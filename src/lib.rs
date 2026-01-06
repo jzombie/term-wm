@@ -1,3 +1,4 @@
+pub mod colors;
 pub mod components;
 pub mod drivers;
 pub mod event_loop;

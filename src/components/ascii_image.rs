@@ -2,7 +2,7 @@ use std::path::Path;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use resvg::{tiny_skia, usvg};
 
 const DEFAULT_RAMP: &[char] = &[' ', '.', ':', '-', '=', '+', '*', '#', '%', '@'];
@@ -456,11 +456,11 @@ impl super::Component for AsciiImage {
                 }
                 if let Some(buf_cell) = buffer.cell_mut((x, y)) {
                     let mut style = Style::default();
-                    if let Some((_r, _g, _b)) = cell.fg {
-                        style = style.fg(Color::Yellow);
+                    if let Some((r, g, b)) = cell.fg {
+                        style = style.fg(crate::colors::map_rgb_to_color(r, g, b));
                     }
-                    if let Some((_r, _g, _b)) = cell.bg {
-                        style = style.bg(Color::Yellow);
+                    if let Some((r, g, b)) = cell.bg {
+                        style = style.bg(crate::colors::map_rgb_to_color(r, g, b));
                     }
                     let mut buf = [0u8; 4];
                     let sym = cell.ch.encode_utf8(&mut buf);
