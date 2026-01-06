@@ -224,3 +224,84 @@ impl ConfirmOverlay {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{
+        Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
+
+    #[test]
+    fn handle_event_recognizes_keys() {
+        let mut o = ConfirmOverlay::new();
+        assert!(o.handle_event(&Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE
+        ))));
+        assert!(o.handle_event(&Event::Key(KeyEvent::new(
+            KeyCode::Char('y'),
+            KeyModifiers::NONE
+        ))));
+        assert!(o.handle_event(&Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))));
+        assert!(o.handle_event(&Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))));
+    }
+
+    #[test]
+    fn handle_confirm_event_mouse_and_keys() {
+        let mut o = ConfirmOverlay::new();
+        // set rects so mouse tests work
+        o.confirm_rect = Some(ratatui::layout::Rect {
+            x: 2,
+            y: 3,
+            width: 4,
+            height: 1,
+        });
+        o.cancel_rect = Some(ratatui::layout::Rect {
+            x: 0,
+            y: 3,
+            width: 2,
+            height: 1,
+        });
+
+        let m = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 3,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert_eq!(
+            o.handle_confirm_event(&Event::Mouse(m)),
+            Some(ConfirmAction::Confirm)
+        );
+
+        let m2 = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert_eq!(
+            o.handle_confirm_event(&Event::Mouse(m2)),
+            Some(ConfirmAction::Cancel)
+        );
+
+        // Tab toggles selection
+        o.selected_confirm = true;
+        assert_eq!(
+            o.handle_confirm_event(&Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))),
+            None
+        );
+        assert!(!o.selected_confirm);
+
+        // Enter uses selected_confirm to decide
+        o.selected_confirm = true;
+        assert_eq!(
+            o.handle_confirm_event(&Event::Key(KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE
+            ))),
+            Some(ConfirmAction::Confirm)
+        );
+    }
+}

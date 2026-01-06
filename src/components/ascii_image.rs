@@ -470,3 +470,70 @@ impl super::Component for AsciiImage {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn average_luma_empty_and_values() {
+        assert_eq!(average_luma(&[]), 0);
+        let vals = vec![10u8, 20, 30, 40];
+        assert_eq!(average_luma(&vals), ((10u32 + 20 + 30 + 40) / 4) as u8);
+    }
+
+    #[test]
+    fn braille_bit_mapping() {
+        assert_eq!(braille_bit(0, 0), 1);
+        assert_eq!(braille_bit(0, 1), 2);
+        assert_eq!(braille_bit(0, 2), 4);
+        assert_eq!(braille_bit(0, 3), 64);
+        assert_eq!(braille_bit(1, 0), 8);
+        assert_eq!(braille_bit(1, 3), 128);
+        assert_eq!(braille_bit(9, 9), 0);
+    }
+
+    #[test]
+    fn set_luma8_sets_state_and_avg() {
+        let mut img = AsciiImage::new();
+        img.set_luma8(2, 2, vec![10, 20, 30, 40]);
+        assert_eq!(img.width, 2);
+        assert_eq!(img.height, 2);
+        assert_eq!(img.luma.len(), 4);
+        assert_eq!(img.luma_avg, average_luma(&[10, 20, 30, 40]));
+
+        // invalid sizes should clear
+        img.set_luma8(0, 0, vec![]);
+        assert_eq!(img.width, 0);
+        assert!(img.luma.is_empty());
+    }
+
+    #[test]
+    fn set_rgba8_and_sampling() {
+        // two pixels wide, one tall: red and green, full alpha
+        let mut img = AsciiImage::new();
+        let rgba = vec![255u8, 0, 0, 255, 0, 255, 0, 255];
+        img.set_rgba8(2, 1, rgba);
+        assert_eq!(img.width, 2);
+        assert_eq!(img.height, 1);
+        assert!(img.alpha.is_some());
+        // first pixel should sample as red
+        assert_eq!(img.sample_alpha(0, 0), 255);
+        assert_eq!(img.sample_alpha(1, 0), 255);
+        assert_eq!(img.sample_rgb(0, 0), Some((255, 0, 0)));
+        assert_eq!(img.sample_rgb(1, 0), Some((0, 255, 0)));
+
+        // compute expected luma for red and green per the formula
+        let red_lum = ((255u32 * 299 + 0 * 587 + 0 * 114) / 1000) as u8;
+        let green_lum = ((0u32 * 299 + 255 * 587 + 0 * 114) / 1000) as u8;
+        let expected_avg = ((red_lum as u32 + green_lum as u32) / 2) as u8;
+        assert_eq!(img.luma_avg, expected_avg);
+
+        // alpha zero => sample_rgb returns None
+        let mut img2 = AsciiImage::new();
+        let rgba2 = vec![0u8, 0, 0, 0];
+        img2.set_rgba8(1, 1, rgba2);
+        assert_eq!(img2.sample_alpha(0, 0), 0);
+        assert_eq!(img2.sample_rgb(0, 0), None);
+    }
+}

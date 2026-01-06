@@ -83,3 +83,62 @@ impl<D: InputDriver> EventLoop<D> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::drivers::InputDriver;
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    use std::time::Duration;
+
+    struct DummyDriver {
+        polls: usize,
+    }
+
+    impl DummyDriver {
+        fn new() -> Self {
+            Self { polls: 0 }
+        }
+    }
+
+    impl InputDriver for DummyDriver {
+        fn poll(&mut self, _timeout: Duration) -> std::io::Result<bool> {
+            self.polls += 1;
+            // return true only once
+            Ok(self.polls == 1)
+        }
+
+        fn read(&mut self) -> std::io::Result<Event> {
+            Ok(Event::Key(KeyEvent::new(
+                KeyCode::Char('x'),
+                KeyModifiers::NONE,
+            )))
+        }
+    }
+
+    #[test]
+    fn poll_returns_event_when_available() {
+        let d = DummyDriver::new();
+        let mut ev = EventLoop::new(d, Duration::from_millis(0));
+        // first poll should cause read to be called
+        let res = ev.poll().unwrap();
+        assert!(res.is_some());
+        // second poll should return None
+        let res2 = ev.poll().unwrap();
+        assert!(res2.is_none());
+    }
+
+    #[test]
+    fn run_calls_handler_and_respects_quit() {
+        let d = DummyDriver::new();
+        let mut ev = EventLoop::new(d, Duration::from_millis(0));
+        let mut count = 0;
+        let handler =
+            |_driver: &mut DummyDriver, _evt: Option<Event>| -> std::io::Result<ControlFlow> {
+                count += 1;
+                Ok(ControlFlow::Quit)
+            };
+        ev.run(handler).unwrap();
+        assert!(count >= 1);
+    }
+}

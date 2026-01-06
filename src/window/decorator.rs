@@ -146,3 +146,15 @@ impl WindowDecorator for OpenStepDecorator {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_step_decorator_debug_format() {
+        let dec = OpenStepDecorator;
+        let s = format!("{:?}", dec);
+        assert!(s.contains("OpenStepDecorator"));
+    }
+}

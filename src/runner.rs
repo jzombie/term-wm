@@ -336,3 +336,34 @@ fn auto_layout_for_windows<R: Copy + Eq + Ord>(windows: &[R]) -> Option<TilingLa
     };
     Some(TilingLayout::new(node))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn auto_layout_empty_and_multiple() {
+        let empty: Vec<u8> = vec![];
+        assert!(auto_layout_for_windows(&empty).is_none());
+
+        let one = vec![1u8];
+        let layout = auto_layout_for_windows(&one).unwrap();
+        // single node should be a leaf
+        assert!(matches!(layout.root(), crate::layout::LayoutNode::Leaf(_)));
+
+        let many = vec![1u8, 2, 3, 4];
+        let layout2 = auto_layout_for_windows(&many).unwrap();
+        // for many windows the top-level node should be a split
+        assert!(matches!(
+            layout2.root(),
+            crate::layout::LayoutNode::Split { .. }
+        ));
+    }
+
+    #[test]
+    fn window_draw_state_update_changes() {
+        let mut s: WindowDrawState<u8> = WindowDrawState::default();
+        assert!(!s.update(&[]));
+        assert!(s.update(&[1, 2]));
+        assert!(!s.update(&[1, 2]));
+    }
+}

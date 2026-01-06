@@ -333,3 +333,55 @@ fn bytes_to_debug_text(bytes: &[u8], max_len: usize) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn bytes_to_debug_text_encodes_control_and_nonprint() {
+        let data = b"a\nb\tc\r\x01\xff";
+        let s = bytes_to_debug_text(data, 32);
+        assert!(s.contains("a\\nb\\tc\\r"));
+        assert!(s.contains("\\x01"));
+        assert!(s.contains("\\xff"));
+    }
+
+    #[test]
+    fn read_loop_reads_and_sets_pending_and_last() {
+        let payload = b"hello\r\n\x1b[6nworld";
+        let reader = Box::new(Cursor::new(payload.to_vec()));
+        let pending = Arc::new(Mutex::new(Vec::new()));
+        let bytes_received = Arc::new(AtomicUsize::new(0));
+        let last_bytes = Arc::new(Mutex::new(Vec::new()));
+        let dsr_requested = Arc::new(AtomicBool::new(false));
+
+        // run read_loop directly (it will exit on EOF)
+        read_loop(
+            reader,
+            Arc::clone(&pending),
+            Arc::clone(&bytes_received),
+            Arc::clone(&last_bytes),
+            Arc::clone(&dsr_requested),
+        );
+
+        // pending should be populated
+        let p = pending.lock().unwrap();
+        assert!(p.len() > 0);
+        assert!(bytes_received.load(Ordering::Relaxed) > 0);
+        let last = last_bytes.lock().unwrap();
+        assert!(last.len() > 0);
+        // the sequence \x1b[6n should have set dsr_requested to true
+        assert!(dsr_requested.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn wrap_err_includes_stage() {
+        let e = wrap_err("test-stage", "oops");
+        let s = format!("{}", e);
+        assert!(s.contains("pty test-stage failed"));
+    }
+}

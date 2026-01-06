@@ -206,3 +206,109 @@ fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
     let max_y = rect.y.saturating_add(rect.height);
     column >= rect.x && column < max_x && row >= rect.y && row < max_y
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::prelude::Rect;
+
+    #[test]
+    fn scrollbar_offset_from_row_edges() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 5,
+            height: 10,
+        };
+        let total = 100usize;
+        let view = 10usize;
+        let top = scrollbar_offset_from_row(0, area, total, view);
+        let bottom = scrollbar_offset_from_row(area.y + area.height - 1, area, total, view);
+        assert_eq!(top, 0);
+        let max_offset = total
+            .saturating_sub(view)
+            .saturating_add(1)
+            .saturating_sub(1);
+        assert!(bottom <= max_offset);
+    }
+
+    #[test]
+    fn drag_handle_mouse_lifecycle() {
+        let mut drag = ScrollbarDrag::new();
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 6,
+        };
+        let total = 20usize;
+        let view = 5usize;
+        let scrollbar_x = area.x.saturating_add(area.width.saturating_sub(1));
+        use crossterm::event::KeyModifiers;
+        let down = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: scrollbar_x,
+            row: area.y + 1,
+            modifiers: KeyModifiers::NONE,
+        };
+        let resp = drag.handle_mouse(&down, area, total, view);
+        assert!(resp.handled);
+        assert!(resp.offset.is_some());
+
+        let drag_evt = MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: scrollbar_x,
+            row: area.y + 2,
+            modifiers: KeyModifiers::NONE,
+        };
+        let resp2 = drag.handle_mouse(&drag_evt, area, total, view);
+        assert!(resp2.handled);
+        assert!(resp2.offset.is_some());
+
+        let up = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: scrollbar_x,
+            row: area.y + 2,
+            modifiers: KeyModifiers::NONE,
+        };
+        let resp3 = drag.handle_mouse(&up, area, total, view);
+        assert!(resp3.handled);
+        assert!(resp3.offset.is_none());
+    }
+
+    #[test]
+    fn scroll_view_set_offset_and_max() {
+        let mut sv = ScrollView::new();
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 3,
+            height: 4,
+        };
+        sv.update(area, 50, 3);
+        sv.set_offset(1000);
+        assert!(sv.offset() <= sv.total.saturating_sub(sv.view));
+        sv.set_offset(0);
+        assert_eq!(sv.offset(), 0);
+    }
+
+    #[test]
+    fn rect_contains_edge_cases() {
+        let r = Rect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 3,
+        };
+        assert!(!rect_contains(r, 0, 0));
+        let r2 = Rect {
+            x: 1,
+            y: 1,
+            width: 2,
+            height: 2,
+        };
+        assert!(rect_contains(r2, 1, 1));
+        assert!(!rect_contains(r2, 3, 1));
+    }
+}

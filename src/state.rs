@@ -38,3 +38,24 @@ impl AppState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mouse_capture_toggle_and_take_change() {
+        let mut s = AppState::new();
+        assert!(s.mouse_capture_enabled());
+        s.set_mouse_capture_enabled(true);
+        // no change -> None
+        assert!(s.take_mouse_capture_change().is_none());
+        s.set_mouse_capture_enabled(false);
+        // now change recorded
+        assert_eq!(s.take_mouse_capture_change(), Some(false));
+        // consumed
+        assert!(s.take_mouse_capture_change().is_none());
+        s.toggle_mouse_capture();
+        assert!(s.mouse_capture_enabled());
+    }
+}

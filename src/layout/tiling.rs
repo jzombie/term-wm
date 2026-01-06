@@ -846,3 +846,91 @@ pub fn render_handles_masked<F>(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::prelude::{Direction, Rect};
+
+    #[test]
+    fn build_rects_from_sizes_horizontal() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 3,
+        };
+        let sizes = [3u16, 7u16];
+        let rects = build_rects_from_sizes(Direction::Horizontal, area, &sizes);
+        assert_eq!(rects.len(), 2);
+        assert_eq!(rects[0].width, 3);
+        assert_eq!(rects[1].width, 7);
+        assert_eq!(rects[0].x, 0);
+        assert_eq!(rects[1].x, 3);
+    }
+
+    #[test]
+    fn build_rects_from_sizes_vertical() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 9,
+        };
+        let sizes = [2u16, 3u16, 4u16];
+        let rects = build_rects_from_sizes(Direction::Vertical, area, &sizes);
+        assert_eq!(rects.len(), 3);
+        assert_eq!(rects[0].height, 2);
+        assert_eq!(rects[1].height, 3);
+        assert_eq!(rects[2].height, 4);
+        assert_eq!(rects[2].y, 5);
+    }
+
+    #[test]
+    fn split_rects_weighted_even() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 11,
+            height: 1,
+        };
+        let weights = [1.0f32, 1.0f32];
+        let rects = split_rects_weighted(Direction::Horizontal, area, &weights, 2);
+        assert_eq!(rects.len(), 2);
+        // floor division: first portion floor((1/2)*11)=5, remainder 6
+        assert_eq!(rects[0].width, 5);
+        assert_eq!(rects[1].width, 6);
+    }
+
+    #[test]
+    fn insert_and_remove_leaf_and_split_area_for_path() {
+        let mut node: LayoutNode<usize> = LayoutNode::leaf(1);
+        // insert a new leaf to the right of 1
+        assert!(node.insert_leaf(1, 2, InsertPosition::Right));
+        // now root should be a split
+        if let LayoutNode::Split { children, .. } = &node {
+            assert_eq!(children.len(), 2);
+            // first child should be leaf(1)
+            assert_eq!(children[0].unwrap_leaf(), Some(1));
+            assert_eq!(children[1].unwrap_leaf(), Some(2));
+        } else {
+            panic!("expected split after insert");
+        }
+
+        // compute area for the second child (path [1])
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 4,
+        };
+        let sub = split_area_for_path(&node, area, &[1]).expect("should get area for path");
+        // since weights default to equal, second rect x should be > 0
+        assert!(sub.x > 0);
+
+        // remove leaf 2
+        assert!(node.remove_leaf(2));
+        // after removal, node should simplify back to leaf(1)
+        assert_eq!(node.unwrap_leaf(), Some(1));
+    }
+}
