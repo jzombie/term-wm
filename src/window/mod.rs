@@ -171,18 +171,15 @@ pub struct WindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     pending_deadline: Option<Instant>,
     state: AppState,
     layout_contract: LayoutContract,
-    wm_overlay_visible: bool,
     wm_overlay_opened_at: Option<Instant>,
     esc_passthrough_window: Duration,
     wm_overlay: DialogOverlay,
-    wm_menu_selected: usize,
     exit_confirm: ConfirmOverlay,
     decorator: Box<dyn WindowDecorator>,
     floating_resize_offscreen: bool,
     z_order: Vec<WindowId<R>>,
     drag_snap: Option<(Option<WindowId<R>>, InsertPosition, Rect)>,
     debug_log: DebugLogComponent,
-    debug_log_visible: bool,
     debug_log_id: WindowId<R>,
 }
 
@@ -228,11 +225,9 @@ where
             pending_deadline: None,
             state: AppState::new(),
             layout_contract: LayoutContract::AppManaged,
-            wm_overlay_visible: false,
             wm_overlay_opened_at: None,
             esc_passthrough_window: esc_passthrough_window_default(),
             wm_overlay: DialogOverlay::new(),
-            wm_menu_selected: 0,
             exit_confirm: ConfirmOverlay::new(),
             decorator: Box::new(DefaultDecorator),
             floating_resize_offscreen: true,
@@ -244,7 +239,6 @@ where
                 install_panic_hook();
                 component
             },
-            debug_log_visible: false,
             debug_log_id: WindowId::system(SystemWindowId::DebugLog),
             closed_app_windows: Vec::new(),
         }
@@ -306,16 +300,17 @@ where
     pub fn clear_capture(&mut self) {
         self.capture_deadline = None;
         self.pending_deadline = None;
-        self.wm_overlay_visible = false;
+        self.state.set_overlay_visible(false);
         self.wm_overlay_opened_at = None;
         self.wm_overlay.set_visible(false);
+        self.state.set_wm_menu_selected(0);
     }
 
     pub fn capture_active(&mut self) -> bool {
         if !self.state.mouse_capture_enabled() {
             return false;
         }
-        if self.layout_contract == LayoutContract::WindowManaged && self.wm_overlay_visible {
+        if self.layout_contract == LayoutContract::WindowManaged && self.state.overlay_visible() {
             return true;
         }
         self.refresh_capture();
@@ -358,16 +353,17 @@ where
     }
 
     pub fn open_wm_overlay(&mut self) {
-        self.wm_overlay_visible = true;
+        self.state.set_overlay_visible(true);
         self.wm_overlay_opened_at = Some(Instant::now());
         self.wm_overlay.set_visible(true);
-        self.wm_menu_selected = 0;
+        self.state.set_wm_menu_selected(0);
     }
 
     pub fn close_wm_overlay(&mut self) {
-        self.wm_overlay_visible = false;
+        self.state.set_overlay_visible(false);
         self.wm_overlay_opened_at = None;
         self.wm_overlay.set_visible(false);
+        self.state.set_wm_menu_selected(0);
     }
 
     pub fn open_exit_confirm(&mut self) {
@@ -386,12 +382,12 @@ where
     }
 
     pub fn wm_overlay_visible(&self) -> bool {
-        self.wm_overlay_visible
+        self.state.overlay_visible()
     }
 
     pub fn toggle_debug_window(&mut self) {
-        self.debug_log_visible = !self.debug_log_visible;
-        if self.debug_log_visible {
+        self.state.toggle_debug_log_visible();
+        if self.state.debug_log_visible() {
             self.ensure_debug_log_in_layout();
             self.bring_to_front_id(self.debug_log_id);
             self.set_wm_focus(self.debug_log_id);
@@ -436,7 +432,7 @@ where
     }
 
     pub fn esc_passthrough_remaining(&self) -> Option<Duration> {
-        if !self.wm_overlay_visible {
+        if !self.wm_overlay_visible() {
             return None;
         }
         let opened_at = self.wm_overlay_opened_at?;
@@ -599,7 +595,7 @@ where
     pub fn set_managed_layout(&mut self, layout: TilingLayout<R>) {
         self.managed_layout = Some(TilingLayout::new(map_layout_node(layout.root())));
         self.managed_floating.clear();
-        if self.debug_log_visible {
+        if self.state.debug_log_visible() {
             self.ensure_debug_log_in_layout();
         }
     }
@@ -616,7 +612,7 @@ where
         let (_, managed_area) = self.panel.split_area(self.panel_active(), area);
         self.managed_area = managed_area;
         self.clamp_floating_to_bounds();
-        if self.debug_log_visible {
+        if self.state.debug_log_visible() {
             self.ensure_debug_log_in_layout();
         }
         let mut active_ids: Vec<WindowId<R>> = Vec::new();
@@ -734,7 +730,7 @@ where
             && rect_contains(self.panel.area(), mouse.column, mouse.row)
         {
             if self.panel.hit_test_menu(event) {
-                if self.wm_overlay_visible {
+                if self.wm_overlay_visible() {
                     self.close_wm_overlay();
                 } else {
                     self.open_wm_overlay();
@@ -752,7 +748,7 @@ where
             }
             return true;
         }
-        if self.debug_log_visible {
+        if self.state.debug_log_visible() {
             match event {
                 Event::Mouse(mouse) => {
                     let rect = self.full_region_for_id(self.debug_log_id);
@@ -1543,7 +1539,7 @@ where
                 continue;
             }
 
-            if id == self.debug_log_id && self.debug_log_visible {
+            if id == self.debug_log_id && self.state.debug_log_visible() {
                 let area = self.region_for_id(id);
                 if area.width > 0 && area.height > 0 {
                     self.debug_log.render(frame, area, id == focused);
@@ -1598,7 +1594,7 @@ where
             }
         }
 
-        let status_line = if self.wm_overlay_visible {
+        let status_line = if self.wm_overlay_visible() {
             let esc_state = if let Some(remaining) = self.esc_passthrough_remaining() {
                 format!("Esc passthrough: active ({}ms)", remaining.as_millis())
             } else {
@@ -1616,7 +1612,7 @@ where
             &display,
             status_line.as_deref(),
             self.mouse_capture_enabled(),
-            self.wm_overlay_visible,
+            self.wm_overlay_visible(),
         );
         let menu_labels = wm_menu_items(self.mouse_capture_enabled())
             .iter()
@@ -1625,14 +1621,14 @@ where
         let bounds = frame.area();
         self.panel.render_menu(
             frame,
-            self.wm_overlay_visible,
+            self.wm_overlay_visible(),
             bounds,
             &menu_labels,
-            self.wm_menu_selected,
+            self.state.wm_menu_selected(),
         );
         self.panel.render_menu_backdrop(
             frame,
-            self.wm_overlay_visible,
+            self.wm_overlay_visible(),
             self.managed_area,
             self.panel.area(),
         );
@@ -1772,7 +1768,7 @@ where
     }
 
     pub fn handle_wm_menu_event(&mut self, event: &Event) -> Option<WmMenuAction> {
-        if !self.wm_overlay_visible {
+        if !self.wm_overlay_visible() {
             return None;
         }
         if let Event::Mouse(mouse) = event
@@ -1780,8 +1776,9 @@ where
         {
             if let Some(index) = self.panel.hit_test_menu_item(event) {
                 let items = wm_menu_items(self.mouse_capture_enabled());
-                self.wm_menu_selected = index.min(items.len().saturating_sub(1));
-                return items.get(self.wm_menu_selected).map(|item| item.action);
+                let selected = index.min(items.len().saturating_sub(1));
+                self.state.set_wm_menu_selected(selected);
+                return items.get(selected).map(|item| item.action);
             }
             if self.panel.menu_icon_contains_point(mouse.column, mouse.row) {
                 return Some(WmMenuAction::CloseMenu);
@@ -1797,10 +1794,11 @@ where
             KeyCode::Up => {
                 let total = wm_menu_items(self.mouse_capture_enabled()).len();
                 if total > 0 {
-                    if self.wm_menu_selected == 0 {
-                        self.wm_menu_selected = total - 1;
+                    let current = self.state.wm_menu_selected();
+                    if current == 0 {
+                        self.state.set_wm_menu_selected(total - 1);
                     } else {
-                        self.wm_menu_selected -= 1;
+                        self.state.set_wm_menu_selected(current - 1);
                     }
                 }
                 None
@@ -1808,17 +1806,19 @@ where
             KeyCode::Down => {
                 let total = wm_menu_items(self.mouse_capture_enabled()).len();
                 if total > 0 {
-                    self.wm_menu_selected = (self.wm_menu_selected + 1) % total;
+                    let current = self.state.wm_menu_selected();
+                    self.state.set_wm_menu_selected((current + 1) % total);
                 }
                 None
             }
             KeyCode::Char('k') => {
                 let total = wm_menu_items(self.mouse_capture_enabled()).len();
                 if total > 0 {
-                    if self.wm_menu_selected == 0 {
-                        self.wm_menu_selected = total - 1;
+                    let current = self.state.wm_menu_selected();
+                    if current == 0 {
+                        self.state.set_wm_menu_selected(total - 1);
                     } else {
-                        self.wm_menu_selected -= 1;
+                        self.state.set_wm_menu_selected(current - 1);
                     }
                 }
                 None
@@ -1826,12 +1826,13 @@ where
             KeyCode::Char('j') => {
                 let total = wm_menu_items(self.mouse_capture_enabled()).len();
                 if total > 0 {
-                    self.wm_menu_selected = (self.wm_menu_selected + 1) % total;
+                    let current = self.state.wm_menu_selected();
+                    self.state.set_wm_menu_selected((current + 1) % total);
                 }
                 None
             }
             KeyCode::Enter => wm_menu_items(self.mouse_capture_enabled())
-                .get(self.wm_menu_selected)
+                .get(self.state.wm_menu_selected())
                 .map(|item| item.action),
             _ => None,
         }
@@ -1845,7 +1846,7 @@ where
     }
 
     pub fn wm_menu_consumes_event(&self, event: &Event) -> bool {
-        if !self.wm_overlay_visible {
+        if !self.wm_overlay_visible() {
             return false;
         }
         let Event::Key(key) = event else {

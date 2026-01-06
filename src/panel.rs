@@ -491,6 +491,7 @@ struct PanelMenuHit {
     rect: Rect,
 }
 
+#[cfg(test)]
 fn panel_order<R: Copy + Eq + Ord>(focus_order: &[R], managed_draw_order: &[R]) -> Vec<R> {
     if focus_order.is_empty() {
         return managed_draw_order.to_vec();
