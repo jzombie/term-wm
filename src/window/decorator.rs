@@ -2,6 +2,15 @@ use ratatui::Frame;
 use ratatui::prelude::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderAction {
+    Minimize,
+    Maximize,
+    Close,
+    Drag,
+    None,
+}
+
 pub trait WindowDecorator: std::fmt::Debug {
     fn render_window(
         &self,
@@ -12,12 +21,43 @@ pub trait WindowDecorator: std::fmt::Debug {
         focused: bool,
         is_obscured: &dyn Fn(u16, u16) -> bool,
     );
+
+    fn hit_test(&self, window_rect: Rect, x: u16, y: u16) -> HeaderAction;
 }
 
 #[derive(Debug)]
 pub struct DefaultDecorator;
 
 impl WindowDecorator for DefaultDecorator {
+    fn hit_test(&self, rect: Rect, x: u16, y: u16) -> HeaderAction {
+        let outer_left = rect.x;
+        let outer_right = rect.x.saturating_add(rect.width).saturating_sub(1);
+        let header_y = rect.y.saturating_add(1);
+
+        // Check if inside header row
+        if y != header_y {
+            return HeaderAction::None;
+        }
+        // Check if within horizontal bounds
+        if x <= outer_left || x >= outer_right {
+            return HeaderAction::None;
+        }
+
+        let close_x = outer_right.saturating_sub(1);
+        let max_x = close_x.saturating_sub(2);
+        let min_x = max_x.saturating_sub(2);
+
+        if x == close_x {
+            HeaderAction::Close
+        } else if x == max_x {
+            HeaderAction::Maximize
+        } else if x == min_x {
+            HeaderAction::Minimize
+        } else {
+            HeaderAction::Drag
+        }
+    }
+
     fn render_window(
         &self,
         frame: &mut Frame,

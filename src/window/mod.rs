@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::{Event, KeyCode, MouseEventKind};
 use ratatui::prelude::Rect;
 
-use self::decorator::{DefaultDecorator, WindowDecorator};
+use self::decorator::{DefaultDecorator, HeaderAction, WindowDecorator};
 use crate::components::{
     Component, ConfirmAction, ConfirmOverlay, DebugLogComponent, DialogOverlay, install_panic_hook,
     set_global_debug_log,
@@ -902,24 +902,27 @@ where
                     }
 
                     let rect = self.full_region_for_id(header.id);
-                    // Detect header-button clicks (minimize, maximize, close) before starting drag.
-                    let header_y = rect.y.saturating_add(1);
-                    let outer_right = rect.x.saturating_add(rect.width).saturating_sub(1);
-                    let close_x = outer_right.saturating_sub(1);
-                    let max_x = close_x.saturating_sub(2);
-                    let min_x = max_x.saturating_sub(2);
-                    if mouse.row == header_y {
-                        if mouse.column == min_x {
+                    match self.decorator.hit_test(rect, mouse.column, mouse.row) {
+                        HeaderAction::Minimize => {
                             self.minimize_window(header.id);
                             return true;
-                        } else if mouse.column == max_x {
+                        }
+                        HeaderAction::Maximize => {
                             self.toggle_maximize(header.id);
                             return true;
-                        } else if mouse.column == close_x {
+                        }
+                        HeaderAction::Close => {
                             self.close_window(header.id);
                             return true;
                         }
+                        HeaderAction::Drag => {
+                            // Proceed to drag below
+                        }
+                        HeaderAction::None => {
+                            // Should not happen as we already checked rect contains
+                        }
                     }
+
                     // Standard floating drag start
                     if self.floating_index(header.id).is_some() {
                         self.bring_floating_to_front_id(header.id);
