@@ -144,7 +144,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn render(
+    pub fn render<F>(
         &mut self,
         frame: &mut Frame,
         active: bool,
@@ -153,7 +153,10 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         status_line: Option<&str>,
         mouse_capture_enabled: bool,
         menu_open: bool,
-    ) {
+        label_for: F,
+    ) where
+        F: Fn(R) -> String,
+    {
         if !active {
             return;
         }
@@ -201,8 +204,8 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         } else {
             for id in display_order.iter().copied() {
                 let focused = id == focus_current;
-                // Pretty label (uses Debug for now). Truncate to remaining space.
-                let mut label = format!("{:?}", id);
+                // Pretty label derived from caller. Truncate to remaining space.
+                let mut label = label_for(id);
                 // leave room for padding
                 let max_label = max_x.saturating_sub(x).saturating_sub(2).max(0) as usize;
                 if label.chars().count() > max_label {

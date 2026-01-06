@@ -122,6 +122,7 @@ impl HasWindowManager<PaneId, PaneId> for App {
 
     fn wm_close_window(&mut self, id: PaneId) {
         if let Some(pane) = self.terminals.get_mut(id) {
+            // TODO: Show confirmation before abrupt termination
             pane.terminate();
         }
     }

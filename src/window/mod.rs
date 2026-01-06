@@ -721,6 +721,13 @@ where
         out
     }
 
+    fn window_title(id: WindowId<R>) -> String {
+        match id {
+            WindowId::App(app_id) => format!("{:?}", app_id),
+            WindowId::System(SystemWindowId::DebugLog) => "Debug Log".to_string(),
+        }
+    }
+
     pub fn handle_managed_event(&mut self, event: &Event) -> bool {
         if self.layout_contract != LayoutContract::WindowManaged {
             return false;
@@ -1558,10 +1565,7 @@ where
             let is_obscured =
                 |x: u16, y: u16| -> bool { obscuring.iter().any(|r| rect_contains(*r, x, y)) };
 
-            let title = match id {
-                WindowId::App(app_id) => format!("Window {:?}", app_id),
-                WindowId::System(SystemWindowId::DebugLog) => "Debug Log".to_string(),
-            };
+            let title = Self::window_title(id);
             let focused_window = id == focused;
             self.decorator.render_window(
                 frame,
@@ -1616,6 +1620,7 @@ where
             status_line.as_deref(),
             self.mouse_capture_enabled(),
             self.wm_overlay_visible(),
+            |id| Self::window_title(id),
         );
         let menu_labels = wm_menu_items(self.mouse_capture_enabled())
             .iter()
