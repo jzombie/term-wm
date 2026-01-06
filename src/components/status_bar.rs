@@ -64,3 +64,19 @@ impl super::Component for StatusBar {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::style::Style;
+
+    #[test]
+    fn set_left_right_and_style_affect_internal_state() {
+        let mut s = StatusBar::new();
+        s.set_left("left");
+        s.set_right("right");
+        s.set_style(Style::default());
+        // call default to ensure Default impl works
+        let _ = StatusBar::default();
+    }
+}

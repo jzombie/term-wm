@@ -1821,3 +1821,81 @@ fn map_layout_node<R: Copy + Eq + Ord>(node: &LayoutNode<R>) -> LayoutNode<Windo
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn clamp_rect_inside_and_outside() {
+        let area = Rect {
+            x: 2,
+            y: 2,
+            width: 4,
+            height: 4,
+        };
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
+        let r = clamp_rect(area, bounds);
+        assert_eq!(r.x, 2);
+        assert_eq!(r.y, 2);
+
+        // non-overlapping
+        let area2 = Rect {
+            x: 50,
+            y: 50,
+            width: 1,
+            height: 1,
+        };
+        let r2 = clamp_rect(area2, bounds);
+        assert_eq!(r2, Rect::default());
+    }
+
+    #[test]
+    fn rects_intersect_true_and_false() {
+        let a = Rect {
+            x: 0,
+            y: 0,
+            width: 5,
+            height: 5,
+        };
+        let b = Rect {
+            x: 4,
+            y: 4,
+            width: 5,
+            height: 5,
+        };
+        assert!(rects_intersect(a, b));
+        let c = Rect {
+            x: 10,
+            y: 10,
+            width: 1,
+            height: 1,
+        };
+        assert!(!rects_intersect(a, c));
+    }
+
+    #[test]
+    fn map_layout_node_maps_leaf_to_windowid_app() {
+        let node = LayoutNode::leaf(3usize);
+        let mapped = map_layout_node(&node);
+        match mapped {
+            LayoutNode::Leaf(id) => match id {
+                WindowId::App(r) => assert_eq!(r, 3usize),
+                _ => panic!("expected App window id"),
+            },
+            _ => panic!("expected leaf"),
+        }
+    }
+
+    #[test]
+    fn esc_passthrough_default_nonzero() {
+        let d = esc_passthrough_window_default();
+        assert!(d.as_millis() > 0);
+    }
+}

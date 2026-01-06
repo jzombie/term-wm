@@ -180,3 +180,50 @@ impl super::Component for ListComponent {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{Event, KeyCode, KeyEvent};
+
+    fn key_event(code: KeyCode) -> Event {
+        let mut k = KeyEvent::new(code, crossterm::event::KeyModifiers::NONE);
+        k.kind = crossterm::event::KeyEventKind::Press;
+        Event::Key(k)
+    }
+
+    #[test]
+    fn selection_moves_with_keys() {
+        let mut list = ListComponent::new("t");
+        list.set_items(vec!["a".into(), "b".into(), "c".into()]);
+        use crate::components::Component;
+        // move down
+        let _ = list.handle_event(&key_event(KeyCode::Down));
+        assert_eq!(list.selected(), 1);
+        // move up
+        let _ = list.handle_event(&key_event(KeyCode::Up));
+        assert_eq!(list.selected(), 0);
+    }
+
+    #[test]
+    fn home_and_end_keys() {
+        let mut list = ListComponent::new("t");
+        list.set_items(vec!["a".into(), "b".into(), "c".into(), "d".into()]);
+        use crate::components::Component;
+        let _ = list.handle_event(&key_event(KeyCode::End));
+        assert_eq!(list.selected(), 3);
+        let _ = list.handle_event(&key_event(KeyCode::Home));
+        assert_eq!(list.selected(), 0);
+    }
+
+    #[test]
+    fn page_keys_move_more() {
+        let mut list = ListComponent::new("t");
+        list.set_items((0..20).map(|i| format!("{}", i)).collect());
+        use crate::components::Component;
+        let _ = list.handle_event(&key_event(KeyCode::PageDown));
+        assert!(list.selected() >= 5);
+        let _ = list.handle_event(&key_event(KeyCode::PageUp));
+        assert!(list.selected() < 20);
+    }
+}

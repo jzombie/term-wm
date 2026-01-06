@@ -439,3 +439,49 @@ fn panel_order<R: Copy + Eq + Ord>(focus_order: &[R], managed_draw_order: &[R]) 
     }
     ordered
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{Event, MouseEvent, MouseEventKind};
+
+    #[test]
+    fn panel_order_prefers_focus_then_managed() {
+        let focus: Vec<u8> = vec![2, 1];
+        let managed: Vec<u8> = vec![1, 2, 3];
+        let ord = panel_order(&focus, &managed);
+        assert_eq!(ord[0], 2);
+        assert_eq!(ord[1], 1);
+        assert!(ord.contains(&3));
+    }
+
+    #[test]
+    fn panel_basic_methods_and_split_area() {
+        let mut p: Panel<usize> = Panel::new();
+        assert!(p.visible());
+        p.set_visible(false);
+        assert!(!p.visible());
+        p.set_height(0);
+        assert!(p.height() >= 1);
+        let area = ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 5,
+        };
+        let (panel_rect, managed) = p.split_area(true, area);
+        assert_eq!(panel_rect.width, 10);
+        assert_eq!(managed.width, 10);
+
+        // hit tests return false when rects not set
+        let ev = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
+        assert!(!p.hit_test_menu(&ev));
+        assert!(!p.hit_test_mouse_capture(&ev));
+        assert!(p.hit_test_window(&ev).is_none());
+    }
+}

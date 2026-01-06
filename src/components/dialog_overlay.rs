@@ -119,3 +119,34 @@ impl super::Component for DialogOverlay {
         frame.render_widget(paragraph, rect);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rect_for_clamps_sizes() {
+        let dlg = DialogOverlay::new();
+        // tiny area smaller than min width/height
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 2,
+        };
+        let r = dlg.rect_for(area);
+        assert!(r.width >= 1);
+        assert!(r.height >= 1);
+
+        // larger area should enforce minimum preferred
+        let area2 = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 10,
+        };
+        let r2 = dlg.rect_for(area2);
+        assert!(r2.width >= 24);
+        assert!(r2.height >= 5);
+    }
+}

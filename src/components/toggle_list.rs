@@ -203,3 +203,55 @@ impl super::Component for ToggleListComponent {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::Component;
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+
+    fn make_items(n: usize) -> Vec<ToggleItem> {
+        (0..n)
+            .map(|i| ToggleItem {
+                id: format!("id{}", i),
+                label: format!("label{}", i),
+                checked: i % 2 == 0,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn bump_selection_bounds_and_toggle() {
+        let mut t = ToggleListComponent::new("test");
+        t.set_items(make_items(3));
+        assert_eq!(t.selected(), 0);
+        t.move_selection(1);
+        assert_eq!(t.selected(), 1);
+        t.move_selection(10);
+        assert_eq!(t.selected(), 2);
+        t.move_selection(-100);
+        assert_eq!(t.selected(), 0);
+
+        // toggle the first item
+        assert!(t.toggle_selected());
+        assert!(!t.items()[0].checked);
+    }
+
+    #[test]
+    fn handle_event_navigation() {
+        let mut t = ToggleListComponent::new("s");
+        t.set_items(make_items(5));
+        t.handle_event(&Event::Key(KeyEvent::new(
+            KeyCode::Down,
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(t.selected(), 1);
+        t.handle_event(&Event::Key(KeyEvent::new(
+            KeyCode::Home,
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(t.selected(), 0);
+        t.handle_event(&Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)));
+        assert_eq!(t.selected(), 4);
+    }
+}

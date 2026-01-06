@@ -27,3 +27,38 @@ impl<T: InputDriver + ?Sized> InputDriver for &mut T {
         (**self).set_mouse_capture(enabled)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    use std::time::Duration;
+
+    struct Dummy;
+    impl InputDriver for Dummy {
+        fn poll(&mut self, _timeout: Duration) -> std::io::Result<bool> {
+            Ok(true)
+        }
+
+        fn read(&mut self) -> std::io::Result<Event> {
+            Ok(Event::Key(KeyEvent::new(
+                KeyCode::Char('x'),
+                KeyModifiers::NONE,
+            )))
+        }
+    }
+
+    #[test]
+    fn blanket_impl_for_mut_ref_works() {
+        let mut d = Dummy;
+        // call methods on &mut Dummy which should use the blanket impl
+        let r = d.poll(Duration::from_millis(0)).unwrap();
+        assert!(r);
+        let ev = d.read().unwrap();
+        if let Event::Key(k) = ev {
+            assert_eq!(k.code, KeyCode::Char('x'));
+        } else {
+            panic!("expected key");
+        }
+    }
+}

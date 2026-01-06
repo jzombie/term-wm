@@ -112,3 +112,58 @@ impl InputDriver for ConsoleDriver {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+
+    #[test]
+    fn next_key_from_queue() {
+        let mut d = ConsoleDriver::new();
+        d.event_queue.push_back(Event::Key(KeyEvent::new(
+            KeyCode::Char('a'),
+            KeyModifiers::NONE,
+        )));
+        d.event_queue.push_back(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        }));
+        let key = d.next_key().unwrap();
+        assert_eq!(key.code, KeyCode::Char('a'));
+        // the mouse event should remain in the queue
+        assert!(matches!(d.event_queue.front(), Some(Event::Mouse(_))));
+    }
+
+    #[test]
+    fn next_mouse_from_queue() {
+        let mut d = ConsoleDriver::new();
+        d.event_queue.push_back(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: 2,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        }));
+        let mouse = d.next_mouse().unwrap();
+        assert_eq!(mouse.column, 2);
+        assert_eq!(mouse.row, 3);
+    }
+
+    #[test]
+    fn poll_and_read_from_queue() {
+        let mut d = ConsoleDriver::new();
+        d.event_queue.push_back(Event::Key(KeyEvent::new(
+            KeyCode::Char('z'),
+            KeyModifiers::NONE,
+        )));
+        assert!(d.poll(std::time::Duration::from_millis(0)).unwrap());
+        let ev = d.read().unwrap();
+        if let Event::Key(k) = ev {
+            assert_eq!(k.code, KeyCode::Char('z'));
+        } else {
+            panic!("expected key");
+        }
+    }
+}

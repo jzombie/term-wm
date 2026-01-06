@@ -33,3 +33,24 @@ pub trait Component {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::Event;
+    use ratatui::prelude::Rect;
+
+    struct DummyComp;
+    impl Component for DummyComp {
+        fn render(&mut self, _frame: &mut Frame, _area: Rect, _focused: bool) {}
+    }
+
+    #[test]
+    fn default_handle_event_returns_false() {
+        let mut d = DummyComp;
+        assert!(!d.handle_event(&Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('a'),
+            crossterm::event::KeyModifiers::NONE
+        ))));
+    }
+}

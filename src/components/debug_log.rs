@@ -258,3 +258,60 @@ impl Component for DebugLogComponent {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{Event, KeyCode, MouseEvent, MouseEventKind};
+    use std::io::Write;
+
+    #[test]
+    fn debug_log_handle_and_buffer_limits() {
+        let (_comp, handle) = DebugLogComponent::new(3);
+        handle.push("one");
+        handle.push("two");
+        handle.push("three");
+        handle.push("four");
+        // internal buffer should be capped at 3
+        if let Ok(buf) = handle.inner.lock() {
+            assert_eq!(buf.lines.len(), 3);
+            assert_eq!(buf.lines.front().unwrap().as_str(), "two");
+        } else {
+            panic!("lock failed");
+        }
+    }
+
+    #[test]
+    fn debug_log_writer_flushes_lines() {
+        let (_comp, handle) = DebugLogComponent::new(10);
+        let mut writer = handle.writer();
+        let _ = writer.write(b"first line\nsecond line\npartial");
+        // flush should push pending partial when forced
+        writer.flush().unwrap();
+        if let Ok(buf) = handle.inner.lock() {
+            assert!(buf.lines.iter().any(|s| s == "first line"));
+            assert!(buf.lines.iter().any(|s| s == "second line"));
+            assert!(buf.lines.iter().any(|s| s == "partial"));
+        }
+    }
+
+    #[test]
+    fn debug_log_component_handle_event_scrolls() {
+        let (mut comp, _handle) = DebugLogComponent::new(10);
+        assert_eq!(comp.scroll_from_bottom, 0);
+        comp.handle_event(&Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::PageUp,
+            crossterm::event::KeyModifiers::NONE,
+        )));
+        assert!(comp.scroll_from_bottom >= 5);
+        let before = comp.scroll_from_bottom;
+        comp.handle_event(&Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        }));
+        // scroll_from_bottom should have decreased or stayed at zero
+        assert!(comp.scroll_from_bottom <= before);
+    }
+}

@@ -415,3 +415,136 @@ fn brighten_indexed(color: Option<TColor>) -> Option<TColor> {
         _ => color,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
+    use vt100::MouseProtocolMode;
+
+    fn key(k: KeyCode, mods: KeyModifiers) -> KeyEvent {
+        let mut ev = KeyEvent::new(k, mods);
+        ev.kind = KeyEventKind::Press;
+        ev
+    }
+
+    #[test]
+    fn key_to_bytes_char_and_controls() {
+        let b = key_to_bytes(key(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(b, b"x".to_vec());
+
+        let enter = key_to_bytes(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(enter, vec![b'\r']);
+
+        let back = key_to_bytes(key(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(back, vec![0x7f]);
+
+        let ctrl_a = key_to_bytes(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(ctrl_a, vec![1u8]);
+    }
+
+    #[test]
+    fn ctrl_char_edges() {
+        assert_eq!(ctrl_char('a'), Some(1));
+        assert_eq!(ctrl_char('z'), Some(26));
+        assert_eq!(ctrl_char('A'), Some(1));
+        assert_eq!(ctrl_char('1'), None);
+    }
+
+    #[test]
+    fn mouse_event_allowed_modes() {
+        use MouseEventKind::*;
+        assert!(!mouse_event_allowed(
+            MouseProtocolMode::None,
+            Down(MouseButton::Left)
+        ));
+        assert!(mouse_event_allowed(
+            MouseProtocolMode::Press,
+            Down(MouseButton::Left)
+        ));
+        assert!(!mouse_event_allowed(
+            MouseProtocolMode::Press,
+            Up(MouseButton::Left)
+        ));
+        assert!(mouse_event_allowed(
+            MouseProtocolMode::PressRelease,
+            Up(MouseButton::Left)
+        ));
+        assert!(mouse_event_allowed(
+            MouseProtocolMode::ButtonMotion,
+            MouseEventKind::Drag(MouseButton::Left)
+        ));
+        assert!(mouse_event_allowed(
+            MouseProtocolMode::AnyMotion,
+            MouseEventKind::Moved
+        ));
+    }
+
+    #[test]
+    fn mouse_event_to_bytes_format_and_mods() {
+        let m = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 2,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        };
+        let bytes = mouse_event_to_bytes(m);
+        let s = String::from_utf8(bytes).unwrap();
+        assert!(s.starts_with("\x1b[<0;3;4M"));
+
+        let m2 = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Right),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::SHIFT | KeyModifiers::ALT,
+        };
+        let s2 = String::from_utf8(mouse_event_to_bytes(m2)).unwrap();
+        // code should include modifier bits
+        assert!(s2.contains(';'));
+        assert!(s2.ends_with('m'));
+    }
+
+    #[test]
+    fn vt_color_and_resolve_color() {
+        assert_eq!(vt_color_to_ratatui(vt100::Color::Default), None);
+        assert_eq!(
+            vt_color_to_ratatui(vt100::Color::Idx(5)),
+            Some(TColor::Indexed(5))
+        );
+        assert_eq!(
+            vt_color_to_ratatui(vt100::Color::Rgb(1, 2, 3)),
+            Some(TColor::Rgb(1, 2, 3))
+        );
+
+        // resolve_color: when both default -> None
+        assert_eq!(
+            resolve_color(vt100::Color::Default, vt100::Color::Default),
+            None
+        );
+        // when screen default is idx, default maps to that
+        assert_eq!(
+            resolve_color(vt100::Color::Default, vt100::Color::Idx(7)),
+            Some(TColor::Indexed(7))
+        );
+    }
+
+    #[test]
+    fn brighten_indexed_moves_0_7_to_8_15() {
+        assert_eq!(
+            brighten_indexed(Some(TColor::Indexed(0))),
+            Some(TColor::Indexed(8))
+        );
+        assert_eq!(
+            brighten_indexed(Some(TColor::Indexed(7))),
+            Some(TColor::Indexed(15))
+        );
+        // values >=8 unchanged
+        assert_eq!(
+            brighten_indexed(Some(TColor::Indexed(8))),
+            Some(TColor::Indexed(8))
+        );
+        assert_eq!(brighten_indexed(None), None);
+    }
+}
