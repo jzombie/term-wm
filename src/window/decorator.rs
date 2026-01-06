@@ -15,9 +15,9 @@ pub trait WindowDecorator: std::fmt::Debug {
 }
 
 #[derive(Debug)]
-pub struct OpenStepDecorator;
+pub struct DefaultDecorator;
 
-impl WindowDecorator for OpenStepDecorator {
+impl WindowDecorator for DefaultDecorator {
     fn render_window(
         &self,
         frame: &mut Frame,
@@ -153,8 +153,8 @@ mod tests {
 
     #[test]
     fn open_step_decorator_debug_format() {
-        let dec = OpenStepDecorator;
+        let dec = DefaultDecorator;
         let s = format!("{:?}", dec);
-        assert!(s.contains("OpenStepDecorator"));
+        assert!(s.contains("DefaultDecorator"));
     }
 }

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::{Event, KeyCode, MouseEventKind};
 use ratatui::prelude::Rect;
 
-use self::decorator::{OpenStepDecorator, WindowDecorator};
+use self::decorator::{DefaultDecorator, WindowDecorator};
 use crate::components::{
     Component, ConfirmAction, ConfirmOverlay, DebugLogComponent, DialogOverlay, install_panic_hook,
     set_global_debug_log,
@@ -223,7 +223,7 @@ where
             wm_overlay: DialogOverlay::new(),
             wm_menu_selected: 0,
             exit_confirm: ConfirmOverlay::new(),
-            decorator: Box::new(OpenStepDecorator),
+            decorator: Box::new(DefaultDecorator),
             floating_resize_offscreen: true,
             z_order: Vec::new(),
             drag_snap: None,
