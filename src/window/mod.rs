@@ -1421,7 +1421,7 @@ where
 
         if let Some((_, _, rect)) = self.drag_snap {
             let buffer = frame.buffer_mut();
-            let color = ratatui::style::Color::Rgb(200, 100, 0);
+            let color = ratatui::style::Color::Yellow;
             for y in rect.y..rect.y.saturating_add(rect.height) {
                 for x in rect.x..rect.x.saturating_add(rect.width) {
                     if let Some(cell) = buffer.cell_mut((x, y)) {

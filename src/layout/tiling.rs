@@ -777,7 +777,7 @@ pub fn render_handles_masked<F>(
         }
         if is_hovered {
             let border_style = Style::default()
-                .fg(ratatui::style::Color::Rgb(255, 165, 0))
+                .fg(ratatui::style::Color::Yellow)
                 .add_modifier(Modifier::BOLD);
             let max_x = handle
                 .rect

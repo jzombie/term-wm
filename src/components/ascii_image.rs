@@ -456,11 +456,11 @@ impl super::Component for AsciiImage {
                 }
                 if let Some(buf_cell) = buffer.cell_mut((x, y)) {
                     let mut style = Style::default();
-                    if let Some((r, g, b)) = cell.fg {
-                        style = style.fg(Color::Rgb(r, g, b));
+                    if let Some((_r, _g, _b)) = cell.fg {
+                        style = style.fg(Color::Yellow);
                     }
-                    if let Some((r, g, b)) = cell.bg {
-                        style = style.bg(Color::Rgb(r, g, b));
+                    if let Some((_r, _g, _b)) = cell.bg {
+                        style = style.bg(Color::Yellow);
                     }
                     let mut buf = [0u8; 4];
                     let sym = cell.ch.encode_utf8(&mut buf);

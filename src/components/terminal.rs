@@ -392,7 +392,8 @@ fn vt_color_to_ratatui(color: vt100::Color) -> Option<TColor> {
     match color {
         vt100::Color::Default => None,
         vt100::Color::Idx(idx) => Some(TColor::Indexed(idx)),
-        vt100::Color::Rgb(r, g, b) => Some(TColor::Rgb(r, g, b)),
+        // Normalize all RGB colors to a single ANSI-safe color for consistency
+        vt100::Color::Rgb(_, _, _) => Some(TColor::Yellow),
     }
 }
 
@@ -515,7 +516,7 @@ mod tests {
         );
         assert_eq!(
             vt_color_to_ratatui(vt100::Color::Rgb(1, 2, 3)),
-            Some(TColor::Rgb(1, 2, 3))
+            Some(TColor::Yellow)
         );
 
         // resolve_color: when both default -> None
