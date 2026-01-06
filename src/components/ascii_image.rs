@@ -457,10 +457,10 @@ impl super::Component for AsciiImage {
                 if let Some(buf_cell) = buffer.cell_mut((x, y)) {
                     let mut style = Style::default();
                     if let Some((r, g, b)) = cell.fg {
-                        style = style.fg(crate::colors::map_rgb_to_color(r, g, b));
+                        style = style.fg(crate::term_color::map_rgb_to_color(r, g, b));
                     }
                     if let Some((r, g, b)) = cell.bg {
-                        style = style.bg(crate::colors::map_rgb_to_color(r, g, b));
+                        style = style.bg(crate::term_color::map_rgb_to_color(r, g, b));
                     }
                     let mut buf = [0u8; 4];
                     let sym = cell.ch.encode_utf8(&mut buf);

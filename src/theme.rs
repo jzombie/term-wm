@@ -8,7 +8,7 @@ pub const ACCENT_RGB: (u8, u8, u8) = (200, 100, 0);
 pub const ACCENT_ALT_RGB: (u8, u8, u8) = (255, 165, 0);
 
 pub fn rgb_to_color(rgb: (u8, u8, u8)) -> Color {
-    crate::colors::map_rgb_to_color(rgb.0, rgb.1, rgb.2)
+    crate::term_color::map_rgb_to_color(rgb.0, rgb.1, rgb.2)
 }
 
 pub fn accent() -> Color {
