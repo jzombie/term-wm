@@ -1,7 +1,7 @@
 use crossterm::event::{Event, KeyCode};
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 
 use crate::components::scroll_view::ScrollView;
@@ -107,7 +107,7 @@ impl super::Component for ListComponent {
             Block::default()
                 .borders(Borders::ALL)
                 .title(format!("{} (focus)", self.title))
-                .border_style(Style::default().fg(Color::Green))
+                .border_style(Style::default().fg(crate::theme::success_fg()))
         } else {
             Block::default()
                 .borders(Borders::ALL)

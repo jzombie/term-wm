@@ -22,7 +22,7 @@ impl DialogOverlay {
             visible: false,
             width: 70,
             height: 9,
-            bg: Color::Black,
+            bg: crate::theme::dialog_bg(),
             dim_backdrop: false,
         }
     }

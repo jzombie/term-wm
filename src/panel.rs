@@ -2,7 +2,7 @@ use crossterm::event::{Event, MouseEventKind};
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
 };
 
 use crate::layout::rect_contains;
@@ -122,7 +122,9 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         let menu_width = menu_icon.chars().count() as u16;
         if x.saturating_add(menu_width) <= max_x {
             let menu_style = if menu_open {
-                Style::default().bg(Color::DarkGray).fg(Color::Black)
+                Style::default()
+                    .bg(crate::theme::menu_bg())
+                    .fg(crate::theme::menu_fg())
             } else {
                 Style::default()
             };
@@ -186,11 +188,11 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         if total_width > 0 && indicator_x < max_x {
             let indicator_style = if mouse_capture_enabled {
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Green)
+                    .fg(crate::theme::success_fg())
+                    .bg(crate::theme::success_bg())
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(crate::theme::panel_inactive_fg())
             };
             safe_set_string(
                 buffer,
@@ -313,10 +315,12 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         if bounds.width == 0 || bounds.height == 0 {
             return;
         }
-        let menu_style = Style::default().bg(Color::DarkGray).fg(Color::White);
+        let menu_style = Style::default()
+            .bg(crate::theme::menu_bg())
+            .fg(crate::theme::menu_fg());
         let selected_style = Style::default()
-            .bg(Color::Gray)
-            .fg(Color::Black)
+            .bg(crate::theme::menu_selected_bg())
+            .fg(crate::theme::menu_selected_fg())
             .add_modifier(Modifier::BOLD);
         self.menu_bounds = Some(Rect {
             x: start_x,

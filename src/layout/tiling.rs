@@ -718,11 +718,11 @@ pub fn render_handles_masked<F>(
         let is_hovered = hover_rect == Some(handle.rect);
         let style = if is_hovered {
             Style::default()
-                .fg(ratatui::style::Color::Gray)
+                .fg(crate::theme::menu_selected_bg())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
-                .fg(ratatui::style::Color::DarkGray)
+                .fg(crate::theme::menu_bg())
                 .add_modifier(Modifier::DIM)
         };
         for y in handle.rect.y..handle.rect.y.saturating_add(handle.rect.height) {
@@ -777,7 +777,7 @@ pub fn render_handles_masked<F>(
         }
         if is_hovered {
             let border_style = Style::default()
-                .fg(crate::colors::map_rgb_to_color(255, 165, 0))
+                .fg(crate::theme::accent_alt())
                 .add_modifier(Modifier::BOLD);
             let max_x = handle
                 .rect

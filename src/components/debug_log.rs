@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crossterm::event::{Event, KeyCode, MouseEventKind};
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Text};
 use ratatui::widgets::Paragraph;
 use ratatui::{Frame, layout::Rect};
@@ -217,7 +217,7 @@ impl Component for DebugLogComponent {
         let text = Text::from(lines.into_iter().map(Line::from).collect::<Vec<_>>());
         let mut paragraph = Paragraph::new(text).scroll((scroll_top as u16, 0));
         if focused {
-            paragraph = paragraph.style(Style::default().fg(Color::Yellow));
+            paragraph = paragraph.style(Style::default().fg(crate::theme::debug_highlight()));
         }
         frame.render_widget(paragraph, area);
     }

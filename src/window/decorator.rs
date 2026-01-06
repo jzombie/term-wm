@@ -30,11 +30,15 @@ impl WindowDecorator for DefaultDecorator {
         let buffer = frame.buffer_mut();
 
         let focused_header_style = Style::default()
-            .bg(Color::Blue)
-            .fg(Color::White)
+            .bg(crate::theme::decorator_header_bg())
+            .fg(crate::theme::decorator_header_fg())
             .add_modifier(Modifier::BOLD);
-        let normal_header_style = Style::default().bg(Color::DarkGray).fg(Color::White);
-        let border_style = Style::default().fg(Color::DarkGray).bg(Color::Reset);
+        let normal_header_style = Style::default()
+            .bg(crate::theme::panel_bg())
+            .fg(crate::theme::decorator_header_fg());
+        let border_style = Style::default()
+            .fg(crate::theme::decorator_border())
+            .bg(Color::Reset);
 
         let header_style = if focused {
             focused_header_style
