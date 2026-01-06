@@ -96,8 +96,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         frame: &mut Frame,
         active: bool,
         focus_current: R,
-        focus_order: &[R],
-        managed_draw_order: &[R],
+        display_order: &[R],
         status_line: Option<&str>,
         mouse_capture_enabled: bool,
         menu_open: bool,
@@ -147,7 +146,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             let text = truncate_to_width(status, available as usize);
             safe_set_string(buffer, bounds, x, y, &text, Style::default());
         } else {
-            for id in panel_order(focus_order, managed_draw_order) {
+            for id in display_order.iter().copied() {
                 let focused = id == focus_current;
                 let chunk = if focused {
                     format!(" [*{:?}]", id)

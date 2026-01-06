@@ -155,6 +155,8 @@ pub struct WindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     floating_headers: Vec<DragHandle<WindowId<R>>>,
     managed_draw_order: Vec<WindowId<R>>,
     managed_draw_order_app: Vec<R>,
+    // canonical creation order for windows; used to build stable display views
+    canonical_order: Vec<WindowId<R>>,
     managed_layout: Option<TilingLayout<WindowId<R>>>,
     managed_floating: Vec<FloatingPane<WindowId<R>>>,
     managed_area: Rect,
@@ -206,6 +208,7 @@ where
             floating_headers: Vec::new(),
             managed_draw_order: Vec::new(),
             managed_draw_order_app: Vec::new(),
+            canonical_order: Vec::new(),
             managed_layout: None,
             managed_floating: Vec::new(),
             managed_area: Rect::default(),
@@ -652,6 +655,19 @@ where
             }
         }
         self.managed_draw_order = self.z_order.clone();
+        // maintain canonical order: keep existing order for known ids, append new ones
+        let mut new_canonical = Vec::new();
+        for id in &self.canonical_order {
+            if self.managed_draw_order.contains(id) {
+                new_canonical.push(*id);
+            }
+        }
+        for id in &self.managed_draw_order {
+            if !new_canonical.contains(id) {
+                new_canonical.push(*id);
+            }
+        }
+        self.canonical_order = new_canonical;
         self.set_wm_focus_order(self.managed_draw_order.clone());
         self.managed_draw_order_app = self
             .managed_draw_order
@@ -662,6 +678,24 @@ where
 
     pub fn managed_draw_order(&self) -> &[R] {
         &self.managed_draw_order_app
+    }
+
+    /// Build a stable display order for UI components.
+    /// By default this returns the canonical creation order filtered to active managed windows,
+    /// appending any windows that are active but not yet present in the canonical ordering.
+    pub fn build_display_order(&self) -> Vec<WindowId<R>> {
+        let mut out: Vec<WindowId<R>> = Vec::new();
+        for id in &self.canonical_order {
+            if self.managed_draw_order.contains(id) {
+                out.push(*id);
+            }
+        }
+        for id in &self.managed_draw_order {
+            if !out.contains(id) {
+                out.push(*id);
+            }
+        }
+        out
     }
 
     pub fn handle_managed_event(&mut self, event: &Event) -> bool {
@@ -1443,12 +1477,12 @@ where
         } else {
             None
         };
+        let display = self.build_display_order();
         self.panel.render(
             frame,
             self.panel_active(),
-            self.wm_focus.current,
-            &self.wm_focus.order,
-            &self.managed_draw_order,
+            self.wm_focus.current(),
+            &display,
             status_line.as_deref(),
             self.mouse_capture_enabled(),
             self.wm_overlay_visible,
