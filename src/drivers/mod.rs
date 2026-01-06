@@ -52,9 +52,9 @@ mod tests {
     fn blanket_impl_for_mut_ref_works() {
         let mut d = Dummy;
         // call methods on &mut Dummy which should use the blanket impl
-        let r = (&mut d).poll(Duration::from_millis(0)).unwrap();
+        let r = d.poll(Duration::from_millis(0)).unwrap();
         assert!(r);
-        let ev = (&mut d).read().unwrap();
+        let ev = d.read().unwrap();
         if let Event::Key(k) = ev {
             assert_eq!(k.code, KeyCode::Char('x'));
         } else {

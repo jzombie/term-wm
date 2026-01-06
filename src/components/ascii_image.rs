@@ -524,8 +524,8 @@ mod tests {
         assert_eq!(img.sample_rgb(1, 0), Some((0, 255, 0)));
 
         // compute expected luma for red and green per the formula
-        let red_lum = ((255u32 * 299 + 0 * 587 + 0 * 114) / 1000) as u8;
-        let green_lum = ((0u32 * 299 + 255 * 587 + 0 * 114) / 1000) as u8;
+        let red_lum = ((255u32 * 299) / 1000) as u8;
+        let green_lum = ((255u32 * 587) / 1000) as u8;
         let expected_avg = ((red_lum as u32 + green_lum as u32) / 2) as u8;
         assert_eq!(img.luma_avg, expected_avg);
 

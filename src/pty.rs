@@ -370,10 +370,10 @@ mod tests {
 
         // pending should be populated
         let p = pending.lock().unwrap();
-        assert!(p.len() > 0);
+        assert!(!p.is_empty());
         assert!(bytes_received.load(Ordering::Relaxed) > 0);
         let last = last_bytes.lock().unwrap();
-        assert!(last.len() > 0);
+        assert!(!last.is_empty());
         // the sequence \x1b[6n should have set dsr_requested to true
         assert!(dsr_requested.load(Ordering::Relaxed));
     }
