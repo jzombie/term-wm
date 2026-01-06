@@ -15,8 +15,12 @@ use crate::window::{AppWindowDraw, LayoutContract, WindowManager, WmMenuAction};
 
 pub trait HasWindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     fn windows(&mut self) -> &mut WindowManager<W, R>;
-    fn wm_new_window(&mut self) {}
-    fn wm_close_window(&mut self, _id: R) {}
+    fn wm_new_window(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+    fn wm_close_window(&mut self, _id: R) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 pub trait WindowApp<W: Copy + Eq + Ord, R: Copy + Eq + Ord>: HasWindowManager<W, R> {
@@ -71,7 +75,7 @@ where
     event_loop.run(|driver, event| {
         // Drain any pending closed app ids recorded by the WindowManager and invoke app cleanup.
         for id in app.windows().take_closed_app_windows() {
-            app.wm_close_window(id);
+            app.wm_close_window(id)?;
         }
         let mut flush_mouse_capture = |app: &mut A, flow: ControlFlow| {
             if let Some(enabled) = app.windows().take_mouse_capture_change() {
@@ -131,7 +135,7 @@ where
                             app.windows().close_wm_overlay();
                         }
                         WmMenuAction::NewWindow => {
-                            app.wm_new_window();
+                            app.wm_new_window()?;
                             app.windows().close_wm_overlay();
                         }
                         WmMenuAction::ToggleDebugWindow => {
@@ -157,7 +161,7 @@ where
                     && key.code == KeyCode::Char('n')
                     && key.modifiers.is_empty()
                 {
-                    app.wm_new_window();
+                    app.wm_new_window()?;
                     app.windows().close_wm_overlay();
                     return flush_mouse_capture(app, ControlFlow::Continue);
                 }

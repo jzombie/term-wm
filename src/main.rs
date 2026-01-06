@@ -76,22 +76,13 @@ struct App {
 
 impl App {
     fn new() -> io::Result<Self> {
-        let size = PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
+        let mut app = Self {
+            windows: WindowManager::new_managed(0),
+            terminals: Vec::new(),
         };
-        let left =
-            TerminalComponent::spawn(default_shell_command(), size).map_err(io::Error::other)?;
-        let right =
-            TerminalComponent::spawn(default_shell_command(), size).map_err(io::Error::other)?;
-        let mut windows = WindowManager::new_managed(0);
-        windows.set_focus_order(vec![0, 1]);
-        Ok(Self {
-            windows,
-            terminals: vec![left, right],
-        })
+        app.wm_new_window()?;
+        app.wm_new_window()?;
+        Ok(app)
     }
 }
 
@@ -100,9 +91,9 @@ impl HasWindowManager<PaneId, PaneId> for App {
         &mut self.windows
     }
 
-    fn wm_new_window(&mut self) {
+    fn wm_new_window(&mut self) -> io::Result<()> {
         if self.terminals.len() >= MAX_WINDOWS {
-            return;
+            return Ok(());
         }
         let size = PtySize {
             rows: 24,
@@ -111,20 +102,20 @@ impl HasWindowManager<PaneId, PaneId> for App {
             pixel_height: 0,
         };
         let pane =
-            TerminalComponent::spawn(default_shell_command(), size).map_err(io::Error::other);
-        if let Ok(pane) = pane {
-            let id = self.terminals.len();
-            self.terminals.push(pane);
-            self.windows.set_focus(id);
-            self.windows.tile_window(id);
-        }
+            TerminalComponent::spawn(default_shell_command(), size).map_err(io::Error::other)?;
+        let id = self.terminals.len();
+        self.terminals.push(pane);
+        self.windows.set_focus(id);
+        self.windows.tile_window(id);
+        Ok(())
     }
 
-    fn wm_close_window(&mut self, id: PaneId) {
+    fn wm_close_window(&mut self, id: PaneId) -> io::Result<()> {
         if let Some(pane) = self.terminals.get_mut(id) {
             // TODO: Show confirmation before abrupt termination
             pane.terminate();
         }
+        Ok(())
     }
 }
 
