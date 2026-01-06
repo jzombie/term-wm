@@ -14,16 +14,73 @@ pub struct PanelWindowHit<R: Copy + Eq + Ord> {
     rect: Rect,
 }
 
+// PanelMenuHit is defined above for use by ActivationMenu
+
+#[derive(Debug)]
+struct ActivationMenu {
+    menu_rect: Option<Rect>,
+    menu_item_hits: Vec<PanelMenuHit>,
+    menu_bounds: Option<Rect>,
+}
+
+impl ActivationMenu {
+    fn new() -> Self {
+        Self {
+            menu_rect: None,
+            menu_item_hits: Vec::new(),
+            menu_bounds: None,
+        }
+    }
+
+    fn begin_frame(&mut self) {
+        self.menu_rect = None;
+        self.menu_item_hits.clear();
+        self.menu_bounds = None;
+    }
+}
+
+#[derive(Debug)]
+struct WindowList<R: Copy + Eq + Ord> {
+    window_hits: Vec<PanelWindowHit<R>>,
+}
+
+impl<R: Copy + Eq + Ord> WindowList<R> {
+    fn new() -> Self {
+        Self {
+            window_hits: Vec::new(),
+        }
+    }
+
+    fn begin_frame(&mut self) {
+        self.window_hits.clear();
+    }
+}
+
+#[derive(Debug)]
+struct NotificationArea {
+    mouse_capture_rect: Option<Rect>,
+}
+
+impl NotificationArea {
+    fn new() -> Self {
+        Self {
+            mouse_capture_rect: None,
+        }
+    }
+
+    fn begin_frame(&mut self) {
+        self.mouse_capture_rect = None;
+    }
+}
+
 #[derive(Debug)]
 pub struct Panel<R: Copy + Eq + Ord> {
     visible: bool,
     height: u16,
     area: Rect,
-    window_hits: Vec<PanelWindowHit<R>>,
-    menu_rect: Option<Rect>,
-    menu_item_hits: Vec<PanelMenuHit>,
-    menu_bounds: Option<Rect>,
-    mouse_capture_rect: Option<Rect>,
+    activation: ActivationMenu,
+    list: WindowList<R>,
+    notifications: NotificationArea,
 }
 
 impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
@@ -32,20 +89,16 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             visible: true,
             height: 1,
             area: Rect::default(),
-            window_hits: Vec::new(),
-            menu_rect: None,
-            menu_item_hits: Vec::new(),
-            menu_bounds: None,
-            mouse_capture_rect: None,
+            activation: ActivationMenu::new(),
+            list: WindowList::new(),
+            notifications: NotificationArea::new(),
         }
     }
 
     pub fn begin_frame(&mut self) {
-        self.window_hits.clear();
-        self.menu_rect = None;
-        self.menu_item_hits.clear();
-        self.menu_bounds = None;
-        self.mouse_capture_rect = None;
+        self.list.begin_frame();
+        self.activation.begin_frame();
+        self.notifications.begin_frame();
     }
 
     pub fn visible(&self) -> bool {
@@ -128,7 +181,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
                 Style::default()
             };
             safe_set_string(buffer, bounds, x, y, menu_icon.as_str(), menu_style);
-            self.menu_rect = Some(Rect {
+            self.activation.menu_rect = Some(Rect {
                 x,
                 y,
                 width: menu_width,
@@ -148,17 +201,28 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         } else {
             for id in display_order.iter().copied() {
                 let focused = id == focus_current;
-                let chunk = if focused {
-                    format!(" [*{:?}]", id)
-                } else {
-                    format!(" [{:?}]", id)
-                };
+                // Pretty label (uses Debug for now). Truncate to remaining space.
+                let mut label = format!("{:?}", id);
+                // leave room for padding
+                let max_label = max_x.saturating_sub(x).saturating_sub(2).max(0) as usize;
+                if label.chars().count() > max_label {
+                    label = truncate_to_width(&label, max_label);
+                }
+                let chunk = format!(" {label} ");
                 let chunk_width = chunk.chars().count() as u16;
                 if x.saturating_add(chunk_width) > max_x {
                     break;
                 }
-                safe_set_string(buffer, bounds, x, y, &chunk, Style::default());
-                self.window_hits.push(PanelWindowHit {
+                let item_style = if focused {
+                    Style::default()
+                        .bg(crate::theme::menu_selected_bg())
+                        .fg(crate::theme::menu_selected_fg())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(crate::theme::panel_inactive_fg())
+                };
+                safe_set_string(buffer, bounds, x, y, &chunk, item_style);
+                self.list.window_hits.push(PanelWindowHit {
                     id,
                     rect: Rect {
                         x,
@@ -204,7 +268,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             let available = max_x.saturating_sub(indicator_x);
             let rect_width = total_width.min(available);
             if rect_width > 0 {
-                self.mouse_capture_rect = Some(Rect {
+                self.notifications.mouse_capture_rect = Some(Rect {
                     x: indicator_x,
                     y,
                     width: rect_width,
@@ -221,21 +285,21 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         if !matches!(mouse.kind, MouseEventKind::Down(_)) {
             return false;
         }
-        if let Some(rect) = self.menu_rect {
+        if let Some(rect) = self.activation.menu_rect {
             return rect_contains(rect, mouse.column, mouse.row);
         }
         false
     }
 
     pub fn menu_contains_point(&self, column: u16, row: u16) -> bool {
-        if let Some(rect) = self.menu_bounds {
+        if let Some(rect) = self.activation.menu_bounds {
             return rect_contains(rect, column, row);
         }
         false
     }
 
     pub fn menu_icon_contains_point(&self, column: u16, row: u16) -> bool {
-        if let Some(rect) = self.menu_rect {
+        if let Some(rect) = self.activation.menu_rect {
             return rect_contains(rect, column, row);
         }
         false
@@ -248,7 +312,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         if !matches!(mouse.kind, MouseEventKind::Down(_)) {
             return false;
         }
-        if let Some(rect) = self.mouse_capture_rect {
+        if let Some(rect) = self.notifications.mouse_capture_rect {
             return rect_contains(rect, mouse.column, mouse.row);
         }
         false
@@ -261,7 +325,8 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         if !matches!(mouse.kind, MouseEventKind::Down(_)) {
             return None;
         }
-        self.window_hits
+        self.list
+            .window_hits
             .iter()
             .find(|hit| rect_contains(hit.rect, mouse.column, mouse.row))
             .map(|hit| hit.id)
@@ -278,7 +343,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         if !open {
             return;
         }
-        let Some(anchor) = self.menu_rect else {
+        let Some(anchor) = self.activation.menu_rect else {
             return;
         };
         if items.is_empty() {
@@ -321,7 +386,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             .bg(crate::theme::menu_selected_bg())
             .fg(crate::theme::menu_selected_fg())
             .add_modifier(Modifier::BOLD);
-        self.menu_bounds = Some(Rect {
+        self.activation.menu_bounds = Some(Rect {
             x: start_x,
             y: start_y,
             width,
@@ -366,7 +431,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
                 menu_style
             };
             safe_set_string(buffer, bounds, inner_x, y, &text, style);
-            self.menu_item_hits.push(PanelMenuHit {
+            self.activation.menu_item_hits.push(PanelMenuHit {
                 index: idx,
                 rect: Rect {
                     x: start_x,
@@ -385,7 +450,8 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         if !matches!(mouse.kind, MouseEventKind::Down(_)) {
             return None;
         }
-        self.menu_item_hits
+        self.activation
+            .menu_item_hits
             .iter()
             .find(|hit| rect_contains(hit.rect, mouse.column, mouse.row))
             .map(|hit| hit.index)
@@ -395,7 +461,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         if !open {
             return;
         }
-        let Some(menu_bounds) = self.menu_bounds else {
+        let Some(menu_bounds) = self.activation.menu_bounds else {
             return;
         };
         let buffer = frame.buffer_mut();
