@@ -289,6 +289,11 @@ impl TerminalComponent {
         }
         response.handled
     }
+
+    /// Terminate the underlying PTY child process.
+    pub fn terminate(&mut self) {
+        let _ = self.pane.kill_child();
+    }
 }
 
 fn key_to_bytes(key: KeyEvent) -> Vec<u8> {

@@ -188,6 +188,17 @@ impl Pty {
         }
     }
 
+    /// Kill the child process if present.
+    pub fn kill_child(&mut self) -> PtyResult<()> {
+        if let Some(mut child) = self.child.take() {
+            // Attempt to kill the child process.
+            child.kill().map_err(|err| wrap_err("kill", err))?;
+            self.exited = true;
+            self.child = None;
+        }
+        Ok(())
+    }
+
     pub fn size(&self) -> PtySize {
         self.size
     }

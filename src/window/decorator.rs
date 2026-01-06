@@ -81,6 +81,20 @@ impl WindowDecorator for DefaultDecorator {
                     }
                 }
             }
+            // Render header buttons (minimize, maximize, close) right-aligned.
+            // Layout: [ _ ] [▢] [✖] with one column spacing.
+            let close_x = outer_right.saturating_sub(1);
+            let max_x = close_x.saturating_sub(2);
+            let min_x = max_x.saturating_sub(2);
+            let buttons = [(min_x, "_"), (max_x, "▢"), (close_x, "✖")];
+            for (bx, sym) in buttons {
+                if bx >= bounds.x && bx < bounds.x + bounds.width && !is_obscured(bx, header_y) {
+                    if let Some(cell) = buffer.cell_mut((bx, header_y)) {
+                        cell.set_symbol(sym);
+                        cell.set_style(header_style);
+                    }
+                }
+            }
         }
 
         // Borders

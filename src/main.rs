@@ -119,6 +119,12 @@ impl HasWindowManager<PaneId, PaneId> for App {
             self.windows.tile_window(id);
         }
     }
+
+    fn wm_close_window(&mut self, id: PaneId) {
+        if let Some(pane) = self.terminals.get_mut(id) {
+            pane.terminate();
+        }
+    }
 }
 
 impl WindowApp<PaneId, PaneId> for App {

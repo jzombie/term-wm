@@ -16,6 +16,7 @@ use crate::window::{AppWindowDraw, LayoutContract, WindowManager, WmMenuAction};
 pub trait HasWindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     fn windows(&mut self) -> &mut WindowManager<W, R>;
     fn wm_new_window(&mut self) {}
+    fn wm_close_window(&mut self, _id: R) {}
 }
 
 pub trait WindowApp<W: Copy + Eq + Ord, R: Copy + Eq + Ord>: HasWindowManager<W, R> {
@@ -63,7 +64,15 @@ where
         .driver()
         .set_mouse_capture(app.windows().mouse_capture_enabled())?;
 
+    // The WindowManager now provides `take_closed_app_windows()` to drain app ids
+    // whose windows were closed; we'll poll that each loop and call `app.wm_close_window`.
+    // No additional setup required here.
+
     event_loop.run(|driver, event| {
+        // Drain any pending closed app ids recorded by the WindowManager and invoke app cleanup.
+        for id in app.windows().take_closed_app_windows() {
+            app.wm_close_window(id);
+        }
         let mut flush_mouse_capture = |app: &mut A, flow: ControlFlow| {
             if let Some(enabled) = app.windows().take_mouse_capture_change() {
                 let _ = driver.set_mouse_capture(enabled);
@@ -105,6 +114,21 @@ where
                         }
                         WmMenuAction::ToggleMouseCapture => {
                             app.windows().toggle_mouse_capture();
+                        }
+                        WmMenuAction::MinimizeWindow => {
+                            let id = app.windows().wm_focus();
+                            app.windows().minimize_window(id);
+                            app.windows().close_wm_overlay();
+                        }
+                        WmMenuAction::MaximizeWindow => {
+                            let id = app.windows().wm_focus();
+                            app.windows().toggle_maximize(id);
+                            app.windows().close_wm_overlay();
+                        }
+                        WmMenuAction::CloseWindow => {
+                            let id = app.windows().wm_focus();
+                            app.windows().close_window(id);
+                            app.windows().close_wm_overlay();
                         }
                         WmMenuAction::NewWindow => {
                             app.wm_new_window();

@@ -144,7 +144,6 @@ impl<T: Copy + Eq> FocusRing<T> {
     }
 }
 
-#[derive(Debug)]
 pub struct WindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     app_focus: FocusRing<W>,
     wm_focus: FocusRing<WindowId<R>>,
@@ -155,10 +154,14 @@ pub struct WindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     floating_headers: Vec<DragHandle<WindowId<R>>>,
     managed_draw_order: Vec<WindowId<R>>,
     managed_draw_order_app: Vec<R>,
+    minimized: Vec<WindowId<R>>,
     // canonical creation order for windows; used to build stable display views
     canonical_order: Vec<WindowId<R>>,
     managed_layout: Option<TilingLayout<WindowId<R>>>,
     managed_floating: Vec<FloatingPane<WindowId<R>>>,
+    prev_floating_rects: std::collections::BTreeMap<WindowId<R>, RectSpec>,
+    // queue of app ids removed this frame; runner drains via `take_closed_app_windows`
+    closed_app_windows: Vec<R>,
     managed_area: Rect,
     panel: Panel<WindowId<R>>,
     drag_header: Option<HeaderDrag<WindowId<R>>>,
@@ -190,6 +193,9 @@ pub enum WmMenuAction {
     ToggleDebugWindow,
     ExitUi,
     BringFloatingFront,
+    MinimizeWindow,
+    MaximizeWindow,
+    CloseWindow,
     ToggleMouseCapture,
 }
 
@@ -209,8 +215,10 @@ where
             managed_draw_order: Vec::new(),
             managed_draw_order_app: Vec::new(),
             canonical_order: Vec::new(),
+            minimized: Vec::new(),
             managed_layout: None,
             managed_floating: Vec::new(),
+            prev_floating_rects: std::collections::BTreeMap::new(),
             managed_area: Rect::default(),
             panel: Panel::new(),
             drag_header: None,
@@ -238,6 +246,7 @@ where
             },
             debug_log_visible: false,
             debug_log_id: WindowId::system(SystemWindowId::DebugLog),
+            closed_app_windows: Vec::new(),
         }
     }
 
@@ -249,6 +258,11 @@ where
 
     pub fn set_layout_contract(&mut self, contract: LayoutContract) {
         self.layout_contract = contract;
+    }
+
+    /// Drain and return any app ids whose windows were closed since the last call.
+    pub fn take_closed_app_windows(&mut self) -> Vec<R> {
+        std::mem::take(&mut self.closed_app_windows)
     }
 
     pub fn layout_contract(&self) -> LayoutContract {
@@ -458,6 +472,10 @@ where
         self.wm_focus.current()
     }
 
+    pub fn wm_focus_app(&self) -> Option<R> {
+        self.wm_focus.current().as_app()
+    }
+
     pub fn set_wm_focus(&mut self, focus: WindowId<R>) {
         self.wm_focus.set_current(focus);
         if let Some(app_id) = focus.as_app()
@@ -609,6 +627,10 @@ where
                 if self.floating_index(*id).is_some() {
                     continue;
                 }
+                // skip minimized windows
+                if self.minimized.contains(id) {
+                    continue;
+                }
                 self.regions.set(*id, *rect);
                 if let Some(header) = floating_header_for_region(*id, *rect, self.managed_area) {
                     self.floating_headers.push(header);
@@ -636,6 +658,10 @@ where
         }
         for floating in &self.managed_floating {
             let rect = floating.rect.resolve(self.managed_area);
+            // skip minimized floating panes
+            if self.minimized.contains(&floating.id) {
+                continue;
+            }
             self.regions.set(floating.id, rect);
             self.resize_handles.extend(resize_handles_for_region(
                 floating.id,
@@ -655,10 +681,10 @@ where
             }
         }
         self.managed_draw_order = self.z_order.clone();
-        // maintain canonical order: keep existing order for known ids, append new ones
+        // maintain canonical order: keep existing order for known ids (including minimized), append new ones
         let mut new_canonical = Vec::new();
         for id in &self.canonical_order {
-            if self.managed_draw_order.contains(id) {
+            if self.managed_draw_order.contains(id) || self.minimized.contains(id) {
                 new_canonical.push(*id);
             }
         }
@@ -686,7 +712,8 @@ where
     pub fn build_display_order(&self) -> Vec<WindowId<R>> {
         let mut out: Vec<WindowId<R>> = Vec::new();
         for id in &self.canonical_order {
-            if self.managed_draw_order.contains(id) {
+            // include canonical ids even if currently minimized so they remain visible in the panel
+            if self.managed_draw_order.contains(id) || self.minimized.contains(id) {
                 out.push(*id);
             }
         }
@@ -715,6 +742,11 @@ where
             } else if self.panel.hit_test_mouse_capture(event) {
                 self.toggle_mouse_capture();
             } else if let Some(id) = self.panel.hit_test_window(event) {
+                // If the clicked window is minimized, restore it first so it appears
+                // in the layout; otherwise just focus and bring to front.
+                if self.minimized.contains(&id) {
+                    self.restore_minimized(id);
+                }
                 self.set_wm_focus(id);
                 self.bring_floating_to_front_id(id);
             }
@@ -761,6 +793,87 @@ where
         false
     }
 
+    pub fn minimize_window(&mut self, id: WindowId<R>) {
+        if self.minimized.contains(&id) {
+            return;
+        }
+        // remove from floating and regions; keep canonical order so it can be restored
+        self.managed_floating.retain(|f| f.id != id);
+        self.z_order.retain(|x| *x != id);
+        self.managed_draw_order.retain(|x| *x != id);
+        self.minimized.push(id);
+        // ensure focus moves if needed
+        if self.wm_focus.current() == id {
+            self.select_fallback_focus();
+        }
+    }
+
+    pub fn restore_minimized(&mut self, id: WindowId<R>) {
+        if let Some(pos) = self.minimized.iter().position(|x| *x == id) {
+            self.minimized.remove(pos);
+            // reinstall into z_order and draw order
+            if !self.z_order.contains(&id) {
+                self.z_order.push(id);
+            }
+            if !self.managed_draw_order.contains(&id) {
+                self.managed_draw_order.push(id);
+            }
+        }
+    }
+
+    pub fn toggle_maximize(&mut self, id: WindowId<R>) {
+        // maximize toggles the floating rect to full managed_area
+        let full = RectSpec::Absolute(self.managed_area);
+        if let Some(index) = self.managed_floating.iter().position(|f| f.id == id) {
+            let cur = self.managed_floating[index].rect.clone();
+            if cur == full {
+                // restore previous if available
+                if let Some(prev) = self.prev_floating_rects.remove(&id) {
+                    self.managed_floating[index].rect = prev;
+                }
+            } else {
+                // save current and set to full
+                self.prev_floating_rects.insert(id, cur);
+                self.managed_floating[index].rect = full;
+            }
+            self.bring_floating_to_front_id(id);
+            return;
+        }
+        // not floating: add floating pane covering full area
+        // Save the current region (if available) so we can restore later.
+        let prev_rect = if let Some(rect) = self.regions.get(id) {
+            RectSpec::Absolute(rect)
+        } else {
+            RectSpec::Percent {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            }
+        };
+        self.prev_floating_rects.insert(id, prev_rect);
+        self.managed_floating.push(FloatingPane { id, rect: full });
+        self.bring_floating_to_front_id(id);
+    }
+
+    pub fn close_window(&mut self, id: WindowId<R>) {
+        // Remove references to this window
+        self.managed_floating.retain(|f| f.id != id);
+        self.z_order.retain(|x| *x != id);
+        self.managed_draw_order.retain(|x| *x != id);
+        self.canonical_order.retain(|x| *x != id);
+        self.minimized.retain(|x| *x != id);
+        self.regions.remove(id);
+        // update focus
+        if self.wm_focus.current() == id {
+            self.select_fallback_focus();
+        }
+        // If this window corresponded to an app id, enqueue it for the runner to drain.
+        if let Some(app_id) = id.as_app() {
+            self.closed_app_windows.push(app_id);
+        }
+    }
+
     fn handle_header_drag_event(&mut self, event: &Event) -> bool {
         use crossterm::event::MouseEventKind;
         let Event::Mouse(mouse) = event else {
@@ -793,6 +906,24 @@ where
                     }
 
                     let rect = self.full_region_for_id(header.id);
+                    // Detect header-button clicks (minimize, maximize, close) before starting drag.
+                    let header_y = rect.y.saturating_add(1);
+                    let outer_right = rect.x.saturating_add(rect.width).saturating_sub(1);
+                    let close_x = outer_right.saturating_sub(1);
+                    let max_x = close_x.saturating_sub(2);
+                    let min_x = max_x.saturating_sub(2);
+                    if mouse.row == header_y {
+                        if mouse.column == min_x {
+                            self.minimize_window(header.id);
+                            return true;
+                        } else if mouse.column == max_x {
+                            self.toggle_maximize(header.id);
+                            return true;
+                        } else if mouse.column == close_x {
+                            self.close_window(header.id);
+                            return true;
+                        }
+                    }
                     // Standard floating drag start
                     if self.floating_index(header.id).is_some() {
                         self.bring_floating_to_front_id(header.id);
@@ -1733,7 +1864,6 @@ struct WmMenuItem {
     icon: Option<&'static str>,
     action: WmMenuAction,
 }
-
 fn wm_menu_items(mouse_capture_enabled: bool) -> [WmMenuItem; 6] {
     let mouse_label = if mouse_capture_enabled {
         "Mouse Capture: On"
