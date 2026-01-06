@@ -1,0 +1,24 @@
+[package]
+name = "term-wm"
+description = "A cross-platform window manager for terminal shells."
+authors = ["Jeremy Harris <jeremy.harris@zenosmosis.com>"]
+version = "0.1.0-alpha"
+edition = "2024"
+repository = "https://github.com/jzombie/term-wm"
+license = "MIT OR Apache-2.0"
+publish = true
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["windows-sys"]
+
+[dependencies]
+crossterm = "0.29.0"
+indoc = "2.0.7"
+libc = "0.2.176"
+portable-pty = "0.9.0"
+ratatui = "0.30.0"
+resvg = "0.45.1"
+shell-words = "1.1.1"
+thiserror = "2.0.17"
+vt100 = "0.16.2"
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO"] }
