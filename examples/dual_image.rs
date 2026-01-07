@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ratatui::prelude::Rect;
-use ratatui::widgets::{Block, Borders, Clear};
+use ratatui::widgets::Clear;
 
 use term_wm::components::{AsciiImage, Component};
 use term_wm::drivers::OutputDriver;
