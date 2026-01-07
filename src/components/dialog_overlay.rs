@@ -88,6 +88,23 @@ impl DialogOverlayComponent {
         self.dim_backdrop = dim;
     }
 
+    /// Render only the dim backdrop into the frame buffer. This is useful when
+    /// callers want to draw a custom dialog body but still have the backdrop dimmed.
+    pub fn render_backdrop(&self, frame: &mut UiFrame<'_>, area: Rect) {
+        if !self.dim_backdrop || area.width == 0 || area.height == 0 {
+            return;
+        }
+        let buffer = frame.buffer_mut();
+        let dim_style = Style::default().add_modifier(Modifier::DIM);
+        for y in area.y..area.y.saturating_add(area.height) {
+            for x in area.x..area.x.saturating_add(area.width) {
+                if let Some(cell) = buffer.cell_mut((x, y)) {
+                    cell.set_style(dim_style);
+                }
+            }
+        }
+    }
+
     pub fn visible(&self) -> bool {
         self.visible
     }

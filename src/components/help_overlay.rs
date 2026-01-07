@@ -21,6 +21,9 @@ impl Component for HelpOverlayComponent {
         if !self.visible || area.width == 0 || area.height == 0 {
             return;
         }
+        // If the dialog requests a dim backdrop, apply it across the full frame
+        // before clearing and drawing the help dialog contents.
+        self.dialog.render_backdrop(frame, area);
         let rect = self.dialog.rect_for(area);
         frame.render_widget(Clear, rect);
         let block = Block::default().title("Help").borders(Borders::ALL);

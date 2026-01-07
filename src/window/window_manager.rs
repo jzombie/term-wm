@@ -189,6 +189,7 @@ pub struct WindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WmMenuAction {
     CloseMenu,
+    Help,
     NewWindow,
     ToggleDebugWindow,
     ExitUi,
@@ -2104,7 +2105,7 @@ struct WmMenuItem {
     icon: Option<&'static str>,
     action: WmMenuAction,
 }
-fn wm_menu_items(mouse_capture_enabled: bool) -> [WmMenuItem; 6] {
+fn wm_menu_items(mouse_capture_enabled: bool) -> [WmMenuItem; 7] {
     let mouse_label = if mouse_capture_enabled {
         "Mouse Capture: On"
     } else {
@@ -2135,6 +2136,11 @@ fn wm_menu_items(mouse_capture_enabled: bool) -> [WmMenuItem; 6] {
             label: "Debug Log",
             icon: Some("≣"),
             action: WmMenuAction::ToggleDebugWindow,
+        },
+        WmMenuItem {
+            label: "Help",
+            icon: Some("?"),
+            action: WmMenuAction::Help,
         },
         WmMenuItem {
             label: "Exit UI",

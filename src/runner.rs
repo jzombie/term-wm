@@ -146,6 +146,10 @@ where
                                 app.windows().toggle_debug_window();
                                 app.windows().close_wm_overlay();
                             }
+                            WmMenuAction::Help => {
+                                app.windows().open_help_overlay();
+                                app.windows().close_wm_overlay();
+                            }
                             WmMenuAction::BringFloatingFront => {
                                 app.windows().bring_all_floating_to_front();
                                 app.windows().close_wm_overlay();
