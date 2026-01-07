@@ -13,8 +13,9 @@ Once the menu is open:
 
 - **Tab / Shift-Tab**: Cycle focus between windows.
 - **n**: Create a new window (when overlay is open).
-- **j / k**: Move up / down lists and menus.
+- **j / k** _or_ **Up / Down arrows**: Move up / down lists and menus.
 - **Enter**: Activate the selected menu item.
+ - **Help menu**: Open the full help overlay from the panel menu (Top-left → Help).
 
 Mouse capturing is enabled by default.  To disable it, open the menu and toggle `Mouse Capture`.
 
