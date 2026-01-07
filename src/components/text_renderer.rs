@@ -1,8 +1,14 @@
+use std::collections::HashMap;
+
+use crossterm::event::MouseEvent;
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::text::{Line, Text};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::style::Color;
+use ratatui::text::{Line, Span, Text};
+use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::components::{Component, scroll_view::ScrollViewComponent};
+use crate::linkifier::LinkifiedText;
 use crate::ui::UiFrame;
 
 #[derive(Debug)]
@@ -10,6 +16,7 @@ pub struct TextRendererComponent {
     text: Text<'static>,
     scroll: ScrollViewComponent,
     wrap: bool,
+    link_map: Vec<Vec<Option<String>>>,
 }
 
 impl Component for TextRendererComponent {
@@ -99,11 +106,18 @@ impl TextRendererComponent {
             text: Text::from(vec![Line::from(String::new())]),
             scroll: ScrollViewComponent::new(),
             wrap: true,
+            link_map: Vec::new(),
         }
     }
 
     pub fn set_text(&mut self, text: Text<'static>) {
         self.text = text;
+        self.link_map.clear();
+    }
+
+    pub fn set_linkified_text(&mut self, linkified: LinkifiedText) {
+        self.text = linkified.text;
+        self.link_map = linkified.link_map;
     }
 
     pub fn set_wrap(&mut self, wrap: bool) {
@@ -151,6 +165,124 @@ impl TextRendererComponent {
             })
             .collect()
     }
+
+    fn build_hit_test_palette(&self) -> Option<HitTestPalette> {
+        let mut url_ids: HashMap<String, u32> = HashMap::new();
+        let mut urls: Vec<String> = Vec::new();
+        let mut has_links = false;
+        let mut lines: Vec<Line<'static>> = Vec::with_capacity(self.text.lines.len());
+
+        for (line_idx, line) in self.text.lines.iter().enumerate() {
+            let mut spans: Vec<Span<'static>> = Vec::with_capacity(line.spans.len());
+            let line_links = self.link_map.get(line_idx);
+            for (span_idx, span) in line.spans.iter().enumerate() {
+                let mut new_span = span.clone();
+                if let Some(link) = line_links
+                    .and_then(|entries| entries.get(span_idx))
+                    .and_then(|opt| opt.clone())
+                {
+                    has_links = true;
+                    let id = *url_ids.entry(link.clone()).or_insert_with(|| {
+                        urls.push(link.clone());
+                        urls.len() as u32
+                    });
+                    new_span.style = new_span.style.fg(encode_link_color(id));
+                }
+                spans.push(new_span);
+            }
+            lines.push(Line::from(spans));
+        }
+
+        if !has_links {
+            return None;
+        }
+
+        Some(HitTestPalette {
+            text: Text::from(lines),
+            urls,
+        })
+    }
+
+    pub fn link_at(&self, area: Rect, mouse: MouseEvent) -> Option<String> {
+        if self.link_map.is_empty() {
+            return None;
+        }
+        if area.width == 0 || area.height == 0 {
+            return None;
+        }
+        if mouse.column < area.x
+            || mouse.column >= area.x.saturating_add(area.width)
+            || mouse.row < area.y
+            || mouse.row >= area.y.saturating_add(area.height)
+        {
+            return None;
+        }
+
+        let mut content_width = area.width;
+        let view = area.height as usize;
+        let total_lines = if self.wrap {
+            compute_display_lines(&self.text, content_width)
+        } else {
+            self.text.lines.len().max(1)
+        };
+
+        let v_scroll_needed = total_lines > view && content_width > 0;
+        if v_scroll_needed {
+            content_width = content_width.saturating_sub(1);
+        }
+
+        if content_width == 0 {
+            return None;
+        }
+
+        let local_x = mouse.column.saturating_sub(area.x);
+        let local_y = mouse.row.saturating_sub(area.y);
+        if local_x >= content_width || local_y >= area.height {
+            return None;
+        }
+
+        let Some(hit_palette) = self.build_hit_test_palette() else {
+            return None;
+        };
+        let HitTestPalette { text, urls } = hit_palette;
+        if urls.is_empty() {
+            return None;
+        }
+
+        let mut paragraph = Paragraph::new(text);
+        if self.wrap {
+            paragraph = paragraph.wrap(Wrap { trim: false });
+        }
+        paragraph = paragraph.scroll((self.scroll.offset() as u16, self.scroll.h_offset() as u16));
+
+        let mut buffer = Buffer::empty(Rect {
+            x: 0,
+            y: 0,
+            width: content_width,
+            height: area.height,
+        });
+        paragraph.render(
+            Rect {
+                x: 0,
+                y: 0,
+                width: content_width,
+                height: area.height,
+            },
+            &mut buffer,
+        );
+
+        if let Some(cell) = buffer.cell((local_x, local_y)) {
+            if let Some(id) = decode_link_color(cell.fg) {
+                if let Some(idx) = id.checked_sub(1) {
+                    if let Some(url) = urls.get(idx as usize) {
+                        return Some(url.clone());
+                    }
+                }
+            }
+        }
+
+        None
+    }
 }
 
 fn compute_display_lines(text: &Text<'_>, width: u16) -> usize {
@@ -172,5 +304,29 @@ fn compute_display_lines(text: &Text<'_>, width: u16) -> usize {
 impl Default for TextRendererComponent {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[derive(Debug)]
+struct HitTestPalette {
+    text: Text<'static>,
+    urls: Vec<String>,
+}
+
+fn encode_link_color(id: u32) -> Color {
+    debug_assert!(id > 0 && id <= 0x00FF_FFFF, "hit-test color id overflow");
+    let r = ((id >> 16) & 0xFF) as u8;
+    let g = ((id >> 8) & 0xFF) as u8;
+    let b = (id & 0xFF) as u8;
+    Color::Rgb(r, g, b)
+}
+
+fn decode_link_color(color: Color) -> Option<u32> {
+    match color {
+        Color::Rgb(r, g, b) => {
+            let id = ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
+            if id == 0 { None } else { Some(id) }
+        }
+        _ => None,
     }
 }

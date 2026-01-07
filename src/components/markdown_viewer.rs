@@ -1,17 +1,30 @@
+use std::fmt;
 use std::str;
+use std::sync::Arc;
 
 use crossterm::event::Event;
 use pulldown_cmark::{Event as MdEvent, Options, Parser, Tag};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span, Text};
 
 use crate::components::{Component, TextRendererComponent};
+use crate::linkifier::{LinkFragment, Linkifier};
 use crate::ui::UiFrame;
 
-#[derive(Debug)]
+pub type LinkHandler = Arc<dyn Fn(&str) -> bool + Send + Sync + 'static>;
+
 pub struct MarkdownViewerComponent {
     renderer: TextRendererComponent,
+    link_handler: Option<LinkHandler>,
+    linkifier: Linkifier,
+}
+
+impl fmt::Debug for MarkdownViewerComponent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MarkdownViewerComponent")
+            .field("renderer", &self.renderer)
+            .finish()
+    }
 }
 
 impl Component for MarkdownViewerComponent {
@@ -37,6 +50,8 @@ impl MarkdownViewerComponent {
     pub fn new() -> Self {
         Self {
             renderer: TextRendererComponent::new(),
+            link_handler: None,
+            linkifier: Linkifier::new(),
         }
     }
 
@@ -48,16 +63,26 @@ impl MarkdownViewerComponent {
         mv
     }
 
+    pub fn set_link_handler(&mut self, handler: Option<LinkHandler>) {
+        self.link_handler = handler;
+    }
+
+    pub fn set_link_handler_fn<F>(&mut self, handler: F)
+    where
+        F: Fn(&str) -> bool + Send + Sync + 'static,
+    {
+        self.link_handler = Some(Arc::new(handler));
+    }
+
     pub fn set_markdown(&mut self, raw: &str) {
         let parser = Parser::new_ext(raw, Options::all());
 
-        let mut lines: Vec<Vec<Span>> = Vec::new();
-        let mut current: Vec<Span> = Vec::new();
-
-        // list numbering handled via `list_start`/`list_count` vectors
+        let mut lines: Vec<Vec<LinkFragment>> = Vec::new();
+        let mut current: Vec<LinkFragment> = Vec::new();
 
         let mut list_start: Vec<Option<usize>> = Vec::new();
         let mut list_count: Vec<usize> = Vec::new();
+
         #[derive(Debug, Clone, Copy)]
         enum TagKind {
             Strong,
@@ -67,12 +92,15 @@ impl MarkdownViewerComponent {
             Item,
             CodeBlock,
             Paragraph,
+            Link,
             Other,
         }
+
         let mut tag_stack: Vec<TagKind> = Vec::new();
         let mut bold = false;
         let mut italic = false;
         let mut in_code_block = false;
+        let mut current_link: Option<String> = None;
 
         for ev in parser {
             match ev {
@@ -102,7 +130,7 @@ impl MarkdownViewerComponent {
                         } else {
                             format!("{}- ", indent)
                         };
-                        current.push(Span::raw(bullet));
+                        current.push(LinkFragment::new(bullet, Style::default(), None));
                     }
                     Tag::CodeBlock(_) => {
                         tag_stack.push(TagKind::CodeBlock);
@@ -110,6 +138,10 @@ impl MarkdownViewerComponent {
                     }
                     Tag::Paragraph => {
                         tag_stack.push(TagKind::Paragraph);
+                    }
+                    Tag::Link { dest_url, .. } => {
+                        tag_stack.push(TagKind::Link);
+                        current_link = Some(dest_url.to_string());
                     }
                     Tag::Heading { .. } => {
                         tag_stack.push(TagKind::Heading);
@@ -122,84 +154,95 @@ impl MarkdownViewerComponent {
                         match kind {
                             TagKind::Strong => bold = false,
                             TagKind::Emphasis => italic = false,
-                            TagKind::Item => {
-                                if !current.is_empty() {
-                                    lines.push(std::mem::take(&mut current));
-                                }
-                            }
+                            TagKind::Item => flush_current_line(&mut lines, &mut current),
                             TagKind::List => {
                                 list_start.pop();
                                 list_count.pop();
                                 let in_parent_list_item =
                                     tag_stack.iter().any(|k| matches!(k, TagKind::Item));
                                 if !in_parent_list_item {
-                                    lines.push(vec![Span::raw("")]);
+                                    push_blank_line(&mut lines);
                                 }
                             }
                             TagKind::CodeBlock => in_code_block = false,
                             TagKind::Paragraph => {
-                                lines.push(std::mem::take(&mut current));
+                                flush_current_line(&mut lines, &mut current);
                                 let in_list_item =
                                     tag_stack.iter().any(|k| matches!(k, TagKind::Item));
                                 if !in_list_item {
-                                    lines.push(vec![Span::raw("")]);
+                                    push_blank_line(&mut lines);
                                 }
                             }
                             TagKind::Heading => {
                                 bold = false;
-                                lines.push(std::mem::take(&mut current));
-                                lines.push(vec![Span::raw("")]);
+                                flush_current_line(&mut lines, &mut current);
+                                push_blank_line(&mut lines);
+                            }
+                            TagKind::Link => {
+                                current_link = None;
                             }
                             TagKind::Other => {}
                         }
                     }
                 }
                 MdEvent::Text(text) => {
-                    let mut style = Style::default();
+                    let mut base_style = Style::default();
                     if bold {
-                        style = style.add_modifier(Modifier::BOLD);
+                        base_style = base_style.add_modifier(Modifier::BOLD);
                     }
                     if italic {
-                        style = style.add_modifier(Modifier::ITALIC);
+                        base_style = base_style.add_modifier(Modifier::ITALIC);
                     }
                     if in_code_block {
-                        style = Style::default().fg(Color::Yellow);
+                        base_style = Style::default().fg(Color::Yellow);
                     }
-                    current.push(Span::styled(text.to_string(), style));
+
+                    current.push(LinkFragment::new(
+                        text.to_string(),
+                        base_style,
+                        current_link.clone(),
+                    ));
+                }
+                MdEvent::Html(text) => {
+                    current.push(LinkFragment::new(
+                        text.to_string(),
+                        Style::default(),
+                        current_link.clone(),
+                    ));
                 }
                 MdEvent::Code(text) => {
-                    current.push(Span::styled(
+                    let style = Style::default().fg(Color::Yellow);
+                    current.push(LinkFragment::new(
                         text.to_string(),
-                        Style::default().fg(Color::Yellow),
+                        style,
+                        current_link.clone(),
                     ));
                 }
                 MdEvent::SoftBreak => {
                     if in_code_block {
-                        lines.push(std::mem::take(&mut current));
+                        flush_current_line(&mut lines, &mut current);
                     } else {
-                        current.push(Span::raw(" "));
+                        current.push(LinkFragment::new(" ", Style::default(), None));
                     }
                 }
                 MdEvent::HardBreak => {
-                    lines.push(std::mem::take(&mut current));
+                    flush_current_line(&mut lines, &mut current);
                 }
                 MdEvent::Rule => {
-                    lines.push(vec![Span::raw("─")]);
+                    lines.push(vec![LinkFragment::new("─", Style::default(), None)]);
                 }
                 _ => {}
             }
         }
 
-        if !current.is_empty() {
-            lines.push(current);
-        }
+        flush_current_line(&mut lines, &mut current);
+
         if lines.is_empty() {
-            lines.push(vec![Span::raw("")]);
+            push_blank_line(&mut lines);
         }
 
-        let owned_lines: Vec<Line> = lines.into_iter().map(Line::from).collect();
-        let text = Text::from(owned_lines);
-        self.renderer.set_text(text);
+        let linkified = self.linkifier.linkify_fragments(lines);
+        self.renderer.set_linkified_text(linkified);
         self.renderer.set_wrap(true);
     }
 
@@ -210,6 +253,26 @@ impl MarkdownViewerComponent {
     }
 
     pub fn handle_pointer_event(&mut self, event: &Event) -> bool {
+        // Deprecated: callers that have area information should use
+        // `handle_pointer_event_in_area` so link hit-testing works reliably.
+        self.renderer.handle_event(event)
+    }
+
+    pub fn handle_pointer_event_in_area(&mut self, event: &Event, area: Rect) -> bool {
+        use crossterm::event::MouseEventKind;
+        if let Event::Mouse(mouse) = event {
+            // Only respond to clicks for opening links; let renderer handle scrolls.
+            if matches!(mouse.kind, MouseEventKind::Down(_))
+                && let Some(url) = self.renderer.link_at(area, *mouse)
+                && self
+                    .link_handler
+                    .as_ref()
+                    .map(|handler| handler(url.as_str()))
+                    .unwrap_or(false)
+            {
+                return true;
+            }
+        }
         self.renderer.handle_event(event)
     }
 
@@ -262,6 +325,16 @@ impl Default for MarkdownViewerComponent {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn flush_current_line(lines: &mut Vec<Vec<LinkFragment>>, current: &mut Vec<LinkFragment>) {
+    if !current.is_empty() {
+        lines.push(std::mem::take(current));
+    }
+}
+
+fn push_blank_line(lines: &mut Vec<Vec<LinkFragment>>) {
+    lines.push(vec![LinkFragment::new("", Style::default(), None)]);
 }
 
 #[cfg(test)]

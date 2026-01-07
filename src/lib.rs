@@ -2,6 +2,7 @@ pub mod components;
 pub mod drivers;
 pub mod event_loop;
 pub mod layout;
+pub mod linkifier;
 pub mod panel;
 pub mod pty;
 pub mod runner;

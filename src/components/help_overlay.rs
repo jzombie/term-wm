@@ -26,7 +26,7 @@ impl Component for HelpOverlayComponent {
         self.dialog.render_backdrop(frame, area);
         let rect = self.dialog.rect_for(area);
         frame.render_widget(Clear, rect);
-        let title = "About / Help";
+        let title = format!("{} — About / Help", env!("CARGO_PKG_NAME"));
         let block = Block::default().title(title).borders(Borders::ALL);
         let inner = Rect {
             x: rect.x.saturating_add(1),
@@ -43,6 +43,34 @@ impl Component for HelpOverlayComponent {
         // The caller (WindowManager) routes events while overlay visible; here just return false
         // Actual routing is handled in WindowManager where available area is known.
         self.handle_help_event(event)
+    }
+}
+
+impl HelpOverlayComponent {
+    pub fn handle_help_event_in_area(&mut self, event: &Event, area: Rect) -> bool {
+        if !self.visible {
+            return false;
+        }
+        match event {
+            Event::Key(key) => match key.code {
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
+                    self.visible = false;
+                    true
+                }
+                _ => self.viewer.handle_key_event(key),
+            },
+            Event::Mouse(_) => {
+                let rect = self.dialog.rect_for(area);
+                let inner = Rect {
+                    x: rect.x.saturating_add(1),
+                    y: rect.y.saturating_add(1),
+                    width: rect.width.saturating_sub(2),
+                    height: rect.height.saturating_sub(2),
+                };
+                self.viewer.handle_pointer_event_in_area(event, inner)
+            }
+            _ => false,
+        }
     }
 }
 
@@ -64,6 +92,10 @@ impl HelpOverlayComponent {
                 .replace("%REPOSITORY%", env!("CARGO_PKG_REPOSITORY"));
             overlay.viewer.set_markdown(&s);
         }
+        overlay.viewer.set_link_handler_fn(|url| {
+            let _ = webbrowser::open(url);
+            true
+        });
         overlay
     }
 

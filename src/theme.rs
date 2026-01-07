@@ -69,6 +69,15 @@ pub fn dialog_separator() -> Color {
     Color::DarkGray
 }
 
+// Link styling
+pub fn link_color() -> Color {
+    Color::White
+}
+
+pub fn link_underline() -> bool {
+    true
+}
+
 // Decorator
 pub fn decorator_header_bg() -> Color {
     Color::Blue

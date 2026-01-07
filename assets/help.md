@@ -3,7 +3,7 @@
 **Package:** %PACKAGE% (https://crates.io/crates/%PACKAGE%)  
 **Version:** %VERSION%
 
-Submit bug reports to: %REPOSITORY%
+Submit bug reports to: %REPOSITORY%/issues/new
 
 Welcome to term-wm! Here's a quick list of useful commands to get around the UI.
 
