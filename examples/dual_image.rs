@@ -138,11 +138,9 @@ impl WindowApp<PaneId, PaneId> for App {
 }
 
 fn render_pane(frame: &mut UiFrame<'_>, image: &mut AsciiImage, area: Rect, _focused: bool) {
-    let block = Block::default().borders(Borders::ALL);
-    let inner = block.inner(area);
+    // Clear the area and render the image directly (no inner decorative frame).
     frame.render_widget(Clear, area);
-    frame.render_widget(block, area);
-    image.render(frame, inner, false);
+    image.render(frame, area, false);
 }
 
 fn load_into(component: &mut AsciiImage, path: &str) -> io::Result<()> {
