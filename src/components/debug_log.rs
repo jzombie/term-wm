@@ -13,6 +13,8 @@ use crate::components::Component;
 const DEFAULT_MAX_LINES: usize = 2000;
 static GLOBAL_LOG: OnceLock<DebugLogHandle> = OnceLock::new();
 static PANIC_HOOK_INSTALLED: OnceLock<()> = OnceLock::new();
+use std::sync::atomic::{AtomicBool, Ordering};
+static PANIC_PENDING: AtomicBool = AtomicBool::new(false);
 
 pub fn set_global_debug_log(handle: DebugLogHandle) -> bool {
     GLOBAL_LOG.set(handle).is_ok()
@@ -59,8 +61,14 @@ pub fn install_panic_hook() {
             }
             handle.push("============".to_string());
         }
+        // Mark that a panic occurred so the UI can react in the next frame.
+        PANIC_PENDING.store(true, Ordering::SeqCst);
         prev(info);
     }));
+}
+
+pub fn take_panic_pending() -> bool {
+    PANIC_PENDING.swap(false, Ordering::SeqCst)
 }
 
 #[derive(Debug)]

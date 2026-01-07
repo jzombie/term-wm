@@ -469,8 +469,12 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         };
         let buffer = frame.buffer_mut();
         let style = Style::default().add_modifier(Modifier::DIM);
-        for y in bounds.y..bounds.y.saturating_add(bounds.height) {
-            for x in bounds.x..bounds.x.saturating_add(bounds.width) {
+        let clip = bounds.intersection(buffer.area);
+        if clip.width == 0 || clip.height == 0 {
+            return;
+        }
+        for y in clip.y..clip.y.saturating_add(clip.height) {
+            for x in clip.x..clip.x.saturating_add(clip.width) {
                 if rect_contains(menu_bounds, x, y) || rect_contains(exclude, x, y) {
                     continue;
                 }

@@ -216,6 +216,7 @@ where
             managed_layout: None,
             managed_floating: Vec::new(),
             prev_floating_rects: std::collections::BTreeMap::new(),
+            closed_app_windows: Vec::new(),
             managed_area: Rect::default(),
             panel: Panel::new(),
             drag_header: None,
@@ -240,7 +241,6 @@ where
                 component
             },
             debug_log_id: WindowId::system(SystemWindowId::DebugLog),
-            closed_app_windows: Vec::new(),
         }
     }
 
@@ -279,6 +279,13 @@ where
         self.managed_draw_order.clear();
         self.managed_draw_order_app.clear();
         self.panel.begin_frame();
+        // If a panic occurred earlier, ensure the debug log is shown and focused.
+        if crate::components::take_panic_pending() {
+            self.state.set_debug_log_visible(true);
+            self.ensure_debug_log_in_layout();
+            self.bring_to_front_id(self.debug_log_id);
+            self.set_wm_focus(self.debug_log_id);
+        }
         if self.layout_contract == LayoutContract::AppManaged {
             self.clear_capture();
         } else {
@@ -1590,12 +1597,15 @@ where
         if let Some((_, _, rect)) = self.drag_snap {
             let buffer = frame.buffer_mut();
             let color = crate::theme::accent();
-            for y in rect.y..rect.y.saturating_add(rect.height) {
-                for x in rect.x..rect.x.saturating_add(rect.width) {
-                    if let Some(cell) = buffer.cell_mut((x, y)) {
-                        let mut style = cell.style();
-                        style.bg = Some(color);
-                        cell.set_style(style);
+            let clip = rect.intersection(buffer.area);
+            if clip.width > 0 && clip.height > 0 {
+                for y in clip.y..clip.y.saturating_add(clip.height) {
+                    for x in clip.x..clip.x.saturating_add(clip.width) {
+                        if let Some(cell) = buffer.cell_mut((x, y)) {
+                            let mut style = cell.style();
+                            style.bg = Some(color);
+                            cell.set_style(style);
+                        }
                     }
                 }
             }

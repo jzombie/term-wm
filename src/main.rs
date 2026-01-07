@@ -1,16 +1,14 @@
 use std::io;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
-use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
-use crossterm::{execute, terminal};
-use ratatui::backend::CrosstermBackend;
+use crossterm::event::{Event, KeyCode, KeyModifiers};
+use ratatui::Frame;
 use ratatui::prelude::Rect;
-use ratatui::{Frame, Terminal};
 
 use portable_pty::PtySize;
 use term_wm::components::{Component, TerminalComponent, default_shell_command};
-use term_wm::drivers::console::ConsoleDriver;
+use term_wm::drivers::OutputDriver;
+use term_wm::drivers::console::{ConsoleInputDriver, ConsoleOutputDriver};
 use term_wm::runner::{HasWindowManager, WindowApp, run_window_app};
 use term_wm::window::{AppWindowDraw, WindowManager};
 
@@ -21,16 +19,13 @@ const MAX_WINDOWS: usize = 8;
 fn main() -> io::Result<()> {
     let mut app = App::new()?;
     let focus_regions: Vec<PaneId> = (0..MAX_WINDOWS).collect();
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    terminal::enable_raw_mode()?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-    let mut driver = ConsoleDriver::new();
+    let mut output = ConsoleOutputDriver::new()?;
+    output.enter()?;
+    let mut input = ConsoleInputDriver::new();
 
     let result = run_window_app(
-        &mut terminal,
-        &mut driver,
+        &mut output,
+        &mut input,
         &mut app,
         &focus_regions,
         |id| id,
@@ -58,13 +53,7 @@ fn main() -> io::Result<()> {
         },
     );
 
-    terminal::disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        event::DisableMouseCapture,
-        LeaveAlternateScreen
-    )?;
-    terminal.show_cursor()?;
+    output.exit()?;
 
     result
 }

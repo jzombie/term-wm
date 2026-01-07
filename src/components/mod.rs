@@ -15,7 +15,7 @@ pub use ascii_image::AsciiImage;
 pub use confirm_overlay::{ConfirmAction, ConfirmOverlay};
 pub use debug_log::{
     DebugLogComponent, DebugLogHandle, DebugLogWriter, global_debug_log, install_panic_hook,
-    log_line, set_global_debug_log,
+    log_line, set_global_debug_log, take_panic_pending,
 };
 pub use dialog_overlay::DialogOverlay;
 pub use list::ListComponent;

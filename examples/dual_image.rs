@@ -2,16 +2,14 @@ use std::fs;
 use std::io;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
-use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
-use crossterm::{execute, terminal};
-use ratatui::backend::CrosstermBackend;
+use crossterm::event::{Event, KeyCode, KeyModifiers};
+use ratatui::Frame;
 use ratatui::prelude::Rect;
 use ratatui::widgets::{Block, Borders, Clear};
-use ratatui::{Frame, Terminal};
 
 use term_wm::components::{AsciiImage, Component};
-use term_wm::drivers::console::ConsoleDriver;
+use term_wm::drivers::OutputDriver;
+use term_wm::drivers::console::{ConsoleInputDriver, ConsoleOutputDriver};
 use term_wm::runner::{HasWindowManager, WindowApp, run_window_app};
 use term_wm::window::{AppWindowDraw, WindowManager};
 
@@ -23,16 +21,13 @@ enum PaneId {
 
 fn main() -> io::Result<()> {
     let mut app = App::new(std::env::args().skip(1).collect())?;
-    terminal::enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-    let mut driver = ConsoleDriver::new();
+    let mut output = ConsoleOutputDriver::new()?;
+    output.enter()?;
+    let mut input = ConsoleInputDriver::new();
 
     let result = run_window_app(
-        &mut terminal,
-        &mut driver,
+        &mut output,
+        &mut input,
         &mut app,
         &[PaneId::Left, PaneId::Right],
         |id| id,
@@ -57,13 +52,7 @@ fn main() -> io::Result<()> {
         },
     );
 
-    terminal::disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        event::DisableMouseCapture,
-        LeaveAlternateScreen
-    )?;
-    terminal.show_cursor()?;
+    output.exit()?;
 
     result
 }
@@ -72,6 +61,8 @@ struct App {
     windows: WindowManager<PaneId, PaneId>,
     left: AsciiImage,
     right: AsciiImage,
+    pending_paths: Vec<String>,
+    loaded_count: usize,
 }
 
 impl App {
@@ -88,21 +79,40 @@ impl App {
         if paths.len() == 1 {
             paths.push(paths[0].clone());
         }
-        load_into(&mut left, &paths[0])?;
-        load_into(&mut right, &paths[1])?;
         let mut windows = WindowManager::new_managed(PaneId::Left);
         windows.set_focus_order(vec![PaneId::Left, PaneId::Right]);
-        Ok(Self {
+        let mut app = Self {
             windows,
             left,
             right,
-        })
+            pending_paths: paths,
+            loaded_count: 0,
+        };
+        // Initialize windows via the wm_new_window API so creation paths match runtime behavior.
+        app.wm_new_window()?;
+        app.wm_new_window()?;
+        Ok(app)
     }
 }
 
 impl HasWindowManager<PaneId, PaneId> for App {
     fn windows(&mut self) -> &mut WindowManager<PaneId, PaneId> {
         &mut self.windows
+    }
+
+    fn wm_new_window(&mut self) -> io::Result<()> {
+        // Load next pending path into the next available pane (Left then Right).
+        if self.loaded_count >= self.pending_paths.len() {
+            return Ok(());
+        }
+        let path = &self.pending_paths[self.loaded_count];
+        match self.loaded_count {
+            0 => load_into(&mut self.left, path)?,
+            1 => load_into(&mut self.right, path)?,
+            _ => {}
+        }
+        self.loaded_count += 1;
+        Ok(())
     }
 }
 

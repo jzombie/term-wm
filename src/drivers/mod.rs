@@ -3,6 +3,8 @@ pub mod keyboard;
 pub mod mouse;
 
 use ::crossterm::event::Event;
+use ratatui::backend::Backend;
+use ratatui::Frame;
 use std::io;
 use std::time::Duration;
 
@@ -26,6 +28,17 @@ impl<T: InputDriver + ?Sized> InputDriver for &mut T {
     fn set_mouse_capture(&mut self, enabled: bool) -> io::Result<()> {
         (**self).set_mouse_capture(enabled)
     }
+}
+
+pub trait OutputDriver {
+    type Backend: Backend;
+
+    fn enter(&mut self) -> io::Result<()>;
+    fn exit(&mut self) -> io::Result<()>;
+
+    fn draw<F>(&mut self, f: F) -> io::Result<()>
+    where
+        F: FnOnce(&mut Frame<'_>);
 }
 
 #[cfg(test)]

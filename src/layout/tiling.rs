@@ -725,17 +725,18 @@ pub fn render_handles_masked<F>(
                 .fg(crate::theme::menu_bg())
                 .add_modifier(Modifier::DIM)
         };
-        for y in handle.rect.y..handle.rect.y.saturating_add(handle.rect.height) {
-            for x in handle.rect.x..handle.rect.x.saturating_add(handle.rect.width) {
-                if is_obscured(x, y) {
-                    continue;
-                }
-                if let Some(cell) = buffer.cell_mut((x, y)) {
-                    // Reset the cell to ensure no background color bleeds through from underlying layers
-                    cell.reset();
-
-                    cell.set_symbol("·");
-                    cell.set_style(style);
+        let clip = handle.rect.intersection(buffer.area);
+        if clip.width > 0 && clip.height > 0 {
+            for y in clip.y..clip.y.saturating_add(clip.height) {
+                for x in clip.x..clip.x.saturating_add(clip.width) {
+                    if is_obscured(x, y) {
+                        continue;
+                    }
+                    if let Some(cell) = buffer.cell_mut((x, y)) {
+                        cell.reset();
+                        cell.set_symbol("·");
+                        cell.set_style(style);
+                    }
                 }
             }
         }

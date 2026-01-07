@@ -1,25 +1,30 @@
 use std::collections::VecDeque;
-use std::io;
+use std::io::{self, Stdout};
 use std::time::Duration;
 
 use crossterm::event::{Event, KeyEvent, MouseEvent};
+use crossterm::event::DisableMouseCapture;
+use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::{execute, terminal};
+use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
 
-use super::InputDriver;
+use super::{InputDriver, OutputDriver};
 use super::keyboard::{KeyboardDriver, KeyboardNormalizer};
 use super::mouse::MouseDriver;
 
-pub struct ConsoleDriver {
+pub struct ConsoleInputDriver {
     normalizer: KeyboardNormalizer,
     event_queue: VecDeque<Event>,
 }
 
-impl Default for ConsoleDriver {
+impl Default for ConsoleInputDriver {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ConsoleDriver {
+impl ConsoleInputDriver {
     pub fn new() -> Self {
         Self {
             normalizer: KeyboardNormalizer::new(),
@@ -37,7 +42,7 @@ impl ConsoleDriver {
     }
 }
 
-impl KeyboardDriver for ConsoleDriver {
+impl KeyboardDriver for ConsoleInputDriver {
     fn next_key(&mut self) -> io::Result<KeyEvent> {
         loop {
             if let Some(index) = self
@@ -59,7 +64,7 @@ impl KeyboardDriver for ConsoleDriver {
     }
 }
 
-impl MouseDriver for ConsoleDriver {
+impl MouseDriver for ConsoleInputDriver {
     fn enable(&mut self) -> io::Result<()> {
         crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)
     }
@@ -89,7 +94,7 @@ impl MouseDriver for ConsoleDriver {
     }
 }
 
-impl InputDriver for ConsoleDriver {
+impl InputDriver for ConsoleInputDriver {
     fn poll(&mut self, timeout: Duration) -> io::Result<bool> {
         if !self.event_queue.is_empty() {
             return Ok(true);
@@ -113,6 +118,69 @@ impl InputDriver for ConsoleDriver {
     }
 }
 
+pub struct ConsoleOutputDriver {
+    terminal: Terminal<CrosstermBackend<Stdout>>,
+    entered: bool,
+}
+
+impl ConsoleOutputDriver {
+    pub fn new() -> io::Result<Self> {
+        let stdout = io::stdout();
+        let backend = CrosstermBackend::new(stdout);
+        let terminal = Terminal::new(backend)?;
+        Ok(Self {
+            terminal,
+            entered: false,
+        })
+    }
+}
+
+impl OutputDriver for ConsoleOutputDriver {
+    type Backend = CrosstermBackend<Stdout>;
+
+    fn enter(&mut self) -> io::Result<()> {
+        if self.entered {
+            return Ok(());
+        }
+        execute!(self.terminal.backend_mut(), EnterAlternateScreen)?;
+        terminal::enable_raw_mode()?;
+        self.terminal.hide_cursor()?;
+        self.entered = true;
+        Ok(())
+    }
+
+    fn exit(&mut self) -> io::Result<()> {
+        if !self.entered {
+            return Ok(());
+        }
+        terminal::disable_raw_mode()?;
+        execute!(
+            self.terminal.backend_mut(),
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        )?;
+        self.terminal.show_cursor()?;
+        self.entered = false;
+        Ok(())
+    }
+
+    fn draw<F>(&mut self, f: F) -> io::Result<()>
+    where
+        F: FnOnce(&mut ratatui::Frame<'_>),
+    {
+        self.terminal
+            .draw(f)
+            .map(|_| ())
+            .map_err(|err| io::Error::other(err.to_string()))
+    }
+}
+
+impl Drop for ConsoleOutputDriver {
+    fn drop(&mut self) {
+        let _ = self.exit();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,7 +188,7 @@ mod tests {
 
     #[test]
     fn next_key_from_queue() {
-        let mut d = ConsoleDriver::new();
+        let mut d = ConsoleInputDriver::new();
         d.event_queue.push_back(Event::Key(KeyEvent::new(
             KeyCode::Char('a'),
             KeyModifiers::NONE,
@@ -139,7 +207,7 @@ mod tests {
 
     #[test]
     fn next_mouse_from_queue() {
-        let mut d = ConsoleDriver::new();
+        let mut d = ConsoleInputDriver::new();
         d.event_queue.push_back(Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
             column: 2,
@@ -153,7 +221,7 @@ mod tests {
 
     #[test]
     fn poll_and_read_from_queue() {
-        let mut d = ConsoleDriver::new();
+        let mut d = ConsoleInputDriver::new();
         d.event_queue.push_back(Event::Key(KeyEvent::new(
             KeyCode::Char('z'),
             KeyModifiers::NONE,
