@@ -4,9 +4,10 @@ pub mod mouse;
 
 use ::crossterm::event::Event;
 use ratatui::backend::Backend;
-use ratatui::Frame;
 use std::io;
 use std::time::Duration;
+
+use crate::ui::UiFrame;
 
 pub trait InputDriver {
     fn poll(&mut self, timeout: Duration) -> io::Result<bool>;
@@ -38,7 +39,7 @@ pub trait OutputDriver {
 
     fn draw<F>(&mut self, f: F) -> io::Result<()>
     where
-        F: FnOnce(&mut Frame<'_>);
+        F: FnOnce(UiFrame<'_>);
 }
 
 #[cfg(test)]

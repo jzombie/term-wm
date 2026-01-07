@@ -1,9 +1,10 @@
 use std::path::Path;
 
-use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use resvg::{tiny_skia, usvg};
+
+use crate::ui::UiFrame;
 
 const DEFAULT_RAMP: &[char] = &[' ', '.', ':', '-', '=', '+', '*', '#', '%', '@'];
 const MAX_SVG_DIM: u32 = 1024;
@@ -436,7 +437,7 @@ fn braille_bit(dx: u32, dy: u32) -> u16 {
 }
 
 impl super::Component for AsciiImage {
-    fn render(&mut self, frame: &mut Frame, area: Rect, _focused: bool) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
         if area.width == 0 || area.height == 0 {
             return;
         }

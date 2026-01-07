@@ -1,6 +1,7 @@
-use ratatui::Frame;
 use ratatui::prelude::Rect;
 use ratatui::style::{Color, Modifier, Style};
+
+use crate::ui::UiFrame;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HeaderAction {
@@ -14,7 +15,7 @@ pub enum HeaderAction {
 pub trait WindowDecorator: std::fmt::Debug {
     fn render_window(
         &self,
-        frame: &mut Frame,
+        frame: &mut UiFrame<'_>,
         rect: Rect,
         bounds: Rect,
         title: &str,
@@ -60,7 +61,7 @@ impl WindowDecorator for DefaultDecorator {
 
     fn render_window(
         &self,
-        frame: &mut Frame,
+        frame: &mut UiFrame<'_>,
         rect: Rect,
         bounds: Rect,
         title: &str,

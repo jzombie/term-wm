@@ -1,9 +1,8 @@
-use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
-use crate::ui::clear_rect;
+use crate::ui::{UiFrame, clear_rect};
 
 #[derive(Debug, Clone)]
 pub struct DialogOverlay {
@@ -93,7 +92,7 @@ impl Default for DialogOverlay {
 }
 
 impl super::Component for DialogOverlay {
-    fn render(&mut self, frame: &mut Frame, area: Rect, _focused: bool) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
         if !self.visible || area.width == 0 || area.height == 0 {
             return;
         }

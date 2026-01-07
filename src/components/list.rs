@@ -1,10 +1,10 @@
 use crossterm::event::{Event, KeyCode};
-use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 
 use crate::components::scroll_view::ScrollView;
+use crate::ui::UiFrame;
 
 pub struct ListComponent {
     items: Vec<String>,
@@ -102,7 +102,7 @@ impl ListComponent {
 }
 
 impl super::Component for ListComponent {
-    fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
         let block = if focused {
             Block::default()
                 .borders(Borders::ALL)

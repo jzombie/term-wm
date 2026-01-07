@@ -3,14 +3,13 @@ use std::io;
 use std::time::Duration;
 
 use crossterm::event::{Event, KeyCode, KeyModifiers};
-use ratatui::Frame;
 use ratatui::prelude::Rect;
 use ratatui::widgets::{Block, Borders};
 
 use term_wm::components::{AsciiImage, Component};
 use term_wm::drivers::OutputDriver;
 use term_wm::drivers::console::{ConsoleInputDriver, ConsoleOutputDriver};
-use term_wm::ui::clear_rect;
+use term_wm::ui::{UiFrame, clear_rect};
 use term_wm::runner::{HasWindowManager, WindowApp, run_window_app};
 use term_wm::window::{AppWindowDraw, WindowManager};
 
@@ -122,7 +121,7 @@ impl WindowApp<PaneId, PaneId> for App {
         vec![PaneId::Left, PaneId::Right]
     }
 
-    fn render_window(&mut self, frame: &mut Frame, window: AppWindowDraw<PaneId>) {
+    fn render_window(&mut self, frame: &mut UiFrame<'_>, window: AppWindowDraw<PaneId>) {
         match window.id {
             PaneId::Left => {
                 render_pane(frame, &mut self.left, window.surface.inner, window.focused)
@@ -138,7 +137,7 @@ impl WindowApp<PaneId, PaneId> for App {
     }
 }
 
-fn render_pane(frame: &mut Frame, image: &mut AsciiImage, area: Rect, _focused: bool) {
+fn render_pane(frame: &mut UiFrame<'_>, image: &mut AsciiImage, area: Rect, _focused: bool) {
     let block = Block::default().borders(Borders::ALL);
     let inner = block.inner(area);
     clear_rect(frame, area);

@@ -1,8 +1,8 @@
-use ratatui::Frame;
 use ratatui::prelude::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 
 use super::{FloatingPane, RegionMap, gap_size, rect_contains};
+use crate::ui::UiFrame;
 
 #[derive(Debug, Clone)]
 pub enum LayoutNode<Id: Copy + Eq + Ord> {
@@ -398,7 +398,7 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
         self.root.hit_test_handle(area, column, row)
     }
 
-    pub fn render_handles(&self, frame: &mut Frame, area: Rect) {
+    pub fn render_handles(&self, frame: &mut UiFrame<'_>, area: Rect) {
         let handles = self.handles(area);
         let hovered = self.hovered_handle(area);
         render_handles(frame, &handles, hovered.as_ref());
@@ -697,12 +697,16 @@ fn split_at_path_mut<'a, Id: Copy + Eq + Ord>(
     Some(current)
 }
 
-pub fn render_handles(frame: &mut Frame, handles: &[SplitHandle], hovered: Option<&SplitHandle>) {
+pub fn render_handles(
+    frame: &mut UiFrame<'_>,
+    handles: &[SplitHandle],
+    hovered: Option<&SplitHandle>,
+) {
     render_handles_masked(frame, handles, hovered, |_, _| false);
 }
 
 pub fn render_handles_masked<F>(
-    frame: &mut Frame,
+    frame: &mut UiFrame<'_>,
     handles: &[SplitHandle],
     hovered: Option<&SplitHandle>,
     is_obscured: F,

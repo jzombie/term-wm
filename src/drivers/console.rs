@@ -12,6 +12,7 @@ use ratatui::Terminal;
 use super::{InputDriver, OutputDriver};
 use super::keyboard::{KeyboardDriver, KeyboardNormalizer};
 use super::mouse::MouseDriver;
+use crate::ui::UiFrame;
 
 pub struct ConsoleInputDriver {
     normalizer: KeyboardNormalizer,
@@ -166,10 +167,13 @@ impl OutputDriver for ConsoleOutputDriver {
 
     fn draw<F>(&mut self, f: F) -> io::Result<()>
     where
-        F: FnOnce(&mut ratatui::Frame<'_>),
+        F: FnOnce(UiFrame<'_>),
     {
         self.terminal
-            .draw(f)
+            .draw(move |frame| {
+                let wrapper = UiFrame::new(frame);
+                f(wrapper);
+            })
             .map(|_| ())
             .map_err(|err| io::Error::other(err.to_string()))
     }

@@ -1,8 +1,7 @@
-use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 
-use crate::ui::{safe_set_string, truncate_to_width};
+use crate::ui::{UiFrame, safe_set_string, truncate_to_width};
 pub struct StatusBar {
     left: String,
     right: String,
@@ -38,7 +37,7 @@ impl Default for StatusBar {
 }
 
 impl super::Component for StatusBar {
-    fn render(&mut self, frame: &mut Frame, area: Rect, _focused: bool) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
         if area.height == 0 || area.width == 0 {
             return;
         }

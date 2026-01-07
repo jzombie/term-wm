@@ -2,7 +2,6 @@ use std::io;
 use std::time::Duration;
 
 use crossterm::event::{Event, KeyCode, KeyModifiers};
-use ratatui::Frame;
 use ratatui::prelude::Rect;
 
 use portable_pty::PtySize;
@@ -10,6 +9,7 @@ use term_wm::components::{Component, TerminalComponent, default_shell_command};
 use term_wm::drivers::OutputDriver;
 use term_wm::drivers::console::{ConsoleInputDriver, ConsoleOutputDriver};
 use term_wm::runner::{HasWindowManager, WindowApp, run_window_app};
+use term_wm::ui::UiFrame;
 use term_wm::window::{AppWindowDraw, WindowManager};
 
 type PaneId = usize;
@@ -117,7 +117,7 @@ impl WindowApp<PaneId, PaneId> for App {
             .collect()
     }
 
-    fn render_window(&mut self, frame: &mut Frame, window: AppWindowDraw<PaneId>) {
+    fn render_window(&mut self, frame: &mut UiFrame<'_>, window: AppWindowDraw<PaneId>) {
         render_pane(frame, self, window.id, window.surface.inner, window.focused);
     }
 
@@ -126,7 +126,7 @@ impl WindowApp<PaneId, PaneId> for App {
     }
 }
 
-fn render_pane(frame: &mut Frame, app: &mut App, id: PaneId, area: Rect, focused: bool) {
+fn render_pane(frame: &mut UiFrame<'_>, app: &mut App, id: PaneId, area: Rect, focused: bool) {
     if area.width == 0 || area.height == 0 {
         return;
     }

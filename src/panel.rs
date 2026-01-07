@@ -1,12 +1,11 @@
 use crossterm::event::{Event, MouseEventKind};
 use ratatui::{
-    Frame,
     layout::Rect,
     style::{Modifier, Style},
 };
 
 use crate::layout::rect_contains;
-use crate::ui::{safe_set_string, truncate_to_width};
+use crate::ui::{UiFrame, safe_set_string, truncate_to_width};
 
 #[derive(Debug, Clone, Copy)]
 pub struct PanelWindowHit<R: Copy + Eq + Ord> {
@@ -146,7 +145,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
     #[allow(clippy::too_many_arguments)]
     pub fn render<F>(
         &mut self,
-        frame: &mut Frame,
+        frame: &mut UiFrame<'_>,
         active: bool,
         focus_current: R,
         display_order: &[R],
@@ -337,7 +336,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
 
     pub fn render_menu(
         &mut self,
-        frame: &mut Frame,
+        frame: &mut UiFrame<'_>,
         open: bool,
         bounds: Rect,
         items: &[(Option<&str>, &str)],
@@ -460,7 +459,13 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             .map(|hit| hit.index)
     }
 
-    pub fn render_menu_backdrop(&self, frame: &mut Frame, open: bool, bounds: Rect, exclude: Rect) {
+    pub fn render_menu_backdrop(
+        &self,
+        frame: &mut UiFrame<'_>,
+        open: bool,
+        bounds: Rect,
+        exclude: Rect,
+    ) {
         if !open {
             return;
         }

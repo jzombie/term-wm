@@ -3,7 +3,6 @@ use crossterm::event::{
 };
 use portable_pty::{CommandBuilder, PtySize};
 use ratatui::{
-    Frame,
     layout::Rect,
     style::{Color as TColor, Modifier, Style},
 };
@@ -12,6 +11,7 @@ use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 use crate::components::scroll_view::ScrollView;
 use crate::layout::rect_contains;
 use crate::pty::Pty;
+use crate::ui::UiFrame;
 
 // This controls the scrollback buffer size in the vt100 parser.
 // It determines how many lines you can scroll up to see.
@@ -51,7 +51,7 @@ impl TerminalComponent {
         self.pane.last_bytes_text()
     }
 
-    fn render_screen(&mut self, frame: &mut Frame, area: Rect, focused: bool) {
+    fn render_screen(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
         let show_cursor = self.pane.scrollback() == 0;
         let used = self.pane.max_scrollback();
         let screen = self.pane.screen();
@@ -177,7 +177,7 @@ impl super::Component for TerminalComponent {
         }
     }
 
-    fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
         if area.height == 0 || area.width == 0 {
             self.last_area = Rect::default();
             return;

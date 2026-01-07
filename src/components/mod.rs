@@ -1,5 +1,7 @@
 use crossterm::event::Event;
-use ratatui::{Frame, layout::Rect};
+use ratatui::layout::Rect;
+
+use crate::ui::UiFrame;
 
 pub mod ascii_image;
 pub mod confirm_overlay;
@@ -27,7 +29,7 @@ pub use toggle_list::{ToggleItem, ToggleListComponent};
 pub trait Component {
     fn resize(&mut self, _area: Rect) {}
 
-    fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool);
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool);
 
     fn handle_event(&mut self, _event: &Event) -> bool {
         false
@@ -37,12 +39,13 @@ pub trait Component {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::UiFrame;
     use crossterm::event::Event;
     use ratatui::prelude::Rect;
 
     struct DummyComp;
     impl Component for DummyComp {
-        fn render(&mut self, _frame: &mut Frame, _area: Rect, _focused: bool) {}
+        fn render(&mut self, _frame: &mut UiFrame<'_>, _area: Rect, _focused: bool) {}
     }
 
     #[test]

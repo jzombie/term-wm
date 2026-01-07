@@ -3,12 +3,13 @@ use std::io::{self, Write};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crossterm::event::{Event, KeyCode, MouseEventKind};
+use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Text};
 use ratatui::widgets::Paragraph;
-use ratatui::{Frame, layout::Rect};
 
 use crate::components::Component;
+use crate::ui::UiFrame;
 
 const DEFAULT_MAX_LINES: usize = 2000;
 static GLOBAL_LOG: OnceLock<DebugLogHandle> = OnceLock::new();
@@ -198,7 +199,7 @@ impl DebugLogComponent {
 }
 
 impl Component for DebugLogComponent {
-    fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
         if area.width == 0 || area.height == 0 {
             return;
         }

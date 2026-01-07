@@ -1,6 +1,8 @@
 use super::{FloatingPane, RegionMap, rect_contains};
 use ratatui::prelude::Rect;
 
+use crate::ui::UiFrame;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResizeEdge {
     Left,
@@ -317,7 +319,7 @@ pub fn apply_resize_drag(
 }
 
 pub fn render_resize_outline<R: Copy + Eq + Ord>(
-    frame: &mut ratatui::Frame,
+    frame: &mut UiFrame<'_>,
     hovered: Option<R>,
     dragging: Option<R>,
     regions: &RegionMap<R>,

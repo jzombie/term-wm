@@ -9,6 +9,7 @@ use crate::components::ConfirmAction;
 use crate::drivers::{InputDriver, OutputDriver};
 use crate::event_loop::{ControlFlow, EventLoop};
 use crate::layout::{LayoutNode, TilingLayout};
+use crate::ui::UiFrame;
 use crate::window::{AppWindowDraw, LayoutContract, WindowManager, WmMenuAction};
 
 pub trait HasWindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
@@ -23,7 +24,7 @@ pub trait HasWindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
 
 pub trait WindowApp<W: Copy + Eq + Ord, R: Copy + Eq + Ord>: HasWindowManager<W, R> {
     fn enumerate_windows(&mut self) -> Vec<R>;
-    fn render_window(&mut self, frame: &mut ratatui::Frame, window: AppWindowDraw<R>);
+    fn render_window(&mut self, frame: &mut UiFrame<'_>, window: AppWindowDraw<R>);
 
     fn empty_window_message(&self) -> &str {
         "No windows"
@@ -53,7 +54,7 @@ where
     A: HasWindowManager<W, R>,
     W: Copy + Eq + Ord,
     R: Copy + Eq + Ord + PartialEq<W> + std::fmt::Debug,
-    FDraw: FnMut(&mut ratatui::Frame, &mut A),
+    FDraw: for<'frame> FnMut(UiFrame<'frame>, &mut A),
     FDispatch: FnMut(&Event, &mut A) -> bool,
     FQuit: FnMut(Option<&Event>, &mut A) -> bool,
     FMap: Fn(R) -> W + Copy,
@@ -224,10 +225,7 @@ where
                     return flush_mouse_capture(app, ControlFlow::Quit);
                 }
                 app.windows().begin_frame();
-                output.draw(|frame| {
-                    draw(frame, app);
-                    app.windows().render_overlays(frame);
-                })?;
+                output.draw(|frame| draw(frame, app))?;
             }
             flush_mouse_capture(app, ControlFlow::Continue)
         };
@@ -246,10 +244,7 @@ where
                 // is visible to the user without waiting for another input event like a resize.
                 let mut redraw = || -> io::Result<()> {
                     app.windows().begin_frame();
-                    output.draw(|frame| {
-                        draw(frame, app);
-                        app.windows().render_overlays(frame);
-                    })
+                    output.draw(|frame| draw(frame, app))
                 };
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let _ = redraw();
@@ -296,7 +291,10 @@ where
         map_region,
         _map_focus,
         poll_interval,
-        move |frame, app| draw_window_app(frame, app, &mut draw_state, draw_map),
+        move |frame, app| {
+            let mut frame = frame;
+            draw_window_app(&mut frame, app, &mut draw_state, draw_map);
+        },
         dispatch,
         should_quit,
     )
@@ -324,7 +322,7 @@ impl<R: Copy + Eq> WindowDrawState<R> {
 }
 
 fn draw_window_app<A, W, R, FMap>(
-    frame: &mut ratatui::Frame,
+    frame: &mut UiFrame<'_>,
     app: &mut A,
     state: &mut WindowDrawState<R>,
     map_region: FMap,
@@ -344,6 +342,7 @@ fn draw_window_app<A, W, R, FMap>(
                 .buffer_mut()
                 .set_string(area.x, area.y, message, Style::default());
         }
+        app.windows().render_overlays(frame);
         return;
     }
 
@@ -359,6 +358,7 @@ fn draw_window_app<A, W, R, FMap>(
     for window in plan {
         app.render_window(frame, window);
     }
+    app.windows().render_overlays(frame);
 }
 
 fn auto_layout_for_windows<R: Copy + Eq + Ord>(windows: &[R]) -> Option<TilingLayout<R>> {

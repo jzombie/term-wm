@@ -17,7 +17,7 @@ use crate::layout::{
     TilingLayout, rect_contains, render_handles_masked,
 };
 use crate::panel::Panel;
-use crate::ui::clear_rect;
+use crate::ui::{UiFrame, clear_rect};
 use crate::state::AppState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1503,7 +1503,7 @@ where
         }
     }
 
-    pub fn window_draw_plan(&mut self, frame: &mut ratatui::Frame) -> Vec<AppWindowDraw<R>> {
+    pub fn window_draw_plan(&mut self, frame: &mut UiFrame<'_>) -> Vec<AppWindowDraw<R>> {
         let mut plan = Vec::new();
         let focused_app = self.wm_focus.current().as_app();
         for &id in &self.managed_draw_order {
@@ -1528,7 +1528,7 @@ where
         plan
     }
 
-    pub fn render_overlays(&mut self, frame: &mut ratatui::Frame) {
+    pub fn render_overlays(&mut self, frame: &mut UiFrame<'_>) {
         let hovered = self.hover.and_then(|(column, row)| {
             self.handles
                 .iter()
@@ -1656,7 +1656,7 @@ where
         }
     }
 
-    pub fn clear_window_backgrounds(&self, frame: &mut ratatui::Frame) {
+    pub fn clear_window_backgrounds(&self, frame: &mut UiFrame<'_>) {
         for id in self.regions.ids() {
             let rect = self.full_region_for_id(id);
             clear_rect(frame, rect);

@@ -1,12 +1,11 @@
 use crossterm::event::{Event, KeyCode, MouseEventKind};
-use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::components::{Component, DialogOverlay};
 use crate::layout::rect_contains;
-use crate::ui::safe_set_string;
+use crate::ui::{UiFrame, safe_set_string};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfirmAction {
@@ -64,7 +63,7 @@ impl ConfirmOverlay {
 }
 
 impl Component for ConfirmOverlay {
-    fn render(&mut self, frame: &mut Frame, area: Rect, _focused: bool) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
         if !self.visible || area.width == 0 || area.height == 0 {
             return;
         }
