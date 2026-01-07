@@ -5,7 +5,7 @@ use std::time::Duration;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ratatui::Frame;
 use ratatui::prelude::Rect;
-use ratatui::widgets::{Block, Borders, Clear};
+use ratatui::widgets::{Block, Borders};
 
 use term_wm::components::{AsciiImage, Component};
 use term_wm::drivers::OutputDriver;
@@ -140,9 +140,28 @@ impl WindowApp<PaneId, PaneId> for App {
 fn render_pane(frame: &mut Frame, image: &mut AsciiImage, area: Rect, _focused: bool) {
     let block = Block::default().borders(Borders::ALL);
     let inner = block.inner(area);
-    frame.render_widget(Clear, area);
+    clear_rect(frame, area);
     frame.render_widget(block, area);
     image.render(frame, inner, false);
+}
+
+fn clear_rect(frame: &mut Frame, rect: Rect) {
+    if rect.width == 0 || rect.height == 0 {
+        return;
+    }
+    let buffer = frame.buffer_mut();
+    let bounds = rect.intersection(buffer.area);
+    if bounds.width == 0 || bounds.height == 0 {
+        return;
+    }
+    for y in bounds.y..bounds.y.saturating_add(bounds.height) {
+        for x in bounds.x..bounds.x.saturating_add(bounds.width) {
+            if let Some(cell) = buffer.cell_mut((x, y)) {
+                cell.reset();
+                cell.set_symbol(" ");
+            }
+        }
+    }
 }
 
 fn load_into(component: &mut AsciiImage, path: &str) -> io::Result<()> {
