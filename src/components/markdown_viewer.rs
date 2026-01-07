@@ -130,6 +130,11 @@ impl MarkdownViewerComponent {
                             TagKind::List => {
                                 list_start.pop();
                                 list_count.pop();
+                                let in_parent_list_item =
+                                    tag_stack.iter().any(|k| matches!(k, TagKind::Item));
+                                if !in_parent_list_item {
+                                    lines.push(vec![Span::raw("")]);
+                                }
                             }
                             TagKind::CodeBlock => in_code_block = false,
                             TagKind::Paragraph => {
@@ -427,6 +432,37 @@ mod markdown_tests {
         assert!(
             found_scrollbar,
             "Expected scrollbar glyphs present in last column"
+        );
+    }
+
+    #[test]
+    fn list_separates_from_following_paragraph() {
+        let md = indoc! {
+            "
+            - item one
+            - item two
+
+            Next paragraph begins here.
+            "
+        };
+        let mut mv = MarkdownViewerComponent::new();
+        mv.set_markdown(md);
+        let rendered = mv.renderer.rendered_lines();
+        let idx = rendered
+            .iter()
+            .position(|line| line.contains("item two"))
+            .expect("list text present");
+        assert_eq!(
+            rendered.get(idx + 1).map(|s| s.as_str()),
+            Some(""),
+            "expected blank line after list"
+        );
+        assert!(
+            rendered
+                .get(idx + 2)
+                .map(|s| s.contains("Next paragraph"))
+                .unwrap_or(false),
+            "paragraph should follow after blank line"
         );
     }
 }
