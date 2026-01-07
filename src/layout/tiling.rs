@@ -578,11 +578,18 @@ fn split_rects_weighted(
         Direction::Horizontal => area.width,
         Direction::Vertical => area.height,
     };
+    // If weights correspond exactly to pixels (common during resize), use them directly to avoid float drift.
+    let exact_match = (total_weight - total as f32).abs() < 0.01;
+
     let mut sizes = Vec::with_capacity(count);
     let mut used: u16 = 0;
     for (idx, weight) in weights.iter().enumerate() {
         let size = if idx + 1 == count {
             total.saturating_sub(used)
+        } else if exact_match {
+            let s = weight.round() as u16;
+            used = used.saturating_add(s);
+            s
         } else {
             let portion = ((*weight / total_weight) * total as f32).floor() as u16;
             used = used.saturating_add(portion);
