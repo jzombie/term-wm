@@ -8,5 +8,6 @@ pub mod runner;
 pub mod state;
 pub mod term_color;
 pub mod theme;
+pub mod tracing_sub;
 pub mod ui;
 pub mod window;

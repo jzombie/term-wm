@@ -208,6 +208,7 @@ where
         self.windows.entry(id).or_insert_with(|| {
             let order = *seq;
             *seq = order.saturating_add(1);
+            tracing::debug!(window_id = ?id, seq = order, "opened window");
             Window::new(order)
         })
     }
@@ -304,6 +305,9 @@ where
             debug_log: {
                 let (component, handle) = DebugLogComponent::new_default();
                 let _ = set_global_debug_log(handle);
+                // Initialize tracing now that the global debug log handle exists
+                // so tracing will write into the in-memory debug buffer by default.
+                let _ = crate::tracing_sub::init_default();
                 install_panic_hook();
                 component
             },
@@ -993,6 +997,7 @@ where
     }
 
     pub fn close_window(&mut self, id: WindowId<R>) {
+        tracing::debug!(window_id = ?id, "closing window");
         if id == self.debug_log_id {
             self.toggle_debug_window();
             return;
