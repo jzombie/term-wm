@@ -27,12 +27,15 @@ pub struct TerminalComponent {
 impl TerminalComponent {
     pub fn spawn(command: CommandBuilder, size: PtySize) -> crate::pty::PtyResult<Self> {
         let pane = Pty::spawn_with_scrollback(command, size, DEFAULT_SCROLLBACK_LEN)?;
-        Ok(Self {
+        let mut comp = Self {
             pane,
             last_size: (size.cols, size.rows),
             scroll_view: ScrollView::new(),
             last_area: Rect::default(),
-        })
+        };
+        // Terminal scroll view must not hijack keyboard input; disable by default.
+        comp.scroll_view.set_keyboard_enabled(false);
+        Ok(comp)
     }
 
     pub fn write_bytes(&mut self, input: &[u8]) -> std::io::Result<()> {
@@ -222,17 +225,6 @@ impl super::Component for TerminalComponent {
                 if !self.pane.alternate_screen() {
                     if self.handle_scrollbar_event(event) {
                         return true;
-                    }
-                    match mouse.kind {
-                        MouseEventKind::ScrollUp => {
-                            self.scroll_scrollback(1);
-                            return true;
-                        }
-                        MouseEventKind::ScrollDown => {
-                            self.scroll_scrollback(-1);
-                            return true;
-                        }
-                        _ => {}
                     }
                 }
                 if !rect_contains(self.last_area, mouse.column, mouse.row) {

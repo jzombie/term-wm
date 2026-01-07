@@ -77,6 +77,7 @@ pub struct ScrollView {
     total: usize,
     view: usize,
     fixed_height: Option<u16>,
+    keyboard_enabled: bool,
 }
 
 impl ScrollView {
@@ -88,7 +89,14 @@ impl ScrollView {
             total: 0,
             view: 0,
             fixed_height: None,
+            keyboard_enabled: false,
         }
+    }
+
+    /// Enable or disable default keyboard handling for this ScrollView.
+    /// When disabled (default), callers must programmatically control scrolling.
+    pub fn set_keyboard_enabled(&mut self, enabled: bool) {
+        self.keyboard_enabled = enabled;
     }
 
     pub fn set_fixed_height(&mut self, height: Option<u16>) {
@@ -150,15 +158,93 @@ impl ScrollView {
                 offset: None,
             };
         };
+        // First, let scrollbar drag clicks/drags handle the event if applicable.
         let response = self
             .drag
             .handle_mouse(mouse, self.area, self.total, self.view);
         if let Some(offset) = response.offset {
             self.set_offset(offset);
         }
-        ScrollEvent {
-            handled: response.handled,
-            offset: response.offset,
+        if response.handled {
+            return ScrollEvent {
+                handled: true,
+                offset: response.offset,
+            };
+        }
+
+        // Handle mouse wheel scrolling as a fallback.
+        use crossterm::event::MouseEventKind::*;
+        match mouse.kind {
+            ScrollUp => {
+                let off = self.offset().saturating_sub(3);
+                self.set_offset(off);
+                ScrollEvent {
+                    handled: true,
+                    offset: Some(off),
+                }
+            }
+            ScrollDown => {
+                let off = (self.offset().saturating_add(3)).min(self.max_offset());
+                self.set_offset(off);
+                ScrollEvent {
+                    handled: true,
+                    offset: Some(off),
+                }
+            }
+            _ => ScrollEvent {
+                handled: false,
+                offset: None,
+            },
+        }
+    }
+
+    // Handle common keyboard scrolling keys when `keyboard_enabled` is true.
+    // Returns true if the key was handled and caused a scroll change.
+    // By default keyboard handling is disabled to avoid hijacking character input;
+    // enable selectively with `set_keyboard_enabled(true)` when appropriate.
+    pub fn handle_key_event(&mut self, key: &crossterm::event::KeyEvent) -> bool {
+        if !self.keyboard_enabled || self.total == 0 || self.view == 0 {
+            return false;
+        }
+        let max_offset = self.total.saturating_sub(self.view);
+        match key.code {
+            crossterm::event::KeyCode::PageUp => {
+                let page = self.view.max(1);
+                let off = self.state.offset.saturating_sub(page);
+                self.state.offset = off;
+                self.state.apply(self.total, self.view);
+                true
+            }
+            crossterm::event::KeyCode::PageDown => {
+                let page = self.view.max(1);
+                let off = (self.state.offset.saturating_add(page)).min(max_offset);
+                self.state.offset = off;
+                self.state.apply(self.total, self.view);
+                true
+            }
+            crossterm::event::KeyCode::Home => {
+                self.state.offset = 0;
+                self.state.apply(self.total, self.view);
+                true
+            }
+            crossterm::event::KeyCode::End => {
+                self.state.offset = max_offset;
+                self.state.apply(self.total, self.view);
+                true
+            }
+            crossterm::event::KeyCode::Up => {
+                let off = self.state.offset.saturating_sub(1);
+                self.state.offset = off;
+                self.state.apply(self.total, self.view);
+                true
+            }
+            crossterm::event::KeyCode::Down => {
+                let off = (self.state.offset.saturating_add(1)).min(max_offset);
+                self.state.offset = off;
+                self.state.apply(self.total, self.view);
+                true
+            }
+            _ => false,
         }
     }
 
@@ -170,6 +256,26 @@ impl ScrollView {
 impl Default for ScrollView {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl super::Component for ScrollView {
+    fn resize(&mut self, mut area: Rect) {
+        if let Some(height) = self.fixed_height {
+            area.height = area.height.min(height);
+        }
+        self.area = area;
+        self.view = self.view.min(self.area.height as usize);
+        self.state.apply(self.total, self.view);
+    }
+
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
+        self.resize(area);
+        ScrollView::render(self, frame);
+    }
+
+    fn handle_event(&mut self, event: &Event) -> bool {
+        ScrollView::handle_event(self, event).handled
     }
 }
 

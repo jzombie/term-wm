@@ -92,6 +92,11 @@ where
                     }
                     return flush_mouse_capture(app, ControlFlow::Continue);
                 }
+
+                if app.windows().help_overlay_visible() {
+                    let _ = app.windows().handle_help_event(&evt);
+                    return flush_mouse_capture(app, ControlFlow::Continue);
+                }
                 let wm_mode = app.windows().layout_contract() == LayoutContract::WindowManaged;
                 if wm_mode
                     && let Event::Key(key) = evt

@@ -5,7 +5,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use crate::ui::UiFrame;
 
 #[derive(Debug, Clone)]
-pub struct DialogOverlay {
+pub struct DialogOverlayComponent {
     title: String,
     body: String,
     visible: bool,
@@ -15,7 +15,7 @@ pub struct DialogOverlay {
     dim_backdrop: bool,
 }
 
-impl DialogOverlay {
+impl DialogOverlayComponent {
     pub fn new() -> Self {
         Self {
             title: "Dialog".to_string(),
@@ -85,13 +85,13 @@ impl DialogOverlay {
     }
 }
 
-impl Default for DialogOverlay {
+impl Default for DialogOverlayComponent {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl super::Component for DialogOverlay {
+impl super::Component for DialogOverlayComponent {
     fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
         if !self.visible || area.width == 0 || area.height == 0 {
             return;
@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn rect_for_clamps_sizes() {
-        let dlg = DialogOverlay::new();
+        let dlg = DialogOverlayComponent::new();
         // tiny area smaller than min width/height
         let area = Rect {
             x: 0,

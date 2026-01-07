@@ -3,7 +3,7 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::components::{Component, DialogOverlay};
+use crate::components::{Component, DialogOverlayComponent};
 use crate::layout::rect_contains;
 use crate::ui::{UiFrame, safe_set_string};
 
@@ -14,8 +14,8 @@ pub enum ConfirmAction {
 }
 
 #[derive(Debug, Default)]
-pub struct ConfirmOverlay {
-    dialog: DialogOverlay,
+pub struct ConfirmOverlayComponent {
+    dialog: DialogOverlayComponent,
     visible: bool,
     body: String,
     selected_confirm: bool,
@@ -23,9 +23,9 @@ pub struct ConfirmOverlay {
     confirm_rect: Option<Rect>,
 }
 
-impl ConfirmOverlay {
+impl ConfirmOverlayComponent {
     pub fn new() -> Self {
-        let mut dialog = DialogOverlay::new();
+        let mut dialog = DialogOverlayComponent::new();
         dialog.set_size(60, 9);
         dialog.set_dim_backdrop(true);
         dialog.set_bg(crate::theme::dialog_bg());
@@ -62,7 +62,7 @@ impl ConfirmOverlay {
     }
 }
 
-impl Component for ConfirmOverlay {
+impl Component for ConfirmOverlayComponent {
     fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
         if !self.visible || area.width == 0 || area.height == 0 {
             return;
@@ -178,7 +178,7 @@ impl Component for ConfirmOverlay {
     }
 }
 
-impl ConfirmOverlay {
+impl ConfirmOverlayComponent {
     pub fn handle_confirm_event(&mut self, event: &Event) -> Option<ConfirmAction> {
         match event {
             Event::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::Down(_)) => {
@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn handle_event_recognizes_keys() {
-        let mut o = ConfirmOverlay::new();
+        let mut o = ConfirmOverlayComponent::new();
         assert!(o.handle_event(&Event::Key(KeyEvent::new(
             KeyCode::Enter,
             KeyModifiers::NONE
@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn handle_confirm_event_mouse_and_keys() {
-        let mut o = ConfirmOverlay::new();
+        let mut o = ConfirmOverlayComponent::new();
         // set rects so mouse tests work
         o.confirm_rect = Some(ratatui::layout::Rect {
             x: 2,

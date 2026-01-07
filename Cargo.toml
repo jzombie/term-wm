@@ -22,3 +22,4 @@ shell-words = "1.1.1"
 thiserror = "2.0.17"
 vt100 = "0.16.2"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO"] }
+pulldown-cmark = "0.13.0"

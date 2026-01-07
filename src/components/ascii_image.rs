@@ -22,7 +22,7 @@ pub enum RenderMode {
     Braille,
 }
 
-pub struct AsciiImage {
+pub struct AsciiImageComponent {
     width: u32,
     height: u32,
     luma: Vec<u8>,
@@ -37,7 +37,7 @@ pub struct AsciiImage {
     luma_avg: u8,
 }
 
-impl AsciiImage {
+impl AsciiImageComponent {
     pub fn new() -> Self {
         Self {
             width: 0,
@@ -408,7 +408,7 @@ impl AsciiImage {
     }
 }
 
-impl Default for AsciiImage {
+impl Default for AsciiImageComponent {
     fn default() -> Self {
         Self::new()
     }
@@ -436,7 +436,7 @@ fn braille_bit(dx: u32, dy: u32) -> u16 {
     }
 }
 
-impl super::Component for AsciiImage {
+impl super::Component for AsciiImageComponent {
     fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
         if area.width == 0 || area.height == 0 {
             return;
@@ -496,7 +496,7 @@ mod tests {
 
     #[test]
     fn set_luma8_sets_state_and_avg() {
-        let mut img = AsciiImage::new();
+        let mut img = AsciiImageComponent::new();
         img.set_luma8(2, 2, vec![10, 20, 30, 40]);
         assert_eq!(img.width, 2);
         assert_eq!(img.height, 2);
@@ -512,7 +512,7 @@ mod tests {
     #[test]
     fn set_rgba8_and_sampling() {
         // two pixels wide, one tall: red and green, full alpha
-        let mut img = AsciiImage::new();
+        let mut img = AsciiImageComponent::new();
         let rgba = vec![255u8, 0, 0, 255, 0, 255, 0, 255];
         img.set_rgba8(2, 1, rgba);
         assert_eq!(img.width, 2);
@@ -531,7 +531,7 @@ mod tests {
         assert_eq!(img.luma_avg, expected_avg);
 
         // alpha zero => sample_rgb returns None
-        let mut img2 = AsciiImage::new();
+        let mut img2 = AsciiImageComponent::new();
         let rgba2 = vec![0u8, 0, 0, 0];
         img2.set_rgba8(1, 1, rgba2);
         assert_eq!(img2.sample_alpha(0, 0), 0);

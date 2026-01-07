@@ -8,8 +8,8 @@ use ratatui::widgets::Clear;
 
 use super::decorator::{DefaultDecorator, HeaderAction, WindowDecorator};
 use crate::components::{
-    Component, ConfirmAction, ConfirmOverlay, DebugLogComponent, DialogOverlay, install_panic_hook,
-    set_global_debug_log,
+    Component, ConfirmAction, ConfirmOverlayComponent, DebugLogComponent, DialogOverlayComponent,
+    HelpOverlayComponent, install_panic_hook, set_global_debug_log,
 };
 use crate::layout::floating::*;
 use crate::layout::{
@@ -171,8 +171,12 @@ pub struct WindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     layout_contract: LayoutContract,
     wm_overlay_opened_at: Option<Instant>,
     esc_passthrough_window: Duration,
-    wm_overlay: DialogOverlay,
-    exit_confirm: ConfirmOverlay,
+    wm_overlay: DialogOverlayComponent,
+    help_overlay: HelpOverlayComponent,
+    // Central default for whether ScrollView keyboard handling should be enabled
+    // for UI components that opt into it. Individual components can override.
+    scroll_keyboard_enabled_default: bool,
+    exit_confirm: ConfirmOverlayComponent,
     decorator: Box<dyn WindowDecorator>,
     floating_resize_offscreen: bool,
     z_order: Vec<WindowId<R>>,
@@ -285,8 +289,14 @@ where
             layout_contract: LayoutContract::AppManaged,
             wm_overlay_opened_at: None,
             esc_passthrough_window: esc_passthrough_window_default(),
-            wm_overlay: DialogOverlay::new(),
-            exit_confirm: ConfirmOverlay::new(),
+            wm_overlay: DialogOverlayComponent::new(),
+            help_overlay: {
+                let mut h = HelpOverlayComponent::new();
+                h.set_visible(true);
+                h
+            },
+            scroll_keyboard_enabled_default: true,
+            exit_confirm: ConfirmOverlayComponent::new(),
             decorator: Box::new(DefaultDecorator),
             floating_resize_offscreen: true,
             z_order: Vec::new(),
@@ -443,6 +453,35 @@ where
 
     pub fn exit_confirm_visible(&self) -> bool {
         self.exit_confirm.visible()
+    }
+
+    pub fn help_overlay_visible(&self) -> bool {
+        self.help_overlay.visible()
+    }
+
+    pub fn open_help_overlay(&mut self) {
+        self.help_overlay.set_visible(true);
+        // respect central default: if globally disabled, ensure the overlay doesn't enable keys
+        if !self.scroll_keyboard_enabled_default {
+            self.help_overlay.set_keyboard_enabled(false);
+        }
+    }
+
+    pub fn close_help_overlay(&mut self) {
+        self.help_overlay.set_visible(false);
+        self.help_overlay.set_keyboard_enabled(false);
+    }
+
+    /// Set the central default for enabling scroll-keyboard handling.
+    pub fn set_scroll_keyboard_enabled(&mut self, enabled: bool) {
+        self.scroll_keyboard_enabled_default = enabled;
+    }
+
+    pub fn handle_help_event(&mut self, event: &Event) -> bool {
+        if !self.help_overlay.visible() {
+            return false;
+        }
+        self.help_overlay.handle_help_event(event)
     }
 
     pub fn wm_overlay_visible(&self) -> bool {
@@ -1805,6 +1844,9 @@ where
         );
         if self.exit_confirm.visible() {
             self.exit_confirm.render(frame, frame.area(), false);
+        }
+        if self.help_overlay.visible() {
+            self.help_overlay.render(frame, frame.area(), false);
         }
     }
 
