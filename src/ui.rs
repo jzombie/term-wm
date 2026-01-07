@@ -1,3 +1,26 @@
+//! UiFrame: a thin wrapper around `ratatui::Frame` that clamps drawing to the
+//! visible area and centralizes clipping logic.
+//!
+//! Why this exists
+//! - Components and widgets sometimes compute rectangles that drift partially or
+//!   fully outside the terminal buffer. Writing out-of-bounds into the underlying
+//!   `Buffer` can panic or corrupt rendering. `UiFrame` prevents that by
+//!   clipping all draw calls to the visible area.
+//!
+//! Benefits
+//! - Safety: components can call the familiar `render_widget` /
+//!   `render_stateful_widget` helpers without needing to guard every draw with
+//!   manual bounds checks.
+//! - Simplicity: keeps widget code concise and focused on layout rather than
+//!   buffer-safety details.
+//! - Clear handling: by routing `Clear` widget rendering through `UiFrame`, we
+//!   can safely clear regions without exposing a brittle `clear_rect` helper.
+//!
+//! Usage
+//! - In paint closures, construct a `UiFrame` from a `ratatui::Frame` via
+//!   `UiFrame::new(&mut frame)`. Use `frame.render_widget(...)` and
+//!   `frame.render_stateful_widget(...)` as before. To clear an area, render the
+//!   `Clear` widget through the `UiFrame`.
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
