@@ -6,6 +6,14 @@ Purpose
 Component Naming
 - All UI widgets must be named `*Component` (e.g., `ScrollViewComponent`, `MarkdownViewerComponent`, `StatusBarComponent`).
 
+Filename Conventions
+- Filenames must be lower_snake_case and derived from the struct name without the `Component` suffix.
+	- Example: `ScrollViewComponent` -> `scroll_view.rs`, `TerminalComponent` -> `terminal.rs`.
+- Use `*_viewer.rs` for components that present document-like or external content (e.g., `markdown_viewer.rs`, `image_viewer.rs`).
+- Use explicit nouns for specialized renderers or formats (e.g., `ascii_image.rs`, `status_bar.rs`).
+- Do NOT include the word `component` in filenames (avoid `terminal_component.rs`).
+
+
 Component Implementation Placement
 - The `impl Component for <Name>Component { ... }` block must appear immediately below the `struct <Name>Component { ... }` declaration in the same file.
 - Any inherent `impl <Name>Component { ... }` (helpers, constructors) should follow the `Component` impl.
