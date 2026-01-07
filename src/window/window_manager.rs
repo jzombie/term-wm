@@ -546,10 +546,10 @@ where
         self.set_wm_focus(id);
         self.bring_to_front_id(id);
         self.managed_draw_order = self.z_order.clone();
-        if let Some(app_id) = id.as_app() {
-            if let Some(app_focus) = self.focus_for_region(app_id) {
-                self.app_focus.set_current(app_focus);
-            }
+        if let Some(app_id) = id.as_app()
+            && let Some(app_focus) = self.focus_for_region(app_id)
+        {
+            self.app_focus.set_current(app_focus);
         }
     }
 
