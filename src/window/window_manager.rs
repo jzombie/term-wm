@@ -162,6 +162,7 @@ pub struct WindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     managed_area: Rect,
     panel: Panel<WindowId<R>>,
     drag_header: Option<HeaderDrag<WindowId<R>>>,
+    last_header_click: Option<(WindowId<R>, Instant)>,
     drag_resize: Option<ResizeDrag<WindowId<R>>>,
     hover: Option<(u16, u16)>,
     capture_deadline: Option<Instant>,
@@ -275,6 +276,7 @@ where
             managed_area: Rect::default(),
             panel: Panel::new(),
             drag_header: None,
+            last_header_click: None,
             drag_resize: None,
             hover: None,
             capture_deadline: None,
@@ -1008,18 +1010,32 @@ where
                     match self.decorator.hit_test(rect, mouse.column, mouse.row) {
                         HeaderAction::Minimize => {
                             self.minimize_window(header.id);
+                            self.last_header_click = None;
                             return true;
                         }
                         HeaderAction::Maximize => {
                             self.toggle_maximize(header.id);
+                            self.last_header_click = None;
                             return true;
                         }
                         HeaderAction::Close => {
                             self.close_window(header.id);
+                            self.last_header_click = None;
                             return true;
                         }
                         HeaderAction::Drag => {
-                            // Proceed to drag below
+                            // Double-click on header toggles maximize/restore.
+                            let now = Instant::now();
+                            if let Some((prev_id, prev)) = self.last_header_click
+                                && prev_id == header.id
+                                && now.duration_since(prev) <= Duration::from_millis(500)
+                            {
+                                self.toggle_maximize(header.id);
+                                self.last_header_click = None;
+                                return true;
+                            }
+                            // Record this click time and proceed to drag below.
+                            self.last_header_click = Some((header.id, now));
                         }
                         HeaderAction::None => {
                             // Should not happen as we already checked rect contains
