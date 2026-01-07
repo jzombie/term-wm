@@ -1,3 +1,4 @@
+use super::Window;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
@@ -144,27 +145,10 @@ impl<T: Copy + Eq> FocusRing<T> {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-struct WindowEntry {
-    title: Option<String>,
-    minimized: bool,
-    floating_rect: Option<RectSpec>,
-    prev_floating_rect: Option<RectSpec>,
-}
-
-impl WindowEntry {
-    fn title_or_default<R: Copy + Eq + Ord + std::fmt::Debug>(&self, id: WindowId<R>) -> String {
-        self.title.clone().unwrap_or_else(|| match id {
-            WindowId::App(app_id) => format!("{:?}", app_id),
-            WindowId::System(SystemWindowId::DebugLog) => "Debug Log".to_string(),
-        })
-    }
-}
-
 pub struct WindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     app_focus: FocusRing<W>,
     wm_focus: FocusRing<WindowId<R>>,
-    windows: BTreeMap<WindowId<R>, WindowEntry>,
+    windows: BTreeMap<WindowId<R>, Window>,
     regions: RegionMap<WindowId<R>>,
     scroll: BTreeMap<W, ScrollState>,
     handles: Vec<SplitHandle>,
@@ -172,10 +156,7 @@ pub struct WindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     floating_headers: Vec<DragHandle<WindowId<R>>>,
     managed_draw_order: Vec<WindowId<R>>,
     managed_draw_order_app: Vec<R>,
-    // canonical creation order for windows; used to build stable display views
-    canonical_order: Vec<WindowId<R>>,
     managed_layout: Option<TilingLayout<WindowId<R>>>,
-    floating_order: Vec<WindowId<R>>,
     // queue of app ids removed this frame; runner drains via `take_closed_app_windows`
     closed_app_windows: Vec<R>,
     managed_area: Rect,
@@ -197,6 +178,7 @@ pub struct WindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     drag_snap: Option<(Option<WindowId<R>>, InsertPosition, Rect)>,
     debug_log: DebugLogComponent,
     debug_log_id: WindowId<R>,
+    next_window_seq: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,71 +198,63 @@ impl<W: Copy + Eq + Ord, R: Copy + Eq + Ord + std::fmt::Debug> WindowManager<W, 
 where
     R: PartialEq<W>,
 {
-    fn entry_mut(&mut self, id: WindowId<R>) -> &mut WindowEntry {
-        self.windows.entry(id).or_default()
+    fn window_mut(&mut self, id: WindowId<R>) -> &mut Window {
+        let seq = &mut self.next_window_seq;
+        self.windows.entry(id).or_insert_with(|| {
+            let order = *seq;
+            *seq = order.saturating_add(1);
+            Window::new(order)
+        })
     }
 
-    fn entry(&self, id: WindowId<R>) -> Option<&WindowEntry> {
+    fn window(&self, id: WindowId<R>) -> Option<&Window> {
         self.windows.get(&id)
     }
 
     fn is_minimized(&self, id: WindowId<R>) -> bool {
-        self.entry(id).map_or(false, |entry| entry.minimized)
+        self.window(id).is_some_and(|window| window.minimized)
     }
 
     fn set_minimized(&mut self, id: WindowId<R>, value: bool) {
-        self.entry_mut(id).minimized = value;
+        self.window_mut(id).minimized = value;
     }
 
     fn floating_rect(&self, id: WindowId<R>) -> Option<RectSpec> {
-        self.entry(id).and_then(|entry| entry.floating_rect.clone())
+        self.window(id).and_then(|window| window.floating_rect)
     }
 
     fn set_floating_rect(&mut self, id: WindowId<R>, rect: Option<RectSpec>) {
-        self.entry_mut(id).floating_rect = rect;
+        self.window_mut(id).floating_rect = rect;
     }
 
     fn clear_floating_rect(&mut self, id: WindowId<R>) {
-        self.entry_mut(id).floating_rect = None;
-    }
-
-    fn floating_entries(&self) -> impl Iterator<Item = (WindowId<R>, &RectSpec)> {
-        self.windows
-            .iter()
-            .filter_map(|(id, entry)| entry.floating_rect.as_ref().map(|rect| (*id, rect)))
+        self.window_mut(id).floating_rect = None;
     }
 
     fn set_prev_floating_rect(&mut self, id: WindowId<R>, rect: Option<RectSpec>) {
-        self.entry_mut(id).prev_floating_rect = rect;
+        self.window_mut(id).prev_floating_rect = rect;
     }
 
     fn take_prev_floating_rect(&mut self, id: WindowId<R>) -> Option<RectSpec> {
-        self.entry_mut(id).prev_floating_rect.take()
+        self.window_mut(id).prev_floating_rect.take()
+    }
+    fn is_window_floating(&self, id: WindowId<R>) -> bool {
+        self.window(id).is_some_and(|window| window.is_floating())
     }
 
-    fn floating_index(&self, id: WindowId<R>) -> Option<usize> {
-        self.floating_order
-            .iter()
-            .position(|&pane_id| pane_id == id)
-    }
-
-    fn ensure_floating_entry(&mut self, id: WindowId<R>) {
-        if self.floating_index(id).is_none() {
-            self.floating_order.push(id);
-        }
-    }
-
-    fn remove_floating_entry(&mut self, id: WindowId<R>) {
-        if let Some(pos) = self.floating_index(id) {
-            self.floating_order.remove(pos);
-        }
+    fn window_title(&self, id: WindowId<R>) -> String {
+        self.window(id)
+            .map(|window| window.title_or_default(id))
+            .unwrap_or_else(|| match id {
+                WindowId::App(app_id) => format!("{:?}", app_id),
+                WindowId::System(SystemWindowId::DebugLog) => "Debug Log".to_string(),
+            })
     }
 
     fn clear_all_floating(&mut self) {
-        self.floating_order.clear();
-        for entry in self.windows.values_mut() {
-            entry.floating_rect = None;
-            entry.prev_floating_rect = None;
+        for window in self.windows.values_mut() {
+            window.floating_rect = None;
+            window.prev_floating_rect = None;
         }
     }
 
@@ -296,9 +270,7 @@ where
             floating_headers: Vec::new(),
             managed_draw_order: Vec::new(),
             managed_draw_order_app: Vec::new(),
-            canonical_order: Vec::new(),
             managed_layout: None,
-            floating_order: Vec::new(),
             closed_app_windows: Vec::new(),
             managed_area: Rect::default(),
             panel: Panel::new(),
@@ -324,6 +296,7 @@ where
                 component
             },
             debug_log_id: WindowId::system(SystemWindowId::DebugLog),
+            next_window_seq: 0,
         }
     }
 
@@ -504,7 +477,6 @@ where
     }
 
     fn remove_debug_log_from_layout(&mut self) {
-        self.remove_floating_entry(self.debug_log_id);
         self.clear_floating_rect(self.debug_log_id);
         if let Some(layout) = &mut self.managed_layout {
             if matches!(layout.root(), LayoutNode::Leaf(id) if *id == self.debug_log_id) {
@@ -704,12 +676,13 @@ where
         if self.state.debug_log_visible() {
             self.ensure_debug_log_in_layout();
         }
+        let z_snapshot = self.z_order.clone();
         let mut active_ids: Vec<WindowId<R>> = Vec::new();
 
         if let Some(layout) = self.managed_layout.as_ref() {
             let (regions, handles) = layout.root().layout_with_handles(self.managed_area);
             for (id, rect) in &regions {
-                if self.floating_index(*id).is_some() {
+                if self.is_window_floating(*id) {
                     continue;
                 }
                 // skip minimized windows
@@ -732,24 +705,35 @@ where
                     };
                     let left = children.get(handle.index);
                     let right = children.get(handle.index + 1);
-                    left.is_some_and(|node| {
-                        node.subtree_any(|id| self.floating_index(id).is_none())
-                    }) || right.is_some_and(|node| {
-                        node.subtree_any(|id| self.floating_index(id).is_none())
-                    })
+                    left.is_some_and(|node| node.subtree_any(|id| !self.is_window_floating(id)))
+                        || right
+                            .is_some_and(|node| node.subtree_any(|id| !self.is_window_floating(id)))
                 })
                 .collect();
             self.handles.extend(filtered_handles);
         }
-        for &floating_id in &self.floating_order {
+        let mut floating_ids: Vec<WindowId<R>> = self
+            .windows
+            .iter()
+            .filter_map(|(&id, window)| {
+                if window.is_floating() && !window.minimized {
+                    Some(id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        floating_ids.sort_by_key(|id| {
+            z_snapshot
+                .iter()
+                .position(|existing| existing == id)
+                .unwrap_or(usize::MAX)
+        });
+        for floating_id in floating_ids {
             let Some(spec) = self.floating_rect(floating_id) else {
                 continue;
             };
             let rect = spec.resolve(self.managed_area);
-            // skip minimized floating panes
-            if self.is_minimized(floating_id) {
-                continue;
-            }
             self.regions.set(floating_id, rect);
             self.resize_handles.extend(resize_handles_for_region(
                 floating_id,
@@ -769,19 +753,6 @@ where
             }
         }
         self.managed_draw_order = self.z_order.clone();
-        // maintain canonical order: keep existing order for known ids (including minimized), append new ones
-        let mut new_canonical = Vec::new();
-        for id in &self.canonical_order {
-            if self.managed_draw_order.contains(id) || self.is_minimized(*id) {
-                new_canonical.push(*id);
-            }
-        }
-        for id in &self.managed_draw_order {
-            if !new_canonical.contains(id) {
-                new_canonical.push(*id);
-            }
-        }
-        self.canonical_order = new_canonical;
         self.set_wm_focus_order(self.managed_draw_order.clone());
         self.managed_draw_order_app = self
             .managed_draw_order
@@ -798,11 +769,17 @@ where
     /// By default this returns the canonical creation order filtered to active managed windows,
     /// appending any windows that are active but not yet present in the canonical ordering.
     pub fn build_display_order(&self) -> Vec<WindowId<R>> {
+        let mut ordered: Vec<(WindowId<R>, &Window)> = self
+            .windows
+            .iter()
+            .map(|(id, window)| (*id, window))
+            .collect();
+        ordered.sort_by_key(|(_, window)| window.creation_order);
+
         let mut out: Vec<WindowId<R>> = Vec::new();
-        for id in &self.canonical_order {
-            // include canonical ids even if currently minimized so they remain visible in the panel
-            if self.managed_draw_order.contains(id) || self.is_minimized(*id) {
-                out.push(*id);
+        for (id, window) in ordered {
+            if self.managed_draw_order.contains(&id) || window.minimized {
+                out.push(id);
             }
         }
         for id in &self.managed_draw_order {
@@ -816,7 +793,7 @@ where
     /// Set a user-visible title for an app window. This overrides the default
     /// Debug-derived title displayed for the given `id`.
     pub fn set_app_title(&mut self, id: R, title: impl Into<String>) {
-        self.entry_mut(WindowId::app(id)).title = Some(title.into());
+        self.window_mut(WindowId::app(id)).title = Some(title.into());
     }
 
     pub fn handle_managed_event(&mut self, event: &Event) -> bool {
@@ -893,7 +870,6 @@ where
         }
         // remove from floating and regions; keep canonical order so it can be restored
         self.clear_floating_rect(id);
-        self.remove_floating_entry(id);
         self.z_order.retain(|x| *x != id);
         self.managed_draw_order.retain(|x| *x != id);
         self.set_minimized(id, true);
@@ -946,7 +922,6 @@ where
         };
         self.set_prev_floating_rect(id, Some(prev_rect));
         self.set_floating_rect(id, Some(full));
-        self.ensure_floating_entry(id);
         self.bring_floating_to_front_id(id);
     }
 
@@ -955,7 +930,6 @@ where
         self.clear_floating_rect(id);
         self.z_order.retain(|x| *x != id);
         self.managed_draw_order.retain(|x| *x != id);
-        self.canonical_order.retain(|x| *x != id);
         self.set_minimized(id, false);
         self.regions.remove(id);
         // update focus
@@ -1022,7 +996,7 @@ where
                     }
 
                     // Standard floating drag start
-                    if self.floating_index(header.id).is_some() {
+                    if self.is_window_floating(header.id) {
                         self.bring_floating_to_front_id(header.id);
                     } else {
                         // If Tiled: We detach immediately to floating (responsive drag).
@@ -1042,7 +1016,7 @@ where
             }
             MouseEventKind::Drag(_) => {
                 if let Some(drag) = self.drag_header {
-                    if self.floating_index(drag.id).is_some() {
+                    if self.is_window_floating(drag.id) {
                         self.move_floating(
                             drag.id,
                             mouse.column,
@@ -1107,7 +1081,7 @@ where
                     }
 
                     let rect = self.full_region_for_id(handle.id);
-                    if self.floating_index(handle.id).is_none() {
+                    if !self.is_window_floating(handle.id) {
                         return false;
                     }
                     self.bring_floating_to_front_id(handle.id);
@@ -1123,7 +1097,7 @@ where
             }
             MouseEventKind::Drag(_) => {
                 if let Some(drag) = self.drag_resize.as_ref()
-                    && self.floating_index(drag.id).is_some()
+                    && self.is_window_floating(drag.id)
                 {
                     let resized = apply_resize_drag(
                         drag.start_rect,
@@ -1150,7 +1124,7 @@ where
     }
 
     fn detach_to_floating(&mut self, id: WindowId<R>, rect: Rect) -> bool {
-        if self.floating_index(id).is_some() {
+        if self.is_window_floating(id) {
             return true;
         }
         if self.managed_layout.is_none() {
@@ -1170,7 +1144,6 @@ where
                 height,
             })),
         );
-        self.ensure_floating_entry(id);
         self.bring_to_front_id(id);
         true
     }
@@ -1225,7 +1198,7 @@ where
             }
             // If we have a layout, ignore floating windows as snap targets
             // to prevent "bait and switch" (offering to split a float, then splitting root).
-            if self.managed_layout.is_some() && self.floating_index(id).is_some() {
+            if self.managed_layout.is_some() && self.is_window_floating(id) {
                 return None;
             }
 
@@ -1352,14 +1325,13 @@ where
 
             if target.is_none() && !other_windows_exist {
                 // Single window edge snap -> Floating Resize
-                if self.floating_index(id).is_some() {
+                if self.is_window_floating(id) {
                     self.set_floating_rect(id, Some(RectSpec::Absolute(preview)));
                 }
                 return;
             }
 
-            if self.floating_index(id).is_some() {
-                self.remove_floating_entry(id);
+            if self.is_window_floating(id) {
                 self.clear_floating_rect(id);
             }
 
@@ -1380,10 +1352,9 @@ where
 
             // Handle case where target is floating (and thus not in layout yet)
             if let Some(target_id) = target
-                && self.floating_index(target_id).is_some()
+                && self.is_window_floating(target_id)
             {
                 // Target is floating. We must initialize layout with it.
-                self.remove_floating_entry(target_id);
                 self.clear_floating_rect(target_id);
                 if self.managed_layout.is_none() {
                     self.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(target_id)));
@@ -1441,8 +1412,7 @@ where
         // If already in layout or floating, do nothing (or move it?)
         // For now, assume this is for new windows.
         if self.layout_contains(id) {
-            if self.floating_index(id).is_some() {
-                self.remove_floating_entry(id);
+            if self.is_window_floating(id) {
                 self.clear_floating_rect(id);
             }
             self.bring_to_front_id(id);
@@ -1501,17 +1471,18 @@ where
     }
 
     pub fn bring_all_floating_to_front(&mut self) {
-        let ids: Vec<WindowId<R>> = self.floating_order.clone();
+        let ids: Vec<WindowId<R>> = self
+            .z_order
+            .iter()
+            .copied()
+            .filter(|id| self.is_window_floating(*id))
+            .collect();
         for id in ids {
             self.bring_to_front_id(id);
         }
     }
 
     fn bring_floating_to_front_id(&mut self, id: WindowId<R>) {
-        if let Some(index) = self.floating_index(id) {
-            self.floating_order.remove(index);
-            self.floating_order.push(id);
-        }
         self.bring_to_front_id(id);
     }
 
@@ -1526,7 +1497,12 @@ where
         }
         // Collect updates first to avoid borrowing `self` mutably while iterating
         let mut updates: Vec<(WindowId<R>, RectSpec)> = Vec::new();
-        for &id in &self.floating_order {
+        let floating_ids: Vec<WindowId<R>> = self
+            .windows
+            .iter()
+            .filter_map(|(&id, window)| window.floating_rect.as_ref().map(|_| id))
+            .collect();
+        for id in floating_ids {
             let Some(RectSpec::Absolute(rect)) = self.floating_rect(id) else {
                 continue;
             };
@@ -1672,14 +1648,7 @@ where
             let is_obscured =
                 |x: u16, y: u16| -> bool { obscuring.iter().any(|r| rect_contains(*r, x, y)) };
 
-            let title = self
-                .entry(id)
-                .map(|e| e.title.clone())
-                .flatten()
-                .unwrap_or_else(|| match id {
-                    WindowId::App(app_id) => format!("{:?}", app_id),
-                    WindowId::System(SystemWindowId::DebugLog) => "Debug Log".to_string(),
-                });
+            let title = self.window_title(id);
             let focused_window = id == focused;
             self.decorator.render_window(
                 frame,
@@ -1693,9 +1662,9 @@ where
 
         // Build floating panes list from per-window entries for resize outline rendering
         let floating_panes: Vec<FloatingPane<WindowId<R>>> = self
-            .floating_order
+            .windows
             .iter()
-            .filter_map(|&id| self.floating_rect(id).map(|rect| FloatingPane { id, rect }))
+            .filter_map(|(&id, window)| window.floating_rect.map(|rect| FloatingPane { id, rect }))
             .collect();
 
         render_resize_outline(
@@ -1739,16 +1708,8 @@ where
         // Build a small title map to avoid borrowing `self` inside the panel closure
         let titles_map: BTreeMap<WindowId<R>, String> = self
             .windows
-            .iter()
-            .map(|(id, entry)| {
-                (
-                    *id,
-                    entry.title.clone().unwrap_or_else(|| match id {
-                        WindowId::App(app_id) => format!("{:?}", app_id),
-                        WindowId::System(SystemWindowId::DebugLog) => "Debug Log".to_string(),
-                    }),
-                )
-            })
+            .keys()
+            .map(|id| (*id, self.window_title(*id)))
             .collect();
 
         self.panel.render(
