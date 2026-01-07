@@ -96,6 +96,8 @@ impl HasWindowManager<PaneId, PaneId> for App {
         self.terminals.push(pane);
         self.windows.set_focus(id);
         self.windows.tile_window(id);
+        // Set a user-visible title for the newly created pane.
+        self.windows.set_app_title(id, format!("Shell {}", id + 1));
         Ok(())
     }
 

@@ -162,6 +162,8 @@ pub struct WindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     managed_layout: Option<TilingLayout<WindowId<R>>>,
     managed_floating: Vec<FloatingPane<WindowId<R>>>,
     prev_floating_rects: std::collections::BTreeMap<WindowId<R>, RectSpec>,
+    /// Optional per-window title overrides. Use `set_app_title` to populate.
+    titles: std::collections::BTreeMap<WindowId<R>, String>,
     // queue of app ids removed this frame; runner drains via `take_closed_app_windows`
     closed_app_windows: Vec<R>,
     managed_area: Rect,
@@ -218,6 +220,7 @@ where
             managed_layout: None,
             managed_floating: Vec::new(),
             prev_floating_rects: std::collections::BTreeMap::new(),
+            titles: std::collections::BTreeMap::new(),
             closed_app_windows: Vec::new(),
             managed_area: Rect::default(),
             panel: Panel::new(),
@@ -730,11 +733,10 @@ where
         out
     }
 
-    fn window_title(id: WindowId<R>) -> String {
-        match id {
-            WindowId::App(app_id) => format!("{:?}", app_id),
-            WindowId::System(SystemWindowId::DebugLog) => "Debug Log".to_string(),
-        }
+    /// Set a user-visible title for an app window. This overrides the default
+    /// Debug-derived title displayed for the given `id`.
+    pub fn set_app_title(&mut self, id: R, title: impl Into<String>) {
+        self.titles.insert(WindowId::app(id), title.into());
     }
 
     pub fn handle_managed_event(&mut self, event: &Event) -> bool {
@@ -1574,7 +1576,10 @@ where
             let is_obscured =
                 |x: u16, y: u16| -> bool { obscuring.iter().any(|r| rect_contains(*r, x, y)) };
 
-            let title = Self::window_title(id);
+            let title = self.titles.get(&id).cloned().unwrap_or_else(|| match id {
+                WindowId::App(app_id) => format!("{:?}", app_id),
+                WindowId::System(SystemWindowId::DebugLog) => "Debug Log".to_string(),
+            });
             let focused_window = id == focused;
             self.decorator.render_window(
                 frame,
@@ -1624,6 +1629,7 @@ where
             None
         };
         let display = self.build_display_order();
+        let titles = &self.titles;
         self.panel.render(
             frame,
             self.panel_active(),
@@ -1632,7 +1638,12 @@ where
             status_line.as_deref(),
             self.mouse_capture_enabled(),
             self.wm_overlay_visible(),
-            |id| Self::window_title(id),
+            move |id| {
+                titles.get(&id).cloned().unwrap_or_else(|| match id {
+                    WindowId::App(app_id) => format!("{:?}", app_id),
+                    WindowId::System(SystemWindowId::DebugLog) => "Debug Log".to_string(),
+                })
+            },
         );
         let menu_labels = wm_menu_items(self.mouse_capture_enabled())
             .iter()
