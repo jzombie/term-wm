@@ -553,10 +553,6 @@ where
         }
     }
 
-    fn focus_window(&mut self, id: R) {
-        self.focus_window_id(WindowId::app(id));
-    }
-
     fn set_wm_focus_order(&mut self, order: Vec<WindowId<R>>) {
         self.wm_focus.set_order(order);
         if !self.wm_focus.order.is_empty() && !self.wm_focus.order.contains(&self.wm_focus.current)
@@ -600,18 +596,6 @@ where
         if let Some(fallback) = self.wm_focus.order.first().copied() {
             self.set_wm_focus(fallback);
         }
-    }
-
-    fn bring_focus_to_front<F>(&mut self, map_focus: F)
-    where
-        F: Fn(W) -> Option<R>,
-    {
-        if self.layout_contract != LayoutContract::WindowManaged {
-            return;
-        }
-        let _ = map_focus;
-        let focused = self.wm_focus.current();
-        self.bring_floating_to_front_id(focused);
     }
 
     pub fn scroll(&self, id: W) -> ScrollState {
