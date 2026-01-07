@@ -1,5 +1,5 @@
 use super::Window;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, MouseEventKind};
@@ -565,19 +565,35 @@ where
         }
     }
 
+    fn rebuild_wm_focus_ring(&mut self, active_ids: &[WindowId<R>]) {
+        if active_ids.is_empty() {
+            self.set_wm_focus_order(Vec::new());
+            return;
+        }
+        let active: BTreeSet<_> = active_ids.iter().copied().collect();
+        let mut next_order: Vec<WindowId<R>> = Vec::with_capacity(active.len());
+        let mut seen: BTreeSet<WindowId<R>> = BTreeSet::new();
+
+        for &id in &self.wm_focus.order {
+            if active.contains(&id) && seen.insert(id) {
+                next_order.push(id);
+            }
+        }
+        for &id in active_ids {
+            if seen.insert(id) {
+                next_order.push(id);
+            }
+        }
+        self.set_wm_focus_order(next_order);
+    }
+
     fn advance_wm_focus(&mut self, forward: bool) {
+        if self.wm_focus.order.is_empty() {
+            return;
+        }
         self.wm_focus.advance(forward);
-        if let Some(app_id) = self.wm_focus.current().as_app()
-            && let Some(app_focus) = self.focus_for_region(app_id)
-        {
-            self.app_focus.set_current(app_focus);
-        }
-        // Ensure the newly-focused window is on top so tab-switching behaves like clicks.
-        if self.layout_contract == LayoutContract::WindowManaged {
-            let focused = self.wm_focus.current();
-            self.bring_floating_to_front_id(focused);
-            self.managed_draw_order = self.z_order.clone();
-        }
+        let focused = self.wm_focus.current();
+        self.focus_window_id(focused);
     }
 
     fn select_fallback_focus(&mut self) {
@@ -768,18 +784,18 @@ where
         }
 
         self.z_order.retain(|id| active_ids.contains(id));
-        for id in active_ids {
+        for &id in &active_ids {
             if !self.z_order.contains(&id) {
                 self.z_order.push(id);
             }
         }
         self.managed_draw_order = self.z_order.clone();
-        self.set_wm_focus_order(self.managed_draw_order.clone());
         self.managed_draw_order_app = self
             .managed_draw_order
             .iter()
             .filter_map(|id| id.as_app())
             .collect();
+        self.rebuild_wm_focus_ring(&active_ids);
         // Ensure the current focus is actually on top and synced after layout registration.
         // Only bring the focused window to front if it's not already the topmost window
         // to avoid repeatedly forcing focus every frame.
