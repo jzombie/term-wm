@@ -3,6 +3,12 @@
 Purpose
 - Record the repository conventions for UI components so contributors and automation follow the same rules.
 
+Cross-platform Requirement
+- All changes and automation must be cross-platform: work correctly on macOS, Linux, and Windows.
+- Avoid using OS-specific APIs or behavior (e.g., direct `tty` ioctl calls, Unix-only paths, or platform-only environment assumptions) unless guarded by platform cfgs and documented.
+- Tests and verification commands in this document should be runnable on all supported platforms; prefer portable crates and APIs.
+- If behavioral differences are unavoidable, document them clearly and include platform-specific tests or CI jobs.
+
 Component Naming
 - All UI widgets must be named `*Component` (e.g., `ScrollViewComponent`, `MarkdownViewerComponent`, `StatusBarComponent`).
 
@@ -50,3 +56,4 @@ Examples / Common Edits
 Notes for Automation/Agents
 - Automation editing component files should prefer minimal, surgical changes via `apply_patch`.
 - Where work spans multiple files, agents must create a `manage_todo_list` plan first and provide concise progress updates after batches of changes.
+
