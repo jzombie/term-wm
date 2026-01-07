@@ -222,10 +222,8 @@ impl super::Component for TerminalComponent {
                 true
             }
             Event::Mouse(mouse) => {
-                if !self.pane.alternate_screen() {
-                    if self.handle_scrollbar_event(event) {
-                        return true;
-                    }
+                if !self.pane.alternate_screen() && self.handle_scrollbar_event(event) {
+                    return true;
                 }
                 if !rect_contains(self.last_area, mouse.column, mouse.row) {
                     return false;

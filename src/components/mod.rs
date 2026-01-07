@@ -24,7 +24,7 @@ pub use debug_log::{
 pub use dialog_overlay::DialogOverlayComponent;
 pub use help_overlay::HelpOverlayComponent;
 pub use list::ListComponent;
-pub use markdown_viewer::MarkdownViewer;
+pub use markdown_viewer::MarkdownViewerComponent;
 pub use scroll_view::ScrollView;
 pub use status_bar::StatusBar;
 pub use terminal::{TerminalComponent, default_shell, default_shell_command};

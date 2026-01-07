@@ -1,24 +1,23 @@
 use std::str;
 
-use crossterm::event::{Event, MouseEventKind};
+use crossterm::event::Event;
 use pulldown_cmark::{Event as MdEvent, Options, Parser, Tag};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::components::Component;
-use crate::components::scroll_view::ScrollView;
+use crate::components::{Component, scroll_view::ScrollView};
 use crate::ui::UiFrame;
 
 #[derive(Debug)]
-pub struct MarkdownViewer {
+pub struct MarkdownViewerComponent {
     text: Text<'static>,
     scroll: ScrollView,
     total_lines: usize,
 }
 
-impl MarkdownViewer {
+impl MarkdownViewerComponent {
     pub fn new() -> Self {
         Self {
             text: Text::from(vec![Line::from(String::new())]),
@@ -41,11 +40,7 @@ impl MarkdownViewer {
         let mut lines: Vec<Vec<Span>> = Vec::new();
         let mut current: Vec<Span> = Vec::new();
 
-        #[derive(Clone, Copy)]
-        enum ListKind {
-            Unordered,
-            Ordered(usize),
-        }
+        // list numbering handled via `list_start`/`list_count` vectors
 
         let mut list_start: Vec<Option<usize>> = Vec::new();
         let mut list_count: Vec<usize> = Vec::new();
@@ -164,7 +159,7 @@ impl MarkdownViewer {
             lines.push(vec![Span::raw("")]);
         }
 
-        let owned_lines: Vec<Line> = lines.into_iter().map(|spans| Line::from(spans)).collect();
+        let owned_lines: Vec<Line> = lines.into_iter().map(Line::from).collect();
         self.total_lines = owned_lines.len();
         self.text = Text::from(owned_lines);
     }
@@ -246,13 +241,13 @@ impl MarkdownViewer {
     }
 }
 
-impl Default for MarkdownViewer {
+impl Default for MarkdownViewerComponent {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl crate::components::Component for MarkdownViewer {
+impl Component for MarkdownViewerComponent {
     fn resize(&mut self, area: ratatui::layout::Rect) {
         // Respect the allocated height so scrollbar calculations are stable.
         self.scroll.set_fixed_height(Some(area.height));

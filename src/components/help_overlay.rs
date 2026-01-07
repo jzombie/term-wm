@@ -4,7 +4,7 @@ use crossterm::event::{Event, KeyCode};
 use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders, Clear};
 
-use crate::components::{Component, DialogOverlayComponent, MarkdownViewer};
+use crate::components::{Component, DialogOverlayComponent, MarkdownViewerComponent};
 use crate::ui::UiFrame;
 
 static HELP_MD: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/help.md"));
@@ -13,7 +13,7 @@ static HELP_MD: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/ass
 pub struct HelpOverlayComponent {
     dialog: DialogOverlayComponent,
     visible: bool,
-    viewer: MarkdownViewer,
+    viewer: MarkdownViewerComponent,
 }
 
 impl HelpOverlayComponent {
@@ -21,7 +21,7 @@ impl HelpOverlayComponent {
         let mut overlay = Self {
             dialog: DialogOverlayComponent::new(),
             visible: false,
-            viewer: MarkdownViewer::new(),
+            viewer: MarkdownViewerComponent::new(),
         };
         overlay.dialog.set_size(70, 20);
         overlay.dialog.set_dim_backdrop(true);
@@ -64,6 +64,12 @@ impl HelpOverlayComponent {
     /// Manually set keyboard handling for the underlying viewer.
     pub fn set_keyboard_enabled(&mut self, enabled: bool) {
         self.viewer.set_keyboard_enabled(enabled);
+    }
+}
+
+impl Default for HelpOverlayComponent {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
