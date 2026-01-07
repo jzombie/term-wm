@@ -185,7 +185,7 @@ impl ToggleListComponent {
 
     fn handle_scrollbar_event(&mut self, event: &Event) -> bool {
         let response = self.scroll_view.handle_event(event);
-        if let Some(offset) = response.offset {
+        if let Some(offset) = response.v_offset {
             self.scroll_view.set_offset(offset);
         }
         if response.handled {

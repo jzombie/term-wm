@@ -5,9 +5,8 @@ use pulldown_cmark::{Event as MdEvent, Options, Parser, Tag};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::components::{Component, scroll_view::ScrollViewComponent, TextRendererComponent};
+use crate::components::{Component, TextRendererComponent};
 use crate::ui::UiFrame;
 
 #[derive(Debug)]
@@ -362,7 +361,7 @@ mod markdown_tests {
     fn scrollbar_does_not_overlay_text() {
         use ratatui::buffer::Buffer;
         use ratatui::layout::Rect;
-        use ratatui::widgets::Paragraph;
+        use ratatui::widgets::{Paragraph, Wrap};
 
         let mut mv = sample_viewer();
 
@@ -393,8 +392,9 @@ mod markdown_tests {
         let mut content_buf = Buffer::empty(content_area);
         {
             let mut frame = crate::ui::UiFrame::from_parts(content_area, &mut content_buf);
-                let mut paragraph = Paragraph::new(mv.renderer.text_ref().clone()).wrap(Wrap { trim: false });
-                paragraph = paragraph.scroll((mv.renderer.offset() as u16, 0));
+            let mut paragraph =
+                Paragraph::new(mv.renderer.text_ref().clone()).wrap(Wrap { trim: false });
+            paragraph = paragraph.scroll((mv.renderer.offset() as u16, 0));
             frame.render_widget(paragraph, content_area);
         }
 

@@ -273,7 +273,7 @@ impl TerminalComponent {
             return false;
         }
         let response = self.scroll_view.handle_event(event);
-        if let Some(offset) = response.offset {
+        if let Some(offset) = response.v_offset {
             let scrollback = used.saturating_sub(offset);
             self.pane.set_scrollback(scrollback);
         }

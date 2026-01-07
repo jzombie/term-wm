@@ -79,8 +79,11 @@ impl Component for TextRendererComponent {
         match event {
             crossterm::event::Event::Mouse(_) => {
                 let resp = self.scroll.handle_event(event);
-                if let Some(off) = resp.offset {
+                if let Some(off) = resp.v_offset {
                     self.scroll.set_offset(off);
+                }
+                if let Some(off) = resp.h_offset {
+                    self.scroll.set_h_offset(off);
                 }
                 resp.handled
             }

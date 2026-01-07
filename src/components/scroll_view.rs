@@ -16,6 +16,12 @@ pub struct ScrollbarDragResponse {
     pub offset: Option<usize>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollbarAxis {
+    Vertical,
+    Horizontal,
+}
+
 impl ScrollbarDrag {
     pub fn new() -> Self {
         Self { dragging: false }
@@ -27,28 +33,54 @@ impl ScrollbarDrag {
         area: Rect,
         total: usize,
         view: usize,
+        axis: ScrollbarAxis,
     ) -> ScrollbarDragResponse {
-        if total <= view || view == 0 || area.height == 0 || area.width == 0 {
+        let axis_empty = match axis {
+            ScrollbarAxis::Vertical => area.height == 0,
+            ScrollbarAxis::Horizontal => area.width == 0,
+        };
+        if total <= view || view == 0 || axis_empty {
             self.dragging = false;
             return ScrollbarDragResponse {
                 handled: false,
                 offset: None,
             };
         }
-        let scrollbar_x = area.x.saturating_add(area.width.saturating_sub(1));
-        let on_scrollbar =
-            rect_contains(area, mouse.column, mouse.row) && mouse.column == scrollbar_x;
+        let on_scrollbar = match axis {
+            ScrollbarAxis::Vertical => {
+                let scrollbar_x = area.x.saturating_add(area.width.saturating_sub(1));
+                rect_contains(area, mouse.column, mouse.row) && mouse.column == scrollbar_x
+            }
+            ScrollbarAxis::Horizontal => {
+                let scrollbar_y = area.y.saturating_add(area.height.saturating_sub(1));
+                rect_contains(area, mouse.column, mouse.row) && mouse.row == scrollbar_y
+            }
+        };
         match mouse.kind {
             MouseEventKind::Down(_) if on_scrollbar => {
                 self.dragging = true;
                 ScrollbarDragResponse {
                     handled: true,
-                    offset: Some(scrollbar_offset_from_row(mouse.row, area, total, view)),
+                    offset: Some(match axis {
+                        ScrollbarAxis::Vertical => {
+                            scrollbar_offset_from_row(mouse.row, area, total, view)
+                        }
+                        ScrollbarAxis::Horizontal => {
+                            scrollbar_offset_from_col(mouse.column, area, total, view)
+                        }
+                    }),
                 }
             }
             MouseEventKind::Drag(_) if self.dragging => ScrollbarDragResponse {
                 handled: true,
-                offset: Some(scrollbar_offset_from_row(mouse.row, area, total, view)),
+                offset: Some(match axis {
+                    ScrollbarAxis::Vertical => {
+                        scrollbar_offset_from_row(mouse.row, area, total, view)
+                    }
+                    ScrollbarAxis::Horizontal => {
+                        scrollbar_offset_from_col(mouse.column, area, total, view)
+                    }
+                }),
             },
             MouseEventKind::Up(_) if self.dragging => {
                 self.dragging = false;
@@ -67,7 +99,8 @@ impl ScrollbarDrag {
 
 pub struct ScrollEvent {
     pub handled: bool,
-    pub offset: Option<usize>,
+    pub v_offset: Option<usize>,
+    pub h_offset: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -215,26 +248,33 @@ impl ScrollViewComponent {
         if self.total == 0 || self.view == 0 {
             return ScrollEvent {
                 handled: false,
-                offset: None,
+                v_offset: None,
+                h_offset: None,
             };
         }
         let Event::Mouse(mouse) = event else {
             return ScrollEvent {
                 handled: false,
-                offset: None,
+                v_offset: None,
+                h_offset: None,
             };
         };
         // First, let vertical scrollbar drag clicks/drags handle the event if applicable.
-        let response = self
-            .v_drag
-            .handle_mouse(mouse, self.area, self.total, self.view);
+        let response = self.v_drag.handle_mouse(
+            mouse,
+            self.area,
+            self.total,
+            self.view,
+            ScrollbarAxis::Vertical,
+        );
         if let Some(offset) = response.offset {
             self.set_offset(offset);
         }
         if response.handled {
             return ScrollEvent {
                 handled: true,
-                offset: response.offset,
+                v_offset: response.offset,
+                h_offset: None,
             };
         }
 
@@ -246,7 +286,8 @@ impl ScrollViewComponent {
                 self.set_offset(off);
                 ScrollEvent {
                     handled: true,
-                    offset: Some(off),
+                    v_offset: Some(off),
+                    h_offset: None,
                 }
             }
             ScrollDown => {
@@ -254,55 +295,42 @@ impl ScrollViewComponent {
                 self.set_offset(off);
                 ScrollEvent {
                     handled: true,
-                    offset: Some(off),
+                    v_offset: Some(off),
+                    h_offset: None,
                 }
             }
             _ => ScrollEvent {
                 handled: false,
-                offset: None,
+                v_offset: None,
+                h_offset: None,
             },
         };
         if mouse_scroll_resp.handled {
             return mouse_scroll_resp;
         }
-        // Next, let horizontal scrollbar drag clicks/drags handle the event if implemented.
-        // ScrollbarDrag currently implements vertical handling; use a simple horizontal
-        // hit-test here and compute offset from column when dragging.
         if self.h_total > self.h_view && self.h_view > 0 {
-            let scrollbar_y = self
-                .area
-                .y
-                .saturating_add(self.area.height.saturating_sub(1));
-            let on_h_scrollbar =
-                rect_contains(self.area, mouse.column, mouse.row) && mouse.row == scrollbar_y;
-            if matches!(mouse.kind, MouseEventKind::Down(_)) && on_h_scrollbar {
-                self.h_drag.dragging = true;
-                let off =
-                    scrollbar_offset_from_col(mouse.column, self.area, self.h_total, self.h_view);
-                self.set_h_offset(off);
+            let response = self.h_drag.handle_mouse(
+                mouse,
+                self.area,
+                self.h_total,
+                self.h_view,
+                ScrollbarAxis::Horizontal,
+            );
+            if let Some(offset) = response.offset {
+                self.set_h_offset(offset);
+            }
+            if response.handled {
                 return ScrollEvent {
                     handled: true,
-                    offset: Some(off),
-                };
-            } else if matches!(mouse.kind, MouseEventKind::Drag(_)) && self.h_drag.dragging {
-                let off =
-                    scrollbar_offset_from_col(mouse.column, self.area, self.h_total, self.h_view);
-                self.set_h_offset(off);
-                return ScrollEvent {
-                    handled: true,
-                    offset: Some(off),
-                };
-            } else if matches!(mouse.kind, MouseEventKind::Up(_)) && self.h_drag.dragging {
-                self.h_drag.dragging = false;
-                return ScrollEvent {
-                    handled: true,
-                    offset: None,
+                    v_offset: None,
+                    h_offset: response.offset,
                 };
             }
         }
         return ScrollEvent {
             handled: false,
-            offset: None,
+            v_offset: None,
+            h_offset: None,
         };
     }
 
@@ -496,7 +524,7 @@ mod tests {
             row: area.y + 1,
             modifiers: KeyModifiers::NONE,
         };
-        let resp = drag.handle_mouse(&down, area, total, view);
+        let resp = drag.handle_mouse(&down, area, total, view, ScrollbarAxis::Vertical);
         assert!(resp.handled);
         assert!(resp.offset.is_some());
 
@@ -506,7 +534,7 @@ mod tests {
             row: area.y + 2,
             modifiers: KeyModifiers::NONE,
         };
-        let resp2 = drag.handle_mouse(&drag_evt, area, total, view);
+        let resp2 = drag.handle_mouse(&drag_evt, area, total, view, ScrollbarAxis::Vertical);
         assert!(resp2.handled);
         assert!(resp2.offset.is_some());
 
@@ -516,7 +544,51 @@ mod tests {
             row: area.y + 2,
             modifiers: KeyModifiers::NONE,
         };
-        let resp3 = drag.handle_mouse(&up, area, total, view);
+        let resp3 = drag.handle_mouse(&up, area, total, view, ScrollbarAxis::Vertical);
+        assert!(resp3.handled);
+        assert!(resp3.offset.is_none());
+    }
+
+    #[test]
+    fn horizontal_drag_handle_mouse_lifecycle() {
+        let mut drag = ScrollbarDrag::new();
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 8,
+            height: 4,
+        };
+        let total = 40usize;
+        let view = 6usize;
+        let scrollbar_y = area.y.saturating_add(area.height.saturating_sub(1));
+        use crossterm::event::KeyModifiers;
+        let down = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: area.x + 2,
+            row: scrollbar_y,
+            modifiers: KeyModifiers::NONE,
+        };
+        let resp = drag.handle_mouse(&down, area, total, view, ScrollbarAxis::Horizontal);
+        assert!(resp.handled);
+        assert!(resp.offset.is_some());
+
+        let drag_evt = MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: area.x + 4,
+            row: scrollbar_y,
+            modifiers: KeyModifiers::NONE,
+        };
+        let resp2 = drag.handle_mouse(&drag_evt, area, total, view, ScrollbarAxis::Horizontal);
+        assert!(resp2.handled);
+        assert!(resp2.offset.is_some());
+
+        let up = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: area.x + 4,
+            row: scrollbar_y,
+            modifiers: KeyModifiers::NONE,
+        };
+        let resp3 = drag.handle_mouse(&up, area, total, view, ScrollbarAxis::Horizontal);
         assert!(resp3.handled);
         assert!(resp3.offset.is_none());
     }

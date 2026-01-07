@@ -4,11 +4,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crossterm::event::Event;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
 use ratatui::text::{Line, Text};
-use ratatui::widgets::Paragraph;
 
-use crate::components::{Component, scroll_view::ScrollViewComponent, TextRendererComponent};
+use crate::components::{Component, TextRendererComponent};
 use crate::ui::UiFrame;
 
 const DEFAULT_MAX_LINES: usize = 2000;
