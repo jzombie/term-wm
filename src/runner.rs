@@ -235,14 +235,25 @@ where
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(handler)) {
             Ok(result) => result,
             Err(_) => {
+                // TODO: This needs to be improved; currently requires resizing the terminal window to
+                // "stabilize" the messages, to produce them in a debug log window. Also, directly setting
+                // the mouse capture here bypasses the state, and the UI is not reflected. It might be better
+                // to just turn off mouse capturing and crash the app naturally if this cannot be improved.
+
                 // A panic occurred; stop mouse capture to avoid terminal spam
                 let _ = driver.set_mouse_capture(false);
                 // Attempt to immediately redraw the UI so the debug log (populated by the panic hook)
                 // is visible to the user without waiting for another input event like a resize.
-                let _ = output.draw(|frame| {
-                    draw(frame, app);
-                    app.windows().render_overlays(frame);
-                });
+                let mut redraw = || -> io::Result<()> {
+                    app.windows().begin_frame();
+                    output.draw(|frame| {
+                        draw(frame, app);
+                        app.windows().render_overlays(frame);
+                    })
+                };
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = redraw();
+                }));
                 // Let the panic hook have recorded details into the debug log; continue event loop.
                 Ok(ControlFlow::Continue)
             }
