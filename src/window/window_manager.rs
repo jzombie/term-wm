@@ -792,7 +792,7 @@ where
 
     /// Set a user-visible title for an app window. This overrides the default
     /// Debug-derived title displayed for the given `id`.
-    pub fn set_app_title(&mut self, id: R, title: impl Into<String>) {
+    pub fn set_window_title(&mut self, id: R, title: impl Into<String>) {
         self.window_mut(WindowId::app(id)).title = Some(title.into());
     }
 
