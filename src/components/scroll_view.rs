@@ -72,11 +72,17 @@ pub struct ScrollEvent {
 
 #[derive(Debug)]
 pub struct ScrollViewComponent {
-    state: ScrollState,
-    drag: ScrollbarDrag,
+    v_state: ScrollState,
+    v_drag: ScrollbarDrag,
+    h_state: ScrollState,
+    h_drag: ScrollbarDrag,
     area: Rect,
     total: usize,
     view: usize,
+    /// Horizontal total (content width in columns)
+    h_total: usize,
+    /// Horizontal viewport width (in columns)
+    h_view: usize,
     fixed_height: Option<u16>,
     keyboard_enabled: bool,
 }
@@ -88,7 +94,7 @@ impl Component for ScrollViewComponent {
         }
         self.area = area;
         self.view = self.view.min(self.area.height as usize);
-        self.state.apply(self.total, self.view);
+        self.v_state.apply(self.total, self.view);
     }
 
     fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
@@ -104,11 +110,15 @@ impl Component for ScrollViewComponent {
 impl ScrollViewComponent {
     pub fn new() -> Self {
         Self {
-            state: ScrollState::default(),
-            drag: ScrollbarDrag::new(),
+            v_state: ScrollState::default(),
+            v_drag: ScrollbarDrag::new(),
+            h_state: ScrollState::default(),
+            h_drag: ScrollbarDrag::new(),
             area: Rect::default(),
             total: 0,
             view: 0,
+            h_total: 0,
+            h_view: 0,
             fixed_height: None,
             keyboard_enabled: false,
         }
@@ -132,38 +142,73 @@ impl ScrollViewComponent {
         self.area = area;
         self.total = total;
         self.view = view.min(area.height as usize);
-        self.state.apply(total, view);
+        self.v_state.apply(total, view);
     }
 
     pub fn set_total_view(&mut self, total: usize, view: usize) {
         self.total = total;
         self.view = view.min(self.area.height as usize);
-        self.state.apply(total, view);
+        self.v_state.apply(total, view);
     }
 
     pub fn offset(&self) -> usize {
-        self.state.offset
+        self.v_state.offset
     }
 
     pub fn set_offset(&mut self, offset: usize) {
-        self.state.offset = offset.min(self.max_offset());
+        self.v_state.offset = offset.min(self.max_offset());
     }
 
     pub fn bump(&mut self, delta: isize) {
-        self.state.bump(delta);
-        self.state.apply(self.total, self.view);
+        self.v_state.bump(delta);
+        self.v_state.apply(self.total, self.view);
     }
 
     pub fn reset(&mut self) {
-        self.state.reset();
+        self.v_state.reset();
+        self.h_state.reset();
     }
 
     pub fn view(&self) -> usize {
         self.view
     }
 
+    pub fn h_view(&self) -> usize {
+        self.h_view
+    }
+
+    pub fn h_offset(&self) -> usize {
+        self.h_state.offset
+    }
+
+    pub fn set_h_offset(&mut self, offset: usize) {
+        self.h_state.offset = offset.min(self.max_h_offset());
+    }
+
+    pub fn bump_h(&mut self, delta: isize) {
+        self.h_state.bump(delta);
+        self.h_state.apply(self.h_total, self.h_view);
+    }
+
     pub fn render(&self, frame: &mut UiFrame<'_>) {
-        render_scrollbar(frame, self.area, self.total, self.view, self.offset());
+        // Render vertical scrollbar on the right if needed
+        render_scrollbar_oriented(
+            frame,
+            self.area,
+            self.total,
+            self.view,
+            self.v_state.offset,
+            ScrollbarOrientation::VerticalRight,
+        );
+        // Render horizontal scrollbar on the bottom if needed
+        render_scrollbar_oriented(
+            frame,
+            self.area,
+            self.h_total,
+            self.h_view,
+            self.h_state.offset,
+            ScrollbarOrientation::HorizontalBottom,
+        );
     }
 
     pub fn handle_event(&mut self, event: &Event) -> ScrollEvent {
@@ -179,9 +224,9 @@ impl ScrollViewComponent {
                 offset: None,
             };
         };
-        // First, let scrollbar drag clicks/drags handle the event if applicable.
+        // First, let vertical scrollbar drag clicks/drags handle the event if applicable.
         let response = self
-            .drag
+            .v_drag
             .handle_mouse(mouse, self.area, self.total, self.view);
         if let Some(offset) = response.offset {
             self.set_offset(offset);
@@ -195,7 +240,7 @@ impl ScrollViewComponent {
 
         // Handle mouse wheel scrolling as a fallback.
         use crossterm::event::MouseEventKind::*;
-        match mouse.kind {
+        let mouse_scroll_resp = match mouse.kind {
             ScrollUp => {
                 let off = self.offset().saturating_sub(3);
                 self.set_offset(off);
@@ -216,7 +261,53 @@ impl ScrollViewComponent {
                 handled: false,
                 offset: None,
             },
+        };
+        if mouse_scroll_resp.handled {
+            return mouse_scroll_resp;
         }
+        // Next, let horizontal scrollbar drag clicks/drags handle the event if implemented.
+        // ScrollbarDrag currently implements vertical handling; use a simple horizontal
+        // hit-test here and compute offset from column when dragging.
+        if self.h_total > self.h_view && self.h_view > 0 {
+            let scrollbar_y = self
+                .area
+                .y
+                .saturating_add(self.area.height.saturating_sub(1));
+            let on_h_scrollbar =
+                rect_contains(self.area, mouse.column, mouse.row) && mouse.row == scrollbar_y;
+            if matches!(mouse.kind, MouseEventKind::Down(_)) && on_h_scrollbar {
+                self.h_drag.dragging = true;
+                let off =
+                    scrollbar_offset_from_col(mouse.column, self.area, self.h_total, self.h_view);
+                self.set_h_offset(off);
+                return ScrollEvent {
+                    handled: true,
+                    offset: Some(off),
+                };
+            } else if matches!(mouse.kind, MouseEventKind::Drag(_)) && self.h_drag.dragging {
+                let off =
+                    scrollbar_offset_from_col(mouse.column, self.area, self.h_total, self.h_view);
+                self.set_h_offset(off);
+                return ScrollEvent {
+                    handled: true,
+                    offset: Some(off),
+                };
+            } else if matches!(mouse.kind, MouseEventKind::Up(_)) && self.h_drag.dragging {
+                self.h_drag.dragging = false;
+                return ScrollEvent {
+                    handled: true,
+                    offset: None,
+                };
+            }
+        }
+        return ScrollEvent {
+            handled: false,
+            offset: None,
+        };
+    }
+
+    fn max_h_offset(&self) -> usize {
+        self.h_total.saturating_sub(self.h_view)
     }
 
     // Handle common keyboard scrolling keys when `keyboard_enabled` is true.
@@ -231,38 +322,38 @@ impl ScrollViewComponent {
         match key.code {
             crossterm::event::KeyCode::PageUp => {
                 let page = self.view.max(1);
-                let off = self.state.offset.saturating_sub(page);
-                self.state.offset = off;
-                self.state.apply(self.total, self.view);
+                let off = self.v_state.offset.saturating_sub(page);
+                self.v_state.offset = off;
+                self.v_state.apply(self.total, self.view);
                 true
             }
             crossterm::event::KeyCode::PageDown => {
                 let page = self.view.max(1);
-                let off = (self.state.offset.saturating_add(page)).min(max_offset);
-                self.state.offset = off;
-                self.state.apply(self.total, self.view);
+                let off = (self.v_state.offset.saturating_add(page)).min(max_offset);
+                self.v_state.offset = off;
+                self.v_state.apply(self.total, self.view);
                 true
             }
             crossterm::event::KeyCode::Home => {
-                self.state.offset = 0;
-                self.state.apply(self.total, self.view);
+                self.v_state.offset = 0;
+                self.v_state.apply(self.total, self.view);
                 true
             }
             crossterm::event::KeyCode::End => {
-                self.state.offset = max_offset;
-                self.state.apply(self.total, self.view);
+                self.v_state.offset = max_offset;
+                self.v_state.apply(self.total, self.view);
                 true
             }
             crossterm::event::KeyCode::Up => {
-                let off = self.state.offset.saturating_sub(1);
-                self.state.offset = off;
-                self.state.apply(self.total, self.view);
+                let off = self.v_state.offset.saturating_sub(1);
+                self.v_state.offset = off;
+                self.v_state.apply(self.total, self.view);
                 true
             }
             crossterm::event::KeyCode::Down => {
-                let off = (self.state.offset.saturating_add(1)).min(max_offset);
-                self.state.offset = off;
-                self.state.apply(self.total, self.view);
+                let off = (self.v_state.offset.saturating_add(1)).min(max_offset);
+                self.v_state.offset = off;
+                self.v_state.apply(self.total, self.view);
                 true
             }
             _ => false,
@@ -277,6 +368,15 @@ impl ScrollViewComponent {
 impl Default for ScrollViewComponent {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl ScrollViewComponent {
+    /// Set horizontal totals (content width in columns and viewport columns).
+    pub fn set_horizontal_total_view(&mut self, total: usize, view: usize) {
+        self.h_total = total;
+        self.h_view = view.min(self.area.width as usize);
+        self.h_state.apply(total, view);
     }
 }
 
@@ -298,6 +398,25 @@ pub fn render_scrollbar(
     frame.render_stateful_widget(scrollbar, area, &mut state);
 }
 
+pub fn render_scrollbar_oriented(
+    frame: &mut UiFrame<'_>,
+    area: Rect,
+    total: usize,
+    view: usize,
+    offset: usize,
+    orientation: ScrollbarOrientation,
+) {
+    if total <= view || view == 0 || area.width == 0 || area.height == 0 {
+        return;
+    }
+    let content_len = total.saturating_sub(view).saturating_add(1).max(1);
+    let mut state = ScrollbarState::new(content_len)
+        .position(offset.min(content_len.saturating_sub(1)))
+        .viewport_content_length(view.max(1));
+    let scrollbar = Scrollbar::new(orientation);
+    frame.render_stateful_widget(scrollbar, area, &mut state);
+}
+
 fn scrollbar_offset_from_row(row: u16, area: Rect, total: usize, view: usize) -> usize {
     let content_len = total.saturating_sub(view).saturating_add(1).max(1);
     let max_offset = content_len.saturating_sub(1);
@@ -308,6 +427,18 @@ fn scrollbar_offset_from_row(row: u16, area: Rect, total: usize, view: usize) ->
         .saturating_sub(area.y)
         .min(area.height.saturating_sub(1));
     let ratio = rel as f64 / (area.height.saturating_sub(1)) as f64;
+    (ratio * max_offset as f64).round() as usize
+}
+
+fn scrollbar_offset_from_col(col: u16, area: Rect, total: usize, view: usize) -> usize {
+    // Map a column within area to a horizontal offset
+    let content_len = total.saturating_sub(view).saturating_add(1).max(1);
+    let max_offset = content_len.saturating_sub(1);
+    if max_offset == 0 || area.width <= 1 {
+        return 0;
+    }
+    let rel = col.saturating_sub(area.x).min(area.width.saturating_sub(1));
+    let ratio = rel as f64 / (area.width.saturating_sub(1)) as f64;
     (ratio * max_offset as f64).round() as usize
 }
 

@@ -7,21 +7,18 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::components::{Component, scroll_view::ScrollViewComponent};
+use crate::components::{Component, scroll_view::ScrollViewComponent, TextRendererComponent};
 use crate::ui::UiFrame;
 
 #[derive(Debug)]
 pub struct MarkdownViewerComponent {
-    text: Text<'static>,
-    scroll: ScrollViewComponent,
-    total_lines: usize,
-    display_lines: usize,
+    renderer: TextRendererComponent,
 }
 
 impl Component for MarkdownViewerComponent {
     fn resize(&mut self, area: Rect) {
         // Respect the allocated height so scrollbar calculations are stable.
-        self.scroll.set_fixed_height(Some(area.height));
+        self.renderer.resize(area);
     }
 
     fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
@@ -40,10 +37,7 @@ impl Component for MarkdownViewerComponent {
 impl MarkdownViewerComponent {
     pub fn new() -> Self {
         Self {
-            text: Text::from(vec![Line::from(String::new())]),
-            scroll: ScrollViewComponent::new(),
-            total_lines: 0,
-            display_lines: 0,
+            renderer: TextRendererComponent::new(),
         }
     }
 
@@ -200,10 +194,9 @@ impl MarkdownViewerComponent {
         }
 
         let owned_lines: Vec<Line> = lines.into_iter().map(Line::from).collect();
-
-        self.total_lines = owned_lines.len();
-        self.text = Text::from(owned_lines);
-        self.display_lines = self.total_lines;
+        let text = Text::from(owned_lines);
+        self.renderer.set_text(text);
+        self.renderer.set_wrap(true);
     }
 
     pub fn set_markdown_bytes(&mut self, bytes: &[u8]) {
@@ -213,107 +206,51 @@ impl MarkdownViewerComponent {
     }
 
     pub fn handle_pointer_event(&mut self, event: &Event) -> bool {
-        let response = self.scroll.handle_event(event);
-        if let Some(offset) = response.offset {
-            self.scroll.set_offset(offset);
-        }
-        if response.handled {
-            let total = self.display_lines.max(self.total_lines).max(1);
-            self.scroll.set_total_view(total, self.scroll.view());
-        }
-        response.handled
+        self.renderer.handle_event(event)
     }
 
     pub fn page_up(&mut self) {
-        let page = self.scroll.view().max(1);
-        let off = self.scroll.offset().saturating_sub(page);
-        self.scroll.set_offset(off);
+        let page = self.renderer.view().max(1);
+        let off = self.renderer.offset().saturating_sub(page);
+        self.renderer.set_offset(off);
     }
 
     pub fn page_down(&mut self) {
-        let page = self.scroll.view().max(1);
-        let off = self.scroll.offset().saturating_add(page);
-        let total = self.display_lines.max(self.total_lines);
-        let max_off = total.saturating_sub(self.scroll.view());
-        self.scroll.set_offset(off.min(max_off));
+        let page = self.renderer.view().max(1);
+        let off = self.renderer.offset().saturating_add(page);
+        self.renderer.set_offset(off);
     }
 
     pub fn scroll_up(&mut self) {
-        let off = self.scroll.offset().saturating_sub(1);
-        self.scroll.set_offset(off);
+        let off = self.renderer.offset().saturating_sub(1);
+        self.renderer.set_offset(off);
     }
 
     pub fn scroll_down(&mut self) {
-        let off = self.scroll.offset().saturating_add(1);
-        let total = self.display_lines.max(self.total_lines);
-        let max_off = total.saturating_sub(self.scroll.view());
-        self.scroll.set_offset(off.min(max_off));
+        let off = self.renderer.offset().saturating_add(1);
+        self.renderer.set_offset(off);
     }
 
     pub fn go_home(&mut self) {
-        self.scroll.set_offset(0);
+        self.renderer.set_offset(0);
     }
 
     pub fn go_end(&mut self) {
-        let total = self.display_lines.max(self.total_lines);
-        let max_off = total.saturating_sub(self.scroll.view());
-        self.scroll.set_offset(max_off);
+        // set to a large offset; TextRenderer will clamp to max
+        self.renderer.set_offset(usize::MAX);
     }
 
     pub fn set_keyboard_enabled(&mut self, enabled: bool) {
-        self.scroll.set_keyboard_enabled(enabled);
+        self.renderer.set_keyboard_enabled(enabled);
     }
 
     pub fn handle_key_event(&mut self, key: &crossterm::event::KeyEvent) -> bool {
-        self.scroll.handle_key_event(key)
-    }
-
-    fn compute_display_lines(&self, width: u16) -> usize {
-        let usable = width.max(1) as usize;
-        self.text
-            .lines
-            .iter()
-            .map(|line| {
-                let line_width = line.width();
-                if line_width == 0 {
-                    1
-                } else {
-                    (line_width + usable - 1) / usable
-                }
-            })
-            .sum::<usize>()
-            .max(1)
+        // Delegate keyboard handling to renderer
+        self.renderer.handle_event(&Event::Key(*key))
     }
 
     pub fn render_content(&mut self, frame: &mut UiFrame<'_>, area: Rect) {
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-        let view = area.height as usize;
-        let mut content_width = area.width;
-        let mut total = self.compute_display_lines(content_width);
-
-        let scrollbar_needed = total > view && content_width > 0;
-        let content_area = if scrollbar_needed {
-            content_width = content_width.saturating_sub(1);
-            total = self.compute_display_lines(content_width);
-            Rect {
-                x: area.x,
-                y: area.y,
-                width: content_width,
-                height: area.height,
-            }
-        } else {
-            area
-        };
-
-        self.display_lines = total;
-        self.scroll.update(area, total, view);
-
-        let mut paragraph = Paragraph::new(self.text.clone()).wrap(Wrap { trim: false });
-        paragraph = paragraph.scroll((self.scroll.offset() as u16, 0));
-        frame.render_widget(paragraph, content_area);
-        self.scroll.render(frame);
+        self.renderer.render(frame, area, false);
     }
 }
 
@@ -356,17 +293,7 @@ mod markdown_tests {
     #[test]
     fn help_md_contains_notes_and_list_items() {
         let mv = sample_viewer();
-        let rendered: Vec<String> = mv
-            .text
-            .lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.to_string())
-                    .collect::<String>()
-            })
-            .collect();
+        let rendered: Vec<String> = mv.renderer.rendered_lines();
         assert!(
             rendered.iter().any(|line| line.contains("Notes:")),
             "help.md should contain 'Notes:'"
@@ -454,10 +381,7 @@ mod markdown_tests {
         }
 
         // verify that our viewer actually needed a scrollbar
-        assert!(
-            mv.display_lines > area.height as usize,
-            "test requires scrollbar present"
-        );
+        // render once into buffer with renderer (which includes scrollbar)
 
         // render the paragraph into a buffer sized to the content area (width - 1)
         let content_area = Rect {
@@ -469,8 +393,8 @@ mod markdown_tests {
         let mut content_buf = Buffer::empty(content_area);
         {
             let mut frame = crate::ui::UiFrame::from_parts(content_area, &mut content_buf);
-            let mut paragraph = Paragraph::new(mv.text.clone()).wrap(Wrap { trim: false });
-            paragraph = paragraph.scroll((mv.scroll.offset() as u16, 0));
+                let mut paragraph = Paragraph::new(mv.renderer.text_ref().clone()).wrap(Wrap { trim: false });
+                paragraph = paragraph.scroll((mv.renderer.offset() as u16, 0));
             frame.render_widget(paragraph, content_area);
         }
 

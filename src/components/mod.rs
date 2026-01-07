@@ -13,6 +13,7 @@ pub mod markdown_viewer;
 pub mod scroll_view;
 pub mod status_bar;
 pub mod terminal;
+pub mod text_renderer;
 pub mod toggle_list;
 
 pub use ascii_image::AsciiImageComponent;
@@ -28,6 +29,7 @@ pub use markdown_viewer::MarkdownViewerComponent;
 pub use scroll_view::ScrollViewComponent;
 pub use status_bar::StatusBarComponent;
 pub use terminal::{TerminalComponent, default_shell, default_shell_command};
+pub use text_renderer::TextRendererComponent;
 pub use toggle_list::{ToggleItem, ToggleListComponent};
 
 pub trait Component {

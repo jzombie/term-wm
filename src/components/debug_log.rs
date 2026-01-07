@@ -8,7 +8,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Text};
 use ratatui::widgets::Paragraph;
 
-use crate::components::{Component, scroll_view::ScrollViewComponent};
+use crate::components::{Component, scroll_view::ScrollViewComponent, TextRendererComponent};
 use crate::ui::UiFrame;
 
 const DEFAULT_MAX_LINES: usize = 2000;
@@ -168,7 +168,7 @@ impl Write for DebugLogWriter {
 #[derive(Debug)]
 pub struct DebugLogComponent {
     handle: DebugLogHandle,
-    scroll_view: ScrollViewComponent,
+    renderer: TextRendererComponent,
     follow_tail: bool,
     last_total: usize,
     last_view: usize,
@@ -192,6 +192,7 @@ impl Component for DebugLogComponent {
                 }
             }
         }
+        // Build text from the handle buffer
         let lines = if let Ok(buffer) = self.handle.inner.lock() {
             buffer.lines.iter().cloned().collect::<Vec<_>>()
         } else {
@@ -201,41 +202,29 @@ impl Component for DebugLogComponent {
         let view = area.height as usize;
         self.last_total = total;
         self.last_view = view;
-        self.scroll_view.update(area, total, view);
+
+        // Prepare Text for the renderer
+        let text = Text::from(lines.into_iter().map(Line::from).collect::<Vec<_>>());
+        self.renderer.set_text(text);
+        self.renderer.set_wrap(false);
+        // Follow tail behavior: set renderer offset to bottom when enabled
         if self.follow_tail {
+            // renderer will position itself to the bottom during render via its internal scroll
             let max_off = total.saturating_sub(view);
-            self.scroll_view.set_offset(max_off);
+            self.renderer.set_offset(max_off);
         }
         self.follow_tail = self.is_at_bottom();
 
-        let text = Text::from(lines.into_iter().map(Line::from).collect::<Vec<_>>());
-        let scroll_top = self.scroll_view.offset().min(u16::MAX as usize) as u16;
-        let mut paragraph = Paragraph::new(text).scroll((scroll_top, 0));
-        if focused {
-            paragraph = paragraph.style(Style::default().fg(crate::theme::debug_highlight()));
-        }
-        frame.render_widget(paragraph, area);
-        self.scroll_view.render(frame);
+        self.renderer.render(frame, area, focused);
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
-        match event {
-            Event::Key(key) => {
-                if self.scroll_view.handle_key_event(key) {
-                    self.follow_tail = self.is_at_bottom();
-                    return true;
-                }
-                false
-            }
-            Event::Mouse(_) => {
-                let response = self.scroll_view.handle_event(event);
-                if response.handled {
-                    self.follow_tail = self.is_at_bottom();
-                }
-                response.handled
-            }
-            _ => false,
+        // Delegate to the renderer which handles scroll/key/mouse
+        let handled = self.renderer.handle_event(event);
+        if handled {
+            self.follow_tail = self.is_at_bottom();
         }
+        handled
     }
 }
 
@@ -244,12 +233,13 @@ impl DebugLogComponent {
         let handle = DebugLogHandle {
             inner: Arc::new(Mutex::new(DebugLogBuffer::new(max_lines))),
         };
-        let mut scroll_view = ScrollViewComponent::new();
-        scroll_view.set_keyboard_enabled(true);
+        let mut renderer = TextRendererComponent::new();
+        renderer.set_wrap(false);
+        renderer.set_keyboard_enabled(true);
         (
             Self {
                 handle: handle.clone(),
-                scroll_view,
+                renderer,
                 follow_tail: true,
                 last_total: 0,
                 last_view: 0,
@@ -266,8 +256,12 @@ impl DebugLogComponent {
         if self.last_view == 0 {
             true
         } else {
-            self.scroll_view.offset() >= self.last_total.saturating_sub(self.last_view)
+            self.renderer_offset() >= self.last_total.saturating_sub(self.last_view)
         }
+    }
+
+    fn renderer_offset(&self) -> usize {
+        self.renderer.offset()
     }
 }
 
@@ -322,25 +316,24 @@ mod tests {
         };
         comp.last_total = 20;
         comp.last_view = 5;
-        comp.scroll_view
-            .update(area, comp.last_total, comp.last_view);
+        comp.renderer.update(area, comp.last_total, comp.last_view);
         let max_off = comp.last_total.saturating_sub(comp.last_view);
-        comp.scroll_view.set_offset(max_off);
+        comp.renderer.set_offset(max_off);
         comp.follow_tail = true;
 
         comp.handle_event(&Event::Key(crossterm::event::KeyEvent::new(
             KeyCode::PageUp,
             crossterm::event::KeyModifiers::NONE,
         )));
-        assert!(comp.scroll_view.offset() < max_off);
+        assert!(comp.renderer.offset() < max_off);
 
-        let before = comp.scroll_view.offset();
+        let before = comp.renderer.offset();
         comp.handle_event(&Event::Mouse(MouseEvent {
             kind: MouseEventKind::ScrollDown,
             column: 0,
             row: 0,
             modifiers: crossterm::event::KeyModifiers::NONE,
         }));
-        assert!(comp.scroll_view.offset() >= before);
+        assert!(comp.renderer.offset() >= before);
     }
 }
