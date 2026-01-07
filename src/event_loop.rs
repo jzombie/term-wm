@@ -114,6 +114,14 @@ mod tests {
                 KeyModifiers::NONE,
             )))
         }
+
+        fn next_key(&mut self) -> std::io::Result<KeyEvent> {
+            Ok(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE))
+        }
+
+        fn next_mouse(&mut self) -> std::io::Result<crossterm::event::MouseEvent> {
+            Err(io::Error::other("not implemented"))
+        }
     }
 
     #[test]

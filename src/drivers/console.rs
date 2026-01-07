@@ -9,8 +9,7 @@ use crossterm::{execute, terminal};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-use super::keyboard::{KeyboardDriver, KeyboardNormalizer};
-use super::mouse::MouseDriver;
+use super::utils::KeyboardNormalizer;
 use super::{InputDriver, OutputDriver};
 use crate::ui::UiFrame;
 
@@ -43,7 +42,21 @@ impl ConsoleInputDriver {
     }
 }
 
-impl KeyboardDriver for ConsoleInputDriver {
+impl InputDriver for ConsoleInputDriver {
+    fn poll(&mut self, timeout: Duration) -> io::Result<bool> {
+        if !self.event_queue.is_empty() {
+            return Ok(true);
+        }
+        crossterm::event::poll(timeout)
+    }
+
+    fn read(&mut self) -> io::Result<Event> {
+        if let Some(evt) = self.event_queue.pop_front() {
+            return Ok(evt);
+        }
+        self.read_internal()
+    }
+
     fn next_key(&mut self) -> io::Result<KeyEvent> {
         loop {
             if let Some(index) = self
@@ -62,16 +75,6 @@ impl KeyboardDriver for ConsoleInputDriver {
                 self.event_queue.push_back(evt);
             }
         }
-    }
-}
-
-impl MouseDriver for ConsoleInputDriver {
-    fn enable(&mut self) -> io::Result<()> {
-        crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)
-    }
-
-    fn disable(&mut self) -> io::Result<()> {
-        crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture)
     }
 
     fn next_mouse(&mut self) -> io::Result<MouseEvent> {
@@ -92,22 +95,6 @@ impl MouseDriver for ConsoleInputDriver {
                 self.event_queue.push_back(evt);
             }
         }
-    }
-}
-
-impl InputDriver for ConsoleInputDriver {
-    fn poll(&mut self, timeout: Duration) -> io::Result<bool> {
-        if !self.event_queue.is_empty() {
-            return Ok(true);
-        }
-        crossterm::event::poll(timeout)
-    }
-
-    fn read(&mut self) -> io::Result<Event> {
-        if let Some(evt) = self.event_queue.pop_front() {
-            return Ok(evt);
-        }
-        self.read_internal()
     }
 
     fn set_mouse_capture(&mut self, enabled: bool) -> io::Result<()> {
