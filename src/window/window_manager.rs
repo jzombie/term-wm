@@ -1408,9 +1408,7 @@ where
             let mut pending_snap = Vec::new();
             for r_id in self.regions.ids() {
                 if r_id != id && self.is_window_floating(r_id) {
-                    if let WindowId::App(_) = r_id {
-                        pending_snap.push(r_id);
-                    }
+                    pending_snap.push(r_id);
                 }
             }
             for float_id in pending_snap {
