@@ -85,3 +85,27 @@ pub fn debug_highlight() -> Color {
     // Use accent alt for a bright highlight
     accent_alt()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::style::Color;
+
+    #[test]
+    fn accent_returns_a_color_variant() {
+        let a = accent();
+        match a {
+            Color::Rgb(_, _, _) | Color::Indexed(_) => {}
+            _ => panic!("unexpected color variant"),
+        }
+    }
+
+    #[test]
+    fn accent_alt_returns_a_color_variant() {
+        let a = accent_alt();
+        match a {
+            Color::Rgb(_, _, _) | Color::Indexed(_) => {}
+            _ => panic!("unexpected color variant"),
+        }
+    }
+}

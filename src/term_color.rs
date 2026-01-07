@@ -78,3 +78,73 @@ fn color_distance_sq(r1: u8, g1: u8, b1: u8, r2: u8, g2: u8, b2: u8) -> u32 {
     let db = b1 as i32 - b2 as i32;
     (dr * dr + dg * dg + db * db) as u32
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::style::Color;
+
+    #[test]
+    fn to_6cube_and_back_roundtrip() {
+        // Ensure that converting 6-cube coordinates -> RGB -> back to 6-cube
+        // recovers the original cube coordinates for each channel.
+        for r6 in 0u8..=5u8 {
+            for g6 in 0u8..=5u8 {
+                for b6 in 0u8..=5u8 {
+                    let (r, g, b) = from_6cube(r6, g6, b6);
+                    let tr = to_6cube(r) as i32;
+                    let tg = to_6cube(g) as i32;
+                    let tb = to_6cube(b) as i32;
+                    let r6i = r6 as i32;
+                    let g6i = g6 as i32;
+                    let b6i = b6 as i32;
+                    // allow an off-by-one due to rounding/back-and-forth approximations
+                    assert!(
+                        (tr - r6i).abs() <= 1,
+                        "r roundtrip off: got {} expected {}",
+                        tr,
+                        r6i
+                    );
+                    assert!(
+                        (tg - g6i).abs() <= 1,
+                        "g roundtrip off: got {} expected {}",
+                        tg,
+                        g6i
+                    );
+                    assert!(
+                        (tb - b6i).abs() <= 1,
+                        "b roundtrip off: got {} expected {}",
+                        tb,
+                        b6i
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn gray_index_and_from_gray_consistent() {
+        let (r, g, b) = (10u8, 50u8, 200u8);
+        let gi = rgb_to_gray_index(r, g, b);
+        let (gr, gg, gb) = from_gray(gi);
+        // gray components should be equal
+        assert_eq!(gr, gg);
+        assert_eq!(gg, gb);
+    }
+
+    #[test]
+    fn rgb_to_xterm_index_in_valid_range() {
+        let idx = rgb_to_xterm_index(10, 20, 30);
+        // xterm color indices used here should be within 16..=255
+        assert!((16..=255).contains(&idx));
+    }
+
+    #[test]
+    fn map_rgb_to_color_returns_some_color() {
+        let c = map_rgb_to_color(12, 34, 56);
+        match c {
+            Color::Rgb(_, _, _) | Color::Indexed(_) => {}
+            _ => panic!("unexpected color variant"),
+        }
+    }
+}

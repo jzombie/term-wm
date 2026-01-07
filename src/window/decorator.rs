@@ -218,4 +218,38 @@ mod tests {
         let s = format!("{:?}", dec);
         assert!(s.contains("DefaultDecorator"));
     }
+
+    #[test]
+    fn hit_test_returns_expected_actions() {
+        let dec = DefaultDecorator;
+        let rect = Rect {
+            x: 10,
+            y: 5,
+            width: 10,
+            height: 6,
+        };
+        // header_y = y + 1 = 6
+        let header_y = 6;
+
+        // outside header row
+        assert_eq!(dec.hit_test(rect, 11, 5), HeaderAction::None);
+
+        // left/right edges
+        assert_eq!(dec.hit_test(rect, 10, header_y), HeaderAction::None);
+        assert_eq!(dec.hit_test(rect, 19, header_y), HeaderAction::None);
+
+        // buttons: compute positions
+        let outer_right = rect.x + rect.width - 1;
+        let close_x = outer_right.saturating_sub(1);
+        let max_x = close_x.saturating_sub(2);
+        let min_x = max_x.saturating_sub(2);
+
+        assert_eq!(dec.hit_test(rect, close_x, header_y), HeaderAction::Close);
+        assert_eq!(dec.hit_test(rect, max_x, header_y), HeaderAction::Maximize);
+        assert_eq!(dec.hit_test(rect, min_x, header_y), HeaderAction::Minimize);
+
+        // middle area -> drag
+        let mid = rect.x + rect.width / 2;
+        assert_eq!(dec.hit_test(rect, mid, header_y), HeaderAction::Drag);
+    }
 }

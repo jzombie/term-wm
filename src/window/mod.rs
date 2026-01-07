@@ -2064,4 +2064,30 @@ mod tests {
         let d = esc_passthrough_window_default();
         assert!(d.as_millis() > 0);
     }
+
+    #[test]
+    fn focus_ring_wraps_and_advances() {
+        let mut ring = FocusRing::new(2usize);
+        ring.set_order(vec![1usize, 2usize, 3usize]);
+        assert_eq!(ring.current(), 2);
+        ring.advance(true);
+        assert_eq!(ring.current(), 3);
+        ring.advance(true);
+        assert_eq!(ring.current(), 1);
+        ring.advance(false);
+        assert_eq!(ring.current(), 3);
+    }
+
+    #[test]
+    fn scroll_state_apply_and_bump() {
+        let mut s = ScrollState::default();
+        s.bump(5);
+        s.apply(100, 10);
+        assert_eq!(s.offset, 5usize);
+
+        s.offset = 1000;
+        s.apply(20, 5);
+        let max_off = 20usize.saturating_sub(5usize);
+        assert_eq!(s.offset, max_off);
+    }
 }
