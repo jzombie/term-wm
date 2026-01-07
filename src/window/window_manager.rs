@@ -926,6 +926,11 @@ where
     }
 
     pub fn close_window(&mut self, id: WindowId<R>) {
+        if id == self.debug_log_id {
+            self.toggle_debug_window();
+            return;
+        }
+
         // Remove references to this window
         self.clear_floating_rect(id);
         self.z_order.retain(|x| *x != id);
@@ -1397,6 +1402,19 @@ where
                 self.managed_draw_order = self.z_order.clone();
             } else {
                 self.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(id)));
+            }
+
+            // If we snapped a window into place, any other floating windows should snap as well.
+            let mut pending_snap = Vec::new();
+            for r_id in self.regions.ids() {
+                if r_id != id && self.is_window_floating(r_id) {
+                    if let WindowId::App(_) = r_id {
+                        pending_snap.push(r_id);
+                    }
+                }
+            }
+            for float_id in pending_snap {
+                self.tile_window_id(float_id);
             }
         }
     }
