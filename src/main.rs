@@ -1,3 +1,6 @@
+//! This default application is a simple terminal app, which opens two sub-shells in side-by-side
+//! windows, where more windows can be added, or windows can be removed.
+
 use std::io;
 use std::time::Duration;
 
