@@ -1,8 +1,8 @@
 use crossterm::event::{Event, MouseEvent, MouseEventKind};
-use ratatui::Frame;
 use ratatui::prelude::Rect;
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 
+use crate::ui::UiFrame;
 use crate::window::ScrollState;
 
 #[derive(Debug, Default, Clone)]
@@ -133,7 +133,7 @@ impl ScrollView {
         self.view
     }
 
-    pub fn render(&self, frame: &mut Frame) {
+    pub fn render(&self, frame: &mut UiFrame<'_>) {
         render_scrollbar(frame, self.area, self.total, self.view, self.offset());
     }
 
@@ -173,7 +173,13 @@ impl Default for ScrollView {
     }
 }
 
-pub fn render_scrollbar(frame: &mut Frame, area: Rect, total: usize, view: usize, offset: usize) {
+pub fn render_scrollbar(
+    frame: &mut UiFrame<'_>,
+    area: Rect,
+    total: usize,
+    view: usize,
+    offset: usize,
+) {
     if total <= view || view == 0 || area.height == 0 {
         return;
     }

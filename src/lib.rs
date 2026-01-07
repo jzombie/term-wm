@@ -6,5 +6,7 @@ pub mod panel;
 pub mod pty;
 pub mod runner;
 pub mod state;
+pub mod term_color;
+pub mod theme;
 pub mod ui;
 pub mod window;

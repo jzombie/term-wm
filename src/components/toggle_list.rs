@@ -1,10 +1,10 @@
 use crossterm::event::{Event, KeyCode};
-use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 
 use crate::components::scroll_view::ScrollView;
+use crate::ui::UiFrame;
 
 #[derive(Clone)]
 pub struct ToggleItem {
@@ -121,12 +121,12 @@ impl ToggleListComponent {
 }
 
 impl super::Component for ToggleListComponent {
-    fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
         let block = if focused {
             Block::default()
                 .borders(Borders::ALL)
                 .title(format!("{} (focus)", self.title))
-                .border_style(Style::default().fg(Color::Green))
+                .border_style(Style::default().fg(crate::theme::success_fg()))
         } else {
             Block::default()
                 .borders(Borders::ALL)

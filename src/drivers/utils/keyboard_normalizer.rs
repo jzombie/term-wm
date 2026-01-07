@@ -1,9 +1,10 @@
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use std::io;
-
-pub trait KeyboardDriver {
-    fn next_key(&mut self) -> io::Result<KeyEvent>;
-}
+// NOTE: This file provides `KeyboardNormalizer`, a lightweight helper for
+// normalizing raw keyboard `Event`s (e.g., converting Shift+Tab to BackTab
+// and filtering key-release events). It is _not_ a standalone keyboard
+// driver. The actual input driver behavior (queueing, `next_key`, and
+// combined keyboard/mouse handling) is implemented in
+// `src/drivers/console.rs` under the consolidated `InputDriver` trait.
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 
 #[derive(Default)]
 pub struct KeyboardNormalizer {

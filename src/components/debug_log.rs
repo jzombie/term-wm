@@ -3,16 +3,19 @@ use std::io::{self, Write};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crossterm::event::{Event, KeyCode, MouseEventKind};
-use ratatui::style::{Color, Style};
+use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::text::{Line, Text};
 use ratatui::widgets::Paragraph;
-use ratatui::{Frame, layout::Rect};
 
 use crate::components::Component;
+use crate::ui::UiFrame;
 
 const DEFAULT_MAX_LINES: usize = 2000;
 static GLOBAL_LOG: OnceLock<DebugLogHandle> = OnceLock::new();
 static PANIC_HOOK_INSTALLED: OnceLock<()> = OnceLock::new();
+use std::sync::atomic::{AtomicBool, Ordering};
+static PANIC_PENDING: AtomicBool = AtomicBool::new(false);
 
 pub fn set_global_debug_log(handle: DebugLogHandle) -> bool {
     GLOBAL_LOG.set(handle).is_ok()
@@ -59,8 +62,14 @@ pub fn install_panic_hook() {
             }
             handle.push("============".to_string());
         }
+        // Mark that a panic occurred so the UI can react in the next frame.
+        PANIC_PENDING.store(true, Ordering::SeqCst);
         prev(info);
     }));
+}
+
+pub fn take_panic_pending() -> bool {
+    PANIC_PENDING.swap(false, Ordering::SeqCst)
 }
 
 #[derive(Debug)]
@@ -190,7 +199,7 @@ impl DebugLogComponent {
 }
 
 impl Component for DebugLogComponent {
-    fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -217,7 +226,7 @@ impl Component for DebugLogComponent {
         let text = Text::from(lines.into_iter().map(Line::from).collect::<Vec<_>>());
         let mut paragraph = Paragraph::new(text).scroll((scroll_top as u16, 0));
         if focused {
-            paragraph = paragraph.style(Style::default().fg(Color::Yellow));
+            paragraph = paragraph.style(Style::default().fg(crate::theme::debug_highlight()));
         }
         frame.render_widget(paragraph, area);
     }

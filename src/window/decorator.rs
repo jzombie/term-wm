@@ -1,26 +1,67 @@
-use ratatui::Frame;
 use ratatui::prelude::Rect;
 use ratatui::style::{Color, Modifier, Style};
+
+use crate::ui::UiFrame;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderAction {
+    Minimize,
+    Maximize,
+    Close,
+    Drag,
+    None,
+}
 
 pub trait WindowDecorator: std::fmt::Debug {
     fn render_window(
         &self,
-        frame: &mut Frame,
+        frame: &mut UiFrame<'_>,
         rect: Rect,
         bounds: Rect,
         title: &str,
         focused: bool,
         is_obscured: &dyn Fn(u16, u16) -> bool,
     );
+
+    fn hit_test(&self, window_rect: Rect, x: u16, y: u16) -> HeaderAction;
 }
 
 #[derive(Debug)]
-pub struct OpenStepDecorator;
+pub struct DefaultDecorator;
 
-impl WindowDecorator for OpenStepDecorator {
+impl WindowDecorator for DefaultDecorator {
+    fn hit_test(&self, rect: Rect, x: u16, y: u16) -> HeaderAction {
+        let outer_left = rect.x;
+        let outer_right = rect.x.saturating_add(rect.width).saturating_sub(1);
+        let header_y = rect.y.saturating_add(1);
+
+        // Check if inside header row
+        if y != header_y {
+            return HeaderAction::None;
+        }
+        // Check if within horizontal bounds
+        if x <= outer_left || x >= outer_right {
+            return HeaderAction::None;
+        }
+
+        let close_x = outer_right.saturating_sub(1);
+        let max_x = close_x.saturating_sub(2);
+        let min_x = max_x.saturating_sub(2);
+
+        if x == close_x {
+            HeaderAction::Close
+        } else if x == max_x {
+            HeaderAction::Maximize
+        } else if x == min_x {
+            HeaderAction::Minimize
+        } else {
+            HeaderAction::Drag
+        }
+    }
+
     fn render_window(
         &self,
-        frame: &mut Frame,
+        frame: &mut UiFrame<'_>,
         rect: Rect,
         bounds: Rect,
         title: &str,
@@ -30,11 +71,15 @@ impl WindowDecorator for OpenStepDecorator {
         let buffer = frame.buffer_mut();
 
         let focused_header_style = Style::default()
-            .bg(Color::Blue)
-            .fg(Color::White)
+            .bg(crate::theme::decorator_header_bg())
+            .fg(crate::theme::decorator_header_fg())
             .add_modifier(Modifier::BOLD);
-        let normal_header_style = Style::default().bg(Color::DarkGray).fg(Color::White);
-        let border_style = Style::default().fg(Color::DarkGray).bg(Color::Reset);
+        let normal_header_style = Style::default()
+            .bg(crate::theme::panel_bg())
+            .fg(crate::theme::decorator_header_fg());
+        let border_style = Style::default()
+            .fg(crate::theme::decorator_border())
+            .bg(Color::Reset);
 
         let header_style = if focused {
             focused_header_style
@@ -75,6 +120,22 @@ impl WindowDecorator for OpenStepDecorator {
                             cell.set_style(header_style);
                         }
                     }
+                }
+            }
+            // Render header buttons (minimize, maximize, close) right-aligned.
+            // Layout: [ _ ] [▢] [✖] with one column spacing.
+            let close_x = outer_right.saturating_sub(1);
+            let max_x = close_x.saturating_sub(2);
+            let min_x = max_x.saturating_sub(2);
+            let buttons = [(min_x, "_"), (max_x, "▢"), (close_x, "✖")];
+            for (bx, sym) in buttons {
+                if bx >= bounds.x
+                    && bx < bounds.x + bounds.width
+                    && !is_obscured(bx, header_y)
+                    && let Some(cell) = buffer.cell_mut((bx, header_y))
+                {
+                    cell.set_symbol(sym);
+                    cell.set_style(header_style);
                 }
             }
         }
@@ -153,8 +214,42 @@ mod tests {
 
     #[test]
     fn open_step_decorator_debug_format() {
-        let dec = OpenStepDecorator;
+        let dec = DefaultDecorator;
         let s = format!("{:?}", dec);
-        assert!(s.contains("OpenStepDecorator"));
+        assert!(s.contains("DefaultDecorator"));
+    }
+
+    #[test]
+    fn hit_test_returns_expected_actions() {
+        let dec = DefaultDecorator;
+        let rect = Rect {
+            x: 10,
+            y: 5,
+            width: 10,
+            height: 6,
+        };
+        // header_y = y + 1 = 6
+        let header_y = 6;
+
+        // outside header row
+        assert_eq!(dec.hit_test(rect, 11, 5), HeaderAction::None);
+
+        // left/right edges
+        assert_eq!(dec.hit_test(rect, 10, header_y), HeaderAction::None);
+        assert_eq!(dec.hit_test(rect, 19, header_y), HeaderAction::None);
+
+        // buttons: compute positions
+        let outer_right = rect.x + rect.width - 1;
+        let close_x = outer_right.saturating_sub(1);
+        let max_x = close_x.saturating_sub(2);
+        let min_x = max_x.saturating_sub(2);
+
+        assert_eq!(dec.hit_test(rect, close_x, header_y), HeaderAction::Close);
+        assert_eq!(dec.hit_test(rect, max_x, header_y), HeaderAction::Maximize);
+        assert_eq!(dec.hit_test(rect, min_x, header_y), HeaderAction::Minimize);
+
+        // middle area -> drag
+        let mid = rect.x + rect.width / 2;
+        assert_eq!(dec.hit_test(rect, mid, header_y), HeaderAction::Drag);
     }
 }

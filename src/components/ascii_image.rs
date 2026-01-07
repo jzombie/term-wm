@@ -1,9 +1,10 @@
 use std::path::Path;
 
-use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use resvg::{tiny_skia, usvg};
+
+use crate::ui::UiFrame;
 
 const DEFAULT_RAMP: &[char] = &[' ', '.', ':', '-', '=', '+', '*', '#', '%', '@'];
 const MAX_SVG_DIM: u32 = 1024;
@@ -436,7 +437,7 @@ fn braille_bit(dx: u32, dy: u32) -> u16 {
 }
 
 impl super::Component for AsciiImage {
-    fn render(&mut self, frame: &mut Frame, area: Rect, _focused: bool) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -457,10 +458,10 @@ impl super::Component for AsciiImage {
                 if let Some(buf_cell) = buffer.cell_mut((x, y)) {
                     let mut style = Style::default();
                     if let Some((r, g, b)) = cell.fg {
-                        style = style.fg(Color::Rgb(r, g, b));
+                        style = style.fg(crate::term_color::map_rgb_to_color(r, g, b));
                     }
                     if let Some((r, g, b)) = cell.bg {
-                        style = style.bg(Color::Rgb(r, g, b));
+                        style = style.bg(crate::term_color::map_rgb_to_color(r, g, b));
                     }
                     let mut buf = [0u8; 4];
                     let sym = cell.ch.encode_utf8(&mut buf);

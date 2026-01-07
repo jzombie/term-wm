@@ -40,7 +40,7 @@ pub fn gap_size(direction: Direction, area: Rect, child_count: usize, resizable:
     handle_thickness(direction, area).min(per_gap)
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RectSpec {
     Absolute(Rect),
     Percent {
@@ -103,6 +103,10 @@ impl<T: Copy + Eq + Ord> RegionMap<T> {
 
     pub fn get(&self, id: T) -> Option<Rect> {
         self.regions.get(&id).copied()
+    }
+
+    pub fn remove(&mut self, id: T) {
+        self.regions.remove(&id);
     }
 
     pub fn hit_test(&self, column: u16, row: u16, ids: &[T]) -> Option<T> {

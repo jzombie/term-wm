@@ -1,12 +1,11 @@
 use crossterm::event::{Event, KeyCode, MouseEventKind};
-use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::components::{Component, DialogOverlay};
 use crate::layout::rect_contains;
-use crate::ui::safe_set_string;
+use crate::ui::{UiFrame, safe_set_string};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfirmAction {
@@ -29,7 +28,7 @@ impl ConfirmOverlay {
         let mut dialog = DialogOverlay::new();
         dialog.set_size(60, 9);
         dialog.set_dim_backdrop(true);
-        dialog.set_bg(Color::Black);
+        dialog.set_bg(crate::theme::dialog_bg());
         Self {
             dialog,
             visible: false,
@@ -64,7 +63,7 @@ impl ConfirmOverlay {
 }
 
 impl Component for ConfirmOverlay {
-    fn render(&mut self, frame: &mut Frame, area: Rect, _focused: bool) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
         if !self.visible || area.width == 0 || area.height == 0 {
             return;
         }
@@ -103,10 +102,10 @@ impl Component for ConfirmOverlay {
         };
         let paragraph = Paragraph::new(self.body.as_str())
             .alignment(Alignment::Left)
-            .style(Style::default().fg(Color::White))
+            .style(Style::default().fg(crate::theme::dialog_fg()))
             .wrap(Wrap { trim: true });
         frame.render_widget(paragraph, body_rect);
-        let separator_style = Style::default().fg(Color::DarkGray);
+        let separator_style = Style::default().fg(crate::theme::dialog_separator());
         let buffer = frame.buffer_mut();
         let bounds = area.intersection(buffer.area);
         if bounds.width == 0 || bounds.height == 0 {
@@ -121,20 +120,24 @@ impl Component for ConfirmOverlay {
         let cancel = "[ Cancel ]";
         let confirm = "[ Exit ]";
         let cancel_style = if self.selected_confirm {
-            Style::default().fg(Color::White).bg(Color::DarkGray)
+            Style::default()
+                .fg(crate::theme::dialog_fg())
+                .bg(crate::theme::panel_bg())
         } else {
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Gray)
+                .fg(crate::theme::panel_fg())
+                .bg(crate::theme::menu_selected_bg())
                 .add_modifier(Modifier::BOLD)
         };
         let confirm_style = if self.selected_confirm {
             Style::default()
-                .fg(Color::White)
-                .bg(Color::Blue)
+                .fg(crate::theme::dialog_fg())
+                .bg(crate::theme::decorator_header_bg())
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White).bg(Color::DarkGray)
+            Style::default()
+                .fg(crate::theme::dialog_fg())
+                .bg(crate::theme::panel_bg())
         };
         let total_width = cancel.len() + 1 + confirm.len();
         let start_x = content

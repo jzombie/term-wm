@@ -1,17 +1,15 @@
 use std::io;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
-use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
-use crossterm::{execute, terminal};
-use ratatui::backend::CrosstermBackend;
+use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ratatui::prelude::Rect;
-use ratatui::{Frame, Terminal};
 
 use portable_pty::PtySize;
 use term_wm::components::{Component, TerminalComponent, default_shell_command};
-use term_wm::drivers::console::ConsoleDriver;
+use term_wm::drivers::OutputDriver;
+use term_wm::drivers::console::{ConsoleInputDriver, ConsoleOutputDriver};
 use term_wm::runner::{HasWindowManager, WindowApp, run_window_app};
+use term_wm::ui::UiFrame;
 use term_wm::window::{AppWindowDraw, WindowManager};
 
 type PaneId = usize;
@@ -21,16 +19,13 @@ const MAX_WINDOWS: usize = 8;
 fn main() -> io::Result<()> {
     let mut app = App::new()?;
     let focus_regions: Vec<PaneId> = (0..MAX_WINDOWS).collect();
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    terminal::enable_raw_mode()?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-    let mut driver = ConsoleDriver::new();
+    let mut output = ConsoleOutputDriver::new()?;
+    output.enter()?;
+    let mut input = ConsoleInputDriver::new();
 
     let result = run_window_app(
-        &mut terminal,
-        &mut driver,
+        &mut output,
+        &mut input,
         &mut app,
         &focus_regions,
         |id| id,
@@ -58,13 +53,7 @@ fn main() -> io::Result<()> {
         },
     );
 
-    terminal::disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        event::DisableMouseCapture,
-        LeaveAlternateScreen
-    )?;
-    terminal.show_cursor()?;
+    output.exit()?;
 
     result
 }
@@ -76,22 +65,13 @@ struct App {
 
 impl App {
     fn new() -> io::Result<Self> {
-        let size = PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
+        let mut app = Self {
+            windows: WindowManager::new_managed(0),
+            terminals: Vec::new(),
         };
-        let left =
-            TerminalComponent::spawn(default_shell_command(), size).map_err(io::Error::other)?;
-        let right =
-            TerminalComponent::spawn(default_shell_command(), size).map_err(io::Error::other)?;
-        let mut windows = WindowManager::new_managed(0);
-        windows.set_focus_order(vec![0, 1]);
-        Ok(Self {
-            windows,
-            terminals: vec![left, right],
-        })
+        app.wm_new_window()?;
+        app.wm_new_window()?;
+        Ok(app)
     }
 }
 
@@ -100,9 +80,9 @@ impl HasWindowManager<PaneId, PaneId> for App {
         &mut self.windows
     }
 
-    fn wm_new_window(&mut self) {
+    fn wm_new_window(&mut self) -> io::Result<()> {
         if self.terminals.len() >= MAX_WINDOWS {
-            return;
+            return Ok(());
         }
         let size = PtySize {
             rows: 24,
@@ -111,13 +91,23 @@ impl HasWindowManager<PaneId, PaneId> for App {
             pixel_height: 0,
         };
         let pane =
-            TerminalComponent::spawn(default_shell_command(), size).map_err(io::Error::other);
-        if let Ok(pane) = pane {
-            let id = self.terminals.len();
-            self.terminals.push(pane);
-            self.windows.set_focus(id);
-            self.windows.tile_window(id);
+            TerminalComponent::spawn(default_shell_command(), size).map_err(io::Error::other)?;
+        let id = self.terminals.len();
+        self.terminals.push(pane);
+        self.windows.set_focus(id);
+        self.windows.tile_window(id);
+        // Set a user-visible title for the newly created pane.
+        self.windows
+            .set_window_title(id, format!("Shell {}", id + 1));
+        Ok(())
+    }
+
+    fn wm_close_window(&mut self, id: PaneId) -> io::Result<()> {
+        if let Some(pane) = self.terminals.get_mut(id) {
+            // TODO: Show confirmation before abrupt termination
+            pane.terminate();
         }
+        Ok(())
     }
 }
 
@@ -130,7 +120,7 @@ impl WindowApp<PaneId, PaneId> for App {
             .collect()
     }
 
-    fn render_window(&mut self, frame: &mut Frame, window: AppWindowDraw<PaneId>) {
+    fn render_window(&mut self, frame: &mut UiFrame<'_>, window: AppWindowDraw<PaneId>) {
         render_pane(frame, self, window.id, window.surface.inner, window.focused);
     }
 
@@ -139,7 +129,7 @@ impl WindowApp<PaneId, PaneId> for App {
     }
 }
 
-fn render_pane(frame: &mut Frame, app: &mut App, id: PaneId, area: Rect, focused: bool) {
+fn render_pane(frame: &mut UiFrame<'_>, app: &mut App, id: PaneId, area: Rect, focused: bool) {
     if area.width == 0 || area.height == 0 {
         return;
     }

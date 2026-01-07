@@ -3,7 +3,6 @@ use crossterm::event::{
 };
 use portable_pty::{CommandBuilder, PtySize};
 use ratatui::{
-    Frame,
     layout::Rect,
     style::{Color as TColor, Modifier, Style},
 };
@@ -12,6 +11,7 @@ use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 use crate::components::scroll_view::ScrollView;
 use crate::layout::rect_contains;
 use crate::pty::Pty;
+use crate::ui::UiFrame;
 
 // This controls the scrollback buffer size in the vt100 parser.
 // It determines how many lines you can scroll up to see.
@@ -51,7 +51,7 @@ impl TerminalComponent {
         self.pane.last_bytes_text()
     }
 
-    fn render_screen(&mut self, frame: &mut Frame, area: Rect, focused: bool) {
+    fn render_screen(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
         let show_cursor = self.pane.scrollback() == 0;
         let used = self.pane.max_scrollback();
         let screen = self.pane.screen();
@@ -177,7 +177,7 @@ impl super::Component for TerminalComponent {
         }
     }
 
-    fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
         if area.height == 0 || area.width == 0 {
             self.last_area = Rect::default();
             return;
@@ -289,6 +289,11 @@ impl TerminalComponent {
         }
         response.handled
     }
+
+    /// Terminate the underlying PTY child process.
+    pub fn terminate(&mut self) {
+        let _ = self.pane.kill_child();
+    }
 }
 
 fn key_to_bytes(key: KeyEvent) -> Vec<u8> {
@@ -389,10 +394,11 @@ fn resolve_colors(cell: &vt100::Cell, screen: &vt100::Screen) -> (Option<TColor>
 }
 
 fn vt_color_to_ratatui(color: vt100::Color) -> Option<TColor> {
+    use crate::term_color::map_rgb_to_color;
     match color {
         vt100::Color::Default => None,
         vt100::Color::Idx(idx) => Some(TColor::Indexed(idx)),
-        vt100::Color::Rgb(r, g, b) => Some(TColor::Rgb(r, g, b)),
+        vt100::Color::Rgb(r, g, b) => Some(map_rgb_to_color(r, g, b)),
     }
 }
 
@@ -515,7 +521,7 @@ mod tests {
         );
         assert_eq!(
             vt_color_to_ratatui(vt100::Color::Rgb(1, 2, 3)),
-            Some(TColor::Rgb(1, 2, 3))
+            Some(crate::term_color::map_rgb_to_color(1, 2, 3))
         );
 
         // resolve_color: when both default -> None

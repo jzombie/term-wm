@@ -1,8 +1,8 @@
-use ratatui::Frame;
 use ratatui::prelude::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 
 use super::{FloatingPane, RegionMap, gap_size, rect_contains};
+use crate::ui::UiFrame;
 
 #[derive(Debug, Clone)]
 pub enum LayoutNode<Id: Copy + Eq + Ord> {
@@ -398,7 +398,7 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
         self.root.hit_test_handle(area, column, row)
     }
 
-    pub fn render_handles(&self, frame: &mut Frame, area: Rect) {
+    pub fn render_handles(&self, frame: &mut UiFrame<'_>, area: Rect) {
         let handles = self.handles(area);
         let hovered = self.hovered_handle(area);
         render_handles(frame, &handles, hovered.as_ref());
@@ -578,11 +578,18 @@ fn split_rects_weighted(
         Direction::Horizontal => area.width,
         Direction::Vertical => area.height,
     };
+    // If weights correspond exactly to pixels (common during resize), use them directly to avoid float drift.
+    let exact_match = (total_weight - total as f32).abs() < 0.01;
+
     let mut sizes = Vec::with_capacity(count);
     let mut used: u16 = 0;
     for (idx, weight) in weights.iter().enumerate() {
         let size = if idx + 1 == count {
             total.saturating_sub(used)
+        } else if exact_match {
+            let s = weight.round() as u16;
+            used = used.saturating_add(s);
+            s
         } else {
             let portion = ((*weight / total_weight) * total as f32).floor() as u16;
             used = used.saturating_add(portion);
@@ -697,12 +704,16 @@ fn split_at_path_mut<'a, Id: Copy + Eq + Ord>(
     Some(current)
 }
 
-pub fn render_handles(frame: &mut Frame, handles: &[SplitHandle], hovered: Option<&SplitHandle>) {
+pub fn render_handles(
+    frame: &mut UiFrame<'_>,
+    handles: &[SplitHandle],
+    hovered: Option<&SplitHandle>,
+) {
     render_handles_masked(frame, handles, hovered, |_, _| false);
 }
 
 pub fn render_handles_masked<F>(
-    frame: &mut Frame,
+    frame: &mut UiFrame<'_>,
     handles: &[SplitHandle],
     hovered: Option<&SplitHandle>,
     is_obscured: F,
@@ -718,24 +729,25 @@ pub fn render_handles_masked<F>(
         let is_hovered = hover_rect == Some(handle.rect);
         let style = if is_hovered {
             Style::default()
-                .fg(ratatui::style::Color::Gray)
+                .fg(crate::theme::menu_selected_bg())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
-                .fg(ratatui::style::Color::DarkGray)
+                .fg(crate::theme::menu_bg())
                 .add_modifier(Modifier::DIM)
         };
-        for y in handle.rect.y..handle.rect.y.saturating_add(handle.rect.height) {
-            for x in handle.rect.x..handle.rect.x.saturating_add(handle.rect.width) {
-                if is_obscured(x, y) {
-                    continue;
-                }
-                if let Some(cell) = buffer.cell_mut((x, y)) {
-                    // Reset the cell to ensure no background color bleeds through from underlying layers
-                    cell.reset();
-
-                    cell.set_symbol("·");
-                    cell.set_style(style);
+        let clip = handle.rect.intersection(buffer.area);
+        if clip.width > 0 && clip.height > 0 {
+            for y in clip.y..clip.y.saturating_add(clip.height) {
+                for x in clip.x..clip.x.saturating_add(clip.width) {
+                    if is_obscured(x, y) {
+                        continue;
+                    }
+                    if let Some(cell) = buffer.cell_mut((x, y)) {
+                        cell.reset();
+                        cell.set_symbol("·");
+                        cell.set_style(style);
+                    }
                 }
             }
         }
@@ -777,7 +789,7 @@ pub fn render_handles_masked<F>(
         }
         if is_hovered {
             let border_style = Style::default()
-                .fg(ratatui::style::Color::Rgb(255, 165, 0))
+                .fg(crate::theme::accent_alt())
                 .add_modifier(Modifier::BOLD);
             let max_x = handle
                 .rect
