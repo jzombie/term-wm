@@ -15,9 +15,9 @@ Once the menu is open:
 - **n**: Create a new window (when overlay is open).
 - **j / k** _or_ **Up / Down arrows**: Move up / down lists and menus.
 - **Enter**: Activate the selected menu item.
- - **Help menu**: Open the full help overlay from the panel menu (Top-left → Help).
+- **Help menu**: Open the full help overlay from the panel menu (Top-left → Help).
 
-Mouse capturing is enabled by default.  To disable it, open the menu and toggle `Mouse Capture`.
+Mouse capturing is enabled by default. To disable it, open the menu and toggle `Mouse Capture`.
 
 _Notes:_
 - Mouse interactions are supported when Mouse Capture is enabled.
