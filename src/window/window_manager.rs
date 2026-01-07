@@ -104,6 +104,64 @@ pub struct AppWindowDraw<R: Copy + Eq + Ord> {
     pub focused: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum WindowDrawTask<R: Copy + Eq + Ord> {
+    App(AppWindowDraw<R>),
+    System(SystemWindowDraw),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SystemWindowDraw {
+    pub id: SystemWindowId,
+    pub surface: WindowSurface,
+    pub focused: bool,
+}
+
+trait SystemWindowView {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool);
+    fn handle_event(&mut self, event: &Event) -> bool;
+}
+
+impl SystemWindowView for DebugLogComponent {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
+        <DebugLogComponent as Component>::render(self, frame, area, focused);
+    }
+
+    fn handle_event(&mut self, event: &Event) -> bool {
+        Component::handle_event(self, event)
+    }
+}
+
+struct SystemWindowEntry {
+    component: Box<dyn SystemWindowView>,
+    visible: bool,
+}
+
+impl SystemWindowEntry {
+    fn new(component: Box<dyn SystemWindowView>) -> Self {
+        Self {
+            component,
+            visible: false,
+        }
+    }
+
+    fn visible(&self) -> bool {
+        self.visible
+    }
+
+    fn set_visible(&mut self, visible: bool) {
+        self.visible = visible;
+    }
+
+    fn render(&mut self, frame: &mut UiFrame<'_>, surface: WindowSurface, focused: bool) {
+        self.component.render(frame, surface.inner, focused);
+    }
+
+    fn handle_event(&mut self, event: &Event) -> bool {
+        self.component.handle_event(event)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FocusRing<T: Copy + Eq> {
     order: Vec<T>,
@@ -181,8 +239,7 @@ pub struct WindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     floating_resize_offscreen: bool,
     z_order: Vec<WindowId<R>>,
     drag_snap: Option<(Option<WindowId<R>>, InsertPosition, Rect)>,
-    debug_log: DebugLogComponent,
-    debug_log_id: WindowId<R>,
+    system_windows: BTreeMap<SystemWindowId, SystemWindowEntry>,
     next_window_seq: usize,
 }
 
@@ -265,6 +322,95 @@ where
         }
     }
 
+    fn system_window_entry(&self, id: SystemWindowId) -> Option<&SystemWindowEntry> {
+        self.system_windows.get(&id)
+    }
+
+    fn system_window_entry_mut(&mut self, id: SystemWindowId) -> Option<&mut SystemWindowEntry> {
+        self.system_windows.get_mut(&id)
+    }
+
+    fn system_window_visible(&self, id: SystemWindowId) -> bool {
+        self.system_window_entry(id)
+            .map(|entry| entry.visible())
+            .unwrap_or(false)
+    }
+
+    fn set_system_window_visible(&mut self, id: SystemWindowId, visible: bool) {
+        if let Some(entry) = self.system_window_entry_mut(id) {
+            entry.set_visible(visible);
+        }
+    }
+
+    fn show_system_window(&mut self, id: SystemWindowId) {
+        if self.system_window_visible(id) {
+            return;
+        }
+        if self.system_window_entry(id).is_none() {
+            return;
+        }
+        self.set_system_window_visible(id, true);
+        if self.layout_contract != LayoutContract::WindowManaged {
+            return;
+        }
+        let window_id = WindowId::system(id);
+        let _ = self.window_mut(window_id);
+        self.ensure_system_window_in_layout(window_id);
+        self.focus_window_id(window_id);
+    }
+
+    fn hide_system_window(&mut self, id: SystemWindowId) {
+        if !self.system_window_visible(id) {
+            return;
+        }
+        let window_id = WindowId::system(id);
+        self.set_system_window_visible(id, false);
+        self.remove_system_window_from_layout(window_id);
+        if self.wm_focus.current() == window_id {
+            self.select_fallback_focus();
+        }
+    }
+
+    fn ensure_system_window_in_layout(&mut self, id: WindowId<R>) {
+        if self.layout_contract != LayoutContract::WindowManaged {
+            return;
+        }
+        if self.layout_contains(id) {
+            return;
+        }
+        let _ = self.window_mut(id);
+        if self.managed_layout.is_none() {
+            self.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(id)));
+            return;
+        }
+        let _ = self.tile_window_id(id);
+    }
+
+    fn remove_system_window_from_layout(&mut self, id: WindowId<R>) {
+        self.clear_floating_rect(id);
+        if let Some(layout) = &mut self.managed_layout {
+            if matches!(layout.root(), LayoutNode::Leaf(root_id) if *root_id == id) {
+                self.managed_layout = None;
+            } else {
+                layout.root_mut().remove_leaf(id);
+            }
+        }
+        self.z_order.retain(|window_id| *window_id != id);
+        self.managed_draw_order.retain(|window_id| *window_id != id);
+    }
+
+    fn dispatch_system_window_event(&mut self, id: SystemWindowId, event: &Event) -> bool {
+        self.system_window_entry_mut(id)
+            .map(|entry| entry.handle_event(event))
+            .unwrap_or(false)
+    }
+
+    fn render_system_window_entry(&mut self, frame: &mut UiFrame<'_>, draw: SystemWindowDraw) {
+        if let Some(entry) = self.system_window_entry_mut(draw.id) {
+            entry.render(frame, draw.surface, draw.focused);
+        }
+    }
+
     pub fn new(current: W) -> Self {
         Self {
             app_focus: FocusRing::new(current),
@@ -303,16 +449,20 @@ where
             floating_resize_offscreen: true,
             z_order: Vec::new(),
             drag_snap: None,
-            debug_log: {
+            system_windows: {
                 let (component, handle) = DebugLogComponent::new_default();
                 set_global_debug_log(handle);
                 // Initialize tracing now that the global debug log handle exists
                 // so tracing will write into the in-memory debug buffer by default.
                 crate::tracing_sub::init_default();
                 install_panic_hook();
-                component
+                let mut map = BTreeMap::new();
+                map.insert(
+                    SystemWindowId::DebugLog,
+                    SystemWindowEntry::new(Box::new(component)),
+                );
+                map
             },
-            debug_log_id: WindowId::system(SystemWindowId::DebugLog),
             next_window_seq: 0,
         }
     }
@@ -354,9 +504,7 @@ where
         self.panel.begin_frame();
         // If a panic occurred earlier, ensure the debug log is shown and focused.
         if crate::components::take_panic_pending() {
-            self.state.set_debug_log_visible(true);
-            self.ensure_debug_log_in_layout();
-            self.focus_window_id(self.debug_log_id);
+            self.show_system_window(SystemWindowId::DebugLog);
         }
         if self.layout_contract == LayoutContract::AppManaged {
             self.clear_capture();
@@ -494,42 +642,11 @@ where
     }
 
     pub fn toggle_debug_window(&mut self) {
-        self.state.toggle_debug_log_visible();
-        if self.state.debug_log_visible() {
-            self.ensure_debug_log_in_layout();
-            self.focus_window_id(self.debug_log_id);
+        if self.system_window_visible(SystemWindowId::DebugLog) {
+            self.hide_system_window(SystemWindowId::DebugLog);
         } else {
-            self.remove_debug_log_from_layout();
-            if self.wm_focus.current() == self.debug_log_id {
-                self.select_fallback_focus();
-            }
+            self.show_system_window(SystemWindowId::DebugLog);
         }
-    }
-
-    fn ensure_debug_log_in_layout(&mut self) {
-        if self.layout_contract != LayoutContract::WindowManaged {
-            return;
-        }
-        if self.layout_contains(self.debug_log_id) {
-            return;
-        }
-        if self.managed_layout.is_none() {
-            self.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(self.debug_log_id)));
-            return;
-        }
-        let _ = self.tile_window_id(self.debug_log_id);
-    }
-
-    fn remove_debug_log_from_layout(&mut self) {
-        self.clear_floating_rect(self.debug_log_id);
-        if let Some(layout) = &mut self.managed_layout {
-            if matches!(layout.root(), LayoutNode::Leaf(id) if *id == self.debug_log_id) {
-                self.managed_layout = None;
-            } else {
-                layout.root_mut().remove_leaf(self.debug_log_id);
-            }
-        }
-        self.z_order.retain(|id| *id != self.debug_log_id);
     }
 
     pub fn esc_passthrough_active(&self) -> bool {
@@ -723,8 +840,8 @@ where
     pub fn set_managed_layout(&mut self, layout: TilingLayout<R>) {
         self.managed_layout = Some(TilingLayout::new(map_layout_node(layout.root())));
         self.clear_all_floating();
-        if self.state.debug_log_visible() {
-            self.ensure_debug_log_in_layout();
+        if self.system_window_visible(SystemWindowId::DebugLog) {
+            self.ensure_system_window_in_layout(WindowId::system(SystemWindowId::DebugLog));
         }
     }
 
@@ -740,8 +857,8 @@ where
         let (_, managed_area) = self.panel.split_area(self.panel_active(), area);
         self.managed_area = managed_area;
         self.clamp_floating_to_bounds();
-        if self.state.debug_log_visible() {
-            self.ensure_debug_log_in_layout();
+        if self.system_window_visible(SystemWindowId::DebugLog) {
+            self.ensure_system_window_in_layout(WindowId::system(SystemWindowId::DebugLog));
         }
         let z_snapshot = self.z_order.clone();
         let mut active_ids: Vec<WindowId<R>> = Vec::new();
@@ -896,30 +1013,8 @@ where
             }
             return true;
         }
-        if self.state.debug_log_visible() {
-            match event {
-                Event::Mouse(mouse) => {
-                    let rect = self.full_region_for_id(self.debug_log_id);
-                    if rect_contains(rect, mouse.column, mouse.row) {
-                        if matches!(mouse.kind, MouseEventKind::Down(_)) {
-                            self.focus_window_id(self.debug_log_id);
-                        }
-                        if self.debug_log.handle_event(event) {
-                            return true;
-                        }
-                    } else if matches!(mouse.kind, MouseEventKind::Down(_))
-                        && self.wm_focus.current() == self.debug_log_id
-                    {
-                        self.select_fallback_focus();
-                    }
-                }
-                Event::Key(_) if self.wm_focus.current() == self.debug_log_id => {
-                    if self.debug_log.handle_event(event) {
-                        return true;
-                    }
-                }
-                _ => {}
-            }
+        if self.handle_system_window_event(event) {
+            return true;
         }
         if let Event::Mouse(mouse) = event {
             self.hover = Some((mouse.column, mouse.row));
@@ -999,8 +1094,8 @@ where
 
     pub fn close_window(&mut self, id: WindowId<R>) {
         tracing::debug!(window_id = ?id, "closing window");
-        if id == self.debug_log_id {
-            self.toggle_debug_window();
+        if let WindowId::System(system_id) = id {
+            self.hide_system_window(system_id);
             return;
         }
 
@@ -1681,29 +1776,51 @@ where
         }
     }
 
-    pub fn window_draw_plan(&mut self, frame: &mut UiFrame<'_>) -> Vec<AppWindowDraw<R>> {
+    pub fn window_draw_plan(&mut self, frame: &mut UiFrame<'_>) -> Vec<WindowDrawTask<R>> {
         let mut plan = Vec::new();
-        let focused_app = self.wm_focus.current().as_app();
+        let focused_window = self.wm_focus.current();
         for &id in &self.managed_draw_order {
             let full = self.full_region_for_id(id);
             if full.width == 0 || full.height == 0 {
                 continue;
             }
             frame.render_widget(Clear, full);
-            let WindowId::App(app_id) = id else {
-                continue;
-            };
-            let inner = self.region(app_id);
-            if inner.width == 0 || inner.height == 0 {
-                continue;
+            match id {
+                WindowId::System(system_id) => {
+                    if !self.system_window_visible(system_id) {
+                        continue;
+                    }
+                    let inner = self.region_for_id(id);
+                    if inner.width == 0 || inner.height == 0 {
+                        continue;
+                    }
+                    plan.push(WindowDrawTask::System(SystemWindowDraw {
+                        id: system_id,
+                        surface: WindowSurface { full, inner },
+                        focused: focused_window == id,
+                    }));
+                }
+                WindowId::App(app_id) => {
+                    let inner = self.region(app_id);
+                    if inner.width == 0 || inner.height == 0 {
+                        continue;
+                    }
+                    plan.push(WindowDrawTask::App(AppWindowDraw {
+                        id: app_id,
+                        surface: WindowSurface { full, inner },
+                        focused: focused_window == WindowId::app(app_id),
+                    }));
+                }
             }
-            plan.push(AppWindowDraw {
-                id: app_id,
-                surface: WindowSurface { full, inner },
-                focused: focused_app == Some(app_id),
-            });
         }
         plan
+    }
+
+    pub fn render_system_window(&mut self, frame: &mut UiFrame<'_>, window: SystemWindowDraw) {
+        if window.surface.inner.width == 0 || window.surface.inner.height == 0 {
+            return;
+        }
+        self.render_system_window_entry(frame, window);
     }
 
     pub fn render_overlays(&mut self, frame: &mut UiFrame<'_>) {
@@ -1733,13 +1850,6 @@ where
             };
             if rect.width < 3 || rect.height < 3 {
                 continue;
-            }
-
-            if id == self.debug_log_id && self.state.debug_log_visible() {
-                let area = self.region_for_id(id);
-                if area.width > 0 && area.height > 0 {
-                    self.debug_log.render(frame, area, id == focused);
-                }
             }
 
             // Collect obscuring rects (windows above this one)
@@ -1980,6 +2090,46 @@ where
                     }
                     _ => false,
                 }
+            }
+            _ => false,
+        }
+    }
+
+    fn handle_system_window_event(&mut self, event: &Event) -> bool {
+        if self.layout_contract != LayoutContract::WindowManaged {
+            return false;
+        }
+        match event {
+            Event::Mouse(mouse) => {
+                if self.managed_draw_order.is_empty() {
+                    return false;
+                }
+                let hit =
+                    self.hit_test_region_topmost(mouse.column, mouse.row, &self.managed_draw_order);
+                if let Some(WindowId::System(system_id)) = hit {
+                    if !self.system_window_visible(system_id) {
+                        return false;
+                    }
+                    if matches!(mouse.kind, MouseEventKind::Down(_)) {
+                        self.focus_window_id(WindowId::system(system_id));
+                    }
+                    return self.dispatch_system_window_event(system_id, event);
+                }
+                if matches!(mouse.kind, MouseEventKind::Down(_))
+                    && let WindowId::System(system_id) = self.wm_focus.current()
+                    && self.system_window_visible(system_id)
+                {
+                    self.select_fallback_focus();
+                }
+                false
+            }
+            Event::Key(_) => {
+                if let WindowId::System(system_id) = self.wm_focus.current()
+                    && self.system_window_visible(system_id)
+                {
+                    return self.dispatch_system_window_event(system_id, event);
+                }
+                false
             }
             _ => false,
         }
