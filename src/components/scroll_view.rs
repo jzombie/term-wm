@@ -327,11 +327,11 @@ impl ScrollViewComponent {
                 };
             }
         }
-        return ScrollEvent {
+        ScrollEvent {
             handled: false,
             v_offset: None,
             h_offset: None,
-        };
+        }
     }
 
     fn max_h_offset(&self) -> usize {

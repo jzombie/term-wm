@@ -304,10 +304,10 @@ where
             drag_snap: None,
             debug_log: {
                 let (component, handle) = DebugLogComponent::new_default();
-                let _ = set_global_debug_log(handle);
+                set_global_debug_log(handle);
                 // Initialize tracing now that the global debug log handle exists
                 // so tracing will write into the in-memory debug buffer by default.
-                let _ = crate::tracing_sub::init_default();
+                crate::tracing_sub::init_default();
                 install_panic_hook();
                 component
             },

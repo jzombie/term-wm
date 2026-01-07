@@ -34,7 +34,7 @@ impl Component for TextRendererComponent {
         } else {
             // no wrapping: each Text line maps to one visual line; compute longest width for h_total
             let total = self.text.lines.len().max(1);
-            let longest = self.text.lines.iter().map(|l| l.width()).max().unwrap_or(0) as usize;
+            let longest = self.text.lines.iter().map(|l| l.width()).max().unwrap_or(0);
             (total, longest)
         };
 
@@ -159,7 +159,11 @@ fn compute_display_lines(text: &Text<'_>, width: u16) -> usize {
         .iter()
         .map(|line| {
             let w = line.width();
-            if w == 0 { 1 } else { (w + usable - 1) / usable }
+            if w == 0 {
+                1
+            } else {
+                (w + usable - 1).div_euclid(usable)
+            }
         })
         .sum::<usize>()
         .max(1)
