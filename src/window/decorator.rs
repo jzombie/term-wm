@@ -129,11 +129,13 @@ impl WindowDecorator for DefaultDecorator {
             let min_x = max_x.saturating_sub(2);
             let buttons = [(min_x, "_"), (max_x, "▢"), (close_x, "✖")];
             for (bx, sym) in buttons {
-                if bx >= bounds.x && bx < bounds.x + bounds.width && !is_obscured(bx, header_y) {
-                    if let Some(cell) = buffer.cell_mut((bx, header_y)) {
-                        cell.set_symbol(sym);
-                        cell.set_style(header_style);
-                    }
+                if bx >= bounds.x
+                    && bx < bounds.x + bounds.width
+                    && !is_obscured(bx, header_y)
+                    && let Some(cell) = buffer.cell_mut((bx, header_y))
+                {
+                    cell.set_symbol(sym);
+                    cell.set_style(header_style);
                 }
             }
         }

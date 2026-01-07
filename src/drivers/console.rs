@@ -2,16 +2,16 @@ use std::collections::VecDeque;
 use std::io::{self, Stdout};
 use std::time::Duration;
 
-use crossterm::event::{Event, KeyEvent, MouseEvent};
 use crossterm::event::DisableMouseCapture;
+use crossterm::event::{Event, KeyEvent, MouseEvent};
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, terminal};
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 
-use super::{InputDriver, OutputDriver};
 use super::keyboard::{KeyboardDriver, KeyboardNormalizer};
 use super::mouse::MouseDriver;
+use super::{InputDriver, OutputDriver};
 use crate::ui::UiFrame;
 
 pub struct ConsoleInputDriver {

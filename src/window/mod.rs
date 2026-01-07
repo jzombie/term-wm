@@ -837,7 +837,7 @@ where
         // maximize toggles the floating rect to full managed_area
         let full = RectSpec::Absolute(self.managed_area);
         if let Some(index) = self.managed_floating.iter().position(|f| f.id == id) {
-            let cur = self.managed_floating[index].rect.clone();
+            let cur = self.managed_floating[index].rect;
             if cur == full {
                 // restore previous if available
                 if let Some(prev) = self.prev_floating_rects.remove(&id) {

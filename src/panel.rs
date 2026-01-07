@@ -206,7 +206,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
                 // Pretty label derived from caller. Truncate to remaining space.
                 let mut label = label_for(id);
                 // leave room for padding
-                let max_label = max_x.saturating_sub(x).saturating_sub(2).max(0) as usize;
+                let max_label = max_x.saturating_sub(x).saturating_sub(2) as usize;
                 if label.chars().count() > max_label {
                     label = truncate_to_width(&label, max_label);
                 }

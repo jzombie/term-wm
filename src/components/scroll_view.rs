@@ -2,8 +2,8 @@ use crossterm::event::{Event, MouseEvent, MouseEventKind};
 use ratatui::prelude::Rect;
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 
-use crate::window::ScrollState;
 use crate::ui::UiFrame;
+use crate::window::ScrollState;
 
 #[derive(Debug, Default, Clone)]
 pub struct ScrollbarDrag {
