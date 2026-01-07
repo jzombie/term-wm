@@ -8,8 +8,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Text};
 use ratatui::widgets::Paragraph;
 
-use crate::components::Component;
-use crate::components::scroll_view::ScrollView;
+use crate::components::{Component, scroll_view::ScrollViewComponent};
 use crate::ui::UiFrame;
 
 const DEFAULT_MAX_LINES: usize = 2000;
@@ -169,42 +168,10 @@ impl Write for DebugLogWriter {
 #[derive(Debug)]
 pub struct DebugLogComponent {
     handle: DebugLogHandle,
-    scroll_view: ScrollView,
+    scroll_view: ScrollViewComponent,
     follow_tail: bool,
     last_total: usize,
     last_view: usize,
-}
-
-impl DebugLogComponent {
-    pub fn new(max_lines: usize) -> (Self, DebugLogHandle) {
-        let handle = DebugLogHandle {
-            inner: Arc::new(Mutex::new(DebugLogBuffer::new(max_lines))),
-        };
-        let mut scroll_view = ScrollView::new();
-        scroll_view.set_keyboard_enabled(true);
-        (
-            Self {
-                handle: handle.clone(),
-                scroll_view,
-                follow_tail: true,
-                last_total: 0,
-                last_view: 0,
-            },
-            handle,
-        )
-    }
-
-    pub fn new_default() -> (Self, DebugLogHandle) {
-        Self::new(DEFAULT_MAX_LINES)
-    }
-
-    fn is_at_bottom(&self) -> bool {
-        if self.last_view == 0 {
-            true
-        } else {
-            self.scroll_view.offset() >= self.last_total.saturating_sub(self.last_view)
-        }
-    }
 }
 
 impl Component for DebugLogComponent {
@@ -268,6 +235,38 @@ impl Component for DebugLogComponent {
                 response.handled
             }
             _ => false,
+        }
+    }
+}
+
+impl DebugLogComponent {
+    pub fn new(max_lines: usize) -> (Self, DebugLogHandle) {
+        let handle = DebugLogHandle {
+            inner: Arc::new(Mutex::new(DebugLogBuffer::new(max_lines))),
+        };
+        let mut scroll_view = ScrollViewComponent::new();
+        scroll_view.set_keyboard_enabled(true);
+        (
+            Self {
+                handle: handle.clone(),
+                scroll_view,
+                follow_tail: true,
+                last_total: 0,
+                last_view: 0,
+            },
+            handle,
+        )
+    }
+
+    pub fn new_default() -> (Self, DebugLogHandle) {
+        Self::new(DEFAULT_MAX_LINES)
+    }
+
+    fn is_at_bottom(&self) -> bool {
+        if self.last_view == 0 {
+            true
+        } else {
+            self.scroll_view.offset() >= self.last_total.saturating_sub(self.last_view)
         }
     }
 }

@@ -8,7 +8,7 @@ use ratatui::{
 };
 use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
-use crate::components::scroll_view::ScrollView;
+use crate::components::{Component, scroll_view::ScrollViewComponent};
 use crate::layout::rect_contains;
 use crate::pty::Pty;
 use crate::ui::UiFrame;
@@ -20,8 +20,105 @@ const DEFAULT_SCROLLBACK_LEN: usize = 2000;
 pub struct TerminalComponent {
     pane: Pty,
     last_size: (u16, u16),
-    scroll_view: ScrollView,
+    scroll_view: ScrollViewComponent,
     last_area: Rect,
+}
+
+impl Component for TerminalComponent {
+    fn resize(&mut self, area: Rect) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        let size = (area.width, area.height);
+        if size != self.last_size {
+            let _ = self.pane.resize(PtySize {
+                rows: area.height,
+                cols: area.width,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
+            self.last_size = size;
+        }
+    }
+
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
+        if area.height == 0 || area.width == 0 {
+            self.last_area = Rect::default();
+            return;
+        }
+        self.last_area = area;
+        let _exited = self.pane.has_exited();
+        self.render_screen(frame, area, focused);
+    }
+
+    fn handle_event(&mut self, event: &Event) -> bool {
+        match event {
+            Event::Key(key) => {
+                if key.kind == KeyEventKind::Release {
+                    return false;
+                }
+                if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
+                    && key.modifiers.contains(KeyModifiers::SHIFT)
+                    && !self.pane.alternate_screen()
+                {
+                    let delta = if key.code == KeyCode::PageUp {
+                        10isize
+                    } else {
+                        -10isize
+                    };
+                    self.scroll_scrollback(delta);
+                    return true;
+                }
+                let bytes = key_to_bytes(*key);
+                if bytes.is_empty() {
+                    return false;
+                }
+                if self.pane.scrollback() > 0 {
+                    self.pane.set_scrollback(0);
+                }
+                if let Err(_err) = self.pane.write_bytes(&bytes) {
+                    #[cfg(windows)]
+                    eprintln!("terminal input write failed: {_err}");
+                }
+                true
+            }
+            Event::Mouse(mouse) => {
+                if !self.pane.alternate_screen() && self.handle_scrollbar_event(event) {
+                    return true;
+                }
+                if !rect_contains(self.last_area, mouse.column, mouse.row) {
+                    return false;
+                }
+                // Only forward mouse events when the nested app opted in to SGR mouse reporting.
+                let screen = self.pane.screen();
+                if screen.mouse_protocol_encoding() != MouseProtocolEncoding::Sgr {
+                    return false;
+                }
+                let mode = screen.mouse_protocol_mode();
+                // Avoid emitting sequences for modes that the app didn't request.
+                if !mouse_event_allowed(mode, mouse.kind) {
+                    return false;
+                }
+                // Convert global coordinates into the PTY-local viewport.
+                let local = MouseEvent {
+                    column: mouse.column.saturating_sub(self.last_area.x),
+                    row: mouse.row.saturating_sub(self.last_area.y),
+                    kind: mouse.kind,
+                    modifiers: mouse.modifiers,
+                };
+                let bytes = mouse_event_to_bytes(local);
+                if bytes.is_empty() {
+                    return false;
+                }
+                if let Err(_err) = self.pane.write_bytes(&bytes) {
+                    #[cfg(windows)]
+                    eprintln!("terminal mouse write failed: {_err}");
+                }
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 impl TerminalComponent {
@@ -30,7 +127,7 @@ impl TerminalComponent {
         let mut comp = Self {
             pane,
             last_size: (size.cols, size.rows),
-            scroll_view: ScrollView::new(),
+            scroll_view: ScrollViewComponent::new(),
             last_area: Rect::default(),
         };
         // Terminal scroll view must not hijack keyboard input; disable by default.
@@ -161,103 +258,6 @@ pub fn default_shell_command() -> CommandBuilder {
         cmd.cwd(cwd);
     }
     cmd
-}
-
-impl super::Component for TerminalComponent {
-    fn resize(&mut self, area: Rect) {
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-        let size = (area.width, area.height);
-        if size != self.last_size {
-            let _ = self.pane.resize(PtySize {
-                rows: area.height,
-                cols: area.width,
-                pixel_width: 0,
-                pixel_height: 0,
-            });
-            self.last_size = size;
-        }
-    }
-
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
-        if area.height == 0 || area.width == 0 {
-            self.last_area = Rect::default();
-            return;
-        }
-        self.last_area = area;
-        let _exited = self.pane.has_exited();
-        self.render_screen(frame, area, focused);
-    }
-
-    fn handle_event(&mut self, event: &Event) -> bool {
-        match event {
-            Event::Key(key) => {
-                if key.kind == KeyEventKind::Release {
-                    return false;
-                }
-                if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
-                    && key.modifiers.contains(KeyModifiers::SHIFT)
-                    && !self.pane.alternate_screen()
-                {
-                    let delta = if key.code == KeyCode::PageUp {
-                        10isize
-                    } else {
-                        -10isize
-                    };
-                    self.scroll_scrollback(delta);
-                    return true;
-                }
-                let bytes = key_to_bytes(*key);
-                if bytes.is_empty() {
-                    return false;
-                }
-                if self.pane.scrollback() > 0 {
-                    self.pane.set_scrollback(0);
-                }
-                if let Err(_err) = self.pane.write_bytes(&bytes) {
-                    #[cfg(windows)]
-                    eprintln!("terminal input write failed: {_err}");
-                }
-                true
-            }
-            Event::Mouse(mouse) => {
-                if !self.pane.alternate_screen() && self.handle_scrollbar_event(event) {
-                    return true;
-                }
-                if !rect_contains(self.last_area, mouse.column, mouse.row) {
-                    return false;
-                }
-                // Only forward mouse events when the nested app opted in to SGR mouse reporting.
-                let screen = self.pane.screen();
-                if screen.mouse_protocol_encoding() != MouseProtocolEncoding::Sgr {
-                    return false;
-                }
-                let mode = screen.mouse_protocol_mode();
-                // Avoid emitting sequences for modes that the app didn't request.
-                if !mouse_event_allowed(mode, mouse.kind) {
-                    return false;
-                }
-                // Convert global coordinates into the PTY-local viewport.
-                let local = MouseEvent {
-                    column: mouse.column.saturating_sub(self.last_area.x),
-                    row: mouse.row.saturating_sub(self.last_area.y),
-                    kind: mouse.kind,
-                    modifiers: mouse.modifiers,
-                };
-                let bytes = mouse_event_to_bytes(local);
-                if bytes.is_empty() {
-                    return false;
-                }
-                if let Err(_err) = self.pane.write_bytes(&bytes) {
-                    #[cfg(windows)]
-                    eprintln!("terminal mouse write failed: {_err}");
-                }
-                true
-            }
-            _ => false,
-        }
-    }
 }
 
 impl TerminalComponent {

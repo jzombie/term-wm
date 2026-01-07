@@ -23,45 +23,6 @@ pub struct ConfirmOverlayComponent {
     confirm_rect: Option<Rect>,
 }
 
-impl ConfirmOverlayComponent {
-    pub fn new() -> Self {
-        let mut dialog = DialogOverlayComponent::new();
-        dialog.set_size(60, 9);
-        dialog.set_dim_backdrop(true);
-        dialog.set_bg(crate::theme::dialog_bg());
-        Self {
-            dialog,
-            visible: false,
-            body: String::new(),
-            selected_confirm: true,
-            cancel_rect: None,
-            confirm_rect: None,
-        }
-    }
-
-    pub fn open(&mut self, title: &str, body: &str) {
-        self.dialog.set_title(title);
-        self.dialog.set_body("");
-        self.dialog.set_visible(true);
-        self.visible = true;
-        self.body = body.to_string();
-        self.selected_confirm = true;
-    }
-
-    pub fn close(&mut self) {
-        self.dialog.set_visible(false);
-        self.visible = false;
-    }
-
-    pub fn visible(&self) -> bool {
-        self.visible
-    }
-
-    pub fn set_dim_backdrop(&mut self, dim: bool) {
-        self.dialog.set_dim_backdrop(dim);
-    }
-}
-
 impl Component for ConfirmOverlayComponent {
     fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
         if !self.visible || area.width == 0 || area.height == 0 {
@@ -175,6 +136,45 @@ impl Component for ConfirmOverlayComponent {
                 | KeyCode::Left
                 | KeyCode::Right
         )
+    }
+}
+
+impl ConfirmOverlayComponent {
+    pub fn new() -> Self {
+        let mut dialog = DialogOverlayComponent::new();
+        dialog.set_size(60, 9);
+        dialog.set_dim_backdrop(true);
+        dialog.set_bg(crate::theme::dialog_bg());
+        Self {
+            dialog,
+            visible: false,
+            body: String::new(),
+            selected_confirm: true,
+            cancel_rect: None,
+            confirm_rect: None,
+        }
+    }
+
+    pub fn open(&mut self, title: &str, body: &str) {
+        self.dialog.set_title(title);
+        self.dialog.set_body("");
+        self.dialog.set_visible(true);
+        self.visible = true;
+        self.body = body.to_string();
+        self.selected_confirm = true;
+    }
+
+    pub fn close(&mut self) {
+        self.dialog.set_visible(false);
+        self.visible = false;
+    }
+
+    pub fn visible(&self) -> bool {
+        self.visible
+    }
+
+    pub fn set_dim_backdrop(&mut self, dim: bool) {
+        self.dialog.set_dim_backdrop(dim);
     }
 }
 

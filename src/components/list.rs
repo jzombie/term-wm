@@ -3,14 +3,94 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 
-use crate::components::scroll_view::ScrollView;
+use crate::components::{Component, scroll_view::ScrollViewComponent};
 use crate::ui::UiFrame;
 
 pub struct ListComponent {
     items: Vec<String>,
     selected: usize,
     title: String,
-    scroll_view: ScrollView,
+    scroll_view: ScrollViewComponent,
+}
+
+impl Component for ListComponent {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
+        let block = if focused {
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!("{} (focus)", self.title))
+                .border_style(Style::default().fg(crate::theme::success_fg()))
+        } else {
+            Block::default()
+                .borders(Borders::ALL)
+                .title(self.title.as_str())
+        };
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        if inner.height == 0 || inner.width == 0 {
+            return;
+        }
+
+        let total = self.items.len();
+        let view = inner.height as usize;
+        self.scroll_view.update(inner, total, view);
+        self.keep_selected_in_view(view);
+
+        let offset = self.scroll_view.offset();
+        let items = self
+            .items
+            .iter()
+            .skip(offset)
+            .take(view)
+            .map(|item| ListItem::new(item.clone()))
+            .collect::<Vec<_>>();
+
+        let mut state = ListState::default();
+        if total > 0 && self.selected >= offset {
+            state.select(Some(self.selected - offset));
+        }
+
+        let list =
+            List::new(items).highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+        frame.render_stateful_widget(list, inner, &mut state);
+        self.scroll_view.render(frame);
+    }
+
+    fn handle_event(&mut self, event: &Event) -> bool {
+        match event {
+            Event::Key(key) => match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.bump_selection(-1);
+                    true
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.bump_selection(1);
+                    true
+                }
+                KeyCode::PageUp => {
+                    self.bump_selection(-5);
+                    true
+                }
+                KeyCode::PageDown => {
+                    self.bump_selection(5);
+                    true
+                }
+                KeyCode::Home => {
+                    self.selected = 0;
+                    true
+                }
+                KeyCode::End => {
+                    if !self.items.is_empty() {
+                        self.selected = self.items.len() - 1;
+                    }
+                    true
+                }
+                _ => false,
+            },
+            Event::Mouse(_) => self.handle_scrollbar_event(event),
+            _ => false,
+        }
+    }
 }
 
 impl ListComponent {
@@ -19,7 +99,7 @@ impl ListComponent {
             items: Vec::new(),
             selected: 0,
             title: title.into(),
-            scroll_view: ScrollView::new(),
+            scroll_view: ScrollViewComponent::new(),
         }
     }
 
@@ -98,86 +178,6 @@ impl ListComponent {
             }
         }
         response.handled
-    }
-}
-
-impl super::Component for ListComponent {
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
-        let block = if focused {
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!("{} (focus)", self.title))
-                .border_style(Style::default().fg(crate::theme::success_fg()))
-        } else {
-            Block::default()
-                .borders(Borders::ALL)
-                .title(self.title.as_str())
-        };
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-        if inner.height == 0 || inner.width == 0 {
-            return;
-        }
-
-        let total = self.items.len();
-        let view = inner.height as usize;
-        self.scroll_view.update(inner, total, view);
-        self.keep_selected_in_view(view);
-
-        let offset = self.scroll_view.offset();
-        let items = self
-            .items
-            .iter()
-            .skip(offset)
-            .take(view)
-            .map(|item| ListItem::new(item.clone()))
-            .collect::<Vec<_>>();
-
-        let mut state = ListState::default();
-        if total > 0 && self.selected >= offset {
-            state.select(Some(self.selected - offset));
-        }
-
-        let list =
-            List::new(items).highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-        frame.render_stateful_widget(list, inner, &mut state);
-        self.scroll_view.render(frame);
-    }
-
-    fn handle_event(&mut self, event: &Event) -> bool {
-        match event {
-            Event::Key(key) => match key.code {
-                KeyCode::Up | KeyCode::Char('k') => {
-                    self.bump_selection(-1);
-                    true
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    self.bump_selection(1);
-                    true
-                }
-                KeyCode::PageUp => {
-                    self.bump_selection(-5);
-                    true
-                }
-                KeyCode::PageDown => {
-                    self.bump_selection(5);
-                    true
-                }
-                KeyCode::Home => {
-                    self.selected = 0;
-                    true
-                }
-                KeyCode::End => {
-                    if !self.items.is_empty() {
-                        self.selected = self.items.len() - 1;
-                    }
-                    true
-                }
-                _ => false,
-            },
-            Event::Mouse(_) => self.handle_scrollbar_event(event),
-            _ => false,
-        }
     }
 }
 

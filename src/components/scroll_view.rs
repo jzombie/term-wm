@@ -2,6 +2,7 @@ use crossterm::event::{Event, MouseEvent, MouseEventKind};
 use ratatui::prelude::Rect;
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 
+use crate::components::Component;
 use crate::ui::UiFrame;
 use crate::window::ScrollState;
 
@@ -70,7 +71,7 @@ pub struct ScrollEvent {
 }
 
 #[derive(Debug)]
-pub struct ScrollView {
+pub struct ScrollViewComponent {
     state: ScrollState,
     drag: ScrollbarDrag,
     area: Rect,
@@ -80,7 +81,27 @@ pub struct ScrollView {
     keyboard_enabled: bool,
 }
 
-impl ScrollView {
+impl Component for ScrollViewComponent {
+    fn resize(&mut self, mut area: Rect) {
+        if let Some(height) = self.fixed_height {
+            area.height = area.height.min(height);
+        }
+        self.area = area;
+        self.view = self.view.min(self.area.height as usize);
+        self.state.apply(self.total, self.view);
+    }
+
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
+        self.resize(area);
+        ScrollViewComponent::render(self, frame);
+    }
+
+    fn handle_event(&mut self, event: &Event) -> bool {
+        ScrollViewComponent::handle_event(self, event).handled
+    }
+}
+
+impl ScrollViewComponent {
     pub fn new() -> Self {
         Self {
             state: ScrollState::default(),
@@ -93,7 +114,7 @@ impl ScrollView {
         }
     }
 
-    /// Enable or disable default keyboard handling for this ScrollView.
+    /// Enable or disable default keyboard handling for this ScrollViewComponent.
     /// When disabled (default), callers must programmatically control scrolling.
     pub fn set_keyboard_enabled(&mut self, enabled: bool) {
         self.keyboard_enabled = enabled;
@@ -253,29 +274,9 @@ impl ScrollView {
     }
 }
 
-impl Default for ScrollView {
+impl Default for ScrollViewComponent {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl super::Component for ScrollView {
-    fn resize(&mut self, mut area: Rect) {
-        if let Some(height) = self.fixed_height {
-            area.height = area.height.min(height);
-        }
-        self.area = area;
-        self.view = self.view.min(self.area.height as usize);
-        self.state.apply(self.total, self.view);
-    }
-
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
-        self.resize(area);
-        ScrollView::render(self, frame);
-    }
-
-    fn handle_event(&mut self, event: &Event) -> bool {
-        ScrollView::handle_event(self, event).handled
     }
 }
 
@@ -391,7 +392,7 @@ mod tests {
 
     #[test]
     fn scroll_view_set_offset_and_max() {
-        let mut sv = ScrollView::new();
+        let mut sv = ScrollViewComponent::new();
         let area = Rect {
             x: 0,
             y: 0,

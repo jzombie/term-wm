@@ -16,6 +16,32 @@ pub struct HelpOverlayComponent {
     viewer: MarkdownViewerComponent,
 }
 
+impl Component for HelpOverlayComponent {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
+        if !self.visible || area.width == 0 || area.height == 0 {
+            return;
+        }
+        let rect = self.dialog.rect_for(area);
+        frame.render_widget(Clear, rect);
+        let block = Block::default().title("Help").borders(Borders::ALL);
+        let inner = Rect {
+            x: rect.x.saturating_add(1),
+            y: rect.y.saturating_add(1),
+            width: rect.width.saturating_sub(2),
+            height: rect.height.saturating_sub(2),
+        };
+        frame.render_widget(block, rect);
+        self.viewer.render_content(frame, inner);
+    }
+
+    fn handle_event(&mut self, event: &Event) -> bool {
+        // need area to pass to viewer; approximate using dialog rect against full frame
+        // The caller (WindowManager) routes events while overlay visible; here just return false
+        // Actual routing is handled in WindowManager where available area is known.
+        self.handle_help_event(event)
+    }
+}
+
 impl HelpOverlayComponent {
     pub fn new() -> Self {
         let mut overlay = Self {
@@ -70,32 +96,6 @@ impl HelpOverlayComponent {
 impl Default for HelpOverlayComponent {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl Component for HelpOverlayComponent {
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
-        if !self.visible || area.width == 0 || area.height == 0 {
-            return;
-        }
-        let rect = self.dialog.rect_for(area);
-        frame.render_widget(Clear, rect);
-        let block = Block::default().title("Help").borders(Borders::ALL);
-        let inner = Rect {
-            x: rect.x.saturating_add(1),
-            y: rect.y.saturating_add(1),
-            width: rect.width.saturating_sub(2),
-            height: rect.height.saturating_sub(2),
-        };
-        frame.render_widget(block, rect);
-        self.viewer.render(frame, inner);
-    }
-
-    fn handle_event(&mut self, event: &Event) -> bool {
-        // need area to pass to viewer; approximate using dialog rect against full frame
-        // The caller (WindowManager) routes events while overlay visible; here just return false
-        // Actual routing is handled in WindowManager where available area is known.
-        self.handle_help_event(event)
     }
 }
 

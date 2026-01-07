@@ -173,7 +173,7 @@ pub struct WindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     esc_passthrough_window: Duration,
     wm_overlay: DialogOverlayComponent,
     help_overlay: HelpOverlayComponent,
-    // Central default for whether ScrollView keyboard handling should be enabled
+    // Central default for whether ScrollViewComponent keyboard handling should be enabled
     // for UI components that opt into it. Individual components can override.
     scroll_keyboard_enabled_default: bool,
     exit_confirm: ConfirmOverlayComponent,

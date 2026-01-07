@@ -2,6 +2,7 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
+use crate::components::Component;
 use crate::ui::UiFrame;
 
 #[derive(Debug, Clone)]
@@ -13,6 +14,36 @@ pub struct DialogOverlayComponent {
     height: u16,
     bg: Color,
     dim_backdrop: bool,
+}
+
+impl Component for DialogOverlayComponent {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
+        if !self.visible || area.width == 0 || area.height == 0 {
+            return;
+        }
+        if self.dim_backdrop {
+            let buffer = frame.buffer_mut();
+            let dim_style = Style::default().add_modifier(Modifier::DIM);
+            for y in area.y..area.y.saturating_add(area.height) {
+                for x in area.x..area.x.saturating_add(area.width) {
+                    if let Some(cell) = buffer.cell_mut((x, y)) {
+                        cell.set_style(dim_style);
+                    }
+                }
+            }
+        }
+        let rect = self.rect_for(area);
+        frame.render_widget(Clear, rect);
+        let block = Block::default()
+            .title(self.title.as_str())
+            .borders(Borders::ALL);
+        let paragraph = Paragraph::new(self.body.as_str())
+            .style(Style::default().bg(self.bg))
+            .block(block)
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: true });
+        frame.render_widget(paragraph, rect);
+    }
 }
 
 impl DialogOverlayComponent {
@@ -88,36 +119,6 @@ impl DialogOverlayComponent {
 impl Default for DialogOverlayComponent {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl super::Component for DialogOverlayComponent {
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
-        if !self.visible || area.width == 0 || area.height == 0 {
-            return;
-        }
-        if self.dim_backdrop {
-            let buffer = frame.buffer_mut();
-            let dim_style = Style::default().add_modifier(Modifier::DIM);
-            for y in area.y..area.y.saturating_add(area.height) {
-                for x in area.x..area.x.saturating_add(area.width) {
-                    if let Some(cell) = buffer.cell_mut((x, y)) {
-                        cell.set_style(dim_style);
-                    }
-                }
-            }
-        }
-        let rect = self.rect_for(area);
-        frame.render_widget(Clear, rect);
-        let block = Block::default()
-            .title(self.title.as_str())
-            .borders(Borders::ALL);
-        let paragraph = Paragraph::new(self.body.as_str())
-            .style(Style::default().bg(self.bg))
-            .block(block)
-            .alignment(Alignment::Center)
-            .wrap(Wrap { trim: true });
-        frame.render_widget(paragraph, rect);
     }
 }
 

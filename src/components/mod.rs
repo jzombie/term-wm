@@ -25,8 +25,8 @@ pub use dialog_overlay::DialogOverlayComponent;
 pub use help_overlay::HelpOverlayComponent;
 pub use list::ListComponent;
 pub use markdown_viewer::MarkdownViewerComponent;
-pub use scroll_view::ScrollView;
-pub use status_bar::StatusBar;
+pub use scroll_view::ScrollViewComponent;
+pub use status_bar::StatusBarComponent;
 pub use terminal::{TerminalComponent, default_shell, default_shell_command};
 pub use toggle_list::{ToggleItem, ToggleListComponent};
 

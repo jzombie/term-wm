@@ -1,42 +1,15 @@
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 
+use crate::components::Component;
 use crate::ui::{UiFrame, safe_set_string, truncate_to_width};
-pub struct StatusBar {
+pub struct StatusBarComponent {
     left: String,
     right: String,
     style: Style,
 }
 
-impl StatusBar {
-    pub fn new() -> Self {
-        Self {
-            left: String::new(),
-            right: String::new(),
-            style: Style::default(),
-        }
-    }
-
-    pub fn set_left<T: Into<String>>(&mut self, value: T) {
-        self.left = value.into();
-    }
-
-    pub fn set_right<T: Into<String>>(&mut self, value: T) {
-        self.right = value.into();
-    }
-
-    pub fn set_style(&mut self, style: Style) {
-        self.style = style;
-    }
-}
-
-impl Default for StatusBar {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl super::Component for StatusBar {
+impl Component for StatusBarComponent {
     fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
         if area.height == 0 || area.width == 0 {
             return;
@@ -64,6 +37,33 @@ impl super::Component for StatusBar {
     }
 }
 
+impl StatusBarComponent {
+    pub fn new() -> Self {
+        Self {
+            left: String::new(),
+            right: String::new(),
+            style: Style::default(),
+        }
+    }
+
+    pub fn set_left<T: Into<String>>(&mut self, value: T) {
+        self.left = value.into();
+    }
+
+    pub fn set_right<T: Into<String>>(&mut self, value: T) {
+        self.right = value.into();
+    }
+
+    pub fn set_style(&mut self, style: Style) {
+        self.style = style;
+    }
+}
+
+impl Default for StatusBarComponent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -71,11 +71,11 @@ mod tests {
 
     #[test]
     fn set_left_right_and_style_affect_internal_state() {
-        let mut s = StatusBar::new();
+        let mut s = StatusBarComponent::new();
         s.set_left("left");
         s.set_right("right");
         s.set_style(Style::default());
         // call default to ensure Default impl works
-        let _ = StatusBar::default();
+        let _ = StatusBarComponent::default();
     }
 }

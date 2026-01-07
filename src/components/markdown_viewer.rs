@@ -7,21 +7,40 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::components::{Component, scroll_view::ScrollView};
+use crate::components::{Component, scroll_view::ScrollViewComponent};
 use crate::ui::UiFrame;
 
 #[derive(Debug)]
 pub struct MarkdownViewerComponent {
     text: Text<'static>,
-    scroll: ScrollView,
+    scroll: ScrollViewComponent,
     total_lines: usize,
+}
+
+impl Component for MarkdownViewerComponent {
+    fn resize(&mut self, area: Rect) {
+        // Respect the allocated height so scrollbar calculations are stable.
+        self.scroll.set_fixed_height(Some(area.height));
+    }
+
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
+        self.render_content(frame, area);
+    }
+
+    fn handle_event(&mut self, event: &Event) -> bool {
+        match event {
+            Event::Mouse(_) => self.handle_pointer_event(event),
+            Event::Key(key) => self.handle_key_event(key),
+            _ => false,
+        }
+    }
 }
 
 impl MarkdownViewerComponent {
     pub fn new() -> Self {
         Self {
             text: Text::from(vec![Line::from(String::new())]),
-            scroll: ScrollView::new(),
+            scroll: ScrollViewComponent::new(),
             total_lines: 0,
         }
     }
@@ -171,7 +190,7 @@ impl MarkdownViewerComponent {
     }
 
     pub fn handle_pointer_event(&mut self, event: &Event) -> bool {
-        // Delegate pointer/scrollbar interactions to the shared ScrollView implementation.
+        // Delegate pointer/scrollbar interactions to the shared ScrollViewComponent implementation.
         let response = self.scroll.handle_event(event);
         if let Some(offset) = response.offset {
             self.scroll.set_offset(offset);
@@ -217,17 +236,17 @@ impl MarkdownViewerComponent {
         self.scroll.set_offset(max_off);
     }
 
-    /// Enable or disable the ScrollView's keyboard handling for this viewer.
+    /// Enable or disable the ScrollViewComponent's keyboard handling for this viewer.
     pub fn set_keyboard_enabled(&mut self, enabled: bool) {
         self.scroll.set_keyboard_enabled(enabled);
     }
 
-    /// Pass through keyboard events to the internal ScrollView's handler.
+    /// Pass through keyboard events to the internal ScrollViewComponent handler.
     pub fn handle_key_event(&mut self, key: &crossterm::event::KeyEvent) -> bool {
         self.scroll.handle_key_event(key)
     }
 
-    pub fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect) {
+    pub fn render_content(&mut self, frame: &mut UiFrame<'_>, area: Rect) {
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -244,24 +263,5 @@ impl MarkdownViewerComponent {
 impl Default for MarkdownViewerComponent {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl Component for MarkdownViewerComponent {
-    fn resize(&mut self, area: ratatui::layout::Rect) {
-        // Respect the allocated height so scrollbar calculations are stable.
-        self.scroll.set_fixed_height(Some(area.height));
-    }
-
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: ratatui::layout::Rect, focused: bool) {
-        let _ = focused; // viewer doesn't need focus state for rendering
-        self.render(frame, area);
-    }
-
-    fn handle_event(&mut self, event: &crossterm::event::Event) -> bool {
-        match event {
-            crossterm::event::Event::Key(k) => self.handle_key_event(k),
-            _ => self.handle_pointer_event(event),
-        }
     }
 }

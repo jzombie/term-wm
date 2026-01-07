@@ -4,6 +4,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use resvg::{tiny_skia, usvg};
 
+use crate::components::Component;
 use crate::ui::UiFrame;
 
 const DEFAULT_RAMP: &[char] = &[' ', '.', ':', '-', '=', '+', '*', '#', '%', '@'];
@@ -35,6 +36,42 @@ pub struct AsciiImageComponent {
     colorize: bool,
     render_mode: RenderMode,
     luma_avg: u8,
+}
+
+impl Component for AsciiImageComponent {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        if self.dirty || self.cached_area != area {
+            self.rebuild_cache(area);
+        }
+        let buffer = frame.buffer_mut();
+        for (row, line) in self.cached.iter().enumerate() {
+            let y = area.y.saturating_add(row as u16);
+            if y >= area.y.saturating_add(area.height) {
+                break;
+            }
+            for (col, cell) in line.iter().enumerate() {
+                let x = area.x.saturating_add(col as u16);
+                if x >= area.x.saturating_add(area.width) {
+                    break;
+                }
+                if let Some(buf_cell) = buffer.cell_mut((x, y)) {
+                    let mut style = Style::default();
+                    if let Some((r, g, b)) = cell.fg {
+                        style = style.fg(crate::term_color::map_rgb_to_color(r, g, b));
+                    }
+                    if let Some((r, g, b)) = cell.bg {
+                        style = style.bg(crate::term_color::map_rgb_to_color(r, g, b));
+                    }
+                    let mut buf = [0u8; 4];
+                    let sym = cell.ch.encode_utf8(&mut buf);
+                    buf_cell.set_symbol(sym).set_style(style);
+                }
+            }
+        }
+    }
 }
 
 impl AsciiImageComponent {
@@ -433,42 +470,6 @@ fn braille_bit(dx: u32, dy: u32) -> u16 {
         (1, 2) => 32,
         (1, 3) => 128,
         _ => 0,
-    }
-}
-
-impl super::Component for AsciiImageComponent {
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-        if self.dirty || self.cached_area != area {
-            self.rebuild_cache(area);
-        }
-        let buffer = frame.buffer_mut();
-        for (row, line) in self.cached.iter().enumerate() {
-            let y = area.y.saturating_add(row as u16);
-            if y >= area.y.saturating_add(area.height) {
-                break;
-            }
-            for (col, cell) in line.iter().enumerate() {
-                let x = area.x.saturating_add(col as u16);
-                if x >= area.x.saturating_add(area.width) {
-                    break;
-                }
-                if let Some(buf_cell) = buffer.cell_mut((x, y)) {
-                    let mut style = Style::default();
-                    if let Some((r, g, b)) = cell.fg {
-                        style = style.fg(crate::term_color::map_rgb_to_color(r, g, b));
-                    }
-                    if let Some((r, g, b)) = cell.bg {
-                        style = style.bg(crate::term_color::map_rgb_to_color(r, g, b));
-                    }
-                    let mut buf = [0u8; 4];
-                    let sym = cell.ch.encode_utf8(&mut buf);
-                    buf_cell.set_symbol(sym).set_style(style);
-                }
-            }
-        }
     }
 }
 
