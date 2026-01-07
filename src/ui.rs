@@ -47,12 +47,8 @@ impl<'a> UiFrame<'a> {
         }
     }
 
-    pub fn render_stateful_widget<W>(
-        &mut self,
-        widget: W,
-        area: Rect,
-        state: &mut W::State,
-    ) where
+    pub fn render_stateful_widget<W>(&mut self, widget: W, area: Rect, state: &mut W::State)
+    where
         W: StatefulWidget,
     {
         if let Some(clipped) = self.clip_rect(area) {
@@ -90,21 +86,6 @@ pub(crate) fn truncate_to_width(value: &str, width: usize) -> String {
         return value.to_string();
     }
     value.chars().take(width).collect()
-}
-
-pub fn clear_rect(frame: &mut UiFrame<'_>, rect: Rect) {
-    let Some(bounds) = frame.clip_rect(rect) else {
-        return;
-    };
-    let buffer = frame.buffer_mut();
-    for y in bounds.y..bounds.y.saturating_add(bounds.height) {
-        for x in bounds.x..bounds.x.saturating_add(bounds.width) {
-            if let Some(cell) = buffer.cell_mut((x, y)) {
-                cell.reset();
-                cell.set_symbol(" ");
-            }
-        }
-    }
 }
 
 #[cfg(test)]

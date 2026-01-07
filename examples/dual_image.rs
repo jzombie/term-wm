@@ -4,13 +4,13 @@ use std::time::Duration;
 
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ratatui::prelude::Rect;
-use ratatui::widgets::{Block, Borders};
+use ratatui::widgets::{Block, Borders, Clear};
 
 use term_wm::components::{AsciiImage, Component};
 use term_wm::drivers::OutputDriver;
 use term_wm::drivers::console::{ConsoleInputDriver, ConsoleOutputDriver};
-use term_wm::ui::{UiFrame, clear_rect};
 use term_wm::runner::{HasWindowManager, WindowApp, run_window_app};
+use term_wm::ui::UiFrame;
 use term_wm::window::{AppWindowDraw, WindowManager};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -140,7 +140,7 @@ impl WindowApp<PaneId, PaneId> for App {
 fn render_pane(frame: &mut UiFrame<'_>, image: &mut AsciiImage, area: Rect, _focused: bool) {
     let block = Block::default().borders(Borders::ALL);
     let inner = block.inner(area);
-    clear_rect(frame, area);
+    frame.render_widget(Clear, area);
     frame.render_widget(block, area);
     image.render(frame, inner, false);
 }

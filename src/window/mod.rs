@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, MouseEventKind};
 use ratatui::prelude::Rect;
+use ratatui::widgets::Clear;
 
 use self::decorator::{DefaultDecorator, HeaderAction, WindowDecorator};
 use crate::components::{
@@ -17,8 +18,8 @@ use crate::layout::{
     TilingLayout, rect_contains, render_handles_masked,
 };
 use crate::panel::Panel;
-use crate::ui::{UiFrame, clear_rect};
 use crate::state::AppState;
+use crate::ui::UiFrame;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Describes who owns layout placement and how WM-level input is handled.
@@ -1511,7 +1512,7 @@ where
             if full.width == 0 || full.height == 0 {
                 continue;
             }
-            clear_rect(frame, full);
+            frame.render_widget(Clear, full);
             let WindowId::App(app_id) = id else {
                 continue;
             };
@@ -1659,7 +1660,7 @@ where
     pub fn clear_window_backgrounds(&self, frame: &mut UiFrame<'_>) {
         for id in self.regions.ids() {
             let rect = self.full_region_for_id(id);
-            clear_rect(frame, rect);
+            frame.render_widget(Clear, rect);
         }
     }
 

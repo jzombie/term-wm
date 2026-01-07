@@ -1,8 +1,8 @@
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-use crate::ui::{UiFrame, clear_rect};
+use crate::ui::UiFrame;
 
 #[derive(Debug, Clone)]
 pub struct DialogOverlay {
@@ -108,7 +108,7 @@ impl super::Component for DialogOverlay {
             }
         }
         let rect = self.rect_for(area);
-        clear_rect(frame, rect);
+        frame.render_widget(Clear, rect);
         let block = Block::default()
             .title(self.title.as_str())
             .borders(Borders::ALL);
