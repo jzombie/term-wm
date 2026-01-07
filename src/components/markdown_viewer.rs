@@ -15,6 +15,7 @@ pub struct MarkdownViewerComponent {
     text: Text<'static>,
     scroll: ScrollViewComponent,
     total_lines: usize,
+    display_lines: usize,
 }
 
 impl Component for MarkdownViewerComponent {
@@ -42,6 +43,7 @@ impl MarkdownViewerComponent {
             text: Text::from(vec![Line::from(String::new())]),
             scroll: ScrollViewComponent::new(),
             total_lines: 0,
+            display_lines: 0,
         }
     }
 
@@ -67,6 +69,7 @@ impl MarkdownViewerComponent {
         enum TagKind {
             Strong,
             Emphasis,
+            Heading,
             List,
             Item,
             CodeBlock,
@@ -101,7 +104,6 @@ impl MarkdownViewerComponent {
                         }
                         let indent = "  ".repeat(list_count.len().saturating_sub(1));
                         let bullet = if let Some(start) = list_start.last().and_then(|s| *s) {
-                            // ordered
                             let idx = list_count.last().copied().unwrap_or(1);
                             format!("{}{}.", indent, start + idx - 1)
                         } else {
@@ -116,6 +118,10 @@ impl MarkdownViewerComponent {
                     Tag::Paragraph => {
                         tag_stack.push(TagKind::Paragraph);
                     }
+                    Tag::Heading { .. } => {
+                        tag_stack.push(TagKind::Heading);
+                        bold = true;
+                    }
                     _ => tag_stack.push(TagKind::Other),
                 },
                 MdEvent::End(_) => {
@@ -124,7 +130,9 @@ impl MarkdownViewerComponent {
                             TagKind::Strong => bold = false,
                             TagKind::Emphasis => italic = false,
                             TagKind::Item => {
-                                lines.push(std::mem::take(&mut current));
+                                if !current.is_empty() {
+                                    lines.push(std::mem::take(&mut current));
+                                }
                             }
                             TagKind::List => {
                                 list_start.pop();
@@ -132,6 +140,15 @@ impl MarkdownViewerComponent {
                             }
                             TagKind::CodeBlock => in_code_block = false,
                             TagKind::Paragraph => {
+                                lines.push(std::mem::take(&mut current));
+                                let in_list_item =
+                                    tag_stack.iter().any(|k| matches!(k, TagKind::Item));
+                                if !in_list_item {
+                                    lines.push(vec![Span::raw("")]);
+                                }
+                            }
+                            TagKind::Heading => {
+                                bold = false;
                                 lines.push(std::mem::take(&mut current));
                                 lines.push(vec![Span::raw("")]);
                             }
@@ -159,7 +176,11 @@ impl MarkdownViewerComponent {
                     ));
                 }
                 MdEvent::SoftBreak => {
-                    current.push(Span::raw(" "));
+                    if in_code_block {
+                        lines.push(std::mem::take(&mut current));
+                    } else {
+                        current.push(Span::raw(" "));
+                    }
                 }
                 MdEvent::HardBreak => {
                     lines.push(std::mem::take(&mut current));
@@ -179,8 +200,10 @@ impl MarkdownViewerComponent {
         }
 
         let owned_lines: Vec<Line> = lines.into_iter().map(Line::from).collect();
+
         self.total_lines = owned_lines.len();
         self.text = Text::from(owned_lines);
+        self.display_lines = self.total_lines;
     }
 
     pub fn set_markdown_bytes(&mut self, bytes: &[u8]) {
@@ -190,19 +213,17 @@ impl MarkdownViewerComponent {
     }
 
     pub fn handle_pointer_event(&mut self, event: &Event) -> bool {
-        // Delegate pointer/scrollbar interactions to the shared ScrollViewComponent implementation.
         let response = self.scroll.handle_event(event);
         if let Some(offset) = response.offset {
             self.scroll.set_offset(offset);
         }
         if response.handled {
-            self.scroll
-                .set_total_view(self.total_lines, self.scroll.view());
+            let total = self.display_lines.max(self.total_lines).max(1);
+            self.scroll.set_total_view(total, self.scroll.view());
         }
         response.handled
     }
 
-    // Programmatic scrolling helpers; callers (e.g. overlay) decide which keys map here.
     pub fn page_up(&mut self) {
         let page = self.scroll.view().max(1);
         let off = self.scroll.offset().saturating_sub(page);
@@ -212,8 +233,9 @@ impl MarkdownViewerComponent {
     pub fn page_down(&mut self) {
         let page = self.scroll.view().max(1);
         let off = self.scroll.offset().saturating_add(page);
-        self.scroll
-            .set_offset(off.min(self.total_lines.saturating_sub(self.scroll.view())));
+        let total = self.display_lines.max(self.total_lines);
+        let max_off = total.saturating_sub(self.scroll.view());
+        self.scroll.set_offset(off.min(max_off));
     }
 
     pub fn scroll_up(&mut self) {
@@ -223,8 +245,9 @@ impl MarkdownViewerComponent {
 
     pub fn scroll_down(&mut self) {
         let off = self.scroll.offset().saturating_add(1);
-        self.scroll
-            .set_offset(off.min(self.total_lines.saturating_sub(self.scroll.view())));
+        let total = self.display_lines.max(self.total_lines);
+        let max_off = total.saturating_sub(self.scroll.view());
+        self.scroll.set_offset(off.min(max_off));
     }
 
     pub fn go_home(&mut self) {
@@ -232,41 +255,60 @@ impl MarkdownViewerComponent {
     }
 
     pub fn go_end(&mut self) {
-        let max_off = self.total_lines.saturating_sub(self.scroll.view());
+        let total = self.display_lines.max(self.total_lines);
+        let max_off = total.saturating_sub(self.scroll.view());
         self.scroll.set_offset(max_off);
     }
 
-    /// Enable or disable the ScrollViewComponent's keyboard handling for this viewer.
     pub fn set_keyboard_enabled(&mut self, enabled: bool) {
         self.scroll.set_keyboard_enabled(enabled);
     }
 
-    /// Pass through keyboard events to the internal ScrollViewComponent handler.
     pub fn handle_key_event(&mut self, key: &crossterm::event::KeyEvent) -> bool {
         self.scroll.handle_key_event(key)
+    }
+
+    fn compute_display_lines(&self, width: u16) -> usize {
+        let usable = width.max(1) as usize;
+        self.text
+            .lines
+            .iter()
+            .map(|line| {
+                let line_width = line.width();
+                if line_width == 0 {
+                    1
+                } else {
+                    (line_width + usable - 1) / usable
+                }
+            })
+            .sum::<usize>()
+            .max(1)
     }
 
     pub fn render_content(&mut self, frame: &mut UiFrame<'_>, area: Rect) {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        let total = self.total_lines;
         let view = area.height as usize;
-        self.scroll.update(area, total, view);
-        // If a vertical scrollbar will be rendered, reserve one column on the
-        // right so the scrollbar does not overlay content. This makes text
-        // wrapping behave as expected and avoids characters being obscured.
-        let scrollbar_visible = total > self.scroll.view() && view > 0 && area.height > 0;
-        let content_area = if scrollbar_visible && area.width > 0 {
+        let mut content_width = area.width;
+        let mut total = self.compute_display_lines(content_width);
+
+        let scrollbar_needed = total > view && content_width > 0;
+        let content_area = if scrollbar_needed {
+            content_width = content_width.saturating_sub(1);
+            total = self.compute_display_lines(content_width);
             Rect {
                 x: area.x,
                 y: area.y,
-                width: area.width.saturating_sub(1),
+                width: content_width,
                 height: area.height,
             }
         } else {
             area
         };
+
+        self.display_lines = total;
+        self.scroll.update(area, total, view);
 
         let mut paragraph = Paragraph::new(self.text.clone()).wrap(Wrap { trim: false });
         paragraph = paragraph.scroll((self.scroll.offset() as u16, 0));
@@ -278,5 +320,114 @@ impl MarkdownViewerComponent {
 impl Default for MarkdownViewerComponent {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod markdown_tests {
+    use super::*;
+    use indoc::indoc;
+
+    const SAMPLE_HELP_MD: &str = indoc! {
+        "
+        Lorem ipsum dolor sit amet, consectetur adipiscing elit. Integer nec odio.
+        Praesent libero. Sed cursus ante dapibus diam. Sed nisi. Nulla quis sem at nibh
+        elementum imperdiet. Duis sagittis ipsum. Praesent mauris.
+
+        - Alpha: first command example
+        - Beta: second command example with a bit more text to force wrapping
+        - Gamma: another brief example
+
+        Curabitur sodales ligula in libero. Sed dignissim lacinia nunc. Curabitur tortor.
+        Pellentesque nibh. Aenean quam. In scelerisque sem at dolor.
+
+        _Notes:_
+        - This is a lorem ipsum note used for tests.
+        - Another note to validate list rendering and wrapping behavior.
+        "
+    };
+
+    fn sample_viewer() -> MarkdownViewerComponent {
+        let mut mv = MarkdownViewerComponent::new();
+        mv.set_markdown(SAMPLE_HELP_MD);
+        mv
+    }
+
+    #[test]
+    fn help_md_contains_notes_and_list_items() {
+        let mv = sample_viewer();
+        let rendered: Vec<String> = mv
+            .text
+            .lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect();
+        assert!(
+            rendered.iter().any(|line| line.contains("Notes:")),
+            "help.md should contain 'Notes:'"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.to_lowercase().contains("lorem ipsum"))
+                || rendered
+                    .iter()
+                    .any(|line| line.to_lowercase().contains("lorem")),
+            "help.md should contain lorem ipsum notes"
+        );
+    }
+
+    #[test]
+    fn notes_lines_visible_at_bottom_scroll() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let mut mv = sample_viewer();
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 50,
+            height: 12,
+        };
+        let mut scratch = Buffer::empty(area);
+        {
+            let mut frame = crate::ui::UiFrame::from_parts(area, &mut scratch);
+            mv.render_content(&mut frame, area);
+        }
+
+        let mut buffer = Buffer::empty(area);
+        {
+            mv.go_end();
+            let mut frame = crate::ui::UiFrame::from_parts(area, &mut buffer);
+            mv.render_content(&mut frame, area);
+        }
+
+        let mut found_mouse_note = false;
+        let mut found_panel_note = false;
+        for y in 0..area.height {
+            let mut row = String::new();
+            for x in 0..area.width {
+                if let Some(cell) = buffer.cell((x, y)) {
+                    row.push_str(cell.symbol());
+                }
+            }
+            if row.contains("- This is a lorem ipsum note") {
+                found_mouse_note = true;
+            }
+            if row.contains("- Another note to validate list rendering") {
+                found_panel_note = true;
+            }
+        }
+        assert!(
+            found_mouse_note,
+            "Mouse interactions note should render at bottom"
+        );
+        assert!(found_panel_note, "Panel menu note should render at bottom");
     }
 }
