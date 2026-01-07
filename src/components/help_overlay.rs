@@ -26,7 +26,8 @@ impl Component for HelpOverlayComponent {
         self.dialog.render_backdrop(frame, area);
         let rect = self.dialog.rect_for(area);
         frame.render_widget(Clear, rect);
-        let block = Block::default().title("Help").borders(Borders::ALL);
+        let title = "About / Help";
+        let block = Block::default().title(title).borders(Borders::ALL);
         let inner = Rect {
             x: rect.x.saturating_add(1),
             y: rect.y.saturating_add(1),
