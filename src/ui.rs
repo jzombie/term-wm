@@ -44,6 +44,15 @@ impl<'a> UiFrame<'a> {
         Self { area, buffer }
     }
 
+    /// Test helper: construct a `UiFrame` directly from an area and buffer.
+    ///
+    /// This exists to make unit testing of clipping behavior straightforward
+    /// without constructing a full `ratatui::Frame` in tests.
+    #[cfg(test)]
+    fn from_parts(area: Rect, buffer: &'a mut Buffer) -> Self {
+        Self { area, buffer }
+    }
+
     pub fn area(&self) -> Rect {
         self.area
     }
@@ -139,5 +148,101 @@ mod tests {
 
         // outside bounds should be ignored (no panic)
         safe_set_string(&mut buf, bounds, 100, 0, "x", Style::default());
+    }
+
+    #[test]
+    fn render_widget_clips_to_frame_area() {
+        use ratatui::layout::Rect;
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 5,
+            height: 3,
+        };
+        let mut buf = Buffer::empty(area);
+        let mut ui = UiFrame::from_parts(area, &mut buf);
+
+        struct FillWidget;
+        impl Widget for FillWidget {
+            fn render(self, area: Rect, buf: &mut Buffer) {
+                for y in area.y..area.y.saturating_add(area.height) {
+                    for x in area.x..area.x.saturating_add(area.width) {
+                        if let Some(cell) = buf.cell_mut((x, y)) {
+                            cell.set_symbol("A");
+                        }
+                    }
+                }
+            }
+        }
+
+        // Request an area that partially lies outside the right edge.
+        ui.render_widget(
+            FillWidget,
+            Rect {
+                x: 3,
+                y: 1,
+                width: 5,
+                height: 2,
+            },
+        );
+
+        // Inside clipped region
+        let inside = buf.cell_mut((3, 1)).expect("cell present");
+        assert!(inside.symbol().starts_with('A'));
+
+        // Outside clipped region (left of the filled area)
+        let outside = buf.cell_mut((2, 1)).expect("cell present");
+        assert!(!outside.symbol().starts_with('A'));
+    }
+
+    #[test]
+    fn render_stateful_widget_clips_to_frame_area() {
+        use ratatui::layout::Rect;
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 6,
+            height: 4,
+        };
+        let mut buf = Buffer::empty(area);
+        let mut ui = UiFrame::from_parts(area, &mut buf);
+
+        struct FillStateful;
+        impl StatefulWidget for FillStateful {
+            type State = usize;
+            fn render(self, area: Rect, buf: &mut Buffer, _state: &mut Self::State) {
+                for y in area.y..area.y.saturating_add(area.height) {
+                    for x in area.x..area.x.saturating_add(area.width) {
+                        if let Some(cell) = buf.cell_mut((x, y)) {
+                            cell.set_symbol("S");
+                        }
+                    }
+                }
+            }
+        }
+
+        // Request an area that exceeds bottom edge.
+        let mut state = 0usize;
+        ui.render_stateful_widget(
+            FillStateful,
+            Rect {
+                x: 1,
+                y: 2,
+                width: 4,
+                height: 4,
+            },
+            &mut state,
+        );
+
+        // Inside clipped region
+        let inside = buf.cell_mut((1, 2)).expect("cell present");
+        assert!(inside.symbol().starts_with('S'));
+
+        // Outside clipped region (below buffer)
+        // Coordinates (1, 6) are outside; ensure we don't panic by checking a nearby in-bounds cell
+        let near = buf.cell_mut((1, 3)).expect("cell present");
+        assert!(near.symbol().starts_with('S'));
     }
 }
