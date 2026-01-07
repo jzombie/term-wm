@@ -430,4 +430,79 @@ mod markdown_tests {
         );
         assert!(found_panel_note, "Panel menu note should render at bottom");
     }
+
+    #[test]
+    fn scrollbar_does_not_overlay_text() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::widgets::Paragraph;
+
+        let mut mv = sample_viewer();
+
+        // choose a narrow viewport so a scrollbar will be required
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 8,
+        };
+
+        let mut with_scroll = Buffer::empty(area);
+        {
+            let mut frame = crate::ui::UiFrame::from_parts(area, &mut with_scroll);
+            mv.render_content(&mut frame, area);
+        }
+
+        // verify that our viewer actually needed a scrollbar
+        assert!(
+            mv.display_lines > area.height as usize,
+            "test requires scrollbar present"
+        );
+
+        // render the paragraph into a buffer sized to the content area (width - 1)
+        let content_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width.saturating_sub(1),
+            height: area.height,
+        };
+        let mut content_buf = Buffer::empty(content_area);
+        {
+            let mut frame = crate::ui::UiFrame::from_parts(content_area, &mut content_buf);
+            let mut paragraph = Paragraph::new(mv.text.clone()).wrap(Wrap { trim: false });
+            paragraph = paragraph.scroll((mv.scroll.offset() as u16, 0));
+            frame.render_widget(paragraph, content_area);
+        }
+
+        // ensure the content columns match between the two buffers (i.e. paragraph wasn't drawn into the last column)
+        for y in 0..area.height {
+            for x in 0..content_area.width {
+                let a = with_scroll
+                    .cell((x, y))
+                    .map(|c| c.symbol().to_string())
+                    .unwrap_or_default();
+                let b = content_buf
+                    .cell((x, y))
+                    .map(|c| c.symbol().to_string())
+                    .unwrap_or_default();
+                assert_eq!(a, b, "Mismatch at ({},{})", x, y);
+            }
+        }
+
+        // verify there's something in the last column (scrollbar glyphs) and it's distinct from content
+        let scrollbar_x = area.x + area.width.saturating_sub(1);
+        let mut found_scrollbar = false;
+        for y in 0..area.height {
+            if let Some(cell) = with_scroll.cell((scrollbar_x, y)) {
+                let sym = cell.symbol();
+                if sym != " " {
+                    found_scrollbar = true;
+                }
+            }
+        }
+        assert!(
+            found_scrollbar,
+            "Expected scrollbar glyphs present in last column"
+        );
+    }
 }
