@@ -339,8 +339,7 @@ where
         if crate::components::take_panic_pending() {
             self.state.set_debug_log_visible(true);
             self.ensure_debug_log_in_layout();
-            self.bring_to_front_id(self.debug_log_id);
-            self.set_wm_focus(self.debug_log_id);
+            self.focus_window_id(self.debug_log_id);
         }
         if self.layout_contract == LayoutContract::AppManaged {
             self.clear_capture();
@@ -452,8 +451,7 @@ where
         self.state.toggle_debug_log_visible();
         if self.state.debug_log_visible() {
             self.ensure_debug_log_in_layout();
-            self.bring_to_front_id(self.debug_log_id);
-            self.set_wm_focus(self.debug_log_id);
+            self.focus_window_id(self.debug_log_id);
         } else {
             self.remove_debug_log_from_layout();
             if self.wm_focus.current() == self.debug_log_id {
@@ -533,7 +531,7 @@ where
         self.wm_focus.current().as_app()
     }
 
-    pub fn set_wm_focus(&mut self, focus: WindowId<R>) {
+    fn set_wm_focus(&mut self, focus: WindowId<R>) {
         self.wm_focus.set_current(focus);
         if let Some(app_id) = focus.as_app()
             && let Some(app_focus) = self.focus_for_region(app_id)
@@ -542,7 +540,24 @@ where
         }
     }
 
-    pub fn set_wm_focus_order(&mut self, order: Vec<WindowId<R>>) {
+    /// Unified focus API: set WM focus, bring the window to front, update draw order,
+    /// and sync app-level focus if applicable.
+    fn focus_window_id(&mut self, id: WindowId<R>) {
+        self.set_wm_focus(id);
+        self.bring_to_front_id(id);
+        self.managed_draw_order = self.z_order.clone();
+        if let Some(app_id) = id.as_app() {
+            if let Some(app_focus) = self.focus_for_region(app_id) {
+                self.app_focus.set_current(app_focus);
+            }
+        }
+    }
+
+    fn focus_window(&mut self, id: R) {
+        self.focus_window_id(WindowId::app(id));
+    }
+
+    fn set_wm_focus_order(&mut self, order: Vec<WindowId<R>>) {
         self.wm_focus.set_order(order);
         if !self.wm_focus.order.is_empty() && !self.wm_focus.order.contains(&self.wm_focus.current)
         {
@@ -550,12 +565,18 @@ where
         }
     }
 
-    pub fn advance_wm_focus(&mut self, forward: bool) {
+    fn advance_wm_focus(&mut self, forward: bool) {
         self.wm_focus.advance(forward);
         if let Some(app_id) = self.wm_focus.current().as_app()
             && let Some(app_focus) = self.focus_for_region(app_id)
         {
             self.app_focus.set_current(app_focus);
+        }
+        // Ensure the newly-focused window is on top so tab-switching behaves like clicks.
+        if self.layout_contract == LayoutContract::WindowManaged {
+            let focused = self.wm_focus.current();
+            self.bring_floating_to_front_id(focused);
+            self.managed_draw_order = self.z_order.clone();
         }
     }
 
@@ -565,7 +586,7 @@ where
         }
     }
 
-    pub fn bring_focus_to_front<F>(&mut self, map_focus: F)
+    fn bring_focus_to_front<F>(&mut self, map_focus: F)
     where
         F: Fn(W) -> Option<R>,
     {
@@ -759,6 +780,13 @@ where
             .iter()
             .filter_map(|id| id.as_app())
             .collect();
+        // Ensure the current focus is actually on top and synced after layout registration.
+        // Only bring the focused window to front if it's not already the topmost window
+        // to avoid repeatedly forcing focus every frame.
+        let focused = self.wm_focus.current();
+        if self.z_order.last().copied() != Some(focused) {
+            self.focus_window_id(focused);
+        }
     }
 
     pub fn managed_draw_order(&self) -> &[R] {
@@ -818,8 +846,7 @@ where
                 if self.is_minimized(id) {
                     self.restore_minimized(id);
                 }
-                self.set_wm_focus(id);
-                self.bring_floating_to_front_id(id);
+                self.focus_window_id(id);
             }
             return true;
         }
@@ -829,8 +856,7 @@ where
                     let rect = self.full_region_for_id(self.debug_log_id);
                     if rect_contains(rect, mouse.column, mouse.row) {
                         if matches!(mouse.kind, MouseEventKind::Down(_)) {
-                            self.set_wm_focus(self.debug_log_id);
-                            self.bring_floating_to_front_id(self.debug_log_id);
+                            self.focus_window_id(self.debug_log_id);
                         }
                         if self.debug_log.handle_event(event) {
                             return true;
@@ -1812,9 +1838,16 @@ where
         None
     }
 
-    pub fn handle_focus_event<F>(&mut self, event: &Event, hit_targets: &[R], map: F) -> bool
+    pub fn handle_focus_event<F, G>(
+        &mut self,
+        event: &Event,
+        hit_targets: &[R],
+        map: F,
+        map_focus: G,
+    ) -> bool
     where
         F: Fn(R) -> W,
+        G: Fn(W) -> Option<R>,
     {
         match event {
             Event::Key(key) => match key.code {
@@ -1823,6 +1856,13 @@ where
                         self.advance_wm_focus(true);
                     } else {
                         self.app_focus.advance(true);
+                        // Ensure app-level tab switching also brings the corresponding window to front
+                        let focused_app = self.app_focus.current();
+                        if let Some(region) = map_focus(focused_app) {
+                            self.set_wm_focus(WindowId::app(region));
+                            self.bring_to_front_id(WindowId::app(region));
+                            self.managed_draw_order = self.z_order.clone();
+                        }
                     }
                     true
                 }
@@ -1831,6 +1871,13 @@ where
                         self.advance_wm_focus(false);
                     } else {
                         self.app_focus.advance(false);
+                        // Mirror behavior for reverse tabbing as well
+                        let focused_app = self.app_focus.current();
+                        if let Some(region) = map_focus(focused_app) {
+                            self.set_wm_focus(WindowId::app(region));
+                            self.bring_to_front_id(WindowId::app(region));
+                            self.managed_draw_order = self.z_order.clone();
+                        }
                     }
                     true
                 }

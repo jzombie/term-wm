@@ -178,17 +178,23 @@ where
                             if wm_mode {
                                 app.windows().arm_capture(capture_timeout);
                             }
-                            let _ =
-                                app.windows()
-                                    .handle_focus_event(&evt, focus_regions, &map_region);
+                            let _ = app.windows().handle_focus_event(
+                                &evt,
+                                focus_regions,
+                                &map_region,
+                                &_map_focus,
+                            );
                             return flush_mouse_capture(app, ControlFlow::Continue);
                         }
                         if dispatch(&evt, app) {
                             return flush_mouse_capture(app, ControlFlow::Continue);
                         }
-                        let _ = app
-                            .windows()
-                            .handle_focus_event(&evt, focus_regions, &map_region);
+                        let _ = app.windows().handle_focus_event(
+                            &evt,
+                            focus_regions,
+                            &map_region,
+                            &_map_focus,
+                        );
                         return flush_mouse_capture(app, ControlFlow::Continue);
                     }
                     Event::Key(key) if key.code == KeyCode::Tab => {
@@ -196,17 +202,23 @@ where
                             if wm_mode {
                                 app.windows().arm_capture(capture_timeout);
                             }
-                            let _ =
-                                app.windows()
-                                    .handle_focus_event(&evt, focus_regions, &map_region);
+                            let _ = app.windows().handle_focus_event(
+                                &evt,
+                                focus_regions,
+                                &map_region,
+                                &_map_focus,
+                            );
                             return flush_mouse_capture(app, ControlFlow::Continue);
                         }
                         if dispatch(&evt, app) {
                             return flush_mouse_capture(app, ControlFlow::Continue);
                         }
-                        let _ = app
-                            .windows()
-                            .handle_focus_event(&evt, focus_regions, &map_region);
+                        let _ = app.windows().handle_focus_event(
+                            &evt,
+                            focus_regions,
+                            &map_region,
+                            &_map_focus,
+                        );
                         return flush_mouse_capture(app, ControlFlow::Continue);
                     }
                     Event::Key(_) if app.windows().capture_active() => {
@@ -214,9 +226,12 @@ where
                         let _ = dispatch(&evt, app);
                     }
                     _ => {
-                        let _ = app
-                            .windows()
-                            .handle_focus_event(&evt, focus_regions, &map_region);
+                        let _ = app.windows().handle_focus_event(
+                            &evt,
+                            focus_regions,
+                            &map_region,
+                            &_map_focus,
+                        );
                         let _ = dispatch(&evt, app);
                     }
                 }
