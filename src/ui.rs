@@ -1,3 +1,4 @@
+use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -31,6 +32,25 @@ pub(crate) fn truncate_to_width(value: &str, width: usize) -> String {
         return value.to_string();
     }
     value.chars().take(width).collect()
+}
+
+pub fn clear_rect(frame: &mut Frame, rect: Rect) {
+    if rect.width == 0 || rect.height == 0 {
+        return;
+    }
+    let buffer = frame.buffer_mut();
+    let bounds = rect.intersection(buffer.area);
+    if bounds.width == 0 || bounds.height == 0 {
+        return;
+    }
+    for y in bounds.y..bounds.y.saturating_add(bounds.height) {
+        for x in bounds.x..bounds.x.saturating_add(bounds.width) {
+            if let Some(cell) = buffer.cell_mut((x, y)) {
+                cell.reset();
+                cell.set_symbol(" ");
+            }
+        }
+    }
 }
 
 #[cfg(test)]

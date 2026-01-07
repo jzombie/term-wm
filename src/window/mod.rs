@@ -17,6 +17,7 @@ use crate::layout::{
     TilingLayout, rect_contains, render_handles_masked,
 };
 use crate::panel::Panel;
+use crate::ui::clear_rect;
 use crate::state::AppState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1953,25 +1954,6 @@ fn clamp_rect(area: Rect, bounds: Rect) -> Rect {
         y: y0,
         width: x1 - x0,
         height: y1 - y0,
-    }
-}
-
-fn clear_rect(frame: &mut ratatui::Frame, rect: Rect) {
-    if rect.width == 0 || rect.height == 0 {
-        return;
-    }
-    let buffer = frame.buffer_mut();
-    let bounds = rect.intersection(buffer.area);
-    if bounds.width == 0 || bounds.height == 0 {
-        return;
-    }
-    for y in bounds.y..bounds.y.saturating_add(bounds.height) {
-        for x in bounds.x..bounds.x.saturating_add(bounds.width) {
-            if let Some(cell) = buffer.cell_mut((x, y)) {
-                cell.reset();
-                cell.set_symbol(" ");
-            }
-        }
     }
 }
 
