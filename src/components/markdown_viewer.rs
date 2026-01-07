@@ -253,9 +253,24 @@ impl MarkdownViewerComponent {
         let total = self.total_lines;
         let view = area.height as usize;
         self.scroll.update(area, total, view);
+        // If a vertical scrollbar will be rendered, reserve one column on the
+        // right so the scrollbar does not overlay content. This makes text
+        // wrapping behave as expected and avoids characters being obscured.
+        let scrollbar_visible = total > self.scroll.view() && view > 0 && area.height > 0;
+        let content_area = if scrollbar_visible && area.width > 0 {
+            Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width.saturating_sub(1),
+                height: area.height,
+            }
+        } else {
+            area
+        };
+
         let mut paragraph = Paragraph::new(self.text.clone()).wrap(Wrap { trim: false });
         paragraph = paragraph.scroll((self.scroll.offset() as u16, 0));
-        frame.render_widget(paragraph, area);
+        frame.render_widget(paragraph, content_area);
         self.scroll.render(frame);
     }
 }
