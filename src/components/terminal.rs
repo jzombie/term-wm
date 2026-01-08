@@ -380,10 +380,10 @@ impl TerminalComponent {
             return false;
         }
 
-        if let Some(url) = self.link_at_position(mouse) {
-            if self.invoke_link_handler(&url) {
-                return true;
-            }
+        if let Some(url) = self.link_at_position(mouse)
+            && self.invoke_link_handler(&url)
+        {
+            return true;
         }
 
         false

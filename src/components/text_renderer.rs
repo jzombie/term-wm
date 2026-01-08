@@ -241,9 +241,7 @@ impl TextRendererComponent {
             return None;
         }
 
-        let Some(hit_palette) = self.build_hit_test_palette() else {
-            return None;
-        };
+        let hit_palette = self.build_hit_test_palette()?;
         let HitTestPalette { text, urls } = hit_palette;
         if urls.is_empty() {
             return None;
@@ -271,14 +269,12 @@ impl TextRendererComponent {
             &mut buffer,
         );
 
-        if let Some(cell) = buffer.cell((local_x, local_y)) {
-            if let Some(id) = decode_link_color(cell.fg) {
-                if let Some(idx) = id.checked_sub(1) {
-                    if let Some(url) = urls.get(idx as usize) {
-                        return Some(url.clone());
-                    }
-                }
-            }
+        if let Some(cell) = buffer.cell((local_x, local_y))
+            && let Some(id) = decode_link_color(cell.fg)
+            && let Some(idx) = id.checked_sub(1)
+            && let Some(url) = urls.get(idx as usize)
+        {
+            return Some(url.clone());
         }
 
         None
