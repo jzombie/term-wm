@@ -81,6 +81,7 @@ pub struct Panel<R: Copy + Eq + Ord> {
     activation: ActivationMenu,
     list: WindowList<R>,
     notifications: NotificationArea,
+    hostname: Option<String>,
 }
 
 impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
@@ -93,6 +94,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             activation: ActivationMenu::new(),
             list: WindowList::new(),
             notifications: NotificationArea::new(),
+            hostname: None,
         }
     }
 
@@ -327,10 +329,17 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         }
         // Platform string (e.g. "linux", "macos", "freebsd", "windows")
         let platform = std::env::consts::OS;
-        let hostname = hostname::get()
-            .ok()
-            .and_then(|s| s.into_string().ok())
-            .unwrap_or_else(|| "unknown-host".to_string());
+        // Use cached hostname if available to avoid a system call every frame.
+        let hostname = if let Some(ref h) = self.hostname {
+            h.clone()
+        } else {
+            let h = hostname::get()
+                .ok()
+                .and_then(|s| s.into_string().ok())
+                .unwrap_or_else(|| "unknown-host".to_string());
+            self.hostname = Some(h.clone());
+            h
+        };
         let info = format!("{platform} · {hostname}");
         let text = truncate_to_width(&info, bounds.width as usize);
         // Fill the bottom bar background fully so the whole row uses the
