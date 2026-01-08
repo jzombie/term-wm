@@ -60,6 +60,11 @@ impl HelpOverlayComponent {
                 _ => self.viewer.handle_key_event(key),
             },
             Event::Mouse(_) => {
+                // If configured, allow clicking outside the dialog to auto-close it.
+                if self.dialog.handle_click_outside(event, area) {
+                    self.visible = false;
+                    return true;
+                }
                 let rect = self.dialog.rect_for(area);
                 let inner = Rect {
                     x: rect.x.saturating_add(1),
@@ -83,6 +88,8 @@ impl HelpOverlayComponent {
         };
         overlay.dialog.set_size(70, 20);
         overlay.dialog.set_dim_backdrop(true);
+        // allow clicking outside the help dialog to auto-close it
+        overlay.dialog.set_auto_close_on_outside_click(true);
         overlay.dialog.set_bg(crate::theme::dialog_bg());
         // substitute package/version placeholders and set markdown
         if let Ok(raw) = str::from_utf8(HELP_MD) {
@@ -109,6 +116,9 @@ impl HelpOverlayComponent {
         self.visible = v;
         // enable/disable keyboard handling for the viewer when visibility changes
         self.viewer.set_keyboard_enabled(v);
+        // keep the underlying dialog visibility in sync so click-outside
+        // handling and rendering behave consistently
+        self.dialog.set_visible(v);
     }
 
     pub fn visible(&self) -> bool {

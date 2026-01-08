@@ -1,8 +1,10 @@
+use crossterm::event::{Event, MouseEventKind};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::components::Component;
+use crate::layout::rect_contains;
 use crate::ui::UiFrame;
 
 #[derive(Debug, Clone)]
@@ -14,6 +16,7 @@ pub struct DialogOverlayComponent {
     height: u16,
     bg: Color,
     dim_backdrop: bool,
+    auto_close_on_outside_click: bool,
 }
 
 impl Component for DialogOverlayComponent {
@@ -56,7 +59,38 @@ impl DialogOverlayComponent {
             height: 9,
             bg: crate::theme::dialog_bg(),
             dim_backdrop: false,
+            auto_close_on_outside_click: false,
         }
+    }
+
+    pub fn set_auto_close_on_outside_click(&mut self, v: bool) {
+        self.auto_close_on_outside_click = v;
+    }
+
+    /// If enabled, handle mouse events that click outside the dialog rect
+    /// by closing the dialog and returning `true` to indicate the event was
+    /// consumed.
+    pub fn handle_click_outside(&mut self, event: &Event, area: Rect) -> bool {
+        if !self.visible || !self.auto_close_on_outside_click {
+            return false;
+        }
+
+        let Event::Mouse(mouse) = event else {
+            return false;
+        };
+        // Treat either button-down or button-up as a click to support
+        // terminals that only surface one of the two event kinds.
+        if !matches!(mouse.kind, MouseEventKind::Down(_)) {
+            return false;
+        }
+        let rect = self.rect_for(area);
+        let outside = !rect_contains(rect, mouse.column, mouse.row);
+
+        if outside {
+            self.visible = false;
+            return true;
+        }
+        false
     }
 
     pub fn set_visible(&mut self, visible: bool) {
@@ -142,6 +176,7 @@ impl Default for DialogOverlayComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::{Event, MouseEvent, MouseEventKind};
 
     #[test]
     fn rect_for_clamps_sizes() {
@@ -167,5 +202,55 @@ mod tests {
         let r2 = dlg.rect_for(area2);
         assert!(r2.width >= 24);
         assert!(r2.height >= 5);
+    }
+
+    #[test]
+    fn clicking_outside_closes_when_enabled() {
+        let mut dlg = DialogOverlayComponent::new();
+        dlg.set_visible(true);
+        dlg.set_auto_close_on_outside_click(true);
+
+        // area is 80x24; dialog will be centered — click at (0,0) which is
+        // outside the centered dialog rect to trigger close
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let ev = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
+        let handled = dlg.handle_click_outside(&ev, area);
+        assert!(handled);
+        assert!(!dlg.visible());
+    }
+
+    #[test]
+    fn clicking_inside_does_not_close() {
+        let mut dlg = DialogOverlayComponent::new();
+        dlg.set_visible(true);
+        dlg.set_auto_close_on_outside_click(true);
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let rect = dlg.rect_for(area);
+        // click on center of dialog
+        let ev = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: rect.x + rect.width / 2,
+            row: rect.y + rect.height / 2,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
+        let handled = dlg.handle_click_outside(&ev, area);
+        assert!(!handled);
+        assert!(dlg.visible());
     }
 }
