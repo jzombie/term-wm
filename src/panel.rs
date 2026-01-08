@@ -187,6 +187,18 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         if bounds.width == 0 || bounds.height == 0 {
             return;
         }
+        // Fill the entire panel area with the bottom-panel color scheme so
+        // the top bar visually matches the bottom info bar.
+        for yy in bounds.y..bounds.y.saturating_add(bounds.height) {
+            for xx in bounds.x..bounds.x.saturating_add(bounds.width) {
+                if let Some(cell) = buffer.cell_mut((xx, yy)) {
+                    let mut st = cell.style();
+                    st.bg = Some(crate::theme::bottom_panel_bg());
+                    st.fg = Some(crate::theme::bottom_panel_fg());
+                    cell.set_style(st);
+                }
+            }
+        }
         let mut x = area.x;
         let y = area.y;
         let max_x = area.x.saturating_add(area.width);
@@ -321,8 +333,34 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             .unwrap_or_else(|| "unknown-host".to_string());
         let info = format!("{platform} · {hostname}");
         let text = truncate_to_width(&info, bounds.width as usize);
-        let style = Style::default().fg(crate::theme::panel_inactive_fg());
-        safe_set_string(buffer, bounds, area.x, area.y, &text, style);
+        // Fill the bottom bar background fully so the whole row uses the
+        // bottom panel background color, then write the foreground text.
+        for yy in bounds.y..bounds.y.saturating_add(bounds.height) {
+            for xx in bounds.x..bounds.x.saturating_add(bounds.width) {
+                if let Some(cell) = buffer.cell_mut((xx, yy)) {
+                    let mut st = cell.style();
+                    st.bg = Some(crate::theme::bottom_panel_bg());
+                    st.fg = Some(crate::theme::bottom_panel_fg());
+                    cell.set_style(st);
+                }
+            }
+        }
+        let style = Style::default()
+            .fg(crate::theme::bottom_panel_fg())
+            .bg(crate::theme::bottom_panel_bg());
+        // Right-align the text within the bottom bar bounds.
+        let text_width = text.chars().count() as u16;
+        let start_x = if text_width >= bounds.width {
+            bounds.x
+        } else {
+            // place text so its right edge aligns with bounds' right edge
+            bounds
+                .x
+                .saturating_add(bounds.width)
+                .saturating_sub(text_width)
+        };
+        let start_x = start_x.max(bounds.x);
+        safe_set_string(buffer, bounds, start_x, area.y, &text, style);
     }
 
     pub fn hit_test_menu(&self, event: &Event) -> bool {
