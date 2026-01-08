@@ -100,11 +100,15 @@ impl Component for TerminalComponent {
                 if !rect_contains(self.last_area, mouse.column, mouse.row) {
                     return false;
                 }
-                // Only forward mouse events when the nested app opted in to SGR mouse reporting.
+                // Forward mouse events if the nested app opted in to mouse reporting.
                 let screen = self.pane.screen();
-                if screen.mouse_protocol_encoding() != MouseProtocolEncoding::Sgr {
-                    return false;
+                let encoding = screen.mouse_protocol_encoding();
+
+                match encoding {
+                    MouseProtocolEncoding::Default | MouseProtocolEncoding::Sgr => {}
+                    _ => return false,
                 }
+
                 let mode = screen.mouse_protocol_mode();
                 // Avoid emitting sequences for modes that the app didn't request.
                 if !mouse_event_allowed(mode, mouse.kind) {
@@ -117,7 +121,7 @@ impl Component for TerminalComponent {
                     kind: mouse.kind,
                     modifiers: mouse.modifiers,
                 };
-                let bytes = mouse_event_to_bytes(local);
+                let bytes = mouse_event_to_bytes(local, encoding);
                 if bytes.is_empty() {
                     return false;
                 }
@@ -331,6 +335,9 @@ pub fn default_shell_command() -> CommandBuilder {
     if let Ok(cwd) = std::env::current_dir() {
         cmd.cwd(cwd);
     }
+    // Set TERM explicitly so that child processes know what to expect.
+    // xterm-256color adds good compatibility for mouse and colors.
+    cmd.env("TERM", "xterm-256color");
     cmd
 }
 
@@ -446,8 +453,8 @@ fn mouse_event_allowed(mode: MouseProtocolMode, kind: MouseEventKind) -> bool {
     }
 }
 
-fn mouse_event_to_bytes(mouse: MouseEvent) -> Vec<u8> {
-    let (mut code, release) = match mouse.kind {
+fn mouse_event_to_bytes(mouse: MouseEvent, encoding: MouseProtocolEncoding) -> Vec<u8> {
+    let (mut code, release): (u8, _) = match mouse.kind {
         MouseEventKind::Down(button) => (
             match button {
                 MouseButton::Left => 0,
@@ -480,10 +487,28 @@ fn mouse_event_to_bytes(mouse: MouseEvent) -> Vec<u8> {
     if mouse.modifiers.contains(KeyModifiers::CONTROL) {
         code |= 16;
     }
-    let action = if release { 'm' } else { 'M' };
     let col = mouse.column.saturating_add(1);
     let row = mouse.row.saturating_add(1);
-    format!("\x1b[<{};{};{}{}", code, col, row, action).into_bytes()
+
+    match encoding {
+        MouseProtocolEncoding::Sgr => {
+            let action = if release { 'm' } else { 'M' };
+            format!("\x1b[<{};{};{}{}", code, col, row, action).into_bytes()
+        }
+        MouseProtocolEncoding::Default => {
+            // X11 encoding: CSI M Cb Cx Cy
+            let cb = code.saturating_add(32);
+            let cx = mouse.column.saturating_add(33);
+            let cy = mouse.row.saturating_add(33);
+
+            if cx > 255 || cy > 255 {
+                return Vec::new();
+            }
+
+            vec![0x1b, b'[', b'M', cb as u8, cx as u8, cy as u8]
+        }
+        _ => Vec::new(),
+    }
 }
 
 fn resolve_colors(cell: &vt100::Cell, screen: &vt100::Screen) -> (Option<TColor>, Option<TColor>) {
@@ -598,9 +623,18 @@ mod tests {
             row: 3,
             modifiers: KeyModifiers::NONE,
         };
-        let bytes = mouse_event_to_bytes(m);
+        // Test SGR
+        let bytes = mouse_event_to_bytes(m, MouseProtocolEncoding::Sgr);
         let s = String::from_utf8(bytes).unwrap();
         assert!(s.starts_with("\x1b[<0;3;4M"));
+
+        // Test Default encoding
+        let bytes_def = mouse_event_to_bytes(m, MouseProtocolEncoding::Default);
+        // CSI M Cb Cx Cy
+        // Cb = 0 + 32 = 32 (' ')
+        // Cx = 2 + 33 = 35 ('#')
+        // Cy = 3 + 33 = 36 ('$')
+        assert_eq!(bytes_def, vec![0x1b, b'[', b'M', 32, 35, 36]);
 
         let m2 = MouseEvent {
             kind: MouseEventKind::Up(MouseButton::Right),
@@ -608,7 +642,7 @@ mod tests {
             row: 0,
             modifiers: KeyModifiers::SHIFT | KeyModifiers::ALT,
         };
-        let s2 = String::from_utf8(mouse_event_to_bytes(m2)).unwrap();
+        let s2 = String::from_utf8(mouse_event_to_bytes(m2, MouseProtocolEncoding::Sgr)).unwrap();
         // code should include modifier bits
         assert!(s2.contains(';'));
         assert!(s2.ends_with('m'));
