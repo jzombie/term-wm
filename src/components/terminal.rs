@@ -341,6 +341,7 @@ pub fn default_shell_command() -> CommandBuilder {
     // (colors + broad compatibility) rather than a full xterm variant to
     // avoid some xterm-specific sequences the parser previously mishandled.
     cmd.env("TERM", "screen-256color");
+
     cmd
 }
 
