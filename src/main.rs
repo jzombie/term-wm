@@ -8,6 +8,7 @@ use clap::Parser;
 use crossterm::event::Event;
 use ratatui::prelude::Rect;
 
+use line_ending::LineEnding;
 use portable_pty::PtySize;
 use term_wm::components::{Component, TerminalComponent, default_shell_command};
 use term_wm::drivers::OutputDriver;
@@ -111,12 +112,6 @@ impl App {
         };
 
         let mut error_occurred = false;
-        let mut handle_spawn = |res: io::Result<()>| {
-            if let Err(e) = res {
-                tracing::error!("Window spawn error: {}", e);
-                error_occurred = true;
-            }
-        };
 
         // If commands provided, open one per command; otherwise open `num_windows`
         // shells using the default shell.
@@ -124,26 +119,34 @@ impl App {
             let mut it = commands.into_iter();
             for _ in 0..num_windows {
                 if let Some(cmd) = it.next() {
-                    let mut cb = default_shell_command();
-                    // run via shell -c / cmd
-                    #[cfg(unix)]
-                    {
-                        cb.arg("-c");
-                        cb.arg(cmd);
+                    // Spawn an interactive shell and send the command as input so
+                    // that when the command exits the shell remains.
+                    let cb = default_shell_command();
+                    if let Err(e) = app.spawn_terminal_with_command(cb) {
+                        tracing::error!("Window spawn error: {}", e);
+                        error_occurred = true;
                     }
-                    #[cfg(windows)]
-                    {
-                        cb.arg("/C");
-                        cb.arg(cmd);
+                    // If spawn succeeded, write the command into the PTY.
+                    if !error_occurred {
+                        if let Some(pane) = app.terminals.last_mut() {
+                            let mut line = cmd;
+                            line.push_str(LineEnding::from_current_platform().as_str());
+                            let _ = pane.write_bytes(line.as_bytes());
+                        }
                     }
-                    handle_spawn(app.spawn_terminal_with_command(cb));
                 } else {
-                    handle_spawn(app.wm_new_window());
+                    if let Err(e) = app.wm_new_window() {
+                        tracing::error!("Window spawn error: {}", e);
+                        error_occurred = true;
+                    }
                 }
             }
         } else {
             for _ in 0..num_windows {
-                handle_spawn(app.wm_new_window());
+                if let Err(e) = app.wm_new_window() {
+                    tracing::error!("Window spawn error: {}", e);
+                    error_occurred = true;
+                }
             }
         }
 
