@@ -19,7 +19,9 @@ impl KeyboardNormalizer {
     pub fn normalize(&mut self, evt: Event) -> Option<Event> {
         match evt {
             Event::Key(mut key) => {
-                if key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::SHIFT) {
+                if (key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::SHIFT))
+                    || (key.code == KeyCode::BackTab && key.modifiers.contains(KeyModifiers::SHIFT))
+                {
                     key.code = KeyCode::BackTab;
                     key.modifiers.remove(KeyModifiers::SHIFT);
                 }
@@ -90,5 +92,20 @@ mod tests {
         let evt = Event::Resize(10, 20);
         let out = norm.normalize(evt);
         assert!(out.is_some());
+    }
+
+    #[test]
+    fn backtab_with_shift_is_normalized() {
+        let mut norm = KeyboardNormalizer::new();
+        let mut key = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
+        key.kind = KeyEventKind::Press;
+        let evt = Event::Key(key);
+        let out = norm.normalize(evt).expect("should return event");
+        if let Event::Key(k) = out {
+            assert!(matches!(k.code, KeyCode::BackTab));
+            assert!(!k.modifiers.contains(KeyModifiers::SHIFT));
+        } else {
+            panic!("expected key event");
+        }
     }
 }
