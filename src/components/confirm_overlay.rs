@@ -86,25 +86,20 @@ impl Component for ConfirmOverlayComponent {
         }
         let cancel = "[ Cancel ]";
         let confirm = "[ Exit ]";
-        let cancel_style = if self.selected_confirm {
-            Style::default()
-                .fg(crate::theme::dialog_fg())
-                .bg(crate::theme::panel_bg())
+        let selected_style = Style::default()
+            .fg(crate::theme::decorator_header_fg())
+            .bg(crate::theme::decorator_header_bg())
+            .add_modifier(Modifier::BOLD);
+        let unselected_style = Style::default()
+            .fg(crate::theme::dialog_fg())
+            .bg(crate::theme::panel_bg());
+
+        let (cancel_style, confirm_style) = if self.selected_confirm {
+            // confirm is selected
+            (unselected_style, selected_style)
         } else {
-            Style::default()
-                .fg(crate::theme::panel_fg())
-                .bg(crate::theme::menu_selected_bg())
-                .add_modifier(Modifier::BOLD)
-        };
-        let confirm_style = if self.selected_confirm {
-            Style::default()
-                .fg(crate::theme::dialog_fg())
-                .bg(crate::theme::decorator_header_bg())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-                .fg(crate::theme::dialog_fg())
-                .bg(crate::theme::panel_bg())
+            // cancel is selected
+            (selected_style, unselected_style)
         };
         let total_width = cancel.len() + 1 + confirm.len();
         let start_x = content
