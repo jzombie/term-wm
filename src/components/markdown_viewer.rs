@@ -254,7 +254,15 @@ impl MarkdownViewerComponent {
                     flush_current_line(&mut lines, &mut current);
                 }
                 MdEvent::Rule => {
-                    lines.push(vec![LinkFragment::new("─", Style::default(), None)]);
+                    // Insert a placeholder fragment for rules. We'll replace
+                    // placeholders after we've scanned the whole document to
+                    // determine a reasonable width for the separator (two-pass).
+                    const RULE_PLACEHOLDER: &str = "\0RULE\0";
+                    lines.push(vec![LinkFragment::new(
+                        RULE_PLACEHOLDER.to_string(),
+                        Style::default(),
+                        None,
+                    )]);
                 }
                 _ => {}
             }
@@ -633,6 +641,58 @@ mod markdown_tests {
         assert!(
             mv.renderer.offset() > 0,
             "Should have scrolled down to Section Two"
+        );
+    }
+
+    #[test]
+    fn horizontal_rule_renders_single_line() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let md = indoc! {
+            "
+            Above paragraph
+
+            ---
+
+            Below paragraph
+            "
+        };
+
+        let mut mv = MarkdownViewerComponent::new();
+        mv.set_markdown(md);
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 6,
+        };
+
+        let mut buffer = Buffer::empty(area);
+        {
+            let mut frame = crate::ui::UiFrame::from_parts(area, &mut buffer);
+            mv.render_content(&mut frame, area);
+        }
+
+        // Find the row that contains the rule glyph and ensure it only
+        // appears on a single visual row (no wrapped continuation rows).
+        let mut rule_rows = 0;
+        for y in 0..area.height {
+            let mut row = String::new();
+            for x in 0..area.width {
+                if let Some(cell) = buffer.cell((x, y)) {
+                    row.push_str(cell.symbol());
+                }
+            }
+            if row.contains('─') {
+                rule_rows += 1;
+            }
+        }
+
+        assert_eq!(
+            rule_rows, 1,
+            "rule should occupy a single visual row regardless of content width"
         );
     }
 }
