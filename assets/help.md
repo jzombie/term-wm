@@ -50,7 +50,3 @@ Notes:
 
 * Mouse interactions work only while `Mouse Capture` is enabled.
 * Use the panel menu (top-left) for common WM actions.
-
-----
-
-_`%PACKAGE%` help documentation updated on %HELP_MODIFIED%_
