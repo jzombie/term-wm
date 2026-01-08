@@ -100,13 +100,18 @@ impl Component for TerminalComponent {
                 if !rect_contains(self.last_area, mouse.column, mouse.row) {
                     return false;
                 }
-                // Only forward mouse events when the nested app opted in to SGR mouse reporting.
+                // Forward mouse events only when the nested app enabled mouse reporting
+                // (either SGR or the legacy/default X11-style protocol).
                 let screen = self.pane.screen();
-                if screen.mouse_protocol_encoding() != MouseProtocolEncoding::Sgr {
-                    return false;
+                let encoding = screen.mouse_protocol_encoding();
+
+                match encoding {
+                    MouseProtocolEncoding::Default | MouseProtocolEncoding::Sgr => {}
+                    _ => return false,
                 }
+
                 let mode = screen.mouse_protocol_mode();
-                // Avoid emitting sequences for modes that the app didn't request.
+                // Avoid emitting sequences for modes the app didn't request.
                 if !mouse_event_allowed(mode, mouse.kind) {
                     return false;
                 }
@@ -117,7 +122,7 @@ impl Component for TerminalComponent {
                     kind: mouse.kind,
                     modifiers: mouse.modifiers,
                 };
-                let bytes = mouse_event_to_bytes(local);
+                let bytes = mouse_event_to_bytes(local, encoding);
                 if bytes.is_empty() {
                     return false;
                 }
@@ -331,6 +336,12 @@ pub fn default_shell_command() -> CommandBuilder {
     if let Ok(cwd) = std::env::current_dir() {
         cmd.cwd(cwd);
     }
+    // Set `TERM` for spawned shells so remote applications detect mouse
+    // capability and enable mouse reporting. We choose `screen-256color`
+    // (colors + broad compatibility) rather than a full xterm variant to
+    // avoid some xterm-specific sequences the parser previously mishandled.
+    cmd.env("TERM", "screen-256color");
+
     cmd
 }
 
@@ -446,8 +457,8 @@ fn mouse_event_allowed(mode: MouseProtocolMode, kind: MouseEventKind) -> bool {
     }
 }
 
-fn mouse_event_to_bytes(mouse: MouseEvent) -> Vec<u8> {
-    let (mut code, release) = match mouse.kind {
+fn mouse_event_to_bytes(mouse: MouseEvent, encoding: MouseProtocolEncoding) -> Vec<u8> {
+    let (mut code, release): (u8, bool) = match mouse.kind {
         MouseEventKind::Down(button) => (
             match button {
                 MouseButton::Left => 0,
@@ -456,7 +467,14 @@ fn mouse_event_to_bytes(mouse: MouseEvent) -> Vec<u8> {
             },
             false,
         ),
-        MouseEventKind::Up(_) => (3, true),
+        MouseEventKind::Up(button) => (
+            match button {
+                MouseButton::Left => 0,
+                MouseButton::Middle => 1,
+                MouseButton::Right => 2,
+            },
+            true,
+        ),
         MouseEventKind::Drag(button) => (
             32 + match button {
                 MouseButton::Left => 0,
@@ -480,10 +498,42 @@ fn mouse_event_to_bytes(mouse: MouseEvent) -> Vec<u8> {
     if mouse.modifiers.contains(KeyModifiers::CONTROL) {
         code |= 16;
     }
-    let action = if release { 'm' } else { 'M' };
     let col = mouse.column.saturating_add(1);
     let row = mouse.row.saturating_add(1);
-    format!("\x1b[<{};{};{}{}", code, col, row, action).into_bytes()
+
+    // Two encodings are supported:
+    // - SGR (`CSI < Cb ; Cx ; Cy M/m`) which conveys presses/releases
+    //   with explicit button numbers and is preferred by many modern apps.
+    // - Legacy/X11 (`CSI M Cb Cx Cy`) used by older apps; for releases the
+    //   canonical base button code is 3. Modifier bits are preserved when
+    //   constructing the Cb byte for legacy encoding.
+    match encoding {
+        MouseProtocolEncoding::Sgr => {
+            let action = if release { 'm' } else { 'M' };
+            format!("\x1b[<{};{};{}{}", code, col, row, action).into_bytes()
+        }
+        MouseProtocolEncoding::Default => {
+            // X11 (CSI M) encoding: Cb Cx Cy. For button releases the base
+            // button code is 3; preserve modifier bits when constructing Cb.
+            let x11_code = if release {
+                let mods = code & (4 | 8 | 16);
+                3 | mods
+            } else {
+                code
+            };
+
+            let cb = x11_code.saturating_add(32);
+            let cx = mouse.column.saturating_add(33);
+            let cy = mouse.row.saturating_add(33);
+
+            if cx > 255 || cy > 255 {
+                return Vec::new();
+            }
+
+            vec![0x1b, b'[', b'M', cb, cx as u8, cy as u8]
+        }
+        _ => Vec::new(),
+    }
 }
 
 fn resolve_colors(cell: &vt100::Cell, screen: &vt100::Screen) -> (Option<TColor>, Option<TColor>) {
@@ -598,9 +648,18 @@ mod tests {
             row: 3,
             modifiers: KeyModifiers::NONE,
         };
-        let bytes = mouse_event_to_bytes(m);
+        // Test SGR
+        let bytes = mouse_event_to_bytes(m, MouseProtocolEncoding::Sgr);
         let s = String::from_utf8(bytes).unwrap();
         assert!(s.starts_with("\x1b[<0;3;4M"));
+
+        // Test Default encoding
+        let bytes_def = mouse_event_to_bytes(m, MouseProtocolEncoding::Default);
+        // CSI M Cb Cx Cy
+        // Cb = 0 + 32 = 32 (' ')
+        // Cx = 2 + 33 = 35 ('#')
+        // Cy = 3 + 33 = 36 ('$')
+        assert_eq!(bytes_def, vec![0x1b, b'[', b'M', 32, 35, 36]);
 
         let m2 = MouseEvent {
             kind: MouseEventKind::Up(MouseButton::Right),
@@ -608,10 +667,46 @@ mod tests {
             row: 0,
             modifiers: KeyModifiers::SHIFT | KeyModifiers::ALT,
         };
-        let s2 = String::from_utf8(mouse_event_to_bytes(m2)).unwrap();
+        let s2 = String::from_utf8(mouse_event_to_bytes(m2, MouseProtocolEncoding::Sgr)).unwrap();
         // code should include modifier bits
         assert!(s2.contains(';'));
         assert!(s2.ends_with('m'));
+    }
+
+    #[test]
+    fn mouse_event_x11_release_and_modifiers() {
+        // 1. Simple Release (Left Up) -> Code 3
+        let m_up = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        // Cb = 3 + 32 = 35 ('#'). Cx, Cy = 0 + 33 = 33 ('!')
+        let bytes = mouse_event_to_bytes(m_up, MouseProtocolEncoding::Default);
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 35, 33, 33]);
+
+        // 2. Release with Shift -> Code 3 + 4 = 7
+        let m_up_shift = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::SHIFT,
+        };
+        // Cb = 7 + 32 = 39 ('\'')
+        let bytes = mouse_event_to_bytes(m_up_shift, MouseProtocolEncoding::Default);
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 39, 33, 33]);
+
+        // 3. Press Right with Control -> Code 2 + 16 = 18
+        let m_down_ctrl = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::CONTROL,
+        };
+        // Cb = 18 + 32 = 50 ('2')
+        let bytes = mouse_event_to_bytes(m_down_ctrl, MouseProtocolEncoding::Default);
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 50, 33, 33]);
     }
 
     #[test]
@@ -654,5 +749,18 @@ mod tests {
             Some(TColor::Indexed(8))
         );
         assert_eq!(brighten_indexed(None), None);
+    }
+
+    #[test]
+    fn default_shell_command_sets_term_env() {
+        let cmd = default_shell_command();
+        // Inspect the debug output of the command builder to verify the environment variable.
+        // We rely on CommandBuilder's Debug impl showing envs.
+        let debug_str = format!("{:?}", cmd);
+        assert!(debug_str.contains("TERM"));
+        assert!(
+            debug_str.contains("screen-256color"),
+            "TERM should be set to screen-256color for compatibility"
+        );
     }
 }
