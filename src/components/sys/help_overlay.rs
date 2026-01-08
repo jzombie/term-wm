@@ -209,10 +209,115 @@ impl Default for HelpOverlayComponent {
 mod tests {
     use super::*;
 
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+    use ratatui::layout::Rect;
+
     #[test]
     fn help_constructs() {
         let h = HelpOverlayComponent::new();
         // should create without panic
         let _ = h;
+    }
+
+    #[test]
+    fn placeholders_are_replaced_in_markdown() {
+        let mut overlay = HelpOverlayComponent::new();
+        use ratatui::buffer::Buffer;
+
+        // Render the viewer into a buffer and inspect visible text to
+        // avoid accessing private internals of `MarkdownViewerComponent`.
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let mut buffer = Buffer::empty(area);
+        {
+            let mut frame = crate::ui::UiFrame::from_parts(area, &mut buffer);
+            overlay.viewer.render_content(&mut frame, area);
+        }
+
+        let mut joined = String::new();
+        for y in 0..area.height {
+            let mut row = String::new();
+            for x in 0..area.width {
+                if let Some(cell) = buffer.cell((x, y)) {
+                    row.push_str(cell.symbol());
+                }
+            }
+            joined.push_str(&row);
+            joined.push('\n');
+        }
+        let joined = joined.to_lowercase();
+
+        // The embedded help should include the package name and version
+        let pkg = env!("CARGO_PKG_NAME").to_lowercase();
+        assert!(
+            joined.contains(&pkg),
+            "markdown should include package name"
+        );
+        let ver = env!("CARGO_PKG_VERSION").to_lowercase();
+        assert!(
+            joined.contains(&ver),
+            "markdown should include package version"
+        );
+    }
+
+    #[test]
+    fn show_and_close_toggle_visibility() {
+        let mut overlay = HelpOverlayComponent::new();
+        assert!(!overlay.visible(), "initially hidden");
+
+        overlay.show();
+        assert!(overlay.visible(), "visible after show");
+        assert!(overlay.dialog.visible(), "dialog visible after show");
+
+        overlay.close();
+        assert!(!overlay.visible(), "hidden after close");
+        assert!(!overlay.dialog.visible(), "dialog hidden after close");
+    }
+
+    #[test]
+    fn handle_help_event_closes_on_close_key() {
+        let mut overlay = HelpOverlayComponent::new();
+        overlay.show();
+        // Default CloseHelp binding includes Esc
+        let ev = Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let handled = overlay.handle_help_event(&ev);
+        assert!(handled, "close key should be handled");
+        assert!(!overlay.visible(), "overlay should be closed by key");
+    }
+
+    #[test]
+    fn clicking_outside_auto_closes_when_enabled() {
+        let mut overlay = HelpOverlayComponent::new();
+        overlay.dialog.set_auto_close_on_outside_click(true);
+        overlay.show();
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+
+        // Click at (0,0) which will be outside the centered dialog rect
+        let ev = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
+
+        let handled = overlay.handle_help_event_in_area(&ev, area);
+        assert!(
+            handled,
+            "outside click should be handled when auto-close enabled"
+        );
+        assert!(
+            !overlay.visible(),
+            "overlay should be closed by outside click"
+        );
     }
 }
