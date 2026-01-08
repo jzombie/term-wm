@@ -14,10 +14,16 @@ pub struct HelpOverlayComponent {
     dialog: DialogOverlayComponent,
     visible: bool,
     viewer: MarkdownViewerComponent,
+    area: Rect,
 }
 
 impl Component for HelpOverlayComponent {
+    fn resize(&mut self, area: Rect) {
+        self.area = area;
+    }
+
     fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
+        self.area = area;
         if !self.visible || area.width == 0 || area.height == 0 {
             return;
         }
@@ -39,10 +45,7 @@ impl Component for HelpOverlayComponent {
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
-        // need area to pass to viewer; approximate using dialog rect against full frame
-        // The caller (WindowManager) routes events while overlay visible; here just return false
-        // Actual routing is handled in WindowManager where available area is known.
-        self.handle_help_event(event)
+        self.handle_help_event_in_area(event, self.area)
     }
 }
 
@@ -54,7 +57,7 @@ impl HelpOverlayComponent {
         match event {
             Event::Key(key) => match key.code {
                 KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
-                    self.visible = false;
+                    self.close();
                     true
                 }
                 _ => self.viewer.handle_key_event(key),
@@ -62,7 +65,7 @@ impl HelpOverlayComponent {
             Event::Mouse(_) => {
                 // If configured, allow clicking outside the dialog to auto-close it.
                 if self.dialog.handle_click_outside(event, area) {
-                    self.visible = false;
+                    self.close();
                     return true;
                 }
                 let rect = self.dialog.rect_for(area);
@@ -85,6 +88,7 @@ impl HelpOverlayComponent {
             dialog: DialogOverlayComponent::new(),
             visible: false,
             viewer: MarkdownViewerComponent::new(),
+            area: Rect::default(),
         };
         overlay.dialog.set_size(70, 20);
         overlay.dialog.set_dim_backdrop(true);
@@ -112,13 +116,17 @@ impl HelpOverlayComponent {
         overlay
     }
 
-    pub fn set_visible(&mut self, v: bool) {
-        self.visible = v;
-        // enable/disable keyboard handling for the viewer when visibility changes
-        self.viewer.set_keyboard_enabled(v);
-        // keep the underlying dialog visibility in sync so click-outside
-        // handling and rendering behave consistently
-        self.dialog.set_visible(v);
+    pub fn show(&mut self) {
+        self.visible = true;
+        self.viewer.set_keyboard_enabled(true);
+        self.dialog.set_visible(true);
+    }
+
+    pub fn close(&mut self) {
+        self.visible = false;
+        self.viewer.set_keyboard_enabled(false);
+        self.dialog.set_visible(false);
+        self.viewer.reset();
     }
 
     pub fn visible(&self) -> bool {
@@ -129,7 +137,7 @@ impl HelpOverlayComponent {
         match event {
             Event::Key(key) => match key.code {
                 KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
-                    self.visible = false;
+                    self.close();
                     true
                 }
                 _ => self.viewer.handle_key_event(key),

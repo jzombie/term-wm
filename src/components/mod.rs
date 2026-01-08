@@ -32,6 +32,8 @@ pub use terminal::{TerminalComponent, default_shell, default_shell_command};
 pub use text_renderer::TextRendererComponent;
 pub use toggle_list::{ToggleItem, ToggleListComponent};
 
+use std::any::Any;
+
 pub trait Component {
     fn resize(&mut self, _area: Rect) {}
 
@@ -39,6 +41,20 @@ pub trait Component {
 
     fn handle_event(&mut self, _event: &Event) -> bool {
         false
+    }
+}
+
+pub trait Overlay: Component + std::fmt::Debug + Any {
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+}
+
+impl<T: Component + std::fmt::Debug + Any> Overlay for T {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 }
 

@@ -17,10 +17,16 @@ pub struct DialogOverlayComponent {
     bg: Color,
     dim_backdrop: bool,
     auto_close_on_outside_click: bool,
+    area: Rect,
 }
 
 impl Component for DialogOverlayComponent {
+    fn resize(&mut self, area: Rect) {
+        self.area = area;
+    }
+
     fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
+        self.area = area;
         if !self.visible || area.width == 0 || area.height == 0 {
             return;
         }
@@ -47,6 +53,10 @@ impl Component for DialogOverlayComponent {
             .wrap(Wrap { trim: true });
         frame.render_widget(paragraph, rect);
     }
+
+    fn handle_event(&mut self, event: &Event) -> bool {
+        self.handle_click_outside(event, self.area)
+    }
 }
 
 impl DialogOverlayComponent {
@@ -60,6 +70,7 @@ impl DialogOverlayComponent {
             bg: crate::theme::dialog_bg(),
             dim_backdrop: false,
             auto_close_on_outside_click: false,
+            area: Rect::default(),
         }
     }
 

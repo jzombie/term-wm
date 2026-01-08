@@ -74,6 +74,7 @@ impl App {
         };
         app.wm_new_window()?;
         app.wm_new_window()?;
+        app.windows.open_help_overlay();
         Ok(app)
     }
 }

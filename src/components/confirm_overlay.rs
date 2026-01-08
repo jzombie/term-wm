@@ -21,10 +21,16 @@ pub struct ConfirmOverlayComponent {
     selected_confirm: bool,
     cancel_rect: Option<Rect>,
     confirm_rect: Option<Rect>,
+    area: Rect,
 }
 
 impl Component for ConfirmOverlayComponent {
+    fn resize(&mut self, area: Rect) {
+        self.area = area;
+    }
+
     fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
+        self.area = area;
         if !self.visible || area.width == 0 || area.height == 0 {
             return;
         }
@@ -122,19 +128,15 @@ impl Component for ConfirmOverlayComponent {
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
+        if self.handle_confirm_event(event).is_some() {
+            return true;
+        }
         let Event::Key(key) = event else {
             return false;
         };
         matches!(
             key.code,
-            KeyCode::Enter
-                | KeyCode::Char('y')
-                | KeyCode::Esc
-                | KeyCode::Char('n')
-                | KeyCode::Tab
-                | KeyCode::BackTab
-                | KeyCode::Left
-                | KeyCode::Right
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right
         )
     }
 }
@@ -142,16 +144,16 @@ impl Component for ConfirmOverlayComponent {
 impl ConfirmOverlayComponent {
     pub fn new() -> Self {
         let mut dialog = DialogOverlayComponent::new();
-        dialog.set_size(60, 9);
-        dialog.set_dim_backdrop(true);
         dialog.set_bg(crate::theme::dialog_bg());
+        dialog.set_auto_close_on_outside_click(false);
         Self {
             dialog,
             visible: false,
             body: String::new(),
-            selected_confirm: true,
+            selected_confirm: false,
             cancel_rect: None,
             confirm_rect: None,
+            area: Rect::default(),
         }
     }
 

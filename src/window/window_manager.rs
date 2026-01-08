@@ -8,8 +8,8 @@ use ratatui::widgets::Clear;
 
 use super::decorator::{DefaultDecorator, HeaderAction, WindowDecorator};
 use crate::components::{
-    Component, ConfirmAction, ConfirmOverlayComponent, DebugLogComponent, DialogOverlayComponent,
-    HelpOverlayComponent, install_panic_hook, set_global_debug_log,
+    Component, ConfirmAction, ConfirmOverlayComponent, DebugLogComponent, HelpOverlayComponent,
+    Overlay, install_panic_hook, set_global_debug_log,
 };
 use crate::layout::floating::*;
 use crate::layout::{
@@ -33,6 +33,12 @@ pub enum LayoutContract {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SystemWindowId {
     DebugLog,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum OverlayId {
+    Help,
+    ExitConfirm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -230,12 +236,10 @@ pub struct WindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     wm_overlay_opened_at: Option<Instant>,
     last_frame_area: ratatui::prelude::Rect,
     esc_passthrough_window: Duration,
-    wm_overlay: DialogOverlayComponent,
-    help_overlay: HelpOverlayComponent,
+    overlays: BTreeMap<OverlayId, Box<dyn Overlay>>,
     // Central default for whether ScrollViewComponent keyboard handling should be enabled
     // for UI components that opt into it. Individual components can override.
     scroll_keyboard_enabled_default: bool,
-    exit_confirm: ConfirmOverlayComponent,
     decorator: Box<dyn WindowDecorator>,
     floating_resize_offscreen: bool,
     z_order: Vec<WindowId<R>>,
@@ -439,14 +443,8 @@ where
             wm_overlay_opened_at: None,
             last_frame_area: Rect::default(),
             esc_passthrough_window: esc_passthrough_window_default(),
-            wm_overlay: DialogOverlayComponent::new(),
-            help_overlay: {
-                let mut h = HelpOverlayComponent::new();
-                h.set_visible(true);
-                h
-            },
+            overlays: BTreeMap::new(),
             scroll_keyboard_enabled_default: true,
-            exit_confirm: ConfirmOverlayComponent::new(),
             decorator: Box::new(DefaultDecorator),
             floating_resize_offscreen: true,
             z_order: Vec::new(),
@@ -531,7 +529,6 @@ where
         self.pending_deadline = None;
         self.state.set_overlay_visible(false);
         self.wm_overlay_opened_at = None;
-        self.wm_overlay.set_visible(false);
         self.state.set_wm_menu_selected(0);
     }
 
@@ -584,47 +581,50 @@ where
     pub fn open_wm_overlay(&mut self) {
         self.state.set_overlay_visible(true);
         self.wm_overlay_opened_at = Some(Instant::now());
-        self.wm_overlay.set_visible(true);
         self.state.set_wm_menu_selected(0);
     }
 
     pub fn close_wm_overlay(&mut self) {
         self.state.set_overlay_visible(false);
         self.wm_overlay_opened_at = None;
-        self.wm_overlay.set_visible(false);
         self.state.set_wm_menu_selected(0);
     }
 
     pub fn open_exit_confirm(&mut self) {
-        self.exit_confirm.open(
+        let mut confirm = ConfirmOverlayComponent::new();
+        // Area is likely set during render/event handling, but ConfirmOverlayComponent uses default.
+        confirm.open(
             "Exit App",
             "Exit the application?\nUnsaved changes will be lost.",
         );
+        self.overlays
+            .insert(OverlayId::ExitConfirm, Box::new(confirm));
     }
 
     pub fn close_exit_confirm(&mut self) {
-        self.exit_confirm.close();
+        self.overlays.remove(&OverlayId::ExitConfirm);
     }
 
     pub fn exit_confirm_visible(&self) -> bool {
-        self.exit_confirm.visible()
+        self.overlays.contains_key(&OverlayId::ExitConfirm)
     }
 
     pub fn help_overlay_visible(&self) -> bool {
-        self.help_overlay.visible()
+        self.overlays.contains_key(&OverlayId::Help)
     }
 
     pub fn open_help_overlay(&mut self) {
-        self.help_overlay.set_visible(true);
+        let mut h = HelpOverlayComponent::new();
+        h.show();
         // respect central default: if globally disabled, ensure the overlay doesn't enable keys
         if !self.scroll_keyboard_enabled_default {
-            self.help_overlay.set_keyboard_enabled(false);
+            h.set_keyboard_enabled(false);
         }
+        self.overlays.insert(OverlayId::Help, Box::new(h));
     }
 
     pub fn close_help_overlay(&mut self) {
-        self.help_overlay.set_visible(false);
-        self.help_overlay.set_keyboard_enabled(false);
+        self.overlays.remove(&OverlayId::Help);
     }
 
     /// Set the central default for enabling scroll-keyboard handling.
@@ -633,11 +633,33 @@ where
     }
 
     pub fn handle_help_event(&mut self, event: &Event) -> bool {
-        if !self.help_overlay.visible() {
+        // Retrieve component as &mut Box<dyn Overlay>
+        let Some(boxed) = self.overlays.get_mut(&OverlayId::Help) else {
             return false;
+        };
+
+        // We need to invoke handle_event on the HelpOverlayComponent.
+        // Since we refactored it to use internal area and Component::handle_event,
+        // we can just use the trait method.
+        // BUT, HelpOverlayComponent::handle_event now calls handle_help_event_in_area with stored area.
+        // Update area to ensure correct hit-testing (Component::resize)
+        boxed.resize(self.last_frame_area);
+
+        let handled = boxed.handle_event(event);
+
+        // Remove the overlay if it has closed itself
+        let should_close = if let Some(help) = boxed.as_any().downcast_ref::<HelpOverlayComponent>()
+        {
+            !help.visible()
+        } else {
+            false
+        };
+
+        if should_close {
+            self.overlays.remove(&OverlayId::Help);
         }
-        self.help_overlay
-            .handle_help_event_in_area(event, self.last_frame_area)
+
+        handled
     }
 
     pub fn wm_overlay_visible(&self) -> bool {
@@ -1962,11 +1984,13 @@ where
             self.managed_area,
             self.panel.area(),
         );
-        if self.exit_confirm.visible() {
-            self.exit_confirm.render(frame, frame.area(), false);
+
+        // Render overlays in fixed order if they exist
+        if let Some(confirm) = self.overlays.get_mut(&OverlayId::ExitConfirm) {
+            confirm.render(frame, frame.area(), false);
         }
-        if self.help_overlay.visible() {
-            self.help_overlay.render(frame, frame.area(), false);
+        if let Some(help) = self.overlays.get_mut(&OverlayId::Help) {
+            help.render(frame, frame.area(), false);
         }
     }
 
@@ -2233,10 +2257,12 @@ where
     }
 
     pub fn handle_exit_confirm_event(&mut self, event: &Event) -> Option<ConfirmAction> {
-        if !self.exit_confirm.visible() {
-            return None;
+        let comp = self.overlays.get_mut(&OverlayId::ExitConfirm)?;
+        // Downcast to ConfirmOverlayComponent to access specific method
+        if let Some(confirm) = comp.as_any_mut().downcast_mut::<ConfirmOverlayComponent>() {
+            return confirm.handle_confirm_event(event);
         }
-        self.exit_confirm.handle_confirm_event(event)
+        None
     }
 
     pub fn wm_menu_consumes_event(&self, event: &Event) -> bool {
