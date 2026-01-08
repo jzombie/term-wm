@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crossterm::event::MouseEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
@@ -65,20 +65,98 @@ impl Component for TextRendererComponent {
         let v_off = self.scroll.offset() as u16;
         let h_off = self.scroll.h_offset() as u16;
 
-        let mut paragraph = Paragraph::new(self.text.clone());
-        if self.wrap {
-            paragraph = paragraph.wrap(Wrap { trim: false });
+        use crate::ui::safe_set_string;
+
+        // Render the document one logical line at a time so we can draw
+        // horizontal rules as single, non-wrapping rows. We compute each
+        // logical line's visual height and respect the vertical scroll
+        // offset (`v_off`) and horizontal scroll (`h_off`).
+        const RULE_PLACEHOLDER: &str = "\0RULE\0";
+        let usable = content_width.max(1) as usize;
+
+        // Precompute per-line visual heights
+        let mut visual_heights: Vec<usize> = Vec::with_capacity(self.text.lines.len());
+        for line in &self.text.lines {
+            let w = line.width();
+            let vh = if w == 0 {
+                1
+            } else if self.wrap {
+                (w + usable - 1).div_euclid(usable)
+            } else {
+                1
+            };
+            visual_heights.push(vh);
         }
-        paragraph = paragraph.scroll((v_off, h_off));
-        frame.render_widget(
-            paragraph,
-            Rect {
-                x: area.x,
-                y: area.y,
-                width: content_width,
-                height: area.height,
-            },
-        );
+
+        let mut cum_visual = 0usize; // visual lines consumed so far
+        let mut y_cursor = area.y;
+        let mut remaining = area.height as usize;
+
+        for (idx, line) in self.text.lines.iter().enumerate() {
+            let line_vh = visual_heights.get(idx).copied().unwrap_or(1);
+            // If this logical line is entirely above the vertical offset, skip it.
+            if cum_visual + line_vh <= v_off as usize {
+                cum_visual += line_vh;
+                continue;
+            }
+
+            // Determine the starting visual row inside this logical line
+            let start_in_line = (v_off as usize).saturating_sub(cum_visual);
+            let rows_available = line_vh.saturating_sub(start_in_line);
+            if rows_available == 0 {
+                cum_visual += line_vh;
+                continue;
+            }
+
+            if remaining == 0 {
+                break;
+            }
+
+            let rows_to_render = rows_available.min(remaining);
+
+            // If this line is a rule placeholder, draw a single separator
+            // row (if we're rendering its first visual row).
+            let is_rule = line.spans.iter().any(|s| s.content == RULE_PLACEHOLDER);
+            if is_rule {
+                if start_in_line == 0 && rows_to_render > 0 {
+                    // Draw separator filling the content width.
+                    let sep = "─".repeat(content_width as usize);
+                    safe_set_string(
+                        frame.buffer_mut(),
+                        area,
+                        area.x,
+                        y_cursor,
+                        &sep,
+                        Style::default(),
+                    );
+                    y_cursor = y_cursor.saturating_add(1);
+                    remaining = remaining.saturating_sub(1);
+                }
+                cum_visual += line_vh;
+                continue;
+            }
+
+            // Render this logical line using a Paragraph sized to its visual height.
+            let single_text = Text::from(vec![line.clone()]);
+            let mut paragraph = Paragraph::new(single_text);
+            if self.wrap {
+                paragraph = paragraph.wrap(Wrap { trim: false });
+            }
+            paragraph = paragraph.scroll((start_in_line as u16, h_off));
+            frame.render_widget(
+                paragraph,
+                Rect {
+                    x: area.x,
+                    y: y_cursor,
+                    width: content_width,
+                    height: rows_to_render as u16,
+                },
+            );
+
+            y_cursor = y_cursor.saturating_add(rows_to_render as u16);
+            remaining = remaining.saturating_sub(rows_to_render);
+            cum_visual += line_vh;
+        }
         self.scroll.render(frame);
     }
 
@@ -147,6 +225,49 @@ impl TextRendererComponent {
 
     pub fn set_horizontal_total_view(&mut self, total: usize, view: usize) {
         self.scroll.set_horizontal_total_view(total, view);
+    }
+
+    pub fn jump_to_logical_line(&mut self, line_idx: usize, area: Rect) {
+        if self.text.lines.is_empty() || area.width == 0 {
+            self.scroll.set_offset(0);
+            return;
+        }
+
+        let mut content_width = area.width;
+        let view = area.height as usize;
+
+        if self.wrap {
+            let v_total = compute_display_lines(&self.text, content_width);
+            let v_scroll_needed = v_total > view && content_width > 0;
+            if v_scroll_needed {
+                content_width = content_width.saturating_sub(1);
+            }
+        } else {
+            let total = self.text.lines.len().max(1);
+            let v_scroll_needed = total > view && content_width > 0;
+            if v_scroll_needed {
+                content_width = content_width.saturating_sub(1);
+            }
+        }
+
+        let usable = content_width.max(1) as usize;
+        let mut offset = 0;
+        for (i, line) in self.text.lines.iter().enumerate() {
+            if i >= line_idx {
+                break;
+            }
+            if self.wrap {
+                let w = line.width();
+                if w == 0 {
+                    offset += 1;
+                } else {
+                    offset += (w + usable - 1).div_euclid(usable);
+                }
+            } else {
+                offset += 1;
+            }
+        }
+        self.scroll.set_offset(offset);
     }
 
     pub fn text_ref(&self) -> &Text<'static> {
@@ -242,7 +363,30 @@ impl TextRendererComponent {
         }
 
         let hit_palette = self.build_hit_test_palette()?;
-        let HitTestPalette { text, urls } = hit_palette;
+        let HitTestPalette { mut text, urls } = hit_palette;
+        // Replace rule placeholders here as well so hit-testing matches
+        // what the rendered output will show.
+        {
+            use std::borrow::Cow;
+            const RULE_PLACEHOLDER: &str = "\0RULE\0";
+            let repeat_len = content_width as usize;
+            if repeat_len > 0 {
+                let mut sep = String::with_capacity(repeat_len * 3);
+                for i in 0..repeat_len {
+                    sep.push('─');
+                    if i + 1 < repeat_len {
+                        sep.push('\u{2060}');
+                    }
+                }
+                for line in text.lines.iter_mut() {
+                    for span in line.spans.iter_mut() {
+                        if span.content == RULE_PLACEHOLDER {
+                            span.content = Cow::Owned(sep.clone());
+                        }
+                    }
+                }
+            }
+        }
         if urls.is_empty() {
             return None;
         }

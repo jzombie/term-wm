@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::str;
 
@@ -16,6 +17,7 @@ pub struct MarkdownViewerComponent {
     renderer: TextRendererComponent,
     link_handler: Option<LinkHandler>,
     linkifier: Linkifier,
+    anchors: HashMap<String, usize>,
 }
 
 impl fmt::Debug for MarkdownViewerComponent {
@@ -51,6 +53,7 @@ impl MarkdownViewerComponent {
             renderer: TextRendererComponent::new(),
             link_handler: None,
             linkifier: Linkifier::new(),
+            anchors: HashMap::new(),
         }
     }
 
@@ -83,6 +86,8 @@ impl MarkdownViewerComponent {
         let mut lines: Vec<Vec<LinkFragment>> = Vec::new();
         let mut current: Vec<LinkFragment> = Vec::new();
 
+        self.anchors.clear();
+
         let mut list_start: Vec<Option<usize>> = Vec::new();
         let mut list_count: Vec<usize> = Vec::new();
 
@@ -104,6 +109,9 @@ impl MarkdownViewerComponent {
         let mut italic = false;
         let mut in_code_block = false;
         let mut current_link: Option<String> = None;
+
+        let mut gathering_anchor = false;
+        let mut current_anchor_text = String::new();
 
         for ev in parser {
             match ev {
@@ -149,6 +157,8 @@ impl MarkdownViewerComponent {
                     Tag::Heading { .. } => {
                         tag_stack.push(TagKind::Heading);
                         bold = true;
+                        gathering_anchor = true;
+                        current_anchor_text.clear();
                     }
                     _ => tag_stack.push(TagKind::Other),
                 },
@@ -178,6 +188,11 @@ impl MarkdownViewerComponent {
                             }
                             TagKind::Heading => {
                                 bold = false;
+                                gathering_anchor = false;
+                                let slug = slugify(&current_anchor_text);
+                                if !slug.is_empty() {
+                                    self.anchors.insert(slug, lines.len());
+                                }
                                 flush_current_line(&mut lines, &mut current);
                                 push_blank_line(&mut lines);
                             }
@@ -200,6 +215,10 @@ impl MarkdownViewerComponent {
                         base_style = Style::default().fg(Color::Yellow);
                     }
 
+                    if gathering_anchor {
+                        current_anchor_text.push_str(&text);
+                    }
+
                     current.push(LinkFragment::new(
                         text.to_string(),
                         base_style,
@@ -215,6 +234,9 @@ impl MarkdownViewerComponent {
                 }
                 MdEvent::Code(text) => {
                     let style = Style::default().fg(Color::Yellow);
+                    if gathering_anchor {
+                        current_anchor_text.push_str(&text);
+                    }
                     current.push(LinkFragment::new(
                         text.to_string(),
                         style,
@@ -232,7 +254,15 @@ impl MarkdownViewerComponent {
                     flush_current_line(&mut lines, &mut current);
                 }
                 MdEvent::Rule => {
-                    lines.push(vec![LinkFragment::new("─", Style::default(), None)]);
+                    // Insert a placeholder fragment for rules. We'll replace
+                    // placeholders after we've scanned the whole document to
+                    // determine a reasonable width for the separator (two-pass).
+                    const RULE_PLACEHOLDER: &str = "\0RULE\0";
+                    lines.push(vec![LinkFragment::new(
+                        RULE_PLACEHOLDER.to_string(),
+                        Style::default(),
+                        None,
+                    )]);
                 }
                 _ => {}
             }
@@ -267,13 +297,22 @@ impl MarkdownViewerComponent {
             // Only respond to clicks for opening links; let renderer handle scrolls.
             if matches!(mouse.kind, MouseEventKind::Down(_))
                 && let Some(url) = self.renderer.link_at(area, *mouse)
-                && self
+            {
+                if let Some(anchor) = url.strip_prefix('#')
+                    && let Some(&line_idx) = self.anchors.get(anchor)
+                {
+                    self.renderer.jump_to_logical_line(line_idx, area);
+                    return true;
+                }
+
+                if self
                     .link_handler
                     .as_ref()
                     .map(|handler| handler(url.as_str()))
                     .unwrap_or(false)
-            {
-                return true;
+                {
+                    return true;
+                }
             }
         }
         self.renderer.handle_event(event)
@@ -338,6 +377,19 @@ fn flush_current_line(lines: &mut Vec<Vec<LinkFragment>>, current: &mut Vec<Link
 
 fn push_blank_line(lines: &mut Vec<Vec<LinkFragment>>) {
     lines.push(vec![LinkFragment::new("", Style::default(), None)]);
+}
+
+fn slugify(text: &str) -> String {
+    let text = text.trim().to_lowercase();
+    let mut result = String::new();
+    for c in text.chars() {
+        if c.is_alphanumeric() || c == '_' || c == '-' {
+            result.push(c);
+        } else if c.is_whitespace() && !result.ends_with('-') {
+            result.push('-');
+        }
+    }
+    result
 }
 
 #[cfg(test)]
@@ -539,6 +591,108 @@ mod markdown_tests {
                 .map(|s| s.contains("Next paragraph"))
                 .unwrap_or(false),
             "paragraph should follow after blank line"
+        );
+    }
+
+    #[test]
+    fn anchor_links_scroll_to_header() {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use ratatui::layout::Rect;
+
+        let md = indoc! {
+            "
+            [Go to section](#section-two)
+
+            # Section One
+            Line 1
+            Line 2
+            Line 3
+
+            # Section Two
+            Target line.
+            "
+        };
+        let mut mv = MarkdownViewerComponent::new();
+        mv.set_markdown(md);
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 5,
+        };
+
+        let mut buffer = ratatui::buffer::Buffer::empty(area);
+        let mut frame = crate::ui::UiFrame::from_parts(area, &mut buffer);
+        mv.render(&mut frame, area, true);
+
+        let mouse_event = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 1,
+            row: 0,
+            modifiers: KeyModifiers::empty(),
+        });
+
+        assert_eq!(mv.renderer.offset(), 0);
+
+        let handled = mv.handle_pointer_event_in_area(&mouse_event, area);
+
+        assert!(handled, "Event should be handled");
+        assert!(
+            mv.renderer.offset() > 0,
+            "Should have scrolled down to Section Two"
+        );
+    }
+
+    #[test]
+    fn horizontal_rule_renders_single_line() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let md = indoc! {
+            "
+            Above paragraph
+
+            ---
+
+            Below paragraph
+            "
+        };
+
+        let mut mv = MarkdownViewerComponent::new();
+        mv.set_markdown(md);
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 6,
+        };
+
+        let mut buffer = Buffer::empty(area);
+        {
+            let mut frame = crate::ui::UiFrame::from_parts(area, &mut buffer);
+            mv.render_content(&mut frame, area);
+        }
+
+        // Find the row that contains the rule glyph and ensure it only
+        // appears on a single visual row (no wrapped continuation rows).
+        let mut rule_rows = 0;
+        for y in 0..area.height {
+            let mut row = String::new();
+            for x in 0..area.width {
+                if let Some(cell) = buffer.cell((x, y)) {
+                    row.push_str(cell.symbol());
+                }
+            }
+            if row.contains('─') {
+                rule_rows += 1;
+            }
+        }
+
+        assert_eq!(
+            rule_rows, 1,
+            "rule should occupy a single visual row regardless of content width"
         );
     }
 }

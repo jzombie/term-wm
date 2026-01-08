@@ -5,10 +5,10 @@ use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders, Clear};
 
 use crate::components::{Component, DialogOverlayComponent, MarkdownViewerComponent};
+// Include generated constants from build.rs
+include!(concat!(env!("OUT_DIR"), "/generated_help.rs"));
 use crate::keybindings::{Action, KeyBindings};
 use crate::ui::UiFrame;
-
-static HELP_MD: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/help.md"));
 
 #[derive(Debug)]
 pub struct HelpOverlayComponent {
@@ -99,7 +99,7 @@ impl HelpOverlayComponent {
         overlay.dialog.set_auto_close_on_outside_click(true);
         overlay.dialog.set_bg(crate::theme::dialog_bg());
         // substitute package/version placeholders and set markdown
-        if let Ok(raw) = str::from_utf8(HELP_MD) {
+        if let Ok(raw) = str::from_utf8(EMBEDDED_HELP.content) {
             // Build a compile-time platform string (OS/ARCH) to indicate the
             // target the binary was built for.
             // Use std::env::consts (which reflect the compilation target) to
@@ -110,7 +110,23 @@ impl HelpOverlayComponent {
                 .replace("%VERSION%", env!("CARGO_PKG_VERSION"))
                 .replace("%PLATFORM%", &platform)
                 .replace("%REPOSITORY%", env!("CARGO_PKG_REPOSITORY"));
-            // Replace placeholder tokens that allow `assets/help.md` to
+
+            // The help file modification time is embedded at compile time by
+            // the build script (`build.rs`) into the `HELP_MD_MODIFIED_RFC3339`
+            // environment variable. Parse the RFC3339 value at runtime and
+            // format it using the centralized `HELP_MODIFIED_FORMAT` so the
+            // displayed string is controlled by the crate constant.
+            let modified_str = {
+                let embed_rfc3339: &str = EMBEDDED_HELP.modified_rfc3339;
+                match chrono::DateTime::parse_from_rfc3339(embed_rfc3339) {
+                    Ok(dt) => dt
+                        .with_timezone(&chrono::Local)
+                        .format(crate::constants::HELP_MODIFIED_FORMAT)
+                        .to_string(),
+                    Err(_) => embed_rfc3339.to_string(),
+                }
+            };
+            // Replace placeholder tokens that allow the help file to
             // contain the descriptive text while only key combo strings are
             // produced here. This keeps the markdown authoritative and
             // avoids hardcoding user-visible sentences in code.
@@ -129,6 +145,7 @@ impl HelpOverlayComponent {
                 format!("{} / {}", a, b)
             };
             let select = kb.combos_for(Action::MenuSelect).join(" / ");
+            let super_key = kb.combos_for(Action::WmToggleOverlay).join(" / ");
             let help_combo = kb.combos_for(Action::OpenHelp).join(" / ");
             // If no combo is configured for `OpenHelp` we prefer the
             // literal 'Help menu' label in the markdown so no empty
@@ -146,6 +163,8 @@ impl HelpOverlayComponent {
                 .replace("%MENU_NAV%", &menu_nav)
                 .replace("%MENU_ALT%", &menu_alt)
                 .replace("%MENU_SELECT%", &select)
+                .replace("%SUPER%", &super_key)
+                .replace("%HELP_MODIFIED%", &modified_str)
                 .replace("%HELP_MENU%", &help_label);
             overlay.viewer.set_markdown(&s);
         }

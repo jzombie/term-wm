@@ -2,7 +2,7 @@
 name = "term-wm"
 description = "A cross-platform window manager for terminal shells."
 authors = ["Jeremy Harris <jeremy.harris@zenosmosis.com>"]
-version = "0.3.1-alpha"
+version = "0.4.0-alpha"
 edition = "2024"
 repository = "https://github.com/jzombie/term-wm"
 license = "MIT OR Apache-2.0"
@@ -12,6 +12,7 @@ publish = true
 normal = ["windows-sys"]
 
 [dependencies]
+chrono = "0.4.42"
 crossterm = "0.29.0"
 hostname = "0.4.2"
 indoc = "2.0.7"
@@ -28,3 +29,7 @@ tracing-subscriber = "0.3.22"
 vt100 = "0.16.2"
 webbrowser = "1.0.6"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO"] }
+
+[build-dependencies]
+chrono = "0.4.42"
+indoc = "2.0.7"
