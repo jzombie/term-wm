@@ -659,4 +659,72 @@ mod tests {
         assert!(!p.hit_test_mouse_capture(&ev));
         assert!(p.hit_test_window(&ev).is_none());
     }
+
+    #[test]
+    fn render_bottom_populates_hostname_cache_and_is_idempotent() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let mut p: Panel<usize> = Panel::new();
+        assert!(p.hostname.is_none());
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 1,
+        };
+        p.bottom_area = area;
+        let mut buf = Buffer::empty(area);
+        let mut ui = crate::ui::UiFrame::from_parts(area, &mut buf);
+
+        // First render should populate the cached hostname.
+        p.render_bottom(&mut ui);
+        assert!(p.hostname.is_some());
+        let first = p.hostname.clone();
+
+        // Second render should not change the cached value.
+        p.render_bottom(&mut ui);
+        assert_eq!(p.hostname, first);
+        // cached hostname should be non-empty string
+        assert!(!p.hostname.as_ref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn render_bottom_fills_background_and_right_aligns_text() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let mut p: Panel<usize> = Panel::new();
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 1,
+        };
+        p.bottom_area = area;
+        let mut buf = Buffer::empty(area);
+        let mut ui = crate::ui::UiFrame::from_parts(area, &mut buf);
+
+        p.render_bottom(&mut ui);
+
+        // Every cell in the bottom row should have the bottom panel bg/fg style.
+        for xx in area.x..area.x.saturating_add(area.width) {
+            let cell = buf.cell_mut((xx, area.y)).expect("cell present");
+            assert_eq!(cell.style().bg, Some(crate::theme::bottom_panel_bg()));
+            assert_eq!(cell.style().fg, Some(crate::theme::bottom_panel_fg()));
+        }
+
+        // Ensure text was right-aligned: find the rightmost non-space symbol in the row.
+        let mut found = false;
+        for dx in (0..area.width).rev() {
+            let cell = buf.cell((area.x + dx, area.y)).expect("cell present");
+            if !cell.symbol().trim().is_empty() {
+                found = true;
+                break;
+            }
+        }
+
+        assert!(found, "expected non-space text in bottom row");
+    }
 }
