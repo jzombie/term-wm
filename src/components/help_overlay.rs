@@ -86,9 +86,15 @@ impl HelpOverlayComponent {
         overlay.dialog.set_bg(crate::theme::dialog_bg());
         // substitute package/version placeholders and set markdown
         if let Ok(raw) = str::from_utf8(HELP_MD) {
+            // Build a compile-time platform string (OS/ARCH) to indicate the
+            // target the binary was built for.
+            // Use std::env::consts (which reflect the compilation target) to
+            // build a concise platform identifier.
+            let platform = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
             let s = raw
                 .replace("%PACKAGE%", env!("CARGO_PKG_NAME"))
                 .replace("%VERSION%", env!("CARGO_PKG_VERSION"))
+                .replace("%PLATFORM%", &platform)
                 .replace("%REPOSITORY%", env!("CARGO_PKG_REPOSITORY"));
             overlay.viewer.set_markdown(&s);
         }

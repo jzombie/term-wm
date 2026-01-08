@@ -32,7 +32,7 @@ fn panel_split_area_basic() {
         width: 12,
         height: 6,
     };
-    let (panel_rect, managed) = p.split_area(true, area);
+    let (panel_rect, _bottom, managed) = p.split_area(true, area);
     assert_eq!(panel_rect.width, area.width);
     assert_eq!(managed.width, area.width);
 }

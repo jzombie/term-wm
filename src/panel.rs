@@ -77,6 +77,7 @@ pub struct Panel<R: Copy + Eq + Ord> {
     visible: bool,
     height: u16,
     area: Rect,
+    bottom_area: Rect,
     activation: ActivationMenu,
     list: WindowList<R>,
     notifications: NotificationArea,
@@ -88,6 +89,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             visible: true,
             height: 1,
             area: Rect::default(),
+            bottom_area: Rect::default(),
             activation: ActivationMenu::new(),
             list: WindowList::new(),
             notifications: NotificationArea::new(),
@@ -120,26 +122,43 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         self.height = height.max(1);
     }
 
-    pub fn split_area(&mut self, active: bool, area: Rect) -> (Rect, Rect) {
+    /// Split the provided `area` into three regions:
+    /// - top panel (height `self.height`),
+    /// - bottom panel (fixed 1 row), and
+    /// - managed area in between, which is returned for main content.
+    ///
+    /// If `active` is false the panel areas are cleared and the entire `area`
+    /// is returned as the managed region.
+    pub fn split_area(&mut self, active: bool, area: Rect) -> (Rect, Rect, Rect) {
         if !active {
             self.area = Rect::default();
-            return (Rect::default(), area);
+            self.bottom_area = Rect::default();
+            return (Rect::default(), Rect::default(), area);
         }
-        let height = self.height.min(area.height);
+        let top_h = self.height.min(area.height);
+        let bottom_h = 1u16.min(area.height.saturating_sub(top_h));
         let panel = Rect {
             x: area.x,
             y: area.y,
             width: area.width,
-            height,
+            height: top_h,
         };
+        let bottom = Rect {
+            x: area.x,
+            y: area.y.saturating_add(area.height).saturating_sub(bottom_h),
+            width: area.width,
+            height: bottom_h,
+        };
+        let managed_height = area.height.saturating_sub(top_h).saturating_sub(bottom_h);
         let managed = Rect {
             x: area.x,
-            y: area.y.saturating_add(height),
+            y: area.y.saturating_add(top_h),
             width: area.width,
-            height: area.height.saturating_sub(height),
+            height: managed_height,
         };
         self.area = panel;
-        (panel, managed)
+        self.bottom_area = bottom;
+        (panel, bottom, managed)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -278,6 +297,32 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
                 });
             }
         }
+        // Render bottom info bar (platform + hostname) if configured
+        if self.bottom_area.width > 0 && self.bottom_area.height > 0 {
+            self.render_bottom(frame);
+        }
+    }
+
+    fn render_bottom(&mut self, frame: &mut UiFrame<'_>) {
+        let area = self.bottom_area;
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        let buffer = frame.buffer_mut();
+        let bounds = area.intersection(buffer.area);
+        if bounds.width == 0 || bounds.height == 0 {
+            return;
+        }
+        // Platform string (e.g. "linux", "macos", "freebsd", "windows")
+        let platform = std::env::consts::OS;
+        let hostname = hostname::get()
+            .ok()
+            .and_then(|s| s.into_string().ok())
+            .unwrap_or_else(|| "unknown-host".to_string());
+        let info = format!("{platform} · {hostname}");
+        let text = truncate_to_width(&info, bounds.width as usize);
+        let style = Style::default().fg(crate::theme::panel_inactive_fg());
+        safe_set_string(buffer, bounds, area.x, area.y, &text, style);
     }
 
     pub fn hit_test_menu(&self, event: &Event) -> bool {
@@ -551,8 +596,9 @@ mod tests {
             width: 10,
             height: 5,
         };
-        let (panel_rect, managed) = p.split_area(true, area);
+        let (panel_rect, bottom_rect, managed) = p.split_area(true, area);
         assert_eq!(panel_rect.width, 10);
+        assert_eq!(bottom_rect.width, 10);
         assert_eq!(managed.width, 10);
 
         // hit tests return false when rects not set

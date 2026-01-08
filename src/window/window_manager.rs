@@ -858,7 +858,7 @@ where
 
     pub fn register_managed_layout(&mut self, area: Rect) {
         self.last_frame_area = area;
-        let (_, managed_area) = self.panel.split_area(self.panel_active(), area);
+        let (_, _, managed_area) = self.panel.split_area(self.panel_active(), area);
         self.managed_area = managed_area;
         self.clamp_floating_to_bounds();
         if self.system_window_visible(SystemWindowId::DebugLog) {

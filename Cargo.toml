@@ -13,6 +13,7 @@ normal = ["windows-sys"]
 
 [dependencies]
 crossterm = "0.29.0"
+hostname = "0.4.2"
 indoc = "2.0.7"
 libc = "0.2.176"
 linkify = "0.10.0"
