@@ -19,6 +19,7 @@ use term_wm::window::{AppWindowDraw, WindowManager};
 
 type PaneId = usize;
 
+// TODO: Remove; not necessary
 const MAX_WINDOWS: usize = 8;
 
 /// Simple CLI for launching `term-wm` with optional commands / window count.
