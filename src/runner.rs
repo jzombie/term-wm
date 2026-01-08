@@ -74,11 +74,11 @@ where
         let handler = || -> io::Result<ControlFlow> {
             // Check if a panic occurred (e.g. in a background thread or previous iteration)
             // and force the debug window open if so.
-            if crate::components::debug_log::take_panic_pending() {
+            if crate::components::sys::debug_log::take_panic_pending() {
                 app.windows().open_debug_window();
             }
             // Also check for reported non-fatal errors that should pop the debug log
-            if crate::components::debug_log::take_error_pending() {
+            if crate::components::sys::debug_log::take_error_pending() {
                 app.windows().open_debug_window();
             }
 

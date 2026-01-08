@@ -24,17 +24,7 @@ pub fn global_debug_log() -> Option<DebugLogHandle> {
     GLOBAL_LOG.get().cloned()
 }
 
-pub fn log_line(line: impl Into<String>) {
-    if let Some(handle) = GLOBAL_LOG.get() {
-        handle.push(line);
-    }
-}
-
-pub fn log_error(line: impl Into<String>) {
-    let s = line.into();
-    if let Some(handle) = GLOBAL_LOG.get() {
-        handle.push(format!("ERROR: {}", s));
-    }
+pub fn trigger_error() {
     ERROR_PENDING.store(true, Ordering::SeqCst);
 }
 

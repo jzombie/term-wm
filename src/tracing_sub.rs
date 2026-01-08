@@ -1,8 +1,23 @@
 use std::io::{self, Write};
 
-use tracing::Level;
+use tracing::{Event, Level, Subscriber};
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::{Layer, layer::Context};
 
-use crate::components::debug_log::{DebugLogWriter, global_debug_log};
+use crate::components::debug_log::{DebugLogWriter, global_debug_log, trigger_error};
+
+struct ErrorNotifyLayer;
+
+impl<S> Layer<S> for ErrorNotifyLayer
+where
+    S: Subscriber,
+{
+    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        if *event.metadata().level() == Level::ERROR {
+            trigger_error();
+        }
+    }
+}
 
 pub struct DelegatingWriter {
     inner: DelegatingInner,
@@ -59,10 +74,17 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SubscriberMakeWriter {
 /// are no-ops for the global subscriber.
 pub fn init_default() {
     // Configure a compact formatter and delegate writes to our make-writer.
-    let _ = tracing_subscriber::fmt()
-        .with_max_level(Level::DEBUG)
+    let fmt_layer = tracing_subscriber::fmt::layer()
         .with_writer(SubscriberMakeWriter)
         .with_target(false)
         .with_thread_names(false)
+        .compact();
+
+    let _ = tracing_subscriber::registry()
+        .with(fmt_layer)
+        .with(ErrorNotifyLayer)
+        .with(tracing_subscriber::filter::LevelFilter::from_level(
+            Level::DEBUG,
+        ))
         .try_init();
 }

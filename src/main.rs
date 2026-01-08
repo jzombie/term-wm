@@ -9,7 +9,7 @@ use crossterm::event::Event;
 use ratatui::prelude::Rect;
 
 use portable_pty::PtySize;
-use term_wm::components::{Component, TerminalComponent, default_shell_command, log_line};
+use term_wm::components::{Component, TerminalComponent, default_shell_command};
 use term_wm::drivers::OutputDriver;
 use term_wm::drivers::console::{ConsoleInputDriver, ConsoleOutputDriver};
 use term_wm::keybindings::{Action, KeyBindings};
@@ -116,7 +116,7 @@ impl App {
         let mut error_occurred = false;
         let mut handle_spawn = |res: io::Result<()>| {
             if let Err(e) = res {
-                log_line(format!("Window spawn error: {}", e));
+                tracing::error!("Window spawn error: {}", e);
                 error_occurred = true;
             }
         };

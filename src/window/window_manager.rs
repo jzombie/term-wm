@@ -8,8 +8,9 @@ use ratatui::widgets::Clear;
 
 use super::decorator::{DefaultDecorator, HeaderAction, WindowDecorator};
 use crate::components::{
-    Component, ConfirmAction, ConfirmOverlayComponent, DebugLogComponent, HelpOverlayComponent,
-    Overlay, install_panic_hook, set_global_debug_log,
+    Component, ConfirmAction, ConfirmOverlayComponent, Overlay,
+    sys::debug_log::{DebugLogComponent, install_panic_hook, set_global_debug_log},
+    sys::help_overlay::HelpOverlayComponent,
 };
 use crate::layout::floating::*;
 use crate::layout::{
@@ -503,7 +504,7 @@ where
         self.managed_draw_order_app.clear();
         self.panel.begin_frame();
         // If a panic occurred earlier, ensure the debug log is shown and focused.
-        if crate::components::take_panic_pending() {
+        if crate::components::sys::debug_log::take_panic_pending() {
             self.show_system_window(SystemWindowId::DebugLog);
         }
         if self.layout_contract == LayoutContract::AppManaged {
