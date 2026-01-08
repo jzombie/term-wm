@@ -30,6 +30,7 @@ pub struct TerminalComponent {
     linkifier: Linkifier,
     link_overlay: LinkOverlay,
     link_handler: Option<LinkHandler>,
+    command_description: String,
 }
 
 impl Component for TerminalComponent {
@@ -139,6 +140,7 @@ impl Component for TerminalComponent {
 
 impl TerminalComponent {
     pub fn spawn(command: CommandBuilder, size: PtySize) -> crate::pty::PtyResult<Self> {
+        let command_description = format!("{:?}", command);
         let pane = Pty::spawn_with_scrollback(command, size, DEFAULT_SCROLLBACK_LEN)?;
         let mut comp = Self {
             pane,
@@ -148,6 +150,7 @@ impl TerminalComponent {
             linkifier: Linkifier::new(),
             link_overlay: LinkOverlay::new(),
             link_handler: None,
+            command_description,
         };
         // Terminal scroll view must not hijack keyboard input; disable by default.
         comp.scroll_view.set_keyboard_enabled(false);
@@ -165,7 +168,10 @@ impl TerminalComponent {
             if let Some(status) = self.pane.take_exit_status() {
                 if !status.success() {
                     use crate::components::debug_log::log_error;
-                    log_error(format!("Terminal exited with error: {:?}", status));
+                    log_error(format!(
+                        "Terminal exited with error: {:?} (Command: {})",
+                        status, self.command_description
+                    ));
                 }
             }
         }
