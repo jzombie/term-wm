@@ -336,11 +336,6 @@ pub fn default_shell_command() -> CommandBuilder {
     if let Ok(cwd) = std::env::current_dir() {
         cmd.cwd(cwd);
     }
-    // Set `TERM` for spawned shells so remote applications detect mouse
-    // capability and enable mouse reporting. We choose `screen-256color`
-    // (colors + broad compatibility) rather than a full xterm variant to
-    // avoid some xterm-specific sequences the parser previously mishandled.
-    cmd.env("TERM", "screen-256color");
 
     cmd
 }
@@ -749,18 +744,5 @@ mod tests {
             Some(TColor::Indexed(8))
         );
         assert_eq!(brighten_indexed(None), None);
-    }
-
-    #[test]
-    fn default_shell_command_sets_term_env() {
-        let cmd = default_shell_command();
-        // Inspect the debug output of the command builder to verify the environment variable.
-        // We rely on CommandBuilder's Debug impl showing envs.
-        let debug_str = format!("{:?}", cmd);
-        assert!(debug_str.contains("TERM"));
-        assert!(
-            debug_str.contains("screen-256color"),
-            "TERM should be set to screen-256color for compatibility"
-        );
     }
 }
