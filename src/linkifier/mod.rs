@@ -1,3 +1,5 @@
+use std::{ops::Range, sync::Arc};
+
 use linkify::{LinkFinder, LinkKind};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -25,6 +27,26 @@ impl LinkFragment {
 pub struct LinkifiedText {
     pub text: Text<'static>,
     pub link_map: LinkMap,
+}
+
+pub type LinkHandler = Arc<dyn Fn(&str) -> bool + Send + Sync + 'static>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DetectedLink {
+    pub range: Range<usize>,
+    pub url: String,
+}
+
+#[derive(Debug, Default)]
+pub struct LinkOverlay {
+    rows: Vec<RowLinks>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct RowLinks {
+    text: String,
+    col_offset: usize,
+    cols: Vec<Option<Arc<str>>>,
 }
 
 #[derive(Debug)]
@@ -94,6 +116,24 @@ impl Linkifier {
         self.linkify_fragments(fragments)
     }
 
+    pub fn detect_links(&self, text: &str) -> Vec<DetectedLink> {
+        let mut links = Vec::new();
+        for span in self.finder.links(text) {
+            let start = span.start();
+            let matched = span.as_str();
+            let (url_part, _) = strip_trailing_punctuation(matched);
+            if url_part.is_empty() {
+                continue;
+            }
+            let end = start + url_part.len();
+            links.push(DetectedLink {
+                range: start..end,
+                url: url_part.to_string(),
+            });
+        }
+        links
+    }
+
     fn process_fragment(
         &self,
         fragment: LinkFragment,
@@ -103,7 +143,7 @@ impl Linkifier {
         if let Some(link) = fragment.link {
             spans.push(Span::styled(
                 fragment.text,
-                apply_link_style(fragment.style),
+                decorate_link_style(fragment.style),
             ));
             links.push(Some(link));
             return;
@@ -115,7 +155,7 @@ impl Linkifier {
             }
             let mut style = fragment.style;
             if detected_link.is_some() {
-                style = apply_link_style(style);
+                style = decorate_link_style(style);
             }
             spans.push(Span::styled(segment, style));
             links.push(detected_link);
@@ -126,23 +166,12 @@ impl Linkifier {
         let mut parts = Vec::new();
         let mut last = 0;
 
-        for span in self.finder.links(text) {
-            let start = span.start();
-            let end = span.end();
-            if start > last {
-                parts.push((text[last..start].to_string(), None));
+        for link in self.detect_links(text) {
+            if link.range.start > last {
+                parts.push((text[last..link.range.start].to_string(), None));
             }
-            let matched = span.as_str();
-            let (url_part, trailing) = strip_trailing_punctuation(matched);
-            if !url_part.is_empty() {
-                parts.push((url_part.to_string(), Some(url_part.to_string())));
-            } else {
-                parts.push((matched.to_string(), None));
-            }
-            if !trailing.is_empty() {
-                parts.push((trailing.to_string(), None));
-            }
-            last = end;
+            parts.push((text[link.range.clone()].to_string(), Some(link.url.clone())));
+            last = link.range.end;
         }
 
         if last < text.len() {
@@ -157,11 +186,123 @@ impl Linkifier {
     }
 }
 
-fn apply_link_style(mut style: Style) -> Style {
+pub fn decorate_link_style(mut style: Style) -> Style {
     if crate::theme::link_underline() {
         style = style.add_modifier(Modifier::UNDERLINED);
     }
     style.fg(crate::theme::link_color())
+}
+
+impl LinkOverlay {
+    pub fn new() -> Self {
+        Self { rows: Vec::new() }
+    }
+
+    pub fn clear(&mut self) {
+        self.rows.clear();
+    }
+
+    pub fn update_view(
+        &mut self,
+        height: usize,
+        width: usize,
+        rows: &[(usize, usize, String, Vec<usize>)],
+        linkifier: &Linkifier,
+    ) {
+        self.resize(height, width);
+        let mut visited = vec![false; self.rows.len()];
+        for (row_idx, col_offset, text, offsets) in rows {
+            if *row_idx >= self.rows.len() {
+                continue;
+            }
+            visited[*row_idx] = true;
+            let row = &mut self.rows[*row_idx];
+            row.ensure_width(width);
+            if row.text == *text && row.col_offset == *col_offset {
+                continue;
+            }
+            row.text = text.clone();
+            row.col_offset = *col_offset;
+            row.clear_links();
+            for link in linkifier.detect_links(text) {
+                let start_idx = match offsets.binary_search(&link.range.start) {
+                    Ok(idx) => idx,
+                    Err(_) => continue,
+                };
+                let end_idx = match offsets.binary_search(&link.range.end) {
+                    Ok(idx) => idx,
+                    Err(_) => continue,
+                };
+                if start_idx >= end_idx {
+                    continue;
+                }
+                let arc_url: Arc<str> = Arc::from(link.url.as_str());
+                for col in start_idx..end_idx {
+                    let area_col = col.saturating_add(*col_offset);
+                    if area_col >= row.cols.len() {
+                        break;
+                    }
+                    row.cols[area_col] = Some(arc_url.clone());
+                }
+            }
+        }
+
+        for (idx, row) in self.rows.iter_mut().enumerate() {
+            if idx >= visited.len() || !visited[idx] {
+                row.text.clear();
+                row.col_offset = 0;
+                row.clear_links();
+            }
+        }
+    }
+
+    pub fn is_link_cell(&self, row: usize, col: usize) -> bool {
+        self.rows
+            .get(row)
+            .and_then(|r| r.cols.get(col))
+            .and_then(|entry| entry.as_ref())
+            .is_some()
+    }
+
+    pub fn link_at(&self, row: usize, col: usize) -> Option<String> {
+        self.rows
+            .get(row)
+            .and_then(|r| r.cols.get(col))
+            .and_then(|entry| entry.as_ref())
+            .map(|url| url.as_ref().to_string())
+    }
+
+    fn resize(&mut self, height: usize, width: usize) {
+        if self.rows.len() != height {
+            self.rows
+                .resize_with(height, || RowLinks::with_width(width));
+        }
+        for row in &mut self.rows {
+            row.ensure_width(width);
+        }
+    }
+}
+
+impl RowLinks {
+    fn with_width(width: usize) -> Self {
+        Self {
+            text: String::new(),
+            col_offset: 0,
+            cols: vec![None; width],
+        }
+    }
+
+    fn ensure_width(&mut self, width: usize) {
+        if self.cols.len() != width {
+            self.cols.resize(width, None);
+        }
+    }
+
+    fn clear_links(&mut self) {
+        for cell in &mut self.cols {
+            *cell = None;
+        }
+    }
 }
 
 fn strip_trailing_punctuation(s: &str) -> (&str, &str) {

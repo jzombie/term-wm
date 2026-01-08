@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -10,6 +12,7 @@ use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
 use crate::components::{Component, scroll_view::ScrollViewComponent};
 use crate::layout::rect_contains;
+use crate::linkifier::{LinkHandler, LinkOverlay, Linkifier, decorate_link_style};
 use crate::pty::Pty;
 use crate::ui::UiFrame;
 
@@ -22,6 +25,9 @@ pub struct TerminalComponent {
     last_size: (u16, u16),
     scroll_view: ScrollViewComponent,
     last_area: Rect,
+    linkifier: Linkifier,
+    link_overlay: LinkOverlay,
+    link_handler: Option<LinkHandler>,
 }
 
 impl Component for TerminalComponent {
@@ -83,6 +89,9 @@ impl Component for TerminalComponent {
                 true
             }
             Event::Mouse(mouse) => {
+                if self.try_handle_link_click(mouse) {
+                    return true;
+                }
                 if !self.pane.alternate_screen() && self.handle_scrollbar_event(event) {
                     return true;
                 }
@@ -129,6 +138,9 @@ impl TerminalComponent {
             last_size: (size.cols, size.rows),
             scroll_view: ScrollViewComponent::new(),
             last_area: Rect::default(),
+            linkifier: Linkifier::new(),
+            link_overlay: LinkOverlay::new(),
+            link_handler: None,
         };
         // Terminal scroll view must not hijack keyboard input; disable by default.
         comp.scroll_view.set_keyboard_enabled(false);
@@ -151,15 +163,27 @@ impl TerminalComponent {
         self.pane.last_bytes_text()
     }
 
+    pub fn set_link_handler(&mut self, handler: Option<LinkHandler>) {
+        self.link_handler = handler;
+    }
+
+    pub fn set_link_handler_fn<F>(&mut self, handler: F)
+    where
+        F: Fn(&str) -> bool + Send + Sync + 'static,
+    {
+        self.link_handler = Some(Arc::new(handler));
+    }
+
     fn render_screen(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
-        let show_cursor = self.pane.scrollback() == 0;
+        let scrollback_value = self.pane.scrollback();
+        let show_cursor = scrollback_value == 0;
         let used = self.pane.max_scrollback();
-        let screen = self.pane.screen();
         let buffer = frame.buffer_mut();
 
         // Optimally only iterate over the visible intersection
         let visible = area.intersection(buffer.area);
         if visible.width == 0 || visible.height == 0 {
+            self.link_overlay.clear();
             return;
         }
 
@@ -167,10 +191,38 @@ impl TerminalComponent {
         let start_col = visible.x.saturating_sub(area.x);
         let start_row = visible.y.saturating_sub(area.y);
 
+        let screen = self.pane.screen();
+        let viewport_height = area.height as usize;
+        let viewport_width = area.width as usize;
+        let mut row_data: Vec<(usize, usize, String, Vec<usize>)> =
+            Vec::with_capacity(visible.height as usize);
+        for row in start_row..start_row + visible.height {
+            let viewport_row = row.saturating_sub(start_row) as usize;
+            if viewport_row >= viewport_height {
+                continue;
+            }
+            let mut line = String::with_capacity(visible.width as usize);
+            let mut offsets = Vec::with_capacity(visible.width as usize + 1);
+            offsets.push(0);
+            for col in start_col..start_col + visible.width {
+                let ch = screen
+                    .cell(row, col)
+                    .and_then(|cell| cell.contents().chars().next())
+                    .unwrap_or(' ');
+                line.push(ch);
+                offsets.push(line.len());
+            }
+            row_data.push((viewport_row, start_col as usize, line, offsets));
+        }
+        self.link_overlay
+            .update_view(viewport_height, viewport_width, &row_data, &self.linkifier);
+
         for row in start_row..start_row + visible.height {
             for col in start_col..start_col + visible.width {
                 let cell_x = area.x + col;
                 let cell_y = area.y + row;
+                let viewport_row = row.saturating_sub(start_row) as usize;
+                let viewport_col = col.saturating_sub(start_col) as usize;
 
                 // If we have a PTY cell, render it
                 if let Some(cell) = screen.cell(row, col) {
@@ -200,6 +252,10 @@ impl TerminalComponent {
                     }
                     if cell.is_wide_continuation() {
                         symbol = ' ';
+                    }
+
+                    if self.link_overlay.is_link_cell(viewport_row, viewport_col) {
+                        style = decorate_link_style(style);
                     }
 
                     if let Some(buf_cell) = buffer.cell_mut((cell_x, cell_y)) {
@@ -233,7 +289,7 @@ impl TerminalComponent {
             let view = area.height as usize;
             if view > 0 {
                 let total = used.saturating_add(view);
-                let offset = used.saturating_sub(self.pane.scrollback());
+                let offset = used.saturating_sub(scrollback_value);
                 self.scroll_view.update(area, total, view);
                 self.scroll_view.set_offset(offset);
                 self.scroll_view.render(frame);
@@ -283,6 +339,44 @@ impl TerminalComponent {
     /// Terminate the underlying PTY child process.
     pub fn terminate(&mut self) {
         let _ = self.pane.kill_child();
+    }
+
+    fn link_at_position(&self, mouse: &MouseEvent) -> Option<String> {
+        if self.last_area.width == 0 || self.last_area.height == 0 {
+            return None;
+        }
+        if mouse.column < self.last_area.x
+            || mouse.column >= self.last_area.x.saturating_add(self.last_area.width)
+            || mouse.row < self.last_area.y
+            || mouse.row >= self.last_area.y.saturating_add(self.last_area.height)
+        {
+            return None;
+        }
+        let local_x = (mouse.column - self.last_area.x) as usize;
+        let local_y = (mouse.row - self.last_area.y) as usize;
+        self.link_overlay.link_at(local_y, local_x)
+    }
+
+    fn try_handle_link_click(&mut self, mouse: &MouseEvent) -> bool {
+        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            return false;
+        }
+
+        if let Some(url) = self.link_at_position(mouse) {
+            if self.invoke_link_handler(&url) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn invoke_link_handler(&self, url: &str) -> bool {
+        if let Some(handler) = &self.link_handler {
+            handler(url)
+        } else {
+            webbrowser::open(url).is_ok()
+        }
     }
 }
 

@@ -1,17 +1,16 @@
 use std::fmt;
 use std::str;
-use std::sync::Arc;
 
 use crossterm::event::Event;
 use pulldown_cmark::{Event as MdEvent, Options, Parser, Tag};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
-use crate::components::{Component, TextRendererComponent};
-use crate::linkifier::{LinkFragment, Linkifier};
-use crate::ui::UiFrame;
+use std::sync::Arc;
 
-pub type LinkHandler = Arc<dyn Fn(&str) -> bool + Send + Sync + 'static>;
+use crate::components::{Component, TextRendererComponent};
+use crate::linkifier::{LinkFragment, LinkHandler, Linkifier};
+use crate::ui::UiFrame;
 
 pub struct MarkdownViewerComponent {
     renderer: TextRendererComponent,
