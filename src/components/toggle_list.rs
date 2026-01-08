@@ -1,4 +1,4 @@
-use crossterm::event::{Event, KeyCode};
+use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
@@ -68,36 +68,38 @@ impl Component for ToggleListComponent {
 
     fn handle_event(&mut self, event: &Event) -> bool {
         match event {
-            Event::Key(key) => match key.code {
-                KeyCode::Up | KeyCode::Char('k') => {
+            Event::Key(key) => {
+                let kb = crate::keybindings::KeyBindings::default();
+                if kb.matches(crate::keybindings::Action::MenuUp, key)
+                    || kb.matches(crate::keybindings::Action::MenuPrev, key)
+                {
                     self.bump_selection(-1);
                     true
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
+                } else if kb.matches(crate::keybindings::Action::MenuDown, key)
+                    || kb.matches(crate::keybindings::Action::MenuNext, key)
+                {
                     self.bump_selection(1);
                     true
-                }
-                KeyCode::PageUp => {
+                } else if kb.matches(crate::keybindings::Action::ScrollPageUp, key) {
                     self.bump_selection(-5);
                     true
-                }
-                KeyCode::PageDown => {
+                } else if kb.matches(crate::keybindings::Action::ScrollPageDown, key) {
                     self.bump_selection(5);
                     true
-                }
-                KeyCode::Home => {
+                } else if kb.matches(crate::keybindings::Action::ScrollHome, key) {
                     self.selected = 0;
                     true
-                }
-                KeyCode::End => {
+                } else if kb.matches(crate::keybindings::Action::ScrollEnd, key) {
                     if !self.items.is_empty() {
                         self.selected = self.items.len() - 1;
                     }
                     true
+                } else if kb.matches(crate::keybindings::Action::ToggleSelection, key) {
+                    self.toggle_selected()
+                } else {
+                    false
                 }
-                KeyCode::Char(' ') => self.toggle_selected(),
-                _ => false,
-            },
+            }
             Event::Mouse(_) => self.handle_scrollbar_event(event),
             _ => false,
         }

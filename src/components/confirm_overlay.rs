@@ -1,4 +1,4 @@
-use crossterm::event::{Event, KeyCode, MouseEventKind};
+use crossterm::event::{Event, MouseEventKind};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Paragraph, Wrap};
@@ -129,10 +129,10 @@ impl Component for ConfirmOverlayComponent {
         let Event::Key(key) = event else {
             return false;
         };
-        matches!(
-            key.code,
-            KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right
-        )
+        let kb = crate::keybindings::KeyBindings::default();
+        kb.matches(crate::keybindings::Action::ConfirmToggle, key)
+            || kb.matches(crate::keybindings::Action::ConfirmLeft, key)
+            || kb.matches(crate::keybindings::Action::ConfirmRight, key)
     }
 }
 
@@ -193,33 +193,29 @@ impl ConfirmOverlayComponent {
                 }
                 None
             }
-            Event::Key(key) => match key.code {
-                KeyCode::Tab => {
+            Event::Key(key) => {
+                let kb = crate::keybindings::KeyBindings::default();
+                if kb.matches(crate::keybindings::Action::ConfirmToggle, key) {
                     self.selected_confirm = !self.selected_confirm;
                     None
-                }
-                KeyCode::BackTab => {
-                    self.selected_confirm = !self.selected_confirm;
-                    None
-                }
-                KeyCode::Left => {
+                } else if kb.matches(crate::keybindings::Action::ConfirmLeft, key) {
                     self.selected_confirm = false;
                     None
-                }
-                KeyCode::Right => {
+                } else if kb.matches(crate::keybindings::Action::ConfirmRight, key) {
                     self.selected_confirm = true;
                     None
-                }
-                KeyCode::Enter | KeyCode::Char('y') => {
+                } else if kb.matches(crate::keybindings::Action::ConfirmAccept, key) {
                     if self.selected_confirm {
                         Some(ConfirmAction::Confirm)
                     } else {
                         Some(ConfirmAction::Cancel)
                     }
+                } else if kb.matches(crate::keybindings::Action::ConfirmCancel, key) {
+                    Some(ConfirmAction::Cancel)
+                } else {
+                    None
                 }
-                KeyCode::Esc | KeyCode::Char('n') => Some(ConfirmAction::Cancel),
-                _ => None,
-            },
+            }
             _ => None,
         }
     }
@@ -232,19 +228,27 @@ mod tests {
         Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
 
+    fn ev_for(action: crate::keybindings::Action) -> Event {
+        use crate::keybindings::KeyBindings;
+        use crossterm::event::KeyEvent;
+        if let Some(combo) = KeyBindings::default().first_combo(action) {
+            Event::Key(KeyEvent::new(combo.code, combo.mods))
+        } else {
+            // fallback: return an arbitrary key that should still be handled
+            Event::Key(KeyEvent::new(
+                crossterm::event::KeyCode::Esc,
+                crossterm::event::KeyModifiers::NONE,
+            ))
+        }
+    }
+
     #[test]
     fn handle_event_recognizes_keys() {
         let mut o = ConfirmOverlayComponent::new();
-        assert!(o.handle_event(&Event::Key(KeyEvent::new(
-            KeyCode::Enter,
-            KeyModifiers::NONE
-        ))));
-        assert!(o.handle_event(&Event::Key(KeyEvent::new(
-            KeyCode::Char('y'),
-            KeyModifiers::NONE
-        ))));
-        assert!(o.handle_event(&Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))));
-        assert!(o.handle_event(&Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))));
+        assert!(o.handle_event(&ev_for(crate::keybindings::Action::ConfirmAccept)));
+        assert!(o.handle_event(&ev_for(crate::keybindings::Action::ConfirmAccept)));
+        assert!(o.handle_event(&ev_for(crate::keybindings::Action::ConfirmCancel)));
+        assert!(o.handle_event(&ev_for(crate::keybindings::Action::ConfirmToggle)));
     }
 
     #[test]

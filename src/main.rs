@@ -4,8 +4,9 @@
 use std::io;
 use std::time::Duration;
 
-use crossterm::event::{Event, KeyCode, KeyModifiers};
+use crossterm::event::Event;
 use ratatui::prelude::Rect;
+use term_wm::keybindings::{Action, KeyBindings};
 
 use portable_pty::PtySize;
 use term_wm::components::{Component, TerminalComponent, default_shell_command};
@@ -47,12 +48,11 @@ fn main() -> io::Result<()> {
             if app.terminals.iter_mut().all(|pane| pane.has_exited()) {
                 return true;
             }
-            matches!(
-                event,
-                Some(Event::Key(key))
-                    if key.code == KeyCode::Char('q')
-                        && key.modifiers.contains(KeyModifiers::CONTROL)
-            )
+            if let Some(Event::Key(key)) = event {
+                let kb = KeyBindings::default();
+                return kb.matches(Action::Quit, key);
+            }
+            false
         },
     );
 

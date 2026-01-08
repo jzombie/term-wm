@@ -1,6 +1,7 @@
 pub mod components;
 pub mod drivers;
 pub mod event_loop;
+pub mod keybindings;
 pub mod layout;
 pub mod linkifier;
 pub mod panel;

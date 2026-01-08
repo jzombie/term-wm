@@ -1,7 +1,7 @@
 use std::io;
 use std::time::Duration;
 
-use crossterm::event::{Event, KeyCode, KeyEventKind};
+use crossterm::event::{Event, KeyEventKind};
 use ratatui::prelude::{Constraint, Direction};
 use ratatui::style::Style;
 
@@ -100,8 +100,9 @@ where
                 let wm_mode = app.windows().layout_contract() == LayoutContract::WindowManaged;
                 if wm_mode
                     && let Event::Key(key) = evt
-                    && key.code == KeyCode::Esc
                     && key.kind == KeyEventKind::Press
+                    && crate::keybindings::KeyBindings::default()
+                        .matches(crate::keybindings::Action::WmToggleOverlay, &key)
                 {
                     if app.windows().wm_overlay_visible() {
                         let passthrough = app.windows().esc_passthrough_active();
@@ -166,23 +167,23 @@ where
                         return flush_mouse_capture(app, ControlFlow::Continue);
                     }
                     if let Event::Key(key) = evt
-                        && key.code == KeyCode::Char('n')
-                        && key.modifiers.is_empty()
+                        && crate::keybindings::KeyBindings::default()
+                            .matches(crate::keybindings::Action::NewWindow, &key)
                     {
                         app.wm_new_window()?;
                         app.windows().close_wm_overlay();
                         return flush_mouse_capture(app, ControlFlow::Continue);
                     }
                 }
-                if should_quit(Some(&evt), app) {
-                    app.windows().open_exit_confirm();
-                    return flush_mouse_capture(app, ControlFlow::Continue);
-                }
+
                 if matches!(evt, Event::Mouse(_)) && !app.windows().mouse_capture_enabled() {
                     return flush_mouse_capture(app, ControlFlow::Continue);
                 }
                 match &evt {
-                    Event::Key(key) if key.code == KeyCode::BackTab => {
+                    Event::Key(key)
+                        if crate::keybindings::KeyBindings::default()
+                            .matches(crate::keybindings::Action::FocusPrev, key) =>
+                    {
                         if app.windows().capture_active() {
                             if wm_mode {
                                 app.windows().arm_capture(capture_timeout);
@@ -206,7 +207,10 @@ where
                         );
                         return flush_mouse_capture(app, ControlFlow::Continue);
                     }
-                    Event::Key(key) if key.code == KeyCode::Tab => {
+                    Event::Key(key)
+                        if crate::keybindings::KeyBindings::default()
+                            .matches(crate::keybindings::Action::FocusNext, key) =>
+                    {
                         if app.windows().capture_active() {
                             if wm_mode {
                                 app.windows().arm_capture(capture_timeout);

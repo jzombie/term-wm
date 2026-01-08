@@ -270,6 +270,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             }
         }
 
+        // TODO: This should use a centralized heuristic to determine if the mouse *can* be captured first
         let indicator = "🖱";
         let label = if mouse_capture_enabled {
             "mouse capture: on"

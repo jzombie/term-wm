@@ -2,7 +2,7 @@ use super::Window;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
-use crossterm::event::{Event, KeyCode, MouseEventKind};
+use crossterm::event::{Event, MouseEventKind};
 use ratatui::prelude::Rect;
 use ratatui::widgets::Clear;
 
@@ -2052,13 +2052,13 @@ where
         G: Fn(W) -> Option<R>,
     {
         match event {
-            Event::Key(key) => match key.code {
-                KeyCode::Tab => {
+            Event::Key(key) => {
+                let kb = crate::keybindings::KeyBindings::default();
+                if kb.matches(crate::keybindings::Action::FocusNext, key) {
                     if self.layout_contract == LayoutContract::WindowManaged {
                         self.advance_wm_focus(true);
                     } else {
                         self.app_focus.advance(true);
-                        // Ensure app-level tab switching also brings the corresponding window to front
                         let focused_app = self.app_focus.current();
                         if let Some(region) = map_focus(focused_app) {
                             self.set_wm_focus(WindowId::app(region));
@@ -2067,13 +2067,11 @@ where
                         }
                     }
                     true
-                }
-                KeyCode::BackTab => {
+                } else if kb.matches(crate::keybindings::Action::FocusPrev, key) {
                     if self.layout_contract == LayoutContract::WindowManaged {
                         self.advance_wm_focus(false);
                     } else {
                         self.app_focus.advance(false);
-                        // Mirror behavior for reverse tabbing as well
                         let focused_app = self.app_focus.current();
                         if let Some(region) = map_focus(focused_app) {
                             self.set_wm_focus(WindowId::app(region));
@@ -2082,9 +2080,10 @@ where
                         }
                     }
                     true
+                } else {
+                    false
                 }
-                _ => false,
-            },
+            }
             Event::Mouse(mouse) => {
                 self.hover = Some((mouse.column, mouse.row));
                 match mouse.kind {
@@ -2208,51 +2207,35 @@ where
         let Event::Key(key) = event else {
             return None;
         };
-        match key.code {
-            KeyCode::Up => {
-                let total = wm_menu_items(self.mouse_capture_enabled()).len();
-                if total > 0 {
-                    let current = self.state.wm_menu_selected();
-                    if current == 0 {
-                        self.state.set_wm_menu_selected(total - 1);
-                    } else {
-                        self.state.set_wm_menu_selected(current - 1);
-                    }
+        let kb = crate::keybindings::KeyBindings::default();
+        if kb.matches(crate::keybindings::Action::MenuUp, key)
+            || kb.matches(crate::keybindings::Action::MenuPrev, key)
+        {
+            let total = wm_menu_items(self.mouse_capture_enabled()).len();
+            if total > 0 {
+                let current = self.state.wm_menu_selected();
+                if current == 0 {
+                    self.state.set_wm_menu_selected(total - 1);
+                } else {
+                    self.state.set_wm_menu_selected(current - 1);
                 }
-                None
             }
-            KeyCode::Down => {
-                let total = wm_menu_items(self.mouse_capture_enabled()).len();
-                if total > 0 {
-                    let current = self.state.wm_menu_selected();
-                    self.state.set_wm_menu_selected((current + 1) % total);
-                }
-                None
+            None
+        } else if kb.matches(crate::keybindings::Action::MenuDown, key)
+            || kb.matches(crate::keybindings::Action::MenuNext, key)
+        {
+            let total = wm_menu_items(self.mouse_capture_enabled()).len();
+            if total > 0 {
+                let current = self.state.wm_menu_selected();
+                self.state.set_wm_menu_selected((current + 1) % total);
             }
-            KeyCode::Char('k') => {
-                let total = wm_menu_items(self.mouse_capture_enabled()).len();
-                if total > 0 {
-                    let current = self.state.wm_menu_selected();
-                    if current == 0 {
-                        self.state.set_wm_menu_selected(total - 1);
-                    } else {
-                        self.state.set_wm_menu_selected(current - 1);
-                    }
-                }
-                None
-            }
-            KeyCode::Char('j') => {
-                let total = wm_menu_items(self.mouse_capture_enabled()).len();
-                if total > 0 {
-                    let current = self.state.wm_menu_selected();
-                    self.state.set_wm_menu_selected((current + 1) % total);
-                }
-                None
-            }
-            KeyCode::Enter => wm_menu_items(self.mouse_capture_enabled())
+            None
+        } else if kb.matches(crate::keybindings::Action::MenuSelect, key) {
+            wm_menu_items(self.mouse_capture_enabled())
                 .get(self.state.wm_menu_selected())
-                .map(|item| item.action),
-            _ => None,
+                .map(|item| item.action)
+        } else {
+            None
         }
     }
 
@@ -2272,10 +2255,12 @@ where
         let Event::Key(key) = event else {
             return false;
         };
-        matches!(
-            key.code,
-            KeyCode::Up | KeyCode::Down | KeyCode::Enter | KeyCode::Char('j') | KeyCode::Char('k')
-        )
+        let kb = crate::keybindings::KeyBindings::default();
+        kb.matches(crate::keybindings::Action::MenuUp, key)
+            || kb.matches(crate::keybindings::Action::MenuDown, key)
+            || kb.matches(crate::keybindings::Action::MenuSelect, key)
+            || kb.matches(crate::keybindings::Action::MenuNext, key)
+            || kb.matches(crate::keybindings::Action::MenuPrev, key)
     }
 }
 

@@ -347,44 +347,39 @@ impl ScrollViewComponent {
             return false;
         }
         let max_offset = self.total.saturating_sub(self.view);
-        match key.code {
-            crossterm::event::KeyCode::PageUp => {
-                let page = self.view.max(1);
-                let off = self.v_state.offset.saturating_sub(page);
-                self.v_state.offset = off;
-                self.v_state.apply(self.total, self.view);
-                true
-            }
-            crossterm::event::KeyCode::PageDown => {
-                let page = self.view.max(1);
-                let off = (self.v_state.offset.saturating_add(page)).min(max_offset);
-                self.v_state.offset = off;
-                self.v_state.apply(self.total, self.view);
-                true
-            }
-            crossterm::event::KeyCode::Home => {
-                self.v_state.offset = 0;
-                self.v_state.apply(self.total, self.view);
-                true
-            }
-            crossterm::event::KeyCode::End => {
-                self.v_state.offset = max_offset;
-                self.v_state.apply(self.total, self.view);
-                true
-            }
-            crossterm::event::KeyCode::Up => {
-                let off = self.v_state.offset.saturating_sub(1);
-                self.v_state.offset = off;
-                self.v_state.apply(self.total, self.view);
-                true
-            }
-            crossterm::event::KeyCode::Down => {
-                let off = (self.v_state.offset.saturating_add(1)).min(max_offset);
-                self.v_state.offset = off;
-                self.v_state.apply(self.total, self.view);
-                true
-            }
-            _ => false,
+        let kb = crate::keybindings::KeyBindings::default();
+        if kb.matches(crate::keybindings::Action::ScrollPageUp, key) {
+            let page = self.view.max(1);
+            let off = self.v_state.offset.saturating_sub(page);
+            self.v_state.offset = off;
+            self.v_state.apply(self.total, self.view);
+            true
+        } else if kb.matches(crate::keybindings::Action::ScrollPageDown, key) {
+            let page = self.view.max(1);
+            let off = (self.v_state.offset.saturating_add(page)).min(max_offset);
+            self.v_state.offset = off;
+            self.v_state.apply(self.total, self.view);
+            true
+        } else if kb.matches(crate::keybindings::Action::ScrollHome, key) {
+            self.v_state.offset = 0;
+            self.v_state.apply(self.total, self.view);
+            true
+        } else if kb.matches(crate::keybindings::Action::ScrollEnd, key) {
+            self.v_state.offset = max_offset;
+            self.v_state.apply(self.total, self.view);
+            true
+        } else if kb.matches(crate::keybindings::Action::ScrollUp, key) {
+            let off = self.v_state.offset.saturating_sub(1);
+            self.v_state.offset = off;
+            self.v_state.apply(self.total, self.view);
+            true
+        } else if kb.matches(crate::keybindings::Action::ScrollDown, key) {
+            let off = (self.v_state.offset.saturating_add(1)).min(max_offset);
+            self.v_state.offset = off;
+            self.v_state.apply(self.total, self.view);
+            true
+        } else {
+            false
         }
     }
 
