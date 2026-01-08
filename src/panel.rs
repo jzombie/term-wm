@@ -329,6 +329,9 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         }
         // Platform string (e.g. "linux", "macos", "freebsd", "windows")
         let platform = std::env::consts::OS;
+        const PKG_NAME: &str = env!("CARGO_PKG_NAME");
+        const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
+        let pkg_label = format!("{PKG_NAME} {PKG_VERSION}");
         // Use cached hostname if available to avoid a system call every frame.
         let hostname = if let Some(ref h) = self.hostname {
             h.clone()
@@ -340,7 +343,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             self.hostname = Some(h.clone());
             h
         };
-        let info = format!("{platform} · {hostname}");
+        let info = format!("{pkg_label} · {platform} · {hostname}");
         let text = truncate_to_width(&info, bounds.width as usize);
         // Fill the bottom bar background fully so the whole row uses the
         // bottom panel background color, then write the foreground text.
