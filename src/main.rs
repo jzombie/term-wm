@@ -22,18 +22,20 @@ type PaneId = usize;
 
 /// Simple CLI for launching `term-wm` with optional commands / window count.
 #[derive(Parser, Debug)]
-#[command(name = "term-wm")]
+#[command(name = env!("CARGO_PKG_NAME"), version = env!("CARGO_PKG_VERSION"))]
 struct Cli {
-    /// Number of terminal windows to open. When omitted and no commands are
-    /// provided this defaults to 2. When commands are provided and `--count`
+    /// Number of terminal windows to open.
+    ///
+    /// When omitted and no commands are provided this defaults to 2. When commands are provided and `--count`
     /// is omitted, the number of windows will default to the number of
-    /// commands (capped by MAX_WINDOWS).
+    /// commands
     #[arg(short = 'n', long = "count")]
     count: Option<usize>,
 
-    /// Commands to run in created windows. If provided, the number of windows
-    /// will equal the number of commands given and each command will be run
-    /// in its respective window via the default shell (shell -c "CMD").
+    /// Commands to run in created windows.
+    ///
+    /// If provided, the number of windows  will equal the number of commands given and each command will be run
+    /// in its respective window via the default shell (i.e. shell -c "CMD").
     #[arg(value_name = "CMD", num_args = 0..)]
     cmds: Vec<String>,
 }
@@ -41,11 +43,12 @@ struct Cli {
 fn main() -> io::Result<()> {
     let cli = Cli::parse();
 
-    // Determine total number of windows to open (cap to MAX_WINDOWS).
+    // Determine total number of windows to open by default.
+    //
     // Behavior:
     // - If no commands provided: open `--count` shells (default 2 if not given).
     // - If commands provided: if `--count` given use it, otherwise default to
-    //   the number of commands. In either case the total is capped by MAX_WINDOWS.
+    //   the number of commands.
     let total = if cli.cmds.is_empty() {
         cli.count.unwrap_or(2).max(1)
     } else {
