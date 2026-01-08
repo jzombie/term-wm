@@ -127,18 +127,14 @@ impl App {
                         error_occurred = true;
                     }
                     // If spawn succeeded, write the command into the PTY.
-                    if !error_occurred {
-                        if let Some(pane) = app.terminals.last_mut() {
-                            let mut line = cmd;
-                            line.push_str(LineEnding::from_current_platform().as_str());
-                            let _ = pane.write_bytes(line.as_bytes());
-                        }
+                    if !error_occurred && let Some(pane) = app.terminals.last_mut() {
+                        let mut line = cmd;
+                        line.push_str(LineEnding::from_current_platform().as_str());
+                        let _ = pane.write_bytes(line.as_bytes());
                     }
-                } else {
-                    if let Err(e) = app.wm_new_window() {
-                        tracing::error!("Window spawn error: {}", e);
-                        error_occurred = true;
-                    }
+                } else if let Err(e) = app.wm_new_window() {
+                    tracing::error!("Window spawn error: {}", e);
+                    error_occurred = true;
                 }
             }
         } else {
