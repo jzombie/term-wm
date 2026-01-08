@@ -1,3 +1,4 @@
+pub mod actions;
 pub mod components;
 pub mod drivers;
 pub mod event_loop;

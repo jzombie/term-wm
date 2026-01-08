@@ -2,75 +2,7 @@ use std::fmt;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Action {
-    Quit,
-    CloseHelp,
-    CycleNextWindow,
-    CyclePrevWindow,
-    OpenHelp,
-    // Focus/tab navigation
-    FocusNext,
-    FocusPrev,
-    // Window manager overlay
-    WmToggleOverlay,
-    NewWindow,
-    // WM menu navigation
-    MenuUp,
-    MenuDown,
-    MenuSelect,
-    MenuNext, // 'j'
-    MenuPrev, // 'k'
-    // Confirm dialog navigation/actions
-    ConfirmToggle,
-    ConfirmLeft,
-    ConfirmRight,
-    ConfirmAccept,
-    ConfirmCancel,
-    // Scrolling
-    ScrollPageUp,
-    ScrollPageDown,
-    ScrollHome,
-    ScrollEnd,
-    ScrollUp,
-    ScrollDown,
-    // Selection toggle
-    ToggleSelection,
-}
-
-impl fmt::Display for Action {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            Action::Quit => "Quit",
-            Action::CloseHelp => "Close help / dialog",
-            Action::CycleNextWindow => "Cycle next window",
-            Action::CyclePrevWindow => "Cycle previous window",
-            Action::OpenHelp => "Open help",
-            Action::FocusNext => "Focus next (Tab)",
-            Action::FocusPrev => "Focus previous (BackTab)",
-            Action::WmToggleOverlay => "Toggle WM overlay (Esc)",
-            Action::NewWindow => "New window",
-            Action::MenuUp => "Menu up",
-            Action::MenuDown => "Menu down",
-            Action::MenuSelect => "Menu select",
-            Action::MenuNext => "Menu next (j)",
-            Action::MenuPrev => "Menu previous (k)",
-            Action::ConfirmToggle => "Confirm toggle (Tab)",
-            Action::ConfirmLeft => "Confirm left",
-            Action::ConfirmRight => "Confirm right",
-            Action::ConfirmAccept => "Confirm accept",
-            Action::ConfirmCancel => "Confirm cancel",
-            Action::ScrollPageUp => "Scroll page up",
-            Action::ScrollPageDown => "Scroll page down",
-            Action::ScrollHome => "Scroll to top",
-            Action::ScrollEnd => "Scroll to end",
-            Action::ScrollUp => "Scroll up",
-            Action::ScrollDown => "Scroll down",
-            Action::ToggleSelection => "Toggle selection / space",
-        };
-        write!(f, "{}", s)
-    }
-}
+pub use crate::actions::Action;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyCombo {
@@ -137,110 +69,46 @@ pub struct KeyBindings {
 
 impl Default for KeyBindings {
     fn default() -> Self {
-        use Action::*;
-        let mut kb = Self::new();
-        kb.add(
-            Quit,
-            KeyCombo::new(KeyCode::Char('q'), KeyModifiers::CONTROL),
-        );
-        kb.add(CloseHelp, KeyCombo::new(KeyCode::Esc, KeyModifiers::NONE));
-        kb.add(CloseHelp, KeyCombo::new(KeyCode::Enter, KeyModifiers::NONE));
-        kb.add(
-            CloseHelp,
-            KeyCombo::new(KeyCode::Char('q'), KeyModifiers::NONE),
-        );
-        // Focus/tab navigation
-        kb.add(FocusNext, KeyCombo::new(KeyCode::Tab, KeyModifiers::NONE));
-        kb.add(
-            FocusPrev,
-            KeyCombo::new(KeyCode::BackTab, KeyModifiers::NONE),
-        );
-        // Window manager overlay and actions
-        kb.add(
-            WmToggleOverlay,
-            KeyCombo::new(KeyCode::Esc, KeyModifiers::NONE),
-        );
-        kb.add(
-            NewWindow,
-            KeyCombo::new(KeyCode::Char('n'), KeyModifiers::NONE),
-        );
-        // WM menu navigation
-        kb.add(MenuUp, KeyCombo::new(KeyCode::Up, KeyModifiers::NONE));
-        kb.add(MenuDown, KeyCombo::new(KeyCode::Down, KeyModifiers::NONE));
-        kb.add(
-            MenuSelect,
-            KeyCombo::new(KeyCode::Enter, KeyModifiers::NONE),
-        );
-        kb.add(
-            MenuNext,
-            KeyCombo::new(KeyCode::Char('j'), KeyModifiers::NONE),
-        );
-        kb.add(
-            MenuPrev,
-            KeyCombo::new(KeyCode::Char('k'), KeyModifiers::NONE),
-        );
-        // Confirm overlay
-        kb.add(
-            ConfirmToggle,
-            KeyCombo::new(KeyCode::Tab, KeyModifiers::NONE),
-        );
-        kb.add(
-            ConfirmToggle,
-            KeyCombo::new(KeyCode::BackTab, KeyModifiers::NONE),
-        );
-        kb.add(
-            ConfirmLeft,
-            KeyCombo::new(KeyCode::Left, KeyModifiers::NONE),
-        );
-        kb.add(
-            ConfirmRight,
-            KeyCombo::new(KeyCode::Right, KeyModifiers::NONE),
-        );
-        kb.add(
-            ConfirmAccept,
-            KeyCombo::new(KeyCode::Enter, KeyModifiers::NONE),
-        );
-        kb.add(
-            ConfirmAccept,
-            KeyCombo::new(KeyCode::Char('y'), KeyModifiers::NONE),
-        );
-        kb.add(
-            ConfirmCancel,
-            KeyCombo::new(KeyCode::Esc, KeyModifiers::NONE),
-        );
-        kb.add(
-            ConfirmCancel,
-            KeyCombo::new(KeyCode::Char('n'), KeyModifiers::NONE),
-        );
-        // Scrolling
-        kb.add(
-            ScrollPageUp,
-            KeyCombo::new(KeyCode::PageUp, KeyModifiers::NONE),
-        );
-        kb.add(
-            ScrollPageDown,
-            KeyCombo::new(KeyCode::PageDown, KeyModifiers::NONE),
-        );
-        kb.add(ScrollHome, KeyCombo::new(KeyCode::Home, KeyModifiers::NONE));
-        kb.add(ScrollEnd, KeyCombo::new(KeyCode::End, KeyModifiers::NONE));
-        kb.add(ScrollUp, KeyCombo::new(KeyCode::Up, KeyModifiers::NONE));
-        kb.add(ScrollDown, KeyCombo::new(KeyCode::Down, KeyModifiers::NONE));
-        kb.add(
-            ToggleSelection,
-            KeyCombo::new(KeyCode::Char(' '), KeyModifiers::NONE),
-        );
-        kb.add(
-            CycleNextWindow,
-            KeyCombo::new(KeyCode::Tab, KeyModifiers::NONE),
-        );
-        kb.add(
-            CyclePrevWindow,
-            KeyCombo::new(KeyCode::Backspace, KeyModifiers::SHIFT),
-        );
-        // Do not register a global OpenHelp binding by default to avoid
-        // conflicting with application-internal keybindings. Opening help
-        // should be triggered from the WM/menu flow (Esc mode) only.
-        kb
+        // Declarative default keybindings in a compact, JS/Python-like literal.
+        macro_rules! default_keybindings {
+            ( $( $action:ident : [ $( ($code:expr, $mods:expr) ),* $(,)? ] ),* $(,)? ) => {{
+                let mut kb = KeyBindings::new();
+                $(
+                    $(
+                        kb.add(Action::$action, KeyCombo::new($code, $mods));
+                    )*
+                )*
+                kb
+            }};
+        }
+
+        default_keybindings! {
+            Quit: [ (KeyCode::Char('q'), KeyModifiers::CONTROL) ],
+            CloseHelp: [ (KeyCode::Esc, KeyModifiers::NONE), (KeyCode::Enter, KeyModifiers::NONE), (KeyCode::Char('q'), KeyModifiers::NONE) ],
+            FocusNext: [ (KeyCode::Tab, KeyModifiers::NONE) ],
+            FocusPrev: [ (KeyCode::BackTab, KeyModifiers::NONE) ],
+            WmToggleOverlay: [ (KeyCode::Esc, KeyModifiers::NONE) ],
+            NewWindow: [ (KeyCode::Char('n'), KeyModifiers::NONE) ],
+            MenuUp: [ (KeyCode::Up, KeyModifiers::NONE) ],
+            MenuDown: [ (KeyCode::Down, KeyModifiers::NONE) ],
+            MenuSelect: [ (KeyCode::Enter, KeyModifiers::NONE) ],
+            MenuNext: [ (KeyCode::Char('j'), KeyModifiers::NONE) ],
+            MenuPrev: [ (KeyCode::Char('k'), KeyModifiers::NONE) ],
+            ConfirmToggle: [ (KeyCode::Tab, KeyModifiers::NONE), (KeyCode::BackTab, KeyModifiers::NONE) ],
+            ConfirmLeft: [ (KeyCode::Left, KeyModifiers::NONE) ],
+            ConfirmRight: [ (KeyCode::Right, KeyModifiers::NONE) ],
+            ConfirmAccept: [ (KeyCode::Enter, KeyModifiers::NONE), (KeyCode::Char('y'), KeyModifiers::NONE) ],
+            ConfirmCancel: [ (KeyCode::Esc, KeyModifiers::NONE), (KeyCode::Char('n'), KeyModifiers::NONE) ],
+            ScrollPageUp: [ (KeyCode::PageUp, KeyModifiers::NONE) ],
+            ScrollPageDown: [ (KeyCode::PageDown, KeyModifiers::NONE) ],
+            ScrollHome: [ (KeyCode::Home, KeyModifiers::NONE) ],
+            ScrollEnd: [ (KeyCode::End, KeyModifiers::NONE) ],
+            ScrollUp: [ (KeyCode::Up, KeyModifiers::NONE) ],
+            ScrollDown: [ (KeyCode::Down, KeyModifiers::NONE) ],
+            ToggleSelection: [ (KeyCode::Char(' '), KeyModifiers::NONE) ],
+            CycleNextWindow: [ (KeyCode::Tab, KeyModifiers::NONE) ],
+            CyclePrevWindow: [ (KeyCode::Backspace, KeyModifiers::SHIFT) ],
+        }
     }
 }
 
