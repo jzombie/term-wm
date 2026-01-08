@@ -684,6 +684,10 @@ where
         self.system_window_visible(SystemWindowId::DebugLog)
     }
 
+    pub fn has_active_system_windows(&self) -> bool {
+        self.system_windows.values().any(|w| w.visible()) || !self.overlays.is_empty()
+    }
+
     pub fn esc_passthrough_active(&self) -> bool {
         self.esc_passthrough_remaining().is_some()
     }
