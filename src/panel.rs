@@ -77,9 +77,11 @@ pub struct Panel<R: Copy + Eq + Ord> {
     visible: bool,
     height: u16,
     area: Rect,
+    bottom_area: Rect,
     activation: ActivationMenu,
     list: WindowList<R>,
     notifications: NotificationArea,
+    hostname: Option<String>,
 }
 
 impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
@@ -88,9 +90,11 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             visible: true,
             height: 1,
             area: Rect::default(),
+            bottom_area: Rect::default(),
             activation: ActivationMenu::new(),
             list: WindowList::new(),
             notifications: NotificationArea::new(),
+            hostname: None,
         }
     }
 
@@ -120,26 +124,43 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         self.height = height.max(1);
     }
 
-    pub fn split_area(&mut self, active: bool, area: Rect) -> (Rect, Rect) {
+    /// Split the provided `area` into three regions:
+    /// - top panel (height `self.height`),
+    /// - bottom panel (fixed 1 row), and
+    /// - managed area in between, which is returned for main content.
+    ///
+    /// If `active` is false the panel areas are cleared and the entire `area`
+    /// is returned as the managed region.
+    pub fn split_area(&mut self, active: bool, area: Rect) -> (Rect, Rect, Rect) {
         if !active {
             self.area = Rect::default();
-            return (Rect::default(), area);
+            self.bottom_area = Rect::default();
+            return (Rect::default(), Rect::default(), area);
         }
-        let height = self.height.min(area.height);
+        let top_h = self.height.min(area.height);
+        let bottom_h = 1u16.min(area.height.saturating_sub(top_h));
         let panel = Rect {
             x: area.x,
             y: area.y,
             width: area.width,
-            height,
+            height: top_h,
         };
+        let bottom = Rect {
+            x: area.x,
+            y: area.y.saturating_add(area.height).saturating_sub(bottom_h),
+            width: area.width,
+            height: bottom_h,
+        };
+        let managed_height = area.height.saturating_sub(top_h).saturating_sub(bottom_h);
         let managed = Rect {
             x: area.x,
-            y: area.y.saturating_add(height),
+            y: area.y.saturating_add(top_h),
             width: area.width,
-            height: area.height.saturating_sub(height),
+            height: managed_height,
         };
         self.area = panel;
-        (panel, managed)
+        self.bottom_area = bottom;
+        (panel, bottom, managed)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -167,6 +188,18 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         let bounds = area.intersection(buffer.area);
         if bounds.width == 0 || bounds.height == 0 {
             return;
+        }
+        // Fill the entire panel area with the bottom-panel color scheme so
+        // the top bar visually matches the bottom info bar.
+        for yy in bounds.y..bounds.y.saturating_add(bounds.height) {
+            for xx in bounds.x..bounds.x.saturating_add(bounds.width) {
+                if let Some(cell) = buffer.cell_mut((xx, yy)) {
+                    let mut st = cell.style();
+                    st.bg = Some(crate::theme::bottom_panel_bg());
+                    st.fg = Some(crate::theme::bottom_panel_fg());
+                    cell.set_style(st);
+                }
+            }
         }
         let mut x = area.x;
         let y = area.y;
@@ -278,6 +311,65 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
                 });
             }
         }
+        // Render bottom info bar (platform + hostname) if configured
+        if self.bottom_area.width > 0 && self.bottom_area.height > 0 {
+            self.render_bottom(frame);
+        }
+    }
+
+    fn render_bottom(&mut self, frame: &mut UiFrame<'_>) {
+        let area = self.bottom_area;
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        let buffer = frame.buffer_mut();
+        let bounds = area.intersection(buffer.area);
+        if bounds.width == 0 || bounds.height == 0 {
+            return;
+        }
+        // Platform string (e.g. "linux", "macos", "freebsd", "windows")
+        let platform = std::env::consts::OS;
+        // Use cached hostname if available to avoid a system call every frame.
+        let hostname = if let Some(ref h) = self.hostname {
+            h.clone()
+        } else {
+            let h = hostname::get()
+                .ok()
+                .and_then(|s| s.into_string().ok())
+                .unwrap_or_else(|| "unknown-host".to_string());
+            self.hostname = Some(h.clone());
+            h
+        };
+        let info = format!("{platform} · {hostname}");
+        let text = truncate_to_width(&info, bounds.width as usize);
+        // Fill the bottom bar background fully so the whole row uses the
+        // bottom panel background color, then write the foreground text.
+        for yy in bounds.y..bounds.y.saturating_add(bounds.height) {
+            for xx in bounds.x..bounds.x.saturating_add(bounds.width) {
+                if let Some(cell) = buffer.cell_mut((xx, yy)) {
+                    let mut st = cell.style();
+                    st.bg = Some(crate::theme::bottom_panel_bg());
+                    st.fg = Some(crate::theme::bottom_panel_fg());
+                    cell.set_style(st);
+                }
+            }
+        }
+        let style = Style::default()
+            .fg(crate::theme::bottom_panel_fg())
+            .bg(crate::theme::bottom_panel_bg());
+        // Right-align the text within the bottom bar bounds.
+        let text_width = text.chars().count() as u16;
+        let start_x = if text_width >= bounds.width {
+            bounds.x
+        } else {
+            // place text so its right edge aligns with bounds' right edge
+            bounds
+                .x
+                .saturating_add(bounds.width)
+                .saturating_sub(text_width)
+        };
+        let start_x = start_x.max(bounds.x);
+        safe_set_string(buffer, bounds, start_x, area.y, &text, style);
     }
 
     pub fn hit_test_menu(&self, event: &Event) -> bool {
@@ -551,8 +643,9 @@ mod tests {
             width: 10,
             height: 5,
         };
-        let (panel_rect, managed) = p.split_area(true, area);
+        let (panel_rect, bottom_rect, managed) = p.split_area(true, area);
         assert_eq!(panel_rect.width, 10);
+        assert_eq!(bottom_rect.width, 10);
         assert_eq!(managed.width, 10);
 
         // hit tests return false when rects not set
@@ -565,5 +658,73 @@ mod tests {
         assert!(!p.hit_test_menu(&ev));
         assert!(!p.hit_test_mouse_capture(&ev));
         assert!(p.hit_test_window(&ev).is_none());
+    }
+
+    #[test]
+    fn render_bottom_populates_hostname_cache_and_is_idempotent() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let mut p: Panel<usize> = Panel::new();
+        assert!(p.hostname.is_none());
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 1,
+        };
+        p.bottom_area = area;
+        let mut buf = Buffer::empty(area);
+        let mut ui = crate::ui::UiFrame::from_parts(area, &mut buf);
+
+        // First render should populate the cached hostname.
+        p.render_bottom(&mut ui);
+        assert!(p.hostname.is_some());
+        let first = p.hostname.clone();
+
+        // Second render should not change the cached value.
+        p.render_bottom(&mut ui);
+        assert_eq!(p.hostname, first);
+        // cached hostname should be non-empty string
+        assert!(!p.hostname.as_ref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn render_bottom_fills_background_and_right_aligns_text() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let mut p: Panel<usize> = Panel::new();
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 1,
+        };
+        p.bottom_area = area;
+        let mut buf = Buffer::empty(area);
+        let mut ui = crate::ui::UiFrame::from_parts(area, &mut buf);
+
+        p.render_bottom(&mut ui);
+
+        // Every cell in the bottom row should have the bottom panel bg/fg style.
+        for xx in area.x..area.x.saturating_add(area.width) {
+            let cell = buf.cell_mut((xx, area.y)).expect("cell present");
+            assert_eq!(cell.style().bg, Some(crate::theme::bottom_panel_bg()));
+            assert_eq!(cell.style().fg, Some(crate::theme::bottom_panel_fg()));
+        }
+
+        // Ensure text was right-aligned: find the rightmost non-space symbol in the row.
+        let mut found = false;
+        for dx in (0..area.width).rev() {
+            let cell = buf.cell((area.x + dx, area.y)).expect("cell present");
+            if !cell.symbol().trim().is_empty() {
+                found = true;
+                break;
+            }
+        }
+
+        assert!(found, "expected non-space text in bottom row");
     }
 }

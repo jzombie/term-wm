@@ -21,10 +21,16 @@ pub struct ConfirmOverlayComponent {
     selected_confirm: bool,
     cancel_rect: Option<Rect>,
     confirm_rect: Option<Rect>,
+    area: Rect,
 }
 
 impl Component for ConfirmOverlayComponent {
+    fn resize(&mut self, area: Rect) {
+        self.area = area;
+    }
+
     fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
+        self.area = area;
         if !self.visible || area.width == 0 || area.height == 0 {
             return;
         }
@@ -80,25 +86,20 @@ impl Component for ConfirmOverlayComponent {
         }
         let cancel = "[ Cancel ]";
         let confirm = "[ Exit ]";
-        let cancel_style = if self.selected_confirm {
-            Style::default()
-                .fg(crate::theme::dialog_fg())
-                .bg(crate::theme::panel_bg())
+        let selected_style = Style::default()
+            .fg(crate::theme::decorator_header_fg())
+            .bg(crate::theme::decorator_header_bg())
+            .add_modifier(Modifier::BOLD);
+        let unselected_style = Style::default()
+            .fg(crate::theme::dialog_fg())
+            .bg(crate::theme::panel_bg());
+
+        let (cancel_style, confirm_style) = if self.selected_confirm {
+            // confirm is selected
+            (unselected_style, selected_style)
         } else {
-            Style::default()
-                .fg(crate::theme::panel_fg())
-                .bg(crate::theme::menu_selected_bg())
-                .add_modifier(Modifier::BOLD)
-        };
-        let confirm_style = if self.selected_confirm {
-            Style::default()
-                .fg(crate::theme::dialog_fg())
-                .bg(crate::theme::decorator_header_bg())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-                .fg(crate::theme::dialog_fg())
-                .bg(crate::theme::panel_bg())
+            // cancel is selected
+            (selected_style, unselected_style)
         };
         let total_width = cancel.len() + 1 + confirm.len();
         let start_x = content
@@ -122,19 +123,15 @@ impl Component for ConfirmOverlayComponent {
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
+        if self.handle_confirm_event(event).is_some() {
+            return true;
+        }
         let Event::Key(key) = event else {
             return false;
         };
         matches!(
             key.code,
-            KeyCode::Enter
-                | KeyCode::Char('y')
-                | KeyCode::Esc
-                | KeyCode::Char('n')
-                | KeyCode::Tab
-                | KeyCode::BackTab
-                | KeyCode::Left
-                | KeyCode::Right
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right
         )
     }
 }
@@ -142,16 +139,16 @@ impl Component for ConfirmOverlayComponent {
 impl ConfirmOverlayComponent {
     pub fn new() -> Self {
         let mut dialog = DialogOverlayComponent::new();
-        dialog.set_size(60, 9);
-        dialog.set_dim_backdrop(true);
         dialog.set_bg(crate::theme::dialog_bg());
+        dialog.set_auto_close_on_outside_click(false);
         Self {
             dialog,
             visible: false,
             body: String::new(),
-            selected_confirm: true,
+            selected_confirm: false,
             cancel_rect: None,
             confirm_rect: None,
+            area: Rect::default(),
         }
     }
 

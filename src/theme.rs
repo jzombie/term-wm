@@ -21,6 +21,7 @@ pub fn accent_alt() -> Color {
 
 // Panel / menu
 pub fn panel_bg() -> Color {
+    // Keep original top panel background (DarkGray)
     Color::DarkGray
 }
 pub fn panel_fg() -> Color {
@@ -93,6 +94,17 @@ pub fn decorator_border() -> Color {
 pub fn debug_highlight() -> Color {
     // Use accent alt for a bright highlight
     accent_alt()
+}
+
+// Bottom panel (status bar) colors — choose complementary, subtle values
+pub fn bottom_panel_bg() -> Color {
+    // Use a darker, muted bottom background (less bright than 253)
+    Color::Indexed(236)
+}
+
+pub fn bottom_panel_fg() -> Color {
+    // Light foreground for contrast against the muted bottom background
+    Color::Indexed(250)
 }
 
 #[cfg(test)]
