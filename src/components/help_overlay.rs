@@ -1,10 +1,11 @@
 use std::str;
 
-use crossterm::event::{Event, KeyCode};
+use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders, Clear};
 
 use crate::components::{Component, DialogOverlayComponent, MarkdownViewerComponent};
+use crate::keybindings::KeyBindings;
 use crate::ui::UiFrame;
 
 static HELP_MD: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/help.md"));
@@ -55,13 +56,15 @@ impl HelpOverlayComponent {
             return false;
         }
         match event {
-            Event::Key(key) => match key.code {
-                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
+            Event::Key(key) => {
+                let kb = KeyBindings::default();
+                if kb.matches(crate::keybindings::Action::CloseHelp, &key) {
                     self.close();
                     true
+                } else {
+                    self.viewer.handle_key_event(key)
                 }
-                _ => self.viewer.handle_key_event(key),
-            },
+            }
             Event::Mouse(_) => {
                 // If configured, allow clicking outside the dialog to auto-close it.
                 if self.dialog.handle_click_outside(event, area) {
@@ -102,11 +105,18 @@ impl HelpOverlayComponent {
             // Use std::env::consts (which reflect the compilation target) to
             // build a concise platform identifier.
             let platform = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
-            let s = raw
+            let mut s = raw
                 .replace("%PACKAGE%", env!("CARGO_PKG_NAME"))
                 .replace("%VERSION%", env!("CARGO_PKG_VERSION"))
                 .replace("%PLATFORM%", &platform)
                 .replace("%REPOSITORY%", env!("CARGO_PKG_REPOSITORY"));
+            // Append dynamic keybinding list from the centralized config.
+            let kb = KeyBindings::default();
+            s.push_str("\n\n---\n\n## Keybindings\n\n");
+            for (action, combos) in kb.help_entries() {
+                let label = format!("- **{}**: {}\n", action, combos.join(", "));
+                s.push_str(&label);
+            }
             overlay.viewer.set_markdown(&s);
         }
         overlay.viewer.set_link_handler_fn(|url| {
@@ -135,13 +145,15 @@ impl HelpOverlayComponent {
 
     pub fn handle_help_event(&mut self, event: &Event) -> bool {
         match event {
-            Event::Key(key) => match key.code {
-                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
+            Event::Key(key) => {
+                let kb = KeyBindings::default();
+                if kb.matches(crate::keybindings::Action::CloseHelp, &key) {
                     self.close();
                     true
+                } else {
+                    self.viewer.handle_key_event(key)
                 }
-                _ => self.viewer.handle_key_event(key),
-            },
+            }
             Event::Mouse(_) => self.viewer.handle_pointer_event(event),
             _ => false,
         }
