@@ -666,6 +666,42 @@ mod tests {
     }
 
     #[test]
+    fn mouse_event_x11_release_and_modifiers() {
+        // 1. Simple Release (Left Up) -> Code 3
+        let m_up = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        // Cb = 3 + 32 = 35 ('#'). Cx, Cy = 0 + 33 = 33 ('!')
+        let bytes = mouse_event_to_bytes(m_up, MouseProtocolEncoding::Default);
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 35, 33, 33]);
+
+        // 2. Release with Shift -> Code 3 + 4 = 7
+        let m_up_shift = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::SHIFT,
+        };
+        // Cb = 7 + 32 = 39 ('\'')
+        let bytes = mouse_event_to_bytes(m_up_shift, MouseProtocolEncoding::Default);
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 39, 33, 33]);
+
+        // 3. Press Right with Control -> Code 2 + 16 = 18
+        let m_down_ctrl = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::CONTROL,
+        };
+        // Cb = 18 + 32 = 50 ('2')
+        let bytes = mouse_event_to_bytes(m_down_ctrl, MouseProtocolEncoding::Default);
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 50, 33, 33]);
+    }
+
+    #[test]
     fn vt_color_and_resolve_color() {
         assert_eq!(vt_color_to_ratatui(vt100::Color::Default), None);
         assert_eq!(
@@ -705,5 +741,18 @@ mod tests {
             Some(TColor::Indexed(8))
         );
         assert_eq!(brighten_indexed(None), None);
+    }
+
+    #[test]
+    fn default_shell_command_sets_term_env() {
+        let cmd = default_shell_command();
+        // Inspect the debug output of the command builder to verify the environment variable.
+        // We rely on CommandBuilder's Debug impl showing envs.
+        let debug_str = format!("{:?}", cmd);
+        assert!(debug_str.contains("TERM"));
+        assert!(
+            debug_str.contains("screen-256color"),
+            "TERM should be set to screen-256color for compatibility"
+        );
     }
 }
