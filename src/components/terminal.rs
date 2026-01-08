@@ -100,7 +100,8 @@ impl Component for TerminalComponent {
                 if !rect_contains(self.last_area, mouse.column, mouse.row) {
                     return false;
                 }
-                // Forward mouse events if the nested app opted in to mouse reporting.
+                // Forward mouse events only when the nested app enabled mouse reporting
+                // (either SGR or the legacy/default X11-style protocol).
                 let screen = self.pane.screen();
                 let encoding = screen.mouse_protocol_encoding();
 
@@ -110,7 +111,7 @@ impl Component for TerminalComponent {
                 }
 
                 let mode = screen.mouse_protocol_mode();
-                // Avoid emitting sequences for modes that the app didn't request.
+                // Avoid emitting sequences for modes the app didn't request.
                 if !mouse_event_allowed(mode, mouse.kind) {
                     return false;
                 }
@@ -336,8 +337,9 @@ pub fn default_shell_command() -> CommandBuilder {
         cmd.cwd(cwd);
     }
     // Set TERM explicitly so that child processes know what to expect.
-    // xterm-256color adds good compatibility for mouse and colors.
-    cmd.env("TERM", "xterm-256color");
+    // Use "screen-256color" to get colors but avoid advanced xterm features (like 'rep')
+    // that the parser might not handle, and to ensure better compatibility.
+    cmd.env("TERM", "screen-256color");
     cmd
 }
 
@@ -454,7 +456,7 @@ fn mouse_event_allowed(mode: MouseProtocolMode, kind: MouseEventKind) -> bool {
 }
 
 fn mouse_event_to_bytes(mouse: MouseEvent, encoding: MouseProtocolEncoding) -> Vec<u8> {
-    let (mut code, release): (u8, _) = match mouse.kind {
+    let (mut code, release): (u8, bool) = match mouse.kind {
         MouseEventKind::Down(button) => (
             match button {
                 MouseButton::Left => 0,
@@ -463,7 +465,14 @@ fn mouse_event_to_bytes(mouse: MouseEvent, encoding: MouseProtocolEncoding) -> V
             },
             false,
         ),
-        MouseEventKind::Up(_) => (3, true),
+        MouseEventKind::Up(button) => (
+            match button {
+                MouseButton::Left => 0,
+                MouseButton::Middle => 1,
+                MouseButton::Right => 2,
+            },
+            true,
+        ),
         MouseEventKind::Drag(button) => (
             32 + match button {
                 MouseButton::Left => 0,
@@ -496,8 +505,16 @@ fn mouse_event_to_bytes(mouse: MouseEvent, encoding: MouseProtocolEncoding) -> V
             format!("\x1b[<{};{};{}{}", code, col, row, action).into_bytes()
         }
         MouseProtocolEncoding::Default => {
-            // X11 encoding: CSI M Cb Cx Cy
-            let cb = code.saturating_add(32);
+            // X11 (CSI M) encoding: Cb Cx Cy. For button releases the base
+            // button code is 3; preserve modifier bits when constructing Cb.
+            let x11_code = if release {
+                let mods = code & (4 | 8 | 16);
+                3 | mods
+            } else {
+                code
+            };
+
+            let cb = x11_code.saturating_add(32);
             let cx = mouse.column.saturating_add(33);
             let cy = mouse.row.saturating_add(33);
 
