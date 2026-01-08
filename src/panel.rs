@@ -730,4 +730,42 @@ mod tests {
 
         assert!(found, "expected non-space text in bottom row");
     }
+
+    #[test]
+    fn render_bottom_includes_package_and_version() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let mut p: Panel<usize> = Panel::new();
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        p.bottom_area = area;
+        let mut buf = Buffer::empty(area);
+        let mut ui = crate::ui::UiFrame::from_parts(area, &mut buf);
+
+        p.render_bottom(&mut ui);
+
+        // Build the rendered row as a string
+        let mut rendered = String::new();
+        for xx in area.x..area.x.saturating_add(area.width) {
+            let cell = buf.cell((xx, area.y)).expect("cell present");
+            rendered.push_str(cell.symbol());
+        }
+
+        let pkg = env!("CARGO_PKG_NAME");
+        let ver = env!("CARGO_PKG_VERSION");
+
+        assert!(
+            rendered.contains(pkg),
+            "bottom bar should include package name"
+        );
+        assert!(
+            rendered.contains(ver),
+            "bottom bar should include package version"
+        );
+    }
 }
