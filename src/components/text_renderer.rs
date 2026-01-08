@@ -149,6 +149,49 @@ impl TextRendererComponent {
         self.scroll.set_horizontal_total_view(total, view);
     }
 
+    pub fn jump_to_logical_line(&mut self, line_idx: usize, area: Rect) {
+        if self.text.lines.is_empty() || area.width == 0 {
+            self.scroll.set_offset(0);
+            return;
+        }
+
+        let mut content_width = area.width;
+        let view = area.height as usize;
+
+        if self.wrap {
+            let v_total = compute_display_lines(&self.text, content_width);
+            let v_scroll_needed = v_total > view && content_width > 0;
+            if v_scroll_needed {
+                content_width = content_width.saturating_sub(1);
+            }
+        } else {
+            let total = self.text.lines.len().max(1);
+            let v_scroll_needed = total > view && content_width > 0;
+            if v_scroll_needed {
+                content_width = content_width.saturating_sub(1);
+            }
+        }
+
+        let usable = content_width.max(1) as usize;
+        let mut offset = 0;
+        for (i, line) in self.text.lines.iter().enumerate() {
+            if i >= line_idx {
+                break;
+            }
+            if self.wrap {
+                let w = line.width();
+                if w == 0 {
+                    offset += 1;
+                } else {
+                    offset += (w + usable - 1).div_euclid(usable);
+                }
+            } else {
+                offset += 1;
+            }
+        }
+        self.scroll.set_offset(offset);
+    }
+
     pub fn text_ref(&self) -> &Text<'static> {
         &self.text
     }
