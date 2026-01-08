@@ -165,14 +165,12 @@ impl TerminalComponent {
         let exited = self.pane.has_exited();
         if exited {
             // If exiting with error, log it to global log which will trigger debug window
-            if let Some(status) = self.pane.take_exit_status() {
-                if !status.success() {
-                    tracing::error!(
-                        "Terminal exited with error: {:?} (Command: {})",
-                        status,
-                        self.command_description
-                    );
-                }
+            if let Some(status) = self.pane.take_exit_status() && !status.success() {
+                tracing::error!(
+                    "Terminal exited with error: {:?} (Command: {})",
+                    status,
+                    self.command_description
+                );
             }
         }
         exited
