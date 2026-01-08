@@ -19,9 +19,6 @@ use term_wm::window::{AppWindowDraw, WindowManager};
 
 type PaneId = usize;
 
-// TODO: Remove; not necessary
-const MAX_WINDOWS: usize = 8;
-
 /// Simple CLI for launching `term-wm` with optional commands / window count.
 #[derive(Parser, Debug)]
 #[command(name = "term-wm")]
@@ -49,17 +46,17 @@ fn main() -> io::Result<()> {
     // - If commands provided: if `--count` given use it, otherwise default to
     //   the number of commands. In either case the total is capped by MAX_WINDOWS.
     let total = if cli.cmds.is_empty() {
-        cli.count.unwrap_or(2).clamp(1, MAX_WINDOWS)
+        cli.count.unwrap_or(2).max(1)
     } else {
-        cli.count
-            .map(|c| c.clamp(1, MAX_WINDOWS))
-            .unwrap_or_else(|| {
-                // default to number of commands when count not given
-                cli.cmds.len().clamp(1, MAX_WINDOWS)
-            })
+        cli.count.map(|c| c.max(1)).unwrap_or_else(|| {
+            // default to number of commands when count not given
+            cli.cmds.len().max(1)
+        })
     };
     let mut app = App::new_with(cli.cmds, total)?;
-    let focus_regions: Vec<PaneId> = (0..MAX_WINDOWS).collect();
+    // Use the initial window indices as focus regions; the WindowManager
+    // will track additional windows as they are created.
+    let focus_regions: Vec<PaneId> = (0..total).collect();
     let mut output = ConsoleOutputDriver::new()?;
     output.enter()?;
     let mut input = ConsoleInputDriver::new();
@@ -186,9 +183,6 @@ impl HasWindowManager<PaneId, PaneId> for App {
     }
 
     fn wm_new_window(&mut self) -> io::Result<()> {
-        if self.terminals.len() >= MAX_WINDOWS {
-            return Ok(());
-        }
         let size = PtySize {
             rows: 24,
             cols: 80,
