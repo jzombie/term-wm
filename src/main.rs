@@ -4,14 +4,15 @@
 use std::io;
 use std::time::Duration;
 
+use clap::Parser;
 use crossterm::event::Event;
 use ratatui::prelude::Rect;
-use term_wm::keybindings::{Action, KeyBindings};
 
 use portable_pty::PtySize;
 use term_wm::components::{Component, TerminalComponent, default_shell_command};
 use term_wm::drivers::OutputDriver;
 use term_wm::drivers::console::{ConsoleInputDriver, ConsoleOutputDriver};
+use term_wm::keybindings::{Action, KeyBindings};
 use term_wm::runner::{HasWindowManager, WindowApp, run_window_app};
 use term_wm::ui::UiFrame;
 use term_wm::window::{AppWindowDraw, WindowManager};
@@ -20,8 +21,43 @@ type PaneId = usize;
 
 const MAX_WINDOWS: usize = 8;
 
+/// Simple CLI for launching `term-wm` with optional commands / window count.
+#[derive(Parser, Debug)]
+#[command(name = "term-wm")]
+struct Cli {
+    /// Number of terminal windows to open. When omitted and no commands are
+    /// provided this defaults to 2. When commands are provided and `--count`
+    /// is omitted, the number of windows will default to the number of
+    /// commands (capped by MAX_WINDOWS).
+    #[arg(short = 'n', long = "count")]
+    count: Option<usize>,
+
+    /// Commands to run in created windows. If provided, the number of windows
+    /// will equal the number of commands given and each command will be run
+    /// in its respective window via the default shell (shell -c "CMD").
+    #[arg(value_name = "CMD", num_args = 0..)]
+    cmds: Vec<String>,
+}
+
 fn main() -> io::Result<()> {
-    let mut app = App::new()?;
+    let cli = Cli::parse();
+
+    // Determine total number of windows to open (cap to MAX_WINDOWS).
+    // Behavior:
+    // - If no commands provided: open `--count` shells (default 2 if not given).
+    // - If commands provided: if `--count` given use it, otherwise default to
+    //   the number of commands. In either case the total is capped by MAX_WINDOWS.
+    let total = if cli.cmds.is_empty() {
+        cli.count.unwrap_or(2).clamp(1, MAX_WINDOWS)
+    } else {
+        cli.count
+            .map(|c| c.clamp(1, MAX_WINDOWS))
+            .unwrap_or_else(|| {
+                // default to number of commands when count not given
+                cli.cmds.len().clamp(1, MAX_WINDOWS)
+            })
+    };
+    let mut app = App::new_with(cli.cmds, total)?;
     let focus_regions: Vec<PaneId> = (0..MAX_WINDOWS).collect();
     let mut output = ConsoleOutputDriver::new()?;
     output.enter()?;
@@ -67,15 +103,64 @@ struct App {
 }
 
 impl App {
-    fn new() -> io::Result<Self> {
+    fn new_with(commands: Vec<String>, num_windows: usize) -> io::Result<Self> {
         let mut app = Self {
             windows: WindowManager::new_managed(0),
             terminals: Vec::new(),
         };
-        app.wm_new_window()?;
-        app.wm_new_window()?;
+
+        // If commands provided, open one per command; otherwise open `num_windows`
+        // shells using the default shell.
+        if !commands.is_empty() {
+            let mut it = commands.into_iter();
+            for _ in 0..num_windows {
+                if let Some(cmd) = it.next() {
+                    let mut cb = default_shell_command();
+                    // run via shell -c / cmd
+                    #[cfg(unix)]
+                    {
+                        cb.arg("-c");
+                        cb.arg(cmd);
+                    }
+                    #[cfg(windows)]
+                    {
+                        cb.arg("/C");
+                        cb.arg(cmd);
+                    }
+                    app.spawn_terminal_with_command(cb)?;
+                } else {
+                    app.wm_new_window()?;
+                }
+            }
+        } else {
+            for _ in 0..num_windows {
+                app.wm_new_window()?;
+            }
+        }
+
         app.windows.open_help_overlay();
         Ok(app)
+    }
+
+    fn spawn_terminal_with_command(&mut self, cmd: portable_pty::CommandBuilder) -> io::Result<()> {
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pane = TerminalComponent::spawn(cmd, size).map_err(io::Error::other)?;
+        pane.set_link_handler_fn(|url| {
+            let _ = webbrowser::open(url);
+            true
+        });
+        let id = self.terminals.len();
+        self.terminals.push(pane);
+        self.windows.set_focus(id);
+        self.windows.tile_window(id);
+        self.windows
+            .set_window_title(id, format!("Shell {}", id + 1));
+        Ok(())
     }
 }
 
