@@ -5,7 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders, Clear};
 
 use crate::components::{Component, DialogOverlayComponent, MarkdownViewerComponent};
-use crate::keybindings::KeyBindings;
+use crate::keybindings::{Action, KeyBindings};
 use crate::ui::UiFrame;
 
 static HELP_MD: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/help.md"));
@@ -110,13 +110,43 @@ impl HelpOverlayComponent {
                 .replace("%VERSION%", env!("CARGO_PKG_VERSION"))
                 .replace("%PLATFORM%", &platform)
                 .replace("%REPOSITORY%", env!("CARGO_PKG_REPOSITORY"));
-            // Append dynamic keybinding list from the centralized config.
+            // Replace placeholder tokens that allow `assets/help.md` to
+            // contain the descriptive text while only key combo strings are
+            // produced here. This keeps the markdown authoritative and
+            // avoids hardcoding user-visible sentences in code.
             let kb = KeyBindings::default();
-            s.push_str("\n\n---\n\n## Keybindings\n\n");
-            for (action, combos) in kb.help_entries() {
-                let label = format!("- **{}**: {}\n", action, combos.join(", "));
-                s.push_str(&label);
-            }
+            let focus_next = kb.combos_for(Action::FocusNext).join(" / ");
+            let focus_prev = kb.combos_for(Action::FocusPrev).join(" / ");
+            let new_win = kb.combos_for(Action::NewWindow).join(" / ");
+            let menu_nav = {
+                let a = kb.combos_for(Action::MenuNext).join(" / ");
+                let b = kb.combos_for(Action::MenuPrev).join(" / ");
+                format!("{} / {}", a, b)
+            };
+            let menu_alt = {
+                let a = kb.combos_for(Action::MenuUp).join(" / ");
+                let b = kb.combos_for(Action::MenuDown).join(" / ");
+                format!("{} / {}", a, b)
+            };
+            let select = kb.combos_for(Action::MenuSelect).join(" / ");
+            let help_combo = kb.combos_for(Action::OpenHelp).join(" / ");
+            // If no combo is configured for `OpenHelp` we prefer the
+            // literal 'Help menu' label in the markdown so no empty
+            // placeholder appears in the rendered help.
+            let help_label = if help_combo.is_empty() {
+                "Help menu".to_string()
+            } else {
+                help_combo
+            };
+
+            s = s
+                .replace("%FOCUS_NEXT%", &focus_next)
+                .replace("%FOCUS_PREV%", &focus_prev)
+                .replace("%NEW_WINDOW%", &new_win)
+                .replace("%MENU_NAV%", &menu_nav)
+                .replace("%MENU_ALT%", &menu_alt)
+                .replace("%MENU_SELECT%", &select)
+                .replace("%HELP_MENU%", &help_label);
             overlay.viewer.set_markdown(&s);
         }
         overlay.viewer.set_link_handler_fn(|url| {

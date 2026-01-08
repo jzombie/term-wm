@@ -175,10 +175,7 @@ where
                         return flush_mouse_capture(app, ControlFlow::Continue);
                     }
                 }
-                if should_quit(Some(&evt), app) {
-                    app.windows().open_exit_confirm();
-                    return flush_mouse_capture(app, ControlFlow::Continue);
-                }
+
                 if matches!(evt, Event::Mouse(_)) && !app.windows().mouse_capture_enabled() {
                     return flush_mouse_capture(app, ControlFlow::Continue);
                 }

@@ -243,7 +243,9 @@ impl KeyBindings {
             CyclePrevWindow,
             KeyCombo::new(KeyCode::Backspace, KeyModifiers::SHIFT),
         );
-        kb.add(OpenHelp, KeyCombo::new(KeyCode::F(1), KeyModifiers::NONE));
+        // Do not register a global OpenHelp binding by default to avoid
+        // conflicting with application-internal keybindings. Opening help
+        // should be triggered from the WM/menu flow (Esc mode) only.
         kb
     }
 
@@ -274,6 +276,14 @@ impl KeyBindings {
             v.push((*act, list.iter().map(|c| c.display()).collect()));
         }
         v
+    }
+
+    /// Return the display strings for all combos mapped to `action`.
+    pub fn combos_for(&self, action: Action) -> Vec<String> {
+        self.map
+            .get(&action)
+            .map(|list| list.iter().map(|c| c.display()).collect())
+            .unwrap_or_default()
     }
 }
 
