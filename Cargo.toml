@@ -2,7 +2,7 @@
 name = "term-wm"
 description = "A cross-platform window manager for terminal shells."
 authors = ["Jeremy Harris <jeremy.harris@zenosmosis.com>"]
-version = "0.2.0-alpha"
+version = "0.3.0-alpha"
 edition = "2024"
 repository = "https://github.com/jzombie/term-wm"
 license = "MIT OR Apache-2.0"
