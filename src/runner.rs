@@ -10,7 +10,7 @@ use crate::drivers::{InputDriver, OutputDriver};
 use crate::event_loop::{ControlFlow, EventLoop};
 use crate::layout::{LayoutNode, TilingLayout};
 use crate::ui::UiFrame;
-use crate::window::{AppWindowDraw, LayoutContract, WindowManager, WmMenuAction};
+use crate::window::{AppWindowDraw, LayoutContract, WindowDrawTask, WindowManager, WmMenuAction};
 
 pub trait HasWindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     fn windows(&mut self) -> &mut WindowManager<W, R>;
@@ -92,6 +92,11 @@ where
                     }
                     return flush_mouse_capture(app, ControlFlow::Continue);
                 }
+
+                if app.windows().help_overlay_visible() {
+                    let _ = app.windows().handle_help_event(&evt);
+                    return flush_mouse_capture(app, ControlFlow::Continue);
+                }
                 let wm_mode = app.windows().layout_contract() == LayoutContract::WindowManaged;
                 if wm_mode
                     && let Event::Key(key) = evt
@@ -139,6 +144,10 @@ where
                             }
                             WmMenuAction::ToggleDebugWindow => {
                                 app.windows().toggle_debug_window();
+                                app.windows().close_wm_overlay();
+                            }
+                            WmMenuAction::Help => {
+                                app.windows().open_help_overlay();
                                 app.windows().close_wm_overlay();
                             }
                             WmMenuAction::BringFloatingFront => {
@@ -370,8 +379,11 @@ fn draw_window_app<A, W, R, FMap>(
     }
     app.windows().register_managed_layout(area);
     let plan = app.windows().window_draw_plan(frame);
-    for window in plan {
-        app.render_window(frame, window);
+    for task in plan {
+        match task {
+            WindowDrawTask::App(window) => app.render_window(frame, window),
+            WindowDrawTask::System(window) => app.windows().render_system_window(frame, window),
+        }
     }
     app.windows().render_overlays(frame);
 }

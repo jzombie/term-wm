@@ -49,7 +49,7 @@ impl<'a> UiFrame<'a> {
     /// This exists to make unit testing of clipping behavior straightforward
     /// without constructing a full `ratatui::Frame` in tests.
     #[cfg(test)]
-    fn from_parts(area: Rect, buffer: &'a mut Buffer) -> Self {
+    pub(crate) fn from_parts(area: Rect, buffer: &'a mut Buffer) -> Self {
         Self { area, buffer }
     }
 

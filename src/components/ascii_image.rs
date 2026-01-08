@@ -4,6 +4,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use resvg::{tiny_skia, usvg};
 
+use crate::components::Component;
 use crate::ui::UiFrame;
 
 const DEFAULT_RAMP: &[char] = &[' ', '.', ':', '-', '=', '+', '*', '#', '%', '@'];
@@ -22,7 +23,7 @@ pub enum RenderMode {
     Braille,
 }
 
-pub struct AsciiImage {
+pub struct AsciiImageComponent {
     width: u32,
     height: u32,
     luma: Vec<u8>,
@@ -37,7 +38,43 @@ pub struct AsciiImage {
     luma_avg: u8,
 }
 
-impl AsciiImage {
+impl Component for AsciiImageComponent {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        if self.dirty || self.cached_area != area {
+            self.rebuild_cache(area);
+        }
+        let buffer = frame.buffer_mut();
+        for (row, line) in self.cached.iter().enumerate() {
+            let y = area.y.saturating_add(row as u16);
+            if y >= area.y.saturating_add(area.height) {
+                break;
+            }
+            for (col, cell) in line.iter().enumerate() {
+                let x = area.x.saturating_add(col as u16);
+                if x >= area.x.saturating_add(area.width) {
+                    break;
+                }
+                if let Some(buf_cell) = buffer.cell_mut((x, y)) {
+                    let mut style = Style::default();
+                    if let Some((r, g, b)) = cell.fg {
+                        style = style.fg(crate::term_color::map_rgb_to_color(r, g, b));
+                    }
+                    if let Some((r, g, b)) = cell.bg {
+                        style = style.bg(crate::term_color::map_rgb_to_color(r, g, b));
+                    }
+                    let mut buf = [0u8; 4];
+                    let sym = cell.ch.encode_utf8(&mut buf);
+                    buf_cell.set_symbol(sym).set_style(style);
+                }
+            }
+        }
+    }
+}
+
+impl AsciiImageComponent {
     pub fn new() -> Self {
         Self {
             width: 0,
@@ -408,7 +445,7 @@ impl AsciiImage {
     }
 }
 
-impl Default for AsciiImage {
+impl Default for AsciiImageComponent {
     fn default() -> Self {
         Self::new()
     }
@@ -436,42 +473,6 @@ fn braille_bit(dx: u32, dy: u32) -> u16 {
     }
 }
 
-impl super::Component for AsciiImage {
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-        if self.dirty || self.cached_area != area {
-            self.rebuild_cache(area);
-        }
-        let buffer = frame.buffer_mut();
-        for (row, line) in self.cached.iter().enumerate() {
-            let y = area.y.saturating_add(row as u16);
-            if y >= area.y.saturating_add(area.height) {
-                break;
-            }
-            for (col, cell) in line.iter().enumerate() {
-                let x = area.x.saturating_add(col as u16);
-                if x >= area.x.saturating_add(area.width) {
-                    break;
-                }
-                if let Some(buf_cell) = buffer.cell_mut((x, y)) {
-                    let mut style = Style::default();
-                    if let Some((r, g, b)) = cell.fg {
-                        style = style.fg(crate::term_color::map_rgb_to_color(r, g, b));
-                    }
-                    if let Some((r, g, b)) = cell.bg {
-                        style = style.bg(crate::term_color::map_rgb_to_color(r, g, b));
-                    }
-                    let mut buf = [0u8; 4];
-                    let sym = cell.ch.encode_utf8(&mut buf);
-                    buf_cell.set_symbol(sym).set_style(style);
-                }
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,7 +497,7 @@ mod tests {
 
     #[test]
     fn set_luma8_sets_state_and_avg() {
-        let mut img = AsciiImage::new();
+        let mut img = AsciiImageComponent::new();
         img.set_luma8(2, 2, vec![10, 20, 30, 40]);
         assert_eq!(img.width, 2);
         assert_eq!(img.height, 2);
@@ -512,7 +513,7 @@ mod tests {
     #[test]
     fn set_rgba8_and_sampling() {
         // two pixels wide, one tall: red and green, full alpha
-        let mut img = AsciiImage::new();
+        let mut img = AsciiImageComponent::new();
         let rgba = vec![255u8, 0, 0, 255, 0, 255, 0, 255];
         img.set_rgba8(2, 1, rgba);
         assert_eq!(img.width, 2);
@@ -531,7 +532,7 @@ mod tests {
         assert_eq!(img.luma_avg, expected_avg);
 
         // alpha zero => sample_rgb returns None
-        let mut img2 = AsciiImage::new();
+        let mut img2 = AsciiImageComponent::new();
         let rgba2 = vec![0u8, 0, 0, 0];
         img2.set_rgba8(1, 1, rgba2);
         assert_eq!(img2.sample_alpha(0, 0), 0);

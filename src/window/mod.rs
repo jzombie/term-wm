@@ -4,8 +4,8 @@ mod window_manager;
 use crate::layout::RectSpec;
 
 pub use window_manager::{
-    AppWindowDraw, LayoutContract, ScrollState, SystemWindowId, WindowId, WindowManager,
-    WmMenuAction,
+    AppWindowDraw, LayoutContract, ScrollState, SystemWindowDraw, SystemWindowId, WindowDrawTask,
+    WindowId, WindowManager, WmMenuAction,
 };
 
 #[derive(Debug, Clone)]

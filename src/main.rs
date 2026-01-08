@@ -1,3 +1,6 @@
+//! This default application is a simple terminal app, which opens two sub-shells in side-by-side
+//! windows, where more windows can be added, or windows can be removed.
+
 use std::io;
 use std::time::Duration;
 
@@ -90,8 +93,12 @@ impl HasWindowManager<PaneId, PaneId> for App {
             pixel_width: 0,
             pixel_height: 0,
         };
-        let pane =
+        let mut pane =
             TerminalComponent::spawn(default_shell_command(), size).map_err(io::Error::other)?;
+        pane.set_link_handler_fn(|url| {
+            let _ = webbrowser::open(url);
+            true
+        });
         let id = self.terminals.len();
         self.terminals.push(pane);
         self.windows.set_focus(id);

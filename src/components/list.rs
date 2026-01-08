@@ -3,105 +3,17 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 
-use crate::components::scroll_view::ScrollView;
+use crate::components::{Component, scroll_view::ScrollViewComponent};
 use crate::ui::UiFrame;
 
 pub struct ListComponent {
     items: Vec<String>,
     selected: usize,
     title: String,
-    scroll_view: ScrollView,
+    scroll_view: ScrollViewComponent,
 }
 
-impl ListComponent {
-    pub fn new<T: Into<String>>(title: T) -> Self {
-        Self {
-            items: Vec::new(),
-            selected: 0,
-            title: title.into(),
-            scroll_view: ScrollView::new(),
-        }
-    }
-
-    pub fn set_items(&mut self, items: Vec<String>) {
-        self.items = items;
-        if self.selected >= self.items.len() {
-            self.selected = self.items.len().saturating_sub(1);
-        }
-    }
-
-    pub fn items(&self) -> &[String] {
-        &self.items
-    }
-
-    pub fn selected(&self) -> usize {
-        self.selected
-    }
-
-    pub fn set_selected(&mut self, selected: usize) {
-        self.selected = selected.min(self.items.len().saturating_sub(1));
-    }
-
-    pub fn scroll_offset(&self) -> usize {
-        self.scroll_view.offset()
-    }
-
-    pub fn move_selection(&mut self, delta: isize) {
-        self.bump_selection(delta);
-    }
-
-    fn bump_selection(&mut self, delta: isize) {
-        if self.items.is_empty() {
-            self.selected = 0;
-            return;
-        }
-        if delta.is_negative() {
-            self.selected = self.selected.saturating_sub(delta.unsigned_abs());
-        } else {
-            self.selected = (self.selected + delta as usize).min(self.items.len() - 1);
-        }
-    }
-
-    fn keep_selected_in_view(&mut self, view: usize) {
-        if view == 0 {
-            self.scroll_view.set_offset(0);
-            return;
-        }
-        if self.items.is_empty() {
-            self.scroll_view.set_offset(0);
-            return;
-        }
-        let mut offset = self.scroll_view.offset();
-        if self.selected < offset {
-            offset = self.selected;
-        } else if self.selected >= offset + view {
-            offset = self.selected + 1 - view;
-        }
-        self.scroll_view.set_offset(offset);
-    }
-
-    fn handle_scrollbar_event(&mut self, event: &Event) -> bool {
-        let response = self.scroll_view.handle_event(event);
-        if let Some(offset) = response.offset {
-            self.scroll_view.set_offset(offset);
-        }
-        if response.handled {
-            self.scroll_view
-                .set_total_view(self.items.len(), self.scroll_view.view());
-            let view = self.scroll_view.view();
-            if view > 0 {
-                if self.selected < self.scroll_view.offset() {
-                    self.selected = self.scroll_view.offset();
-                } else if self.selected >= self.scroll_view.offset() + view {
-                    self.selected = self.scroll_view.offset() + view - 1;
-                }
-            }
-        }
-        response.handled
-    }
-}
-
-impl super::Component for ListComponent {
+impl Component for ListComponent {
     fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
         let block = if focused {
             Block::default()
@@ -178,6 +90,94 @@ impl super::Component for ListComponent {
             Event::Mouse(_) => self.handle_scrollbar_event(event),
             _ => false,
         }
+    }
+}
+
+impl ListComponent {
+    pub fn new<T: Into<String>>(title: T) -> Self {
+        Self {
+            items: Vec::new(),
+            selected: 0,
+            title: title.into(),
+            scroll_view: ScrollViewComponent::new(),
+        }
+    }
+
+    pub fn set_items(&mut self, items: Vec<String>) {
+        self.items = items;
+        if self.selected >= self.items.len() {
+            self.selected = self.items.len().saturating_sub(1);
+        }
+    }
+
+    pub fn items(&self) -> &[String] {
+        &self.items
+    }
+
+    pub fn selected(&self) -> usize {
+        self.selected
+    }
+
+    pub fn set_selected(&mut self, selected: usize) {
+        self.selected = selected.min(self.items.len().saturating_sub(1));
+    }
+
+    pub fn scroll_offset(&self) -> usize {
+        self.scroll_view.offset()
+    }
+
+    pub fn move_selection(&mut self, delta: isize) {
+        self.bump_selection(delta);
+    }
+
+    fn bump_selection(&mut self, delta: isize) {
+        if self.items.is_empty() {
+            self.selected = 0;
+            return;
+        }
+        if delta.is_negative() {
+            self.selected = self.selected.saturating_sub(delta.unsigned_abs());
+        } else {
+            self.selected = (self.selected + delta as usize).min(self.items.len() - 1);
+        }
+    }
+
+    fn keep_selected_in_view(&mut self, view: usize) {
+        if view == 0 {
+            self.scroll_view.set_offset(0);
+            return;
+        }
+        if self.items.is_empty() {
+            self.scroll_view.set_offset(0);
+            return;
+        }
+        let mut offset = self.scroll_view.offset();
+        if self.selected < offset {
+            offset = self.selected;
+        } else if self.selected >= offset + view {
+            offset = self.selected + 1 - view;
+        }
+        self.scroll_view.set_offset(offset);
+    }
+
+    fn handle_scrollbar_event(&mut self, event: &Event) -> bool {
+        let response = self.scroll_view.handle_event(event);
+        if let Some(offset) = response.v_offset {
+            self.scroll_view.set_offset(offset);
+        }
+        if response.handled {
+            self.scroll_view
+                .set_total_view(self.items.len(), self.scroll_view.view());
+            let view = self.scroll_view.view();
+            if view > 0 {
+                if self.selected < self.scroll_view.offset() {
+                    self.selected = self.scroll_view.offset();
+                } else if self.selected >= self.scroll_view.offset() + view {
+                    self.selected = self.scroll_view.offset() + view - 1;
+                }
+            }
+        }
+        response.handled
     }
 }
 

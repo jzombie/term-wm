@@ -2,13 +2,11 @@ use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use crossterm::event::{Event, KeyCode, MouseEventKind};
+use crossterm::event::Event;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
 use ratatui::text::{Line, Text};
-use ratatui::widgets::Paragraph;
 
-use crate::components::Component;
+use crate::components::{Component, TextRendererComponent};
 use crate::ui::UiFrame;
 
 const DEFAULT_MAX_LINES: usize = 2000;
@@ -168,34 +166,10 @@ impl Write for DebugLogWriter {
 #[derive(Debug)]
 pub struct DebugLogComponent {
     handle: DebugLogHandle,
-    scroll_from_bottom: usize,
-}
-
-impl DebugLogComponent {
-    pub fn new(max_lines: usize) -> (Self, DebugLogHandle) {
-        let handle = DebugLogHandle {
-            inner: Arc::new(Mutex::new(DebugLogBuffer::new(max_lines))),
-        };
-        (
-            Self {
-                handle: handle.clone(),
-                scroll_from_bottom: 0,
-            },
-            handle,
-        )
-    }
-
-    pub fn new_default() -> (Self, DebugLogHandle) {
-        Self::new(DEFAULT_MAX_LINES)
-    }
-
-    fn clamp_scroll(&mut self, line_count: usize, area: Rect) -> usize {
-        let max_scroll = line_count.saturating_sub(area.height as usize);
-        if self.scroll_from_bottom > max_scroll {
-            self.scroll_from_bottom = max_scroll;
-        }
-        max_scroll
-    }
+    renderer: TextRendererComponent,
+    follow_tail: bool,
+    last_total: usize,
+    last_view: usize,
 }
 
 impl Component for DebugLogComponent {
@@ -216,55 +190,76 @@ impl Component for DebugLogComponent {
                 }
             }
         }
+        // Build text from the handle buffer
         let lines = if let Ok(buffer) = self.handle.inner.lock() {
             buffer.lines.iter().cloned().collect::<Vec<_>>()
         } else {
             Vec::new()
         };
-        let max_scroll = self.clamp_scroll(lines.len(), area);
-        let scroll_top = max_scroll.saturating_sub(self.scroll_from_bottom);
+        let total = lines.len();
+        let view = area.height as usize;
+        self.last_total = total;
+        self.last_view = view;
+
+        // Prepare Text for the renderer
         let text = Text::from(lines.into_iter().map(Line::from).collect::<Vec<_>>());
-        let mut paragraph = Paragraph::new(text).scroll((scroll_top as u16, 0));
-        if focused {
-            paragraph = paragraph.style(Style::default().fg(crate::theme::debug_highlight()));
+        self.renderer.set_text(text);
+        self.renderer.set_wrap(false);
+        // Follow tail behavior: set renderer offset to bottom when enabled
+        if self.follow_tail {
+            // renderer will position itself to the bottom during render via its internal scroll
+            let max_off = total.saturating_sub(view);
+            self.renderer.set_offset(max_off);
         }
-        frame.render_widget(paragraph, area);
+        self.follow_tail = self.is_at_bottom();
+
+        self.renderer.render(frame, area, focused);
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
-        match event {
-            Event::Key(key) => match key.code {
-                KeyCode::PageUp => {
-                    self.scroll_from_bottom = self.scroll_from_bottom.saturating_add(5);
-                    true
-                }
-                KeyCode::PageDown => {
-                    self.scroll_from_bottom = self.scroll_from_bottom.saturating_sub(5);
-                    true
-                }
-                KeyCode::Home => {
-                    self.scroll_from_bottom = usize::MAX;
-                    true
-                }
-                KeyCode::End => {
-                    self.scroll_from_bottom = 0;
-                    true
-                }
-                _ => false,
-            },
-            Event::Mouse(mouse) => match mouse.kind {
-                MouseEventKind::ScrollUp => {
-                    self.scroll_from_bottom = self.scroll_from_bottom.saturating_add(2);
-                    true
-                }
-                MouseEventKind::ScrollDown => {
-                    self.scroll_from_bottom = self.scroll_from_bottom.saturating_sub(2);
-                    true
-                }
-                _ => false,
-            },
-            _ => false,
+        // Delegate to the renderer which handles scroll/key/mouse
+        let handled = self.renderer.handle_event(event);
+        if handled {
+            self.follow_tail = self.is_at_bottom();
         }
+        handled
+    }
+}
+
+impl DebugLogComponent {
+    pub fn new(max_lines: usize) -> (Self, DebugLogHandle) {
+        let handle = DebugLogHandle {
+            inner: Arc::new(Mutex::new(DebugLogBuffer::new(max_lines))),
+        };
+        let mut renderer = TextRendererComponent::new();
+        renderer.set_wrap(false);
+        renderer.set_keyboard_enabled(true);
+        (
+            Self {
+                handle: handle.clone(),
+                renderer,
+                follow_tail: true,
+                last_total: 0,
+                last_view: 0,
+            },
+            handle,
+        )
+    }
+
+    pub fn new_default() -> (Self, DebugLogHandle) {
+        Self::new(DEFAULT_MAX_LINES)
+    }
+
+    fn is_at_bottom(&self) -> bool {
+        if self.last_view == 0 {
+            true
+        } else {
+            self.renderer_offset() >= self.last_total.saturating_sub(self.last_view)
+        }
+    }
+
+    fn renderer_offset(&self) -> usize {
+        self.renderer.offset()
     }
 }
 
@@ -272,6 +267,7 @@ impl Component for DebugLogComponent {
 mod tests {
     use super::*;
     use crossterm::event::{Event, KeyCode, MouseEvent, MouseEventKind};
+    use ratatui::prelude::Rect;
     use std::io::Write;
 
     #[test]
@@ -306,21 +302,36 @@ mod tests {
 
     #[test]
     fn debug_log_component_handle_event_scrolls() {
-        let (mut comp, _handle) = DebugLogComponent::new(10);
-        assert_eq!(comp.scroll_from_bottom, 0);
+        let (mut comp, handle) = DebugLogComponent::new(10);
+        for i in 0..20 {
+            handle.push(format!("line{i}"));
+        }
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 5,
+        };
+        comp.last_total = 20;
+        comp.last_view = 5;
+        comp.renderer.update(area, comp.last_total, comp.last_view);
+        let max_off = comp.last_total.saturating_sub(comp.last_view);
+        comp.renderer.set_offset(max_off);
+        comp.follow_tail = true;
+
         comp.handle_event(&Event::Key(crossterm::event::KeyEvent::new(
             KeyCode::PageUp,
             crossterm::event::KeyModifiers::NONE,
         )));
-        assert!(comp.scroll_from_bottom >= 5);
-        let before = comp.scroll_from_bottom;
+        assert!(comp.renderer.offset() < max_off);
+
+        let before = comp.renderer.offset();
         comp.handle_event(&Event::Mouse(MouseEvent {
             kind: MouseEventKind::ScrollDown,
             column: 0,
             row: 0,
             modifiers: crossterm::event::KeyModifiers::NONE,
         }));
-        // scroll_from_bottom should have decreased or stayed at zero
-        assert!(comp.scroll_from_bottom <= before);
+        assert!(comp.renderer.offset() >= before);
     }
 }

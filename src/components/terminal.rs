@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -8,8 +10,11 @@ use ratatui::{
 };
 use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
-use crate::components::scroll_view::ScrollView;
+use crate::components::{Component, scroll_view::ScrollViewComponent};
 use crate::layout::rect_contains;
+use crate::linkifier::{
+    LinkHandler, LinkOverlay, Linkifier, OverlaySignature, decorate_link_style,
+};
 use crate::pty::Pty;
 use crate::ui::UiFrame;
 
@@ -20,147 +25,14 @@ const DEFAULT_SCROLLBACK_LEN: usize = 2000;
 pub struct TerminalComponent {
     pane: Pty,
     last_size: (u16, u16),
-    scroll_view: ScrollView,
+    scroll_view: ScrollViewComponent,
     last_area: Rect,
+    linkifier: Linkifier,
+    link_overlay: LinkOverlay,
+    link_handler: Option<LinkHandler>,
 }
 
-impl TerminalComponent {
-    pub fn spawn(command: CommandBuilder, size: PtySize) -> crate::pty::PtyResult<Self> {
-        let pane = Pty::spawn_with_scrollback(command, size, DEFAULT_SCROLLBACK_LEN)?;
-        Ok(Self {
-            pane,
-            last_size: (size.cols, size.rows),
-            scroll_view: ScrollView::new(),
-            last_area: Rect::default(),
-        })
-    }
-
-    pub fn write_bytes(&mut self, input: &[u8]) -> std::io::Result<()> {
-        self.pane.write_bytes(input)
-    }
-
-    pub fn has_exited(&mut self) -> bool {
-        self.pane.has_exited()
-    }
-
-    pub fn bytes_received(&self) -> usize {
-        self.pane.bytes_received()
-    }
-
-    pub fn last_bytes_text(&self) -> String {
-        self.pane.last_bytes_text()
-    }
-
-    fn render_screen(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
-        let show_cursor = self.pane.scrollback() == 0;
-        let used = self.pane.max_scrollback();
-        let screen = self.pane.screen();
-        let buffer = frame.buffer_mut();
-
-        // Optimally only iterate over the visible intersection
-        let visible = area.intersection(buffer.area);
-        if visible.width == 0 || visible.height == 0 {
-            return;
-        }
-
-        // Calculate offset into the PTY screen
-        let start_col = visible.x.saturating_sub(area.x);
-        let start_row = visible.y.saturating_sub(area.y);
-
-        for row in start_row..start_row + visible.height {
-            for col in start_col..start_col + visible.width {
-                let cell_x = area.x + col;
-                let cell_y = area.y + row;
-
-                // If we have a PTY cell, render it
-                if let Some(cell) = screen.cell(row, col) {
-                    let mut symbol = cell.contents().chars().next().unwrap_or(' ');
-                    let (fg, bg) = resolve_colors(cell, screen);
-                    let mut style = Style::default();
-                    if let Some(fg) = fg {
-                        style = style.fg(fg);
-                    }
-                    if let Some(bg) = bg {
-                        style = style.bg(bg);
-                    }
-                    if cell.bold() {
-                        style = style.add_modifier(Modifier::BOLD);
-                    }
-                    if cell.dim() {
-                        style = style.add_modifier(Modifier::DIM);
-                    }
-                    if cell.italic() {
-                        style = style.add_modifier(Modifier::ITALIC);
-                    }
-                    if cell.underline() {
-                        style = style.add_modifier(Modifier::UNDERLINED);
-                    }
-                    if cell.inverse() {
-                        style = style.add_modifier(Modifier::REVERSED);
-                    }
-                    if cell.is_wide_continuation() {
-                        symbol = ' ';
-                    }
-
-                    if let Some(buf_cell) = buffer.cell_mut((cell_x, cell_y)) {
-                        let mut buf = [0u8; 4];
-                        // If background is transparent (None), force it to Reset to clear underlying content
-                        if bg.is_none() {
-                            buf_cell.reset();
-                        }
-                        let sym = symbol.encode_utf8(&mut buf);
-                        buf_cell.set_symbol(sym).set_style(style);
-                    }
-                } else if let Some(buf_cell) = buffer.cell_mut((cell_x, cell_y)) {
-                    // Otherwise clear the cell so we don't bleed background
-                    buf_cell.reset();
-                    buf_cell.set_symbol(" ");
-                }
-            }
-        }
-
-        if focused && !screen.hide_cursor() && show_cursor {
-            let (row, col) = screen.cursor_position();
-            if row < area.height
-                && col < area.width
-                && let Some(cell) = buffer.cell_mut((area.x + col, area.y + row))
-            {
-                cell.set_style(cell.style().add_modifier(Modifier::REVERSED));
-            }
-        }
-
-        if !screen.alternate_screen() && used > 0 {
-            let view = area.height as usize;
-            if view > 0 {
-                let total = used.saturating_add(view);
-                let offset = used.saturating_sub(self.pane.scrollback());
-                self.scroll_view.update(area, total, view);
-                self.scroll_view.set_offset(offset);
-                self.scroll_view.render(frame);
-            }
-        }
-    }
-}
-
-#[cfg(unix)]
-pub fn default_shell() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string())
-}
-
-#[cfg(windows)]
-pub fn default_shell() -> String {
-    std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
-}
-
-pub fn default_shell_command() -> CommandBuilder {
-    let mut cmd = CommandBuilder::new(default_shell());
-    if let Ok(cwd) = std::env::current_dir() {
-        cmd.cwd(cwd);
-    }
-    cmd
-}
-
-impl super::Component for TerminalComponent {
+impl Component for TerminalComponent {
     fn resize(&mut self, area: Rect) {
         if area.width == 0 || area.height == 0 {
             return;
@@ -219,21 +91,11 @@ impl super::Component for TerminalComponent {
                 true
             }
             Event::Mouse(mouse) => {
-                if !self.pane.alternate_screen() {
-                    if self.handle_scrollbar_event(event) {
-                        return true;
-                    }
-                    match mouse.kind {
-                        MouseEventKind::ScrollUp => {
-                            self.scroll_scrollback(1);
-                            return true;
-                        }
-                        MouseEventKind::ScrollDown => {
-                            self.scroll_scrollback(-1);
-                            return true;
-                        }
-                        _ => {}
-                    }
+                if self.try_handle_link_click(mouse) {
+                    return true;
+                }
+                if !self.pane.alternate_screen() && self.handle_scrollbar_event(event) {
+                    return true;
                 }
                 if !rect_contains(self.last_area, mouse.column, mouse.row) {
                     return false;
@@ -271,6 +133,208 @@ impl super::Component for TerminalComponent {
 }
 
 impl TerminalComponent {
+    pub fn spawn(command: CommandBuilder, size: PtySize) -> crate::pty::PtyResult<Self> {
+        let pane = Pty::spawn_with_scrollback(command, size, DEFAULT_SCROLLBACK_LEN)?;
+        let mut comp = Self {
+            pane,
+            last_size: (size.cols, size.rows),
+            scroll_view: ScrollViewComponent::new(),
+            last_area: Rect::default(),
+            linkifier: Linkifier::new(),
+            link_overlay: LinkOverlay::new(),
+            link_handler: None,
+        };
+        // Terminal scroll view must not hijack keyboard input; disable by default.
+        comp.scroll_view.set_keyboard_enabled(false);
+        Ok(comp)
+    }
+
+    pub fn write_bytes(&mut self, input: &[u8]) -> std::io::Result<()> {
+        self.pane.write_bytes(input)
+    }
+
+    pub fn has_exited(&mut self) -> bool {
+        self.pane.has_exited()
+    }
+
+    pub fn bytes_received(&self) -> usize {
+        self.pane.bytes_received()
+    }
+
+    pub fn last_bytes_text(&self) -> String {
+        self.pane.last_bytes_text()
+    }
+
+    pub fn set_link_handler(&mut self, handler: Option<LinkHandler>) {
+        self.link_handler = handler;
+    }
+
+    pub fn set_link_handler_fn<F>(&mut self, handler: F)
+    where
+        F: Fn(&str) -> bool + Send + Sync + 'static,
+    {
+        self.link_handler = Some(Arc::new(handler));
+    }
+
+    fn render_screen(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
+        let scrollback_value = self.pane.scrollback();
+        let show_cursor = scrollback_value == 0;
+        let used = self.pane.max_scrollback();
+        let buffer = frame.buffer_mut();
+
+        // Optimally only iterate over the visible intersection
+        let visible = area.intersection(buffer.area);
+        if visible.width == 0 || visible.height == 0 {
+            self.link_overlay.clear();
+            return;
+        }
+
+        // Calculate offset into the PTY screen
+        let start_col = visible.x.saturating_sub(area.x);
+        let start_row = visible.y.saturating_sub(area.y);
+
+        let bytes_seen = self.pane.bytes_received();
+        let screen = self.pane.screen();
+        let signature = OverlaySignature::new(
+            bytes_seen,
+            scrollback_value,
+            area.width,
+            area.height,
+            start_row,
+            start_col,
+        );
+        if !self.link_overlay.is_signature_current(&signature) {
+            let viewport_height = area.height as usize;
+            let viewport_width = area.width as usize;
+            let mut row_data: Vec<(usize, usize, String, Vec<usize>)> =
+                Vec::with_capacity(visible.height as usize);
+            for row in start_row..start_row + visible.height {
+                let viewport_row = row.saturating_sub(start_row) as usize;
+                if viewport_row >= viewport_height {
+                    continue;
+                }
+                let mut line = String::with_capacity(visible.width as usize);
+                let mut offsets = Vec::with_capacity(visible.width as usize + 1);
+                offsets.push(0);
+                for col in start_col..start_col + visible.width {
+                    let ch = screen
+                        .cell(row, col)
+                        .and_then(|cell| cell.contents().chars().next())
+                        .unwrap_or(' ');
+                    line.push(ch);
+                    offsets.push(line.len());
+                }
+                row_data.push((viewport_row, start_col as usize, line, offsets));
+            }
+            self.link_overlay.update_view(
+                signature,
+                viewport_height,
+                viewport_width,
+                &row_data,
+                &self.linkifier,
+            );
+        }
+
+        for row in start_row..start_row + visible.height {
+            for col in start_col..start_col + visible.width {
+                let cell_x = area.x + col;
+                let cell_y = area.y + row;
+                let viewport_row = row.saturating_sub(start_row) as usize;
+                let viewport_col = col.saturating_sub(start_col) as usize;
+
+                // If we have a PTY cell, render it
+                if let Some(cell) = screen.cell(row, col) {
+                    let mut symbol = cell.contents().chars().next().unwrap_or(' ');
+                    let (fg, bg) = resolve_colors(cell, screen);
+                    let mut style = Style::default();
+                    if let Some(fg) = fg {
+                        style = style.fg(fg);
+                    }
+                    if let Some(bg) = bg {
+                        style = style.bg(bg);
+                    }
+                    if cell.bold() {
+                        style = style.add_modifier(Modifier::BOLD);
+                    }
+                    if cell.dim() {
+                        style = style.add_modifier(Modifier::DIM);
+                    }
+                    if cell.italic() {
+                        style = style.add_modifier(Modifier::ITALIC);
+                    }
+                    if cell.underline() {
+                        style = style.add_modifier(Modifier::UNDERLINED);
+                    }
+                    if cell.inverse() {
+                        style = style.add_modifier(Modifier::REVERSED);
+                    }
+                    if cell.is_wide_continuation() {
+                        symbol = ' ';
+                    }
+
+                    if self.link_overlay.is_link_cell(viewport_row, viewport_col) {
+                        style = decorate_link_style(style);
+                    }
+
+                    if let Some(buf_cell) = buffer.cell_mut((cell_x, cell_y)) {
+                        let mut buf = [0u8; 4];
+                        // If background is transparent (None), force it to Reset to clear underlying content
+                        if bg.is_none() {
+                            buf_cell.reset();
+                        }
+                        let sym = symbol.encode_utf8(&mut buf);
+                        buf_cell.set_symbol(sym).set_style(style);
+                    }
+                } else if let Some(buf_cell) = buffer.cell_mut((cell_x, cell_y)) {
+                    // Otherwise clear the cell so we don't bleed background
+                    buf_cell.reset();
+                    buf_cell.set_symbol(" ");
+                }
+            }
+        }
+
+        if focused && !screen.hide_cursor() && show_cursor {
+            let (row, col) = screen.cursor_position();
+            if row < area.height
+                && col < area.width
+                && let Some(cell) = buffer.cell_mut((area.x + col, area.y + row))
+            {
+                cell.set_style(cell.style().add_modifier(Modifier::REVERSED));
+            }
+        }
+
+        if !screen.alternate_screen() && used > 0 {
+            let view = area.height as usize;
+            if view > 0 {
+                let total = used.saturating_add(view);
+                let offset = used.saturating_sub(scrollback_value);
+                self.scroll_view.update(area, total, view);
+                self.scroll_view.set_offset(offset);
+                self.scroll_view.render(frame);
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+pub fn default_shell() -> String {
+    std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string())
+}
+
+#[cfg(windows)]
+pub fn default_shell() -> String {
+    std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
+}
+
+pub fn default_shell_command() -> CommandBuilder {
+    let mut cmd = CommandBuilder::new(default_shell());
+    if let Ok(cwd) = std::env::current_dir() {
+        cmd.cwd(cwd);
+    }
+    cmd
+}
+
+impl TerminalComponent {
     fn scroll_scrollback(&mut self, delta: isize) {
         let current = self.pane.scrollback() as isize;
         let next = (current + delta).clamp(0, self.pane.scrollback_len() as isize) as usize;
@@ -283,7 +347,7 @@ impl TerminalComponent {
             return false;
         }
         let response = self.scroll_view.handle_event(event);
-        if let Some(offset) = response.offset {
+        if let Some(offset) = response.v_offset {
             let scrollback = used.saturating_sub(offset);
             self.pane.set_scrollback(scrollback);
         }
@@ -293,6 +357,44 @@ impl TerminalComponent {
     /// Terminate the underlying PTY child process.
     pub fn terminate(&mut self) {
         let _ = self.pane.kill_child();
+    }
+
+    fn link_at_position(&self, mouse: &MouseEvent) -> Option<String> {
+        if self.last_area.width == 0 || self.last_area.height == 0 {
+            return None;
+        }
+        if mouse.column < self.last_area.x
+            || mouse.column >= self.last_area.x.saturating_add(self.last_area.width)
+            || mouse.row < self.last_area.y
+            || mouse.row >= self.last_area.y.saturating_add(self.last_area.height)
+        {
+            return None;
+        }
+        let local_x = (mouse.column - self.last_area.x) as usize;
+        let local_y = (mouse.row - self.last_area.y) as usize;
+        self.link_overlay.link_at(local_y, local_x)
+    }
+
+    fn try_handle_link_click(&mut self, mouse: &MouseEvent) -> bool {
+        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            return false;
+        }
+
+        if let Some(url) = self.link_at_position(mouse)
+            && self.invoke_link_handler(&url)
+        {
+            return true;
+        }
+
+        false
+    }
+
+    fn invoke_link_handler(&self, url: &str) -> bool {
+        if let Some(handler) = &self.link_handler {
+            handler(url)
+        } else {
+            webbrowser::open(url).is_ok()
+        }
     }
 }
 

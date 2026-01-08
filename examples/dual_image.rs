@@ -6,7 +6,7 @@ use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ratatui::prelude::Rect;
 use ratatui::widgets::Clear;
 
-use term_wm::components::{AsciiImage, Component};
+use term_wm::components::{AsciiImageComponent, Component};
 use term_wm::drivers::OutputDriver;
 use term_wm::drivers::console::{ConsoleInputDriver, ConsoleOutputDriver};
 use term_wm::runner::{HasWindowManager, WindowApp, run_window_app};
@@ -59,16 +59,16 @@ fn main() -> io::Result<()> {
 
 struct App {
     windows: WindowManager<PaneId, PaneId>,
-    left: AsciiImage,
-    right: AsciiImage,
+    left: AsciiImageComponent,
+    right: AsciiImageComponent,
     pending_paths: Vec<String>,
     loaded_count: usize,
 }
 
 impl App {
     fn new(mut paths: Vec<String>) -> io::Result<Self> {
-        let mut left = AsciiImage::new();
-        let mut right = AsciiImage::new();
+        let mut left = AsciiImageComponent::new();
+        let mut right = AsciiImageComponent::new();
         left.set_keep_aspect(true);
         right.set_keep_aspect(true);
         left.set_colorize(true);
@@ -137,13 +137,18 @@ impl WindowApp<PaneId, PaneId> for App {
     }
 }
 
-fn render_pane(frame: &mut UiFrame<'_>, image: &mut AsciiImage, area: Rect, _focused: bool) {
+fn render_pane(
+    frame: &mut UiFrame<'_>,
+    image: &mut AsciiImageComponent,
+    area: Rect,
+    _focused: bool,
+) {
     // Clear the area and render the image directly (no inner decorative frame).
     frame.render_widget(Clear, area);
     image.render(frame, area, false);
 }
 
-fn load_into(component: &mut AsciiImage, path: &str) -> io::Result<()> {
+fn load_into(component: &mut AsciiImageComponent, path: &str) -> io::Result<()> {
     if path.ends_with(".svg") {
         return component
             .load_svg_from_path(path)

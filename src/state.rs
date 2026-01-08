@@ -4,7 +4,6 @@ pub struct AppState {
     mouse_capture_dirty: bool,
     overlay_visible: bool,
     wm_menu_selected: usize,
-    debug_log_visible: bool,
 }
 
 impl AppState {
@@ -14,7 +13,6 @@ impl AppState {
             mouse_capture_dirty: false,
             overlay_visible: false,
             wm_menu_selected: 0,
-            debug_log_visible: false,
         }
     }
 
@@ -62,18 +60,6 @@ impl AppState {
 
     pub fn set_wm_menu_selected(&mut self, selected: usize) {
         self.wm_menu_selected = selected;
-    }
-
-    pub fn debug_log_visible(&self) -> bool {
-        self.debug_log_visible
-    }
-
-    pub fn set_debug_log_visible(&mut self, visible: bool) {
-        self.debug_log_visible = visible;
-    }
-
-    pub fn toggle_debug_log_visible(&mut self) {
-        self.debug_log_visible = !self.debug_log_visible;
     }
 }
 
