@@ -336,9 +336,10 @@ pub fn default_shell_command() -> CommandBuilder {
     if let Ok(cwd) = std::env::current_dir() {
         cmd.cwd(cwd);
     }
-    // Set TERM explicitly so that child processes know what to expect.
-    // Use "screen-256color" to get colors but avoid advanced xterm features (like 'rep')
-    // that the parser might not handle, and to ensure better compatibility.
+    // Set `TERM` for spawned shells so remote applications detect mouse
+    // capability and enable mouse reporting. We choose `screen-256color`
+    // (colors + broad compatibility) rather than a full xterm variant to
+    // avoid some xterm-specific sequences the parser previously mishandled.
     cmd.env("TERM", "screen-256color");
     cmd
 }
@@ -499,6 +500,12 @@ fn mouse_event_to_bytes(mouse: MouseEvent, encoding: MouseProtocolEncoding) -> V
     let col = mouse.column.saturating_add(1);
     let row = mouse.row.saturating_add(1);
 
+    // Two encodings are supported:
+    // - SGR (`CSI < Cb ; Cx ; Cy M/m`) which conveys presses/releases
+    //   with explicit button numbers and is preferred by many modern apps.
+    // - Legacy/X11 (`CSI M Cb Cx Cy`) used by older apps; for releases the
+    //   canonical base button code is 3. Modifier bits are preserved when
+    //   constructing the Cb byte for legacy encoding.
     match encoding {
         MouseProtocolEncoding::Sgr => {
             let action = if release { 'm' } else { 'M' };
