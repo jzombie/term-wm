@@ -522,7 +522,7 @@ fn mouse_event_to_bytes(mouse: MouseEvent, encoding: MouseProtocolEncoding) -> V
                 return Vec::new();
             }
 
-            vec![0x1b, b'[', b'M', cb as u8, cx as u8, cy as u8]
+            vec![0x1b, b'[', b'M', cb, cx as u8, cy as u8]
         }
         _ => Vec::new(),
     }
