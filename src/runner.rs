@@ -83,6 +83,13 @@ where
                 Ok(flow)
             };
             if let Some(evt) = event {
+                // Map key events to high-level `Action`s once to prefer action-based handling
+                let mapped_action = match &evt {
+                    Event::Key(key) => {
+                        crate::keybindings::KeyBindings::default().action_for_key(key)
+                    }
+                    _ => None,
+                };
                 if app.windows().exit_confirm_visible() {
                     if let Some(action) = app.windows().handle_exit_confirm_event(&evt) {
                         match action {
@@ -101,8 +108,7 @@ where
                 if wm_mode
                     && let Event::Key(key) = evt
                     && key.kind == KeyEventKind::Press
-                    && crate::keybindings::KeyBindings::default()
-                        .matches(crate::keybindings::Action::WmToggleOverlay, &key)
+                    && mapped_action == Some(crate::keybindings::Action::WmToggleOverlay)
                 {
                     if app.windows().wm_overlay_visible() {
                         let passthrough = app.windows().esc_passthrough_active();
@@ -166,9 +172,8 @@ where
                     if app.windows().wm_menu_consumes_event(&evt) {
                         return flush_mouse_capture(app, ControlFlow::Continue);
                     }
-                    if let Event::Key(key) = evt
-                        && crate::keybindings::KeyBindings::default()
-                            .matches(crate::keybindings::Action::NewWindow, &key)
+                    if let Event::Key(_key) = evt
+                        && mapped_action == Some(crate::keybindings::Action::NewWindow)
                     {
                         app.wm_new_window()?;
                         app.windows().close_wm_overlay();
@@ -180,9 +185,8 @@ where
                     return flush_mouse_capture(app, ControlFlow::Continue);
                 }
                 match &evt {
-                    Event::Key(key)
-                        if crate::keybindings::KeyBindings::default()
-                            .matches(crate::keybindings::Action::FocusPrev, key) =>
+                    Event::Key(_key)
+                        if mapped_action == Some(crate::keybindings::Action::FocusPrev) =>
                     {
                         if app.windows().capture_active() {
                             if wm_mode {
@@ -207,9 +211,8 @@ where
                         );
                         return flush_mouse_capture(app, ControlFlow::Continue);
                     }
-                    Event::Key(key)
-                        if crate::keybindings::KeyBindings::default()
-                            .matches(crate::keybindings::Action::FocusNext, key) =>
+                    Event::Key(_key)
+                        if mapped_action == Some(crate::keybindings::Action::FocusNext) =>
                     {
                         if app.windows().capture_active() {
                             if wm_mode {

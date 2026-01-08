@@ -2,7 +2,7 @@ use std::fs;
 use std::io;
 use std::time::Duration;
 
-use crossterm::event::{Event, KeyCode, KeyModifiers};
+use crossterm::event::Event;
 use ratatui::prelude::Rect;
 use ratatui::widgets::Clear;
 
@@ -43,12 +43,12 @@ fn main() -> io::Result<()> {
             }
         },
         |event, _app| {
-            matches!(
-                event,
-                Some(Event::Key(key))
-                    if key.code == KeyCode::Char('q')
-                        && key.modifiers.contains(KeyModifiers::CONTROL)
-            )
+            if let Some(evt) = event {
+                term_wm::keybindings::KeyBindings::default().action_for_event(evt)
+                    == Some(term_wm::keybindings::Action::Quit)
+            } else {
+                false
+            }
         },
     );
 

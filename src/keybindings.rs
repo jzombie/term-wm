@@ -140,6 +140,15 @@ impl KeyBindings {
         None
     }
 
+    /// Map a full `Event` to an `Action`, if the event is a key event.
+    pub fn action_for_event(&self, evt: &crossterm::event::Event) -> Option<Action> {
+        if let crossterm::event::Event::Key(k) = evt {
+            self.action_for_key(k)
+        } else {
+            None
+        }
+    }
+
     pub fn help_entries(&self) -> Vec<(Action, Vec<String>)> {
         let mut v = Vec::new();
         for (act, list) in &self.map {
