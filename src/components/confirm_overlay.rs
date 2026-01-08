@@ -228,19 +228,27 @@ mod tests {
         Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
 
+    fn ev_for(action: crate::keybindings::Action) -> Event {
+        use crate::keybindings::KeyBindings;
+        use crossterm::event::KeyEvent;
+        if let Some(combo) = KeyBindings::default().first_combo(action) {
+            Event::Key(KeyEvent::new(combo.code, combo.mods))
+        } else {
+            // fallback: return an arbitrary key that should still be handled
+            Event::Key(KeyEvent::new(
+                crossterm::event::KeyCode::Esc,
+                crossterm::event::KeyModifiers::NONE,
+            ))
+        }
+    }
+
     #[test]
     fn handle_event_recognizes_keys() {
         let mut o = ConfirmOverlayComponent::new();
-        assert!(o.handle_event(&Event::Key(KeyEvent::new(
-            KeyCode::Enter,
-            KeyModifiers::NONE
-        ))));
-        assert!(o.handle_event(&Event::Key(KeyEvent::new(
-            KeyCode::Char('y'),
-            KeyModifiers::NONE
-        ))));
-        assert!(o.handle_event(&Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))));
-        assert!(o.handle_event(&Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))));
+        assert!(o.handle_event(&ev_for(crate::keybindings::Action::ConfirmAccept)));
+        assert!(o.handle_event(&ev_for(crate::keybindings::Action::ConfirmAccept)));
+        assert!(o.handle_event(&ev_for(crate::keybindings::Action::ConfirmCancel)));
+        assert!(o.handle_event(&ev_for(crate::keybindings::Action::ConfirmToggle)));
     }
 
     #[test]

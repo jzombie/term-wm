@@ -285,6 +285,11 @@ impl KeyBindings {
             .map(|list| list.iter().map(|c| c.display()).collect())
             .unwrap_or_default()
     }
+
+    /// Return the first `KeyCombo` mapped to `action`, if any.
+    pub fn first_combo(&self, action: Action) -> Option<KeyCombo> {
+        self.map.get(&action).and_then(|list| list.first().cloned())
+    }
 }
 
 #[cfg(test)]
