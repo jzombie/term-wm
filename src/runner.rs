@@ -72,6 +72,16 @@ where
 
     event_loop.run(|driver, event| {
         let handler = || -> io::Result<ControlFlow> {
+            // Check if a panic occurred (e.g. in a background thread or previous iteration)
+            // and force the debug window open if so.
+            if crate::components::debug_log::take_panic_pending() {
+                app.windows().open_debug_window();
+            }
+            // Also check for reported non-fatal errors that should pop the debug log
+            if crate::components::debug_log::take_error_pending() {
+                app.windows().open_debug_window();
+            }
+
             // Drain any pending closed app ids recorded by the WindowManager and invoke app cleanup.
             for id in app.windows().take_closed_app_windows() {
                 app.wm_close_window(id)?;
@@ -366,20 +376,31 @@ fn draw_window_app<A, W, R, FMap>(
     let area = frame.area();
     let windows = app.enumerate_windows();
     let windows_changed = state.update(&windows);
+    // If no application windows, we still might need to draw system windows (e.g. debug log).
+    // The previous check `if windows.is_empty() { return }` prevented this.
+    // We now allow proceeding, ensuring the layout is handled gracefully.
+
+    if windows_changed {
+        if let Some(layout) = app.layout_for_windows(&windows) {
+            app.windows().set_managed_layout(layout);
+        } else if windows.is_empty() {
+            // Force a layout update to reflect empty state, but don't clear system windows
+            // that the WindowManager might inject. passing None usually clears the app layout.
+            app.windows().set_managed_layout_none();
+        }
+    }
+
     if windows.is_empty() {
+        // If app windows are empty, we might still have system windows.
+        // We render the "empty" message underneath, then let the window manager draw its overlays/system windows on top.
         let message = app.empty_window_message();
         if !message.is_empty() {
             frame
                 .buffer_mut()
                 .set_string(area.x, area.y, message, Style::default());
         }
-        app.windows().render_overlays(frame);
-        return;
     }
 
-    if windows_changed && let Some(layout) = app.layout_for_windows(&windows) {
-        app.windows().set_managed_layout(layout);
-    }
     let focus_order: Vec<W> = windows.iter().copied().map(map_region).collect();
     if !focus_order.is_empty() {
         app.windows().set_focus_order(focus_order);

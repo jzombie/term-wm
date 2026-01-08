@@ -9,7 +9,7 @@ use crossterm::event::Event;
 use ratatui::prelude::Rect;
 
 use portable_pty::PtySize;
-use term_wm::components::{Component, TerminalComponent, default_shell_command};
+use term_wm::components::{Component, TerminalComponent, default_shell_command, log_line};
 use term_wm::drivers::OutputDriver;
 use term_wm::drivers::console::{ConsoleInputDriver, ConsoleOutputDriver};
 use term_wm::keybindings::{Action, KeyBindings};
@@ -82,12 +82,15 @@ fn main() -> io::Result<()> {
             false
         },
         |event, app| {
-            if app.terminals.iter_mut().all(|pane| pane.has_exited()) {
-                return true;
-            }
             if let Some(Event::Key(key)) = event {
                 let kb = KeyBindings::default();
-                return kb.matches(Action::Quit, key);
+                if kb.matches(Action::Quit, key) {
+                    return true;
+                }
+            }
+
+            if app.check_quit() {
+                return true;
             }
             false
         },
@@ -110,6 +113,14 @@ impl App {
             terminals: Vec::new(),
         };
 
+        let mut error_occurred = false;
+        let mut handle_spawn = |res: io::Result<()>| {
+            if let Err(e) = res {
+                log_line(format!("Window spawn error: {}", e));
+                error_occurred = true;
+            }
+        };
+
         // If commands provided, open one per command; otherwise open `num_windows`
         // shells using the default shell.
         if !commands.is_empty() {
@@ -128,15 +139,19 @@ impl App {
                         cb.arg("/C");
                         cb.arg(cmd);
                     }
-                    app.spawn_terminal_with_command(cb)?;
+                    handle_spawn(app.spawn_terminal_with_command(cb));
                 } else {
-                    app.wm_new_window()?;
+                    handle_spawn(app.wm_new_window());
                 }
             }
         } else {
             for _ in 0..num_windows {
-                app.wm_new_window()?;
+                handle_spawn(app.wm_new_window());
             }
+        }
+
+        if error_occurred {
+            app.windows.open_debug_window();
         }
 
         app.windows.open_help_overlay();
@@ -202,6 +217,24 @@ impl HasWindowManager<PaneId, PaneId> for App {
             pane.terminate();
         }
         Ok(())
+    }
+}
+
+impl App {
+    fn check_quit(&mut self) -> bool {
+        if self.windows.debug_window_visible() {
+            // Never quit automatically if debug window is open. User must explicitly quit.
+            return false;
+        }
+
+        if self.terminals.iter_mut().all(|pane| pane.has_exited()) {
+            // Re-check visibility in case has_exited() triggered an error report
+            if self.windows.debug_window_visible() {
+                return false;
+            }
+            return true;
+        }
+        false
     }
 }
 

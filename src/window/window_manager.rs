@@ -674,6 +674,16 @@ where
         }
     }
 
+    pub fn open_debug_window(&mut self) {
+        if !self.system_window_visible(SystemWindowId::DebugLog) {
+            self.show_system_window(SystemWindowId::DebugLog);
+        }
+    }
+
+    pub fn debug_window_visible(&self) -> bool {
+        self.system_window_visible(SystemWindowId::DebugLog)
+    }
+
     pub fn esc_passthrough_active(&self) -> bool {
         self.esc_passthrough_remaining().is_some()
     }
@@ -865,6 +875,16 @@ where
     pub fn set_managed_layout(&mut self, layout: TilingLayout<R>) {
         self.managed_layout = Some(TilingLayout::new(map_layout_node(layout.root())));
         self.clear_all_floating();
+        if self.system_window_visible(SystemWindowId::DebugLog) {
+            self.ensure_system_window_in_layout(WindowId::system(SystemWindowId::DebugLog));
+        }
+    }
+
+    pub fn set_managed_layout_none(&mut self) {
+        if self.managed_layout.is_none() {
+            return;
+        }
+        self.managed_layout = None;
         if self.system_window_visible(SystemWindowId::DebugLog) {
             self.ensure_system_window_in_layout(WindowId::system(SystemWindowId::DebugLog));
         }
