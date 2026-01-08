@@ -73,6 +73,10 @@ impl MarkdownViewerComponent {
         self.link_handler = Some(Arc::new(handler));
     }
 
+    pub fn reset(&mut self) {
+        self.renderer.reset();
+    }
+
     pub fn set_markdown(&mut self, raw: &str) {
         let parser = Parser::new_ext(raw, Options::all());
 

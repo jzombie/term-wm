@@ -279,6 +279,10 @@ impl TextRendererComponent {
 
         None
     }
+
+    pub fn reset(&mut self) {
+        self.scroll.reset();
+    }
 }
 
 fn compute_display_lines(text: &Text<'_>, width: u16) -> usize {
