@@ -1,15 +1,53 @@
+//! Lightweight link detection and overlay caching utilities.
+//!
+//! This module provides two related responsibilities:
+//!
+//! - `Linkifier`: a small wrapper around `linkify::LinkFinder` that exposes
+//!   convenience helpers to detect and break text into link-aware fragments
+//!   suitable for rendering.
+//! - `LinkOverlay`: a compact, per-view cache of detected links for a grid of
+//!   rendered rows. `LinkOverlay` remembers a small `OverlaySignature` and will
+//!   skip recomputing per-row link maps when the upstream viewport and PTY
+//!   content haven't changed. This keeps link detection cheap when the visible
+//!   buffer is stable (helps with high-frequency rendering workloads).
+//!
+//! Typical usage:
+//!
+//! - Call `Linkifier::detect_links()` to obtain ranges/URLs when producing
+//!   renderable text fragments, or use `Linkifier::linkify_text()` to convert
+//!   a `ratatui::Text` into a `LinkifiedText` (for viewers like the Markdown
+//!   component).
+//! - For interactive terminal views, call `LinkOverlay::update_view()` with a
+//!   small slice of visible rows; the overlay will internally decide whether to
+//!   recompute based on the provided `OverlaySignature`.
+//!
+//! The helper `strip_trailing_punctuation` exists to trim extraneous
+//! punctuation characters that `linkify` may include when matching ranges in
+//! natural text (e.g. a URL followed by a period in a sentence). See
+//! `Linkifier::detect_links()` where it is applied.
+
 use std::{ops::Range, sync::Arc};
 
 use linkify::{LinkFinder, LinkKind};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 
+/// Map of lines -> columns -> optional URL string used by linkified renderers.
 pub type LinkMap = Vec<Vec<Option<String>>>;
 
 #[derive(Clone, Debug)]
+/// A piece of text with rendering `style` and optional `link` metadata.
+///
+/// `LinkFragment` represents a contiguous span emitted by a renderer (e.g.
+/// `MarkdownViewer` or a `ratatui::Span`) which may either be explicitly a
+/// hyperlink (the `link` field) or plain text that should be scanned for
+/// automatic links via the `Linkifier`.
 pub struct LinkFragment {
+    /// The textual content of the fragment.
     pub text: String,
+    /// Visual styling to apply when rendering this fragment.
     pub style: Style,
+    /// Optional explicit hyperlink associated with this fragment.
     pub link: Option<String>,
 }
 
@@ -24,22 +62,75 @@ impl LinkFragment {
 }
 
 #[derive(Debug)]
+/// Result of converting renderable text into link-aware spans.
+///
+/// `text` is the `ratatui::Text` value ready to render, and `link_map` is a
+/// parallel structure mapping each cell/spans position to an optional URL.
 pub struct LinkifiedText {
     pub text: Text<'static>,
     pub link_map: LinkMap,
 }
 
+/// A callback that consumes a URL and returns `true` if it handled opening it.
 pub type LinkHandler = Arc<dyn Fn(&str) -> bool + Send + Sync + 'static>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// A link that was detected inside a single string slice.
+///
+/// `range` is the byte range inside the input string and `url` is the
+/// substring (after trimming punctuation) that should be used when opening
+/// the link.
 pub struct DetectedLink {
     pub range: Range<usize>,
     pub url: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Small fingerprint used by `LinkOverlay` to determine whether the cached
+/// per-row link map remains valid.
+///
+/// It includes a monotonic `bytes_seen` counter (from the PTY), the current
+/// `scrollback` offset, the viewport size, and the top-left offset into the
+/// PTY screen. When the signature matches, `LinkOverlay` can safely skip the
+/// expensive detect pass for rows that haven't changed.
+pub struct OverlaySignature {
+    bytes_seen: usize,
+    scrollback: usize,
+    area_width: u16,
+    area_height: u16,
+    start_row: u16,
+    start_col: u16,
+}
+
+impl OverlaySignature {
+    pub fn new(
+        bytes_seen: usize,
+        scrollback: usize,
+        area_width: u16,
+        area_height: u16,
+        start_row: u16,
+        start_col: u16,
+    ) -> Self {
+        Self {
+            bytes_seen,
+            scrollback,
+            area_width,
+            area_height,
+            start_row,
+            start_col,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
+/// Cache of detected links for a rectangular viewport.
+///
+/// Callers should provide only the visible rows (and a signature) via
+/// `update_view()`; `LinkOverlay` will update only rows that changed and will
+/// keep an internal signature to skip redundant work.
 pub struct LinkOverlay {
     rows: Vec<RowLinks>,
+    signature: Option<OverlaySignature>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -50,6 +141,8 @@ struct RowLinks {
 }
 
 #[derive(Debug)]
+/// Convenience wrapper around `linkify::LinkFinder` with helpers used by the
+/// UI components in this crate.
 pub struct Linkifier {
     finder: LinkFinder,
 }
@@ -121,6 +214,10 @@ impl Linkifier {
         for span in self.finder.links(text) {
             let start = span.start();
             let matched = span.as_str();
+            // Trim any common trailing punctuation characters from the
+            // matched substring. `linkify` can include trailing characters
+            // when links appear at the end of a sentence; callers typically
+            // want the raw URL without punctuation when opening it.
             let (url_part, _) = strip_trailing_punctuation(matched);
             if url_part.is_empty() {
                 continue;
@@ -195,20 +292,30 @@ pub fn decorate_link_style(mut style: Style) -> Style {
 
 impl LinkOverlay {
     pub fn new() -> Self {
-        Self { rows: Vec::new() }
+        Self {
+            rows: Vec::new(),
+            signature: None,
+        }
     }
 
     pub fn clear(&mut self) {
         self.rows.clear();
+        self.signature = None;
+    }
+
+    pub fn is_signature_current(&self, signature: &OverlaySignature) -> bool {
+        self.signature.as_ref() == Some(signature)
     }
 
     pub fn update_view(
         &mut self,
+        signature: OverlaySignature,
         height: usize,
         width: usize,
         rows: &[(usize, usize, String, Vec<usize>)],
         linkifier: &Linkifier,
     ) {
+        self.signature = Some(signature);
         self.resize(height, width);
         let mut visited = vec![false; self.rows.len()];
         for (row_idx, col_offset, text, offsets) in rows {
@@ -306,6 +413,9 @@ impl RowLinks {
 }
 
 fn strip_trailing_punctuation(s: &str) -> (&str, &str) {
+    // Return the largest prefix without trailing punctuation and the
+    // remaining suffix. This is used to strip sentence punctuation like
+    // ".,?!:;)]'\"" from URLs that `linkify` may include at match time.
     let mut end = s.len();
     while end > 0 {
         let ch = s[..end].chars().last().unwrap();

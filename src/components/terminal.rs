@@ -12,7 +12,9 @@ use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
 use crate::components::{Component, scroll_view::ScrollViewComponent};
 use crate::layout::rect_contains;
-use crate::linkifier::{LinkHandler, LinkOverlay, Linkifier, decorate_link_style};
+use crate::linkifier::{
+    LinkHandler, LinkOverlay, Linkifier, OverlaySignature, decorate_link_style,
+};
 use crate::pty::Pty;
 use crate::ui::UiFrame;
 
@@ -191,31 +193,47 @@ impl TerminalComponent {
         let start_col = visible.x.saturating_sub(area.x);
         let start_row = visible.y.saturating_sub(area.y);
 
+        let bytes_seen = self.pane.bytes_received();
         let screen = self.pane.screen();
-        let viewport_height = area.height as usize;
-        let viewport_width = area.width as usize;
-        let mut row_data: Vec<(usize, usize, String, Vec<usize>)> =
-            Vec::with_capacity(visible.height as usize);
-        for row in start_row..start_row + visible.height {
-            let viewport_row = row.saturating_sub(start_row) as usize;
-            if viewport_row >= viewport_height {
-                continue;
+        let signature = OverlaySignature::new(
+            bytes_seen,
+            scrollback_value,
+            area.width,
+            area.height,
+            start_row,
+            start_col,
+        );
+        if !self.link_overlay.is_signature_current(&signature) {
+            let viewport_height = area.height as usize;
+            let viewport_width = area.width as usize;
+            let mut row_data: Vec<(usize, usize, String, Vec<usize>)> =
+                Vec::with_capacity(visible.height as usize);
+            for row in start_row..start_row + visible.height {
+                let viewport_row = row.saturating_sub(start_row) as usize;
+                if viewport_row >= viewport_height {
+                    continue;
+                }
+                let mut line = String::with_capacity(visible.width as usize);
+                let mut offsets = Vec::with_capacity(visible.width as usize + 1);
+                offsets.push(0);
+                for col in start_col..start_col + visible.width {
+                    let ch = screen
+                        .cell(row, col)
+                        .and_then(|cell| cell.contents().chars().next())
+                        .unwrap_or(' ');
+                    line.push(ch);
+                    offsets.push(line.len());
+                }
+                row_data.push((viewport_row, start_col as usize, line, offsets));
             }
-            let mut line = String::with_capacity(visible.width as usize);
-            let mut offsets = Vec::with_capacity(visible.width as usize + 1);
-            offsets.push(0);
-            for col in start_col..start_col + visible.width {
-                let ch = screen
-                    .cell(row, col)
-                    .and_then(|cell| cell.contents().chars().next())
-                    .unwrap_or(' ');
-                line.push(ch);
-                offsets.push(line.len());
-            }
-            row_data.push((viewport_row, start_col as usize, line, offsets));
+            self.link_overlay.update_view(
+                signature,
+                viewport_height,
+                viewport_width,
+                &row_data,
+                &self.linkifier,
+            );
         }
-        self.link_overlay
-            .update_view(viewport_height, viewport_width, &row_data, &self.linkifier);
 
         for row in start_row..start_row + visible.height {
             for col in start_col..start_col + visible.width {
