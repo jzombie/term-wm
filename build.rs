@@ -5,6 +5,9 @@ use std::path::Path;
 
 const HELP_REL: &str = "assets/help.md";
 
+// Note: This same path is also included via `help_overlay.rs`
+const OUT_REL: &str = "generated_help.rs";
+
 fn main() {
     let manifest = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
     let help_basename = Path::new(HELP_REL)
@@ -30,7 +33,7 @@ fn main() {
     // timestamp. Placing the file in `OUT_DIR` avoids mutating tracked
     // source files during builds and keeps generated artifacts isolated.
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
-    let gen_path = Path::new(&out_dir).join("generated_help.rs");
+    let gen_path = Path::new(&out_dir).join(OUT_REL);
 
     // The generated file will `include_bytes!` the markdown from the
     // crate source tree (`CARGO_MANIFEST_DIR`) so we don't need to copy
@@ -58,5 +61,6 @@ fn main() {
         basename = help_basename,
         rfc = escaped,
     );
-    fs::write(&gen_path, gen_src).expect("failed to write generated_help.rs to OUT_DIR");
+    fs::write(&gen_path, gen_src)
+        .unwrap_or_else(|e| panic!("failed to write {} to OUT_DIR: {}", OUT_REL, e));
 }
