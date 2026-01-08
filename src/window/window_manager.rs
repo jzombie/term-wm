@@ -1639,12 +1639,12 @@ where
             if self.is_window_floating(id) {
                 self.clear_floating_rect(id);
             }
-            self.bring_to_front_id(id);
+            self.focus_window_id(id);
             return true;
         }
         if self.managed_layout.is_none() {
             self.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(id)));
-            self.bring_to_front_id(id);
+            self.focus_window_id(id);
             return true;
         }
 
@@ -1672,14 +1672,14 @@ where
                 .root_mut()
                 .insert_leaf(target, id, InsertPosition::Right)
             {
-                self.bring_to_front_id(id);
+                self.focus_window_id(id);
                 return true;
             }
         }
 
         // Fallback: split root
         layout.split_root(id, InsertPosition::Right);
-        self.bring_to_front_id(id);
+        self.focus_window_id(id);
         true
     }
 
