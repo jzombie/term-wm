@@ -60,26 +60,26 @@ impl Component for ListComponent {
         match event {
             Event::Key(key) => {
                 let kb = crate::keybindings::KeyBindings::default();
-                if kb.matches(crate::keybindings::Action::MenuUp, &key)
-                    || kb.matches(crate::keybindings::Action::MenuPrev, &key)
+                if kb.matches(crate::keybindings::Action::MenuUp, key)
+                    || kb.matches(crate::keybindings::Action::MenuPrev, key)
                 {
                     self.bump_selection(-1);
                     true
-                } else if kb.matches(crate::keybindings::Action::MenuDown, &key)
-                    || kb.matches(crate::keybindings::Action::MenuNext, &key)
+                } else if kb.matches(crate::keybindings::Action::MenuDown, key)
+                    || kb.matches(crate::keybindings::Action::MenuNext, key)
                 {
                     self.bump_selection(1);
                     true
-                } else if kb.matches(crate::keybindings::Action::ScrollPageUp, &key) {
+                } else if kb.matches(crate::keybindings::Action::ScrollPageUp, key) {
                     self.bump_selection(-5);
                     true
-                } else if kb.matches(crate::keybindings::Action::ScrollPageDown, &key) {
+                } else if kb.matches(crate::keybindings::Action::ScrollPageDown, key) {
                     self.bump_selection(5);
                     true
-                } else if kb.matches(crate::keybindings::Action::ScrollHome, &key) {
+                } else if kb.matches(crate::keybindings::Action::ScrollHome, key) {
                     self.selected = 0;
                     true
-                } else if kb.matches(crate::keybindings::Action::ScrollEnd, &key) {
+                } else if kb.matches(crate::keybindings::Action::ScrollEnd, key) {
                     if !self.items.is_empty() {
                         self.selected = self.items.len() - 1;
                     }

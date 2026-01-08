@@ -2054,7 +2054,7 @@ where
         match event {
             Event::Key(key) => {
                 let kb = crate::keybindings::KeyBindings::default();
-                if kb.matches(crate::keybindings::Action::FocusNext, &key) {
+                if kb.matches(crate::keybindings::Action::FocusNext, key) {
                     if self.layout_contract == LayoutContract::WindowManaged {
                         self.advance_wm_focus(true);
                     } else {
@@ -2067,7 +2067,7 @@ where
                         }
                     }
                     true
-                } else if kb.matches(crate::keybindings::Action::FocusPrev, &key) {
+                } else if kb.matches(crate::keybindings::Action::FocusPrev, key) {
                     if self.layout_contract == LayoutContract::WindowManaged {
                         self.advance_wm_focus(false);
                     } else {
@@ -2208,8 +2208,8 @@ where
             return None;
         };
         let kb = crate::keybindings::KeyBindings::default();
-        if kb.matches(crate::keybindings::Action::MenuUp, &key)
-            || kb.matches(crate::keybindings::Action::MenuPrev, &key)
+        if kb.matches(crate::keybindings::Action::MenuUp, key)
+            || kb.matches(crate::keybindings::Action::MenuPrev, key)
         {
             let total = wm_menu_items(self.mouse_capture_enabled()).len();
             if total > 0 {
@@ -2221,8 +2221,8 @@ where
                 }
             }
             None
-        } else if kb.matches(crate::keybindings::Action::MenuDown, &key)
-            || kb.matches(crate::keybindings::Action::MenuNext, &key)
+        } else if kb.matches(crate::keybindings::Action::MenuDown, key)
+            || kb.matches(crate::keybindings::Action::MenuNext, key)
         {
             let total = wm_menu_items(self.mouse_capture_enabled()).len();
             if total > 0 {
@@ -2230,7 +2230,7 @@ where
                 self.state.set_wm_menu_selected((current + 1) % total);
             }
             None
-        } else if kb.matches(crate::keybindings::Action::MenuSelect, &key) {
+        } else if kb.matches(crate::keybindings::Action::MenuSelect, key) {
             wm_menu_items(self.mouse_capture_enabled())
                 .get(self.state.wm_menu_selected())
                 .map(|item| item.action)
@@ -2256,11 +2256,11 @@ where
             return false;
         };
         let kb = crate::keybindings::KeyBindings::default();
-        kb.matches(crate::keybindings::Action::MenuUp, &key)
-            || kb.matches(crate::keybindings::Action::MenuDown, &key)
-            || kb.matches(crate::keybindings::Action::MenuSelect, &key)
-            || kb.matches(crate::keybindings::Action::MenuNext, &key)
-            || kb.matches(crate::keybindings::Action::MenuPrev, &key)
+        kb.matches(crate::keybindings::Action::MenuUp, key)
+            || kb.matches(crate::keybindings::Action::MenuDown, key)
+            || kb.matches(crate::keybindings::Action::MenuSelect, key)
+            || kb.matches(crate::keybindings::Action::MenuNext, key)
+            || kb.matches(crate::keybindings::Action::MenuPrev, key)
     }
 }
 

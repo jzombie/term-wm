@@ -5,8 +5,8 @@ use std::io;
 use std::time::Duration;
 
 use crossterm::event::Event;
-use term_wm::keybindings::{KeyBindings, Action};
 use ratatui::prelude::Rect;
+use term_wm::keybindings::{Action, KeyBindings};
 
 use portable_pty::PtySize;
 use term_wm::components::{Component, TerminalComponent, default_shell_command};

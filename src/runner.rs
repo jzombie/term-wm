@@ -182,7 +182,7 @@ where
                 match &evt {
                     Event::Key(key)
                         if crate::keybindings::KeyBindings::default()
-                            .matches(crate::keybindings::Action::FocusPrev, &key) =>
+                            .matches(crate::keybindings::Action::FocusPrev, key) =>
                     {
                         if app.windows().capture_active() {
                             if wm_mode {
@@ -209,7 +209,7 @@ where
                     }
                     Event::Key(key)
                         if crate::keybindings::KeyBindings::default()
-                            .matches(crate::keybindings::Action::FocusNext, &key) =>
+                            .matches(crate::keybindings::Action::FocusNext, key) =>
                     {
                         if app.windows().capture_active() {
                             if wm_mode {

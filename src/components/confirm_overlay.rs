@@ -130,9 +130,9 @@ impl Component for ConfirmOverlayComponent {
             return false;
         };
         let kb = crate::keybindings::KeyBindings::default();
-        kb.matches(crate::keybindings::Action::ConfirmToggle, &key)
-            || kb.matches(crate::keybindings::Action::ConfirmLeft, &key)
-            || kb.matches(crate::keybindings::Action::ConfirmRight, &key)
+        kb.matches(crate::keybindings::Action::ConfirmToggle, key)
+            || kb.matches(crate::keybindings::Action::ConfirmLeft, key)
+            || kb.matches(crate::keybindings::Action::ConfirmRight, key)
     }
 }
 
@@ -195,22 +195,22 @@ impl ConfirmOverlayComponent {
             }
             Event::Key(key) => {
                 let kb = crate::keybindings::KeyBindings::default();
-                if kb.matches(crate::keybindings::Action::ConfirmToggle, &key) {
+                if kb.matches(crate::keybindings::Action::ConfirmToggle, key) {
                     self.selected_confirm = !self.selected_confirm;
                     None
-                } else if kb.matches(crate::keybindings::Action::ConfirmLeft, &key) {
+                } else if kb.matches(crate::keybindings::Action::ConfirmLeft, key) {
                     self.selected_confirm = false;
                     None
-                } else if kb.matches(crate::keybindings::Action::ConfirmRight, &key) {
+                } else if kb.matches(crate::keybindings::Action::ConfirmRight, key) {
                     self.selected_confirm = true;
                     None
-                } else if kb.matches(crate::keybindings::Action::ConfirmAccept, &key) {
+                } else if kb.matches(crate::keybindings::Action::ConfirmAccept, key) {
                     if self.selected_confirm {
                         Some(ConfirmAction::Confirm)
                     } else {
                         Some(ConfirmAction::Cancel)
                     }
-                } else if kb.matches(crate::keybindings::Action::ConfirmCancel, &key) {
+                } else if kb.matches(crate::keybindings::Action::ConfirmCancel, key) {
                     Some(ConfirmAction::Cancel)
                 } else {
                     None

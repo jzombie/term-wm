@@ -58,7 +58,7 @@ impl HelpOverlayComponent {
         match event {
             Event::Key(key) => {
                 let kb = KeyBindings::default();
-                if kb.matches(crate::keybindings::Action::CloseHelp, &key) {
+                if kb.matches(crate::keybindings::Action::CloseHelp, key) {
                     self.close();
                     true
                 } else {
@@ -177,7 +177,7 @@ impl HelpOverlayComponent {
         match event {
             Event::Key(key) => {
                 let kb = KeyBindings::default();
-                if kb.matches(crate::keybindings::Action::CloseHelp, &key) {
+                if kb.matches(crate::keybindings::Action::CloseHelp, key) {
                     self.close();
                     true
                 } else {

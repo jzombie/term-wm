@@ -135,14 +135,8 @@ pub struct KeyBindings {
     map: HashMap<Action, Vec<KeyCombo>>,
 }
 
-impl KeyBindings {
-    pub fn new() -> Self {
-        Self {
-            map: HashMap::new(),
-        }
-    }
-
-    pub fn default() -> Self {
+impl Default for KeyBindings {
+    fn default() -> Self {
         use Action::*;
         let mut kb = Self::new();
         kb.add(
@@ -247,6 +241,14 @@ impl KeyBindings {
         // conflicting with application-internal keybindings. Opening help
         // should be triggered from the WM/menu flow (Esc mode) only.
         kb
+    }
+}
+
+impl KeyBindings {
+    pub fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+        }
     }
 
     pub fn add(&mut self, action: Action, combo: KeyCombo) {
