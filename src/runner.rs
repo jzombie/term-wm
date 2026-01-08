@@ -60,7 +60,6 @@ where
     FMap: Fn(R) -> W + Copy,
     FFocus: Fn(W) -> Option<R>,
 {
-    let capture_timeout = Duration::from_millis(500);
     let mut event_loop = EventLoop::new(driver, poll_interval);
     event_loop
         .driver()
@@ -116,15 +115,16 @@ where
                 }
                 let wm_mode = app.windows().layout_contract() == LayoutContract::WindowManaged;
                 if wm_mode
-                    && let Event::Key(key) = evt
+                    && let Event::Key(key) = &evt
                     && key.kind == KeyEventKind::Press
-                    && mapped_action == Some(crate::keybindings::Action::WmToggleOverlay)
+                    && crate::keybindings::KeyBindings::default()
+                        .matches(crate::keybindings::Action::WmToggleOverlay, key)
                 {
                     if app.windows().wm_overlay_visible() {
                         let passthrough = app.windows().esc_passthrough_active();
                         app.windows().close_wm_overlay();
                         if passthrough {
-                            let _ = dispatch(&Event::Key(key), app);
+                            let _ = dispatch(&Event::Key(*key), app);
                         }
                     } else {
                         app.windows().open_wm_overlay();
@@ -182,11 +182,26 @@ where
                     if app.windows().wm_menu_consumes_event(&evt) {
                         return flush_mouse_capture(app, ControlFlow::Continue);
                     }
-                    if let Event::Key(_key) = evt
+                    if let Event::Key(_key) = &evt
                         && mapped_action == Some(crate::keybindings::Action::NewWindow)
                     {
                         app.wm_new_window()?;
                         app.windows().close_wm_overlay();
+                        return flush_mouse_capture(app, ControlFlow::Continue);
+                    }
+                    if let Event::Key(_key) = &evt
+                        && (mapped_action == Some(crate::keybindings::Action::FocusNext)
+                            || mapped_action == Some(crate::keybindings::Action::FocusPrev))
+                    {
+                        let _ = app.windows().handle_focus_event(
+                            &evt,
+                            focus_regions,
+                            &map_region,
+                            &_map_focus,
+                        );
+                        return flush_mouse_capture(app, ControlFlow::Continue);
+                    }
+                    if let Event::Key(_) = &evt {
                         return flush_mouse_capture(app, ControlFlow::Continue);
                     }
                 }
@@ -195,69 +210,11 @@ where
                     return flush_mouse_capture(app, ControlFlow::Continue);
                 }
                 match &evt {
-                    Event::Key(_key)
-                        if mapped_action == Some(crate::keybindings::Action::FocusPrev) =>
-                    {
-                        if app.windows().capture_active() {
-                            if wm_mode {
-                                app.windows().arm_capture(capture_timeout);
-                            }
-                            let _ = app.windows().handle_focus_event(
-                                &evt,
-                                focus_regions,
-                                &map_region,
-                                &_map_focus,
-                            );
-                            return flush_mouse_capture(app, ControlFlow::Continue);
-                        }
-                        if dispatch(&evt, app) {
-                            return flush_mouse_capture(app, ControlFlow::Continue);
-                        }
-                        let _ = app.windows().handle_focus_event(
-                            &evt,
-                            focus_regions,
-                            &map_region,
-                            &_map_focus,
-                        );
-                        return flush_mouse_capture(app, ControlFlow::Continue);
-                    }
-                    Event::Key(_key)
-                        if mapped_action == Some(crate::keybindings::Action::FocusNext) =>
-                    {
-                        if app.windows().capture_active() {
-                            if wm_mode {
-                                app.windows().arm_capture(capture_timeout);
-                            }
-                            let _ = app.windows().handle_focus_event(
-                                &evt,
-                                focus_regions,
-                                &map_region,
-                                &_map_focus,
-                            );
-                            return flush_mouse_capture(app, ControlFlow::Continue);
-                        }
-                        if dispatch(&evt, app) {
-                            return flush_mouse_capture(app, ControlFlow::Continue);
-                        }
-                        let _ = app.windows().handle_focus_event(
-                            &evt,
-                            focus_regions,
-                            &map_region,
-                            &_map_focus,
-                        );
-                        return flush_mouse_capture(app, ControlFlow::Continue);
-                    }
                     Event::Key(_) if app.windows().capture_active() => {
                         app.windows().clear_capture();
                         let _ = dispatch(&evt, app);
                     }
                     _ => {
-                        let _ = app.windows().handle_focus_event(
-                            &evt,
-                            focus_regions,
-                            &map_region,
-                            &_map_focus,
-                        );
                         let _ = dispatch(&evt, app);
                     }
                 }

@@ -60,11 +60,11 @@ impl fmt::Display for KeyCombo {
     }
 }
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
 pub struct KeyBindings {
-    map: HashMap<Action, Vec<KeyCombo>>,
+    map: BTreeMap<Action, Vec<KeyCombo>>,
 }
 
 impl Default for KeyBindings {
@@ -106,8 +106,6 @@ impl Default for KeyBindings {
             ScrollUp: [ (KeyCode::Up, KeyModifiers::NONE) ],
             ScrollDown: [ (KeyCode::Down, KeyModifiers::NONE) ],
             ToggleSelection: [ (KeyCode::Char(' '), KeyModifiers::NONE) ],
-            CycleNextWindow: [ (KeyCode::Tab, KeyModifiers::NONE) ],
-            CyclePrevWindow: [ (KeyCode::Backspace, KeyModifiers::SHIFT) ],
         }
     }
 }
@@ -115,7 +113,7 @@ impl Default for KeyBindings {
 impl KeyBindings {
     pub fn new() -> Self {
         Self {
-            map: HashMap::new(),
+            map: BTreeMap::new(),
         }
     }
 
