@@ -36,44 +36,7 @@ pub use toggle_list::{ToggleItem, ToggleListComponent};
 
 use std::any::Any;
 
-#[derive(Debug, Clone, Copy)]
-pub struct ComponentContext {
-    focused: bool,
-    overlay: bool,
-}
-
-impl ComponentContext {
-    pub const fn new(focused: bool) -> Self {
-        Self {
-            focused,
-            overlay: false,
-        }
-    }
-
-    pub const fn focused(&self) -> bool {
-        self.focused
-    }
-
-    pub const fn overlay(&self) -> bool {
-        self.overlay
-    }
-
-    pub const fn with_focus(mut self, focused: bool) -> Self {
-        self.focused = focused;
-        self
-    }
-
-    pub const fn with_overlay(mut self, overlay: bool) -> Self {
-        self.overlay = overlay;
-        self
-    }
-}
-
-impl Default for ComponentContext {
-    fn default() -> Self {
-        Self::new(false)
-    }
-}
+pub use crate::component_context::ComponentContext;
 
 pub trait Component {
     fn resize(&mut self, _area: Rect, _ctx: &ComponentContext) {}

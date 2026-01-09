@@ -1,5 +1,6 @@
 pub mod actions;
 pub mod clipboard;
+pub mod component_context;
 pub mod components;
 pub mod drivers;
 pub mod event_loop;
