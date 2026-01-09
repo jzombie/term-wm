@@ -8,6 +8,8 @@ repository = "https://github.com/jzombie/term-wm"
 license = "MIT OR Apache-2.0"
 publish = true
 
+default-run = "term-wm"
+
 [package.metadata.cargo-udeps.ignore]
 normal = ["windows-sys"]
 
