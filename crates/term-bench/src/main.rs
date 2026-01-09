@@ -458,3 +458,156 @@ fn poll_for_exit(wait: Duration) -> io::Result<bool> {
     }
     Ok(false)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn benchcli_to_config_valid_and_invalid() {
+        // valid
+        let cli = BenchCli {
+            duration_seconds: 5.0,
+            target_fps: 30.0,
+        };
+        let cfg = BenchConfig::try_from(&cli).expect("valid config");
+        assert_eq!(cfg.target_fps, 30.0);
+        assert_eq!(cfg.duration, Duration::from_secs_f64(5.0));
+
+        // invalid duration
+        let bad = BenchCli {
+            duration_seconds: 0.1,
+            target_fps: 60.0,
+        };
+        assert!(BenchConfig::try_from(&bad).is_err());
+
+        // invalid fps
+        let bad2 = BenchCli {
+            duration_seconds: 2.0,
+            target_fps: 1000.0,
+        };
+        assert!(BenchConfig::try_from(&bad2).is_err());
+    }
+
+    #[test]
+    fn benchstats_record_and_metrics() {
+        let mut stats = BenchStats::new();
+        assert_eq!(stats.frame_count, 0);
+
+        stats.record_frame(100, Duration::from_millis(10));
+        stats.record_frame(200, Duration::from_millis(20));
+        stats.record_frame(300, Duration::from_millis(5));
+
+        assert_eq!(stats.frame_count, 3);
+        assert_eq!(stats.cell_updates, 600);
+
+        let avg = stats.average_frame_ms();
+        assert!(avg > 0.0);
+        let best = stats.fastest_frame_ms();
+        let worst = stats.slowest_frame_ms();
+        assert!(best <= worst);
+
+        let cli = BenchCli {
+            duration_seconds: 1.0,
+            target_fps: 60.0,
+        };
+        let cfg = BenchConfig::try_from(&cli).unwrap();
+        let report = stats.final_report(&cfg);
+        assert!(report.contains("Frames:"));
+        assert!(report.contains("Cell updates:"));
+    }
+
+    #[test]
+    fn noise_next_changes_state() {
+        let mut n = NoiseField::seeded_from_clock();
+        let a = n.next();
+        let b = n.next();
+        assert_ne!(
+            a, b,
+            "subsequent next() calls should produce different values"
+        );
+    }
+
+    #[test]
+    fn fill_rect_and_noise_fill_affect_buffer() {
+        // create a small buffer
+        let mut buf = Buffer::empty(Rect {
+            x: 0,
+            y: 0,
+            width: 6,
+            height: 4,
+        });
+        // fill a rect and assert cells were written
+        let area = Rect {
+            x: 1,
+            y: 1,
+            width: 2,
+            height: 2,
+        };
+        fill_rect(&mut buf, area, Style::default().bg(Color::Red));
+        assert_eq!(buf[(1, 1)].symbol(), " ");
+        assert_eq!(buf[(2, 2)].symbol(), " ");
+
+        // noise fill should write glyphs into buffer within area
+        let mut nf = NoiseField::seeded_from_clock();
+        let area2 = Rect {
+            x: 0,
+            y: 0,
+            width: 3,
+            height: 2,
+        };
+        nf.fill(&mut buf, area2, 5);
+        // at least one cell in the area should contain a one-character glyph
+        let mut found = false;
+        for y in area2.y..area2.y + area2.height {
+            for x in area2.x..area2.x + area2.width {
+                let s = buf[(x, y)].symbol();
+                if !s.is_empty() && s != " " {
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                break;
+            }
+        }
+        assert!(found, "noise fill should have written at least one glyph");
+    }
+
+    #[test]
+    fn overlay_state_and_build_overlay_lines() {
+        let small = Rect {
+            x: 0,
+            y: 0,
+            width: 6,
+            height: 3,
+        };
+        let lines = vec!["one".to_string(), "two".to_string()];
+        let s = OverlayState::new(small, &lines);
+        assert!(
+            s.area.is_none(),
+            "overlay should be None for too-small window"
+        );
+
+        let large = Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 10,
+        };
+        let s2 = OverlayState::new(large, &lines);
+        assert!(s2.area.is_some());
+
+        // build overlay lines from stats
+        let mut stats = BenchStats::new();
+        stats.record_frame(10, Duration::from_millis(16));
+        let cli = BenchCli {
+            duration_seconds: 2.0,
+            target_fps: 60.0,
+        };
+        let cfg = BenchConfig::try_from(&cli).unwrap();
+        let v = build_overlay_lines(&stats, &cfg);
+        assert!(!v.is_empty());
+        assert_eq!(v[0], "== Render Bench ==");
+    }
+}
