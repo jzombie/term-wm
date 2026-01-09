@@ -35,27 +35,21 @@ impl SvgImageComponent {
             inner: AsciiImageComponent::new(),
         }
     }
-
     pub fn set_keep_aspect(&mut self, keep: bool) {
         self.inner.set_keep_aspect(keep);
     }
-
     pub fn set_colorize(&mut self, colorize: bool) {
         self.inner.set_colorize(colorize);
     }
-
     pub fn set_luma8(&mut self, width: u32, height: u32, luma: Vec<u8>) {
         self.inner.set_luma8(width, height, luma);
     }
-
     pub fn set_rgba8(&mut self, width: u32, height: u32, rgba: Vec<u8>) {
         self.inner.set_rgba8(width, height, rgba);
     }
-
     pub fn load_svg_from_path<P: AsRef<Path>>(&mut self, path: P) -> Result<(), String> {
         self.inner.load_svg_from_path(path)
     }
-
     pub fn load_from_path<P: AsRef<Path>>(&mut self, path: P) -> io::Result<()> {
         let p = path.as_ref();
         if let Some(ext) = p.extension().and_then(|s| s.to_str())
@@ -102,6 +96,9 @@ fn decode_pnm(bytes: &[u8]) -> Option<Pnm> {
         return None;
     }
     if magic == "P5" {
+        while idx < bytes.len() && bytes[idx].is_ascii_whitespace() {
+            idx += 1;
+        }
         let count = (width * height) as usize;
         let data = bytes.get(idx..idx + count)?.to_vec();
         if maxval != 255 {
@@ -122,6 +119,9 @@ fn decode_pnm(bytes: &[u8]) -> Option<Pnm> {
         });
     }
     if magic == "P6" {
+        while idx < bytes.len() && bytes[idx].is_ascii_whitespace() {
+            idx += 1;
+        }
         let count = (width * height * 3) as usize;
         let raw = bytes.get(idx..idx + count)?.to_vec();
         let mut rgba = Vec::with_capacity((width * height * 4) as usize);
@@ -173,5 +173,81 @@ fn next_token<'a>(bytes: &'a [u8], idx: &mut usize) -> Option<&'a str> {
 impl Default for SvgImageComponent {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn scale_max_basic() {
+        assert_eq!(scale_max(10, 255), 10);
+        assert_eq!(scale_max(128, 200), ((128u32 * 255) / 200) as u8);
+    }
+
+    #[test]
+    fn decode_pnm_p5_and_p6() {
+        // P5: 2x1 luma
+        let p5 = b"P5\n2 1\n255\n\x05\x06";
+        match decode_pnm(p5).unwrap() {
+            Pnm::Luma {
+                width,
+                height,
+                data,
+            } => {
+                assert_eq!(width, 2);
+                assert_eq!(height, 1);
+                assert_eq!(data, vec![5u8, 6u8]);
+            }
+            _ => panic!("expected luma"),
+        }
+
+        // P6: 2x1 RGB -> expect RGBA with alpha 255
+        let p6 = b"P6\n2 1\n255\n\x01\x02\x03\x04\x05\x06";
+        match decode_pnm(p6).unwrap() {
+            Pnm::Rgba {
+                width,
+                height,
+                data,
+            } => {
+                assert_eq!(width, 2);
+                assert_eq!(height, 1);
+                assert_eq!(data.len(), 8);
+                assert_eq!(&data[0..4], &[1u8, 2u8, 3u8, 255u8]);
+                assert_eq!(&data[4..8], &[4u8, 5u8, 6u8, 255u8]);
+            }
+            _ => panic!("expected rgba"),
+        }
+    }
+
+    #[test]
+    fn next_token_handles_comments_and_whitespace() {
+        let bytes = b"# this is a comment\nP5 2 1 255\n";
+        let mut idx = 0usize;
+        // skip comment
+        let tok1 = next_token(bytes, &mut idx).unwrap();
+        assert_eq!(tok1, "P5");
+        let tok2 = next_token(bytes, &mut idx).unwrap();
+        assert_eq!(tok2, "2");
+    }
+
+    #[test]
+    fn load_from_path_accepts_pnm_files() {
+        // P5
+        let mut f = NamedTempFile::new().expect("create temp file");
+        f.write_all(b"P5\n2 1\n255\n\x07\x08").expect("write p5");
+        let mut comp = SvgImageComponent::new();
+        comp.load_from_path(f.path())
+            .expect("load p5 should succeed");
+
+        // P6
+        let mut f2 = NamedTempFile::new().expect("create temp file");
+        f2.write_all(b"P6\n2 1\n255\n\x01\x02\x03\x04\x05\x06")
+            .expect("write p6");
+        comp.load_from_path(f2.path())
+            .expect("load p6 should succeed");
     }
 }
