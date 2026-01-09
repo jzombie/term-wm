@@ -1001,7 +1001,33 @@ where
     pub fn register_managed_layout(&mut self, area: Rect) {
         self.last_frame_area = area;
         let (_, _, managed_area) = self.panel.split_area(self.panel_active(), area);
+        // Preserve the previous managed area so we can update any windows that
+        // were maximized to it; this ensures a maximized window remains
+        // maximized when the terminal (and thus managed area) resizes.
+        let prev_managed = self.managed_area;
         self.managed_area = managed_area;
+        // If any window's floating rect exactly matched the previous managed
+        // area (i.e. it was maximized), update it to the new managed area so
+        // maximize persists across resizes.
+        if prev_managed.width > 0 && prev_managed.height > 0 {
+            let prev_full = crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
+                x: prev_managed.x as i32,
+                y: prev_managed.y as i32,
+                width: prev_managed.width,
+                height: prev_managed.height,
+            });
+            let new_full = crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
+                x: self.managed_area.x as i32,
+                y: self.managed_area.y as i32,
+                width: self.managed_area.width,
+                height: self.managed_area.height,
+            });
+            for (id, window) in self.windows.iter_mut() {
+                if window.floating_rect == Some(prev_full) {
+                    window.floating_rect = Some(new_full);
+                }
+            }
+        }
         self.clamp_floating_to_bounds();
         if self.system_window_visible(SystemWindowId::DebugLog) {
             self.ensure_system_window_in_layout(WindowId::system(SystemWindowId::DebugLog));
