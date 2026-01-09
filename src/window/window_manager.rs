@@ -1069,6 +1069,9 @@ where
         }
         if let Event::Mouse(mouse) = event {
             self.hover = Some((mouse.column, mouse.row));
+            if matches!(mouse.kind, MouseEventKind::Down(_)) {
+                self.focus_window_at(mouse.column, mouse.row);
+            }
         }
         if self.handle_resize_event(event) {
             return true;
@@ -1285,6 +1288,22 @@ where
             _ => {}
         }
         false
+    }
+
+    fn focus_window_at(&mut self, column: u16, row: u16) -> bool {
+        if self.layout_contract != LayoutContract::WindowManaged
+            || self.managed_draw_order.is_empty()
+        {
+            return false;
+        }
+        let Some(hit) = self.hit_test_region_topmost(column, row, &self.managed_draw_order) else {
+            return false;
+        };
+        if !matches!(hit, WindowId::App(_)) {
+            return false;
+        }
+        self.focus_window_id(hit);
+        true
     }
 
     fn handle_resize_event(&mut self, event: &Event) -> bool {
