@@ -10,7 +10,6 @@ pub mod list;
 pub mod markdown_viewer;
 pub mod scroll_view;
 pub mod selectable_text;
-pub mod status_bar;
 pub mod svg_image;
 pub mod sys;
 pub mod terminal;
@@ -27,7 +26,6 @@ pub use selectable_text::{
     LogicalPosition, SelectableSurface, SelectionController, SelectionHost, SelectionRange,
     SelectionViewport, handle_selection_mouse, maintain_selection_drag,
 };
-pub use status_bar::StatusBarComponent;
 pub use svg_image::SvgImageComponent;
 pub use sys::*;
 pub use terminal::{TerminalComponent, default_shell, default_shell_command};
