@@ -2,6 +2,8 @@
 
 A small, render-heavy benchmark for measuring terminal throughput and update performance.
 
+Used in [term-wm](../../) for comparing window manager rendering performance to native terminal rendering.
+
 ![term-bench running in term-wm](https://raw.githubusercontent.com/jzombie/live-assets/refs/heads/main/term-bench-0.4.1-alpha-linux.png)
 
 ## Overview
