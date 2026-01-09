@@ -1,3 +1,5 @@
+[![made-with-rust][rust-logo]][rust-src-page] [![crates.io][crates-badge]][crates-page] [![MIT licensed][mit-license-badge]][mit-license-page] [![Apache 2.0 licensed][apache-2.0-license-badge]][apache-2.0-license-page] [![Coverage][coveralls-badge]][coveralls-page]
+
 # term-wm
 
 **WORK IN PROGRESS.**
@@ -121,3 +123,21 @@ _The benchmark reports frame pacing, render times (avg/1% lows), and cell-update
 `term-wm` is primarily distributed under the terms of both the MIT license and the Apache License (Version 2.0).
 
 See [LICENSE-APACHE](./LICENSE-APACHE) and [LICENSE-MIT](./LICENSE-MIT) for details.
+
+[rust-src-page]: https://www.rust-lang.org/
+[rust-logo]: https://img.shields.io/badge/Made%20with-Rust-black?&logo=Rust
+
+[deepwiki-page]: https://deepwiki.com/jzombie/term-wm
+[deepwiki-badge]: https://deepwiki.com/badge.svg
+
+[crates-page]: https://crates.io/crates/term-wm
+[crates-badge]: https://img.shields.io/crates/v/term-wm.svg
+
+[mit-license-page]: ./LICENSE-MIT
+[mit-license-badge]: https://img.shields.io/badge/license-MIT-blue.svg
+
+[apache-2.0-license-page]: ./LICENSE-APACHE
+[apache-2.0-license-badge]: https://img.shields.io/badge/license-Apache%202.0-blue.svg
+
+[coveralls-page]: https://coveralls.io/github/jzombie/term-wm?branch=main
+[coveralls-badge]: https://coveralls.io/repos/github/jzombie/term-wm/badge.svg?branch=main
