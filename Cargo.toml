@@ -13,9 +13,18 @@ default-run = "term-wm"
 [package.metadata.cargo-udeps.ignore]
 normal = ["windows-sys"]
 
-[dependencies]
+[workspace]
+members = ["crates/term-bench"]
+resolver = "2"
+
+[workspace.dependencies]
 clap = { version = "4.5.54", features = ["derive"] }
 crossterm = "0.29.0"
+ratatui = "0.30.0"
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+crossterm.workspace = true
 hostname = "0.4.2"
 indoc = "2.0.7"
 libc = "0.2.176"
@@ -23,7 +32,7 @@ line-ending = "1.5.1"
 linkify = "0.10.0"
 portable-pty = "0.9.0"
 pulldown-cmark = "0.13.0"
-ratatui = "0.30.0"
+ratatui.workspace = true
 resvg = "0.45.1"
 shell-words = "1.1.1"
 thiserror = "2.0.17"
