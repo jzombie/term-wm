@@ -6,6 +6,7 @@
 //! small for now; future commits can extend it with clipboard drivers and
 //! richer rendering hooks.
 
+use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 
 /// Logical coordinates inside a text surface.
@@ -80,6 +81,30 @@ pub trait SelectableSurface {
 
     /// Build a clipboard-ready string for the provided range.
     fn text_for_range(&self, range: SelectionRange) -> Option<String>;
+}
+
+/// Describes the viewport and scrolling capabilities needed to normalize mouse
+/// coordinates and auto-scroll while selecting.
+pub trait SelectionViewport {
+    /// Rectangle describing the currently rendered area for the component.
+    fn selection_viewport(&self) -> Rect;
+
+    /// Map the provided screen-space point to a logical text position.
+    fn logical_position_from_point(&mut self, column: u16, row: u16) -> Option<LogicalPosition>;
+
+    /// Scroll vertically by `delta` logical rows. Positive values move down.
+    fn scroll_selection_vertical(&mut self, delta: isize);
+
+    /// Scroll horizontally by `delta` logical columns. Implementors may ignore
+    /// this if horizontal scrolling is unsupported.
+    fn scroll_selection_horizontal(&mut self, _delta: isize) {}
+}
+
+/// Hosts that store their own `SelectionController` implement this so shared
+/// helpers can operate on both the viewport and controller without double
+/// borrowing.
+pub trait SelectionHost: SelectionViewport {
+    fn selection_controller(&mut self) -> &mut SelectionController;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -175,6 +200,84 @@ impl SelectionController {
         let range = self.selection_range()?.normalized();
         surface.text_for_range(range)
     }
+}
+
+/// Shared mouse handler that begins/updates/ends selections and auto-scrolls
+/// when the cursor leaves the viewport.
+pub fn handle_selection_mouse<H: SelectionHost>(
+    host: &mut H,
+    enabled: bool,
+    mouse: &MouseEvent,
+) -> bool {
+    if !enabled {
+        return false;
+    }
+    let area = host.selection_viewport();
+    if area.width == 0 || area.height == 0 {
+        return false;
+    }
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            if rect_contains(area, mouse.column, mouse.row)
+                && let Some(pos) = host.logical_position_from_point(mouse.column, mouse.row)
+            {
+                host.selection_controller().begin_drag(pos);
+                return true;
+            }
+            false
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            {
+                let selection = host.selection_controller();
+                if !selection.is_dragging() {
+                    return false;
+                }
+            }
+            auto_scroll_selection(host, mouse);
+            if let Some(pos) = host.logical_position_from_point(mouse.column, mouse.row) {
+                host.selection_controller().update_drag(pos);
+            }
+            true
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            let active = { host.selection_controller().is_dragging() };
+            if !active {
+                return false;
+            }
+            let _ = host.selection_controller().finish_drag();
+            true
+        }
+        _ => false,
+    }
+}
+
+fn auto_scroll_selection<V: SelectionViewport>(viewport: &mut V, mouse: &MouseEvent) {
+    let area = viewport.selection_viewport();
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let bottom = area.y.saturating_add(area.height);
+    let right = area.x.saturating_add(area.width);
+    if mouse.row < area.y {
+        viewport.scroll_selection_vertical(-1);
+    } else if mouse.row >= bottom {
+        viewport.scroll_selection_vertical(1);
+    }
+
+    if mouse.column < area.x {
+        viewport.scroll_selection_horizontal(-1);
+    } else if mouse.column >= right {
+        viewport.scroll_selection_horizontal(1);
+    }
+}
+
+fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
+    if rect.width == 0 || rect.height == 0 {
+        return false;
+    }
+    let max_x = rect.x.saturating_add(rect.width);
+    let max_y = rect.y.saturating_add(rect.height);
+    column >= rect.x && column < max_x && row >= rect.y && row < max_y
 }
 
 #[cfg(test)]

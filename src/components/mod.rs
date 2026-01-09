@@ -24,7 +24,8 @@ pub use list::ListComponent;
 pub use markdown_viewer::MarkdownViewerComponent;
 pub use scroll_view::ScrollViewComponent;
 pub use selectable_text::{
-    LogicalPosition, SelectableSurface, SelectionController, SelectionRange,
+    LogicalPosition, SelectableSurface, SelectionController, SelectionHost, SelectionRange,
+    SelectionViewport, handle_selection_mouse,
 };
 pub use status_bar::StatusBarComponent;
 pub use svg_image::SvgImageComponent;

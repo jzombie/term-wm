@@ -10,9 +10,11 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 use crate::components::{
     Component,
     scroll_view::ScrollViewComponent,
-    selectable_text::{LogicalPosition, SelectionController},
+    selectable_text::{
+        LogicalPosition, SelectionController, SelectionHost, SelectionViewport,
+        handle_selection_mouse,
+    },
 };
-use crate::layout::rect_contains;
 use crate::linkifier::LinkifiedText;
 use crate::ui::UiFrame;
 
@@ -182,7 +184,7 @@ impl Component for TextRendererComponent {
     fn handle_event(&mut self, event: &crossterm::event::Event) -> bool {
         match event {
             crossterm::event::Event::Mouse(mouse) => {
-                if self.selection_enabled && self.handle_selection_mouse(mouse) {
+                if handle_selection_mouse(self, self.selection_enabled, mouse) {
                     return true;
                 }
                 let resp = self.scroll.handle_event(event);
@@ -465,65 +467,47 @@ impl TextRendererComponent {
     }
 }
 
+impl SelectionViewport for TextRendererComponent {
+    fn selection_viewport(&self) -> Rect {
+        self.content_area
+    }
+
+    fn logical_position_from_point(
+        &mut self,
+        column: u16,
+        row: u16,
+    ) -> Option<LogicalPosition> {
+        TextRendererComponent::logical_position_from_point(self, column, row)
+    }
+
+    fn scroll_selection_vertical(&mut self, delta: isize) {
+        let current = self.scroll.offset();
+        if delta.is_negative() {
+            self.scroll
+                .set_offset(current.saturating_sub(delta.unsigned_abs()));
+        } else if delta > 0 {
+            self.scroll.set_offset(current.saturating_add(delta as usize));
+        }
+    }
+
+    fn scroll_selection_horizontal(&mut self, delta: isize) {
+        let current = self.scroll.h_offset();
+        if delta.is_negative() {
+            self.scroll
+                .set_h_offset(current.saturating_sub(delta.unsigned_abs()));
+        } else if delta > 0 {
+            self.scroll.set_h_offset(current.saturating_add(delta as usize));
+        }
+    }
+}
+
+impl SelectionHost for TextRendererComponent {
+    fn selection_controller(&mut self) -> &mut SelectionController {
+        &mut self.selection
+    }
+}
+
 impl TextRendererComponent {
-    fn handle_selection_mouse(&mut self, mouse: &MouseEvent) -> bool {
-        if !self.selection_enabled || self.content_area.width == 0 || self.content_area.height == 0
-        {
-            return false;
-        }
-        use crossterm::event::MouseEventKind;
-        match mouse.kind {
-            MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
-                if rect_contains(self.content_area, mouse.column, mouse.row)
-                    && let Some(pos) = self.logical_position_from_point(mouse.column, mouse.row)
-                {
-                    self.selection.begin_drag(pos);
-                    return true;
-                }
-                false
-            }
-            MouseEventKind::Drag(crossterm::event::MouseButton::Left) => {
-                if !self.selection.is_dragging() {
-                    return false;
-                }
-                self.auto_scroll_selection(mouse);
-                if let Some(pos) = self.logical_position_from_point(mouse.column, mouse.row) {
-                    self.selection.update_drag(pos);
-                }
-                true
-            }
-            MouseEventKind::Up(crossterm::event::MouseButton::Left) => {
-                if self.selection.is_dragging() {
-                    let _ = self.selection.finish_drag();
-                    return true;
-                }
-                false
-            }
-            _ => false,
-        }
-    }
-
-    fn auto_scroll_selection(&mut self, mouse: &MouseEvent) {
-        if self.content_area.height == 0 || self.content_area.width == 0 {
-            return;
-        }
-        let bottom = self.content_area.y.saturating_add(self.content_area.height);
-        let right = self.content_area.x.saturating_add(self.content_area.width);
-        let current_v = self.scroll.offset();
-        if mouse.row < self.content_area.y {
-            self.scroll.set_offset(current_v.saturating_sub(1));
-        } else if mouse.row >= bottom {
-            self.scroll.set_offset(current_v.saturating_add(1));
-        }
-
-        let current_h = self.scroll.h_offset();
-        if mouse.column < self.content_area.x {
-            self.scroll.set_h_offset(current_h.saturating_sub(1));
-        } else if mouse.column >= right {
-            self.scroll.set_h_offset(current_h.saturating_add(1));
-        }
-    }
-
     fn logical_position_from_point(&self, column: u16, row: u16) -> Option<LogicalPosition> {
         if self.content_area.width == 0 || self.content_area.height == 0 {
             return None;

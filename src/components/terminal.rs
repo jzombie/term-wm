@@ -13,7 +13,10 @@ use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 use crate::components::{
     Component,
     scroll_view::ScrollViewComponent,
-    selectable_text::{LogicalPosition, SelectionController},
+    selectable_text::{
+        LogicalPosition, SelectionController, SelectionHost, SelectionViewport,
+        handle_selection_mouse,
+    },
 };
 use crate::layout::rect_contains;
 use crate::linkifier::{
@@ -98,7 +101,8 @@ impl Component for TerminalComponent {
                 true
             }
             Event::Mouse(mouse) => {
-                if self.selection_enabled && self.handle_selection_mouse(mouse) {
+                let selection_ready = self.selection_enabled && !self.pane.alternate_screen();
+                if handle_selection_mouse(self, selection_ready, mouse) {
                     return true;
                 }
                 if self.try_handle_link_click(mouse) {
@@ -401,6 +405,32 @@ impl TerminalComponent {
     }
 }
 
+impl SelectionViewport for TerminalComponent {
+    fn selection_viewport(&self) -> Rect {
+        self.last_area
+    }
+
+    fn logical_position_from_point(&mut self, column: u16, row: u16) -> Option<LogicalPosition> {
+        TerminalComponent::logical_position_from_point(self, column, row)
+    }
+
+    fn scroll_selection_vertical(&mut self, delta: isize) {
+        if delta.is_negative() {
+            self.scroll_scrollback(1);
+        } else if delta > 0 {
+            self.scroll_scrollback(-1);
+        }
+    }
+
+    fn scroll_selection_horizontal(&mut self, _delta: isize) {}
+}
+
+impl SelectionHost for TerminalComponent {
+    fn selection_controller(&mut self) -> &mut SelectionController {
+        &mut self.selection
+    }
+}
+
 #[cfg(unix)]
 pub fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string())
@@ -427,68 +457,20 @@ impl TerminalComponent {
         self.pane.set_scrollback(next);
     }
 
-    fn handle_selection_mouse(&mut self, mouse: &MouseEvent) -> bool {
-        if !self.selection_enabled || self.pane.alternate_screen() {
-            return false;
-        }
-        use MouseEventKind::*;
-        match mouse.kind {
-            Down(MouseButton::Left) => {
-                if rect_contains(self.last_area, mouse.column, mouse.row)
-                    && let Some(pos) = self.logical_position_from_point(mouse.column, mouse.row)
-                {
-                    self.selection.begin_drag(pos);
-                    return true;
-                }
-                false
-            }
-            Drag(MouseButton::Left) => {
-                if !self.selection.is_dragging() {
-                    return false;
-                }
-                self.auto_scroll_selection(mouse);
-                if let Some(pos) = self.logical_position_from_point(mouse.column, mouse.row) {
-                    self.selection.update_drag(pos);
-                }
-                true
-            }
-            Up(MouseButton::Left) => {
-                if self.selection.is_dragging() {
-                    let _ = self.selection.finish_drag();
-                    return true;
-                }
-                false
-            }
-            _ => false,
-        }
-    }
-
-    fn auto_scroll_selection(&mut self, mouse: &MouseEvent) {
-        if self.last_area.height == 0 {
-            return;
-        }
-        if mouse.row < self.last_area.y {
-            self.scroll_scrollback(1);
-        } else if mouse.row
-            >= self
-                .last_area
-                .y
-                .saturating_add(self.last_area.height)
-        {
-            self.scroll_scrollback(-1);
-        }
-    }
-
-    fn logical_position_from_point(
-        &mut self,
-        column: u16,
-        row: u16,
-    ) -> Option<LogicalPosition> {
+    fn logical_position_from_point(&mut self, column: u16, row: u16) -> Option<LogicalPosition> {
         if self.last_area.width == 0 || self.last_area.height == 0 {
             return None;
         }
-        let max_x = self.last_area.x.saturating_add(self.last_area.width).saturating_sub(1);
-        let max_y = self.last_area.y.saturating_add(self.last_area.height).saturating_sub(1);
+        let max_x = self
+            .last_area
+            .x
+            .saturating_add(self.last_area.width)
+            .saturating_sub(1);
+        let max_y = self
+            .last_area
+            .y
+            .saturating_add(self.last_area.height)
+            .saturating_sub(1);
         let clamped_col = column.clamp(self.last_area.x, max_x);
         let clamped_row = row.clamp(self.last_area.y, max_y);
         let local_col = clamped_col.saturating_sub(self.last_area.x) as usize;
