@@ -7,6 +7,7 @@ use ratatui::prelude::Rect;
 use ratatui::widgets::Clear;
 
 use super::decorator::{DefaultDecorator, HeaderAction, WindowDecorator};
+use crate::clipboard;
 use crate::components::{
     Component, ConfirmAction, ConfirmOverlayComponent, Overlay,
     sys::debug_log::{DebugLogComponent, install_panic_hook, set_global_debug_log},
@@ -233,6 +234,7 @@ pub struct WindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     capture_deadline: Option<Instant>,
     pending_deadline: Option<Instant>,
     state: AppState,
+    clipboard_available: bool,
     layout_contract: LayoutContract,
     wm_overlay_opened_at: Option<Instant>,
     last_frame_area: ratatui::prelude::Rect,
@@ -261,6 +263,7 @@ pub enum WmMenuAction {
     MaximizeWindow,
     CloseWindow,
     ToggleMouseCapture,
+    ToggleClipboardMode,
 }
 
 impl<W: Copy + Eq + Ord, R: Copy + Eq + Ord + std::fmt::Debug> WindowManager<W, R>
@@ -418,6 +421,11 @@ where
     }
 
     pub fn new(current: W) -> Self {
+        let clipboard_available = clipboard::available();
+        let mut state = AppState::new();
+        if !clipboard_available {
+            state.set_clipboard_enabled(false);
+        }
         Self {
             app_focus: FocusRing::new(current),
             wm_focus: FocusRing::new(WindowId::system(SystemWindowId::DebugLog)),
@@ -439,7 +447,8 @@ where
             hover: None,
             capture_deadline: None,
             pending_deadline: None,
-            state: AppState::new(),
+            state,
+            clipboard_available,
             layout_contract: LayoutContract::AppManaged,
             wm_overlay_opened_at: None,
             last_frame_area: Rect::default(),
@@ -564,6 +573,28 @@ where
 
     pub fn take_mouse_capture_change(&mut self) -> Option<bool> {
         self.state.take_mouse_capture_change()
+    }
+
+    pub fn clipboard_available(&self) -> bool {
+        self.clipboard_available
+    }
+
+    pub fn clipboard_enabled(&self) -> bool {
+        self.state.clipboard_enabled()
+    }
+
+    pub fn set_clipboard_enabled(&mut self, enabled: bool) {
+        if !self.clipboard_available {
+            return;
+        }
+        self.state.set_clipboard_enabled(enabled);
+    }
+
+    pub fn toggle_clipboard_enabled(&mut self) {
+        if !self.clipboard_available {
+            return;
+        }
+        self.state.toggle_clipboard_enabled();
     }
 
     fn refresh_capture(&mut self) {
@@ -1075,6 +1106,8 @@ where
                 }
             } else if self.panel.hit_test_mouse_capture(event) {
                 self.toggle_mouse_capture();
+            } else if self.panel.hit_test_clipboard(event) {
+                self.toggle_clipboard_enabled();
             } else if let Some(id) = self.panel.hit_test_window(event) {
                 // If the clicked window is minimized, restore it first so it appears
                 // in the layout; otherwise just focus and bring to front.
@@ -2023,6 +2056,8 @@ where
             &display,
             status_line.as_deref(),
             self.mouse_capture_enabled(),
+            self.clipboard_enabled(),
+            self.clipboard_available(),
             self.wm_overlay_visible(),
             move |id| {
                 titles_map.get(&id).cloned().unwrap_or_else(|| match id {
@@ -2031,7 +2066,12 @@ where
                 })
             },
         );
-        let menu_labels = wm_menu_items(self.mouse_capture_enabled())
+        let menu_items = wm_menu_items(
+            self.mouse_capture_enabled(),
+            self.clipboard_enabled(),
+            self.clipboard_available(),
+        );
+        let menu_labels = menu_items
             .iter()
             .map(|item| (item.icon, item.label))
             .collect::<Vec<_>>();
@@ -2253,11 +2293,15 @@ where
         if !self.wm_overlay_visible() {
             return None;
         }
+        let items = wm_menu_items(
+            self.mouse_capture_enabled(),
+            self.clipboard_enabled(),
+            self.clipboard_available(),
+        );
         if let Event::Mouse(mouse) = event
             && matches!(mouse.kind, MouseEventKind::Down(_))
         {
             if let Some(index) = self.panel.hit_test_menu_item(event) {
-                let items = wm_menu_items(self.mouse_capture_enabled());
                 let selected = index.min(items.len().saturating_sub(1));
                 self.state.set_wm_menu_selected(selected);
                 return items.get(selected).map(|item| item.action);
@@ -2276,7 +2320,7 @@ where
         if kb.matches(crate::keybindings::Action::MenuUp, key)
             || kb.matches(crate::keybindings::Action::MenuPrev, key)
         {
-            let total = wm_menu_items(self.mouse_capture_enabled()).len();
+            let total = items.len();
             if total > 0 {
                 let current = self.state.wm_menu_selected();
                 if current == 0 {
@@ -2289,14 +2333,14 @@ where
         } else if kb.matches(crate::keybindings::Action::MenuDown, key)
             || kb.matches(crate::keybindings::Action::MenuNext, key)
         {
-            let total = wm_menu_items(self.mouse_capture_enabled()).len();
+            let total = items.len();
             if total > 0 {
                 let current = self.state.wm_menu_selected();
                 self.state.set_wm_menu_selected((current + 1) % total);
             }
             None
         } else if kb.matches(crate::keybindings::Action::MenuSelect, key) {
-            wm_menu_items(self.mouse_capture_enabled())
+            items
                 .get(self.state.wm_menu_selected())
                 .map(|item| item.action)
         } else {
@@ -2335,11 +2379,24 @@ struct WmMenuItem {
     icon: Option<&'static str>,
     action: WmMenuAction,
 }
-fn wm_menu_items(mouse_capture_enabled: bool) -> [WmMenuItem; 7] {
+fn wm_menu_items(
+    mouse_capture_enabled: bool,
+    clipboard_enabled: bool,
+    clipboard_available: bool,
+) -> [WmMenuItem; 8] {
     let mouse_label = if mouse_capture_enabled {
         "Mouse Capture: On"
     } else {
         "Mouse Capture: Off"
+    };
+    let clipboard_label = if clipboard_available {
+        if clipboard_enabled {
+            "Clipboard Mode: On"
+        } else {
+            "Clipboard Mode: Off"
+        }
+    } else {
+        "Clipboard Mode: Unavailable"
     };
     [
         WmMenuItem {
@@ -2351,6 +2408,11 @@ fn wm_menu_items(mouse_capture_enabled: bool) -> [WmMenuItem; 7] {
             label: mouse_label,
             icon: Some("🖱"),
             action: WmMenuAction::ToggleMouseCapture,
+        },
+        WmMenuItem {
+            label: clipboard_label,
+            icon: Some("📋"),
+            action: WmMenuAction::ToggleClipboardMode,
         },
         WmMenuItem {
             label: "Floating Front",

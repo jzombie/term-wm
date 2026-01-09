@@ -140,6 +140,9 @@ where
                             WmMenuAction::ToggleMouseCapture => {
                                 app.windows().toggle_mouse_capture();
                             }
+                            WmMenuAction::ToggleClipboardMode => {
+                                app.windows().toggle_clipboard_enabled();
+                            }
                             WmMenuAction::MinimizeWindow => {
                                 let id = app.windows().wm_focus();
                                 app.windows().minimize_window(id);
