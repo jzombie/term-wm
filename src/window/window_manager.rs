@@ -14,10 +14,11 @@ use crate::components::{
     sys::debug_log::{DebugLogComponent, install_panic_hook, set_global_debug_log},
     sys::help_overlay::HelpOverlayComponent,
 };
+use crate::constants::MIN_FLOATING_VISIBLE_MARGIN;
 use crate::layout::floating::*;
 use crate::layout::{
-    FloatingPane, InsertPosition, LayoutNode, LayoutPlan, RegionMap, SplitHandle,
-    TilingLayout, rect_contains, render_handles_masked,
+    FloatingPane, InsertPosition, LayoutNode, LayoutPlan, RegionMap, SplitHandle, TilingLayout,
+    rect_contains, render_handles_masked,
 };
 use crate::panel::Panel;
 use crate::state::AppState;
@@ -316,7 +317,11 @@ where
         self.window_mut(id).floating_rect = None;
     }
 
-    fn set_prev_floating_rect(&mut self, id: WindowId<R>, rect: Option<crate::window::FloatRectSpec>) {
+    fn set_prev_floating_rect(
+        &mut self,
+        id: WindowId<R>,
+        rect: Option<crate::window::FloatRectSpec>,
+    ) {
         self.window_mut(id).prev_floating_rect = rect;
     }
 
@@ -1347,11 +1352,14 @@ where
                         let _ = self.detach_to_floating(header.id, rect);
                     }
 
-                    let (initial_x, initial_y) = if let Some(crate::window::FloatRectSpec::Absolute(fr)) = self.floating_rect(header.id) {
-                        (fr.x, fr.y)
-                    } else {
-                        (rect.x as i32, rect.y as i32)
-                    };
+                    let (initial_x, initial_y) =
+                        if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
+                            self.floating_rect(header.id)
+                        {
+                            (fr.x, fr.y)
+                        } else {
+                            (rect.x as i32, rect.y as i32)
+                        };
                     self.drag_header = Some(HeaderDrag {
                         id: header.id,
                         initial_x,
@@ -1477,12 +1485,14 @@ where
                     );
                     self.set_floating_rect(
                         drag.id,
-                        Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
-                            x: resized.x as i32,
-                            y: resized.y as i32,
-                            width: resized.width,
-                            height: resized.height,
-                        })),
+                        Some(crate::window::FloatRectSpec::Absolute(
+                            crate::window::FloatRect {
+                                x: resized.x as i32,
+                                y: resized.y as i32,
+                                width: resized.width,
+                                height: resized.height,
+                            },
+                        )),
                     );
                     return true;
                 }
@@ -1511,12 +1521,14 @@ where
         let y = rect.y;
         self.set_floating_rect(
             id,
-            Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
-                x: x as i32,
-                y: y as i32,
-                width,
-                height,
-            })),
+            Some(crate::window::FloatRectSpec::Absolute(
+                crate::window::FloatRect {
+                    x: x as i32,
+                    y: y as i32,
+                    width,
+                    height,
+                },
+            )),
         );
         self.bring_to_front_id(id);
         true
@@ -1555,12 +1567,14 @@ where
         }
         self.set_floating_rect(
             id,
-            Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
-                x,
-                y,
-                width,
-                height,
-            })),
+            Some(crate::window::FloatRectSpec::Absolute(
+                crate::window::FloatRect {
+                    x,
+                    y,
+                    width,
+                    height,
+                },
+            )),
         );
     }
 
@@ -1707,12 +1721,14 @@ where
                 if self.is_window_floating(id) {
                     self.set_floating_rect(
                         id,
-                        Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
-                            x: preview.x as i32,
-                            y: preview.y as i32,
-                            width: preview.width,
-                            height: preview.height,
-                        })),
+                        Some(crate::window::FloatRectSpec::Absolute(
+                            crate::window::FloatRect {
+                                x: preview.x as i32,
+                                y: preview.y as i32,
+                                width: preview.width,
+                                height: preview.height,
+                            },
+                        )),
                     );
                 }
                 return;
@@ -1945,7 +1961,7 @@ where
 
             // Ensure at least a small portion of the window (e.g. handle) is always visible
             // so the user can grab it back.
-            let min_visible_margin = 4u16;
+            let min_visible_margin = MIN_FLOATING_VISIBLE_MARGIN;
 
             let width = if self.floating_resize_offscreen {
                 fr.width.max(min_w)
@@ -1959,7 +1975,8 @@ where
             };
 
             let max_x = if self.floating_resize_offscreen {
-                (bounds.x
+                (bounds
+                    .x
                     .saturating_add(bounds.width)
                     .saturating_sub(min_visible_margin.min(width))) as i32
             } else {
@@ -1967,7 +1984,10 @@ where
             };
 
             let max_y = if self.floating_resize_offscreen {
-                (bounds.y.saturating_add(bounds.height).saturating_sub(1)) as i32 // Header is usually top line
+                (bounds
+                    .y
+                    .saturating_add(bounds.height)
+                    .saturating_sub(min_visible_margin.min(height))) as i32
             } else {
                 bounds
                     .y
@@ -1975,16 +1995,17 @@ where
             };
 
             // When `floating_resize_offscreen` is enabled we allow dragging a
-            // floating pane partially off the left or right edge while ensuring
-            // a small visible margin remains. If the pane is fully off-screen
-            // (`out_x`) or offscreen handling is disabled, recover it into the
-            // visible bounds as before.
+            // floating pane partially off the edges while ensuring a small
+            // visible margin remains. If the pane is fully off-screen on an
+            // axis (`out_x`/`out_y`) or offscreen handling is disabled, recover
+            // it into the visible bounds as before.
             let x = if out_x || !self.floating_resize_offscreen {
                 fr.x.clamp(bounds_left, max_x)
             } else {
                 // Compute left-most allowed x such that at least
                 // `min_visible_margin` columns remain visible inside `bounds`.
-                let left_allowed = bounds_left.saturating_sub(width as i32 - min_visible_margin.min(width) as i32);
+                let left_allowed =
+                    bounds_left.saturating_sub(width as i32 - min_visible_margin.min(width) as i32);
                 let left_allowed = left_allowed.min(max_x);
                 fr.x.clamp(left_allowed, max_x)
             };
@@ -1992,7 +2013,10 @@ where
             let y = if out_y || !self.floating_resize_offscreen {
                 fr.y.clamp(bounds_top, max_y)
             } else {
-                fr.y.max(bounds_top).min(max_y)
+                let visible_height = min_visible_margin.min(height) as i32;
+                let top_allowed = bounds_top.saturating_sub(height as i32 - visible_height);
+                let top_allowed = top_allowed.min(max_y);
+                fr.y.clamp(top_allowed, max_y)
             };
 
             updates.push((
@@ -2104,9 +2128,19 @@ where
                             height: fr.height,
                         }),
                     },
-                    crate::window::FloatRectSpec::Percent { x, y, width, height } => FloatingPane {
+                    crate::window::FloatRectSpec::Percent {
+                        x,
+                        y,
+                        width,
+                        height,
+                    } => FloatingPane {
                         id,
-                        rect: crate::layout::RectSpec::Percent { x, y, width, height },
+                        rect: crate::layout::RectSpec::Percent {
+                            x,
+                            y,
+                            width,
+                            height,
+                        },
                     },
                 })
             })
