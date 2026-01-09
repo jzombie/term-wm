@@ -12,6 +12,8 @@ A cross-platform, mouse & keyboard drivable, terminal window manager and [Ratatu
 
 It works the same over SSH, Mac, Linux, and Windows.
 
+![term-wm running on macOS](https://github.com/jzombie/live-assets/blob/main/term-wm-0.5.0-alpha-mac.gif?raw=true)
+
 `term-wm` serves two distinct purposes:
 
 - **For Users:** A standalone, keyboard-driven window manager for your terminal shell.
