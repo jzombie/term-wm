@@ -353,6 +353,10 @@ impl MarkdownViewerComponent {
         self.renderer.set_keyboard_enabled(enabled);
     }
 
+    pub fn set_selection_enabled(&mut self, enabled: bool) {
+        self.renderer.set_selection_enabled(enabled);
+    }
+
     pub fn handle_key_event(&mut self, key: &crossterm::event::KeyEvent) -> bool {
         // Delegate keyboard handling to renderer
         self.renderer.handle_event(&Event::Key(*key))

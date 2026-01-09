@@ -9,6 +9,7 @@ pub mod dialog_overlay;
 pub mod list;
 pub mod markdown_viewer;
 pub mod scroll_view;
+pub mod selectable_text;
 pub mod status_bar;
 pub mod svg_image;
 pub mod sys;
@@ -22,6 +23,9 @@ pub use dialog_overlay::DialogOverlayComponent;
 pub use list::ListComponent;
 pub use markdown_viewer::MarkdownViewerComponent;
 pub use scroll_view::ScrollViewComponent;
+pub use selectable_text::{
+    LogicalPosition, SelectableSurface, SelectionController, SelectionRange,
+};
 pub use status_bar::StatusBarComponent;
 pub use svg_image::SvgImageComponent;
 pub use sys::*;

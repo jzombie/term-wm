@@ -7,7 +7,12 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
-use crate::components::{Component, scroll_view::ScrollViewComponent};
+use crate::components::{
+    Component,
+    scroll_view::ScrollViewComponent,
+    selectable_text::{LogicalPosition, SelectionController},
+};
+use crate::layout::rect_contains;
 use crate::linkifier::LinkifiedText;
 use crate::ui::UiFrame;
 
@@ -17,6 +22,10 @@ pub struct TextRendererComponent {
     scroll: ScrollViewComponent,
     wrap: bool,
     link_map: Vec<Vec<Option<String>>>,
+    selection: SelectionController,
+    selection_enabled: bool,
+    last_area: Rect,
+    content_area: Rect,
 }
 
 impl Component for TextRendererComponent {
@@ -28,6 +37,8 @@ impl Component for TextRendererComponent {
         if area.width == 0 || area.height == 0 {
             return;
         }
+
+        self.last_area = area;
 
         let view = area.height as usize;
         // Determine content width and whether vertical scrollbar is needed.
@@ -52,6 +63,13 @@ impl Component for TextRendererComponent {
                 v_total = compute_display_lines(&self.text, content_width);
             }
         }
+
+        self.content_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: content_width,
+            height: area.height,
+        };
 
         // If wrapping is enabled, horizontal total should reflect the final content width
         if self.wrap {
@@ -158,11 +176,15 @@ impl Component for TextRendererComponent {
             cum_visual += line_vh;
         }
         self.scroll.render(frame);
+        self.render_selection_overlay(frame);
     }
 
     fn handle_event(&mut self, event: &crossterm::event::Event) -> bool {
         match event {
-            crossterm::event::Event::Mouse(_) => {
+            crossterm::event::Event::Mouse(mouse) => {
+                if self.selection_enabled && self.handle_selection_mouse(mouse) {
+                    return true;
+                }
                 let resp = self.scroll.handle_event(event);
                 if let Some(off) = resp.v_offset {
                     self.scroll.set_offset(off);
@@ -185,6 +207,10 @@ impl TextRendererComponent {
             scroll: ScrollViewComponent::new(),
             wrap: true,
             link_map: Vec::new(),
+            selection: SelectionController::new(),
+            selection_enabled: false,
+            last_area: Rect::default(),
+            content_area: Rect::default(),
         }
     }
 
@@ -204,6 +230,16 @@ impl TextRendererComponent {
 
     pub fn set_keyboard_enabled(&mut self, enabled: bool) {
         self.scroll.set_keyboard_enabled(enabled);
+    }
+
+    pub fn set_selection_enabled(&mut self, enabled: bool) {
+        if self.selection_enabled == enabled {
+            return;
+        }
+        self.selection_enabled = enabled;
+        if !enabled {
+            self.selection.clear();
+        }
     }
 
     pub fn offset(&self) -> usize {
@@ -426,6 +462,125 @@ impl TextRendererComponent {
 
     pub fn reset(&mut self) {
         self.scroll.reset();
+    }
+}
+
+impl TextRendererComponent {
+    fn handle_selection_mouse(&mut self, mouse: &MouseEvent) -> bool {
+        if !self.selection_enabled || self.content_area.width == 0 || self.content_area.height == 0
+        {
+            return false;
+        }
+        use crossterm::event::MouseEventKind;
+        match mouse.kind {
+            MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
+                if rect_contains(self.content_area, mouse.column, mouse.row)
+                    && let Some(pos) = self.logical_position_from_point(mouse.column, mouse.row)
+                {
+                    self.selection.begin_drag(pos);
+                    return true;
+                }
+                false
+            }
+            MouseEventKind::Drag(crossterm::event::MouseButton::Left) => {
+                if !self.selection.is_dragging() {
+                    return false;
+                }
+                self.auto_scroll_selection(mouse);
+                if let Some(pos) = self.logical_position_from_point(mouse.column, mouse.row) {
+                    self.selection.update_drag(pos);
+                }
+                true
+            }
+            MouseEventKind::Up(crossterm::event::MouseButton::Left) => {
+                if self.selection.is_dragging() {
+                    let _ = self.selection.finish_drag();
+                    return true;
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    fn auto_scroll_selection(&mut self, mouse: &MouseEvent) {
+        if self.content_area.height == 0 {
+            return;
+        }
+        let bottom = self.content_area.y.saturating_add(self.content_area.height);
+        let current = self.scroll.offset();
+        if mouse.row < self.content_area.y {
+            self.scroll.set_offset(current.saturating_sub(1));
+        } else if mouse.row >= bottom {
+            self.scroll.set_offset(current.saturating_add(1));
+        }
+    }
+
+    fn logical_position_from_point(&self, column: u16, row: u16) -> Option<LogicalPosition> {
+        if self.content_area.width == 0 || self.content_area.height == 0 {
+            return None;
+        }
+        let max_x = self
+            .content_area
+            .x
+            .saturating_add(self.content_area.width)
+            .saturating_sub(1);
+        let max_y = self
+            .content_area
+            .y
+            .saturating_add(self.content_area.height)
+            .saturating_sub(1);
+        let clamped_col = column.clamp(self.content_area.x, max_x);
+        let clamped_row = row.clamp(self.content_area.y, max_y);
+        let local_col = clamped_col.saturating_sub(self.content_area.x) as usize;
+        let local_row = clamped_row.saturating_sub(self.content_area.y) as usize;
+        let row_base = self.scroll.offset();
+        let col_base = self.scroll.h_offset();
+        Some(LogicalPosition::new(
+            row_base.saturating_add(local_row),
+            col_base.saturating_add(local_col),
+        ))
+    }
+
+    fn render_selection_overlay(&mut self, frame: &mut UiFrame<'_>) {
+        if !self.selection_enabled {
+            return;
+        }
+        let Some(range) = self
+            .selection
+            .selection_range()
+            .filter(|r| r.is_non_empty())
+            .map(|r| r.normalized())
+        else {
+            return;
+        };
+        let mut bounds = self.content_area;
+        let buffer = frame.buffer_mut();
+        bounds = bounds.intersection(buffer.area);
+        if bounds.width == 0 || bounds.height == 0 {
+            return;
+        }
+        let row_base = self.scroll.offset();
+        let col_base = self.scroll.h_offset();
+        for y in bounds.y..bounds.y.saturating_add(bounds.height) {
+            let local_row = y.saturating_sub(self.content_area.y) as usize;
+            for x in bounds.x..bounds.x.saturating_add(bounds.width) {
+                let local_col = x.saturating_sub(self.content_area.x) as usize;
+                let pos = LogicalPosition::new(
+                    row_base.saturating_add(local_row),
+                    col_base.saturating_add(local_col),
+                );
+                if range.contains(pos) {
+                    if let Some(cell) = buffer.cell_mut((x, y)) {
+                        let style = cell
+                            .style()
+                            .bg(crate::theme::selection_bg())
+                            .fg(crate::theme::selection_fg());
+                        cell.set_style(style);
+                    }
+                }
+            }
+        }
     }
 }
 

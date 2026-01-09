@@ -59,6 +59,15 @@ pub fn success_fg() -> Color {
     Color::Black
 }
 
+// Selection highlight
+pub fn selection_bg() -> Color {
+    Color::Indexed(238)
+}
+
+pub fn selection_fg() -> Color {
+    Color::Black
+}
+
 // Dialog / confirm
 pub fn dialog_bg() -> Color {
     Color::Black

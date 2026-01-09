@@ -264,6 +264,10 @@ impl DebugLogComponent {
     fn renderer_offset(&self) -> usize {
         self.renderer.offset()
     }
+
+    pub fn set_selection_enabled(&mut self, enabled: bool) {
+        self.renderer.set_selection_enabled(enabled);
+    }
 }
 
 #[cfg(test)]

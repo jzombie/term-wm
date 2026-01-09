@@ -10,7 +10,11 @@ use ratatui::{
 };
 use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
-use crate::components::{Component, scroll_view::ScrollViewComponent};
+use crate::components::{
+    Component,
+    scroll_view::ScrollViewComponent,
+    selectable_text::{LogicalPosition, SelectionController},
+};
 use crate::layout::rect_contains;
 use crate::linkifier::{
     LinkHandler, LinkOverlay, Linkifier, OverlaySignature, decorate_link_style,
@@ -31,6 +35,8 @@ pub struct TerminalComponent {
     link_overlay: LinkOverlay,
     link_handler: Option<LinkHandler>,
     command_description: String,
+    selection: SelectionController,
+    selection_enabled: bool,
 }
 
 impl Component for TerminalComponent {
@@ -92,6 +98,9 @@ impl Component for TerminalComponent {
                 true
             }
             Event::Mouse(mouse) => {
+                if self.selection_enabled && self.handle_selection_mouse(mouse) {
+                    return true;
+                }
                 if self.try_handle_link_click(mouse) {
                     return true;
                 }
@@ -167,6 +176,8 @@ impl TerminalComponent {
             link_overlay: LinkOverlay::new(),
             link_handler: None,
             command_description,
+            selection: SelectionController::new(),
+            selection_enabled: false,
         };
         // Terminal scroll view must not hijack keyboard input; disable by default.
         comp.scroll_view.set_keyboard_enabled(false);
@@ -221,10 +232,29 @@ impl TerminalComponent {
         self.link_handler = Some(Arc::new(handler));
     }
 
+    pub fn set_selection_enabled(&mut self, enabled: bool) {
+        if self.selection_enabled == enabled {
+            return;
+        }
+        self.selection_enabled = enabled;
+        if !enabled {
+            self.selection.clear();
+        }
+    }
+
     fn render_screen(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
         let scrollback_value = self.pane.scrollback();
         let show_cursor = scrollback_value == 0;
         let used = self.pane.max_scrollback();
+        let selection_row_base = used.saturating_sub(scrollback_value);
+        let selection_range = if self.selection_enabled {
+            self.selection
+                .selection_range()
+                .filter(|r| r.is_non_empty())
+                .map(|r| r.normalized())
+        } else {
+            None
+        };
         let buffer = frame.buffer_mut();
 
         // Optimally only iterate over the visible intersection
@@ -321,6 +351,16 @@ impl TerminalComponent {
                         style = decorate_link_style(style);
                     }
 
+                    if let Some(range) = selection_range {
+                        let abs_row = selection_row_base.saturating_add(row as usize);
+                        let abs_col = col as usize;
+                        if range.contains(LogicalPosition::new(abs_row, abs_col)) {
+                            style = style
+                                .bg(crate::theme::selection_bg())
+                                .fg(crate::theme::selection_fg());
+                        }
+                    }
+
                     if let Some(buf_cell) = buffer.cell_mut((cell_x, cell_y)) {
                         let mut buf = [0u8; 4];
                         // If background is transparent (None), force it to Reset to clear underlying content
@@ -385,6 +425,81 @@ impl TerminalComponent {
         let current = self.pane.scrollback() as isize;
         let next = (current + delta).clamp(0, self.pane.scrollback_len() as isize) as usize;
         self.pane.set_scrollback(next);
+    }
+
+    fn handle_selection_mouse(&mut self, mouse: &MouseEvent) -> bool {
+        if !self.selection_enabled || self.pane.alternate_screen() {
+            return false;
+        }
+        use MouseEventKind::*;
+        match mouse.kind {
+            Down(MouseButton::Left) => {
+                if rect_contains(self.last_area, mouse.column, mouse.row)
+                    && let Some(pos) = self.logical_position_from_point(mouse.column, mouse.row)
+                {
+                    self.selection.begin_drag(pos);
+                    return true;
+                }
+                false
+            }
+            Drag(MouseButton::Left) => {
+                if !self.selection.is_dragging() {
+                    return false;
+                }
+                self.auto_scroll_selection(mouse);
+                if let Some(pos) = self.logical_position_from_point(mouse.column, mouse.row) {
+                    self.selection.update_drag(pos);
+                }
+                true
+            }
+            Up(MouseButton::Left) => {
+                if self.selection.is_dragging() {
+                    let _ = self.selection.finish_drag();
+                    return true;
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    fn auto_scroll_selection(&mut self, mouse: &MouseEvent) {
+        if self.last_area.height == 0 {
+            return;
+        }
+        if mouse.row < self.last_area.y {
+            self.scroll_scrollback(1);
+        } else if mouse.row
+            >= self
+                .last_area
+                .y
+                .saturating_add(self.last_area.height)
+        {
+            self.scroll_scrollback(-1);
+        }
+    }
+
+    fn logical_position_from_point(
+        &mut self,
+        column: u16,
+        row: u16,
+    ) -> Option<LogicalPosition> {
+        if self.last_area.width == 0 || self.last_area.height == 0 {
+            return None;
+        }
+        let max_x = self.last_area.x.saturating_add(self.last_area.width).saturating_sub(1);
+        let max_y = self.last_area.y.saturating_add(self.last_area.height).saturating_sub(1);
+        let clamped_col = column.clamp(self.last_area.x, max_x);
+        let clamped_row = row.clamp(self.last_area.y, max_y);
+        let local_col = clamped_col.saturating_sub(self.last_area.x) as usize;
+        let local_row = clamped_row.saturating_sub(self.last_area.y) as usize;
+        let scrollback_value = self.pane.scrollback();
+        let used = self.pane.max_scrollback();
+        let row_base = used.saturating_sub(scrollback_value);
+        Some(LogicalPosition::new(
+            row_base.saturating_add(local_row),
+            local_col,
+        ))
     }
 
     fn handle_scrollbar_event(&mut self, event: &Event) -> bool {

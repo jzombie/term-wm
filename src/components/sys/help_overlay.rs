@@ -197,6 +197,10 @@ impl HelpOverlayComponent {
     pub fn set_keyboard_enabled(&mut self, enabled: bool) {
         self.viewer.set_keyboard_enabled(enabled);
     }
+
+    pub fn set_selection_enabled(&mut self, enabled: bool) {
+        self.viewer.set_selection_enabled(enabled);
+    }
 }
 
 impl Default for HelpOverlayComponent {

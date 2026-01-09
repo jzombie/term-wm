@@ -82,6 +82,7 @@ fn main() -> io::Result<()> {
                 return true;
             }
             if let Some(pane) = app.terminals.get_mut(app.windows.focus()) {
+                pane.set_selection_enabled(app.windows.clipboard_enabled());
                 return pane.handle_event(event);
             }
             false
@@ -238,6 +239,7 @@ fn render_pane(frame: &mut UiFrame<'_>, app: &mut App, id: PaneId, area: Rect, f
         return;
     }
     if let Some(pane) = app.terminals.get_mut(id) {
+        pane.set_selection_enabled(app.windows.clipboard_enabled());
         pane.resize(area);
         pane.render(frame, area, focused);
     }

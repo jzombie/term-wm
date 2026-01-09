@@ -128,6 +128,7 @@ pub struct SystemWindowDraw {
 trait SystemWindowView {
     fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool);
     fn handle_event(&mut self, event: &Event) -> bool;
+    fn set_selection_enabled(&mut self, _enabled: bool) {}
 }
 
 impl SystemWindowView for DebugLogComponent {
@@ -137,6 +138,10 @@ impl SystemWindowView for DebugLogComponent {
 
     fn handle_event(&mut self, event: &Event) -> bool {
         Component::handle_event(self, event)
+    }
+
+    fn set_selection_enabled(&mut self, enabled: bool) {
+        DebugLogComponent::set_selection_enabled(self, enabled);
     }
 }
 
@@ -167,6 +172,10 @@ impl SystemWindowEntry {
 
     fn handle_event(&mut self, event: &Event) -> bool {
         self.component.handle_event(event)
+    }
+
+    fn set_selection_enabled(&mut self, enabled: bool) {
+        self.component.set_selection_enabled(enabled);
     }
 }
 
@@ -426,6 +435,7 @@ where
         if !clipboard_available {
             state.set_clipboard_enabled(false);
         }
+        let selection_enabled = state.clipboard_enabled();
         Self {
             app_focus: FocusRing::new(current),
             wm_focus: FocusRing::new(WindowId::system(SystemWindowId::DebugLog)),
@@ -460,7 +470,8 @@ where
             z_order: Vec::new(),
             drag_snap: None,
             system_windows: {
-                let (component, handle) = DebugLogComponent::new_default();
+                let (mut component, handle) = DebugLogComponent::new_default();
+                component.set_selection_enabled(selection_enabled);
                 set_global_debug_log(handle);
                 // Initialize tracing now that the global debug log handle exists
                 // so tracing will write into the in-memory debug buffer by default.
@@ -587,14 +598,33 @@ where
         if !self.clipboard_available {
             return;
         }
+        if self.state.clipboard_enabled() == enabled {
+            return;
+        }
         self.state.set_clipboard_enabled(enabled);
+        self.apply_clipboard_selection_state(enabled);
     }
 
     pub fn toggle_clipboard_enabled(&mut self) {
         if !self.clipboard_available {
             return;
         }
-        self.state.toggle_clipboard_enabled();
+        let next = !self.state.clipboard_enabled();
+        self.set_clipboard_enabled(next);
+    }
+
+    fn apply_clipboard_selection_state(&mut self, enabled: bool) {
+        for entry in self.system_windows.values_mut() {
+            entry.set_selection_enabled(enabled);
+        }
+        for overlay in self.overlays.values_mut() {
+            if let Some(help) = overlay
+                .as_any_mut()
+                .downcast_mut::<HelpOverlayComponent>()
+            {
+                help.set_selection_enabled(enabled);
+            }
+        }
     }
 
     fn refresh_capture(&mut self) {
@@ -648,6 +678,7 @@ where
     pub fn open_help_overlay(&mut self) {
         let mut h = HelpOverlayComponent::new();
         h.show();
+        h.set_selection_enabled(self.clipboard_enabled());
         // respect central default: if globally disabled, ensure the overlay doesn't enable keys
         if !self.scroll_keyboard_enabled_default {
             h.set_keyboard_enabled(false);
