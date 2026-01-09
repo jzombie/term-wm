@@ -212,7 +212,7 @@ impl Component for DebugLogComponent {
         if self.follow_tail {
             // renderer will position itself to the bottom during render via its internal scroll
             let max_off = total.saturating_sub(view);
-            self.renderer.set_offset(max_off);
+            self.renderer.set_vertical_offset(max_off);
         }
         self.follow_tail = self.is_at_bottom();
 
@@ -262,7 +262,7 @@ impl DebugLogComponent {
     }
 
     fn renderer_offset(&self) -> usize {
-        self.renderer.offset()
+        self.renderer.vertical_offset()
     }
 
     pub fn set_selection_enabled(&mut self, enabled: bool) {
@@ -326,7 +326,7 @@ mod tests {
             comp.render(&mut frame, area, &ComponentContext::new(true));
         }
         let max_off = comp.last_total.saturating_sub(comp.last_view);
-        comp.renderer.set_offset(max_off);
+        comp.renderer.set_vertical_offset(max_off);
         comp.follow_tail = true;
 
         comp.handle_event(
@@ -336,9 +336,9 @@ mod tests {
             )),
             &ComponentContext::new(true),
         );
-        assert!(comp.renderer.offset() < max_off);
+        assert!(comp.renderer.vertical_offset() < max_off);
 
-        let before = comp.renderer.offset();
+        let before = comp.renderer.vertical_offset();
         comp.handle_event(
             &Event::Mouse(MouseEvent {
                 kind: MouseEventKind::ScrollDown,
@@ -348,6 +348,6 @@ mod tests {
             }),
             &ComponentContext::new(true),
         );
-        assert!(comp.renderer.offset() >= before);
+        assert!(comp.renderer.vertical_offset() >= before);
     }
 }

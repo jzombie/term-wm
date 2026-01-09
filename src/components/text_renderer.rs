@@ -259,15 +259,15 @@ impl TextRendererComponent {
         }
     }
 
-    pub fn offset(&self) -> usize {
+    pub fn vertical_offset(&self) -> usize {
         self.scroll.vertical_offset()
     }
 
-    pub fn set_offset(&mut self, offset: usize) {
+    pub fn set_vertical_offset(&mut self, offset: usize) {
         self.scroll.set_vertical_offset(offset);
     }
 
-    pub fn view(&self) -> usize {
+    pub fn view_height(&self) -> usize {
         self.scroll.view_height()
     }
 

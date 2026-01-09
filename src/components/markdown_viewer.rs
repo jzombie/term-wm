@@ -324,34 +324,34 @@ impl MarkdownViewerComponent {
     }
 
     pub fn page_up(&mut self) {
-        let page = self.renderer.view().max(1);
-        let off = self.renderer.offset().saturating_sub(page);
-        self.renderer.set_offset(off);
+        let page = self.renderer.view_height().max(1);
+        let off = self.renderer.vertical_offset().saturating_sub(page);
+        self.renderer.set_vertical_offset(off);
     }
 
     pub fn page_down(&mut self) {
-        let page = self.renderer.view().max(1);
-        let off = self.renderer.offset().saturating_add(page);
-        self.renderer.set_offset(off);
+        let page = self.renderer.view_height().max(1);
+        let off = self.renderer.vertical_offset().saturating_add(page);
+        self.renderer.set_vertical_offset(off);
     }
 
     pub fn scroll_up(&mut self) {
-        let off = self.renderer.offset().saturating_sub(1);
-        self.renderer.set_offset(off);
+        let off = self.renderer.vertical_offset().saturating_sub(1);
+        self.renderer.set_vertical_offset(off);
     }
 
     pub fn scroll_down(&mut self) {
-        let off = self.renderer.offset().saturating_add(1);
-        self.renderer.set_offset(off);
+        let off = self.renderer.vertical_offset().saturating_add(1);
+        self.renderer.set_vertical_offset(off);
     }
 
     pub fn go_home(&mut self) {
-        self.renderer.set_offset(0);
+        self.renderer.set_vertical_offset(0);
     }
 
     pub fn go_end(&mut self) {
         // set to a large offset; TextRenderer will clamp to max
-        self.renderer.set_offset(usize::MAX);
+        self.renderer.set_vertical_offset(usize::MAX);
     }
 
     pub fn set_keyboard_enabled(&mut self, enabled: bool) {
@@ -624,14 +624,14 @@ mod markdown_tests {
             modifiers: KeyModifiers::empty(),
         });
 
-        assert_eq!(mv.renderer.offset(), 0);
+        assert_eq!(mv.renderer.vertical_offset(), 0);
 
         let handled =
             mv.handle_pointer_event_in_area(&mouse_event, area, &ComponentContext::new(true));
 
         assert!(handled, "Event should be handled");
         assert!(
-            mv.renderer.offset() > 0,
+            mv.renderer.vertical_offset() > 0,
             "Should have scrolled down to Section Two"
         );
     }
