@@ -139,6 +139,22 @@ impl Component for TerminalComponent {
 }
 
 impl TerminalComponent {
+    /// Return a reasonable default PTY size used when spawning a terminal
+    /// when the caller doesn't need to pick a custom size.
+    pub fn default_pty_size() -> PtySize {
+        PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        }
+    }
+
+    /// Convenience spawn that uses `default_pty_size()`.
+    pub fn spawn_default(command: CommandBuilder) -> crate::pty::PtyResult<Self> {
+        Self::spawn(command, Self::default_pty_size())
+    }
+
     pub fn spawn(command: CommandBuilder, size: PtySize) -> crate::pty::PtyResult<Self> {
         let command_description = format!("{:?}", command);
         let pane = Pty::spawn_with_scrollback(command, size, DEFAULT_SCROLLBACK_LEN)?;

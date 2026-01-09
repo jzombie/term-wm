@@ -158,13 +158,7 @@ impl App {
     }
 
     fn spawn_terminal_with_command(&mut self, cmd: portable_pty::CommandBuilder) -> io::Result<()> {
-        let size = PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        };
-        let mut pane = TerminalComponent::spawn(cmd, size).map_err(io::Error::other)?;
+        let mut pane = TerminalComponent::spawn_default(cmd).map_err(io::Error::other)?;
         pane.set_link_handler_fn(|url| {
             let _ = webbrowser::open(url);
             true
@@ -185,14 +179,8 @@ impl HasWindowManager<PaneId, PaneId> for App {
     }
 
     fn wm_new_window(&mut self) -> io::Result<()> {
-        let size = PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        };
         let mut pane =
-            TerminalComponent::spawn(default_shell_command(), size).map_err(io::Error::other)?;
+            TerminalComponent::spawn_default(default_shell_command()).map_err(io::Error::other)?;
         pane.set_link_handler_fn(|url| {
             let _ = webbrowser::open(url);
             true
