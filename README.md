@@ -3,7 +3,7 @@
 
 [![made-with-rust][rust-logo]][rust-src-page] [![crates.io][crates-badge]][crates-page] [![MIT licensed][mit-license-badge]][mit-license-page] [![Apache 2.0 licensed][apache-2.0-license-badge]][apache-2.0-license-page] [![Coverage][coveralls-badge]][coveralls-page]
 
-**WORK IN PROGRESS.**
+**WORK IN PROGRESS. API SUBJECT TO CHANGE.**
 
 A cross-platform terminal multiplexer, window manager, and [Ratatui](https://crates.io/crates/ratatui) component library.
 
