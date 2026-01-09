@@ -59,6 +59,45 @@ By using `term-wm` primitives, your application gains:
 - Z-ordering for floating components.
 - A pre-built "Command Palette" pattern for global actions.
 
+## Build & Installation
+
+### Requirements
+
+- If building from source: [Rust toolchain (stable)](https://rust-lang.org/tools/install/)
+- A terminal emulator supporting Raw Mode and standard ANSI escape sequences (most terminal emulators support this including Windows 11 Command Prompt, macOS, and Ubuntu).
+
+### Building from Source
+
+```bash
+git clone https://github.com/jzombie/term-wm.git
+cd term-wm
+cargo build --release
+```
+
+_There is also a published Rust crate at: https://crates.io/crates/term-wm_
+
+### Running from Source
+
+The easiest way to run the latest build is via [Cargo](https://rust-lang.org/tools/install/), which handles platform differences automatically:
+
+```bash
+cargo run --release
+```
+
+### Installing from Source
+
+To install `term-wm` as an executable system command, you can install it directly to your system.
+
+```bash
+cargo install --path .
+```
+
+**To uninstall:**
+
+```bash
+cargo uninstall term-wm
+```
+
 ## Performance & Benchmarking
 
 The project emphasizes high-throughput rendering. Included in the repository is [term-bench](./crates/term-bench/), a tool designed to stress-test terminal emulators and window managers.
