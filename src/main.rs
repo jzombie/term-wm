@@ -21,7 +21,12 @@ type PaneId = usize;
 
 /// Simple CLI for launching `term-wm` with optional commands / window count.
 #[derive(Parser, Debug)]
-#[command(name = env!("CARGO_PKG_NAME"), version = env!("CARGO_PKG_VERSION"))]
+#[command(
+    name = env!("CARGO_PKG_NAME"),
+    version = env!("CARGO_PKG_VERSION"),
+    about = env!("CARGO_PKG_DESCRIPTION"),
+    long_about = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"), ": ", env!("CARGO_PKG_DESCRIPTION")),
+)]
 struct Cli {
     /// Number of terminal windows to open.
     ///
@@ -33,7 +38,7 @@ struct Cli {
 
     /// Commands to run in created windows.
     ///
-    /// If provided, the number of windows  will equal the number of commands given and each command will be run
+    /// If provided, the number of windows will equal the number of commands given and each command will be run
     /// in its respective window via the default shell (i.e. shell -c "CMD").
     #[arg(value_name = "CMD", num_args = 0..)]
     cmds: Vec<String>,
