@@ -2,7 +2,8 @@ use std::io;
 use std::time::Duration;
 
 use crossterm::event::{Event, KeyEventKind};
-use ratatui::prelude::{Constraint, Direction};
+use ratatui::buffer::Buffer;
+use ratatui::prelude::{Constraint, Direction, Rect};
 use ratatui::style::Style;
 
 use crate::components::ConfirmAction;
@@ -369,11 +370,34 @@ fn draw_window_app<A, W, R, FMap>(
     let plan = app.windows().window_draw_plan(frame);
     for task in plan {
         match task {
-            WindowDrawTask::App(window) => app.render_window(frame, window),
-            WindowDrawTask::System(window) => app.windows().render_system_window(frame, window),
+            WindowDrawTask::App(window) => {
+                render_window_offscreen(frame, window.surface.inner, |subframe| {
+                    app.render_window(subframe, window);
+                });
+            }
+            WindowDrawTask::System(window) => {
+                render_window_offscreen(frame, window.surface.inner, |subframe| {
+                    app.windows().render_system_window(subframe, window);
+                });
+            }
         }
     }
     app.windows().render_overlays(frame);
+}
+
+fn render_window_offscreen<F>(frame: &mut UiFrame<'_>, area: Rect, mut render: F)
+where
+    F: FnMut(&mut UiFrame<'_>),
+{
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let mut buffer = Buffer::empty(area);
+    {
+        let mut offscreen = UiFrame::from_parts(area, &mut buffer);
+        render(&mut offscreen);
+    }
+    frame.blit_from(&buffer, area);
 }
 
 fn auto_layout_for_windows<R: Copy + Eq + Ord>(windows: &[R]) -> Option<TilingLayout<R>> {

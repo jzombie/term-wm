@@ -126,15 +126,15 @@ pub struct SystemWindowDraw {
 }
 
 trait SystemWindowView {
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool);
+    fn render(&mut self, frame: &mut UiFrame<'_>, surface: WindowSurface, focused: bool);
     fn handle_event(&mut self, event: &Event) -> bool;
     fn set_selection_enabled(&mut self, _enabled: bool) {}
 }
 
 impl SystemWindowView for DebugLogComponent {
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, surface: WindowSurface, focused: bool) {
         let ctx = ComponentContext::new(focused);
-        <DebugLogComponent as Component>::render(self, frame, area, &ctx);
+        <DebugLogComponent as Component>::render(self, frame, surface.inner, &ctx);
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
@@ -168,7 +168,7 @@ impl SystemWindowEntry {
     }
 
     fn render(&mut self, frame: &mut UiFrame<'_>, surface: WindowSurface, focused: bool) {
-        self.component.render(frame, surface.inner, focused);
+        self.component.render(frame, surface, focused);
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
@@ -619,10 +619,7 @@ where
             entry.set_selection_enabled(enabled);
         }
         for overlay in self.overlays.values_mut() {
-            if let Some(help) = overlay
-                .as_any_mut()
-                .downcast_mut::<HelpOverlayComponent>()
-            {
+            if let Some(help) = overlay.as_any_mut().downcast_mut::<HelpOverlayComponent>() {
                 help.set_selection_enabled(enabled);
             }
         }
@@ -707,7 +704,10 @@ where
         // we can just use the trait method.
         // BUT, HelpOverlayComponent::handle_event now calls handle_help_event_in_area with stored area.
         // Update area to ensure correct hit-testing (Component::resize)
-        boxed.resize(self.last_frame_area, &ComponentContext::new(true).with_overlay(true));
+        boxed.resize(
+            self.last_frame_area,
+            &ComponentContext::new(true).with_overlay(true),
+        );
 
         let handled = boxed.handle_event(event, &ComponentContext::new(true).with_overlay(true));
 
@@ -2124,10 +2124,18 @@ where
 
         // Render overlays in fixed order if they exist
         if let Some(confirm) = self.overlays.get_mut(&OverlayId::ExitConfirm) {
-            confirm.render(frame, frame.area(), &ComponentContext::new(false).with_overlay(true));
+            confirm.render(
+                frame,
+                frame.area(),
+                &ComponentContext::new(false).with_overlay(true),
+            );
         }
         if let Some(help) = self.overlays.get_mut(&OverlayId::Help) {
-            help.render(frame, frame.area(), &ComponentContext::new(false).with_overlay(true));
+            help.render(
+                frame,
+                frame.area(),
+                &ComponentContext::new(false).with_overlay(true),
+            );
         }
     }
 

@@ -44,11 +44,11 @@ impl<'a> UiFrame<'a> {
         Self { area, buffer }
     }
 
-    /// Test helper: construct a `UiFrame` directly from an area and buffer.
+    /// Construct a `UiFrame` directly from an area and buffer.
     ///
-    /// This exists to make unit testing of clipping behavior straightforward
-    /// without constructing a full `ratatui::Frame` in tests.
-    #[cfg(test)]
+    /// This powers offscreen rendering paths where components should draw into
+    /// their logical window size before being composited onto the visible
+    /// terminal buffer.
     pub(crate) fn from_parts(area: Rect, buffer: &'a mut Buffer) -> Self {
         Self { area, buffer }
     }
@@ -85,6 +85,22 @@ impl<'a> UiFrame<'a> {
     {
         if let Some(clipped) = self.clip_rect(area) {
             widget.render(clipped, self.buffer, state);
+        }
+    }
+
+    pub fn blit_from(&mut self, src: &Buffer, src_area: Rect) {
+        let overlap = src_area.intersection(self.area);
+        if overlap.width == 0 || overlap.height == 0 {
+            return;
+        }
+        for y in overlap.y..overlap.y.saturating_add(overlap.height) {
+            for x in overlap.x..overlap.x.saturating_add(overlap.width) {
+                if let (Some(src_cell), Some(dst_cell)) =
+                    (src.cell((x, y)), self.buffer.cell_mut((x, y)))
+                {
+                    *dst_cell = src_cell.clone();
+                }
+            }
         }
     }
 }
