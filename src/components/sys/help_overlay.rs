@@ -43,7 +43,11 @@ impl Component for HelpOverlayComponent {
             height: rect.height.saturating_sub(2),
         };
         frame.render_widget(block, rect);
-        self.viewer.render_content(frame, inner);
+        // Overlays are not part of the standard focus ring, so they often
+        // receive `focused=false`. Force the viewer to stay logically focused
+        // so selection drags are preserved while the help dialog is visible.
+        let viewer_focused = self.visible;
+        self.viewer.render_content(frame, inner, viewer_focused);
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
@@ -239,7 +243,7 @@ mod tests {
         let mut buffer = Buffer::empty(area);
         {
             let mut frame = crate::ui::UiFrame::from_parts(area, &mut buffer);
-            overlay.viewer.render_content(&mut frame, area);
+            overlay.viewer.render_content(&mut frame, area, true);
         }
 
         let mut joined = String::new();

@@ -35,7 +35,8 @@ impl Component for TextRendererComponent {
         self.scroll.set_fixed_height(Some(area.height));
     }
 
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
+        self.apply_focus_state(focused);
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -186,9 +187,6 @@ impl Component for TextRendererComponent {
     fn handle_event(&mut self, event: &crossterm::event::Event) -> bool {
         match event {
             crossterm::event::Event::Mouse(mouse) => {
-                if handle_selection_mouse(self, self.selection_enabled, mouse) {
-                    return true;
-                }
                 let resp = self.scroll.handle_event(event);
                 if let Some(off) = resp.v_offset {
                     self.scroll.set_offset(off);
@@ -196,9 +194,18 @@ impl Component for TextRendererComponent {
                 if let Some(off) = resp.h_offset {
                     self.scroll.set_h_offset(off);
                 }
-                resp.handled
+                if resp.handled {
+                    return true;
+                }
+                if handle_selection_mouse(self, self.selection_enabled, mouse) {
+                    return true;
+                }
+                false
             }
-            crossterm::event::Event::Key(key) => self.scroll.handle_key_event(key),
+            crossterm::event::Event::Key(key) => {
+                self.selection.clear();
+                self.scroll.handle_key_event(key)
+            }
             _ => false,
         }
     }
@@ -514,6 +521,12 @@ impl SelectionHost for TextRendererComponent {
 }
 
 impl TextRendererComponent {
+    fn apply_focus_state(&mut self, focused: bool) {
+        if !focused {
+            self.selection.clear();
+        }
+    }
+
     fn logical_position_from_point(&self, column: u16, row: u16) -> Option<LogicalPosition> {
         if self.content_area.width == 0 || self.content_area.height == 0 {
             return None;
@@ -601,6 +614,65 @@ fn compute_display_lines(text: &Text<'_>, width: u16) -> usize {
 impl Default for TextRendererComponent {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{
+        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+        MouseEventKind,
+    };
+
+    fn key_event(code: KeyCode) -> KeyEvent {
+        let mut ev = KeyEvent::new(code, KeyModifiers::NONE);
+        ev.kind = KeyEventKind::Press;
+        ev
+    }
+
+    #[test]
+    fn key_press_clears_selection() {
+        let mut comp = TextRendererComponent::new();
+        comp.selection_enabled = true;
+        comp.selection.begin_drag(LogicalPosition::new(0, 0));
+        comp.selection.update_drag(LogicalPosition::new(0, 5));
+        assert!(comp.selection.has_selection());
+
+        let handled = comp.handle_event(&Event::Key(key_event(KeyCode::Char('a'))));
+        assert!(!handled);
+        assert!(!comp.selection.has_selection());
+    }
+
+    #[test]
+    fn blur_clears_selection() {
+        let mut comp = TextRendererComponent::new();
+        comp.selection.begin_drag(LogicalPosition::new(0, 0));
+        comp.selection.update_drag(LogicalPosition::new(0, 2));
+        assert!(comp.selection.has_selection());
+
+        comp.apply_focus_state(false);
+        assert!(!comp.selection.has_selection());
+    }
+
+    #[test]
+    fn scrollbar_drag_bypasses_selection() {
+        let mut comp = TextRendererComponent::new();
+        comp.selection_enabled = true;
+        comp.content_area = Rect::new(0, 0, 5, 5);
+        comp.scroll.set_fixed_height(Some(5));
+        comp.scroll.update(Rect::new(0, 0, 5, 5), 20, 5);
+        comp.scroll.set_horizontal_total_view(20, 5);
+
+        let handled = comp.handle_event(&Event::Mouse(MouseEvent {
+            column: 2,
+            row: 4,
+            kind: MouseEventKind::Down(MouseButton::Left),
+            modifiers: KeyModifiers::NONE,
+        }));
+
+        assert!(handled);
+        assert!(!comp.selection.is_dragging());
     }
 }
 

@@ -34,8 +34,8 @@ impl Component for MarkdownViewerComponent {
         self.renderer.resize(area);
     }
 
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
-        self.render_content(frame, area);
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
+        self.render_content(frame, area, focused);
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
@@ -362,8 +362,8 @@ impl MarkdownViewerComponent {
         self.renderer.handle_event(&Event::Key(*key))
     }
 
-    pub fn render_content(&mut self, frame: &mut UiFrame<'_>, area: Rect) {
-        self.renderer.render(frame, area, false);
+    pub fn render_content(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
+        self.renderer.render(frame, area, focused);
     }
 }
 
@@ -461,14 +461,14 @@ mod markdown_tests {
         let mut scratch = Buffer::empty(area);
         {
             let mut frame = crate::ui::UiFrame::from_parts(area, &mut scratch);
-            mv.render_content(&mut frame, area);
+            mv.render_content(&mut frame, area, true);
         }
 
         let mut buffer = Buffer::empty(area);
         {
             mv.go_end();
             let mut frame = crate::ui::UiFrame::from_parts(area, &mut buffer);
-            mv.render_content(&mut frame, area);
+            mv.render_content(&mut frame, area, true);
         }
 
         let mut found_mouse_note = false;
@@ -513,7 +513,7 @@ mod markdown_tests {
         let mut with_scroll = Buffer::empty(area);
         {
             let mut frame = crate::ui::UiFrame::from_parts(area, &mut with_scroll);
-            mv.render_content(&mut frame, area);
+            mv.render_content(&mut frame, area, true);
         }
 
         // verify that our viewer actually needed a scrollbar
@@ -676,7 +676,7 @@ mod markdown_tests {
         let mut buffer = Buffer::empty(area);
         {
             let mut frame = crate::ui::UiFrame::from_parts(area, &mut buffer);
-            mv.render_content(&mut frame, area);
+            mv.render_content(&mut frame, area, true);
         }
 
         // Find the row that contains the rule glyph and ensure it only

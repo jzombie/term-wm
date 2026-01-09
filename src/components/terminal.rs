@@ -60,6 +60,9 @@ impl Component for TerminalComponent {
     }
 
     fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
+        if !focused {
+            self.selection.clear();
+        }
         if area.height == 0 || area.width == 0 {
             self.last_area = Rect::default();
             return;
@@ -75,6 +78,7 @@ impl Component for TerminalComponent {
                 if key.kind == KeyEventKind::Release {
                     return false;
                 }
+                self.selection.clear();
                 if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
                     && key.modifiers.contains(KeyModifiers::SHIFT)
                     && !self.pane.alternate_screen()
@@ -101,14 +105,14 @@ impl Component for TerminalComponent {
                 true
             }
             Event::Mouse(mouse) => {
+                if !self.pane.alternate_screen() && self.handle_scrollbar_event(event) {
+                    return true;
+                }
                 let selection_ready = self.selection_enabled && !self.pane.alternate_screen();
                 if handle_selection_mouse(self, selection_ready, mouse) {
                     return true;
                 }
                 if self.try_handle_link_click(mouse) {
-                    return true;
-                }
-                if !self.pane.alternate_screen() && self.handle_scrollbar_event(event) {
                     return true;
                 }
                 if !rect_contains(self.last_area, mouse.column, mouse.row) {
