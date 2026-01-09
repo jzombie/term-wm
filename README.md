@@ -1,16 +1,10 @@
-TODO: Include "terminal multiplexer".  
-TODO: Include inspired by 90's Unix user interfaces, Windows 1.0, and how this wants to borrow from them as much as possible while being compatible with text-based shells.  
-TODO: Include animated gifs, showcasing working over SSH, native, and inside of VS Code's terminal.  
-
-----
-
 # term-wm
 
 **WORK IN PROGRESS.**
 
-A cross-platform, mouse & keyboard drivable, terminal window manager and [Ratatui](https://crates.io/crates/ratatui) component library.
+A cross-platform terminal multiplexer, window manager, and [Ratatui](https://crates.io/crates/ratatui) component library.
 
-It works the same over SSH, Mac, Linux, and Windows.
+It is controllable via mouse and keyboard and works the same over SSH, Mac, Linux, and Windows.
 
 ![term-wm running on macOS](https://github.com/jzombie/live-assets/blob/main/term-wm-0.5.0-alpha-mac.gif?raw=true)
 
@@ -18,6 +12,14 @@ It works the same over SSH, Mac, Linux, and Windows.
 
 - **For Users:** A standalone, keyboard-driven window manager for your terminal shell.
 - **For Developers:** A reusable library of TUI primitives for building window-managed Ratatui applications.
+
+## Design Philosophy: Retro-Modern
+
+`term-wm` is heavily inspired by the utilitarian beauty of **90's Unix user interfaces** (like [CDE](https://en.wikipedia.org/wiki/Common_Desktop_Environmen)) and the cooperative tiling of **Windows 1.0**.
+
+It bridges the gap between standard terminal multiplexers and full desktop environments by adapting GUI metaphors to the command line.
+
+Working with the terminal grid, the project aims to provide a rich window management experience despite the architectural constraints of a text-based terminal. Since terminals lack pixel-perfect positioning and rely on a rigid character cell grid, `term-wm` employs creative layout algorithms to make borders, resizing, and overlapping layers feel fluid and natural, even within the strict boundaries of ANSI/VT standards.
 
 ## For Users: The Window Manager
 
