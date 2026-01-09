@@ -689,6 +689,27 @@ where
         self.system_windows.values().any(|w| w.visible()) || !self.overlays.is_empty()
     }
 
+    /// Returns true when any windows are still active (app or system).
+    ///
+    /// This is intended as a simple, conservative check for callers that
+    /// want to know whether the window manager currently has any visible
+    /// or managed windows remaining.
+    pub fn has_any_active_windows(&self) -> bool {
+        // Active system windows or overlays
+        if self.has_active_system_windows() {
+            return true;
+        }
+        // Any regions (tiled or floating) indicate active app windows
+        if !self.regions.ids().is_empty() {
+            return true;
+        }
+        // Z-order may contain app windows (including floating ones)
+        if self.z_order.iter().any(|id| id.as_app().is_some()) {
+            return true;
+        }
+        false
+    }
+
     pub fn esc_passthrough_active(&self) -> bool {
         self.esc_passthrough_remaining().is_some()
     }

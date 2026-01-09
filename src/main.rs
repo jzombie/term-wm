@@ -218,19 +218,8 @@ impl HasWindowManager<PaneId, PaneId> for App {
 
 impl App {
     fn check_quit(&mut self) -> bool {
-        if self.windows.has_active_system_windows() {
-            // Never quit automatically if a system window (debug/help) is open.
-            return false;
-        }
-
-        if self.terminals.iter_mut().all(|pane| pane.has_exited()) {
-            // Re-check visibility in case has_exited() triggered an error report
-            if self.windows.has_active_system_windows() {
-                return false;
-            }
-            return true;
-        }
-        false
+        // Quit when the window manager reports no active windows remaining.
+        !self.windows.has_any_active_windows()
     }
 }
 
