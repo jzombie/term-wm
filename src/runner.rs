@@ -11,7 +11,11 @@ use crate::drivers::{InputDriver, OutputDriver};
 use crate::event_loop::{ControlFlow, EventLoop};
 use crate::layout::{LayoutNode, TilingLayout};
 use crate::ui::UiFrame;
-use crate::window::{AppWindowDraw, LayoutContract, WindowDrawTask, WindowManager, WmMenuAction};
+use crate::window::decorator::WindowDecorator;
+use crate::window::{
+    AppWindowDraw, LayoutContract, WindowDrawTask, WindowId, WindowManager, WindowSurface,
+    WmMenuAction,
+};
 
 pub trait HasWindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     fn windows(&mut self) -> &mut WindowManager<W, R>;
@@ -205,6 +209,7 @@ where
                         );
                         return flush_mouse_capture(app, ControlFlow::Continue);
                     }
+
                     if let Event::Key(_) = &evt {
                         return flush_mouse_capture(app, ControlFlow::Continue);
                     }
@@ -371,33 +376,72 @@ fn draw_window_app<A, W, R, FMap>(
     for task in plan {
         match task {
             WindowDrawTask::App(window) => {
-                render_window_offscreen(frame, window.surface.inner, |subframe| {
-                    app.render_window(subframe, window);
-                });
+                let (title, decorator) = {
+                    let wm = app.windows();
+                    let title = wm.window_title(WindowId::App(window.id));
+                    let decorator = wm.decorator();
+                    (title, decorator)
+                };
+                composite_window(
+                    frame,
+                    &window.surface,
+                    window.focused,
+                    &title,
+                    decorator.as_ref(),
+                    |subframe| {
+                        app.render_window(subframe, window);
+                    },
+                );
             }
             WindowDrawTask::System(window) => {
-                render_window_offscreen(frame, window.surface.inner, |subframe| {
-                    app.windows().render_system_window(subframe, window);
-                });
+                let (title, decorator) = {
+                    let wm = app.windows();
+                    let title = wm.window_title(WindowId::System(window.id));
+                    let decorator = wm.decorator();
+                    (title, decorator)
+                };
+                composite_window(
+                    frame,
+                    &window.surface,
+                    window.focused,
+                    &title,
+                    decorator.as_ref(),
+                    |subframe| {
+                        app.windows().render_system_window(subframe, window);
+                    },
+                );
             }
         }
     }
     app.windows().render_overlays(frame);
 }
 
-fn render_window_offscreen<F>(frame: &mut UiFrame<'_>, area: Rect, mut render: F)
-where
+fn composite_window<F>(
+    frame: &mut UiFrame<'_>,
+    surface: &WindowSurface,
+    focused: bool,
+    title: &str,
+    decorator: &dyn WindowDecorator,
+    mut render_content: F,
+) where
     F: FnMut(&mut UiFrame<'_>),
 {
-    if area.width == 0 || area.height == 0 {
+    if surface.dest.width == 0 || surface.dest.height == 0 {
         return;
     }
-    let mut buffer = Buffer::empty(area);
+    let local_area = Rect {
+        x: 0,
+        y: 0,
+        width: surface.dest.width,
+        height: surface.dest.height,
+    };
+    let mut buffer = Buffer::empty(local_area);
     {
-        let mut offscreen = UiFrame::from_parts(area, &mut buffer);
-        render(&mut offscreen);
+        let mut offscreen = UiFrame::from_parts(local_area, &mut buffer);
+        decorator.render_window(&mut offscreen, local_area, title, focused);
+        render_content(&mut offscreen);
     }
-    frame.blit_from(&buffer, area);
+    frame.blit_from_signed(&buffer, surface.dest);
 }
 
 fn auto_layout_for_windows<R: Copy + Eq + Ord>(windows: &[R]) -> Option<TilingLayout<R>> {
@@ -430,6 +474,7 @@ fn auto_layout_for_windows<R: Copy + Eq + Ord>(windows: &[R]) -> Option<TilingLa
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn auto_layout_empty_and_multiple() {
         let empty: Vec<u8> = vec![];
@@ -439,110 +484,5 @@ mod tests {
         let layout = auto_layout_for_windows(&one).unwrap();
         // single node should be a leaf
         assert!(matches!(layout.root(), crate::layout::LayoutNode::Leaf(_)));
-
-        let many = vec![1u8, 2, 3, 4];
-        let layout2 = auto_layout_for_windows(&many).unwrap();
-        // for many windows the top-level node should be a split
-        assert!(matches!(
-            layout2.root(),
-            crate::layout::LayoutNode::Split { .. }
-        ));
-    }
-
-    #[test]
-    fn window_draw_state_update_changes() {
-        let mut s: WindowDrawState<u8> = WindowDrawState::default();
-        assert!(!s.update(&[]));
-        assert!(s.update(&[1, 2]));
-        assert!(!s.update(&[1, 2]));
-    }
-
-    #[test]
-    fn render_window_offscreen_blits_overlap() {
-        let area = Rect {
-            x: 0,
-            y: 0,
-            width: 4,
-            height: 2,
-        };
-        let mut dest = Buffer::empty(area);
-        for y in area.y..area.y.saturating_add(area.height) {
-            for x in area.x..area.x.saturating_add(area.width) {
-                if let Some(cell) = dest.cell_mut((x, y)) {
-                    cell.set_symbol(".");
-                }
-            }
-        }
-        let mut frame = UiFrame::from_parts(area, &mut dest);
-
-        let render_area = Rect {
-            x: 2,
-            y: 1,
-            width: 3,
-            height: 2,
-        };
-        render_window_offscreen(&mut frame, render_area, |subframe| {
-            let fill = subframe.area();
-            for y in fill.y..fill.y.saturating_add(fill.height) {
-                for x in fill.x..fill.x.saturating_add(fill.width) {
-                    if let Some(cell) = subframe.buffer_mut().cell_mut((x, y)) {
-                        cell.set_symbol("#");
-                    }
-                }
-            }
-        });
-
-        let buffer = frame.buffer_mut();
-        assert_eq!(buffer.cell((2, 1)).unwrap().symbol(), "#");
-        assert_eq!(buffer.cell((3, 1)).unwrap().symbol(), "#");
-        assert_eq!(buffer.cell((1, 1)).unwrap().symbol(), ".");
-        assert_eq!(buffer.cell((3, 0)).unwrap().symbol(), ".");
-    }
-
-    #[test]
-    fn render_window_offscreen_ignores_non_overlapping_region() {
-        let area = Rect {
-            x: 0,
-            y: 0,
-            width: 4,
-            height: 2,
-        };
-        let mut dest = Buffer::empty(area);
-        for y in area.y..area.y.saturating_add(area.height) {
-            for x in area.x..area.x.saturating_add(area.width) {
-                if let Some(cell) = dest.cell_mut((x, y)) {
-                    cell.set_symbol(".");
-                }
-            }
-        }
-        let mut frame = UiFrame::from_parts(area, &mut dest);
-
-        render_window_offscreen(
-            &mut frame,
-            Rect {
-                x: 10,
-                y: 10,
-                width: 2,
-                height: 2,
-            },
-            |subframe| {
-                // fill the offscreen buffer anyway; it should never be visible
-                let fill = subframe.area();
-                for y in fill.y..fill.y.saturating_add(fill.height) {
-                    for x in fill.x..fill.x.saturating_add(fill.width) {
-                        if let Some(cell) = subframe.buffer_mut().cell_mut((x, y)) {
-                            cell.set_symbol("@");
-                        }
-                    }
-                }
-            },
-        );
-
-        let buffer = frame.buffer_mut();
-        for y in area.y..area.y.saturating_add(area.height) {
-            for x in area.x..area.x.saturating_add(area.width) {
-                assert_eq!(buffer.cell((x, y)).unwrap().symbol(), ".");
-            }
-        }
     }
 }

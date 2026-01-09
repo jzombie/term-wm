@@ -34,8 +34,8 @@ pub struct ResizeDrag<R: Copy + Eq + Ord> {
 #[derive(Debug, Clone, Copy)]
 pub struct HeaderDrag<R: Copy + Eq + Ord> {
     pub id: R,
-    pub offset_x: u16,
-    pub offset_y: u16,
+    pub initial_x: i32,
+    pub initial_y: i32,
     pub start_x: u16,
     pub start_y: u16,
 }

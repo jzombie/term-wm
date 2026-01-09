@@ -21,6 +21,7 @@
 //!   `UiFrame::new(&mut frame)`. Use `frame.render_widget(...)` and
 //!   `frame.render_stateful_widget(...)` as before. To clear an area, render the
 //!   `Clear` widget through the `UiFrame`.
+use crate::window::FloatRect;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -103,6 +104,31 @@ impl<'a> UiFrame<'a> {
             }
         }
     }
+
+    pub fn blit_from_signed(&mut self, src: &Buffer, dest: FloatRect) {
+        let frame_x0 = self.area.x as i32;
+        let frame_y0 = self.area.y as i32;
+        let frame_x1 = frame_x0 + self.area.width as i32;
+        let frame_y1 = frame_y0 + self.area.height as i32;
+        for sy in 0..dest.height as i32 {
+            let dy = dest.y + sy;
+            if dy < frame_y0 || dy >= frame_y1 {
+                continue;
+            }
+            for sx in 0..dest.width as i32 {
+                let dx = dest.x + sx;
+                if dx < frame_x0 || dx >= frame_x1 {
+                    continue;
+                }
+                if let (Some(src_cell), Some(dst_cell)) = (
+                    src.cell((sx as u16, sy as u16)),
+                    self.buffer.cell_mut((dx as u16, dy as u16)),
+                ) {
+                    *dst_cell = src_cell.clone();
+                }
+            }
+        }
+    }
 }
 
 pub(crate) fn safe_set_string(
@@ -140,7 +166,88 @@ pub(crate) fn truncate_to_width(value: &str, width: usize) -> String {
 mod tests {
     use super::*;
     use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
     use ratatui::style::Style;
+
+    #[test]
+    fn blit_from_signed_clips_negative_offsets() {
+        let frame_area = Rect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 2,
+        };
+        let mut dest = Buffer::empty(frame_area);
+        let mut frame = UiFrame::from_parts(frame_area, &mut dest);
+        let src_area = Rect {
+            x: 0,
+            y: 0,
+            width: 3,
+            height: 2,
+        };
+        let mut src = Buffer::empty(src_area);
+        for y in 0..src_area.height {
+            for x in 0..src_area.width {
+                if let Some(cell) = src.cell_mut((x, y)) {
+                    cell.set_symbol("#");
+                }
+            }
+        }
+        frame.blit_from_signed(
+            &src,
+            FloatRect {
+                x: -1,
+                y: 0,
+                width: 3,
+                height: 2,
+            },
+        );
+        let buffer = frame.buffer;
+        assert_eq!(buffer.cell((0, 0)).unwrap().symbol(), "#");
+        assert_eq!(buffer.cell((1, 0)).unwrap().symbol(), "#");
+        assert_eq!(buffer.cell((2, 0)).unwrap().symbol(), " ");
+    }
+
+    #[test]
+    fn blit_from_signed_ignores_non_overlapping() {
+        let frame_area = Rect {
+            x: 0,
+            y: 0,
+            width: 3,
+            height: 3,
+        };
+        let mut dest = Buffer::empty(frame_area);
+        let mut frame = UiFrame::from_parts(frame_area, &mut dest);
+        let src_area = Rect {
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 2,
+        };
+        let mut src = Buffer::empty(src_area);
+        for y in 0..src_area.height {
+            for x in 0..src_area.width {
+                if let Some(cell) = src.cell_mut((x, y)) {
+                    cell.set_symbol("#");
+                }
+            }
+        }
+        frame.blit_from_signed(
+            &src,
+            FloatRect {
+                x: -5,
+                y: -5,
+                width: 2,
+                height: 2,
+            },
+        );
+        let buffer = frame.buffer;
+        for y in 0..frame_area.height {
+            for x in 0..frame_area.width {
+                assert_eq!(buffer.cell((x, y)).unwrap().symbol(), " ");
+            }
+        }
+    }
 
     #[test]
     fn truncate_to_width_short_and_long() {

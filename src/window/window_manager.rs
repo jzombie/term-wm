@@ -1,5 +1,6 @@
 use super::Window;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, MouseEventKind};
@@ -15,7 +16,7 @@ use crate::components::{
 };
 use crate::layout::floating::*;
 use crate::layout::{
-    FloatingPane, InsertPosition, LayoutNode, LayoutPlan, RectSpec, RegionMap, SplitHandle,
+    FloatingPane, InsertPosition, LayoutNode, LayoutPlan, RegionMap, SplitHandle,
     TilingLayout, rect_contains, render_handles_masked,
 };
 use crate::panel::Panel;
@@ -103,6 +104,7 @@ impl ScrollState {
 pub struct WindowSurface {
     pub full: Rect,
     pub inner: Rect,
+    pub dest: crate::window::FloatRect,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -253,7 +255,7 @@ pub struct WindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     // Central default for whether ScrollViewComponent keyboard handling should be enabled
     // for UI components that opt into it. Individual components can override.
     scroll_keyboard_enabled_default: bool,
-    decorator: Box<dyn WindowDecorator>,
+    decorator: Arc<dyn WindowDecorator>,
     floating_resize_offscreen: bool,
     z_order: Vec<WindowId<R>>,
     drag_snap: Option<(Option<WindowId<R>>, InsertPosition, Rect)>,
@@ -302,11 +304,11 @@ where
         self.window_mut(id).minimized = value;
     }
 
-    fn floating_rect(&self, id: WindowId<R>) -> Option<RectSpec> {
+    fn floating_rect(&self, id: WindowId<R>) -> Option<crate::window::FloatRectSpec> {
         self.window(id).and_then(|window| window.floating_rect)
     }
 
-    fn set_floating_rect(&mut self, id: WindowId<R>, rect: Option<RectSpec>) {
+    fn set_floating_rect(&mut self, id: WindowId<R>, rect: Option<crate::window::FloatRectSpec>) {
         self.window_mut(id).floating_rect = rect;
     }
 
@@ -314,18 +316,18 @@ where
         self.window_mut(id).floating_rect = None;
     }
 
-    fn set_prev_floating_rect(&mut self, id: WindowId<R>, rect: Option<RectSpec>) {
+    fn set_prev_floating_rect(&mut self, id: WindowId<R>, rect: Option<crate::window::FloatRectSpec>) {
         self.window_mut(id).prev_floating_rect = rect;
     }
 
-    fn take_prev_floating_rect(&mut self, id: WindowId<R>) -> Option<RectSpec> {
+    fn take_prev_floating_rect(&mut self, id: WindowId<R>) -> Option<crate::window::FloatRectSpec> {
         self.window_mut(id).prev_floating_rect.take()
     }
     fn is_window_floating(&self, id: WindowId<R>) -> bool {
         self.window(id).is_some_and(|window| window.is_floating())
     }
 
-    fn window_title(&self, id: WindowId<R>) -> String {
+    pub fn window_title(&self, id: WindowId<R>) -> String {
         self.window(id)
             .map(|window| window.title_or_default(id))
             .unwrap_or_else(|| match id {
@@ -466,7 +468,7 @@ where
             esc_passthrough_window: esc_passthrough_window_default(),
             overlays: BTreeMap::new(),
             scroll_keyboard_enabled_default: true,
-            decorator: Box::new(DefaultDecorator),
+            decorator: Arc::new(DefaultDecorator),
             floating_resize_offscreen: true,
             z_order: Vec::new(),
             drag_snap: None,
@@ -987,6 +989,10 @@ where
         self.panel.set_height(height);
     }
 
+    pub fn decorator(&self) -> Arc<dyn WindowDecorator> {
+        Arc::clone(&self.decorator)
+    }
+
     pub fn register_managed_layout(&mut self, area: Rect) {
         self.last_frame_area = area;
         let (_, _, managed_area) = self.panel.split_area(self.panel_active(), area);
@@ -1202,7 +1208,12 @@ where
 
     pub fn toggle_maximize(&mut self, id: WindowId<R>) {
         // maximize toggles the floating rect to full managed_area
-        let full = RectSpec::Absolute(self.managed_area);
+        let full = crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
+            x: self.managed_area.x as i32,
+            y: self.managed_area.y as i32,
+            width: self.managed_area.width,
+            height: self.managed_area.height,
+        });
         if let Some(current) = self.floating_rect(id) {
             if current == full {
                 if let Some(prev) = self.take_prev_floating_rect(id) {
@@ -1218,9 +1229,14 @@ where
         // not floating: add floating pane covering full area
         // Save the current region (if available) so we can restore later.
         let prev_rect = if let Some(rect) = self.regions.get(id) {
-            RectSpec::Absolute(rect)
+            crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
+                x: rect.x as i32,
+                y: rect.y as i32,
+                width: rect.width,
+                height: rect.height,
+            })
         } else {
-            RectSpec::Percent {
+            crate::window::FloatRectSpec::Percent {
                 x: 0,
                 y: 0,
                 width: 100,
@@ -1331,10 +1347,15 @@ where
                         let _ = self.detach_to_floating(header.id, rect);
                     }
 
+                    let (initial_x, initial_y) = if let Some(crate::window::FloatRectSpec::Absolute(fr)) = self.floating_rect(header.id) {
+                        (fr.x, fr.y)
+                    } else {
+                        (rect.x as i32, rect.y as i32)
+                    };
                     self.drag_header = Some(HeaderDrag {
                         id: header.id,
-                        offset_x: mouse.column.saturating_sub(rect.x),
-                        offset_y: mouse.row.saturating_sub(rect.y),
+                        initial_x,
+                        initial_y,
                         start_x: mouse.column,
                         start_y: mouse.row,
                     });
@@ -1348,8 +1369,10 @@ where
                             drag.id,
                             mouse.column,
                             mouse.row,
-                            drag.offset_x,
-                            drag.offset_y,
+                            drag.start_x,
+                            drag.start_y,
+                            drag.initial_x,
+                            drag.initial_y,
                         );
                         // Only show snap preview if dragged a bit
                         let dx = mouse.column.abs_diff(drag.start_x);
@@ -1452,7 +1475,15 @@ where
                         self.managed_area,
                         self.floating_resize_offscreen,
                     );
-                    self.set_floating_rect(drag.id, Some(RectSpec::Absolute(resized)));
+                    self.set_floating_rect(
+                        drag.id,
+                        Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
+                            x: resized.x as i32,
+                            y: resized.y as i32,
+                            width: resized.width,
+                            height: resized.height,
+                        })),
+                    );
                     return true;
                 }
             }
@@ -1480,9 +1511,9 @@ where
         let y = rect.y;
         self.set_floating_rect(
             id,
-            Some(RectSpec::Absolute(Rect {
-                x,
-                y,
+            Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
+                x: x as i32,
+                y: y as i32,
                 width,
                 height,
             })),
@@ -1502,24 +1533,29 @@ where
         id: WindowId<R>,
         column: u16,
         row: u16,
-        offset_x: u16,
-        offset_y: u16,
+        start_mouse_x: u16,
+        start_mouse_y: u16,
+        initial_x: i32,
+        initial_y: i32,
     ) {
         let panel_active = self.panel_active();
         let bounds = self.managed_area;
-        let Some(RectSpec::Absolute(rect)) = self.floating_rect(id) else {
+        let Some(crate::window::FloatRectSpec::Absolute(fr)) = self.floating_rect(id) else {
             return;
         };
-        let width = rect.width.max(1);
-        let height = rect.height.max(1);
-        let x = column.saturating_sub(offset_x);
-        let mut y = row.saturating_sub(offset_y);
-        if panel_active && y < bounds.y {
-            y = bounds.y;
+        let width = fr.width.max(1);
+        let height = fr.height.max(1);
+        let dx = column as i32 - start_mouse_x as i32;
+        let dy = row as i32 - start_mouse_y as i32;
+        let x = initial_x + dx;
+        let mut y = initial_y + dy;
+        let bounds_y = bounds.y as i32;
+        if panel_active && y < bounds_y {
+            y = bounds_y;
         }
         self.set_floating_rect(
             id,
-            Some(RectSpec::Absolute(Rect {
+            Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
                 x,
                 y,
                 width,
@@ -1669,7 +1705,15 @@ where
             if target.is_none() && !other_windows_exist {
                 // Single window edge snap -> Floating Resize
                 if self.is_window_floating(id) {
-                    self.set_floating_rect(id, Some(RectSpec::Absolute(preview)));
+                    self.set_floating_rect(
+                        id,
+                        Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
+                            x: preview.x as i32,
+                            y: preview.y as i32,
+                            width: preview.width,
+                            height: preview.height,
+                        })),
+                    );
                 }
                 return;
             }
@@ -1824,6 +1868,19 @@ where
         }
     }
 
+    fn window_dest(&self, id: WindowId<R>, fallback: Rect) -> crate::window::FloatRect {
+        if let Some(spec) = self.floating_rect(id) {
+            spec.resolve_signed(self.managed_area)
+        } else {
+            crate::window::FloatRect {
+                x: fallback.x as i32,
+                y: fallback.y as i32,
+                width: fallback.width,
+                height: fallback.height,
+            }
+        }
+    }
+
     pub fn bring_all_floating_to_front(&mut self) {
         let ids: Vec<WindowId<R>> = self
             .z_order
@@ -1850,27 +1907,39 @@ where
             return;
         }
         // Collect updates first to avoid borrowing `self` mutably while iterating
-        let mut updates: Vec<(WindowId<R>, RectSpec)> = Vec::new();
+        let mut updates: Vec<(WindowId<R>, crate::window::FloatRectSpec)> = Vec::new();
         let floating_ids: Vec<WindowId<R>> = self
             .windows
             .iter()
             .filter_map(|(&id, window)| window.floating_rect.as_ref().map(|_| id))
             .collect();
         for id in floating_ids {
-            let Some(RectSpec::Absolute(rect)) = self.floating_rect(id) else {
+            let Some(crate::window::FloatRectSpec::Absolute(fr)) = self.floating_rect(id) else {
                 continue;
+            };
+
+            let rect = Rect {
+                x: fr.x.max(0) as u16,
+                y: fr.y.max(0) as u16,
+                width: fr.width,
+                height: fr.height,
             };
             if rects_intersect(rect, bounds) {
                 continue;
             }
             // Only recover panes that are fully off-screen; keep normal dragging untouched.
-            let rect_right = rect.x.saturating_add(rect.width);
-            let rect_bottom = rect.y.saturating_add(rect.height);
-            let bounds_right = bounds.x.saturating_add(bounds.width);
-            let bounds_bottom = bounds.y.saturating_add(bounds.height);
+            // Use signed arithmetic for off-screen detection
+            let rect_left = fr.x;
+            let rect_top = fr.y;
+            let rect_right = fr.x.saturating_add(fr.width as i32);
+            let rect_bottom = fr.y.saturating_add(fr.height as i32);
+            let bounds_left = bounds.x as i32;
+            let bounds_top = bounds.y as i32;
+            let bounds_right = bounds_left.saturating_add(bounds.width as i32);
+            let bounds_bottom = bounds_top.saturating_add(bounds.height as i32);
             // Clamp only the axis that is fully outside the viewport.
-            let out_x = rect_right <= bounds.x || rect.x >= bounds_right;
-            let out_y = rect_bottom <= bounds.y || rect.y >= bounds_bottom;
+            let out_x = rect_right <= bounds_left || rect_left >= bounds_right;
+            let out_y = rect_bottom <= bounds_top || rect_top >= bounds_bottom;
             let min_w = FLOATING_MIN_WIDTH.min(bounds.width.max(1));
             let min_h = FLOATING_MIN_HEIGHT.min(bounds.height.max(1));
 
@@ -1879,47 +1948,56 @@ where
             let min_visible_margin = 4u16;
 
             let width = if self.floating_resize_offscreen {
-                rect.width.max(min_w)
+                fr.width.max(min_w)
             } else {
-                rect.width.max(min_w).min(bounds.width)
+                fr.width.max(min_w).min(bounds.width)
             };
             let height = if self.floating_resize_offscreen {
-                rect.height.max(min_h)
+                fr.height.max(min_h)
             } else {
-                rect.height.max(min_h).min(bounds.height)
+                fr.height.max(min_h).min(bounds.height)
             };
 
             let max_x = if self.floating_resize_offscreen {
-                bounds
-                    .x
+                (bounds.x
                     .saturating_add(bounds.width)
-                    .saturating_sub(min_visible_margin.min(width))
+                    .saturating_sub(min_visible_margin.min(width))) as i32
             } else {
-                bounds.x.saturating_add(bounds.width.saturating_sub(width))
+                bounds.x.saturating_add(bounds.width.saturating_sub(width)) as i32
             };
 
             let max_y = if self.floating_resize_offscreen {
-                bounds.y.saturating_add(bounds.height).saturating_sub(1) // Header is usually top line
+                (bounds.y.saturating_add(bounds.height).saturating_sub(1)) as i32 // Header is usually top line
             } else {
                 bounds
                     .y
-                    .saturating_add(bounds.height.saturating_sub(height))
+                    .saturating_add(bounds.height.saturating_sub(height)) as i32
             };
 
+            // When `floating_resize_offscreen` is enabled we allow dragging a
+            // floating pane partially off the left or right edge while ensuring
+            // a small visible margin remains. If the pane is fully off-screen
+            // (`out_x`) or offscreen handling is disabled, recover it into the
+            // visible bounds as before.
             let x = if out_x || !self.floating_resize_offscreen {
-                rect.x.clamp(bounds.x, max_x)
+                fr.x.clamp(bounds_left, max_x)
             } else {
-                rect.x.max(bounds.x).min(max_x)
+                // Compute left-most allowed x such that at least
+                // `min_visible_margin` columns remain visible inside `bounds`.
+                let left_allowed = bounds_left.saturating_sub(width as i32 - min_visible_margin.min(width) as i32);
+                let left_allowed = left_allowed.min(max_x);
+                fr.x.clamp(left_allowed, max_x)
             };
 
             let y = if out_y || !self.floating_resize_offscreen {
-                rect.y.clamp(bounds.y, max_y)
+                fr.y.clamp(bounds_top, max_y)
             } else {
-                rect.y.max(bounds.y).min(max_y)
+                fr.y.max(bounds_top).min(max_y)
             };
+
             updates.push((
                 id,
-                RectSpec::Absolute(Rect {
+                crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
                     x,
                     y,
                     width,
@@ -1941,29 +2019,42 @@ where
                 continue;
             }
             frame.render_widget(Clear, full);
+            let dest = self.window_dest(id, full);
             match id {
                 WindowId::System(system_id) => {
                     if !self.system_window_visible(system_id) {
                         continue;
                     }
-                    let inner = self.region_for_id(id);
+                    let inner_abs = self.region_for_id(id);
+                    let inner = Rect {
+                        x: inner_abs.x.saturating_sub(full.x),
+                        y: inner_abs.y.saturating_sub(full.y),
+                        width: inner_abs.width,
+                        height: inner_abs.height,
+                    };
                     if inner.width == 0 || inner.height == 0 {
                         continue;
                     }
                     plan.push(WindowDrawTask::System(SystemWindowDraw {
                         id: system_id,
-                        surface: WindowSurface { full, inner },
+                        surface: WindowSurface { full, inner, dest },
                         focused: focused_window == id,
                     }));
                 }
                 WindowId::App(app_id) => {
-                    let inner = self.region(app_id);
+                    let inner_abs = self.region(app_id);
+                    let inner = Rect {
+                        x: inner_abs.x.saturating_sub(full.x),
+                        y: inner_abs.y.saturating_sub(full.y),
+                        width: inner_abs.width,
+                        height: inner_abs.height,
+                    };
                     if inner.width == 0 || inner.height == 0 {
                         continue;
                     }
                     plan.push(WindowDrawTask::App(AppWindowDraw {
                         id: app_id,
-                        surface: WindowSurface { full, inner },
+                        surface: WindowSurface { full, inner, dest },
                         focused: focused_window == WindowId::app(app_id),
                     }));
                 }
@@ -1998,42 +2089,27 @@ where
         let is_obscured =
             |x: u16, y: u16| -> bool { obscuring.iter().any(|r| rect_contains(*r, x, y)) };
         render_handles_masked(frame, &self.handles, hovered, is_obscured);
-        let focused = self.wm_focus.current();
-
-        for (i, &id) in self.managed_draw_order.iter().enumerate() {
-            let Some(rect) = self.regions.get(id) else {
-                continue;
-            };
-            if rect.width < 3 || rect.height < 3 {
-                continue;
-            }
-
-            // Collect obscuring rects (windows above this one)
-            let obscuring: Vec<Rect> = self.managed_draw_order[i + 1..]
-                .iter()
-                .filter_map(|&above_id| self.regions.get(above_id))
-                .collect();
-
-            let is_obscured =
-                |x: u16, y: u16| -> bool { obscuring.iter().any(|r| rect_contains(*r, x, y)) };
-
-            let title = self.window_title(id);
-            let focused_window = id == focused;
-            self.decorator.render_window(
-                frame,
-                rect,
-                self.managed_area,
-                &title,
-                focused_window,
-                &is_obscured,
-            );
-        }
-
         // Build floating panes list from per-window entries for resize outline rendering
         let floating_panes: Vec<FloatingPane<WindowId<R>>> = self
             .windows
             .iter()
-            .filter_map(|(&id, window)| window.floating_rect.map(|rect| FloatingPane { id, rect }))
+            .filter_map(|(&id, window)| {
+                window.floating_rect.map(|rect| match rect {
+                    crate::window::FloatRectSpec::Absolute(fr) => FloatingPane {
+                        id,
+                        rect: crate::layout::RectSpec::Absolute(ratatui::prelude::Rect {
+                            x: fr.x.max(0) as u16,
+                            y: fr.y.max(0) as u16,
+                            width: fr.width,
+                            height: fr.height,
+                        }),
+                    },
+                    crate::window::FloatRectSpec::Percent { x, y, width, height } => FloatingPane {
+                        id,
+                        rect: crate::layout::RectSpec::Percent { x, y, width, height },
+                    },
+                })
+            })
             .collect();
 
         render_resize_outline(
