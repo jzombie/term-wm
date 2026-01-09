@@ -9,6 +9,7 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::components::{
     Component,
+    ComponentContext,
     scroll_view::ScrollViewComponent,
     selectable_text::{
         LogicalPosition, SelectionController, SelectionHost, SelectionViewport,
@@ -31,12 +32,12 @@ pub struct TextRendererComponent {
 }
 
 impl Component for TextRendererComponent {
-    fn resize(&mut self, area: Rect) {
+    fn resize(&mut self, area: Rect, _ctx: &ComponentContext) {
         self.scroll.set_fixed_height(Some(area.height));
     }
 
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
-        self.apply_focus_state(focused);
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
+        self.apply_focus_state(ctx.focused());
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -184,7 +185,11 @@ impl Component for TextRendererComponent {
         self.render_selection_overlay(frame);
     }
 
-    fn handle_event(&mut self, event: &crossterm::event::Event) -> bool {
+    fn handle_event(
+        &mut self,
+        event: &crossterm::event::Event,
+        _ctx: &ComponentContext,
+    ) -> bool {
         match event {
             crossterm::event::Event::Mouse(mouse) => {
                 let resp = self.scroll.handle_event(event);
@@ -639,7 +644,7 @@ mod tests {
         comp.selection.update_drag(LogicalPosition::new(0, 5));
         assert!(comp.selection.has_selection());
 
-        let handled = comp.handle_event(&Event::Key(key_event(KeyCode::Char('a'))));
+        let handled = comp.handle_event(&Event::Key(key_event(KeyCode::Char('a'))), &ComponentContext::new(true));
         assert!(!handled);
         assert!(!comp.selection.has_selection());
     }
@@ -669,7 +674,7 @@ mod tests {
             row: 4,
             kind: MouseEventKind::Down(MouseButton::Left),
             modifiers: KeyModifiers::NONE,
-        }));
+        }), &ComponentContext::new(true));
 
         assert!(handled);
         assert!(!comp.selection.is_dragging());

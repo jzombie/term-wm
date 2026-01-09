@@ -3,7 +3,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 
-use crate::components::{Component, scroll_view::ScrollViewComponent};
+use crate::components::{Component, ComponentContext, scroll_view::ScrollViewComponent};
 use crate::ui::UiFrame;
 
 pub struct ListComponent {
@@ -14,8 +14,8 @@ pub struct ListComponent {
 }
 
 impl Component for ListComponent {
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
-        let block = if focused {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
+        let block = if ctx.focused() {
             Block::default()
                 .borders(Borders::ALL)
                 .title(format!("{} (focus)", self.title))
@@ -56,7 +56,7 @@ impl Component for ListComponent {
         self.scroll_view.render(frame);
     }
 
-    fn handle_event(&mut self, event: &Event) -> bool {
+    fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
         match event {
             Event::Key(key) => {
                 let kb = crate::keybindings::KeyBindings::default();
@@ -198,11 +198,12 @@ mod tests {
         let mut list = ListComponent::new("t");
         list.set_items(vec!["a".into(), "b".into(), "c".into()]);
         use crate::components::Component;
+        let ctx = ComponentContext::new(true);
         // move down
-        let _ = list.handle_event(&key_event(KeyCode::Down));
+        let _ = list.handle_event(&key_event(KeyCode::Down), &ctx);
         assert_eq!(list.selected(), 1);
         // move up
-        let _ = list.handle_event(&key_event(KeyCode::Up));
+        let _ = list.handle_event(&key_event(KeyCode::Up), &ctx);
         assert_eq!(list.selected(), 0);
     }
 
@@ -211,9 +212,10 @@ mod tests {
         let mut list = ListComponent::new("t");
         list.set_items(vec!["a".into(), "b".into(), "c".into(), "d".into()]);
         use crate::components::Component;
-        let _ = list.handle_event(&key_event(KeyCode::End));
+        let ctx = ComponentContext::new(true);
+        let _ = list.handle_event(&key_event(KeyCode::End), &ctx);
         assert_eq!(list.selected(), 3);
-        let _ = list.handle_event(&key_event(KeyCode::Home));
+        let _ = list.handle_event(&key_event(KeyCode::Home), &ctx);
         assert_eq!(list.selected(), 0);
     }
 
@@ -222,9 +224,10 @@ mod tests {
         let mut list = ListComponent::new("t");
         list.set_items((0..20).map(|i| format!("{}", i)).collect());
         use crate::components::Component;
-        let _ = list.handle_event(&key_event(KeyCode::PageDown));
+        let ctx = ComponentContext::new(true);
+        let _ = list.handle_event(&key_event(KeyCode::PageDown), &ctx);
         assert!(list.selected() >= 5);
-        let _ = list.handle_event(&key_event(KeyCode::PageUp));
+        let _ = list.handle_event(&key_event(KeyCode::PageUp), &ctx);
         assert!(list.selected() < 20);
     }
 }

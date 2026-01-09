@@ -3,7 +3,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 
-use crate::components::{Component, scroll_view::ScrollViewComponent};
+use crate::components::{Component, ComponentContext, scroll_view::ScrollViewComponent};
 use crate::ui::UiFrame;
 
 #[derive(Clone)]
@@ -21,8 +21,8 @@ pub struct ToggleListComponent {
 }
 
 impl Component for ToggleListComponent {
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
-        let block = if focused {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
+        let block = if ctx.focused() {
             Block::default()
                 .borders(Borders::ALL)
                 .title(format!("{} (focus)", self.title))
@@ -66,7 +66,7 @@ impl Component for ToggleListComponent {
         self.scroll_view.render(frame);
     }
 
-    fn handle_event(&mut self, event: &Event) -> bool {
+    fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
         match event {
             Event::Key(key) => {
                 let kb = crate::keybindings::KeyBindings::default();
@@ -243,17 +243,21 @@ mod tests {
     fn handle_event_navigation() {
         let mut t = ToggleListComponent::new("s");
         t.set_items(make_items(5));
-        t.handle_event(&Event::Key(KeyEvent::new(
-            KeyCode::Down,
-            KeyModifiers::NONE,
-        )));
+        let ctx = ComponentContext::new(true);
+        t.handle_event(
+            &Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            &ctx,
+        );
         assert_eq!(t.selected(), 1);
-        t.handle_event(&Event::Key(KeyEvent::new(
-            KeyCode::Home,
-            KeyModifiers::NONE,
-        )));
+        t.handle_event(
+            &Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE)),
+            &ctx,
+        );
         assert_eq!(t.selected(), 0);
-        t.handle_event(&Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)));
+        t.handle_event(
+            &Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)),
+            &ctx,
+        );
         assert_eq!(t.selected(), 4);
     }
 }

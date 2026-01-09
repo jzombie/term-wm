@@ -4,7 +4,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use resvg::{tiny_skia, usvg};
 
-use crate::components::Component;
+use crate::components::{Component, ComponentContext};
 use crate::ui::UiFrame;
 
 const DEFAULT_RAMP: &[char] = &[' ', '.', ':', '-', '=', '+', '*', '#', '%', '@'];
@@ -39,7 +39,7 @@ pub struct AsciiImageComponent {
 }
 
 impl Component for AsciiImageComponent {
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _ctx: &ComponentContext) {
         if area.width == 0 || area.height == 0 {
             return;
         }

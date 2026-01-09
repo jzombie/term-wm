@@ -12,6 +12,7 @@ use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
 use crate::components::{
     Component,
+    ComponentContext,
     scroll_view::ScrollViewComponent,
     selectable_text::{
         LogicalPosition, SelectionController, SelectionHost, SelectionViewport,
@@ -43,7 +44,7 @@ pub struct TerminalComponent {
 }
 
 impl Component for TerminalComponent {
-    fn resize(&mut self, area: Rect) {
+    fn resize(&mut self, area: Rect, _ctx: &ComponentContext) {
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -59,8 +60,8 @@ impl Component for TerminalComponent {
         }
     }
 
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
-        if !focused {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
+        if !ctx.focused() {
             self.selection.clear();
         }
         if area.height == 0 || area.width == 0 {
@@ -69,10 +70,10 @@ impl Component for TerminalComponent {
         }
         self.last_area = area;
         let _exited = self.pane.has_exited();
-        self.render_screen(frame, area, focused);
+        self.render_screen(frame, area, ctx.focused());
     }
 
-    fn handle_event(&mut self, event: &Event) -> bool {
+    fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
         match event {
             Event::Key(key) => {
                 if key.kind == KeyEventKind::Release {

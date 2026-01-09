@@ -36,12 +36,51 @@ pub use toggle_list::{ToggleItem, ToggleListComponent};
 
 use std::any::Any;
 
+#[derive(Debug, Clone, Copy)]
+pub struct ComponentContext {
+    focused: bool,
+    overlay: bool,
+}
+
+impl ComponentContext {
+    pub const fn new(focused: bool) -> Self {
+        Self {
+            focused,
+            overlay: false,
+        }
+    }
+
+    pub const fn focused(&self) -> bool {
+        self.focused
+    }
+
+    pub const fn overlay(&self) -> bool {
+        self.overlay
+    }
+
+    pub const fn with_focus(mut self, focused: bool) -> Self {
+        self.focused = focused;
+        self
+    }
+
+    pub const fn with_overlay(mut self, overlay: bool) -> Self {
+        self.overlay = overlay;
+        self
+    }
+}
+
+impl Default for ComponentContext {
+    fn default() -> Self {
+        Self::new(false)
+    }
+}
+
 pub trait Component {
-    fn resize(&mut self, _area: Rect) {}
+    fn resize(&mut self, _area: Rect, _ctx: &ComponentContext) {}
 
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool);
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext);
 
-    fn handle_event(&mut self, _event: &Event) -> bool {
+    fn handle_event(&mut self, _event: &Event, _ctx: &ComponentContext) -> bool {
         false
     }
 }
@@ -69,15 +108,18 @@ mod tests {
 
     struct DummyComp;
     impl Component for DummyComp {
-        fn render(&mut self, _frame: &mut UiFrame<'_>, _area: Rect, _focused: bool) {}
+        fn render(&mut self, _frame: &mut UiFrame<'_>, _area: Rect, _ctx: &ComponentContext) {}
     }
 
     #[test]
     fn default_handle_event_returns_false() {
         let mut d = DummyComp;
-        assert!(!d.handle_event(&Event::Key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Char('a'),
-            crossterm::event::KeyModifiers::NONE
-        ))));
+        assert!(!d.handle_event(
+            &Event::Key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('a'),
+                crossterm::event::KeyModifiers::NONE
+            )),
+            &ComponentContext::default()
+        ));
     }
 }

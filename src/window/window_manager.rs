@@ -9,7 +9,7 @@ use ratatui::widgets::Clear;
 use super::decorator::{DefaultDecorator, HeaderAction, WindowDecorator};
 use crate::clipboard;
 use crate::components::{
-    Component, ConfirmAction, ConfirmOverlayComponent, Overlay,
+    Component, ComponentContext, ConfirmAction, ConfirmOverlayComponent, Overlay,
     sys::debug_log::{DebugLogComponent, install_panic_hook, set_global_debug_log},
     sys::help_overlay::HelpOverlayComponent,
 };
@@ -133,11 +133,12 @@ trait SystemWindowView {
 
 impl SystemWindowView for DebugLogComponent {
     fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
-        <DebugLogComponent as Component>::render(self, frame, area, focused);
+        let ctx = ComponentContext::new(focused);
+        <DebugLogComponent as Component>::render(self, frame, area, &ctx);
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
-        Component::handle_event(self, event)
+        Component::handle_event(self, event, &ComponentContext::default())
     }
 
     fn set_selection_enabled(&mut self, enabled: bool) {
@@ -706,9 +707,9 @@ where
         // we can just use the trait method.
         // BUT, HelpOverlayComponent::handle_event now calls handle_help_event_in_area with stored area.
         // Update area to ensure correct hit-testing (Component::resize)
-        boxed.resize(self.last_frame_area);
+        boxed.resize(self.last_frame_area, &ComponentContext::new(true).with_overlay(true));
 
-        let handled = boxed.handle_event(event);
+        let handled = boxed.handle_event(event, &ComponentContext::new(true).with_overlay(true));
 
         // Remove the overlay if it has closed itself
         let should_close = if let Some(help) = boxed.as_any().downcast_ref::<HelpOverlayComponent>()
@@ -2123,10 +2124,10 @@ where
 
         // Render overlays in fixed order if they exist
         if let Some(confirm) = self.overlays.get_mut(&OverlayId::ExitConfirm) {
-            confirm.render(frame, frame.area(), false);
+            confirm.render(frame, frame.area(), &ComponentContext::new(false).with_overlay(true));
         }
         if let Some(help) = self.overlays.get_mut(&OverlayId::Help) {
-            help.render(frame, frame.area(), false);
+            help.render(frame, frame.area(), &ComponentContext::new(false).with_overlay(true));
         }
     }
 

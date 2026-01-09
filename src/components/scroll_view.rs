@@ -2,7 +2,7 @@ use crossterm::event::{Event, MouseEvent, MouseEventKind};
 use ratatui::prelude::Rect;
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 
-use crate::components::Component;
+use crate::components::{Component, ComponentContext};
 use crate::ui::UiFrame;
 use crate::window::ScrollState;
 
@@ -121,7 +121,7 @@ pub struct ScrollViewComponent {
 }
 
 impl Component for ScrollViewComponent {
-    fn resize(&mut self, mut area: Rect) {
+    fn resize(&mut self, mut area: Rect, _ctx: &ComponentContext) {
         if let Some(height) = self.fixed_height {
             area.height = area.height.min(height);
         }
@@ -130,12 +130,12 @@ impl Component for ScrollViewComponent {
         self.v_state.apply(self.total, self.view);
     }
 
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
-        self.resize(area);
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
+        self.resize(area, ctx);
         ScrollViewComponent::render(self, frame);
     }
 
-    fn handle_event(&mut self, event: &Event) -> bool {
+    fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
         ScrollViewComponent::handle_event(self, event).handled
     }
 }

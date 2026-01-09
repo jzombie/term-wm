@@ -4,7 +4,9 @@ use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders, Clear};
 
-use crate::components::{Component, DialogOverlayComponent, MarkdownViewerComponent};
+use crate::components::{
+    Component, ComponentContext, DialogOverlayComponent, MarkdownViewerComponent,
+};
 use crate::keybindings::{Action, KeyBindings};
 use crate::ui::UiFrame;
 
@@ -20,11 +22,11 @@ pub struct HelpOverlayComponent {
 }
 
 impl Component for HelpOverlayComponent {
-    fn resize(&mut self, area: Rect) {
+    fn resize(&mut self, area: Rect, _ctx: &ComponentContext) {
         self.area = area;
     }
 
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _ctx: &ComponentContext) {
         self.area = area;
         if !self.visible || area.width == 0 || area.height == 0 {
             return;
@@ -47,16 +49,22 @@ impl Component for HelpOverlayComponent {
         // receive `focused=false`. Force the viewer to stay logically focused
         // so selection drags are preserved while the help dialog is visible.
         let viewer_focused = self.visible;
-        self.viewer.render_content(frame, inner, viewer_focused);
+        let viewer_ctx = ComponentContext::new(viewer_focused).with_overlay(true);
+        self.viewer.render_content(frame, inner, &viewer_ctx);
     }
 
-    fn handle_event(&mut self, event: &Event) -> bool {
-        self.handle_help_event_in_area(event, self.area)
+    fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
+        self.handle_help_event_in_area(event, self.area, ctx)
     }
 }
 
 impl HelpOverlayComponent {
-    pub fn handle_help_event_in_area(&mut self, event: &Event, area: Rect) -> bool {
+    pub fn handle_help_event_in_area(
+        &mut self,
+        event: &Event,
+        area: Rect,
+        ctx: &ComponentContext,
+    ) -> bool {
         if !self.visible {
             return false;
         }
@@ -67,7 +75,7 @@ impl HelpOverlayComponent {
                     self.close();
                     true
                 } else {
-                    self.viewer.handle_key_event(key)
+                    self.viewer.handle_key_event(key, ctx)
                 }
             }
             Event::Mouse(_) => {
@@ -83,7 +91,7 @@ impl HelpOverlayComponent {
                     width: rect.width.saturating_sub(2),
                     height: rect.height.saturating_sub(2),
                 };
-                self.viewer.handle_pointer_event_in_area(event, inner)
+                self.viewer.handle_pointer_event_in_area(event, inner, ctx)
             }
             _ => false,
         }
@@ -181,7 +189,7 @@ impl HelpOverlayComponent {
         self.visible
     }
 
-    pub fn handle_help_event(&mut self, event: &Event) -> bool {
+    pub fn handle_help_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
         match event {
             Event::Key(key) => {
                 let kb = KeyBindings::default();
@@ -189,10 +197,10 @@ impl HelpOverlayComponent {
                     self.close();
                     true
                 } else {
-                    self.viewer.handle_key_event(key)
+                    self.viewer.handle_key_event(key, ctx)
                 }
             }
-            Event::Mouse(_) => self.viewer.handle_pointer_event(event),
+            Event::Mouse(_) => self.viewer.handle_pointer_event(event, ctx),
             _ => false,
         }
     }
@@ -243,7 +251,9 @@ mod tests {
         let mut buffer = Buffer::empty(area);
         {
             let mut frame = crate::ui::UiFrame::from_parts(area, &mut buffer);
-            overlay.viewer.render_content(&mut frame, area, true);
+            overlay
+                .viewer
+                .render_content(&mut frame, area, &ComponentContext::new(true));
         }
 
         let mut joined = String::new();
@@ -292,7 +302,7 @@ mod tests {
         overlay.show();
         // Default CloseHelp binding includes Esc
         let ev = Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        let handled = overlay.handle_help_event(&ev);
+        let handled = overlay.handle_help_event(&ev, &ComponentContext::new(true));
         assert!(handled, "close key should be handled");
         assert!(!overlay.visible(), "overlay should be closed by key");
     }
@@ -318,7 +328,7 @@ mod tests {
             modifiers: crossterm::event::KeyModifiers::NONE,
         });
 
-        let handled = overlay.handle_help_event_in_area(&ev, area);
+        let handled = overlay.handle_help_event_in_area(&ev, area, &ComponentContext::new(true));
         assert!(
             handled,
             "outside click should be handled when auto-close enabled"

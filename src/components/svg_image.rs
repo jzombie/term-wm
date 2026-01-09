@@ -2,7 +2,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use crate::components::Component;
+use crate::components::{Component, ComponentContext};
 use crate::components::ascii_image::AsciiImageComponent;
 use crate::ui::UiFrame;
 
@@ -24,8 +24,13 @@ pub struct SvgImageComponent {
 }
 
 impl Component for SvgImageComponent {
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: ratatui::layout::Rect, focused: bool) {
-        self.inner.render(frame, area, focused)
+    fn render(
+        &mut self,
+        frame: &mut UiFrame<'_>,
+        area: ratatui::layout::Rect,
+        ctx: &ComponentContext,
+    ) {
+        self.inner.render(frame, area, ctx)
     }
 }
 

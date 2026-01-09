@@ -3,7 +3,7 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-use crate::components::Component;
+use crate::components::{Component, ComponentContext};
 use crate::layout::rect_contains;
 use crate::ui::UiFrame;
 
@@ -21,11 +21,11 @@ pub struct DialogOverlayComponent {
 }
 
 impl Component for DialogOverlayComponent {
-    fn resize(&mut self, area: Rect) {
+    fn resize(&mut self, area: Rect, _ctx: &ComponentContext) {
         self.area = area;
     }
 
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _ctx: &ComponentContext) {
         self.area = area;
         if !self.visible || area.width == 0 || area.height == 0 {
             return;
@@ -54,7 +54,7 @@ impl Component for DialogOverlayComponent {
         frame.render_widget(paragraph, rect);
     }
 
-    fn handle_event(&mut self, event: &Event) -> bool {
+    fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
         self.handle_click_outside(event, self.area)
     }
 }

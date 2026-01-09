@@ -6,7 +6,7 @@ use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Text};
 
-use crate::components::{Component, TextRendererComponent};
+use crate::components::{Component, ComponentContext, TextRendererComponent};
 use crate::ui::UiFrame;
 
 const DEFAULT_MAX_LINES: usize = 2000;
@@ -176,7 +176,7 @@ pub struct DebugLogComponent {
 }
 
 impl Component for DebugLogComponent {
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -216,12 +216,12 @@ impl Component for DebugLogComponent {
         }
         self.follow_tail = self.is_at_bottom();
 
-        self.renderer.render(frame, area, focused);
+        self.renderer.render(frame, area, ctx);
     }
 
-    fn handle_event(&mut self, event: &Event) -> bool {
+    fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
         // Delegate to the renderer which handles scroll/key/mouse
-        let handled = self.renderer.handle_event(event);
+        let handled = self.renderer.handle_event(event, ctx);
         if handled {
             self.follow_tail = self.is_at_bottom();
         }
@@ -329,7 +329,7 @@ mod tests {
         comp.handle_event(&Event::Key(crossterm::event::KeyEvent::new(
             KeyCode::PageUp,
             crossterm::event::KeyModifiers::NONE,
-        )));
+        )), &ComponentContext::new(true));
         assert!(comp.renderer.offset() < max_off);
 
         let before = comp.renderer.offset();
@@ -338,7 +338,7 @@ mod tests {
             column: 0,
             row: 0,
             modifiers: crossterm::event::KeyModifiers::NONE,
-        }));
+        }), &ComponentContext::new(true));
         assert!(comp.renderer.offset() >= before);
     }
 }

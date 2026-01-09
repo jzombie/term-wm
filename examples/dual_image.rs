@@ -5,7 +5,7 @@ use crossterm::event::Event;
 use ratatui::prelude::Rect;
 use ratatui::widgets::Clear;
 
-use term_wm::components::{Component, SvgImageComponent};
+use term_wm::components::{Component, ComponentContext, SvgImageComponent};
 use term_wm::drivers::OutputDriver;
 use term_wm::drivers::console::{ConsoleInputDriver, ConsoleOutputDriver};
 use term_wm::runner::{HasWindowManager, WindowApp, run_window_app};
@@ -37,8 +37,8 @@ fn main() -> io::Result<()> {
                 return true;
             }
             match app.windows.focus() {
-                PaneId::Left => app.left.handle_event(event),
-                PaneId::Right => app.right.handle_event(event),
+                PaneId::Left => app.left.handle_event(event, &ComponentContext::new(true)),
+                PaneId::Right => app.right.handle_event(event, &ComponentContext::new(true)),
             }
         },
         |event, _app| {
@@ -136,10 +136,10 @@ impl WindowApp<PaneId, PaneId> for App {
     }
 }
 
-fn render_pane(frame: &mut UiFrame<'_>, image: &mut SvgImageComponent, area: Rect, _focused: bool) {
+fn render_pane(frame: &mut UiFrame<'_>, image: &mut SvgImageComponent, area: Rect, focused: bool) {
     // Clear the area and render the image directly (no inner decorative frame).
     frame.render_widget(Clear, area);
-    image.render(frame, area, false);
+    image.render(frame, area, &ComponentContext::new(focused));
 }
 
 fn load_into(component: &mut SvgImageComponent, path: &str) -> io::Result<()> {
