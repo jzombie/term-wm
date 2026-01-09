@@ -1940,11 +1940,8 @@ where
                 width: fr.width,
                 height: fr.height,
             };
-            if rects_intersect(rect, bounds) {
-                continue;
-            }
             // Only recover panes that are fully off-screen; keep normal dragging untouched.
-            // Use signed arithmetic for off-screen detection
+            // Use signed arithmetic for off-screen detection.
             let rect_left = fr.x;
             let rect_top = fr.y;
             let rect_right = fr.x.saturating_add(fr.width as i32);
@@ -1953,9 +1950,7 @@ where
             let bounds_top = bounds.y as i32;
             let bounds_right = bounds_left.saturating_add(bounds.width as i32);
             let bounds_bottom = bounds_top.saturating_add(bounds.height as i32);
-            // Clamp only the axis that is fully outside the viewport.
-            let out_x = rect_right <= bounds_left || rect_left >= bounds_right;
-            let out_y = rect_bottom <= bounds_top || rect_top >= bounds_bottom;
+
             let min_w = FLOATING_MIN_WIDTH.min(bounds.width.max(1));
             let min_h = FLOATING_MIN_HEIGHT.min(bounds.height.max(1));
 
@@ -1994,12 +1989,41 @@ where
                     .saturating_add(bounds.height.saturating_sub(height)) as i32
             };
 
+            // Determine overlap between the floating rect and the managed bounds.
+            // We used to skip any rect that intersected the bounds, but that
+            // allowed the visible portion to shrink below the grab margin when
+            // the terminal was gradually resized. Compute the visible overlap
+            // and treat too-small visibility as an axis that requires recovery.
+            let visible_left = rect_left.max(bounds_left);
+            let visible_right = rect_right.min(bounds_right);
+            let visible_top = rect_top.max(bounds_top);
+            let visible_bottom = rect_bottom.min(bounds_bottom);
+            let visible_width_i32 = visible_right.saturating_sub(visible_left);
+            let visible_height_i32 = visible_bottom.saturating_sub(visible_top);
+            let visible_width = if visible_width_i32 > 0 {
+                visible_width_i32 as u16
+            } else {
+                0u16
+            };
+            let visible_height = if visible_height_i32 > 0 {
+                visible_height_i32 as u16
+            } else {
+                0u16
+            };
+
+            // Clamp an axis if the rect is fully outside it, or if the
+            // visible portion is smaller than the minimum visible margin.
+            let out_x = rect_right <= bounds_left || rect_left >= bounds_right;
+            let out_y = rect_bottom <= bounds_top || rect_top >= bounds_bottom;
+            let too_small_x = visible_width > 0 && visible_width < min_visible_margin.min(width);
+            let too_small_y = visible_height > 0 && visible_height < min_visible_margin.min(height);
+
             // When `floating_resize_offscreen` is enabled we allow dragging a
             // floating pane partially off the edges while ensuring a small
             // visible margin remains. If the pane is fully off-screen on an
             // axis (`out_x`/`out_y`) or offscreen handling is disabled, recover
             // it into the visible bounds as before.
-            let x = if out_x || !self.floating_resize_offscreen {
+            let x = if out_x || too_small_x || !self.floating_resize_offscreen {
                 fr.x.clamp(bounds_left, max_x)
             } else {
                 // Compute left-most allowed x such that at least
@@ -2010,7 +2034,7 @@ where
                 fr.x.clamp(left_allowed, max_x)
             };
 
-            let y = if out_y || !self.floating_resize_offscreen {
+            let y = if out_y || too_small_y || !self.floating_resize_offscreen {
                 fr.y.clamp(bounds_top, max_y)
             } else {
                 let visible_height = min_visible_margin.min(height) as i32;
