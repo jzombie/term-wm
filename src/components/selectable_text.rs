@@ -6,6 +6,8 @@
 //! small for now; future commits can extend it with clipboard drivers and
 //! richer rendering hooks.
 
+use std::time::{Duration, Instant};
+
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 
@@ -119,6 +121,8 @@ struct SelectionState {
     cursor: Option<LogicalPosition>,
     phase: Phase,
     pointer: Option<(u16, u16)>,
+    last_pointer_event: Option<Instant>,
+    button_down: bool,
 }
 
 impl Default for SelectionState {
@@ -128,6 +132,8 @@ impl Default for SelectionState {
             cursor: None,
             phase: Phase::Idle,
             pointer: None,
+            last_pointer_event: None,
+            button_down: false,
         }
     }
 }
@@ -154,6 +160,8 @@ impl SelectionController {
         self.state.anchor = Some(pos);
         self.state.cursor = Some(pos);
         self.state.phase = Phase::Dragging;
+        self.touch_pointer_clock();
+        self.state.button_down = true;
     }
 
     /// Update the current drag cursor.
@@ -170,7 +178,8 @@ impl SelectionController {
             return None;
         }
         self.state.phase = Phase::Idle;
-        self.state.pointer = None;
+        self.clear_pointer();
+        self.state.button_down = false;
         let range = self.selection_range();
         if range.is_some_and(|r| r.is_non_empty()) {
             range
@@ -206,14 +215,38 @@ impl SelectionController {
 
     pub fn set_pointer(&mut self, column: u16, row: u16) {
         self.state.pointer = Some((column, row));
+        self.touch_pointer_clock();
     }
 
     pub fn clear_pointer(&mut self) {
         self.state.pointer = None;
+        self.state.last_pointer_event = None;
     }
 
     pub fn pointer(&self) -> Option<(u16, u16)> {
         self.state.pointer
+    }
+
+    pub fn set_button_down(&mut self, pressed: bool) {
+        self.state.button_down = pressed;
+    }
+
+    pub fn button_down(&self) -> bool {
+        self.state.button_down
+    }
+
+    fn touch_pointer_clock(&mut self) {
+        self.state.last_pointer_event = Some(Instant::now());
+    }
+
+    fn pointer_stale(&self, now: Instant, timeout: Duration) -> bool {
+        if self.state.phase != Phase::Dragging {
+            return false;
+        }
+        let Some(last) = self.state.last_pointer_event else {
+            return true;
+        };
+        now.duration_since(last) > timeout
     }
 }
 
@@ -240,6 +273,7 @@ pub fn handle_selection_mouse<H: SelectionHost>(
                     let selection = host.selection_controller();
                     selection.begin_drag(pos);
                     selection.set_pointer(mouse.column, mouse.row);
+                    selection.set_button_down(true);
                 }
                 return true;
             }
@@ -252,6 +286,7 @@ pub fn handle_selection_mouse<H: SelectionHost>(
                     return false;
                 }
                 selection.set_pointer(mouse.column, mouse.row);
+                selection.set_button_down(true);
             }
             auto_scroll_selection(host, mouse.column, mouse.row);
             if let Some(pos) = host.logical_position_from_point(mouse.column, mouse.row) {
@@ -260,18 +295,21 @@ pub fn handle_selection_mouse<H: SelectionHost>(
             true
         }
         MouseEventKind::Up(MouseButton::Left) => {
-            let was_dragging = {
-                let selection = host.selection_controller();
-                let active = selection.is_dragging();
-                if active {
-                    selection.clear_pointer();
-                }
-                active
-            };
-            if !was_dragging {
+            if !host.selection_controller().is_dragging() {
                 return false;
             }
-            let _ = host.selection_controller().finish_drag();
+            let controller = host.selection_controller();
+            controller.set_button_down(false);
+            let _ = controller.finish_drag();
+            true
+        }
+        MouseEventKind::Moved => {
+            let controller = host.selection_controller();
+            if !controller.is_dragging() || !controller.button_down() {
+                return false;
+            }
+            controller.set_button_down(false);
+            let _ = controller.finish_drag();
             true
         }
         _ => false,
@@ -309,7 +347,7 @@ fn auto_scroll_selection<V: SelectionViewport>(viewport: &mut V, column: u16, ro
     let left = area.x;
     if column < left {
         let dist = left.saturating_sub(column);
-        let delta = edge_scroll_step(dist, 1, 48);
+        let delta = edge_scroll_step(dist, 1, 80);
         if delta != 0 {
             viewport.scroll_selection_horizontal(-delta);
             scrolled = true;
@@ -318,7 +356,7 @@ fn auto_scroll_selection<V: SelectionViewport>(viewport: &mut V, column: u16, ro
         let right_edge = area.x.saturating_add(area.width).saturating_sub(1);
         if column > right_edge {
             let dist = column.saturating_sub(right_edge);
-            let delta = edge_scroll_step(dist, 1, 48);
+            let delta = edge_scroll_step(dist, 1, 80);
             if delta != 0 {
                 viewport.scroll_selection_horizontal(delta);
                 scrolled = true;
@@ -328,6 +366,10 @@ fn auto_scroll_selection<V: SelectionViewport>(viewport: &mut V, column: u16, ro
 
     scrolled
 }
+
+const DRAG_IDLE_TIMEOUT_BASE: Duration = Duration::from_millis(220);
+const DRAG_IDLE_TIMEOUT_VERTICAL: Duration = Duration::from_millis(600);
+const DRAG_IDLE_TIMEOUT_HORIZONTAL: Duration = Duration::from_millis(900);
 
 /// Continue scrolling/selection updates using the last drag pointer, even when
 /// no new mouse events arrive (e.g., cursor held outside the viewport).
@@ -341,6 +383,37 @@ pub fn maintain_selection_drag<H: SelectionHost>(host: &mut H) -> bool {
     };
 
     let Some((column, row)) = pointer else {
+        let _ = host.selection_controller().finish_drag();
+        return false;
+    };
+
+    let timeout = drag_idle_timeout(host.selection_viewport(), column, row);
+    let stale = {
+        let selection = host.selection_controller();
+        if !selection.button_down() {
+            return true;
+        }
+        selection.pointer_stale(Instant::now(), timeout)
+    };
+
+    if stale {
+        let controller = host.selection_controller();
+        controller.set_button_down(false);
+        let _ = controller.finish_drag();
+        return false;
+    }
+
+    maintain_selection_drag_active(host)
+}
+
+fn maintain_selection_drag_active<H: SelectionHost>(host: &mut H) -> bool {
+    if !host.selection_controller().is_dragging() {
+        return false;
+    }
+
+    let pointer = host.selection_controller().pointer();
+    let Some((column, row)) = pointer else {
+        let _ = host.selection_controller().finish_drag();
         return false;
     };
 
@@ -350,6 +423,23 @@ pub fn maintain_selection_drag<H: SelectionHost>(host: &mut H) -> bool {
         changed = true;
     }
     changed
+}
+
+fn drag_idle_timeout(area: Rect, column: u16, row: u16) -> Duration {
+    if area.width == 0 || area.height == 0 {
+        return DRAG_IDLE_TIMEOUT_BASE;
+    }
+    let horiz_outside = column < area.x || column >= area.x.saturating_add(area.width);
+    let vert_outside = row < area.y || row >= area.y.saturating_add(area.height);
+
+    let mut timeout = DRAG_IDLE_TIMEOUT_BASE;
+    if vert_outside {
+        timeout = timeout.max(DRAG_IDLE_TIMEOUT_VERTICAL);
+    }
+    if horiz_outside {
+        timeout = timeout.max(DRAG_IDLE_TIMEOUT_HORIZONTAL);
+    }
+    timeout
 }
 
 fn edge_scroll_step(distance: u16, divisor: u16, max_step: u16) -> isize {
