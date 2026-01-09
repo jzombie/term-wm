@@ -2524,4 +2524,46 @@ mod tests {
         let max_off = 20usize.saturating_sub(5usize);
         assert_eq!(s.offset, max_off);
     }
+
+    #[test]
+    fn click_focusing_topmost_window() {
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        let mut wm = WindowManager::<usize, usize>::new_managed(0);
+
+        // Two overlapping regions: window 1 underneath, window 2 on top
+        let r1 = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
+        let r2 = Rect {
+            x: 5,
+            y: 5,
+            width: 10,
+            height: 10,
+        };
+        wm.regions.set(WindowId::app(1usize), r1);
+        wm.regions.set(WindowId::app(2usize), r2);
+        wm.z_order.push(WindowId::app(1usize));
+        wm.z_order.push(WindowId::app(2usize));
+        wm.managed_draw_order = wm.z_order.clone();
+
+        // initial wm focus defaults to a system window (DebugLog)
+        assert!(matches!(wm.wm_focus.current(), WindowId::System(_)));
+
+        // Click inside the overlapping area that belongs to window 2 (topmost)
+        let clicked_col = 6u16;
+        let clicked_row = 6u16;
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: clicked_col,
+            row: clicked_row,
+            modifiers: KeyModifiers::NONE,
+        };
+        let evt = Event::Mouse(mouse);
+        // Call the public handler path as in runtime
+        let _handled = wm.handle_managed_event(&evt);
+        assert_eq!(wm.wm_focus.current(), WindowId::app(2usize));
+    }
 }
