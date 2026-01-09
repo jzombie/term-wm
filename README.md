@@ -13,7 +13,7 @@ It works the same over SSH, Mac, Linux, and Windows.
 
 `term-wm` serves two distinct purposes:
 
-- **For Users:** A standalone, keyboard-driven window manager for your terminal shell. It works over SSH, Mac, Linux, and Windows.
+- **For Users:** A standalone, keyboard-driven window manager for your terminal shell.
 - **For Developers:** A reusable library of TUI primitives for building window-managed Ratatui applications.
 
 ## For Users: The Window Manager
