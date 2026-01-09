@@ -60,7 +60,6 @@ where
     FMap: Fn(R) -> W + Copy,
     FFocus: Fn(W) -> Option<R>,
 {
-    let capture_timeout = Duration::from_millis(500);
     let mut event_loop = EventLoop::new(driver, poll_interval);
     event_loop
         .driver()
@@ -72,6 +71,16 @@ where
 
     event_loop.run(|driver, event| {
         let handler = || -> io::Result<ControlFlow> {
+            // Check if a panic occurred (e.g. in a background thread or previous iteration)
+            // and force the debug window open if so.
+            if crate::components::sys::debug_log::take_panic_pending() {
+                app.windows().open_debug_window();
+            }
+            // Also check for reported non-fatal errors that should pop the debug log
+            if crate::components::sys::debug_log::take_error_pending() {
+                app.windows().open_debug_window();
+            }
+
             // Drain any pending closed app ids recorded by the WindowManager and invoke app cleanup.
             for id in app.windows().take_closed_app_windows() {
                 app.wm_close_window(id)?;
@@ -83,6 +92,13 @@ where
                 Ok(flow)
             };
             if let Some(evt) = event {
+                // Map key events to high-level `Action`s once to prefer action-based handling
+                let mapped_action = match &evt {
+                    Event::Key(key) => {
+                        crate::keybindings::KeyBindings::default().action_for_key(key)
+                    }
+                    _ => None,
+                };
                 if app.windows().exit_confirm_visible() {
                     if let Some(action) = app.windows().handle_exit_confirm_event(&evt) {
                         match action {
@@ -99,16 +115,16 @@ where
                 }
                 let wm_mode = app.windows().layout_contract() == LayoutContract::WindowManaged;
                 if wm_mode
-                    && let Event::Key(key) = evt
+                    && let Event::Key(key) = &evt
                     && key.kind == KeyEventKind::Press
                     && crate::keybindings::KeyBindings::default()
-                        .matches(crate::keybindings::Action::WmToggleOverlay, &key)
+                        .matches(crate::keybindings::Action::WmToggleOverlay, key)
                 {
                     if app.windows().wm_overlay_visible() {
                         let passthrough = app.windows().esc_passthrough_active();
                         app.windows().close_wm_overlay();
                         if passthrough {
-                            let _ = dispatch(&Event::Key(key), app);
+                            let _ = dispatch(&Event::Key(*key), app);
                         }
                     } else {
                         app.windows().open_wm_overlay();
@@ -166,12 +182,26 @@ where
                     if app.windows().wm_menu_consumes_event(&evt) {
                         return flush_mouse_capture(app, ControlFlow::Continue);
                     }
-                    if let Event::Key(key) = evt
-                        && crate::keybindings::KeyBindings::default()
-                            .matches(crate::keybindings::Action::NewWindow, &key)
+                    if let Event::Key(_key) = &evt
+                        && mapped_action == Some(crate::keybindings::Action::NewWindow)
                     {
                         app.wm_new_window()?;
                         app.windows().close_wm_overlay();
+                        return flush_mouse_capture(app, ControlFlow::Continue);
+                    }
+                    if let Event::Key(_key) = &evt
+                        && (mapped_action == Some(crate::keybindings::Action::FocusNext)
+                            || mapped_action == Some(crate::keybindings::Action::FocusPrev))
+                    {
+                        let _ = app.windows().handle_focus_event(
+                            &evt,
+                            focus_regions,
+                            &map_region,
+                            &_map_focus,
+                        );
+                        return flush_mouse_capture(app, ControlFlow::Continue);
+                    }
+                    if let Event::Key(_) = &evt {
                         return flush_mouse_capture(app, ControlFlow::Continue);
                     }
                 }
@@ -180,71 +210,11 @@ where
                     return flush_mouse_capture(app, ControlFlow::Continue);
                 }
                 match &evt {
-                    Event::Key(key)
-                        if crate::keybindings::KeyBindings::default()
-                            .matches(crate::keybindings::Action::FocusPrev, key) =>
-                    {
-                        if app.windows().capture_active() {
-                            if wm_mode {
-                                app.windows().arm_capture(capture_timeout);
-                            }
-                            let _ = app.windows().handle_focus_event(
-                                &evt,
-                                focus_regions,
-                                &map_region,
-                                &_map_focus,
-                            );
-                            return flush_mouse_capture(app, ControlFlow::Continue);
-                        }
-                        if dispatch(&evt, app) {
-                            return flush_mouse_capture(app, ControlFlow::Continue);
-                        }
-                        let _ = app.windows().handle_focus_event(
-                            &evt,
-                            focus_regions,
-                            &map_region,
-                            &_map_focus,
-                        );
-                        return flush_mouse_capture(app, ControlFlow::Continue);
-                    }
-                    Event::Key(key)
-                        if crate::keybindings::KeyBindings::default()
-                            .matches(crate::keybindings::Action::FocusNext, key) =>
-                    {
-                        if app.windows().capture_active() {
-                            if wm_mode {
-                                app.windows().arm_capture(capture_timeout);
-                            }
-                            let _ = app.windows().handle_focus_event(
-                                &evt,
-                                focus_regions,
-                                &map_region,
-                                &_map_focus,
-                            );
-                            return flush_mouse_capture(app, ControlFlow::Continue);
-                        }
-                        if dispatch(&evt, app) {
-                            return flush_mouse_capture(app, ControlFlow::Continue);
-                        }
-                        let _ = app.windows().handle_focus_event(
-                            &evt,
-                            focus_regions,
-                            &map_region,
-                            &_map_focus,
-                        );
-                        return flush_mouse_capture(app, ControlFlow::Continue);
-                    }
                     Event::Key(_) if app.windows().capture_active() => {
                         app.windows().clear_capture();
                         let _ = dispatch(&evt, app);
                     }
                     _ => {
-                        let _ = app.windows().handle_focus_event(
-                            &evt,
-                            focus_regions,
-                            &map_region,
-                            &_map_focus,
-                        );
                         let _ = dispatch(&evt, app);
                     }
                 }
@@ -363,20 +333,31 @@ fn draw_window_app<A, W, R, FMap>(
     let area = frame.area();
     let windows = app.enumerate_windows();
     let windows_changed = state.update(&windows);
+    // If no application windows, we still might need to draw system windows (e.g. debug log).
+    // The previous check `if windows.is_empty() { return }` prevented this.
+    // We now allow proceeding, ensuring the layout is handled gracefully.
+
+    if windows_changed {
+        if let Some(layout) = app.layout_for_windows(&windows) {
+            app.windows().set_managed_layout(layout);
+        } else if windows.is_empty() {
+            // Force a layout update to reflect empty state, but don't clear system windows
+            // that the WindowManager might inject. passing None usually clears the app layout.
+            app.windows().set_managed_layout_none();
+        }
+    }
+
     if windows.is_empty() {
+        // If app windows are empty, we might still have system windows.
+        // We render the "empty" message underneath, then let the window manager draw its overlays/system windows on top.
         let message = app.empty_window_message();
         if !message.is_empty() {
             frame
                 .buffer_mut()
                 .set_string(area.x, area.y, message, Style::default());
         }
-        app.windows().render_overlays(frame);
-        return;
     }
 
-    if windows_changed && let Some(layout) = app.layout_for_windows(&windows) {
-        app.windows().set_managed_layout(layout);
-    }
     let focus_order: Vec<W> = windows.iter().copied().map(map_region).collect();
     if !focus_order.is_empty() {
         app.windows().set_focus_order(focus_order);

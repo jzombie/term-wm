@@ -1,25 +1,45 @@
 [package]
 name = "term-wm"
 description = "A cross-platform window manager for terminal shells."
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["windows-sys"]
+
+[workspace]
+members = ["crates/term-bench"]
+resolver = "2"
+
+[workspace.package]
 authors = ["Jeremy Harris <jeremy.harris@zenosmosis.com>"]
-version = "0.4.1-alpha"
+version = "0.5.0-alpha"
 edition = "2024"
 repository = "https://github.com/jzombie/term-wm"
 license = "MIT OR Apache-2.0"
 publish = true
 
-[package.metadata.cargo-udeps.ignore]
-normal = ["windows-sys"]
+[workspace.dependencies]
+clap = { version = "4.5.54", features = ["derive"] }
+crossterm = "0.29.0"
+indoc = "2.0.7"
+ratatui = "0.30.0"
 
 [dependencies]
-crossterm = "0.29.0"
+clap = { workspace = true, features = ["derive"] }
+crossterm.workspace = true
 hostname = "0.4.2"
-indoc = "2.0.7"
+indoc.workspace = true
 libc = "0.2.176"
+line-ending = "1.5.1"
 linkify = "0.10.0"
 portable-pty = "0.9.0"
 pulldown-cmark = "0.13.0"
-ratatui = "0.30.0"
+ratatui.workspace = true
 resvg = "0.45.1"
 shell-words = "1.1.1"
 thiserror = "2.0.17"
@@ -31,3 +51,6 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Stora
 
 [build-dependencies]
 indoc = "2.0.7"
+
+[dev-dependencies]
+tempfile = "3.24.0"

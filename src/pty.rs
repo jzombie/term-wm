@@ -24,6 +24,7 @@ pub struct Pty {
     scrollback_used: usize,
     child: Option<Box<dyn Child + Send + Sync>>,
     exited: bool,
+    exit_status: Option<portable_pty::ExitStatus>,
     _reader: JoinHandle<()>,
     pending_resize: Option<PtySize>,
 }
@@ -87,6 +88,7 @@ impl Pty {
             scrollback_used: 0,
             child: Some(child),
             exited: false,
+            exit_status: None,
             _reader: reader_handle,
             pending_resize: None,
         })
@@ -178,14 +180,23 @@ impl Pty {
             return true;
         };
         match child.try_wait() {
-            Ok(Some(_)) => {
+            Ok(Some(status)) => {
                 self.exited = true;
+                self.exit_status = Some(status);
                 self.child = None;
                 true
             }
             Ok(None) => false,
             Err(_) => false,
         }
+    }
+
+    pub fn exit_status(&self) -> Option<portable_pty::ExitStatus> {
+        self.exit_status.clone()
+    }
+
+    pub fn take_exit_status(&mut self) -> Option<portable_pty::ExitStatus> {
+        self.exit_status.take()
     }
 
     /// Kill the child process if present.

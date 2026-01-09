@@ -8,8 +8,9 @@ use ratatui::widgets::Clear;
 
 use super::decorator::{DefaultDecorator, HeaderAction, WindowDecorator};
 use crate::components::{
-    Component, ConfirmAction, ConfirmOverlayComponent, DebugLogComponent, HelpOverlayComponent,
-    Overlay, install_panic_hook, set_global_debug_log,
+    Component, ConfirmAction, ConfirmOverlayComponent, Overlay,
+    sys::debug_log::{DebugLogComponent, install_panic_hook, set_global_debug_log},
+    sys::help_overlay::HelpOverlayComponent,
 };
 use crate::layout::floating::*;
 use crate::layout::{
@@ -503,7 +504,7 @@ where
         self.managed_draw_order_app.clear();
         self.panel.begin_frame();
         // If a panic occurred earlier, ensure the debug log is shown and focused.
-        if crate::components::take_panic_pending() {
+        if crate::components::sys::debug_log::take_panic_pending() {
             self.show_system_window(SystemWindowId::DebugLog);
         }
         if self.layout_contract == LayoutContract::AppManaged {
@@ -672,6 +673,41 @@ where
         } else {
             self.show_system_window(SystemWindowId::DebugLog);
         }
+    }
+
+    pub fn open_debug_window(&mut self) {
+        if !self.system_window_visible(SystemWindowId::DebugLog) {
+            self.show_system_window(SystemWindowId::DebugLog);
+        }
+    }
+
+    pub fn debug_window_visible(&self) -> bool {
+        self.system_window_visible(SystemWindowId::DebugLog)
+    }
+
+    pub fn has_active_system_windows(&self) -> bool {
+        self.system_windows.values().any(|w| w.visible()) || !self.overlays.is_empty()
+    }
+
+    /// Returns true when any windows are still active (app or system).
+    ///
+    /// This is intended as a simple, conservative check for callers that
+    /// want to know whether the window manager currently has any visible
+    /// or managed windows remaining.
+    pub fn has_any_active_windows(&self) -> bool {
+        // Active system windows or overlays
+        if self.has_active_system_windows() {
+            return true;
+        }
+        // Any regions (tiled or floating) indicate active app windows
+        if !self.regions.ids().is_empty() {
+            return true;
+        }
+        // Z-order may contain app windows (including floating ones)
+        if self.z_order.iter().any(|id| id.as_app().is_some()) {
+            return true;
+        }
+        false
     }
 
     pub fn esc_passthrough_active(&self) -> bool {
@@ -870,6 +906,16 @@ where
         }
     }
 
+    pub fn set_managed_layout_none(&mut self) {
+        if self.managed_layout.is_none() {
+            return;
+        }
+        self.managed_layout = None;
+        if self.system_window_visible(SystemWindowId::DebugLog) {
+            self.ensure_system_window_in_layout(WindowId::system(SystemWindowId::DebugLog));
+        }
+    }
+
     pub fn set_panel_visible(&mut self, visible: bool) {
         self.panel.set_visible(visible);
     }
@@ -1044,6 +1090,9 @@ where
         }
         if let Event::Mouse(mouse) = event {
             self.hover = Some((mouse.column, mouse.row));
+            if matches!(mouse.kind, MouseEventKind::Down(_)) {
+                self.focus_window_at(mouse.column, mouse.row);
+            }
         }
         if self.handle_resize_event(event) {
             return true;
@@ -1260,6 +1309,22 @@ where
             _ => {}
         }
         false
+    }
+
+    fn focus_window_at(&mut self, column: u16, row: u16) -> bool {
+        if self.layout_contract != LayoutContract::WindowManaged
+            || self.managed_draw_order.is_empty()
+        {
+            return false;
+        }
+        let Some(hit) = self.hit_test_region_topmost(column, row, &self.managed_draw_order) else {
+            return false;
+        };
+        if !matches!(hit, WindowId::App(_)) {
+            return false;
+        }
+        self.focus_window_id(hit);
+        true
     }
 
     fn handle_resize_event(&mut self, event: &Event) -> bool {
@@ -2479,5 +2544,47 @@ mod tests {
         s.apply(20, 5);
         let max_off = 20usize.saturating_sub(5usize);
         assert_eq!(s.offset, max_off);
+    }
+
+    #[test]
+    fn click_focusing_topmost_window() {
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        let mut wm = WindowManager::<usize, usize>::new_managed(0);
+
+        // Two overlapping regions: window 1 underneath, window 2 on top
+        let r1 = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
+        let r2 = Rect {
+            x: 5,
+            y: 5,
+            width: 10,
+            height: 10,
+        };
+        wm.regions.set(WindowId::app(1usize), r1);
+        wm.regions.set(WindowId::app(2usize), r2);
+        wm.z_order.push(WindowId::app(1usize));
+        wm.z_order.push(WindowId::app(2usize));
+        wm.managed_draw_order = wm.z_order.clone();
+
+        // initial wm focus defaults to a system window (DebugLog)
+        assert!(matches!(wm.wm_focus.current(), WindowId::System(_)));
+
+        // Click inside the overlapping area that belongs to window 2 (topmost)
+        let clicked_col = 6u16;
+        let clicked_row = 6u16;
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: clicked_col,
+            row: clicked_row,
+            modifiers: KeyModifiers::NONE,
+        };
+        let evt = Event::Mouse(mouse);
+        // Call the public handler path as in runtime
+        let _handled = wm.handle_managed_event(&evt);
+        assert_eq!(wm.wm_focus.current(), WindowId::app(2usize));
     }
 }

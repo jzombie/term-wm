@@ -5,12 +5,12 @@ use crate::ui::UiFrame;
 
 pub mod ascii_image;
 pub mod confirm_overlay;
-pub mod debug_log;
 pub mod dialog_overlay;
 pub mod list;
 pub mod markdown_viewer;
 pub mod scroll_view;
 pub mod status_bar;
+pub mod svg_image;
 pub mod sys;
 pub mod terminal;
 pub mod text_renderer;
@@ -18,16 +18,13 @@ pub mod toggle_list;
 
 pub use ascii_image::AsciiImageComponent;
 pub use confirm_overlay::{ConfirmAction, ConfirmOverlayComponent};
-pub use debug_log::{
-    DebugLogComponent, DebugLogHandle, DebugLogWriter, global_debug_log, install_panic_hook,
-    log_line, set_global_debug_log, take_panic_pending,
-};
 pub use dialog_overlay::DialogOverlayComponent;
 pub use list::ListComponent;
 pub use markdown_viewer::MarkdownViewerComponent;
 pub use scroll_view::ScrollViewComponent;
 pub use status_bar::StatusBarComponent;
-pub use sys::help_overlay::HelpOverlayComponent;
+pub use svg_image::SvgImageComponent;
+pub use sys::*;
 pub use terminal::{TerminalComponent, default_shell, default_shell_command};
 pub use text_renderer::TextRendererComponent;
 pub use toggle_list::{ToggleItem, ToggleListComponent};

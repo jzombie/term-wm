@@ -1,0 +1,15 @@
+[package]
+name = "term-bench"
+description = "A simple render benchmark for terminal throughput measurements."
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+crossterm = { workspace = true }
+indoc = { workspace = true }
+ratatui = { workspace = true }

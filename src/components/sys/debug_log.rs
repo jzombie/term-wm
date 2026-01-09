@@ -14,6 +14,7 @@ static GLOBAL_LOG: OnceLock<DebugLogHandle> = OnceLock::new();
 static PANIC_HOOK_INSTALLED: OnceLock<()> = OnceLock::new();
 use std::sync::atomic::{AtomicBool, Ordering};
 static PANIC_PENDING: AtomicBool = AtomicBool::new(false);
+static ERROR_PENDING: AtomicBool = AtomicBool::new(false);
 
 pub fn set_global_debug_log(handle: DebugLogHandle) -> bool {
     GLOBAL_LOG.set(handle).is_ok()
@@ -23,10 +24,8 @@ pub fn global_debug_log() -> Option<DebugLogHandle> {
     GLOBAL_LOG.get().cloned()
 }
 
-pub fn log_line(line: impl Into<String>) {
-    if let Some(handle) = GLOBAL_LOG.get() {
-        handle.push(line);
-    }
+pub fn trigger_error() {
+    ERROR_PENDING.store(true, Ordering::SeqCst);
 }
 
 pub fn install_panic_hook() {
@@ -68,6 +67,10 @@ pub fn install_panic_hook() {
 
 pub fn take_panic_pending() -> bool {
     PANIC_PENDING.swap(false, Ordering::SeqCst)
+}
+
+pub fn take_error_pending() -> bool {
+    ERROR_PENDING.swap(false, Ordering::SeqCst)
 }
 
 #[derive(Debug)]

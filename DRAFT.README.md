@@ -25,3 +25,12 @@ Use the layout contract to describe who owns window placement:
 
 The contract decides how `Esc` behaves and whether the window-manager overlay
 is active.
+
+## Terminal Render Benchmark
+
+The project now ships a standalone benchmark binary in [src/bin/render_bench.rs](src/bin/render_bench.rs). It produces an aggressive, animated noise field and reports frame pacing plus cell-update throughput so you can compare native terminal performance against `term-wm` hosting the same workload.
+
+- **Standalone run:** `cargo run -p term-bench --release -- --duration 15 --fps 120`
+- **Inside term-wm:** `cargo run --release -- "./target/release/term-bench --duration 15 --fps 120"`
+
+The second form launches `term-wm` and feeds the benchmark command to the first pane. Run both variants back-to-back to see how much headroom the host terminal versus the managed window environment provides.

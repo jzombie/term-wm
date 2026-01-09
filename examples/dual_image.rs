@@ -1,12 +1,11 @@
-use std::fs;
 use std::io;
 use std::time::Duration;
 
-use crossterm::event::{Event, KeyCode, KeyModifiers};
+use crossterm::event::Event;
 use ratatui::prelude::Rect;
 use ratatui::widgets::Clear;
 
-use term_wm::components::{AsciiImageComponent, Component};
+use term_wm::components::{Component, SvgImageComponent};
 use term_wm::drivers::OutputDriver;
 use term_wm::drivers::console::{ConsoleInputDriver, ConsoleOutputDriver};
 use term_wm::runner::{HasWindowManager, WindowApp, run_window_app};
@@ -43,12 +42,12 @@ fn main() -> io::Result<()> {
             }
         },
         |event, _app| {
-            matches!(
-                event,
-                Some(Event::Key(key))
-                    if key.code == KeyCode::Char('q')
-                        && key.modifiers.contains(KeyModifiers::CONTROL)
-            )
+            if let Some(evt) = event {
+                term_wm::keybindings::KeyBindings::default().action_for_event(evt)
+                    == Some(term_wm::keybindings::Action::Quit)
+            } else {
+                false
+            }
         },
     );
 
@@ -59,16 +58,16 @@ fn main() -> io::Result<()> {
 
 struct App {
     windows: WindowManager<PaneId, PaneId>,
-    left: AsciiImageComponent,
-    right: AsciiImageComponent,
+    left: SvgImageComponent,
+    right: SvgImageComponent,
     pending_paths: Vec<String>,
     loaded_count: usize,
 }
 
 impl App {
     fn new(mut paths: Vec<String>) -> io::Result<Self> {
-        let mut left = AsciiImageComponent::new();
-        let mut right = AsciiImageComponent::new();
+        let mut left = SvgImageComponent::new();
+        let mut right = SvgImageComponent::new();
         left.set_keep_aspect(true);
         right.set_keep_aspect(true);
         left.set_colorize(true);
@@ -137,128 +136,12 @@ impl WindowApp<PaneId, PaneId> for App {
     }
 }
 
-fn render_pane(
-    frame: &mut UiFrame<'_>,
-    image: &mut AsciiImageComponent,
-    area: Rect,
-    _focused: bool,
-) {
+fn render_pane(frame: &mut UiFrame<'_>, image: &mut SvgImageComponent, area: Rect, _focused: bool) {
     // Clear the area and render the image directly (no inner decorative frame).
     frame.render_widget(Clear, area);
     image.render(frame, area, false);
 }
 
-fn load_into(component: &mut AsciiImageComponent, path: &str) -> io::Result<()> {
-    if path.ends_with(".svg") {
-        return component
-            .load_svg_from_path(path)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err));
-    }
-    let bytes = fs::read(path)?;
-    let image = decode_pnm(&bytes)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "unsupported image"))?;
-    match image {
-        Pnm::Luma {
-            width,
-            height,
-            data,
-        } => component.set_luma8(width, height, data),
-        Pnm::Rgba {
-            width,
-            height,
-            data,
-        } => component.set_rgba8(width, height, data),
-    }
-    Ok(())
-}
-
-enum Pnm {
-    Luma {
-        width: u32,
-        height: u32,
-        data: Vec<u8>,
-    },
-    Rgba {
-        width: u32,
-        height: u32,
-        data: Vec<u8>,
-    },
-}
-
-fn decode_pnm(bytes: &[u8]) -> Option<Pnm> {
-    let mut idx = 0;
-    let magic = next_token(bytes, &mut idx)?;
-    let width: u32 = next_token(bytes, &mut idx)?.parse().ok()?;
-    let height: u32 = next_token(bytes, &mut idx)?.parse().ok()?;
-    let maxval: u32 = next_token(bytes, &mut idx)?.parse().ok()?;
-    if maxval == 0 || maxval > 255 {
-        return None;
-    }
-    if magic == "P5" {
-        let count = (width * height) as usize;
-        let data = bytes.get(idx..idx + count)?.to_vec();
-        if maxval != 255 {
-            let data = data
-                .into_iter()
-                .map(|v| ((v as u32 * 255) / maxval) as u8)
-                .collect();
-            return Some(Pnm::Luma {
-                width,
-                height,
-                data,
-            });
-        }
-        return Some(Pnm::Luma {
-            width,
-            height,
-            data,
-        });
-    }
-    if magic == "P6" {
-        let count = (width * height * 3) as usize;
-        let raw = bytes.get(idx..idx + count)?.to_vec();
-        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
-        for chunk in raw.chunks_exact(3) {
-            let r = scale_max(chunk[0], maxval);
-            let g = scale_max(chunk[1], maxval);
-            let b = scale_max(chunk[2], maxval);
-            rgba.extend_from_slice(&[r, g, b, 255]);
-        }
-        return Some(Pnm::Rgba {
-            width,
-            height,
-            data: rgba,
-        });
-    }
-    None
-}
-
-fn scale_max(value: u8, maxval: u32) -> u8 {
-    if maxval == 255 {
-        value
-    } else {
-        ((value as u32 * 255) / maxval) as u8
-    }
-}
-
-fn next_token<'a>(bytes: &'a [u8], idx: &mut usize) -> Option<&'a str> {
-    while *idx < bytes.len() {
-        let b = bytes[*idx];
-        if b == b'#' {
-            while *idx < bytes.len() && bytes[*idx] != b'\n' {
-                *idx += 1;
-            }
-            continue;
-        }
-        if b.is_ascii_whitespace() {
-            *idx += 1;
-            continue;
-        }
-        break;
-    }
-    let start = *idx;
-    while *idx < bytes.len() && !bytes[*idx].is_ascii_whitespace() {
-        *idx += 1;
-    }
-    std::str::from_utf8(bytes.get(start..*idx)?).ok()
+fn load_into(component: &mut SvgImageComponent, path: &str) -> io::Result<()> {
+    component.load_from_path(path)
 }

@@ -30,6 +30,7 @@ pub struct TerminalComponent {
     linkifier: Linkifier,
     link_overlay: LinkOverlay,
     link_handler: Option<LinkHandler>,
+    command_description: String,
 }
 
 impl Component for TerminalComponent {
@@ -138,7 +139,24 @@ impl Component for TerminalComponent {
 }
 
 impl TerminalComponent {
+    /// Return a reasonable default PTY size used when spawning a terminal
+    /// when the caller doesn't need to pick a custom size.
+    pub fn default_pty_size() -> PtySize {
+        PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        }
+    }
+
+    /// Convenience spawn that uses `default_pty_size()`.
+    pub fn spawn_default(command: CommandBuilder) -> crate::pty::PtyResult<Self> {
+        Self::spawn(command, Self::default_pty_size())
+    }
+
     pub fn spawn(command: CommandBuilder, size: PtySize) -> crate::pty::PtyResult<Self> {
+        let command_description = format!("{:?}", command);
         let pane = Pty::spawn_with_scrollback(command, size, DEFAULT_SCROLLBACK_LEN)?;
         let mut comp = Self {
             pane,
@@ -148,6 +166,7 @@ impl TerminalComponent {
             linkifier: Linkifier::new(),
             link_overlay: LinkOverlay::new(),
             link_handler: None,
+            command_description,
         };
         // Terminal scroll view must not hijack keyboard input; disable by default.
         comp.scroll_view.set_keyboard_enabled(false);
@@ -159,7 +178,28 @@ impl TerminalComponent {
     }
 
     pub fn has_exited(&mut self) -> bool {
-        self.pane.has_exited()
+        let exited = self.pane.has_exited();
+        if exited {
+            // If exiting with error, log it to global log which will trigger debug window
+            if let Some(status) = self.pane.take_exit_status()
+                && !status.success()
+            {
+                tracing::error!(
+                    "Terminal exited with error: {:?} (Command: {})",
+                    status,
+                    self.command_description
+                );
+            }
+        }
+        exited
+    }
+
+    pub fn exit_status(&self) -> Option<portable_pty::ExitStatus> {
+        self.pane.exit_status()
+    }
+
+    pub fn take_exit_status(&mut self) -> Option<portable_pty::ExitStatus> {
+        self.pane.take_exit_status()
     }
 
     pub fn bytes_received(&self) -> usize {
