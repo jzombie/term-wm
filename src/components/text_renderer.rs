@@ -12,7 +12,7 @@ use crate::components::{
     scroll_view::ScrollViewComponent,
     selectable_text::{
         LogicalPosition, SelectionController, SelectionHost, SelectionViewport,
-        handle_selection_mouse,
+        handle_selection_mouse, maintain_selection_drag,
     },
 };
 use crate::linkifier::LinkifiedText;
@@ -81,6 +81,8 @@ impl Component for TextRendererComponent {
         self.scroll.update(area, v_total, view);
         self.scroll
             .set_horizontal_total_view(h_total, content_width as usize);
+
+        maintain_selection_drag(self);
 
         let v_off = self.scroll.offset() as u16;
         let h_off = self.scroll.h_offset() as u16;
@@ -472,31 +474,35 @@ impl SelectionViewport for TextRendererComponent {
         self.content_area
     }
 
-    fn logical_position_from_point(
-        &mut self,
-        column: u16,
-        row: u16,
-    ) -> Option<LogicalPosition> {
+    fn logical_position_from_point(&mut self, column: u16, row: u16) -> Option<LogicalPosition> {
         TextRendererComponent::logical_position_from_point(self, column, row)
     }
 
     fn scroll_selection_vertical(&mut self, delta: isize) {
+        if delta == 0 {
+            return;
+        }
         let current = self.scroll.offset();
-        if delta.is_negative() {
+        if delta < 0 {
+            let step = (-delta) as usize;
+            self.scroll.set_offset(current.saturating_sub(step));
+        } else {
             self.scroll
-                .set_offset(current.saturating_sub(delta.unsigned_abs()));
-        } else if delta > 0 {
-            self.scroll.set_offset(current.saturating_add(delta as usize));
+                .set_offset(current.saturating_add(delta as usize));
         }
     }
 
     fn scroll_selection_horizontal(&mut self, delta: isize) {
+        if delta == 0 {
+            return;
+        }
         let current = self.scroll.h_offset();
-        if delta.is_negative() {
+        if delta < 0 {
+            let step = (-delta) as usize;
+            self.scroll.set_h_offset(current.saturating_sub(step));
+        } else {
             self.scroll
-                .set_h_offset(current.saturating_sub(delta.unsigned_abs()));
-        } else if delta > 0 {
-            self.scroll.set_h_offset(current.saturating_add(delta as usize));
+                .set_h_offset(current.saturating_add(delta as usize));
         }
     }
 }

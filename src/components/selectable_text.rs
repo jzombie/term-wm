@@ -118,6 +118,7 @@ struct SelectionState {
     anchor: Option<LogicalPosition>,
     cursor: Option<LogicalPosition>,
     phase: Phase,
+    pointer: Option<(u16, u16)>,
 }
 
 impl Default for SelectionState {
@@ -126,6 +127,7 @@ impl Default for SelectionState {
             anchor: None,
             cursor: None,
             phase: Phase::Idle,
+            pointer: None,
         }
     }
 }
@@ -168,6 +170,7 @@ impl SelectionController {
             return None;
         }
         self.state.phase = Phase::Idle;
+        self.state.pointer = None;
         let range = self.selection_range();
         if range.is_some_and(|r| r.is_non_empty()) {
             range
@@ -200,6 +203,18 @@ impl SelectionController {
         let range = self.selection_range()?.normalized();
         surface.text_for_range(range)
     }
+
+    pub fn set_pointer(&mut self, column: u16, row: u16) {
+        self.state.pointer = Some((column, row));
+    }
+
+    pub fn clear_pointer(&mut self) {
+        self.state.pointer = None;
+    }
+
+    pub fn pointer(&self) -> Option<(u16, u16)> {
+        self.state.pointer
+    }
 }
 
 /// Shared mouse handler that begins/updates/ends selections and auto-scrolls
@@ -221,7 +236,11 @@ pub fn handle_selection_mouse<H: SelectionHost>(
             if rect_contains(area, mouse.column, mouse.row)
                 && let Some(pos) = host.logical_position_from_point(mouse.column, mouse.row)
             {
-                host.selection_controller().begin_drag(pos);
+                {
+                    let selection = host.selection_controller();
+                    selection.begin_drag(pos);
+                    selection.set_pointer(mouse.column, mouse.row);
+                }
                 return true;
             }
             false
@@ -232,16 +251,24 @@ pub fn handle_selection_mouse<H: SelectionHost>(
                 if !selection.is_dragging() {
                     return false;
                 }
+                selection.set_pointer(mouse.column, mouse.row);
             }
-            auto_scroll_selection(host, mouse);
+            auto_scroll_selection(host, mouse.column, mouse.row);
             if let Some(pos) = host.logical_position_from_point(mouse.column, mouse.row) {
                 host.selection_controller().update_drag(pos);
             }
             true
         }
         MouseEventKind::Up(MouseButton::Left) => {
-            let active = { host.selection_controller().is_dragging() };
-            if !active {
+            let was_dragging = {
+                let selection = host.selection_controller();
+                let active = selection.is_dragging();
+                if active {
+                    selection.clear_pointer();
+                }
+                active
+            };
+            if !was_dragging {
                 return false;
             }
             let _ = host.selection_controller().finish_drag();
@@ -251,24 +278,90 @@ pub fn handle_selection_mouse<H: SelectionHost>(
     }
 }
 
-fn auto_scroll_selection<V: SelectionViewport>(viewport: &mut V, mouse: &MouseEvent) {
+fn auto_scroll_selection<V: SelectionViewport>(viewport: &mut V, column: u16, row: u16) -> bool {
     let area = viewport.selection_viewport();
     if area.width == 0 || area.height == 0 {
-        return;
-    }
-    let bottom = area.y.saturating_add(area.height);
-    let right = area.x.saturating_add(area.width);
-    if mouse.row < area.y {
-        viewport.scroll_selection_vertical(-1);
-    } else if mouse.row >= bottom {
-        viewport.scroll_selection_vertical(1);
+        return false;
     }
 
-    if mouse.column < area.x {
-        viewport.scroll_selection_horizontal(-1);
-    } else if mouse.column >= right {
-        viewport.scroll_selection_horizontal(1);
+    let mut scrolled = false;
+
+    let top = area.y;
+    if row < top {
+        let dist = top.saturating_sub(row);
+        let delta = edge_scroll_step(dist, 2, 12);
+        if delta != 0 {
+            viewport.scroll_selection_vertical(-delta);
+            scrolled = true;
+        }
+    } else {
+        let bottom_edge = area.y.saturating_add(area.height).saturating_sub(1);
+        if row > bottom_edge {
+            let dist = row.saturating_sub(bottom_edge);
+            let delta = edge_scroll_step(dist, 2, 12);
+            if delta != 0 {
+                viewport.scroll_selection_vertical(delta);
+                scrolled = true;
+            }
+        }
     }
+
+    let left = area.x;
+    if column < left {
+        let dist = left.saturating_sub(column);
+        let delta = edge_scroll_step(dist, 1, 48);
+        if delta != 0 {
+            viewport.scroll_selection_horizontal(-delta);
+            scrolled = true;
+        }
+    } else {
+        let right_edge = area.x.saturating_add(area.width).saturating_sub(1);
+        if column > right_edge {
+            let dist = column.saturating_sub(right_edge);
+            let delta = edge_scroll_step(dist, 1, 48);
+            if delta != 0 {
+                viewport.scroll_selection_horizontal(delta);
+                scrolled = true;
+            }
+        }
+    }
+
+    scrolled
+}
+
+/// Continue scrolling/selection updates using the last drag pointer, even when
+/// no new mouse events arrive (e.g., cursor held outside the viewport).
+pub fn maintain_selection_drag<H: SelectionHost>(host: &mut H) -> bool {
+    let pointer = {
+        let selection = host.selection_controller();
+        if !selection.is_dragging() {
+            return false;
+        }
+        selection.pointer()
+    };
+
+    let Some((column, row)) = pointer else {
+        return false;
+    };
+
+    let mut changed = auto_scroll_selection(host, column, row);
+    if let Some(pos) = host.logical_position_from_point(column, row) {
+        host.selection_controller().update_drag(pos);
+        changed = true;
+    }
+    changed
+}
+
+fn edge_scroll_step(distance: u16, divisor: u16, max_step: u16) -> isize {
+    if distance == 0 || max_step == 0 {
+        return 0;
+    }
+    let div = divisor.max(1);
+    let mut step = 1 + distance.saturating_sub(1) / div;
+    if step > max_step {
+        step = max_step;
+    }
+    step as isize
 }
 
 fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
@@ -314,5 +407,14 @@ mod tests {
         controller.update_drag(LogicalPosition::new(0, 0));
         assert!(controller.finish_drag().is_none());
         assert!(!controller.has_selection());
+    }
+
+    #[test]
+    fn edge_scroll_step_scales_and_clamps() {
+        assert_eq!(edge_scroll_step(1, 2, 12), 1);
+        assert!(edge_scroll_step(6, 2, 12) >= 3);
+        assert_eq!(edge_scroll_step(50, 2, 12), 12);
+        assert_eq!(edge_scroll_step(10, 1, 48), 10);
+        assert_eq!(edge_scroll_step(100, 1, 48), 48);
     }
 }

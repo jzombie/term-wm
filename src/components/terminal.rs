@@ -15,7 +15,7 @@ use crate::components::{
     scroll_view::ScrollViewComponent,
     selectable_text::{
         LogicalPosition, SelectionController, SelectionHost, SelectionViewport,
-        handle_selection_mouse,
+        handle_selection_mouse, maintain_selection_drag,
     },
 };
 use crate::layout::rect_contains;
@@ -247,6 +247,7 @@ impl TerminalComponent {
     }
 
     fn render_screen(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
+        maintain_selection_drag(self);
         let scrollback_value = self.pane.scrollback();
         let show_cursor = scrollback_value == 0;
         let used = self.pane.max_scrollback();
@@ -415,11 +416,10 @@ impl SelectionViewport for TerminalComponent {
     }
 
     fn scroll_selection_vertical(&mut self, delta: isize) {
-        if delta.is_negative() {
-            self.scroll_scrollback(1);
-        } else if delta > 0 {
-            self.scroll_scrollback(-1);
+        if delta == 0 {
+            return;
         }
+        self.scroll_scrollback(-delta);
     }
 
     fn scroll_selection_horizontal(&mut self, _delta: isize) {}
