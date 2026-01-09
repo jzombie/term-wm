@@ -1,4 +1,4 @@
-TODO: Include "terminal multiplexer". 
+TODO: Include "terminal multiplexer".  
 TODO: Include inspired by 90's Unix user interfaces, Windows 1.0, and how this wants to borrow from them as much as possible while being compatible with text-based shells.  
 TODO: Include animated gifs, showcasing working over SSH, native, and inside of VS Code's terminal.  
 
