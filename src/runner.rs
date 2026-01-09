@@ -456,4 +456,93 @@ mod tests {
         assert!(s.update(&[1, 2]));
         assert!(!s.update(&[1, 2]));
     }
+
+    #[test]
+    fn render_window_offscreen_blits_overlap() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 2,
+        };
+        let mut dest = Buffer::empty(area);
+        for y in area.y..area.y.saturating_add(area.height) {
+            for x in area.x..area.x.saturating_add(area.width) {
+                if let Some(cell) = dest.cell_mut((x, y)) {
+                    cell.set_symbol(".");
+                }
+            }
+        }
+        let mut frame = UiFrame::from_parts(area, &mut dest);
+
+        let render_area = Rect {
+            x: 2,
+            y: 1,
+            width: 3,
+            height: 2,
+        };
+        render_window_offscreen(&mut frame, render_area, |subframe| {
+            let fill = subframe.area();
+            for y in fill.y..fill.y.saturating_add(fill.height) {
+                for x in fill.x..fill.x.saturating_add(fill.width) {
+                    if let Some(cell) = subframe.buffer_mut().cell_mut((x, y)) {
+                        cell.set_symbol("#");
+                    }
+                }
+            }
+        });
+
+        let buffer = frame.buffer_mut();
+        assert_eq!(buffer.cell((2, 1)).unwrap().symbol(), "#");
+        assert_eq!(buffer.cell((3, 1)).unwrap().symbol(), "#");
+        assert_eq!(buffer.cell((1, 1)).unwrap().symbol(), ".");
+        assert_eq!(buffer.cell((3, 0)).unwrap().symbol(), ".");
+    }
+
+    #[test]
+    fn render_window_offscreen_ignores_non_overlapping_region() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 2,
+        };
+        let mut dest = Buffer::empty(area);
+        for y in area.y..area.y.saturating_add(area.height) {
+            for x in area.x..area.x.saturating_add(area.width) {
+                if let Some(cell) = dest.cell_mut((x, y)) {
+                    cell.set_symbol(".");
+                }
+            }
+        }
+        let mut frame = UiFrame::from_parts(area, &mut dest);
+
+        render_window_offscreen(
+            &mut frame,
+            Rect {
+                x: 10,
+                y: 10,
+                width: 2,
+                height: 2,
+            },
+            |subframe| {
+                // fill the offscreen buffer anyway; it should never be visible
+                let fill = subframe.area();
+                for y in fill.y..fill.y.saturating_add(fill.height) {
+                    for x in fill.x..fill.x.saturating_add(fill.width) {
+                        if let Some(cell) = subframe.buffer_mut().cell_mut((x, y)) {
+                            cell.set_symbol("@");
+                        }
+                    }
+                }
+            },
+        );
+
+        let buffer = frame.buffer_mut();
+        for y in area.y..area.y.saturating_add(area.height) {
+            for x in area.x..area.x.saturating_add(area.width) {
+                assert_eq!(buffer.cell((x, y)).unwrap().symbol(), ".");
+            }
+        }
+    }
 }

@@ -261,4 +261,92 @@ mod tests {
         let near = buf.cell_mut((1, 3)).expect("cell present");
         assert!(near.symbol().starts_with('S'));
     }
+
+    #[test]
+    fn blit_from_copies_overlapping_region() {
+        use ratatui::layout::Rect;
+
+        let dest_area = Rect {
+            x: 0,
+            y: 0,
+            width: 5,
+            height: 3,
+        };
+        let mut dest = Buffer::empty(dest_area);
+        for y in dest_area.y..dest_area.y.saturating_add(dest_area.height) {
+            for x in dest_area.x..dest_area.x.saturating_add(dest_area.width) {
+                if let Some(cell) = dest.cell_mut((x, y)) {
+                    cell.set_symbol(".");
+                }
+            }
+        }
+        let mut frame = UiFrame::from_parts(dest_area, &mut dest);
+
+        let src_area = Rect {
+            x: 3,
+            y: 1,
+            width: 4,
+            height: 3,
+        };
+        let mut src = Buffer::empty(src_area);
+        for y in src_area.y..src_area.y.saturating_add(src_area.height) {
+            for x in src_area.x..src_area.x.saturating_add(src_area.width) {
+                if let Some(cell) = src.cell_mut((x, y)) {
+                    cell.set_symbol("Z");
+                }
+            }
+        }
+
+        frame.blit_from(&src, src_area);
+
+        let buffer = frame.buffer_mut();
+        assert_eq!(buffer.cell((3, 1)).unwrap().symbol(), "Z");
+        assert_eq!(buffer.cell((4, 2)).unwrap().symbol(), "Z");
+        assert_eq!(buffer.cell((2, 1)).unwrap().symbol(), ".");
+        assert_eq!(buffer.cell((4, 0)).unwrap().symbol(), ".");
+    }
+
+    #[test]
+    fn blit_from_respects_non_zero_origins() {
+        use ratatui::layout::Rect;
+
+        let dest_area = Rect {
+            x: 5,
+            y: 5,
+            width: 4,
+            height: 2,
+        };
+        let mut dest = Buffer::empty(dest_area);
+        for y in dest_area.y..dest_area.y.saturating_add(dest_area.height) {
+            for x in dest_area.x..dest_area.x.saturating_add(dest_area.width) {
+                if let Some(cell) = dest.cell_mut((x, y)) {
+                    cell.set_symbol(".");
+                }
+            }
+        }
+        let mut frame = UiFrame::from_parts(dest_area, &mut dest);
+
+        let src_area = Rect {
+            x: 6,
+            y: 6,
+            width: 2,
+            height: 1,
+        };
+        let mut src = Buffer::empty(src_area);
+        for y in src_area.y..src_area.y.saturating_add(src_area.height) {
+            for x in src_area.x..src_area.x.saturating_add(src_area.width) {
+                if let Some(cell) = src.cell_mut((x, y)) {
+                    cell.set_symbol("Q");
+                }
+            }
+        }
+
+        frame.blit_from(&src, src_area);
+
+        let buffer = frame.buffer_mut();
+        assert_eq!(buffer.cell((6, 6)).unwrap().symbol(), "Q");
+        assert_eq!(buffer.cell((7, 6)).unwrap().symbol(), "Q");
+        assert_eq!(buffer.cell((5, 5)).unwrap().symbol(), ".");
+        assert_eq!(buffer.cell((8, 6)).unwrap().symbol(), ".");
+    }
 }
