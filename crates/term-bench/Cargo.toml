@@ -1,6 +1,6 @@
 [package]
 name = "term-bench"
-description = "Standalone render benchmark for terminal throughput measurements."
+description = "A simple render benchmark for terminal throughput measurements."
 authors.workspace = true
 version.workspace = true
 edition.workspace = true
