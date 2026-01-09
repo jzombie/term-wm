@@ -21,7 +21,9 @@ pub use confirm_overlay::{ConfirmAction, ConfirmOverlayComponent};
 pub use dialog_overlay::DialogOverlayComponent;
 pub use list::ListComponent;
 pub use markdown_viewer::MarkdownViewerComponent;
-pub use scroll_view::ScrollViewComponent;
+pub use scroll_view::{
+    ScrollAreaComponent, ScrollAreaContent, ScrollConstraints, ScrollMetrics, ScrollViewComponent,
+};
 pub use selectable_text::{
     LogicalPosition, SelectableSurface, SelectionController, SelectionHost, SelectionRange,
     SelectionViewport, handle_selection_mouse, maintain_selection_drag,

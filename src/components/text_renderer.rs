@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 
 use crossterm::event::MouseEvent;
 use ratatui::buffer::Buffer;
@@ -7,10 +8,10 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
+use crate::component_context::{ViewportContext, ViewportHandle};
 use crate::components::{
-    Component,
-    ComponentContext,
-    scroll_view::ScrollViewComponent,
+    Component, ComponentContext,
+    scroll_view::{ScrollAreaComponent, ScrollAreaContent, ScrollConstraints, ScrollMetrics},
     selectable_text::{
         LogicalPosition, SelectionController, SelectionHost, SelectionViewport,
         handle_selection_mouse, maintain_selection_drag,
@@ -19,86 +20,69 @@ use crate::components::{
 use crate::linkifier::LinkifiedText;
 use crate::ui::UiFrame;
 
-#[derive(Debug)]
 pub struct TextRendererComponent {
+    scroll: ScrollAreaComponent<TextRendererContent>,
+}
+
+impl fmt::Debug for TextRendererComponent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TextRendererComponent").finish()
+    }
+}
+
+struct TextRendererContent {
     text: Text<'static>,
-    scroll: ScrollViewComponent,
     wrap: bool,
     link_map: Vec<Vec<Option<String>>>,
     selection: SelectionController,
     selection_enabled: bool,
     last_area: Rect,
     content_area: Rect,
+    viewport_cache: ViewportContext,
+    viewport_handle: Option<ViewportHandle>,
 }
 
 impl Component for TextRendererComponent {
+    fn resize(&mut self, area: Rect, ctx: &ComponentContext) {
+        self.scroll.resize(area, ctx);
+    }
+
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
+        self.scroll.render(frame, area, ctx);
+    }
+
+    fn handle_event(&mut self, event: &crossterm::event::Event, ctx: &ComponentContext) -> bool {
+        self.scroll.handle_event(event, ctx)
+    }
+}
+
+impl Component for TextRendererContent {
     fn resize(&mut self, area: Rect, _ctx: &ComponentContext) {
-        self.scroll.set_fixed_height(Some(area.height));
+        self.last_area = area;
     }
 
     fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
         self.apply_focus_state(ctx.focused());
         if area.width == 0 || area.height == 0 {
+            self.last_area = Rect::default();
             return;
         }
 
         self.last_area = area;
-
-        let view = area.height as usize;
-        // Determine content width and whether vertical scrollbar is needed.
-        let mut content_width = area.width;
-
-        // Compute totals depending on wrap mode.
-        let (mut v_total, mut h_total) = if self.wrap {
-            // when wrapping, compute display lines after wrapping and set h_total to content width
-            let total = compute_display_lines(&self.text, content_width);
-            (total, content_width as usize)
-        } else {
-            // no wrapping: each Text line maps to one visual line; compute longest width for h_total
-            let total = self.text.lines.len().max(1);
-            let longest = self.text.lines.iter().map(|l| l.width()).max().unwrap_or(0);
-            (total, longest)
-        };
-
-        let v_scroll_needed = v_total > view && content_width > 0;
-        if v_scroll_needed {
-            content_width = content_width.saturating_sub(1);
-            if self.wrap {
-                v_total = compute_display_lines(&self.text, content_width);
-            }
-        }
-
-        self.content_area = Rect {
-            x: area.x,
-            y: area.y,
-            width: content_width,
-            height: area.height,
-        };
-
-        // If wrapping is enabled, horizontal total should reflect the final content width
-        if self.wrap {
-            h_total = content_width as usize;
-        }
-
-        self.scroll.update(area, v_total, view);
-        self.scroll
-            .set_horizontal_total_view(h_total, content_width as usize);
+        self.content_area = area;
+        self.viewport_cache = ctx.viewport();
+        self.viewport_handle = ctx.viewport_handle();
 
         maintain_selection_drag(self);
 
-        let v_off = self.scroll.offset() as u16;
-        let h_off = self.scroll.h_offset() as u16;
+        let v_off = self.viewport_cache.offset_y as u16;
+        let h_off = self.viewport_cache.offset_x as u16;
 
         use crate::ui::safe_set_string;
 
-        // Render the document one logical line at a time so we can draw
-        // horizontal rules as single, non-wrapping rows. We compute each
-        // logical line's visual height and respect the vertical scroll
-        // offset (`v_off`) and horizontal scroll (`h_off`).
         const RULE_PLACEHOLDER: &str = "\0RULE\0";
-        let usable = content_width.max(1) as usize;
+        let usable = area.width.max(1) as usize;
 
-        // Precompute per-line visual heights
         let mut visual_heights: Vec<usize> = Vec::with_capacity(self.text.lines.len());
         for line in &self.text.lines {
             let w = line.width();
@@ -112,19 +96,17 @@ impl Component for TextRendererComponent {
             visual_heights.push(vh);
         }
 
-        let mut cum_visual = 0usize; // visual lines consumed so far
+        let mut cum_visual = 0usize;
         let mut y_cursor = area.y;
         let mut remaining = area.height as usize;
 
         for (idx, line) in self.text.lines.iter().enumerate() {
             let line_vh = visual_heights.get(idx).copied().unwrap_or(1);
-            // If this logical line is entirely above the vertical offset, skip it.
             if cum_visual + line_vh <= v_off as usize {
                 cum_visual += line_vh;
                 continue;
             }
 
-            // Determine the starting visual row inside this logical line
             let start_in_line = (v_off as usize).saturating_sub(cum_visual);
             let rows_available = line_vh.saturating_sub(start_in_line);
             if rows_available == 0 {
@@ -138,13 +120,10 @@ impl Component for TextRendererComponent {
 
             let rows_to_render = rows_available.min(remaining);
 
-            // If this line is a rule placeholder, draw a single separator
-            // row (if we're rendering its first visual row).
             let is_rule = line.spans.iter().any(|s| s.content == RULE_PLACEHOLDER);
             if is_rule {
                 if start_in_line == 0 && rows_to_render > 0 {
-                    // Draw separator filling the content width.
-                    let sep = "─".repeat(content_width as usize);
+                    let sep = "─".repeat(area.width as usize);
                     safe_set_string(
                         frame.buffer_mut(),
                         area,
@@ -160,7 +139,6 @@ impl Component for TextRendererComponent {
                 continue;
             }
 
-            // Render this logical line using a Paragraph sized to its visual height.
             let single_text = Text::from(vec![line.clone()]);
             let mut paragraph = Paragraph::new(single_text);
             if self.wrap {
@@ -172,7 +150,7 @@ impl Component for TextRendererComponent {
                 Rect {
                     x: area.x,
                     y: y_cursor,
-                    width: content_width,
+                    width: area.width,
                     height: rows_to_render as u16,
                 },
             );
@@ -181,67 +159,89 @@ impl Component for TextRendererComponent {
             remaining = remaining.saturating_sub(rows_to_render);
             cum_visual += line_vh;
         }
-        self.scroll.render(frame);
         self.render_selection_overlay(frame);
     }
 
-    fn handle_event(
-        &mut self,
-        event: &crossterm::event::Event,
-        _ctx: &ComponentContext,
-    ) -> bool {
+    fn handle_event(&mut self, event: &crossterm::event::Event, ctx: &ComponentContext) -> bool {
         match event {
             crossterm::event::Event::Mouse(mouse) => {
-                let resp = self.scroll.handle_event(event);
-                if let Some(off) = resp.v_offset {
-                    self.scroll.set_offset(off);
-                }
-                if let Some(off) = resp.h_offset {
-                    self.scroll.set_h_offset(off);
-                }
-                if resp.handled {
-                    return true;
-                }
-                if handle_selection_mouse(self, self.selection_enabled, mouse) {
-                    return true;
-                }
-                false
+                handle_selection_mouse(self, self.selection_enabled, mouse)
             }
-            crossterm::event::Event::Key(key) => {
+            crossterm::event::Event::Key(_) => {
                 self.selection.clear();
-                self.scroll.handle_key_event(key)
+                self.viewport_handle = ctx.viewport_handle();
+                false
             }
             _ => false,
         }
     }
 }
 
+impl ScrollAreaContent for TextRendererContent {
+    fn scroll_metrics(&self, constraints: ScrollConstraints) -> ScrollMetrics {
+        let viewport_width = constraints.viewport_width.max(1);
+        let content_height = if self.wrap {
+            compute_display_lines(&self.text, viewport_width)
+        } else {
+            self.text.lines.len().max(1)
+        };
+        let content_width = if self.wrap {
+            viewport_width as usize
+        } else {
+            self.text
+                .lines
+                .iter()
+                .map(|line| line.width())
+                .max()
+                .unwrap_or(0)
+        };
+        ScrollMetrics {
+            content_height,
+            content_width,
+        }
+    }
+}
+
 impl TextRendererComponent {
     pub fn new() -> Self {
-        Self {
+        let content = TextRendererContent {
             text: Text::from(vec![Line::from(String::new())]),
-            scroll: ScrollViewComponent::new(),
             wrap: true,
             link_map: Vec::new(),
             selection: SelectionController::new(),
             selection_enabled: false,
             last_area: Rect::default(),
             content_area: Rect::default(),
+            viewport_cache: ViewportContext::default(),
+            viewport_handle: None,
+        };
+        Self {
+            scroll: ScrollAreaComponent::new(content),
         }
     }
 
+    fn content(&self) -> &TextRendererContent {
+        self.scroll.content()
+    }
+
+    fn content_mut(&mut self) -> &mut TextRendererContent {
+        self.scroll.content_mut()
+    }
+
     pub fn set_text(&mut self, text: Text<'static>) {
-        self.text = text;
-        self.link_map.clear();
+        let content = self.content_mut();
+        content.text = text;
+        content.link_map.clear();
     }
 
     pub fn set_linkified_text(&mut self, linkified: LinkifiedText) {
-        self.text = linkified.text;
-        self.link_map = linkified.link_map;
+        let content = self.content_mut();
+        content.text = linkified.text;
+        content.link_map = linkified.link_map;
     }
 
     pub fn set_wrap(&mut self, wrap: bool) {
-        self.wrap = wrap;
+        self.content_mut().wrap = wrap;
     }
 
     pub fn set_keyboard_enabled(&mut self, enabled: bool) {
@@ -249,66 +249,46 @@ impl TextRendererComponent {
     }
 
     pub fn set_selection_enabled(&mut self, enabled: bool) {
-        if self.selection_enabled == enabled {
+        let content = self.content_mut();
+        if content.selection_enabled == enabled {
             return;
         }
-        self.selection_enabled = enabled;
+        content.selection_enabled = enabled;
         if !enabled {
-            self.selection.clear();
+            content.selection.clear();
         }
     }
 
     pub fn offset(&self) -> usize {
-        self.scroll.offset()
+        self.scroll.vertical_offset()
     }
 
     pub fn set_offset(&mut self, offset: usize) {
-        self.scroll.set_offset(offset);
+        self.scroll.set_vertical_offset(offset);
     }
 
     pub fn view(&self) -> usize {
-        self.scroll.view()
+        self.scroll.view_height()
     }
 
-    pub fn update(&mut self, area: Rect, total: usize, view: usize) {
-        self.scroll.set_fixed_height(Some(area.height));
-        self.scroll.update(area, total, view);
-    }
-
-    pub fn set_horizontal_total_view(&mut self, total: usize, view: usize) {
-        self.scroll.set_horizontal_total_view(total, view);
+    pub fn viewport_rect(&self) -> Rect {
+        self.scroll.viewport_rect()
     }
 
     pub fn jump_to_logical_line(&mut self, line_idx: usize, area: Rect) {
-        if self.text.lines.is_empty() || area.width == 0 {
-            self.scroll.set_offset(0);
+        let content = self.content();
+        if content.text.lines.is_empty() || area.width == 0 {
+            self.scroll.set_vertical_offset(0);
             return;
         }
 
-        let mut content_width = area.width;
-        let view = area.height as usize;
-
-        if self.wrap {
-            let v_total = compute_display_lines(&self.text, content_width);
-            let v_scroll_needed = v_total > view && content_width > 0;
-            if v_scroll_needed {
-                content_width = content_width.saturating_sub(1);
-            }
-        } else {
-            let total = self.text.lines.len().max(1);
-            let v_scroll_needed = total > view && content_width > 0;
-            if v_scroll_needed {
-                content_width = content_width.saturating_sub(1);
-            }
-        }
-
-        let usable = content_width.max(1) as usize;
+        let usable = area.width.max(1) as usize;
         let mut offset = 0;
-        for (i, line) in self.text.lines.iter().enumerate() {
+        for (i, line) in content.text.lines.iter().enumerate() {
             if i >= line_idx {
                 break;
             }
-            if self.wrap {
+            if content.wrap {
                 let w = line.width();
                 if w == 0 {
                     offset += 1;
@@ -319,15 +299,16 @@ impl TextRendererComponent {
                 offset += 1;
             }
         }
-        self.scroll.set_offset(offset);
+        self.scroll.set_vertical_offset(offset);
     }
 
     pub fn text_ref(&self) -> &Text<'static> {
-        &self.text
+        &self.content().text
     }
 
     pub fn rendered_lines(&self) -> Vec<String> {
-        self.text
+        self.content()
+            .text
             .lines
             .iter()
             .map(|line| {
@@ -340,44 +321,12 @@ impl TextRendererComponent {
     }
 
     fn build_hit_test_palette(&self) -> Option<HitTestPalette> {
-        let mut url_ids: HashMap<String, u32> = HashMap::new();
-        let mut urls: Vec<String> = Vec::new();
-        let mut has_links = false;
-        let mut lines: Vec<Line<'static>> = Vec::with_capacity(self.text.lines.len());
-
-        for (line_idx, line) in self.text.lines.iter().enumerate() {
-            let mut spans: Vec<Span<'static>> = Vec::with_capacity(line.spans.len());
-            let line_links = self.link_map.get(line_idx);
-            for (span_idx, span) in line.spans.iter().enumerate() {
-                let mut new_span = span.clone();
-                if let Some(link) = line_links
-                    .and_then(|entries| entries.get(span_idx))
-                    .and_then(|opt| opt.clone())
-                {
-                    has_links = true;
-                    let id = *url_ids.entry(link.clone()).or_insert_with(|| {
-                        urls.push(link.clone());
-                        urls.len() as u32
-                    });
-                    new_span.style = new_span.style.fg(encode_link_color(id));
-                }
-                spans.push(new_span);
-            }
-            lines.push(Line::from(spans));
-        }
-
-        if !has_links {
-            return None;
-        }
-
-        Some(HitTestPalette {
-            text: Text::from(lines),
-            urls,
-        })
+        self.content().build_hit_test_palette()
     }
 
     pub fn link_at(&self, area: Rect, mouse: MouseEvent) -> Option<String> {
-        if self.link_map.is_empty() {
+        let content = self.content();
+        if content.link_map.is_empty() {
             return None;
         }
         if area.width == 0 || area.height == 0 {
@@ -391,19 +340,7 @@ impl TextRendererComponent {
             return None;
         }
 
-        let mut content_width = area.width;
-        let view = area.height as usize;
-        let total_lines = if self.wrap {
-            compute_display_lines(&self.text, content_width)
-        } else {
-            self.text.lines.len().max(1)
-        };
-
-        let v_scroll_needed = total_lines > view && content_width > 0;
-        if v_scroll_needed {
-            content_width = content_width.saturating_sub(1);
-        }
-
+        let content_width = area.width;
         if content_width == 0 {
             return None;
         }
@@ -444,10 +381,11 @@ impl TextRendererComponent {
         }
 
         let mut paragraph = Paragraph::new(text);
-        if self.wrap {
+        if content.wrap {
             paragraph = paragraph.wrap(Wrap { trim: false });
         }
-        paragraph = paragraph.scroll((self.scroll.offset() as u16, self.scroll.h_offset() as u16));
+        let viewport = content.viewport_cache;
+        paragraph = paragraph.scroll((viewport.offset_y as u16, viewport.offset_x as u16));
 
         let mut buffer = Buffer::empty(Rect {
             x: 0,
@@ -477,30 +415,26 @@ impl TextRendererComponent {
     }
 
     pub fn reset(&mut self) {
-        self.scroll.reset();
+        self.scroll.set_vertical_offset(0);
+        self.scroll.set_horizontal_offset(0);
     }
 }
 
-impl SelectionViewport for TextRendererComponent {
+impl SelectionViewport for TextRendererContent {
     fn selection_viewport(&self) -> Rect {
         self.content_area
     }
 
     fn logical_position_from_point(&mut self, column: u16, row: u16) -> Option<LogicalPosition> {
-        TextRendererComponent::logical_position_from_point(self, column, row)
+        self.logical_position_from_point_impl(column, row)
     }
 
     fn scroll_selection_vertical(&mut self, delta: isize) {
         if delta == 0 {
             return;
         }
-        let current = self.scroll.offset();
-        if delta < 0 {
-            let step = (-delta) as usize;
-            self.scroll.set_offset(current.saturating_sub(step));
-        } else {
-            self.scroll
-                .set_offset(current.saturating_add(delta as usize));
+        if let Some(handle) = &self.viewport_handle {
+            handle.scroll_vertical_by(delta);
         }
     }
 
@@ -508,31 +442,26 @@ impl SelectionViewport for TextRendererComponent {
         if delta == 0 {
             return;
         }
-        let current = self.scroll.h_offset();
-        if delta < 0 {
-            let step = (-delta) as usize;
-            self.scroll.set_h_offset(current.saturating_sub(step));
-        } else {
-            self.scroll
-                .set_h_offset(current.saturating_add(delta as usize));
+        if let Some(handle) = &self.viewport_handle {
+            handle.scroll_horizontal_by(delta);
         }
     }
 }
 
-impl SelectionHost for TextRendererComponent {
+impl SelectionHost for TextRendererContent {
     fn selection_controller(&mut self) -> &mut SelectionController {
         &mut self.selection
     }
 }
 
-impl TextRendererComponent {
+impl TextRendererContent {
     fn apply_focus_state(&mut self, focused: bool) {
         if !focused {
             self.selection.clear();
         }
     }
 
-    fn logical_position_from_point(&self, column: u16, row: u16) -> Option<LogicalPosition> {
+    fn logical_position_from_point_impl(&self, column: u16, row: u16) -> Option<LogicalPosition> {
         if self.content_area.width == 0 || self.content_area.height == 0 {
             return None;
         }
@@ -550,8 +479,8 @@ impl TextRendererComponent {
         let clamped_row = row.clamp(self.content_area.y, max_y);
         let local_col = clamped_col.saturating_sub(self.content_area.x) as usize;
         let local_row = clamped_row.saturating_sub(self.content_area.y) as usize;
-        let row_base = self.scroll.offset();
-        let col_base = self.scroll.h_offset();
+        let row_base = self.viewport_cache.offset_y;
+        let col_base = self.viewport_cache.offset_x;
         Some(LogicalPosition::new(
             row_base.saturating_add(local_row),
             col_base.saturating_add(local_col),
@@ -576,8 +505,8 @@ impl TextRendererComponent {
         if bounds.width == 0 || bounds.height == 0 {
             return;
         }
-        let row_base = self.scroll.offset();
-        let col_base = self.scroll.h_offset();
+        let row_base = self.viewport_cache.offset_y;
+        let col_base = self.viewport_cache.offset_x;
         for y in bounds.y..bounds.y.saturating_add(bounds.height) {
             let local_row = y.saturating_sub(self.content_area.y) as usize;
             for x in bounds.x..bounds.x.saturating_add(bounds.width) {
@@ -597,6 +526,43 @@ impl TextRendererComponent {
                 }
             }
         }
+    }
+
+    fn build_hit_test_palette(&self) -> Option<HitTestPalette> {
+        let mut url_ids: HashMap<String, u32> = HashMap::new();
+        let mut urls: Vec<String> = Vec::new();
+        let mut has_links = false;
+        let mut lines: Vec<Line<'static>> = Vec::with_capacity(self.text.lines.len());
+
+        for (line_idx, line) in self.text.lines.iter().enumerate() {
+            let mut spans: Vec<Span<'static>> = Vec::with_capacity(line.spans.len());
+            let line_links = self.link_map.get(line_idx);
+            for (span_idx, span) in line.spans.iter().enumerate() {
+                let mut new_span = span.clone();
+                if let Some(link) = line_links
+                    .and_then(|entries| entries.get(span_idx))
+                    .and_then(|opt| opt.clone())
+                {
+                    has_links = true;
+                    let id = *url_ids.entry(link.clone()).or_insert_with(|| {
+                        urls.push(link.clone());
+                        urls.len() as u32
+                    });
+                    new_span.style = new_span.style.fg(encode_link_color(id));
+                }
+                spans.push(new_span);
+            }
+            lines.push(Line::from(spans));
+        }
+
+        if !has_links {
+            return None;
+        }
+
+        Some(HitTestPalette {
+            text: Text::from(lines),
+            urls,
+        })
     }
 }
 
@@ -629,6 +595,7 @@ mod tests {
         Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
         MouseEventKind,
     };
+    use ratatui::text::Text;
 
     fn key_event(code: KeyCode) -> KeyEvent {
         let mut ev = KeyEvent::new(code, KeyModifiers::NONE);
@@ -639,45 +606,62 @@ mod tests {
     #[test]
     fn key_press_clears_selection() {
         let mut comp = TextRendererComponent::new();
-        comp.selection_enabled = true;
-        comp.selection.begin_drag(LogicalPosition::new(0, 0));
-        comp.selection.update_drag(LogicalPosition::new(0, 5));
-        assert!(comp.selection.has_selection());
+        comp.set_selection_enabled(true);
+        {
+            let content = comp.content_mut();
+            content.selection.begin_drag(LogicalPosition::new(0, 0));
+            content.selection.update_drag(LogicalPosition::new(0, 5));
+            assert!(content.selection.has_selection());
+        }
 
-        let handled = comp.handle_event(&Event::Key(key_event(KeyCode::Char('a'))), &ComponentContext::new(true));
+        let handled = comp.handle_event(
+            &Event::Key(key_event(KeyCode::Char('a'))),
+            &ComponentContext::new(true),
+        );
         assert!(!handled);
-        assert!(!comp.selection.has_selection());
+        assert!(!comp.content().selection.has_selection());
     }
 
     #[test]
     fn blur_clears_selection() {
         let mut comp = TextRendererComponent::new();
-        comp.selection.begin_drag(LogicalPosition::new(0, 0));
-        comp.selection.update_drag(LogicalPosition::new(0, 2));
-        assert!(comp.selection.has_selection());
-
-        comp.apply_focus_state(false);
-        assert!(!comp.selection.has_selection());
+        {
+            let content = comp.content_mut();
+            content.selection.begin_drag(LogicalPosition::new(0, 0));
+            content.selection.update_drag(LogicalPosition::new(0, 2));
+            assert!(content.selection.has_selection());
+            content.apply_focus_state(false);
+            assert!(!content.selection.has_selection());
+        }
     }
 
     #[test]
     fn scrollbar_drag_bypasses_selection() {
         let mut comp = TextRendererComponent::new();
-        comp.selection_enabled = true;
-        comp.content_area = Rect::new(0, 0, 5, 5);
-        comp.scroll.set_fixed_height(Some(5));
-        comp.scroll.update(Rect::new(0, 0, 5, 5), 20, 5);
-        comp.scroll.set_horizontal_total_view(20, 5);
+        comp.set_selection_enabled(true);
+        let lines: Vec<Line<'static>> = (0..20)
+            .map(|idx| Line::from(format!("line {idx}")))
+            .collect();
+        comp.set_text(Text::from(lines));
+        let area = Rect::new(0, 0, 20, 5);
+        let mut buffer = ratatui::buffer::Buffer::empty(area);
+        {
+            let mut frame = crate::ui::UiFrame::from_parts(area, &mut buffer);
+            comp.render(&mut frame, area, &ComponentContext::new(true));
+        }
 
-        let handled = comp.handle_event(&Event::Mouse(MouseEvent {
-            column: 2,
-            row: 4,
-            kind: MouseEventKind::Down(MouseButton::Left),
-            modifiers: KeyModifiers::NONE,
-        }), &ComponentContext::new(true));
+        let scrollbar_x = area.x + area.width.saturating_sub(1);
+        let _handled = comp.handle_event(
+            &Event::Mouse(MouseEvent {
+                column: scrollbar_x,
+                row: area.y + 1,
+                kind: MouseEventKind::Down(MouseButton::Left),
+                modifiers: KeyModifiers::NONE,
+            }),
+            &ComponentContext::new(true),
+        );
 
-        assert!(handled);
-        assert!(!comp.selection.is_dragging());
+        assert!(!comp.content().selection.is_dragging());
     }
 }
 

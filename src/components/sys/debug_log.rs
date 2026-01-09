@@ -273,8 +273,9 @@ impl DebugLogComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::UiFrame;
     use crossterm::event::{Event, KeyCode, MouseEvent, MouseEventKind};
-    use ratatui::prelude::Rect;
+    use ratatui::{buffer::Buffer, prelude::Rect};
     use std::io::Write;
 
     #[test]
@@ -319,26 +320,34 @@ mod tests {
             width: 10,
             height: 5,
         };
-        comp.last_total = 20;
-        comp.last_view = 5;
-        comp.renderer.update(area, comp.last_total, comp.last_view);
+        let mut buffer = Buffer::empty(area);
+        {
+            let mut frame = UiFrame::from_parts(area, &mut buffer);
+            comp.render(&mut frame, area, &ComponentContext::new(true));
+        }
         let max_off = comp.last_total.saturating_sub(comp.last_view);
         comp.renderer.set_offset(max_off);
         comp.follow_tail = true;
 
-        comp.handle_event(&Event::Key(crossterm::event::KeyEvent::new(
-            KeyCode::PageUp,
-            crossterm::event::KeyModifiers::NONE,
-        )), &ComponentContext::new(true));
+        comp.handle_event(
+            &Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::PageUp,
+                crossterm::event::KeyModifiers::NONE,
+            )),
+            &ComponentContext::new(true),
+        );
         assert!(comp.renderer.offset() < max_off);
 
         let before = comp.renderer.offset();
-        comp.handle_event(&Event::Mouse(MouseEvent {
-            kind: MouseEventKind::ScrollDown,
-            column: 0,
-            row: 0,
-            modifiers: crossterm::event::KeyModifiers::NONE,
-        }), &ComponentContext::new(true));
+        comp.handle_event(
+            &Event::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: 0,
+                row: 0,
+                modifiers: crossterm::event::KeyModifiers::NONE,
+            }),
+            &ComponentContext::new(true),
+        );
         assert!(comp.renderer.offset() >= before);
     }
 }

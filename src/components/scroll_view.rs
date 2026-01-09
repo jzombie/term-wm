@@ -1,7 +1,11 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use crossterm::event::{Event, MouseEvent, MouseEventKind};
 use ratatui::prelude::Rect;
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 
+use crate::component_context::{ViewportContext, ViewportHandle, ViewportSharedState};
 use crate::components::{Component, ComponentContext};
 use crate::ui::UiFrame;
 use crate::window::ScrollState;
@@ -472,6 +476,269 @@ fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
     let max_x = rect.x.saturating_add(rect.width);
     let max_y = rect.y.saturating_add(rect.height);
     column >= rect.x && column < max_x && row >= rect.y && row < max_y
+}
+
+// --- Scroll Area Wrapper -------------------------------------------------
+
+#[derive(Debug, Clone, Copy)]
+pub struct ScrollConstraints {
+    pub viewport_width: u16,
+    pub viewport_height: u16,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ScrollMetrics {
+    pub content_height: usize,
+    pub content_width: usize,
+}
+
+pub trait ScrollAreaContent: Component {
+    fn scroll_metrics(&self, constraints: ScrollConstraints) -> ScrollMetrics;
+}
+
+pub struct ScrollAreaComponent<C: ScrollAreaContent> {
+    content: C,
+    scroll: ScrollViewComponent,
+    viewport_area: Rect,
+    viewport_info: ViewportContext,
+    shared: Rc<RefCell<ViewportSharedState>>,
+    keyboard_enabled: bool,
+}
+
+impl<C: ScrollAreaContent> ScrollAreaComponent<C> {
+    pub fn new(content: C) -> Self {
+        Self {
+            content,
+            scroll: ScrollViewComponent::new(),
+            viewport_area: Rect::default(),
+            viewport_info: ViewportContext::default(),
+            shared: Rc::new(RefCell::new(ViewportSharedState::default())),
+            keyboard_enabled: false,
+        }
+    }
+
+    pub fn content(&self) -> &C {
+        &self.content
+    }
+
+    pub fn content_mut(&mut self) -> &mut C {
+        &mut self.content
+    }
+
+    pub fn set_keyboard_enabled(&mut self, enabled: bool) {
+        self.keyboard_enabled = enabled;
+        self.scroll.set_keyboard_enabled(enabled);
+    }
+
+    pub fn vertical_offset(&self) -> usize {
+        self.scroll.offset()
+    }
+
+    pub fn horizontal_offset(&self) -> usize {
+        self.scroll.h_offset()
+    }
+
+    pub fn set_vertical_offset(&mut self, offset: usize) {
+        self.scroll.set_offset(offset);
+        self.viewport_info.offset_y = self.scroll.offset();
+    }
+
+    pub fn set_horizontal_offset(&mut self, offset: usize) {
+        self.scroll.set_h_offset(offset);
+        self.viewport_info.offset_x = self.scroll.h_offset();
+    }
+
+    pub fn view_height(&self) -> usize {
+        self.scroll.view()
+    }
+
+    pub fn view_width(&self) -> usize {
+        self.scroll.h_view()
+    }
+
+    pub fn viewport_handle(&self) -> ViewportHandle {
+        ViewportHandle {
+            shared: self.shared.clone(),
+        }
+    }
+
+    pub fn viewport_rect(&self) -> Rect {
+        self.viewport_area
+    }
+
+    fn update_shared_state(&mut self, max_x: usize, max_y: usize) {
+        let mut inner = self.shared.borrow_mut();
+        inner.width = self.viewport_info.width;
+        inner.height = self.viewport_info.height;
+        inner.offset_x = self.viewport_info.offset_x;
+        inner.offset_y = self.viewport_info.offset_y;
+        inner.max_offset_x = max_x;
+        inner.max_offset_y = max_y;
+    }
+
+    fn apply_pending_requests(&mut self) {
+        let mut inner = self.shared.borrow_mut();
+        if let Some(off) = inner.pending_offset_y.take() {
+            self.scroll.set_offset(off);
+            inner.offset_y = self.scroll.offset();
+            self.viewport_info.offset_y = inner.offset_y;
+        }
+        if let Some(off) = inner.pending_offset_x.take() {
+            self.scroll.set_h_offset(off);
+            inner.offset_x = self.scroll.h_offset();
+            self.viewport_info.offset_x = inner.offset_x;
+        }
+    }
+
+    fn compute_plan(&mut self, area: Rect) -> ViewportPlan {
+        let mut viewport_width = area.width;
+        let mut viewport_height = area.height;
+        let mut metrics = self.content.scroll_metrics(ScrollConstraints {
+            viewport_width,
+            viewport_height,
+        });
+
+        let mut reserved_vertical = false;
+        let mut reserved_horizontal = false;
+
+        loop {
+            let needs_vertical = metrics.content_height > viewport_height as usize;
+            if needs_vertical && viewport_width > 0 && !reserved_vertical {
+                viewport_width = viewport_width.saturating_sub(1);
+                reserved_vertical = true;
+                metrics = self.content.scroll_metrics(ScrollConstraints {
+                    viewport_width,
+                    viewport_height,
+                });
+                continue;
+            }
+
+            let needs_horizontal = metrics.content_width > viewport_width as usize;
+            if needs_horizontal && viewport_height > 0 && !reserved_horizontal {
+                viewport_height = viewport_height.saturating_sub(1);
+                reserved_horizontal = true;
+                metrics = self.content.scroll_metrics(ScrollConstraints {
+                    viewport_width,
+                    viewport_height,
+                });
+                continue;
+            }
+
+            break;
+        }
+
+        let viewport_rect = Rect {
+            x: area.x,
+            y: area.y,
+            width: viewport_width,
+            height: viewport_height,
+        };
+
+        let viewport_width_usize = viewport_width as usize;
+        let viewport_height_usize = viewport_height as usize;
+        let max_v = metrics.content_height.saturating_sub(viewport_height_usize);
+        let max_h = metrics.content_width.saturating_sub(viewport_width_usize);
+
+        self.scroll
+            .set_total_view(metrics.content_height, viewport_height_usize);
+        self.scroll
+            .set_horizontal_total_view(metrics.content_width, viewport_width_usize);
+
+        let v_offset = self.scroll.offset().min(max_v);
+        let h_offset = self.scroll.h_offset().min(max_h);
+        self.scroll.set_offset(v_offset);
+        self.scroll.set_h_offset(h_offset);
+
+        let viewport_info = ViewportContext {
+            offset_x: h_offset,
+            offset_y: v_offset,
+            width: viewport_width_usize,
+            height: viewport_height_usize,
+        };
+
+        ViewportPlan {
+            viewport_rect,
+            viewport_info,
+            max_offset_x: max_h,
+            max_offset_y: max_v,
+        }
+    }
+
+    fn try_handle_scroll_event(&mut self, event: &Event) -> bool {
+        match event {
+            Event::Mouse(_) => {
+                let response = self.scroll.handle_event(event);
+                if let Some(off) = response.v_offset {
+                    self.scroll.set_offset(off);
+                    self.viewport_info.offset_y = self.scroll.offset();
+                }
+                if let Some(off) = response.h_offset {
+                    self.scroll.set_h_offset(off);
+                    self.viewport_info.offset_x = self.scroll.h_offset();
+                }
+                if response.handled {
+                    let mut inner = self.shared.borrow_mut();
+                    inner.offset_y = self.viewport_info.offset_y;
+                    inner.offset_x = self.viewport_info.offset_x;
+                }
+                response.handled
+            }
+            Event::Key(key) if self.keyboard_enabled => {
+                if self.scroll.handle_key_event(key) {
+                    self.viewport_info.offset_y = self.scroll.offset();
+                    self.viewport_info.offset_x = self.scroll.h_offset();
+                    let mut inner = self.shared.borrow_mut();
+                    inner.offset_y = self.viewport_info.offset_y;
+                    inner.offset_x = self.viewport_info.offset_x;
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+}
+
+impl<C: ScrollAreaContent> Component for ScrollAreaComponent<C> {
+    fn resize(&mut self, area: Rect, ctx: &ComponentContext) {
+        self.viewport_area = area;
+        self.content.resize(area, ctx);
+    }
+
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
+        self.viewport_area = area;
+        self.apply_pending_requests();
+        self.scroll.resize(area, ctx);
+        let plan = self.compute_plan(area);
+        self.viewport_area = plan.viewport_rect;
+        self.viewport_info = plan.viewport_info;
+        self.update_shared_state(plan.max_offset_x, plan.max_offset_y);
+        let child_ctx = ctx
+            .clone()
+            .with_viewport(self.viewport_info, Some(self.viewport_handle()));
+        self.content.render(frame, self.viewport_area, &child_ctx);
+        self.scroll.render(frame);
+    }
+
+    fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
+        if self.try_handle_scroll_event(event) {
+            return true;
+        }
+        let child_ctx = ctx
+            .clone()
+            .with_viewport(self.viewport_info, Some(self.viewport_handle()));
+        let handled = self.content.handle_event(event, &child_ctx);
+        self.apply_pending_requests();
+        handled
+    }
+}
+
+struct ViewportPlan {
+    viewport_rect: Rect,
+    viewport_info: ViewportContext,
+    max_offset_x: usize,
+    max_offset_y: usize,
 }
 
 #[cfg(test)]

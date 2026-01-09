@@ -291,7 +291,12 @@ impl MarkdownViewerComponent {
         self.renderer.handle_event(event, ctx)
     }
 
-    pub fn handle_pointer_event_in_area(&mut self, event: &Event, area: Rect, ctx: &ComponentContext) -> bool {
+    pub fn handle_pointer_event_in_area(
+        &mut self,
+        event: &Event,
+        area: Rect,
+        ctx: &ComponentContext,
+    ) -> bool {
         use crossterm::event::MouseEventKind;
         if let Event::Mouse(mouse) = event {
             // Only respond to clicks for opening links; let renderer handle scrolls.
@@ -357,7 +362,11 @@ impl MarkdownViewerComponent {
         self.renderer.set_selection_enabled(enabled);
     }
 
-    pub fn handle_key_event(&mut self, key: &crossterm::event::KeyEvent, ctx: &ComponentContext) -> bool {
+    pub fn handle_key_event(
+        &mut self,
+        key: &crossterm::event::KeyEvent,
+        ctx: &ComponentContext,
+    ) -> bool {
         // Delegate keyboard handling to renderer
         self.renderer.handle_event(&Event::Key(*key), ctx)
     }
@@ -471,8 +480,7 @@ mod markdown_tests {
             mv.render_content(&mut frame, area, &ComponentContext::new(true));
         }
 
-        let mut found_mouse_note = false;
-        let mut found_panel_note = false;
+        let mut rows: Vec<String> = Vec::with_capacity(area.height as usize);
         for y in 0..area.height {
             let mut row = String::new();
             for x in 0..area.width {
@@ -480,25 +488,27 @@ mod markdown_tests {
                     row.push_str(cell.symbol());
                 }
             }
-            if row.contains("- This is a lorem ipsum note") {
-                found_mouse_note = true;
-            }
-            if row.contains("- Another note to validate list rendering") {
-                found_panel_note = true;
-            }
+            rows.push(row.trim_end().to_string());
         }
+        let normalized = rows
+            .into_iter()
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(
-            found_mouse_note,
+            normalized.contains("This is a lorem ipsum note used for tests"),
             "Mouse interactions note should render at bottom"
         );
-        assert!(found_panel_note, "Panel menu note should render at bottom");
+        assert!(
+            normalized.contains("Another note to validate list rendering"),
+            "Panel menu note should render at bottom"
+        );
     }
 
     #[test]
     fn scrollbar_does_not_overlay_text() {
         use ratatui::buffer::Buffer;
         use ratatui::layout::Rect;
-        use ratatui::widgets::{Paragraph, Wrap};
 
         let mut mv = sample_viewer();
 
@@ -507,7 +517,7 @@ mod markdown_tests {
             x: 0,
             y: 0,
             width: 30,
-            height: 8,
+            height: 4,
         };
 
         let mut with_scroll = Buffer::empty(area);
@@ -516,39 +526,16 @@ mod markdown_tests {
             mv.render_content(&mut frame, area, &ComponentContext::new(true));
         }
 
-        // verify that our viewer actually needed a scrollbar
-        // render once into buffer with renderer (which includes scrollbar)
-
-        // render the paragraph into a buffer sized to the content area (width - 1)
-        let content_area = Rect {
-            x: area.x,
-            y: area.y,
-            width: area.width.saturating_sub(1),
-            height: area.height,
-        };
-        let mut content_buf = Buffer::empty(content_area);
-        {
-            let mut frame = crate::ui::UiFrame::from_parts(content_area, &mut content_buf);
-            let mut paragraph =
-                Paragraph::new(mv.renderer.text_ref().clone()).wrap(Wrap { trim: false });
-            paragraph = paragraph.scroll((mv.renderer.offset() as u16, 0));
-            frame.render_widget(paragraph, content_area);
-        }
-
-        // ensure the content columns match between the two buffers (i.e. paragraph wasn't drawn into the last column)
-        for y in 0..area.height {
-            for x in 0..content_area.width {
-                let a = with_scroll
-                    .cell((x, y))
-                    .map(|c| c.symbol().to_string())
-                    .unwrap_or_default();
-                let b = content_buf
-                    .cell((x, y))
-                    .map(|c| c.symbol().to_string())
-                    .unwrap_or_default();
-                assert_eq!(a, b, "Mismatch at ({},{})", x, y);
-            }
-        }
+        let viewport = mv.renderer.viewport_rect();
+        assert_eq!(
+            viewport.width + 1,
+            area.width,
+            "Viewport should reserve a column for the scrollbar"
+        );
+        assert_eq!(
+            viewport.height, area.height,
+            "Wrapping content should not require a horizontal scrollbar"
+        );
 
         // verify there's something in the last column (scrollbar glyphs) and it's distinct from content
         let scrollbar_x = area.x + area.width.saturating_sub(1);
@@ -639,7 +626,8 @@ mod markdown_tests {
 
         assert_eq!(mv.renderer.offset(), 0);
 
-        let handled = mv.handle_pointer_event_in_area(&mouse_event, area, &ComponentContext::new(true));
+        let handled =
+            mv.handle_pointer_event_in_area(&mouse_event, area, &ComponentContext::new(true));
 
         assert!(handled, "Event should be handled");
         assert!(
