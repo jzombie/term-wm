@@ -9,7 +9,6 @@ use crossterm::event::Event;
 use ratatui::prelude::Rect;
 
 use line_ending::LineEnding;
-use portable_pty::PtySize;
 use term_wm::components::{Component, TerminalComponent, default_shell_command};
 use term_wm::drivers::OutputDriver;
 use term_wm::drivers::console::{ConsoleInputDriver, ConsoleOutputDriver};
