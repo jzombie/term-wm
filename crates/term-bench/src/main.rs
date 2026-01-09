@@ -347,8 +347,14 @@ impl BenchStats {
             0.0
         };
 
-        format!(
-            "Render bench {status}.\nDuration: {elapsed:.2}s (target {target:.2}s)\nFrames: {frames} | Avg FPS: {fps:.1} (target {target_fps:.1})\nAvg frame: {avg:.2} ms | Best: {best:.2} ms | Worst: {worst:.2} ms\nCell updates: {cells} total (~{cells_per_sec:.0}/s)",
+        indoc::formatdoc!(
+            r#"
+            Render bench {status}.
+            Duration: {elapsed:.2}s (target {target:.2}s)
+            Frames: {frames} | Avg FPS: {fps:.1} (target {target_fps:.1})
+            Avg frame: {avg:.2} ms | Best: {best:.2} ms | Worst: {worst:.2} ms
+            Cell updates: {cells} total (~{cells_per_sec:.0}/s)
+            "#,
             status = self.exit_reason.describe(),
             elapsed = elapsed,
             target = config.duration.as_secs_f64(),

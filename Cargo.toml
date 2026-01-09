@@ -26,13 +26,14 @@ publish = true
 [workspace.dependencies]
 clap = { version = "4.5.54", features = ["derive"] }
 crossterm = "0.29.0"
+indoc = "2.0.7"
 ratatui = "0.30.0"
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
 crossterm.workspace = true
 hostname = "0.4.2"
-indoc = "2.0.7"
+indoc.workspace = true
 libc = "0.2.176"
 line-ending = "1.5.1"
 linkify = "0.10.0"

@@ -10,5 +10,6 @@ publish.workspace = true
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
-crossterm.workspace = true
-ratatui.workspace = true
+crossterm = { workspace = true }
+indoc = { workspace = true }
+ratatui = { workspace = true }

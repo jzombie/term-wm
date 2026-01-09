@@ -1944,6 +1944,7 @@ version = "0.4.1-alpha"
 dependencies = [
  "clap",
  "crossterm",
+ "indoc",
  "ratatui",
 ]
 
