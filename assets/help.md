@@ -50,3 +50,7 @@ Notes:
 
 * Mouse interactions work only while `Mouse Capture` is enabled.
 * Use the panel menu (top-left) for common WM actions.
+
+----
+
+_For additional information, see the [README](%REPOSITORY%) on the project's repo: %REPOSITORY%._

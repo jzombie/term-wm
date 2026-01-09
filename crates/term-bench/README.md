@@ -1,10 +1,12 @@
 # term-bench
 
+[![made-with-rust][rust-logo]][rust-src-page] [![crates.io][crates-badge]][crates-page] [![MIT licensed][mit-license-badge]][mit-license-page] [![Apache 2.0 licensed][apache-2.0-license-badge]][apache-2.0-license-page]
+
 `term-bench` is a small, render-heavy benchmark that repeatedly renders a colorful noise field to the terminal and records statistics about frames, frame time, and cell updates.
 
 It's useful for comparing terminal backends, drivers, or clients and for estimating rendering throughput on different systems.
 
-Used in [term-wm](../../) for comparing window manager rendering performance to native terminal rendering.
+Used in [term-wm](https://github.com/jzombie/term-wm) for comparing window manager rendering performance to native terminal rendering.
 
 ![term-bench running in term-wm](https://raw.githubusercontent.com/jzombie/live-assets/refs/heads/main/term-bench-0.4.1-alpha-linux.png)  
 _[term-bench](https://github.com/jzombie/term-wm/tree/main/crates/term-bench) 0.4.1-alpha Linux running in [term-wm](https://github.com/jzombie/term-wm) over SSH on macOS_
@@ -98,3 +100,15 @@ cargo run -p term-bench -- --duration 5.0
 `term-bench` is primarily distributed under the terms of both the MIT license and the Apache License (Version 2.0).
 
 See [LICENSE-APACHE](../../LICENSE-APACHE) and [LICENSE-MIT](../../LICENSE-MIT) for details.
+
+[rust-src-page]: https://www.rust-lang.org/
+[rust-logo]: https://img.shields.io/badge/Made%20with-Rust-black?logo=Rust&style=for-the-badge
+
+[crates-page]: https://crates.io/crates/term-bench
+[crates-badge]: https://img.shields.io/crates/v/term-bench.svg?style=for-the-badge
+
+[mit-license-page]: ../../LICENSE-MIT
+[mit-license-badge]: https://img.shields.io/badge/license-MIT-blue.svg?style=for-the-badge
+
+[apache-2.0-license-page]: ../../LICENSE-APACHE
+[apache-2.0-license-badge]: https://img.shields.io/badge/license-Apache%202.0-blue.svg?style=for-the-badge
