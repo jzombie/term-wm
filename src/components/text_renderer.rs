@@ -504,15 +504,23 @@ impl TextRendererComponent {
     }
 
     fn auto_scroll_selection(&mut self, mouse: &MouseEvent) {
-        if self.content_area.height == 0 {
+        if self.content_area.height == 0 || self.content_area.width == 0 {
             return;
         }
         let bottom = self.content_area.y.saturating_add(self.content_area.height);
-        let current = self.scroll.offset();
+        let right = self.content_area.x.saturating_add(self.content_area.width);
+        let current_v = self.scroll.offset();
         if mouse.row < self.content_area.y {
-            self.scroll.set_offset(current.saturating_sub(1));
+            self.scroll.set_offset(current_v.saturating_sub(1));
         } else if mouse.row >= bottom {
-            self.scroll.set_offset(current.saturating_add(1));
+            self.scroll.set_offset(current_v.saturating_add(1));
+        }
+
+        let current_h = self.scroll.h_offset();
+        if mouse.column < self.content_area.x {
+            self.scroll.set_h_offset(current_h.saturating_sub(1));
+        } else if mouse.column >= right {
+            self.scroll.set_h_offset(current_h.saturating_add(1));
         }
     }
 
