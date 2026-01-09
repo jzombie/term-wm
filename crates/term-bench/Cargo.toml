@@ -1,12 +1,12 @@
 [package]
 name = "term-bench"
 description = "Standalone render benchmark for terminal throughput measurements."
-authors = ["Jeremy Harris <jeremy.harris@zenosmosis.com>"]
-version = "0.1.0"
-edition = "2024"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/jzombie/term-wm"
-publish = true
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
