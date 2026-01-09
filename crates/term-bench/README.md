@@ -2,8 +2,8 @@
 
 A simple render benchmark for terminal throughput measurements.
 
-![term-bench 0.4.1-alpha Linux running in term-wm](https://raw.githubusercontent.com/jzombie/live-assets/refs/heads/main/term-bench-0.4.1-alpha-linux.png)
-term-bench 0.4.1-alpha Linux running in [term-wm](../../)
+![term-bench 0.4.1-alpha Linux running in term-wm](https://raw.githubusercontent.com/jzombie/live-assets/refs/heads/main/term-bench-0.4.1-alpha-linux.png)  
+_term-bench 0.4.1-alpha Linux running in [term-wm](../../)_
 
 ## License
 
