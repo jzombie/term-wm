@@ -29,6 +29,8 @@ pub struct TextRendererComponent {
     viewport_handle: Option<ViewportHandle>,
     viewport_cache: ViewportContext,
     content_area: Rect,
+    content_width: usize,
+    content_height: usize,
 }
 
 impl fmt::Debug for TextRendererComponent {
@@ -76,6 +78,9 @@ impl Component for TextRendererComponent {
                 .max()
                 .unwrap_or(0)
         };
+
+        self.content_height = content_height;
+        self.content_width = content_width;
 
         if let Some(handle) = &viewport_handle {
             handle.set_content_size(content_width, content_height);
@@ -173,7 +178,12 @@ impl Component for TextRendererComponent {
         self.render_selection_overlay(frame);
     }
 
-    fn handle_event(&mut self, event: &crossterm::event::Event, _ctx: &ComponentContext) -> bool {
+    fn handle_event(&mut self, event: &crossterm::event::Event, ctx: &ComponentContext) -> bool {
+        self.viewport_cache = ctx.viewport();
+        if let Some(handle) = ctx.viewport_handle() {
+            self.viewport_handle = Some(handle);
+        }
+
         match event {
             crossterm::event::Event::Mouse(mouse) => {
                 handle_selection_mouse(self, self.selection_enabled, mouse)
@@ -201,6 +211,8 @@ impl TextRendererComponent {
             viewport_handle: None,
             viewport_cache: ViewportContext::default(),
             content_area: Rect::default(),
+            content_width: 0,
+            content_height: 0,
         }
     }
 
@@ -514,6 +526,14 @@ impl SelectionViewport for TextRendererComponent {
             handle.scroll_horizontal_by(delta);
         }
     }
+
+    fn selection_viewport_offsets(&self) -> (usize, usize) {
+        (self.viewport_cache.offset_x, self.viewport_cache.offset_y)
+    }
+
+    fn selection_content_size(&self) -> (usize, usize) {
+        (self.content_width, self.content_height)
+    }
 }
 
 impl SelectionHost for TextRendererComponent {
@@ -548,11 +568,12 @@ impl Default for TextRendererComponent {
 mod tests {
     use super::*;
     use crate::components::ScrollViewComponent;
+    use crate::ui::UiFrame;
     use crossterm::event::{
         Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
         MouseEventKind,
     };
-    use ratatui::text::Text;
+    use ratatui::{buffer::Buffer, layout::Rect, text::Text};
 
     fn key_event(code: KeyCode) -> KeyEvent {
         let mut ev = KeyEvent::new(code, KeyModifiers::NONE);
@@ -578,6 +599,48 @@ mod tests {
         );
         assert!(!handled);
         assert!(!comp.selection_controller().has_selection());
+    }
+
+    #[test]
+    fn selection_drag_auto_scrolls_left_at_edge() {
+        use ratatui::text::Line;
+        let mut renderer = TextRendererComponent::new();
+        renderer.set_selection_enabled(true);
+        renderer.set_wrap(false);
+        let long_line = Line::from("0123456789".repeat(20));
+        renderer.set_text(Text::from(vec![long_line]));
+        let mut scroll_view = ScrollViewComponent::new(renderer);
+        let area = Rect::new(0, 0, 20, 3);
+        let mut buffer = Buffer::empty(area);
+        {
+            let mut frame = UiFrame::from_parts(area, &mut buffer);
+            scroll_view.render(&mut frame, area, &ComponentContext::new(true));
+        }
+
+        scroll_view.viewport_handle().scroll_horizontal_to(25);
+        let ctx = ComponentContext::new(true);
+        let down = Event::Mouse(MouseEvent {
+            column: 10,
+            row: 1,
+            kind: MouseEventKind::Down(MouseButton::Left),
+            modifiers: KeyModifiers::NONE,
+        });
+        scroll_view.handle_event(&down, &ctx);
+        let before = scroll_view.viewport_handle().info().offset_x;
+        assert!(before > 0);
+
+        let drag = Event::Mouse(MouseEvent {
+            column: 0,
+            row: 1,
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            modifiers: KeyModifiers::NONE,
+        });
+        scroll_view.handle_event(&drag, &ctx);
+        let after = scroll_view.viewport_handle().info().offset_x;
+        assert!(
+            after < before,
+            "expected horizontal auto-scroll towards origin"
+        );
     }
 
     #[test]

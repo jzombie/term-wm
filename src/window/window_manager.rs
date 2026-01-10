@@ -1006,10 +1006,13 @@ where
     pub fn localize_event(&self, id: WindowId<R>, event: &Event) -> Option<Event> {
         match event {
             Event::Mouse(mouse) => {
-                let rect = self.full_region_for_id(id);
+                let dest = self.window_dest(id, self.full_region_for_id(id));
+                let column =
+                    (i32::from(mouse.column) - dest.x).clamp(0, i32::from(u16::MAX)) as u16;
+                let row = (i32::from(mouse.row) - dest.y).clamp(0, i32::from(u16::MAX)) as u16;
                 Some(Event::Mouse(MouseEvent {
-                    column: mouse.column.saturating_sub(rect.x),
-                    row: mouse.row.saturating_sub(rect.y),
+                    column,
+                    row,
                     kind: mouse.kind,
                     modifiers: mouse.modifiers,
                 }))
@@ -1022,10 +1025,16 @@ where
     fn localize_event_content(&self, id: WindowId<R>, event: &Event) -> Option<Event> {
         match event {
             Event::Mouse(mouse) => {
-                let rect = self.region_for_id(id);
+                let dest = self.window_dest(id, self.full_region_for_id(id));
+                let (offset_x, offset_y) = self.window_content_offset(id);
+                let content_x = dest.x + i32::from(offset_x);
+                let content_y = dest.y + i32::from(offset_y);
+                let column =
+                    (i32::from(mouse.column) - content_x).clamp(0, i32::from(u16::MAX)) as u16;
+                let row = (i32::from(mouse.row) - content_y).clamp(0, i32::from(u16::MAX)) as u16;
                 Some(Event::Mouse(MouseEvent {
-                    column: mouse.column.saturating_sub(rect.x),
-                    row: mouse.row.saturating_sub(rect.y),
+                    column,
+                    row,
                     kind: mouse.kind,
                     modifiers: mouse.modifiers,
                 }))
@@ -1201,13 +1210,18 @@ where
             };
             let rect = spec.resolve(self.managed_area);
             self.regions.set(floating_id, rect);
-            self.resize_handles.extend(resize_handles_for_region(
-                floating_id,
-                rect,
-                self.managed_area,
-            ));
-            if let Some(header) = floating_header_for_region(floating_id, rect, self.managed_area) {
-                self.floating_headers.push(header);
+            let visible = self.visible_rect_from_spec(spec);
+            if visible.width > 0 && visible.height > 0 {
+                self.resize_handles.extend(resize_handles_for_region(
+                    floating_id,
+                    visible,
+                    self.managed_area,
+                ));
+                if let Some(header) =
+                    floating_header_for_region(floating_id, visible, self.managed_area)
+                {
+                    self.floating_headers.push(header);
+                }
             }
             active_ids.push(floating_id);
         }
@@ -1297,9 +1311,6 @@ where
             }
             return true;
         }
-        if self.handle_system_window_event(event) {
-            return true;
-        }
         if let Event::Mouse(mouse) = event {
             self.hover = Some((mouse.column, mouse.row));
             if matches!(mouse.kind, MouseEventKind::Down(_)) {
@@ -1310,6 +1321,9 @@ where
             return true;
         }
         if self.handle_header_drag_event(event) {
+            return true;
+        }
+        if self.handle_system_window_event(event) {
             return true;
         }
         if let Some(layout) = self.managed_layout.as_mut() {
@@ -1595,12 +1609,24 @@ where
                         return false;
                     }
                     self.bring_floating_to_front_id(handle.id);
+                    let (start_x, start_y, start_width, start_height) =
+                        if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
+                            self.floating_rect(handle.id)
+                        {
+                            (fr.x, fr.y, fr.width, fr.height)
+                        } else {
+                            (rect.x as i32, rect.y as i32, rect.width, rect.height)
+                        };
                     self.drag_resize = Some(ResizeDrag {
                         id: handle.id,
                         edge: handle.edge,
                         start_rect: rect,
                         start_col: mouse.column,
                         start_row: mouse.row,
+                        start_x,
+                        start_y,
+                        start_width,
+                        start_height,
                     });
                     return true;
                 }
@@ -1609,8 +1635,11 @@ where
                 if let Some(drag) = self.drag_resize.as_ref()
                     && self.is_window_floating(drag.id)
                 {
-                    let resized = apply_resize_drag(
-                        drag.start_rect,
+                    let resized = apply_resize_drag_signed(
+                        drag.start_x,
+                        drag.start_y,
+                        drag.start_width,
+                        drag.start_height,
                         drag.edge,
                         mouse.column,
                         mouse.row,
@@ -1621,14 +1650,7 @@ where
                     );
                     self.set_floating_rect(
                         drag.id,
-                        Some(crate::window::FloatRectSpec::Absolute(
-                            crate::window::FloatRect {
-                                x: resized.x as i32,
-                                y: resized.y as i32,
-                                width: resized.width,
-                                height: resized.height,
-                            },
-                        )),
+                        Some(crate::window::FloatRectSpec::Absolute(resized)),
                     );
                     return true;
                 }
@@ -2035,6 +2057,18 @@ where
         }
     }
 
+    fn visible_rect_from_spec(&self, spec: crate::window::FloatRectSpec) -> Rect {
+        float_rect_visible(spec.resolve_signed(self.managed_area), self.managed_area)
+    }
+
+    fn visible_region_for_id(&self, id: WindowId<R>) -> Rect {
+        if let Some(spec) = self.floating_rect(id) {
+            self.visible_rect_from_spec(spec)
+        } else {
+            self.full_region_for_id(id)
+        }
+    }
+
     pub fn bring_all_floating_to_front(&mut self) {
         let ids: Vec<WindowId<R>> = self
             .z_order
@@ -2174,7 +2208,11 @@ where
             if full.width == 0 || full.height == 0 {
                 continue;
             }
-            frame.render_widget(Clear, full);
+            let visible_full = self.visible_region_for_id(id);
+            if visible_full.width == 0 || visible_full.height == 0 {
+                continue;
+            }
+            frame.render_widget(Clear, visible_full);
             let dest = self.window_dest(id, full);
             match id {
                 WindowId::System(system_id) => {
@@ -2226,17 +2264,27 @@ where
         self.render_system_window_entry(frame, window);
     }
 
-    pub fn render_overlays(&mut self, frame: &mut UiFrame<'_>) {
-        let hovered = self.hover.and_then(|(column, row)| {
+    fn hover_targets(&self) -> (Option<&SplitHandle>, Option<&ResizeHandle<WindowId<R>>>) {
+        let Some((column, row)) = self.hover else {
+            return (None, None);
+        };
+        let topmost = self.hit_test_region_topmost(column, row, &self.managed_draw_order);
+        let hovered = if topmost.is_none() {
             self.handles
                 .iter()
                 .find(|handle| rect_contains(handle.rect, column, row))
-        });
-        let hovered_resize = self.hover.and_then(|(column, row)| {
-            self.resize_handles
-                .iter()
-                .find(|handle| rect_contains(handle.rect, column, row))
-        });
+        } else {
+            None
+        };
+        let hovered_resize = self
+            .resize_handles
+            .iter()
+            .find(|handle| rect_contains(handle.rect, column, row) && topmost == Some(handle.id));
+        (hovered, hovered_resize)
+    }
+
+    pub fn render_overlays(&mut self, frame: &mut UiFrame<'_>) {
+        let (hovered, hovered_resize) = self.hover_targets();
         let obscuring: Vec<Rect> = self
             .managed_draw_order
             .iter()
@@ -2278,11 +2326,16 @@ where
             })
             .collect();
 
+        let mut visible_regions = RegionMap::default();
+        for id in self.regions.ids() {
+            visible_regions.set(id, self.visible_region_for_id(id));
+        }
+
         render_resize_outline(
             frame,
             hovered_resize.map(|handle| handle.id),
             self.drag_resize.as_ref().map(|drag| drag.id),
-            &self.regions,
+            &visible_regions,
             self.managed_area,
             &floating_panes,
             &self.managed_draw_order,
@@ -2400,9 +2453,8 @@ where
 
     pub fn hit_test_region(&self, column: u16, row: u16, ids: &[R]) -> Option<R> {
         for id in ids {
-            if let Some(rect) = self.regions.get(WindowId::app(*id))
-                && rect_contains(rect, column, row)
-            {
+            let rect = self.visible_region_for_id(WindowId::app(*id));
+            if rect.width > 0 && rect.height > 0 && rect_contains(rect, column, row) {
                 return Some(*id);
             }
         }
@@ -2418,9 +2470,8 @@ where
         ids: &[WindowId<R>],
     ) -> Option<WindowId<R>> {
         for id in ids.iter().rev() {
-            if let Some(rect) = self.regions.get(*id)
-                && rect_contains(rect, column, row)
-            {
+            let rect = self.visible_region_for_id(*id);
+            if rect.width > 0 && rect.height > 0 && rect_contains(rect, column, row) {
                 return Some(*id);
             }
         }
@@ -2757,6 +2808,30 @@ fn clamp_rect(area: Rect, bounds: Rect) -> Rect {
     }
 }
 
+fn float_rect_visible(rect: crate::window::FloatRect, bounds: Rect) -> Rect {
+    let bounds_x0 = bounds.x as i32;
+    let bounds_y0 = bounds.y as i32;
+    let bounds_x1 = bounds_x0 + bounds.width as i32;
+    let bounds_y1 = bounds_y0 + bounds.height as i32;
+    let rect_x0 = rect.x;
+    let rect_y0 = rect.y;
+    let rect_x1 = rect.x + rect.width as i32;
+    let rect_y1 = rect.y + rect.height as i32;
+    let x0 = rect_x0.max(bounds_x0);
+    let y0 = rect_y0.max(bounds_y0);
+    let x1 = rect_x1.min(bounds_x1);
+    let y1 = rect_y1.min(bounds_y1);
+    if x1 <= x0 || y1 <= y0 {
+        return Rect::default();
+    }
+    Rect {
+        x: x0 as u16,
+        y: y0 as u16,
+        width: (x1 - x0) as u16,
+        height: (y1 - y0) as u16,
+    }
+}
+
 fn map_layout_node<R: Copy + Eq + Ord>(node: &LayoutNode<R>) -> LayoutNode<WindowId<R>> {
     match node {
         LayoutNode::Leaf(id) => LayoutNode::leaf(WindowId::app(*id)),
@@ -2791,7 +2866,7 @@ fn rects_intersect(a: Rect, b: Rect) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::layout::Rect;
+    use ratatui::layout::{Direction, Rect};
 
     #[test]
     fn clamp_rect_inside_and_outside() {
@@ -2820,6 +2895,27 @@ mod tests {
         };
         let r2 = clamp_rect(area2, bounds);
         assert_eq!(r2, Rect::default());
+    }
+
+    #[test]
+    fn float_rect_visible_clips_negative_offsets() {
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let rect = crate::window::FloatRect {
+            x: -5,
+            y: 3,
+            width: 20,
+            height: 6,
+        };
+        let visible = float_rect_visible(rect, bounds);
+        assert_eq!(visible.x, 0);
+        assert_eq!(visible.y, 3);
+        assert_eq!(visible.width, 15);
+        assert_eq!(visible.height, 6);
     }
 
     #[test]
@@ -3074,6 +3170,251 @@ mod tests {
         } else {
             panic!("expected mouse event");
         }
+    }
+
+    #[test]
+    fn localize_event_handles_negative_origin() {
+        use crate::window::{FloatRect, FloatRectSpec};
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        let mut wm = WindowManager::<usize, usize>::new_managed(0);
+        wm.set_floating_resize_offscreen(true);
+        wm.set_floating_rect(
+            WindowId::app(1usize),
+            Some(FloatRectSpec::Absolute(FloatRect {
+                x: -5,
+                y: 1,
+                width: 10,
+                height: 5,
+            })),
+        );
+        wm.register_managed_layout(ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 20,
+        });
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        };
+        let event = Event::Mouse(mouse);
+
+        let window_local = wm
+            .localize_event(WindowId::app(1), &event)
+            .expect("window-local event");
+        if let Event::Mouse(local) = window_local {
+            assert_eq!(local.column, 5);
+            assert_eq!(local.row, 2);
+        } else {
+            panic!("expected mouse event");
+        }
+
+        let content_local = wm
+            .localize_event_to_app(1, &event)
+            .expect("content-local event");
+        if let Event::Mouse(local) = content_local {
+            assert_eq!(local.column, 4);
+            assert_eq!(local.row, 0);
+        } else {
+            panic!("expected mouse event");
+        }
+    }
+
+    #[test]
+    fn hit_test_uses_visible_bounds_for_floating_windows() {
+        use crate::window::{FloatRect, FloatRectSpec};
+        let mut wm = WindowManager::<usize, usize>::new_managed(0);
+        wm.set_floating_resize_offscreen(true);
+        wm.set_floating_rect(
+            WindowId::app(1usize),
+            Some(FloatRectSpec::Absolute(FloatRect {
+                x: -5,
+                y: 0,
+                width: 10,
+                height: 5,
+            })),
+        );
+        wm.register_managed_layout(ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 10,
+        });
+        // Background window occupies most of the visible area.
+        wm.regions.set(
+            WindowId::app(2usize),
+            ratatui::layout::Rect {
+                x: 0,
+                y: 0,
+                width: 30,
+                height: 10,
+            },
+        );
+        wm.managed_draw_order = vec![WindowId::app(2usize), WindowId::app(1usize)];
+
+        // Click to the right of the clipped floating window. Without clipping, window 1 would eat
+        // the event; with visible bounds it should fall through to the background window.
+        let hit = wm.hit_test_region_topmost(8, 2, &wm.managed_draw_order);
+        assert_eq!(hit, Some(WindowId::app(2usize)));
+    }
+
+    #[test]
+    fn hover_targets_respects_occlusion() {
+        use crate::layout::floating::{ResizeEdge, ResizeHandle};
+        use crate::layout::tiling::SplitHandle;
+        let mut wm = WindowManager::<usize, usize>::new_managed(0);
+        wm.regions.set(
+            WindowId::app(1usize),
+            Rect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 5,
+            },
+        );
+        wm.regions.set(
+            WindowId::app(2usize),
+            Rect {
+                x: 0,
+                y: 0,
+                width: 5,
+                height: 5,
+            },
+        );
+        wm.managed_draw_order = vec![WindowId::app(1usize), WindowId::app(2usize)];
+        // Two resize handles sharing the same coordinates but belonging to different windows
+        let overlapping = Rect {
+            x: 2,
+            y: 1,
+            width: 1,
+            height: 1,
+        };
+        wm.resize_handles.push(ResizeHandle {
+            id: WindowId::app(1usize),
+            rect: overlapping,
+            edge: ResizeEdge::Left,
+        });
+        wm.resize_handles.push(ResizeHandle {
+            id: WindowId::app(2usize),
+            rect: overlapping,
+            edge: ResizeEdge::Left,
+        });
+        // Background-only handle to ensure uncovered areas still hover
+        wm.resize_handles.push(ResizeHandle {
+            id: WindowId::app(1usize),
+            rect: Rect {
+                x: 8,
+                y: 1,
+                width: 1,
+                height: 1,
+            },
+            edge: ResizeEdge::Right,
+        });
+        // Split handle positioned outside any window to verify handle hover only triggers there
+        wm.handles.push(SplitHandle {
+            rect: Rect {
+                x: 15,
+                y: 1,
+                width: 1,
+                height: 1,
+            },
+            path: Vec::new(),
+            index: 0,
+            direction: Direction::Horizontal,
+        });
+
+        wm.hover = Some((2, 1));
+        let (handle_hover, resize_hover) = wm.hover_targets();
+        assert!(
+            handle_hover.is_none(),
+            "floating window should mask layout handles"
+        );
+        assert_eq!(
+            resize_hover.map(|handle| handle.id),
+            Some(WindowId::app(2usize)),
+            "topmost window should own the hover"
+        );
+
+        wm.hover = Some((8, 1));
+        let (_, resize_hover) = wm.hover_targets();
+        assert_eq!(
+            resize_hover.map(|handle| handle.id),
+            Some(WindowId::app(1usize)),
+            "background window should hover once it is exposed"
+        );
+
+        wm.hover = Some((15, 1));
+        let (handle_hover, resize_hover) = wm.hover_targets();
+        assert!(resize_hover.is_none());
+        assert!(
+            handle_hover.is_some(),
+            "layout handles should respond off-window"
+        );
+    }
+
+    #[test]
+    fn system_window_header_drag_detaches_to_floating() {
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let mut wm = WindowManager::<usize, usize>::new_managed(0);
+        wm.set_panel_visible(false);
+        wm.show_system_window(SystemWindowId::DebugLog);
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        let debug_id = WindowId::system(SystemWindowId::DebugLog);
+        let header_rect = wm
+            .floating_headers
+            .iter()
+            .find(|handle| handle.id == debug_id)
+            .expect("debug header present")
+            .rect;
+        assert!(!wm.is_window_floating(debug_id));
+
+        let down = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: header_rect.x,
+            row: header_rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(wm.handle_managed_event(&down));
+        assert!(wm.is_window_floating(debug_id));
+        let start_rect = match wm.floating_rect(debug_id).expect("floating rect present") {
+            crate::window::FloatRectSpec::Absolute(fr) => fr,
+            _ => panic!("expected absolute rect"),
+        };
+
+        let drag_col = header_rect.x.saturating_add(2);
+        let drag_row = header_rect.y.saturating_add(1);
+        let drag = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: drag_col,
+            row: drag_row,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(wm.handle_managed_event(&drag));
+
+        let moved = match wm.floating_rect(debug_id).expect("floating rect present") {
+            crate::window::FloatRectSpec::Absolute(fr) => fr,
+            _ => panic!("expected absolute rect"),
+        };
+        assert_eq!(moved.x, start_rect.x + 2);
+        assert_eq!(moved.y, start_rect.y + 1);
+
+        let up = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: drag_col,
+            row: drag_row,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(wm.handle_managed_event(&up));
+        assert!(wm.drag_header.is_none());
     }
 
     #[test]

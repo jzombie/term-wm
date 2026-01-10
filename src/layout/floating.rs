@@ -1,6 +1,8 @@
 use super::{FloatingPane, RegionMap, rect_contains};
 use ratatui::prelude::Rect;
 
+use crate::window::FloatRect;
+
 use crate::ui::UiFrame;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +31,10 @@ pub struct ResizeDrag<R: Copy + Eq + Ord> {
     pub start_rect: Rect,
     pub start_col: u16,
     pub start_row: u16,
+    pub start_x: i32,
+    pub start_y: i32,
+    pub start_width: u16,
+    pub start_height: u16,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -200,12 +206,47 @@ pub fn apply_resize_drag(
     bounds: Rect,
     allow_offscreen: bool,
 ) -> Rect {
+    let fr = apply_resize_drag_signed(
+        start.x as i32,
+        start.y as i32,
+        start.width,
+        start.height,
+        edge,
+        column,
+        row,
+        start_col,
+        start_row,
+        bounds,
+        allow_offscreen,
+    );
+    Rect {
+        x: fr.x.max(0) as u16,
+        y: fr.y.max(0) as u16,
+        width: fr.width,
+        height: fr.height,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn apply_resize_drag_signed(
+    start_x: i32,
+    start_y: i32,
+    start_width: u16,
+    start_height: u16,
+    edge: ResizeEdge,
+    column: u16,
+    row: u16,
+    start_col: u16,
+    start_row: u16,
+    bounds: Rect,
+    allow_offscreen: bool,
+) -> FloatRect {
     let dx = column as i32 - start_col as i32;
     let dy = row as i32 - start_row as i32;
-    let mut x = start.x as i32;
-    let mut y = start.y as i32;
-    let mut width = start.width as i32;
-    let mut height = start.height as i32;
+    let mut x = start_x;
+    let mut y = start_y;
+    let mut width = start_width as i32;
+    let mut height = start_height as i32;
 
     match edge {
         ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft => {
@@ -251,70 +292,80 @@ pub fn apply_resize_drag(
 
     let mut width = width.max(1);
     let mut height = height.max(1);
+    let max_dim = u16::MAX as i32;
+    width = width.min(max_dim);
+    height = height.min(max_dim);
 
     if !allow_offscreen {
         width = width.min(bounds.width as i32);
         height = height.min(bounds.height as i32);
     }
 
+    let bounds_left = bounds.x as i32;
+    let bounds_top = bounds.y as i32;
     let max_x = bounds.x.saturating_add(bounds.width.saturating_sub(1)) as i32;
     let max_y = bounds.y.saturating_add(bounds.height.saturating_sub(1)) as i32;
 
-    // Clamp Left
-    if matches!(
-        edge,
-        ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft
-    ) && x < bounds.x as i32
-    {
-        let diff = bounds.x as i32 - x;
-        x = bounds.x as i32;
-        if !allow_offscreen {
-            width -= diff;
-        }
-    }
-
-    // Clamp Top
-    if matches!(
-        edge,
-        ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight
-    ) && y < bounds.y as i32
-    {
-        let diff = bounds.y as i32 - y;
-        y = bounds.y as i32;
-        if !allow_offscreen {
-            height -= diff;
-        }
-    }
-
-    // Clamp Right
-    let right = x + width - 1;
     if !allow_offscreen
-        && right > max_x
+        && matches!(
+            edge,
+            ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft
+        )
+        && x < bounds_left
+    {
+        let diff = bounds_left - x;
+        x = bounds_left;
+        width -= diff;
+    }
+
+    if !allow_offscreen
+        && matches!(
+            edge,
+            ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight
+        )
+        && y < bounds_top
+    {
+        let diff = bounds_top - y;
+        y = bounds_top;
+        height -= diff;
+    }
+
+    if !allow_offscreen
         && matches!(
             edge,
             ResizeEdge::Right | ResizeEdge::TopRight | ResizeEdge::BottomRight
         )
     {
-        width -= right - max_x;
+        let right = x + width - 1;
+        if right > max_x {
+            width -= right - max_x;
+        }
     }
 
-    // Clamp Bottom
-    let bottom = y + height - 1;
     if !allow_offscreen
-        && bottom > max_y
         && matches!(
             edge,
             ResizeEdge::Bottom | ResizeEdge::BottomLeft | ResizeEdge::BottomRight
         )
     {
-        height -= bottom - max_y;
+        let bottom = y + height - 1;
+        if bottom > max_y {
+            height -= bottom - max_y;
+        }
     }
 
-    Rect {
-        x: x.max(0) as u16,
-        y: y.max(0) as u16,
-        width: width.max(1) as u16,
-        height: height.max(1) as u16,
+    if width < 1 {
+        width = 1;
+    }
+    if height < 1 {
+        height = 1;
+    }
+
+    FloatRect {
+        x,
+        y,
+        width: width as u16,
+        height: height as u16,
     }
 }
 
@@ -511,5 +562,43 @@ mod tests {
                 height: 25
             }
         );
+    }
+
+    #[test]
+    fn resize_left_offscreen_preserves_negative_origin() {
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            width: 200,
+            height: 100,
+        };
+        let start_x = -8;
+        let start_y = 10;
+        let start_width = 30u16;
+        let start_height = 12u16;
+        let edge = ResizeEdge::Left;
+        let start_col = 0;
+        let start_row = 15;
+        let col = 4; // drag 4 cells to the right
+        let row = 15;
+
+        let res = apply_resize_drag_signed(
+            start_x,
+            start_y,
+            start_width,
+            start_height,
+            edge,
+            col,
+            row,
+            start_col,
+            start_row,
+            bounds,
+            true,
+        );
+
+        assert_eq!(res.x, start_x + (col as i32 - start_col as i32));
+        assert_eq!(res.width, start_width - (col - start_col));
+        assert_eq!(res.y, start_y);
+        assert_eq!(res.height, start_height);
     }
 }

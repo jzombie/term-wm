@@ -10,6 +10,7 @@
 
 use std::time::{Duration, Instant};
 
+use crate::constants::{EDGE_PAD_HORIZONTAL, EDGE_PAD_VERTICAL};
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 
@@ -102,6 +103,18 @@ pub trait SelectionViewport {
     /// Scroll horizontally by `delta` logical columns. Implementors may ignore
     /// this if horizontal scrolling is unsupported.
     fn scroll_selection_horizontal(&mut self, _delta: isize) {}
+
+    /// Current viewport offsets (column, row) within the underlying content.
+    fn selection_viewport_offsets(&self) -> (usize, usize) {
+        (0, 0)
+    }
+
+    /// Logical content size (width, height) backing the viewport. Defaults to
+    /// the viewport dimensions for non-scrollable surfaces.
+    fn selection_content_size(&self) -> (usize, usize) {
+        let area = self.selection_viewport();
+        (area.width as usize, area.height as usize)
+    }
 }
 
 /// Hosts that store their own `SelectionController` implement this so shared
@@ -324,45 +337,78 @@ fn auto_scroll_selection<V: SelectionViewport>(viewport: &mut V, column: u16, ro
         return false;
     }
 
+    let (offset_x, offset_y) = viewport.selection_viewport_offsets();
+    let (content_w, content_h) = viewport.selection_content_size();
+    let view_w = area.width as usize;
+    let view_h = area.height as usize;
+    let max_off_x = content_w.saturating_sub(view_w);
+    let max_off_y = content_h.saturating_sub(view_h);
     let mut scrolled = false;
 
     let top = area.y;
+    let bottom_edge = area.y.saturating_add(area.height).saturating_sub(1);
+    let mut scroll_up_dist = 0;
     if row < top {
-        let dist = top.saturating_sub(row);
-        let delta = edge_scroll_step(dist, 2, 12);
+        scroll_up_dist = top.saturating_sub(row);
+    } else if row <= top.saturating_add(EDGE_PAD_VERTICAL) {
+        scroll_up_dist = top.saturating_add(EDGE_PAD_VERTICAL).saturating_sub(row);
+    }
+    if scroll_up_dist > 0 && offset_y > 0 {
+        let delta = edge_scroll_step(scroll_up_dist, 2, 12);
         if delta != 0 {
             viewport.scroll_selection_vertical(-delta);
             scrolled = true;
         }
-    } else {
-        let bottom_edge = area.y.saturating_add(area.height).saturating_sub(1);
-        if row > bottom_edge {
-            let dist = row.saturating_sub(bottom_edge);
-            let delta = edge_scroll_step(dist, 2, 12);
-            if delta != 0 {
-                viewport.scroll_selection_vertical(delta);
-                scrolled = true;
-            }
+    }
+
+    let mut scroll_down_dist = 0;
+    if row > bottom_edge {
+        scroll_down_dist = row.saturating_sub(bottom_edge);
+    } else if row.saturating_add(EDGE_PAD_VERTICAL) >= bottom_edge
+        && row >= bottom_edge.saturating_sub(EDGE_PAD_VERTICAL)
+    {
+        scroll_down_dist = row.saturating_sub(bottom_edge.saturating_sub(EDGE_PAD_VERTICAL));
+    }
+    if scroll_down_dist > 0 && offset_y < max_off_y {
+        let delta = edge_scroll_step(scroll_down_dist, 2, 12);
+        if delta != 0 {
+            viewport.scroll_selection_vertical(delta);
+            scrolled = true;
         }
     }
 
     let left = area.x;
+    let right_edge = area.x.saturating_add(area.width).saturating_sub(1);
+
+    let mut scroll_left_dist = 0;
     if column < left {
-        let dist = left.saturating_sub(column);
-        let delta = edge_scroll_step(dist, 1, 80);
+        scroll_left_dist = left.saturating_sub(column);
+    } else if column <= left.saturating_add(EDGE_PAD_HORIZONTAL) {
+        scroll_left_dist = left
+            .saturating_add(EDGE_PAD_HORIZONTAL)
+            .saturating_sub(column);
+    }
+    if scroll_left_dist > 0 && offset_x > 0 {
+        let delta = edge_scroll_step(scroll_left_dist, 1, 80);
         if delta != 0 {
             viewport.scroll_selection_horizontal(-delta);
             scrolled = true;
         }
-    } else {
-        let right_edge = area.x.saturating_add(area.width).saturating_sub(1);
-        if column > right_edge {
-            let dist = column.saturating_sub(right_edge);
-            let delta = edge_scroll_step(dist, 1, 80);
-            if delta != 0 {
-                viewport.scroll_selection_horizontal(delta);
-                scrolled = true;
-            }
+    }
+
+    let mut scroll_right_dist = 0;
+    if column > right_edge {
+        scroll_right_dist = column.saturating_sub(right_edge);
+    } else if column.saturating_add(EDGE_PAD_HORIZONTAL) >= right_edge
+        && column >= right_edge.saturating_sub(EDGE_PAD_HORIZONTAL)
+    {
+        scroll_right_dist = column.saturating_sub(right_edge.saturating_sub(EDGE_PAD_HORIZONTAL));
+    }
+    if scroll_right_dist > 0 && offset_x < max_off_x {
+        let delta = edge_scroll_step(scroll_right_dist, 1, 80);
+        if delta != 0 {
+            viewport.scroll_selection_horizontal(delta);
+            scrolled = true;
         }
     }
 
@@ -497,6 +543,21 @@ mod tests {
     impl SelectionViewport for TestHost {
         fn selection_viewport(&self) -> Rect {
             self.viewport
+        }
+
+        fn selection_viewport_offsets(&self) -> (usize, usize) {
+            // Simulate the viewport starting at column 0, row 0 within a larger
+            // content area so horizontal scrolling is possible in tests.
+            (0, 0)
+        }
+
+        fn selection_content_size(&self) -> (usize, usize) {
+            // Make the logical content significantly wider than the viewport
+            // to allow horizontal auto-scrolling in test scenarios.
+            (
+                self.viewport.width as usize + 50,
+                self.viewport.height as usize,
+            )
         }
 
         fn logical_position_from_point(
