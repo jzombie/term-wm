@@ -11,7 +11,6 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 use crate::component_context::{ViewportContext, ViewportHandle};
 use crate::components::{
     Component, ComponentContext,
-    scroll_view::{ScrollAreaComponent, ScrollAreaContent, ScrollConstraints, ScrollMetrics},
     selectable_text::{
         LogicalPosition, SelectionController, SelectionHost, SelectionViewport,
         handle_selection_mouse, maintain_selection_drag,
@@ -21,7 +20,15 @@ use crate::linkifier::LinkifiedText;
 use crate::ui::UiFrame;
 
 pub struct TextRendererComponent {
-    scroll: ScrollAreaComponent<TextRendererContent>,
+    text: Text<'static>,
+    wrap: bool,
+    link_map: Vec<Vec<Option<String>>>,
+    selection: SelectionController,
+    selection_enabled: bool,
+    last_area: Rect,
+    viewport_handle: Option<ViewportHandle>,
+    viewport_cache: ViewportContext,
+    content_area: Rect,
 }
 
 impl fmt::Debug for TextRendererComponent {
@@ -30,33 +37,7 @@ impl fmt::Debug for TextRendererComponent {
     }
 }
 
-struct TextRendererContent {
-    text: Text<'static>,
-    wrap: bool,
-    link_map: Vec<Vec<Option<String>>>,
-    selection: SelectionController,
-    selection_enabled: bool,
-    last_area: Rect,
-    content_area: Rect,
-    viewport_cache: ViewportContext,
-    viewport_handle: Option<ViewportHandle>,
-}
-
 impl Component for TextRendererComponent {
-    fn resize(&mut self, area: Rect, ctx: &ComponentContext) {
-        self.scroll.resize(area, ctx);
-    }
-
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
-        self.scroll.render(frame, area, ctx);
-    }
-
-    fn handle_event(&mut self, event: &crossterm::event::Event, ctx: &ComponentContext) -> bool {
-        self.scroll.handle_event(event, ctx)
-    }
-}
-
-impl Component for TextRendererContent {
     fn resize(&mut self, area: Rect, _ctx: &ComponentContext) {
         self.last_area = area;
     }
@@ -65,6 +46,7 @@ impl Component for TextRendererContent {
         self.apply_focus_state(ctx.focused());
         if area.width == 0 || area.height == 0 {
             self.last_area = Rect::default();
+            self.content_area = Rect::default();
             return;
         }
 
@@ -73,15 +55,44 @@ impl Component for TextRendererContent {
         self.viewport_cache = ctx.viewport();
         self.viewport_handle = ctx.viewport_handle();
 
+        let viewport_cache = self.viewport_cache;
+        let viewport_handle = &self.viewport_handle;
+
+        // Calculate Metrics
+        let usable_width = area.width.max(1) as usize;
+        let content_height = if self.wrap {
+            compute_display_lines(&self.text, usable_width as u16)
+        } else {
+            self.text.lines.len().max(1)
+        };
+
+        let content_width = if self.wrap {
+            usable_width
+        } else {
+            self.text
+                .lines
+                .iter()
+                .map(|line| line.width())
+                .max()
+                .unwrap_or(0)
+        };
+
+        if let Some(handle) = &viewport_handle {
+            handle.set_content_size(content_width, content_height);
+        }
+
         maintain_selection_drag(self);
 
-        let v_off = self.viewport_cache.offset_y as u16;
-        let h_off = self.viewport_cache.offset_x as u16;
+        let v_off = viewport_cache.offset_y as u16;
+        let h_off = viewport_cache.offset_x as u16;
 
         use crate::ui::safe_set_string;
 
         const RULE_PLACEHOLDER: &str = "\0RULE\0";
-        let usable = area.width.max(1) as usize;
+        let usable = usable_width;
+
+        // Optimization: Pre-calculate just enough to skip invisible lines?
+        // Or reuse existing logic.
 
         let mut visual_heights: Vec<usize> = Vec::with_capacity(self.text.lines.len());
         for line in &self.text.lines {
@@ -119,8 +130,8 @@ impl Component for TextRendererContent {
             }
 
             let rows_to_render = rows_available.min(remaining);
-
             let is_rule = line.spans.iter().any(|s| s.content == RULE_PLACEHOLDER);
+
             if is_rule {
                 if start_in_line == 0 && rows_to_render > 0 {
                     let sep = "─".repeat(area.width as usize);
@@ -162,14 +173,13 @@ impl Component for TextRendererContent {
         self.render_selection_overlay(frame);
     }
 
-    fn handle_event(&mut self, event: &crossterm::event::Event, ctx: &ComponentContext) -> bool {
+    fn handle_event(&mut self, event: &crossterm::event::Event, _ctx: &ComponentContext) -> bool {
         match event {
             crossterm::event::Event::Mouse(mouse) => {
                 handle_selection_mouse(self, self.selection_enabled, mouse)
             }
             crossterm::event::Event::Key(_) => {
                 self.selection.clear();
-                self.viewport_handle = ctx.viewport_handle();
                 false
             }
             _ => false,
@@ -177,118 +187,62 @@ impl Component for TextRendererContent {
     }
 }
 
-impl ScrollAreaContent for TextRendererContent {
-    fn scroll_metrics(&self, constraints: ScrollConstraints) -> ScrollMetrics {
-        let viewport_width = constraints.viewport_width.max(1);
-        let content_height = if self.wrap {
-            compute_display_lines(&self.text, viewport_width)
-        } else {
-            self.text.lines.len().max(1)
-        };
-        let content_width = if self.wrap {
-            viewport_width as usize
-        } else {
-            self.text
-                .lines
-                .iter()
-                .map(|line| line.width())
-                .max()
-                .unwrap_or(0)
-        };
-        ScrollMetrics {
-            content_height,
-            content_width,
-        }
-    }
-}
+// removed usage of ScrollAreaContent
 
 impl TextRendererComponent {
     pub fn new() -> Self {
-        let content = TextRendererContent {
+        Self {
             text: Text::from(vec![Line::from(String::new())]),
             wrap: true,
             link_map: Vec::new(),
             selection: SelectionController::new(),
             selection_enabled: false,
             last_area: Rect::default(),
-            content_area: Rect::default(),
-            viewport_cache: ViewportContext::default(),
             viewport_handle: None,
-        };
-        Self {
-            scroll: ScrollAreaComponent::new(content),
+            viewport_cache: ViewportContext::default(),
+            content_area: Rect::default(),
         }
-    }
-
-    fn content(&self) -> &TextRendererContent {
-        self.scroll.content()
-    }
-
-    fn content_mut(&mut self) -> &mut TextRendererContent {
-        self.scroll.content_mut()
     }
 
     pub fn set_text(&mut self, text: Text<'static>) {
-        let content = self.content_mut();
-        content.text = text;
-        content.link_map.clear();
+        self.text = text;
+        self.link_map.clear();
     }
 
     pub fn set_linkified_text(&mut self, linkified: LinkifiedText) {
-        let content = self.content_mut();
-        content.text = linkified.text;
-        content.link_map = linkified.link_map;
+        self.text = linkified.text;
+        self.link_map = linkified.link_map;
     }
 
     pub fn set_wrap(&mut self, wrap: bool) {
-        self.content_mut().wrap = wrap;
-    }
-
-    pub fn set_keyboard_enabled(&mut self, enabled: bool) {
-        self.scroll.set_keyboard_enabled(enabled);
+        self.wrap = wrap;
     }
 
     pub fn set_selection_enabled(&mut self, enabled: bool) {
-        let content = self.content_mut();
-        if content.selection_enabled == enabled {
+        if self.selection_enabled == enabled {
             return;
         }
-        content.selection_enabled = enabled;
+        self.selection_enabled = enabled;
         if !enabled {
-            content.selection.clear();
+            self.selection.clear();
         }
-    }
-
-    pub fn vertical_offset(&self) -> usize {
-        self.scroll.vertical_offset()
-    }
-
-    pub fn set_vertical_offset(&mut self, offset: usize) {
-        self.scroll.set_vertical_offset(offset);
-    }
-
-    pub fn view_height(&self) -> usize {
-        self.scroll.view_height()
-    }
-
-    pub fn viewport_rect(&self) -> Rect {
-        self.scroll.viewport_rect()
     }
 
     pub fn jump_to_logical_line(&mut self, line_idx: usize, area: Rect) {
-        let content = self.content();
-        if content.text.lines.is_empty() || area.width == 0 {
-            self.scroll.set_vertical_offset(0);
+        if self.text.lines.is_empty() || area.width == 0 {
+            if let Some(handle) = &self.viewport_handle {
+                handle.scroll_vertical_to(0);
+            }
             return;
         }
 
         let usable = area.width.max(1) as usize;
         let mut offset = 0;
-        for (i, line) in content.text.lines.iter().enumerate() {
+        for (i, line) in self.text.lines.iter().enumerate() {
             if i >= line_idx {
                 break;
             }
-            if content.wrap {
+            if self.wrap {
                 let w = line.width();
                 if w == 0 {
                     offset += 1;
@@ -299,16 +253,23 @@ impl TextRendererComponent {
                 offset += 1;
             }
         }
-        self.scroll.set_vertical_offset(offset);
+        if let Some(handle) = &self.viewport_handle {
+            handle.scroll_vertical_to(offset);
+        }
+    }
+
+    pub fn scroll_vertical_to(&mut self, offset: usize) {
+        if let Some(handle) = &self.viewport_handle {
+            handle.scroll_vertical_to(offset);
+        }
     }
 
     pub fn text_ref(&self) -> &Text<'static> {
-        &self.content().text
+        &self.text
     }
 
     pub fn rendered_lines(&self) -> Vec<String> {
-        self.content()
-            .text
+        self.text
             .lines
             .iter()
             .map(|line| {
@@ -320,141 +281,8 @@ impl TextRendererComponent {
             .collect()
     }
 
-    fn build_hit_test_palette(&self) -> Option<HitTestPalette> {
-        self.content().build_hit_test_palette()
-    }
+    // Internal helper methods
 
-    pub fn link_at(&self, area: Rect, mouse: MouseEvent) -> Option<String> {
-        let content = self.content();
-        if content.link_map.is_empty() {
-            return None;
-        }
-        if area.width == 0 || area.height == 0 {
-            return None;
-        }
-        if mouse.column < area.x
-            || mouse.column >= area.x.saturating_add(area.width)
-            || mouse.row < area.y
-            || mouse.row >= area.y.saturating_add(area.height)
-        {
-            return None;
-        }
-
-        let content_width = area.width;
-        if content_width == 0 {
-            return None;
-        }
-
-        let local_x = mouse.column.saturating_sub(area.x);
-        let local_y = mouse.row.saturating_sub(area.y);
-        if local_x >= content_width || local_y >= area.height {
-            return None;
-        }
-
-        let hit_palette = self.build_hit_test_palette()?;
-        let HitTestPalette { mut text, urls } = hit_palette;
-        // Replace rule placeholders here as well so hit-testing matches
-        // what the rendered output will show.
-        {
-            use std::borrow::Cow;
-            const RULE_PLACEHOLDER: &str = "\0RULE\0";
-            let repeat_len = content_width as usize;
-            if repeat_len > 0 {
-                let mut sep = String::with_capacity(repeat_len * 3);
-                for i in 0..repeat_len {
-                    sep.push('─');
-                    if i + 1 < repeat_len {
-                        sep.push('\u{2060}');
-                    }
-                }
-                for line in text.lines.iter_mut() {
-                    for span in line.spans.iter_mut() {
-                        if span.content == RULE_PLACEHOLDER {
-                            span.content = Cow::Owned(sep.clone());
-                        }
-                    }
-                }
-            }
-        }
-        if urls.is_empty() {
-            return None;
-        }
-
-        let mut paragraph = Paragraph::new(text);
-        if content.wrap {
-            paragraph = paragraph.wrap(Wrap { trim: false });
-        }
-        let viewport = content.viewport_cache;
-        paragraph = paragraph.scroll((viewport.offset_y as u16, viewport.offset_x as u16));
-
-        let mut buffer = Buffer::empty(Rect {
-            x: 0,
-            y: 0,
-            width: content_width,
-            height: area.height,
-        });
-        paragraph.render(
-            Rect {
-                x: 0,
-                y: 0,
-                width: content_width,
-                height: area.height,
-            },
-            &mut buffer,
-        );
-
-        if let Some(cell) = buffer.cell((local_x, local_y))
-            && let Some(id) = decode_link_color(cell.fg)
-            && let Some(idx) = id.checked_sub(1)
-            && let Some(url) = urls.get(idx as usize)
-        {
-            return Some(url.clone());
-        }
-
-        None
-    }
-
-    pub fn reset(&mut self) {
-        self.scroll.set_vertical_offset(0);
-        self.scroll.set_horizontal_offset(0);
-    }
-}
-
-impl SelectionViewport for TextRendererContent {
-    fn selection_viewport(&self) -> Rect {
-        self.content_area
-    }
-
-    fn logical_position_from_point(&mut self, column: u16, row: u16) -> Option<LogicalPosition> {
-        self.logical_position_from_point_impl(column, row)
-    }
-
-    fn scroll_selection_vertical(&mut self, delta: isize) {
-        if delta == 0 {
-            return;
-        }
-        if let Some(handle) = &self.viewport_handle {
-            handle.scroll_vertical_by(delta);
-        }
-    }
-
-    fn scroll_selection_horizontal(&mut self, delta: isize) {
-        if delta == 0 {
-            return;
-        }
-        if let Some(handle) = &self.viewport_handle {
-            handle.scroll_horizontal_by(delta);
-        }
-    }
-}
-
-impl SelectionHost for TextRendererContent {
-    fn selection_controller(&mut self) -> &mut SelectionController {
-        &mut self.selection
-    }
-}
-
-impl TextRendererContent {
     fn apply_focus_state(&mut self, focused: bool) {
         if !focused {
             self.selection.clear();
@@ -564,6 +392,134 @@ impl TextRendererContent {
             urls,
         })
     }
+
+    pub fn link_at(&self, area: Rect, mouse: MouseEvent) -> Option<String> {
+        if self.link_map.is_empty() {
+            return None;
+        }
+        if area.width == 0 || area.height == 0 {
+            return None;
+        }
+        if mouse.column < area.x
+            || mouse.column >= area.x.saturating_add(area.width)
+            || mouse.row < area.y
+            || mouse.row >= area.y.saturating_add(area.height)
+        {
+            return None;
+        }
+
+        let content_width = area.width;
+        if content_width == 0 {
+            return None;
+        }
+
+        let local_x = mouse.column.saturating_sub(area.x);
+        let local_y = mouse.row.saturating_sub(area.y);
+        if local_x >= content_width || local_y >= area.height {
+            return None;
+        }
+
+        let hit_palette = self.build_hit_test_palette()?;
+        let HitTestPalette { mut text, urls } = hit_palette;
+        {
+            use std::borrow::Cow;
+            const RULE_PLACEHOLDER: &str = "\0RULE\0";
+            let repeat_len = content_width as usize;
+            if repeat_len > 0 {
+                let mut sep = String::with_capacity(repeat_len * 3);
+                for i in 0..repeat_len {
+                    sep.push('─');
+                    if i + 1 < repeat_len {
+                        sep.push('\u{2060}');
+                    }
+                }
+                for line in text.lines.iter_mut() {
+                    for span in line.spans.iter_mut() {
+                        if span.content == RULE_PLACEHOLDER {
+                            span.content = Cow::Owned(sep.clone());
+                        }
+                    }
+                }
+            }
+        }
+        if urls.is_empty() {
+            return None;
+        }
+
+        let mut paragraph = Paragraph::new(text);
+        if self.wrap {
+            paragraph = paragraph.wrap(Wrap { trim: false });
+        }
+        let viewport = self.viewport_cache;
+        paragraph = paragraph.scroll((viewport.offset_y as u16, viewport.offset_x as u16));
+
+        let mut buffer = Buffer::empty(Rect {
+            x: 0,
+            y: 0,
+            width: content_width,
+            height: area.height,
+        });
+        paragraph.render(
+            Rect {
+                x: 0,
+                y: 0,
+                width: content_width,
+                height: area.height,
+            },
+            &mut buffer,
+        );
+
+        if let Some(cell) = buffer.cell((local_x, local_y))
+            && let Some(id) = decode_link_color(cell.fg)
+            && let Some(idx) = id.checked_sub(1)
+            && let Some(url) = urls.get(idx as usize)
+        {
+            return Some(url.clone());
+        }
+
+        None
+    }
+
+    pub fn reset(&mut self) {
+        if let Some(handle) = &self.viewport_handle {
+            handle.scroll_vertical_to(0);
+            handle.scroll_horizontal_to(0);
+        }
+    }
+}
+
+impl SelectionViewport for TextRendererComponent {
+    fn selection_viewport(&self) -> Rect {
+        self.content_area
+    }
+
+    fn logical_position_from_point(&mut self, column: u16, row: u16) -> Option<LogicalPosition> {
+        self.logical_position_from_point_impl(column, row)
+    }
+
+    fn scroll_selection_vertical(&mut self, delta: isize) {
+        if delta == 0 {
+            return;
+        }
+        if let Some(handle) = &self.viewport_handle {
+            handle.scroll_vertical_by(delta);
+        }
+    }
+
+    fn scroll_selection_horizontal(&mut self, delta: isize) {
+        if delta == 0 {
+            return;
+        }
+        if let Some(handle) = &self.viewport_handle {
+            handle.scroll_horizontal_by(delta);
+        }
+    }
+}
+
+impl SelectionHost for TextRendererComponent {
+    fn selection_controller(&mut self) -> &mut SelectionController {
+        &mut self.selection
+    }
 }
 
 fn compute_display_lines(text: &Text<'_>, width: u16) -> usize {
@@ -591,6 +547,7 @@ impl Default for TextRendererComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::ScrollViewComponent;
     use crossterm::event::{
         Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
         MouseEventKind,
@@ -608,10 +565,11 @@ mod tests {
         let mut comp = TextRendererComponent::new();
         comp.set_selection_enabled(true);
         {
-            let content = comp.content_mut();
-            content.selection.begin_drag(LogicalPosition::new(0, 0));
-            content.selection.update_drag(LogicalPosition::new(0, 5));
-            assert!(content.selection.has_selection());
+            comp.selection_controller()
+                .begin_drag(LogicalPosition::new(0, 0));
+            comp.selection_controller()
+                .update_drag(LogicalPosition::new(0, 5));
+            assert!(comp.selection_controller().has_selection());
         }
 
         let handled = comp.handle_event(
@@ -619,39 +577,41 @@ mod tests {
             &ComponentContext::new(true),
         );
         assert!(!handled);
-        assert!(!comp.content().selection.has_selection());
+        assert!(!comp.selection_controller().has_selection());
     }
 
     #[test]
     fn blur_clears_selection() {
         let mut comp = TextRendererComponent::new();
         {
-            let content = comp.content_mut();
-            content.selection.begin_drag(LogicalPosition::new(0, 0));
-            content.selection.update_drag(LogicalPosition::new(0, 2));
-            assert!(content.selection.has_selection());
-            content.apply_focus_state(false);
-            assert!(!content.selection.has_selection());
+            comp.selection_controller()
+                .begin_drag(LogicalPosition::new(0, 0));
+            comp.selection_controller()
+                .update_drag(LogicalPosition::new(0, 2));
+            assert!(comp.selection_controller().has_selection());
+            comp.apply_focus_state(false);
+            assert!(!comp.selection_controller().has_selection());
         }
     }
 
     #[test]
     fn scrollbar_drag_bypasses_selection() {
-        let mut comp = TextRendererComponent::new();
-        comp.set_selection_enabled(true);
+        let mut renderer = TextRendererComponent::new();
+        renderer.set_selection_enabled(true);
         let lines: Vec<Line<'static>> = (0..20)
             .map(|idx| Line::from(format!("line {idx}")))
             .collect();
-        comp.set_text(Text::from(lines));
+        renderer.set_text(Text::from(lines));
+        let mut scroll_view = ScrollViewComponent::new(renderer);
         let area = Rect::new(0, 0, 20, 5);
         let mut buffer = ratatui::buffer::Buffer::empty(area);
         {
             let mut frame = crate::ui::UiFrame::from_parts(area, &mut buffer);
-            comp.render(&mut frame, area, &ComponentContext::new(true));
+            scroll_view.render(&mut frame, area, &ComponentContext::new(true));
         }
 
         let scrollbar_x = area.x + area.width.saturating_sub(1);
-        let _handled = comp.handle_event(
+        let handled = scroll_view.handle_event(
             &Event::Mouse(MouseEvent {
                 column: scrollbar_x,
                 row: area.y + 1,
@@ -661,7 +621,8 @@ mod tests {
             &ComponentContext::new(true),
         );
 
-        assert!(!comp.content().selection.is_dragging());
+        assert!(handled);
+        assert!(!scroll_view.content.selection_controller().is_dragging());
     }
 }
 

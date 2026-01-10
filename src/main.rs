@@ -2,17 +2,16 @@
 //! windows, where more windows can be added, or windows can be removed.
 
 use std::io;
-use std::time::Duration;
 
 use clap::Parser;
-use crossterm::event::Event;
 use ratatui::prelude::Rect;
 
 use line_ending::LineEnding;
-use term_wm::components::{Component, TerminalComponent, default_shell_command};
+use term_wm::components::{
+    Component, ScrollViewComponent, TerminalComponent, default_shell_command,
+};
 use term_wm::drivers::OutputDriver;
 use term_wm::drivers::console::{ConsoleInputDriver, ConsoleOutputDriver};
-use term_wm::keybindings::{Action, KeyBindings};
 use term_wm::runner::{HasWindowManager, WindowApp, run_window_app};
 use term_wm::ui::UiFrame;
 use term_wm::window::{AppWindowDraw, WindowManager};
@@ -76,37 +75,6 @@ fn main() -> io::Result<()> {
         &focus_regions,
         |id| id,
         Some,
-        Duration::from_millis(16),
-        |event, app| {
-            if matches!(event, Event::Mouse(_)) && app.windows.handle_managed_event(event) {
-                return true;
-            }
-            if let Some(pane) = app.terminals.get_mut(app.windows.focus()) {
-                pane.set_selection_enabled(app.windows.clipboard_enabled());
-                let mut localized = None;
-                let focus = app.windows.focus();
-                if let Some(loc_event) = app.windows.localize_event_to_app(focus, event) {
-                    localized = Some(loc_event);
-                }
-                let event_ref = localized.as_ref().unwrap_or(event);
-                return pane
-                    .handle_event(event_ref, &term_wm::components::ComponentContext::new(true));
-            }
-            false
-        },
-        |event, app| {
-            if let Some(Event::Key(key)) = event {
-                let kb = KeyBindings::default();
-                if kb.matches(Action::Quit, key) {
-                    return true;
-                }
-            }
-
-            if app.check_quit() {
-                return true;
-            }
-            false
-        },
     );
 
     output.exit()?;
@@ -116,7 +84,7 @@ fn main() -> io::Result<()> {
 
 struct App {
     windows: WindowManager<PaneId, PaneId>,
-    terminals: Vec<TerminalComponent>,
+    terminals: Vec<ScrollViewComponent<TerminalComponent>>,
 }
 
 impl App {
@@ -145,7 +113,7 @@ impl App {
                     if !error_occurred && let Some(pane) = app.terminals.last_mut() {
                         let mut line = cmd;
                         line.push_str(LineEnding::from_current_platform().as_str());
-                        let _ = pane.write_bytes(line.as_bytes());
+                        let _ = pane.content.write_bytes(line.as_bytes());
                     }
                 } else if let Err(e) = app.wm_new_window() {
                     tracing::error!("Window spawn error: {}", e);
@@ -175,8 +143,12 @@ impl App {
             let _ = webbrowser::open(url);
             true
         });
+        let mut sv = ScrollViewComponent::new(pane);
+        sv.set_keyboard_enabled(false);
+        sv.content
+            .set_selection_enabled(self.windows.clipboard_enabled());
         let id = self.terminals.len();
-        self.terminals.push(pane);
+        self.terminals.push(sv);
         self.windows.set_focus(id);
         self.windows.tile_window(id);
         self.windows
@@ -197,8 +169,12 @@ impl HasWindowManager<PaneId, PaneId> for App {
             let _ = webbrowser::open(url);
             true
         });
+        let mut sv = ScrollViewComponent::new(pane);
+        sv.set_keyboard_enabled(false);
+        sv.content
+            .set_selection_enabled(self.windows.clipboard_enabled());
         let id = self.terminals.len();
-        self.terminals.push(pane);
+        self.terminals.push(sv);
         self.windows.set_focus(id);
         self.windows.tile_window(id);
         // Set a user-visible title for the newly created pane.
@@ -208,18 +184,17 @@ impl HasWindowManager<PaneId, PaneId> for App {
     }
 
     fn wm_close_window(&mut self, id: PaneId) -> io::Result<()> {
-        if let Some(pane) = self.terminals.get_mut(id) {
+        if let Some(sv) = self.terminals.get_mut(id) {
             // TODO: Show confirmation before abrupt termination
-            pane.terminate();
+            sv.content.terminate();
         }
         Ok(())
     }
-}
 
-impl App {
-    fn check_quit(&mut self) -> bool {
-        // Quit when the window manager reports no active windows remaining.
-        !self.windows.has_any_active_windows()
+    fn set_clipboard_enabled(&mut self, enabled: bool) {
+        for sv in &mut self.terminals {
+            sv.content.set_selection_enabled(enabled);
+        }
     }
 }
 
@@ -228,7 +203,7 @@ impl WindowApp<PaneId, PaneId> for App {
         self.terminals
             .iter_mut()
             .enumerate()
-            .filter_map(|(id, pane)| (!pane.has_exited()).then_some(id))
+            .filter_map(|(id, sv)| (!sv.content.has_exited()).then_some(id))
             .collect()
     }
 
@@ -239,16 +214,22 @@ impl WindowApp<PaneId, PaneId> for App {
     fn empty_window_message(&self) -> &str {
         "all shells exited"
     }
+
+    fn window_component(&mut self, id: PaneId) -> Option<&mut dyn Component> {
+        self.terminals
+            .get_mut(id)
+            .map(|sv| sv as &mut dyn Component)
+    }
 }
 
 fn render_pane(frame: &mut UiFrame<'_>, app: &mut App, id: PaneId, area: Rect, focused: bool) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    if let Some(pane) = app.terminals.get_mut(id) {
-        pane.set_selection_enabled(app.windows.clipboard_enabled());
-        pane.resize(area, &term_wm::components::ComponentContext::new(focused));
-        pane.render(
+    if let Some(sv) = app.terminals.get_mut(id) {
+        // We pass resize to the wrapper Viewport which passes it to content with updated context
+        sv.resize(area, &term_wm::components::ComponentContext::new(focused));
+        sv.render(
             frame,
             area,
             &term_wm::components::ComponentContext::new(focused),

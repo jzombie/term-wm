@@ -12,7 +12,6 @@ use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
 use crate::components::{
     Component, ComponentContext,
-    scroll_view::ScrollViewComponent,
     selectable_text::{
         LogicalPosition, SelectionController, SelectionHost, SelectionViewport,
         handle_selection_mouse, maintain_selection_drag,
@@ -32,7 +31,6 @@ const DEFAULT_SCROLLBACK_LEN: usize = 2000;
 pub struct TerminalComponent {
     pane: Pty,
     last_size: (u16, u16),
-    scroll_view: ScrollViewComponent,
     last_area: Rect,
     linkifier: Linkifier,
     link_overlay: LinkOverlay,
@@ -40,6 +38,7 @@ pub struct TerminalComponent {
     command_description: String,
     selection: SelectionController,
     selection_enabled: bool,
+    last_scrollback: usize,
 }
 
 impl Component for TerminalComponent {
@@ -69,7 +68,7 @@ impl Component for TerminalComponent {
         }
         self.last_area = area;
         let _exited = self.pane.has_exited();
-        self.render_screen(frame, area, ctx.focused());
+        self.render_screen(frame, area, ctx);
     }
 
     fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
@@ -105,8 +104,10 @@ impl Component for TerminalComponent {
                 true
             }
             Event::Mouse(mouse) => {
-                if !self.pane.alternate_screen() && self.handle_scrollbar_event(event) {
-                    return true;
+                if !self.pane.alternate_screen() {
+                    // Logic for scrollbar event was here, but now ScrollView handles it.
+                    // If we need to capture events that ScrollView didn't handle (e.g. if we are not wrapped?),
+                    // but we assume we are wrapped or don't need it.
                 }
                 let selection_ready = self.selection_enabled && !self.pane.alternate_screen();
                 if handle_selection_mouse(self, selection_ready, mouse) {
@@ -175,10 +176,9 @@ impl TerminalComponent {
     pub fn spawn(command: CommandBuilder, size: PtySize) -> crate::pty::PtyResult<Self> {
         let command_description = format!("{:?}", command);
         let pane = Pty::spawn_with_scrollback(command, size, DEFAULT_SCROLLBACK_LEN)?;
-        let mut comp = Self {
+        let comp = Self {
             pane,
             last_size: (size.cols, size.rows),
-            scroll_view: ScrollViewComponent::new(),
             last_area: Rect::default(),
             linkifier: Linkifier::new(),
             link_overlay: LinkOverlay::new(),
@@ -186,9 +186,8 @@ impl TerminalComponent {
             command_description,
             selection: SelectionController::new(),
             selection_enabled: false,
+            last_scrollback: 0,
         };
-        // Terminal scroll view must not hijack keyboard input; disable by default.
-        comp.scroll_view.set_keyboard_enabled(false);
         Ok(comp)
     }
 
@@ -250,9 +249,36 @@ impl TerminalComponent {
         }
     }
 
-    fn render_screen(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
+    fn render_screen(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
         maintain_selection_drag(self);
+
+        // Synchronize scroll state with the shared Viewport
+        if !self.pane.alternate_screen()
+            && let Some(handle) = ctx.viewport_handle()
+        {
+            let used = self.pane.max_scrollback();
+            let view_height = area.height as usize;
+            let total_height = used + view_height;
+            handle.set_content_size(area.width as usize, total_height);
+
+            let current_sb = self.pane.scrollback();
+            // If scrollback changed internally (keys/output), push to viewport
+            if current_sb != self.last_scrollback {
+                let new_offset = used.saturating_sub(current_sb);
+                handle.scroll_vertical_to(new_offset);
+            } else {
+                // Otherwise sync from viewport (scrollbar/mouse wheel on container)
+                let offset = ctx.viewport().offset_y;
+                let target_sb = used.saturating_sub(offset);
+                if target_sb != current_sb {
+                    self.pane.set_scrollback(target_sb);
+                }
+            }
+        }
+
         let scrollback_value = self.pane.scrollback();
+        self.last_scrollback = scrollback_value;
+
         let show_cursor = scrollback_value == 0;
         let used = self.pane.max_scrollback();
         let selection_row_base = used.saturating_sub(scrollback_value);
@@ -319,6 +345,7 @@ impl TerminalComponent {
             );
         }
 
+        let focused = ctx.focused();
         for row in start_row..start_row + visible.height {
             for col in start_col..start_col + visible.width {
                 let cell_x = area.x + col;
@@ -394,17 +421,6 @@ impl TerminalComponent {
                 && let Some(cell) = buffer.cell_mut((area.x + col, area.y + row))
             {
                 cell.set_style(cell.style().add_modifier(Modifier::REVERSED));
-            }
-        }
-
-        if !screen.alternate_screen() && used > 0 {
-            let view = area.height as usize;
-            if view > 0 {
-                let total = used.saturating_add(view);
-                let offset = used.saturating_sub(scrollback_value);
-                self.scroll_view.update(area, total, view);
-                self.scroll_view.set_offset(offset);
-                self.scroll_view.render(frame);
             }
         }
     }
@@ -486,19 +502,6 @@ impl TerminalComponent {
             row_base.saturating_add(local_row),
             local_col,
         ))
-    }
-
-    fn handle_scrollbar_event(&mut self, event: &Event) -> bool {
-        let used = self.pane.max_scrollback();
-        if used == 0 {
-            return false;
-        }
-        let response = self.scroll_view.handle_event(event);
-        if let Some(offset) = response.v_offset {
-            let scrollback = used.saturating_sub(offset);
-            self.pane.set_scrollback(scrollback);
-        }
-        response.handled
     }
 
     /// Terminate the underlying PTY child process.

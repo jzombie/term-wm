@@ -5,19 +5,15 @@ use crossterm::event::{Event, MouseEvent, MouseEventKind};
 use ratatui::prelude::Rect;
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 
-use crate::component_context::{ViewportContext, ViewportHandle, ViewportSharedState};
+use crate::component_context::{ViewportHandle, ViewportSharedState};
 use crate::components::{Component, ComponentContext};
 use crate::ui::UiFrame;
-use crate::window::ScrollState;
+
+// --- Scroll Logic Helpers (Public API) ---
 
 #[derive(Debug, Default, Clone)]
 pub struct ScrollbarDrag {
-    dragging: bool,
-}
-
-pub struct ScrollbarDragResponse {
-    pub handled: bool,
-    pub offset: Option<usize>,
+    pub dragging: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +27,7 @@ impl ScrollbarDrag {
         Self { dragging: false }
     }
 
+    /// Returns Some(new_offset) if a drag event occurred.
     pub fn handle_mouse(
         &mut self,
         mouse: &MouseEvent,
@@ -38,18 +35,16 @@ impl ScrollbarDrag {
         total: usize,
         view: usize,
         axis: ScrollbarAxis,
-    ) -> ScrollbarDragResponse {
+    ) -> Option<usize> {
         let axis_empty = match axis {
             ScrollbarAxis::Vertical => area.height == 0,
             ScrollbarAxis::Horizontal => area.width == 0,
         };
         if total <= view || view == 0 || axis_empty {
             self.dragging = false;
-            return ScrollbarDragResponse {
-                handled: false,
-                offset: None,
-            };
+            return None;
         }
+
         let on_scrollbar = match axis {
             ScrollbarAxis::Vertical => {
                 let scrollbar_x = area.x.saturating_add(area.width.saturating_sub(1));
@@ -60,352 +55,35 @@ impl ScrollbarDrag {
                 rect_contains(area, mouse.column, mouse.row) && mouse.row == scrollbar_y
             }
         };
+
         match mouse.kind {
             MouseEventKind::Down(_) if on_scrollbar => {
                 self.dragging = true;
-                ScrollbarDragResponse {
-                    handled: true,
-                    offset: Some(match axis {
-                        ScrollbarAxis::Vertical => {
-                            scrollbar_offset_from_row(mouse.row, area, total, view)
-                        }
-                        ScrollbarAxis::Horizontal => {
-                            scrollbar_offset_from_col(mouse.column, area, total, view)
-                        }
-                    }),
-                }
-            }
-            MouseEventKind::Drag(_) if self.dragging => ScrollbarDragResponse {
-                handled: true,
-                offset: Some(match axis {
+                Some(match axis {
                     ScrollbarAxis::Vertical => {
                         scrollbar_offset_from_row(mouse.row, area, total, view)
                     }
                     ScrollbarAxis::Horizontal => {
                         scrollbar_offset_from_col(mouse.column, area, total, view)
                     }
-                }),
-            },
+                })
+            }
+            MouseEventKind::Drag(_) if self.dragging => Some(match axis {
+                ScrollbarAxis::Vertical => scrollbar_offset_from_row(mouse.row, area, total, view),
+                ScrollbarAxis::Horizontal => {
+                    scrollbar_offset_from_col(mouse.column, area, total, view)
+                }
+            }),
             MouseEventKind::Up(_) if self.dragging => {
                 self.dragging = false;
-                ScrollbarDragResponse {
-                    handled: true,
-                    offset: None,
-                }
+                None
             }
-            _ => ScrollbarDragResponse {
-                handled: false,
-                offset: None,
-            },
+            _ => None,
         }
     }
 }
 
-pub struct ScrollEvent {
-    pub handled: bool,
-    pub v_offset: Option<usize>,
-    pub h_offset: Option<usize>,
-}
-
-#[derive(Debug)]
-pub struct ScrollViewComponent {
-    v_state: ScrollState,
-    v_drag: ScrollbarDrag,
-    h_state: ScrollState,
-    h_drag: ScrollbarDrag,
-    area: Rect,
-    total: usize,
-    view: usize,
-    /// Horizontal total (content width in columns)
-    h_total: usize,
-    /// Horizontal viewport width (in columns)
-    h_view: usize,
-    fixed_height: Option<u16>,
-    keyboard_enabled: bool,
-}
-
-impl Component for ScrollViewComponent {
-    fn resize(&mut self, mut area: Rect, _ctx: &ComponentContext) {
-        if let Some(height) = self.fixed_height {
-            area.height = area.height.min(height);
-        }
-        self.area = area;
-        self.view = self.view.min(self.area.height as usize);
-        self.v_state.apply(self.total, self.view);
-    }
-
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
-        self.resize(area, ctx);
-        ScrollViewComponent::render(self, frame);
-    }
-
-    fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
-        ScrollViewComponent::handle_event(self, event).handled
-    }
-}
-
-impl ScrollViewComponent {
-    pub fn new() -> Self {
-        Self {
-            v_state: ScrollState::default(),
-            v_drag: ScrollbarDrag::new(),
-            h_state: ScrollState::default(),
-            h_drag: ScrollbarDrag::new(),
-            area: Rect::default(),
-            total: 0,
-            view: 0,
-            h_total: 0,
-            h_view: 0,
-            fixed_height: None,
-            keyboard_enabled: false,
-        }
-    }
-
-    /// Enable or disable default keyboard handling for this ScrollViewComponent.
-    /// When disabled (default), callers must programmatically control scrolling.
-    pub fn set_keyboard_enabled(&mut self, enabled: bool) {
-        self.keyboard_enabled = enabled;
-    }
-
-    pub fn set_fixed_height(&mut self, height: Option<u16>) {
-        self.fixed_height = height;
-    }
-
-    pub fn update(&mut self, area: Rect, total: usize, view: usize) {
-        let mut area = area;
-        if let Some(height) = self.fixed_height {
-            area.height = area.height.min(height);
-        }
-        self.area = area;
-        self.total = total;
-        self.view = view.min(area.height as usize);
-        self.v_state.apply(total, view);
-    }
-
-    pub fn set_total_view(&mut self, total: usize, view: usize) {
-        self.total = total;
-        self.view = view.min(self.area.height as usize);
-        self.v_state.apply(total, view);
-    }
-
-    pub fn offset(&self) -> usize {
-        self.v_state.offset
-    }
-
-    pub fn set_offset(&mut self, offset: usize) {
-        self.v_state.offset = offset.min(self.max_offset());
-    }
-
-    pub fn bump(&mut self, delta: isize) {
-        self.v_state.bump(delta);
-        self.v_state.apply(self.total, self.view);
-    }
-
-    pub fn reset(&mut self) {
-        self.v_state.reset();
-        self.h_state.reset();
-    }
-
-    pub fn view(&self) -> usize {
-        self.view
-    }
-
-    pub fn h_view(&self) -> usize {
-        self.h_view
-    }
-
-    pub fn h_offset(&self) -> usize {
-        self.h_state.offset
-    }
-
-    pub fn set_h_offset(&mut self, offset: usize) {
-        self.h_state.offset = offset.min(self.max_h_offset());
-    }
-
-    pub fn bump_h(&mut self, delta: isize) {
-        self.h_state.bump(delta);
-        self.h_state.apply(self.h_total, self.h_view);
-    }
-
-    pub fn render(&self, frame: &mut UiFrame<'_>) {
-        // Render vertical scrollbar on the right if needed
-        render_scrollbar_oriented(
-            frame,
-            self.area,
-            self.total,
-            self.view,
-            self.v_state.offset,
-            ScrollbarOrientation::VerticalRight,
-        );
-        // Render horizontal scrollbar on the bottom if needed
-        render_scrollbar_oriented(
-            frame,
-            self.area,
-            self.h_total,
-            self.h_view,
-            self.h_state.offset,
-            ScrollbarOrientation::HorizontalBottom,
-        );
-    }
-
-    pub fn handle_event(&mut self, event: &Event) -> ScrollEvent {
-        if self.total == 0 || self.view == 0 {
-            return ScrollEvent {
-                handled: false,
-                v_offset: None,
-                h_offset: None,
-            };
-        }
-        let Event::Mouse(mouse) = event else {
-            return ScrollEvent {
-                handled: false,
-                v_offset: None,
-                h_offset: None,
-            };
-        };
-        // First, let vertical scrollbar drag clicks/drags handle the event if applicable.
-        let response = self.v_drag.handle_mouse(
-            mouse,
-            self.area,
-            self.total,
-            self.view,
-            ScrollbarAxis::Vertical,
-        );
-        if let Some(offset) = response.offset {
-            self.set_offset(offset);
-        }
-        if response.handled {
-            return ScrollEvent {
-                handled: true,
-                v_offset: response.offset,
-                h_offset: None,
-            };
-        }
-
-        // Handle mouse wheel scrolling as a fallback.
-        use crossterm::event::MouseEventKind::*;
-        let mouse_scroll_resp = match mouse.kind {
-            ScrollUp => {
-                let off = self.offset().saturating_sub(3);
-                self.set_offset(off);
-                ScrollEvent {
-                    handled: true,
-                    v_offset: Some(off),
-                    h_offset: None,
-                }
-            }
-            ScrollDown => {
-                let off = (self.offset().saturating_add(3)).min(self.max_offset());
-                self.set_offset(off);
-                ScrollEvent {
-                    handled: true,
-                    v_offset: Some(off),
-                    h_offset: None,
-                }
-            }
-            _ => ScrollEvent {
-                handled: false,
-                v_offset: None,
-                h_offset: None,
-            },
-        };
-        if mouse_scroll_resp.handled {
-            return mouse_scroll_resp;
-        }
-        if self.h_total > self.h_view && self.h_view > 0 {
-            let response = self.h_drag.handle_mouse(
-                mouse,
-                self.area,
-                self.h_total,
-                self.h_view,
-                ScrollbarAxis::Horizontal,
-            );
-            if let Some(offset) = response.offset {
-                self.set_h_offset(offset);
-            }
-            if response.handled {
-                return ScrollEvent {
-                    handled: true,
-                    v_offset: None,
-                    h_offset: response.offset,
-                };
-            }
-        }
-        ScrollEvent {
-            handled: false,
-            v_offset: None,
-            h_offset: None,
-        }
-    }
-
-    fn max_h_offset(&self) -> usize {
-        self.h_total.saturating_sub(self.h_view)
-    }
-
-    // Handle common keyboard scrolling keys when `keyboard_enabled` is true.
-    // Returns true if the key was handled and caused a scroll change.
-    // By default keyboard handling is disabled to avoid hijacking character input;
-    // enable selectively with `set_keyboard_enabled(true)` when appropriate.
-    pub fn handle_key_event(&mut self, key: &crossterm::event::KeyEvent) -> bool {
-        if !self.keyboard_enabled || self.total == 0 || self.view == 0 {
-            return false;
-        }
-        let max_offset = self.total.saturating_sub(self.view);
-        let kb = crate::keybindings::KeyBindings::default();
-        if kb.matches(crate::keybindings::Action::ScrollPageUp, key) {
-            let page = self.view.max(1);
-            let off = self.v_state.offset.saturating_sub(page);
-            self.v_state.offset = off;
-            self.v_state.apply(self.total, self.view);
-            true
-        } else if kb.matches(crate::keybindings::Action::ScrollPageDown, key) {
-            let page = self.view.max(1);
-            let off = (self.v_state.offset.saturating_add(page)).min(max_offset);
-            self.v_state.offset = off;
-            self.v_state.apply(self.total, self.view);
-            true
-        } else if kb.matches(crate::keybindings::Action::ScrollHome, key) {
-            self.v_state.offset = 0;
-            self.v_state.apply(self.total, self.view);
-            true
-        } else if kb.matches(crate::keybindings::Action::ScrollEnd, key) {
-            self.v_state.offset = max_offset;
-            self.v_state.apply(self.total, self.view);
-            true
-        } else if kb.matches(crate::keybindings::Action::ScrollUp, key) {
-            let off = self.v_state.offset.saturating_sub(1);
-            self.v_state.offset = off;
-            self.v_state.apply(self.total, self.view);
-            true
-        } else if kb.matches(crate::keybindings::Action::ScrollDown, key) {
-            let off = (self.v_state.offset.saturating_add(1)).min(max_offset);
-            self.v_state.offset = off;
-            self.v_state.apply(self.total, self.view);
-            true
-        } else {
-            false
-        }
-    }
-
-    fn max_offset(&self) -> usize {
-        self.total.saturating_sub(self.view)
-    }
-}
-
-impl Default for ScrollViewComponent {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ScrollViewComponent {
-    /// Set horizontal totals (content width in columns and viewport columns).
-    pub fn set_horizontal_total_view(&mut self, total: usize, view: usize) {
-        self.h_total = total;
-        self.h_view = view.min(self.area.width as usize);
-        self.h_state.apply(total, view);
-    }
-}
+// --- Rendering Helpers ---
 
 pub fn render_scrollbar(
     frame: &mut UiFrame<'_>,
@@ -444,6 +122,8 @@ pub fn render_scrollbar_oriented(
     frame.render_stateful_widget(scrollbar, area, &mut state);
 }
 
+// --- Internal Math ---
+
 fn scrollbar_offset_from_row(row: u16, area: Rect, total: usize, view: usize) -> usize {
     let content_len = total.saturating_sub(view).saturating_add(1).max(1);
     let max_offset = content_len.saturating_sub(1);
@@ -458,7 +138,6 @@ fn scrollbar_offset_from_row(row: u16, area: Rect, total: usize, view: usize) ->
 }
 
 fn scrollbar_offset_from_col(col: u16, area: Rect, total: usize, view: usize) -> usize {
-    // Map a column within area to a horizontal offset
     let content_len = total.saturating_sub(view).saturating_add(1).max(1);
     let max_offset = content_len.saturating_sub(1);
     if max_offset == 0 || area.width <= 1 {
@@ -478,267 +157,333 @@ fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
     column >= rect.x && column < max_x && row >= rect.y && row < max_y
 }
 
-// --- Scroll Area Wrapper -------------------------------------------------
+// --- ScrollView Component Wrapper ---
 
-#[derive(Debug, Clone, Copy)]
-pub struct ScrollConstraints {
-    pub viewport_width: u16,
-    pub viewport_height: u16,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ScrollMetrics {
-    pub content_height: usize,
-    pub content_width: usize,
-}
-
-pub trait ScrollAreaContent: Component {
-    fn scroll_metrics(&self, constraints: ScrollConstraints) -> ScrollMetrics;
-}
-
-pub struct ScrollAreaComponent<C: ScrollAreaContent> {
-    content: C,
-    scroll: ScrollViewComponent,
-    viewport_area: Rect,
-    viewport_info: ViewportContext,
-    shared: Rc<RefCell<ViewportSharedState>>,
+#[derive(Debug)]
+pub struct ScrollViewComponent<C> {
+    pub content: C,
+    shared_state: Rc<RefCell<ViewportSharedState>>,
+    v_drag: ScrollbarDrag,
+    h_drag: ScrollbarDrag,
+    pub viewport_area: Rect,
     keyboard_enabled: bool,
 }
 
-impl<C: ScrollAreaContent> ScrollAreaComponent<C> {
+impl<C: Component> ScrollViewComponent<C> {
     pub fn new(content: C) -> Self {
         Self {
             content,
-            scroll: ScrollViewComponent::new(),
+            shared_state: Rc::new(RefCell::new(ViewportSharedState::default())),
+            v_drag: ScrollbarDrag::new(),
+            h_drag: ScrollbarDrag::new(),
             viewport_area: Rect::default(),
-            viewport_info: ViewportContext::default(),
-            shared: Rc::new(RefCell::new(ViewportSharedState::default())),
-            keyboard_enabled: false,
+            keyboard_enabled: true,
         }
-    }
-
-    pub fn content(&self) -> &C {
-        &self.content
-    }
-
-    pub fn content_mut(&mut self) -> &mut C {
-        &mut self.content
     }
 
     pub fn set_keyboard_enabled(&mut self, enabled: bool) {
         self.keyboard_enabled = enabled;
-        self.scroll.set_keyboard_enabled(enabled);
-    }
-
-    pub fn vertical_offset(&self) -> usize {
-        self.scroll.offset()
-    }
-
-    pub fn horizontal_offset(&self) -> usize {
-        self.scroll.h_offset()
-    }
-
-    pub fn set_vertical_offset(&mut self, offset: usize) {
-        self.scroll.set_offset(offset);
-        self.viewport_info.offset_y = self.scroll.offset();
-    }
-
-    pub fn set_horizontal_offset(&mut self, offset: usize) {
-        self.scroll.set_h_offset(offset);
-        self.viewport_info.offset_x = self.scroll.h_offset();
-    }
-
-    pub fn view_height(&self) -> usize {
-        self.scroll.view()
-    }
-
-    pub fn view_width(&self) -> usize {
-        self.scroll.h_view()
     }
 
     pub fn viewport_handle(&self) -> ViewportHandle {
         ViewportHandle {
-            shared: self.shared.clone(),
+            shared: self.shared_state.clone(),
         }
     }
 
-    pub fn viewport_rect(&self) -> Rect {
-        self.viewport_area
-    }
+    fn compute_layout(&mut self, area: Rect) -> Rect {
+        // Simple reservation strategy:
+        // Use previous frame's content size to decide on scrollbars.
+        let state = self.shared_state.borrow();
+        let content_w = state.content_width;
+        let content_h = state.content_height;
+        drop(state); // Drop borrow
 
-    fn update_shared_state(&mut self, max_x: usize, max_y: usize) {
-        let mut inner = self.shared.borrow_mut();
-        inner.width = self.viewport_info.width;
-        inner.height = self.viewport_info.height;
-        inner.offset_x = self.viewport_info.offset_x;
-        inner.offset_y = self.viewport_info.offset_y;
-        inner.max_offset_x = max_x;
-        inner.max_offset_y = max_y;
-    }
-
-    fn apply_pending_requests(&mut self) {
-        let mut inner = self.shared.borrow_mut();
-        if let Some(off) = inner.pending_offset_y.take() {
-            self.scroll.set_offset(off);
-            inner.offset_y = self.scroll.offset();
-            self.viewport_info.offset_y = inner.offset_y;
+        // If we don't know content size yet, give full area.
+        if content_w == 0 && content_h == 0 {
+            return area;
         }
-        if let Some(off) = inner.pending_offset_x.take() {
-            self.scroll.set_h_offset(off);
-            inner.offset_x = self.scroll.h_offset();
-            self.viewport_info.offset_x = inner.offset_x;
+
+        let mut view_w = area.width;
+        let mut view_h = area.height;
+
+        let needs_v = content_h > view_h as usize;
+        if needs_v && view_w > 0 {
+            view_w = view_w.saturating_sub(1);
+        }
+
+        let needs_h = content_w > view_w as usize;
+        if needs_h && view_h > 0 {
+            view_h = view_h.saturating_sub(1);
+        }
+
+        // Re-check V if H reduced height?
+        // (If reducing height makes V needed unexpectedly? Unlikely if content_h check used original height.
+        // But if content_h matched exactly, reducing height might trigger wrap... but we use content size from CHILD which is usually absolute).
+
+        Rect {
+            x: area.x,
+            y: area.y,
+            width: view_w,
+            height: view_h,
         }
     }
+}
 
-    fn compute_plan(&mut self, area: Rect) -> ViewportPlan {
-        let mut viewport_width = area.width;
-        let mut viewport_height = area.height;
-        let mut metrics = self.content.scroll_metrics(ScrollConstraints {
-            viewport_width,
-            viewport_height,
-        });
+impl<C: Component> Component for ScrollViewComponent<C> {
+    fn resize(&mut self, area: Rect, ctx: &ComponentContext) {
+        // Predict layout and resize child
+        let inner = self.compute_layout(area);
+        self.viewport_area = inner;
+        self.content.resize(inner, ctx);
+    }
 
-        let mut reserved_vertical = false;
-        let mut reserved_horizontal = false;
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
+        if area.width == 0 || area.height == 0 {
+            self.viewport_area = Rect::default();
+            return;
+        }
+
+        let max_attempts = 3;
+        let mut attempt = 0;
 
         loop {
-            let needs_vertical = metrics.content_height > viewport_height as usize;
-            if needs_vertical && viewport_width > 0 && !reserved_vertical {
-                viewport_width = viewport_width.saturating_sub(1);
-                reserved_vertical = true;
-                metrics = self.content.scroll_metrics(ScrollConstraints {
-                    viewport_width,
-                    viewport_height,
-                });
+            // 1. Compute layout (potentially reserving space for scrollbars)
+            let inner_area = self.compute_layout(area);
+            self.viewport_area = inner_area;
+
+            // 2. Update Shared State for this frame's Viewport properties
+            {
+                let mut state = self.shared_state.borrow_mut();
+                state.width = inner_area.width as usize;
+                state.height = inner_area.height as usize;
+
+                let max_x = state.content_width.saturating_sub(state.width);
+                let max_y = state.content_height.saturating_sub(state.height);
+                if let Some(off) = state.pending_offset_x.take() {
+                    state.offset_x = off.min(max_x);
+                } else {
+                    state.offset_x = state.offset_x.min(max_x);
+                }
+                if let Some(off) = state.pending_offset_y.take() {
+                    state.offset_y = off.min(max_y);
+                } else {
+                    state.offset_y = state.offset_y.min(max_y);
+                }
+            }
+
+            // 3. Create context with ViewportHandle
+            let handle = self.viewport_handle();
+            let info = handle.info();
+            let child_ctx = ctx.with_viewport(info, Some(handle));
+
+            // 4. Render Child
+            self.content.render(frame, inner_area, &child_ctx);
+
+            // Retrieve updated state (child might have updated content_size during render)
+            let state = self.shared_state.borrow();
+            let content_w = state.content_width;
+            let content_h = state.content_height;
+            let off_x = state.offset_x;
+            let off_y = state.offset_y;
+            drop(state);
+
+            let needs_vertical = inner_area.height > 0 && content_h > inner_area.height as usize;
+            let has_vertical_reserved = inner_area.width < area.width;
+            let needs_horizontal = inner_area.width > 0 && content_w > inner_area.width as usize;
+            let has_horizontal_reserved = inner_area.height < area.height;
+
+            // store final values in loop-local variables (use them directly below)
+
+            let drop_vertical = has_vertical_reserved && !needs_vertical && area.width > 0;
+            let drop_horizontal = has_horizontal_reserved && !needs_horizontal && area.height > 0;
+            let retry_vertical =
+                (needs_vertical && !has_vertical_reserved && area.width > 0) || drop_vertical;
+            let retry_horizontal =
+                (needs_horizontal && !has_horizontal_reserved && area.height > 0)
+                    || drop_horizontal;
+
+            if (retry_vertical || retry_horizontal) && attempt + 1 < max_attempts {
+                attempt += 1;
                 continue;
             }
 
-            let needs_horizontal = metrics.content_width > viewport_width as usize;
-            if needs_horizontal && viewport_height > 0 && !reserved_horizontal {
-                viewport_height = viewport_height.saturating_sub(1);
-                reserved_horizontal = true;
-                metrics = self.content.scroll_metrics(ScrollConstraints {
-                    viewport_width,
-                    viewport_height,
-                });
-                continue;
+            // 5. Render Scrollbars with finalized layout
+            if needs_vertical {
+                let sb_area = Rect {
+                    x: area.x + area.width.saturating_sub(1),
+                    y: area.y,
+                    width: 1,
+                    height: inner_area.height,
+                };
+                render_scrollbar_oriented(
+                    frame,
+                    sb_area,
+                    content_h,
+                    inner_area.height as usize,
+                    off_y,
+                    ScrollbarOrientation::VerticalRight,
+                );
+            }
+
+            if needs_horizontal {
+                let sb_area = Rect {
+                    x: area.x,
+                    y: area.y + area.height.saturating_sub(1),
+                    width: inner_area.width,
+                    height: 1,
+                };
+                render_scrollbar_oriented(
+                    frame,
+                    sb_area,
+                    content_w,
+                    inner_area.width as usize,
+                    off_x,
+                    ScrollbarOrientation::HorizontalBottom,
+                );
             }
 
             break;
         }
-
-        let viewport_rect = Rect {
-            x: area.x,
-            y: area.y,
-            width: viewport_width,
-            height: viewport_height,
-        };
-
-        let viewport_width_usize = viewport_width as usize;
-        let viewport_height_usize = viewport_height as usize;
-        let max_v = metrics.content_height.saturating_sub(viewport_height_usize);
-        let max_h = metrics.content_width.saturating_sub(viewport_width_usize);
-
-        self.scroll
-            .set_total_view(metrics.content_height, viewport_height_usize);
-        self.scroll
-            .set_horizontal_total_view(metrics.content_width, viewport_width_usize);
-
-        let v_offset = self.scroll.offset().min(max_v);
-        let h_offset = self.scroll.h_offset().min(max_h);
-        self.scroll.set_offset(v_offset);
-        self.scroll.set_h_offset(h_offset);
-
-        let viewport_info = ViewportContext {
-            offset_x: h_offset,
-            offset_y: v_offset,
-            width: viewport_width_usize,
-            height: viewport_height_usize,
-        };
-
-        ViewportPlan {
-            viewport_rect,
-            viewport_info,
-            max_offset_x: max_h,
-            max_offset_y: max_v,
-        }
-    }
-
-    fn try_handle_scroll_event(&mut self, event: &Event) -> bool {
-        match event {
-            Event::Mouse(_) => {
-                let response = self.scroll.handle_event(event);
-                if let Some(off) = response.v_offset {
-                    self.scroll.set_offset(off);
-                    self.viewport_info.offset_y = self.scroll.offset();
-                }
-                if let Some(off) = response.h_offset {
-                    self.scroll.set_h_offset(off);
-                    self.viewport_info.offset_x = self.scroll.h_offset();
-                }
-                if response.handled {
-                    let mut inner = self.shared.borrow_mut();
-                    inner.offset_y = self.viewport_info.offset_y;
-                    inner.offset_x = self.viewport_info.offset_x;
-                }
-                response.handled
-            }
-            Event::Key(key) if self.keyboard_enabled => {
-                if self.scroll.handle_key_event(key) {
-                    self.viewport_info.offset_y = self.scroll.offset();
-                    self.viewport_info.offset_x = self.scroll.h_offset();
-                    let mut inner = self.shared.borrow_mut();
-                    inner.offset_y = self.viewport_info.offset_y;
-                    inner.offset_x = self.viewport_info.offset_x;
-                    true
-                } else {
-                    false
-                }
-            }
-            _ => false,
-        }
-    }
-}
-
-impl<C: ScrollAreaContent> Component for ScrollAreaComponent<C> {
-    fn resize(&mut self, area: Rect, ctx: &ComponentContext) {
-        self.viewport_area = area;
-        self.content.resize(area, ctx);
-    }
-
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
-        self.viewport_area = area;
-        self.apply_pending_requests();
-        self.scroll.resize(area, ctx);
-        let plan = self.compute_plan(area);
-        self.viewport_area = plan.viewport_rect;
-        self.viewport_info = plan.viewport_info;
-        self.update_shared_state(plan.max_offset_x, plan.max_offset_y);
-        let child_ctx = ctx
-            .clone()
-            .with_viewport(self.viewport_info, Some(self.viewport_handle()));
-        self.content.render(frame, self.viewport_area, &child_ctx);
-        self.scroll.render(frame);
     }
 
     fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
-        if self.try_handle_scroll_event(event) {
+        // Handle scrollbar drags interactions first
+        if let Event::Mouse(mouse) = event {
+            let state = self.shared_state.borrow();
+            let content_h = state.content_height;
+            let view_h = state.height;
+            let content_w = state.content_width;
+            let view_w = state.width;
+            drop(state);
+
+            // Vertical Scrollbar
+            if content_h > view_h {
+                // Assumes vertical scrollbar is immediately to the right of viewport
+                let sb_area = Rect {
+                    x: self
+                        .viewport_area
+                        .x
+                        .saturating_add(self.viewport_area.width),
+                    y: self.viewport_area.y,
+                    width: 1,
+                    height: self.viewport_area.height,
+                };
+                if let Some(new_off) = self.v_drag.handle_mouse(
+                    mouse,
+                    sb_area,
+                    content_h,
+                    view_h,
+                    ScrollbarAxis::Vertical,
+                ) {
+                    let mut st = self.shared_state.borrow_mut();
+                    st.offset_y = new_off;
+                    st.pending_offset_y = Some(new_off);
+                    return true;
+                }
+            }
+
+            // Horizontal Scrollbar
+            if content_w > view_w {
+                let sb_area = Rect {
+                    x: self.viewport_area.x,
+                    y: self
+                        .viewport_area
+                        .y
+                        .saturating_add(self.viewport_area.height),
+                    width: self.viewport_area.width,
+                    height: 1,
+                };
+                if let Some(new_off) = self.h_drag.handle_mouse(
+                    mouse,
+                    sb_area,
+                    content_w,
+                    view_w,
+                    ScrollbarAxis::Horizontal,
+                ) {
+                    let mut st = self.shared_state.borrow_mut();
+                    st.offset_x = new_off;
+                    st.pending_offset_x = Some(new_off);
+                    return true;
+                }
+            }
+        }
+
+        // Mouse Wheel (Common)
+        if let Event::Mouse(mouse) = event {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    let mut st = self.shared_state.borrow_mut();
+                    st.offset_y = st.offset_y.saturating_sub(3);
+                    st.pending_offset_y = Some(st.offset_y);
+                    return true;
+                }
+                MouseEventKind::ScrollDown => {
+                    let mut st = self.shared_state.borrow_mut();
+                    let max = st.content_height.saturating_sub(st.height);
+                    st.offset_y = (st.offset_y + 3).min(max);
+                    st.pending_offset_y = Some(st.offset_y);
+                    return true;
+                }
+                _ => {}
+            }
+        }
+
+        // Pass to child
+        // Construct child context
+        let handle = self.viewport_handle();
+        let info = handle.info();
+        let child_ctx = ctx.with_viewport(info, Some(handle));
+
+        if self.content.handle_event(event, &child_ctx) {
             return true;
         }
-        let child_ctx = ctx
-            .clone()
-            .with_viewport(self.viewport_info, Some(self.viewport_handle()));
-        let handled = self.content.handle_event(event, &child_ctx);
-        self.apply_pending_requests();
-        handled
-    }
-}
 
-struct ViewportPlan {
-    viewport_rect: Rect,
-    viewport_info: ViewportContext,
-    max_offset_x: usize,
-    max_offset_y: usize,
+        if self.keyboard_enabled
+            && ctx.focused()
+            && let Event::Key(key) = event
+            && key.kind == crossterm::event::KeyEventKind::Press
+        {
+            use crossterm::event::KeyCode;
+            let mut st = self.shared_state.borrow_mut();
+            let max_y = st.content_height.saturating_sub(st.height);
+            match key.code {
+                KeyCode::Up => {
+                    st.offset_y = st.offset_y.saturating_sub(1);
+                    st.pending_offset_y = Some(st.offset_y);
+                    return true;
+                }
+                KeyCode::Down => {
+                    st.offset_y = (st.offset_y + 1).min(max_y);
+                    st.pending_offset_y = Some(st.offset_y);
+                    return true;
+                }
+                KeyCode::PageUp => {
+                    st.offset_y = st.offset_y.saturating_sub(st.height);
+                    st.pending_offset_y = Some(st.offset_y);
+                    return true;
+                }
+                KeyCode::PageDown => {
+                    st.offset_y = (st.offset_y + st.height).min(max_y);
+                    st.pending_offset_y = Some(st.offset_y);
+                    return true;
+                }
+                KeyCode::Home => {
+                    st.offset_y = 0;
+                    st.pending_offset_y = Some(st.offset_y);
+                    return true;
+                }
+                KeyCode::End => {
+                    st.offset_y = max_y;
+                    st.pending_offset_y = Some(st.offset_y);
+                    return true;
+                }
+                _ => {}
+            }
+        }
+
+        false
+    }
 }
 
 #[cfg(test)]
@@ -787,8 +532,8 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         };
         let resp = drag.handle_mouse(&down, area, total, view, ScrollbarAxis::Vertical);
-        assert!(resp.handled);
-        assert!(resp.offset.is_some());
+        assert!(resp.is_some());
+        assert!(drag.dragging);
 
         let drag_evt = MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
@@ -797,8 +542,8 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         };
         let resp2 = drag.handle_mouse(&drag_evt, area, total, view, ScrollbarAxis::Vertical);
-        assert!(resp2.handled);
-        assert!(resp2.offset.is_some());
+        assert!(resp2.is_some());
+        assert!(drag.dragging);
 
         let up = MouseEvent {
             kind: MouseEventKind::Up(MouseButton::Left),
@@ -807,8 +552,8 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         };
         let resp3 = drag.handle_mouse(&up, area, total, view, ScrollbarAxis::Vertical);
-        assert!(resp3.handled);
-        assert!(resp3.offset.is_none());
+        assert!(resp3.is_none());
+        assert!(!drag.dragging);
     }
 
     #[test]
@@ -831,8 +576,8 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         };
         let resp = drag.handle_mouse(&down, area, total, view, ScrollbarAxis::Horizontal);
-        assert!(resp.handled);
-        assert!(resp.offset.is_some());
+        assert!(resp.is_some());
+        assert!(drag.dragging);
 
         let drag_evt = MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
@@ -841,8 +586,8 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         };
         let resp2 = drag.handle_mouse(&drag_evt, area, total, view, ScrollbarAxis::Horizontal);
-        assert!(resp2.handled);
-        assert!(resp2.offset.is_some());
+        assert!(resp2.is_some());
+        assert!(drag.dragging);
 
         let up = MouseEvent {
             kind: MouseEventKind::Up(MouseButton::Left),
@@ -851,24 +596,8 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         };
         let resp3 = drag.handle_mouse(&up, area, total, view, ScrollbarAxis::Horizontal);
-        assert!(resp3.handled);
-        assert!(resp3.offset.is_none());
-    }
-
-    #[test]
-    fn scroll_view_set_offset_and_max() {
-        let mut sv = ScrollViewComponent::new();
-        let area = Rect {
-            x: 0,
-            y: 0,
-            width: 3,
-            height: 4,
-        };
-        sv.update(area, 50, 3);
-        sv.set_offset(1000);
-        assert!(sv.offset() <= sv.total.saturating_sub(sv.view));
-        sv.set_offset(0);
-        assert_eq!(sv.offset(), 0);
+        assert!(resp3.is_none());
+        assert!(!drag.dragging);
     }
 
     #[test]

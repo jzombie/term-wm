@@ -6,7 +6,7 @@ use ratatui::buffer::Buffer;
 use ratatui::prelude::{Constraint, Direction, Rect};
 use ratatui::style::Style;
 
-use crate::components::ConfirmAction;
+use crate::components::{Component, ComponentContext, ConfirmAction};
 use crate::drivers::{InputDriver, OutputDriver};
 use crate::event_loop::{ControlFlow, EventLoop};
 use crate::layout::{LayoutNode, TilingLayout};
@@ -25,6 +25,7 @@ pub trait HasWindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     fn wm_close_window(&mut self, _id: R) -> std::io::Result<()> {
         Ok(())
     }
+    fn set_clipboard_enabled(&mut self, _enabled: bool) {}
 }
 
 pub trait WindowApp<W: Copy + Eq + Ord, R: Copy + Eq + Ord>: HasWindowManager<W, R> {
@@ -38,10 +39,43 @@ pub trait WindowApp<W: Copy + Eq + Ord, R: Copy + Eq + Ord>: HasWindowManager<W,
     fn layout_for_windows(&mut self, windows: &[R]) -> Option<TilingLayout<R>> {
         auto_layout_for_windows(windows)
     }
+
+    fn window_component(&mut self, _id: R) -> Option<&mut dyn Component> {
+        None
+    }
+}
+
+fn handle_focused_app_event<A, W, R>(event: &Event, app: &mut A) -> bool
+where
+    A: WindowApp<W, R>,
+    W: Copy + Eq + Ord,
+    R: Copy + Eq + Ord + PartialEq<W> + std::fmt::Debug,
+{
+    let mut pending_focus: Option<R> = None;
+    let mut pending_event: Option<Event> = None;
+    let consumed = {
+        let windows = app.windows();
+        windows.dispatch_focused_event(event, |focus_id, localized| {
+            pending_focus = Some(focus_id);
+            pending_event = Some(localized.clone());
+            false
+        })
+    };
+
+    if let (Some(focus_id), Some(localized)) = (pending_focus, pending_event) {
+        if let Some(component) = app.window_component(focus_id) {
+            let ctx = ComponentContext::new(true);
+            component.handle_event(&localized, &ctx)
+        } else {
+            false
+        }
+    } else {
+        consumed
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn run_app<O, D, A, W, R, FDraw, FDispatch, FQuit, FMap, FFocus>(
+pub fn run_app<O, D, A, W, R, FDraw, FMap, FFocus>(
     output: &mut O,
     driver: &mut D,
     app: &mut A,
@@ -50,18 +84,14 @@ pub fn run_app<O, D, A, W, R, FDraw, FDispatch, FQuit, FMap, FFocus>(
     _map_focus: FFocus,
     poll_interval: Duration,
     mut draw: FDraw,
-    mut dispatch: FDispatch,
-    mut should_quit: FQuit,
 ) -> io::Result<()>
 where
     O: OutputDriver,
     D: InputDriver,
-    A: HasWindowManager<W, R>,
+    A: WindowApp<W, R>,
     W: Copy + Eq + Ord,
     R: Copy + Eq + Ord + PartialEq<W> + std::fmt::Debug,
     FDraw: for<'frame> FnMut(UiFrame<'frame>, &mut A),
-    FDispatch: FnMut(&Event, &mut A) -> bool,
-    FQuit: FnMut(Option<&Event>, &mut A) -> bool,
     FMap: Fn(R) -> W + Copy,
     FFocus: Fn(W) -> Option<R>,
 {
@@ -90,9 +120,12 @@ where
             for id in app.windows().take_closed_app_windows() {
                 app.wm_close_window(id)?;
             }
-            let mut flush_mouse_capture = |app: &mut A, flow: ControlFlow| {
+            let mut flush_state_changes = |app: &mut A, flow: ControlFlow| {
                 if let Some(enabled) = app.windows().take_mouse_capture_change() {
                     let _ = driver.set_mouse_capture(enabled);
+                }
+                if let Some(clipboard) = app.windows().take_clipboard_change() {
+                    app.set_clipboard_enabled(clipboard);
                 }
                 Ok(flow)
             };
@@ -111,12 +144,12 @@ where
                             ConfirmAction::Cancel => app.windows().close_exit_confirm(),
                         }
                     }
-                    return flush_mouse_capture(app, ControlFlow::Continue);
+                    return flush_state_changes(app, ControlFlow::Continue);
                 }
 
                 if app.windows().help_overlay_visible() {
                     let _ = app.windows().handle_help_event(&evt);
-                    return flush_mouse_capture(app, ControlFlow::Continue);
+                    return flush_state_changes(app, ControlFlow::Continue);
                 }
                 let wm_mode = app.windows().layout_contract() == LayoutContract::WindowManaged;
                 if wm_mode
@@ -129,12 +162,13 @@ where
                         let passthrough = app.windows().esc_passthrough_active();
                         app.windows().close_wm_overlay();
                         if passthrough {
-                            let _ = dispatch(&Event::Key(*key), app);
+                            let passthrough_event = Event::Key(*key);
+                            let _ = handle_focused_app_event(&passthrough_event, app);
                         }
                     } else {
                         app.windows().open_wm_overlay();
                     }
-                    return flush_mouse_capture(app, ControlFlow::Continue);
+                    return flush_state_changes(app, ControlFlow::Continue);
                 }
                 if wm_mode && app.windows().wm_overlay_visible() {
                     if let Some(action) = app.windows().handle_wm_menu_event(&evt) {
@@ -182,20 +216,20 @@ where
                             WmMenuAction::ExitUi => {
                                 app.windows().close_wm_overlay();
                                 app.windows().open_exit_confirm();
-                                return flush_mouse_capture(app, ControlFlow::Continue);
+                                return flush_state_changes(app, ControlFlow::Continue);
                             }
                         }
-                        return flush_mouse_capture(app, ControlFlow::Continue);
+                        return flush_state_changes(app, ControlFlow::Continue);
                     }
                     if app.windows().wm_menu_consumes_event(&evt) {
-                        return flush_mouse_capture(app, ControlFlow::Continue);
+                        return flush_state_changes(app, ControlFlow::Continue);
                     }
                     if let Event::Key(_key) = &evt
                         && mapped_action == Some(crate::keybindings::Action::NewWindow)
                     {
                         app.wm_new_window()?;
                         app.windows().close_wm_overlay();
-                        return flush_mouse_capture(app, ControlFlow::Continue);
+                        return flush_state_changes(app, ControlFlow::Continue);
                     }
                     if let Event::Key(_key) = &evt
                         && (mapped_action == Some(crate::keybindings::Action::FocusNext)
@@ -207,34 +241,41 @@ where
                             &map_region,
                             &_map_focus,
                         );
-                        return flush_mouse_capture(app, ControlFlow::Continue);
+                        return flush_state_changes(app, ControlFlow::Continue);
                     }
 
                     if let Event::Key(_) = &evt {
-                        return flush_mouse_capture(app, ControlFlow::Continue);
+                        return flush_state_changes(app, ControlFlow::Continue);
                     }
                 }
 
                 if matches!(evt, Event::Mouse(_)) && !app.windows().mouse_capture_enabled() {
-                    return flush_mouse_capture(app, ControlFlow::Continue);
+                    return flush_state_changes(app, ControlFlow::Continue);
+                }
+                if let Event::Key(key) = &evt
+                    && key.kind == KeyEventKind::Press
+                    && crate::keybindings::KeyBindings::default()
+                        .matches(crate::keybindings::Action::Quit, key)
+                {
+                    return flush_state_changes(app, ControlFlow::Quit);
                 }
                 match &evt {
                     Event::Key(_) if app.windows().capture_active() => {
                         app.windows().clear_capture();
-                        let _ = dispatch(&evt, app);
+                        let _ = handle_focused_app_event(&evt, app);
                     }
                     _ => {
-                        let _ = dispatch(&evt, app);
+                        let _ = handle_focused_app_event(&evt, app);
                     }
                 }
             } else {
-                if should_quit(None, app) {
-                    return flush_mouse_capture(app, ControlFlow::Quit);
+                if !app.windows().has_any_active_windows() {
+                    return flush_state_changes(app, ControlFlow::Quit);
                 }
                 app.windows().begin_frame();
                 output.draw(|frame| draw(frame, app))?;
             }
-            flush_mouse_capture(app, ControlFlow::Continue)
+            flush_state_changes(app, ControlFlow::Continue)
         };
 
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(handler)) {
@@ -266,16 +307,13 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn run_window_app<O, D, A, W, R, FDispatch, FQuit, FMap, FFocus>(
+pub fn run_window_app<O, D, A, W, R, FMap, FFocus>(
     output: &mut O,
     driver: &mut D,
     app: &mut A,
     focus_regions: &[R],
     map_region: FMap,
     _map_focus: FFocus,
-    poll_interval: Duration,
-    dispatch: FDispatch,
-    should_quit: FQuit,
 ) -> io::Result<()>
 where
     O: OutputDriver,
@@ -283,13 +321,12 @@ where
     A: WindowApp<W, R>,
     W: Copy + Eq + Ord,
     R: Copy + Eq + Ord + PartialEq<W> + std::fmt::Debug,
-    FDispatch: FnMut(&Event, &mut A) -> bool,
-    FQuit: FnMut(Option<&Event>, &mut A) -> bool,
     FMap: Fn(R) -> W + Copy,
     FFocus: Fn(W) -> Option<R>,
 {
     let draw_map = map_region;
     let mut draw_state = WindowDrawState::default();
+    let poll_interval = Duration::from_millis(16);
     run_app(
         output,
         driver,
@@ -302,8 +339,6 @@ where
             let mut frame = frame;
             draw_window_app(&mut frame, app, &mut draw_state, draw_map);
         },
-        dispatch,
-        should_quit,
     )
 }
 

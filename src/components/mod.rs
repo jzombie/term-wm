@@ -22,7 +22,7 @@ pub use dialog_overlay::DialogOverlayComponent;
 pub use list::ListComponent;
 pub use markdown_viewer::MarkdownViewerComponent;
 pub use scroll_view::{
-    ScrollAreaComponent, ScrollAreaContent, ScrollConstraints, ScrollMetrics, ScrollViewComponent,
+    ScrollViewComponent, ScrollbarAxis, ScrollbarDrag, render_scrollbar, render_scrollbar_oriented,
 };
 pub use selectable_text::{
     LogicalPosition, SelectableSurface, SelectionController, SelectionHost, SelectionRange,

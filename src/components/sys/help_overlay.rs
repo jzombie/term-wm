@@ -6,6 +6,7 @@ use ratatui::widgets::{Block, Borders, Clear};
 
 use crate::components::{
     Component, ComponentContext, DialogOverlayComponent, MarkdownViewerComponent,
+    ScrollViewComponent,
 };
 use crate::keybindings::{Action, KeyBindings};
 use crate::ui::UiFrame;
@@ -17,7 +18,7 @@ const HELP_CONTENT_BYTES: &[u8] =
 pub struct HelpOverlayComponent {
     dialog: DialogOverlayComponent,
     visible: bool,
-    viewer: MarkdownViewerComponent,
+    viewer: ScrollViewComponent<MarkdownViewerComponent>,
     area: Rect,
 }
 
@@ -48,9 +49,8 @@ impl Component for HelpOverlayComponent {
         // Overlays are not part of the standard focus ring, so they often
         // receive `focused=false`. Force the viewer to stay logically focused
         // so selection drags are preserved while the help dialog is visible.
-        let viewer_focused = self.visible;
-        let viewer_ctx = ComponentContext::new(viewer_focused).with_overlay(true);
-        self.viewer.render_content(frame, inner, &viewer_ctx);
+        let viewer_ctx = self.viewer_context();
+        self.viewer.render(frame, inner, &viewer_ctx);
     }
 
     fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
@@ -63,7 +63,7 @@ impl HelpOverlayComponent {
         &mut self,
         event: &Event,
         area: Rect,
-        ctx: &ComponentContext,
+        _ctx: &ComponentContext,
     ) -> bool {
         if !self.visible {
             return false;
@@ -75,7 +75,8 @@ impl HelpOverlayComponent {
                     self.close();
                     true
                 } else {
-                    self.viewer.handle_key_event(key, ctx)
+                    let viewer_ctx = self.viewer_context();
+                    self.viewer.handle_event(event, &viewer_ctx)
                 }
             }
             Event::Mouse(_) => {
@@ -84,14 +85,8 @@ impl HelpOverlayComponent {
                     self.close();
                     return true;
                 }
-                let rect = self.dialog.rect_for(area);
-                let inner = Rect {
-                    x: rect.x.saturating_add(1),
-                    y: rect.y.saturating_add(1),
-                    width: rect.width.saturating_sub(2),
-                    height: rect.height.saturating_sub(2),
-                };
-                self.viewer.handle_pointer_event_in_area(event, inner, ctx)
+                let viewer_ctx = self.viewer_context();
+                self.viewer.handle_event(event, &viewer_ctx)
             }
             _ => false,
         }
@@ -103,7 +98,7 @@ impl HelpOverlayComponent {
         let mut overlay = Self {
             dialog: DialogOverlayComponent::new(),
             visible: false,
-            viewer: MarkdownViewerComponent::new(),
+            viewer: ScrollViewComponent::new(MarkdownViewerComponent::new()),
             area: Rect::default(),
         };
         overlay.dialog.set_size(70, 20);
@@ -163,9 +158,9 @@ impl HelpOverlayComponent {
                 .replace("%MENU_SELECT%", &select)
                 .replace("%SUPER%", &super_key)
                 .replace("%HELP_MENU%", &help_label);
-            overlay.viewer.set_markdown(&s);
+            overlay.viewer.content.set_markdown(&s);
         }
-        overlay.viewer.set_link_handler_fn(|url| {
+        overlay.viewer.content.set_link_handler_fn(|url| {
             let _ = webbrowser::open(url);
             true
         });
@@ -182,14 +177,14 @@ impl HelpOverlayComponent {
         self.visible = false;
         self.viewer.set_keyboard_enabled(false);
         self.dialog.set_visible(false);
-        self.viewer.reset();
+        self.viewer.content.reset();
     }
 
     pub fn visible(&self) -> bool {
         self.visible
     }
 
-    pub fn handle_help_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
+    pub fn handle_help_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
         match event {
             Event::Key(key) => {
                 let kb = KeyBindings::default();
@@ -197,10 +192,14 @@ impl HelpOverlayComponent {
                     self.close();
                     true
                 } else {
-                    self.viewer.handle_key_event(key, ctx)
+                    let viewer_ctx = self.viewer_context();
+                    self.viewer.handle_event(event, &viewer_ctx)
                 }
             }
-            Event::Mouse(_) => self.viewer.handle_pointer_event(event, ctx),
+            Event::Mouse(_) => {
+                let viewer_ctx = self.viewer_context();
+                self.viewer.handle_event(event, &viewer_ctx)
+            }
             _ => false,
         }
     }
@@ -211,7 +210,13 @@ impl HelpOverlayComponent {
     }
 
     pub fn set_selection_enabled(&mut self, enabled: bool) {
-        self.viewer.set_selection_enabled(enabled);
+        self.viewer.content.set_selection_enabled(enabled);
+    }
+}
+
+impl HelpOverlayComponent {
+    fn viewer_context(&self) -> ComponentContext {
+        ComponentContext::new(self.visible).with_overlay(true)
     }
 }
 
@@ -253,7 +258,7 @@ mod tests {
             let mut frame = crate::ui::UiFrame::from_parts(area, &mut buffer);
             overlay
                 .viewer
-                .render_content(&mut frame, area, &ComponentContext::new(true));
+                .render(&mut frame, area, &overlay.viewer_context());
         }
 
         let mut joined = String::new();

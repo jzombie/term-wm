@@ -43,10 +43,20 @@ pub struct ViewportSharedState {
     pub(crate) offset_y: usize,
     pub(crate) width: usize,
     pub(crate) height: usize,
-    pub(crate) max_offset_x: usize,
-    pub(crate) max_offset_y: usize,
+    pub(crate) content_width: usize,
+    pub(crate) content_height: usize,
     pub(crate) pending_offset_x: Option<usize>,
     pub(crate) pending_offset_y: Option<usize>,
+}
+
+impl ViewportSharedState {
+    pub(crate) fn max_offset_x(&self) -> usize {
+        self.content_width.saturating_sub(self.width)
+    }
+
+    pub(crate) fn max_offset_y(&self) -> usize {
+        self.content_height.saturating_sub(self.height)
+    }
 }
 
 impl ViewportHandle {
@@ -60,17 +70,25 @@ impl ViewportHandle {
         }
     }
 
+    pub fn set_content_size(&self, width: usize, height: usize) {
+        let mut inner = self.shared.borrow_mut();
+        inner.content_width = width;
+        inner.content_height = height;
+    }
+
     pub fn scroll_vertical_to(&self, offset: usize) {
         let mut inner = self.shared.borrow_mut();
-        let clamped = offset.min(inner.max_offset_y);
+        let max = inner.max_offset_y();
+        let clamped = offset.min(max);
         inner.offset_y = clamped;
         inner.pending_offset_y = Some(clamped);
     }
 
     pub fn scroll_vertical_by(&self, delta: isize) {
         let mut inner = self.shared.borrow_mut();
+        let max = inner.max_offset_y();
         let current = inner.offset_y as isize;
-        let next = (current + delta).clamp(0, inner.max_offset_y as isize) as usize;
+        let next = (current + delta).clamp(0, max as isize) as usize;
         inner.offset_y = next;
         inner.pending_offset_y = Some(next);
     }
@@ -90,7 +108,8 @@ impl ViewportHandle {
             inner.pending_offset_y = Some(start);
         } else if end > current + height {
             let new_offset = end.saturating_sub(height);
-            let clamped = new_offset.min(inner.max_offset_y);
+            let max = inner.max_offset_y();
+            let clamped = new_offset.min(max);
             inner.offset_y = clamped;
             inner.pending_offset_y = Some(clamped);
         }
@@ -98,15 +117,17 @@ impl ViewportHandle {
 
     pub fn scroll_horizontal_to(&self, offset: usize) {
         let mut inner = self.shared.borrow_mut();
-        let clamped = offset.min(inner.max_offset_x);
+        let max = inner.max_offset_x();
+        let clamped = offset.min(max);
         inner.offset_x = clamped;
         inner.pending_offset_x = Some(clamped);
     }
 
     pub fn scroll_horizontal_by(&self, delta: isize) {
         let mut inner = self.shared.borrow_mut();
+        let max = inner.max_offset_x();
         let current = inner.offset_x as isize;
-        let next = (current + delta).clamp(0, inner.max_offset_x as isize) as usize;
+        let next = (current + delta).clamp(0, max as isize) as usize;
         inner.offset_x = next;
         inner.pending_offset_x = Some(next);
     }
@@ -126,7 +147,8 @@ impl ViewportHandle {
             inner.pending_offset_x = Some(start);
         } else if end > current + width {
             let new_offset = end.saturating_sub(width);
-            let clamped = new_offset.min(inner.max_offset_x);
+            let max = inner.max_offset_x();
+            let clamped = new_offset.min(max);
             inner.offset_x = clamped;
             inner.pending_offset_x = Some(clamped);
         }

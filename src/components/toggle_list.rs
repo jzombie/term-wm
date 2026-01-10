@@ -1,9 +1,9 @@
 use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
+use ratatui::widgets::{Block, Borders, List, ListItem};
 
-use crate::components::{Component, ComponentContext, scroll_view::ScrollViewComponent};
+use crate::components::{Component, ComponentContext};
 use crate::ui::UiFrame;
 
 #[derive(Clone)]
@@ -17,7 +17,6 @@ pub struct ToggleListComponent {
     items: Vec<ToggleItem>,
     selected: usize,
     title: String,
-    scroll_view: ScrollViewComponent,
 }
 
 impl Component for ToggleListComponent {
@@ -34,36 +33,40 @@ impl Component for ToggleListComponent {
         };
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        if inner.height == 0 || inner.width == 0 {
+
+        if inner.width == 0 || inner.height == 0 {
             return;
         }
 
-        let total = self.items.len();
-        let view = inner.height as usize;
-        self.scroll_view.update(inner, total, view);
-        self.keep_selected_in_view(view);
+        let total_count = self.items.len();
+        // Assuming single line items
+        if let Some(handle) = ctx.viewport_handle() {
+            handle.set_content_size(inner.width as usize, total_count + 2);
+            handle.ensure_vertical_visible(self.selected + 1, self.selected + 2);
+        }
 
-        let offset = self.scroll_view.offset();
-        let items = self
+        let vp = ctx.viewport();
+        // Similar logic to ListComponent
+        let skip_n = vp.offset_y.saturating_sub(1);
+
+        let items: Vec<ListItem> = self
             .items
             .iter()
-            .skip(offset)
-            .take(view)
-            .map(|item| {
+            .enumerate()
+            .skip(skip_n)
+            .take(inner.height as usize)
+            .map(|(i, item)| {
                 let marker = if item.checked { "[x]" } else { "[ ]" };
-                ListItem::new(format!("{marker} {}", item.label))
+                let mut li = ListItem::new(format!("{marker} {}", item.label));
+                if i == self.selected {
+                    li = li.style(Style::default().add_modifier(Modifier::REVERSED));
+                }
+                li
             })
             .collect::<Vec<_>>();
 
-        let mut state = ListState::default();
-        if total > 0 && self.selected >= offset {
-            state.select(Some(self.selected - offset));
-        }
-
-        let list =
-            List::new(items).highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-        frame.render_stateful_widget(list, inner, &mut state);
-        self.scroll_view.render(frame);
+        let list = List::new(items);
+        frame.render_widget(list, inner);
     }
 
     fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
@@ -100,7 +103,6 @@ impl Component for ToggleListComponent {
                     false
                 }
             }
-            Event::Mouse(_) => self.handle_scrollbar_event(event),
             _ => false,
         }
     }
@@ -112,7 +114,6 @@ impl ToggleListComponent {
             items: Vec::new(),
             selected: 0,
             title: title.into(),
-            scroll_view: ScrollViewComponent::new(),
         }
     }
 
@@ -139,10 +140,6 @@ impl ToggleListComponent {
         self.selected = selected.min(self.items.len().saturating_sub(1));
     }
 
-    pub fn scroll_offset(&self) -> usize {
-        self.scroll_view.offset()
-    }
-
     pub fn move_selection(&mut self, delta: isize) {
         self.bump_selection(delta);
     }
@@ -165,44 +162,6 @@ impl ToggleListComponent {
             return true;
         }
         false
-    }
-
-    fn keep_selected_in_view(&mut self, view: usize) {
-        if view == 0 {
-            self.scroll_view.set_offset(0);
-            return;
-        }
-        if self.items.is_empty() {
-            self.scroll_view.set_offset(0);
-            return;
-        }
-        let mut offset = self.scroll_view.offset();
-        if self.selected < offset {
-            offset = self.selected;
-        } else if self.selected >= offset + view {
-            offset = self.selected + 1 - view;
-        }
-        self.scroll_view.set_offset(offset);
-    }
-
-    fn handle_scrollbar_event(&mut self, event: &Event) -> bool {
-        let response = self.scroll_view.handle_event(event);
-        if let Some(offset) = response.v_offset {
-            self.scroll_view.set_offset(offset);
-        }
-        if response.handled {
-            self.scroll_view
-                .set_total_view(self.items.len(), self.scroll_view.view());
-            let view = self.scroll_view.view();
-            if view > 0 {
-                if self.selected < self.scroll_view.offset() {
-                    self.selected = self.scroll_view.offset();
-                } else if self.selected >= self.scroll_view.offset() + view {
-                    self.selected = self.scroll_view.offset() + view - 1;
-                }
-            }
-        }
-        response.handled
     }
 }
 

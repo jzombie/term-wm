@@ -426,8 +426,22 @@ where
     }
 
     fn dispatch_system_window_event(&mut self, id: SystemWindowId, event: &Event) -> bool {
+        if let Some(localized) = self.localize_event_content(WindowId::system(id), event) {
+            return self.dispatch_system_window_event_localized(id, &localized);
+        }
         self.system_window_entry_mut(id)
             .map(|entry| entry.handle_event(event))
+            .unwrap_or(false)
+    }
+
+    fn dispatch_system_window_event_localized(
+        &mut self,
+        id: SystemWindowId,
+        event: &Event,
+    ) -> bool {
+        let adjusted = self.adjust_event_for_window(WindowId::system(id), event);
+        self.system_window_entry_mut(id)
+            .map(|entry| entry.handle_event(&adjusted))
             .unwrap_or(false)
     }
 
@@ -592,6 +606,10 @@ where
 
     pub fn take_mouse_capture_change(&mut self) -> Option<bool> {
         self.state.take_mouse_capture_change()
+    }
+
+    pub fn take_clipboard_change(&mut self) -> Option<bool> {
+        self.state.take_clipboard_change()
     }
 
     pub fn clipboard_available(&self) -> bool {
@@ -800,6 +818,40 @@ where
         self.app_focus.current()
     }
 
+    pub fn focused_window(&self) -> WindowId<R> {
+        self.wm_focus.current()
+    }
+
+    /// Returns the currently focused window along with an event localized to its content area.
+    pub fn focused_window_event(&self, event: &Event) -> Option<(WindowId<R>, Event)> {
+        let window_id = self.focused_window();
+        let localized = self
+            .localize_event_content(window_id, event)
+            .unwrap_or_else(|| event.clone());
+        Some((window_id, localized))
+    }
+
+    /// Handle managed chrome interactions first, then dispatch the localized event to either the
+    /// focused system window or the provided app handler. Returns true when the event was consumed.
+    pub fn dispatch_focused_event<F>(&mut self, event: &Event, mut on_app: F) -> bool
+    where
+        F: FnMut(R, &Event) -> bool,
+    {
+        if matches!(event, Event::Mouse(_)) && self.handle_managed_event(event) {
+            return true;
+        }
+        let Some((window_id, localized)) = self.focused_window_event(event) else {
+            return false;
+        };
+        let adjusted = self.adjust_event_for_window(window_id, &localized);
+        match window_id {
+            WindowId::App(id) => on_app(id, &adjusted),
+            WindowId::System(system_id) => {
+                self.dispatch_system_window_event_localized(system_id, &adjusted)
+            }
+        }
+    }
+
     pub fn set_focus(&mut self, focus: W) {
         self.app_focus.set_current(focus);
     }
@@ -924,14 +976,50 @@ where
         self.region_for_id(WindowId::app(id))
     }
 
-    /// Translate a mouse event into the local coordinate space for the given app window.
-    /// Returns a new `Event` when translation occurs; otherwise returns `None`.
-    pub fn localize_event_to_app(&self, id: R, event: &Event) -> Option<Event> {
-        self.localize_event(WindowId::app(id), event)
+    fn window_content_offset(&self, id: WindowId<R>) -> (u16, u16) {
+        let full = self.full_region_for_id(id);
+        let content = self.region_for_id(id);
+        (
+            content.x.saturating_sub(full.x),
+            content.y.saturating_sub(full.y),
+        )
     }
 
-    /// Translate mouse coordinates into the local coordinate space for the provided window id.
+    fn adjust_event_for_window(&self, id: WindowId<R>, event: &Event) -> Event {
+        if let Event::Mouse(mut mouse) = event.clone() {
+            let (offset_x, offset_y) = self.window_content_offset(id);
+            mouse.column = mouse.column.saturating_add(offset_x);
+            mouse.row = mouse.row.saturating_add(offset_y);
+            Event::Mouse(mouse)
+        } else {
+            event.clone()
+        }
+    }
+
+    /// Translate a mouse event into the content coordinate space for the given app window.
+    /// Returns a new `Event` when translation occurs; otherwise returns `None`.
+    pub fn localize_event_to_app(&self, id: R, event: &Event) -> Option<Event> {
+        self.localize_event_content(WindowId::app(id), event)
+    }
+
+    /// Translate mouse coordinates into the window-local coordinate space, including chrome.
     pub fn localize_event(&self, id: WindowId<R>, event: &Event) -> Option<Event> {
+        match event {
+            Event::Mouse(mouse) => {
+                let rect = self.full_region_for_id(id);
+                Some(Event::Mouse(MouseEvent {
+                    column: mouse.column.saturating_sub(rect.x),
+                    row: mouse.row.saturating_sub(rect.y),
+                    kind: mouse.kind,
+                    modifiers: mouse.modifiers,
+                }))
+            }
+            _ => None,
+        }
+    }
+
+    /// Translate mouse coordinates into the content-area coordinate space for the provided window id.
+    fn localize_event_content(&self, id: WindowId<R>, event: &Event) -> Option<Event> {
         match event {
             Event::Mouse(mouse) => {
                 let rect = self.region_for_id(id);
@@ -2965,14 +3053,96 @@ mod tests {
             modifiers: crossterm::event::KeyModifiers::NONE,
         };
         let event = Event::Mouse(mouse);
-        let localized = wm
+        // Window-local coordinates include chrome offsets.
+        let window_local = wm
+            .localize_event(WindowId::app(1), &event)
+            .expect("window-local event");
+        if let Event::Mouse(local) = window_local {
+            assert_eq!(local.column, 5); // 15 - target_rect.x
+            assert_eq!(local.row, 4); // 9 - target_rect.y
+        } else {
+            panic!("expected mouse event");
+        }
+
+        // Content-local coordinates subtract decorator padding.
+        let content_local = wm
             .localize_event_to_app(1, &event)
-            .expect("mouse localized");
-        if let Event::Mouse(local) = localized {
+            .expect("content-local event");
+        if let Event::Mouse(local) = content_local {
             assert_eq!(local.column, 4);
             assert_eq!(local.row, 2);
         } else {
             panic!("expected mouse event");
         }
+    }
+
+    #[test]
+    fn adjust_event_rebases_app_mouse_coordinates() {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        let mut wm = WindowManager::<usize, usize>::new_managed(0);
+        let full = Rect {
+            x: 10,
+            y: 3,
+            width: 12,
+            height: 8,
+        };
+        wm.regions.set(WindowId::app(1usize), full);
+
+        let global = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 16,
+            row: 9,
+            modifiers: KeyModifiers::NONE,
+        };
+        let content = wm.region_for_id(WindowId::app(1));
+        let localized = Event::Mouse(MouseEvent {
+            column: global.column.saturating_sub(content.x),
+            row: global.row.saturating_sub(content.y),
+            kind: global.kind,
+            modifiers: global.modifiers,
+        });
+
+        let rebased = wm.adjust_event_for_window(WindowId::app(1), &localized);
+        let Event::Mouse(result) = rebased else {
+            panic!("expected mouse event");
+        };
+        assert_eq!(result.column, global.column - full.x);
+        assert_eq!(result.row, global.row - full.y);
+    }
+
+    #[test]
+    fn adjust_event_rebases_system_mouse_coordinates() {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        let mut wm = WindowManager::<usize, usize>::new_managed(0);
+        let full = Rect {
+            x: 2,
+            y: 4,
+            width: 15,
+            height: 6,
+        };
+        wm.regions
+            .set(WindowId::system(SystemWindowId::DebugLog), full);
+
+        let global = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 7,
+            row: 8,
+            modifiers: KeyModifiers::NONE,
+        };
+        let content = wm.region_for_id(WindowId::system(SystemWindowId::DebugLog));
+        let localized = Event::Mouse(MouseEvent {
+            column: global.column.saturating_sub(content.x),
+            row: global.row.saturating_sub(content.y),
+            kind: global.kind,
+            modifiers: global.modifiers,
+        });
+
+        let rebased =
+            wm.adjust_event_for_window(WindowId::system(SystemWindowId::DebugLog), &localized);
+        let Event::Mouse(result) = rebased else {
+            panic!("expected mouse event");
+        };
+        assert_eq!(result.column, global.column - full.x);
+        assert_eq!(result.row, global.row - full.y);
     }
 }

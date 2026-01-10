@@ -6,7 +6,7 @@ use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Text};
 
-use crate::components::{Component, ComponentContext, TextRendererComponent};
+use crate::components::{Component, ComponentContext, ScrollViewComponent, TextRendererComponent};
 use crate::ui::UiFrame;
 
 const DEFAULT_MAX_LINES: usize = 2000;
@@ -169,7 +169,7 @@ impl Write for DebugLogWriter {
 #[derive(Debug)]
 pub struct DebugLogComponent {
     handle: DebugLogHandle,
-    renderer: TextRendererComponent,
+    scroll_view: ScrollViewComponent<TextRendererComponent>,
     follow_tail: bool,
     last_total: usize,
     last_view: usize,
@@ -206,22 +206,27 @@ impl Component for DebugLogComponent {
 
         // Prepare Text for the renderer
         let text = Text::from(lines.into_iter().map(Line::from).collect::<Vec<_>>());
-        self.renderer.set_text(text);
-        self.renderer.set_wrap(false);
+        self.scroll_view.content.set_text(text);
+        self.scroll_view.content.set_wrap(false);
         // Follow tail behavior: set renderer offset to bottom when enabled
         if self.follow_tail {
             // renderer will position itself to the bottom during render via its internal scroll
-            let max_off = total.saturating_sub(view);
-            self.renderer.set_vertical_offset(max_off);
+            self.scroll_view
+                .viewport_handle()
+                .scroll_vertical_to(usize::MAX);
         }
+        // We need to render first to update scrollbar/offsets if we want is_at_bottom to reflect *after* render state?
+        // But original code did `follow_tail = is_at_bottom()` BEFORE render (after explicit set offset).
+        // If we just set offset to MAX, then is_at_bottom should be true.
+        // But internal `is_at_bottom` reads `renderer_offset`. `ViewportHandle` updates immediately.
         self.follow_tail = self.is_at_bottom();
 
-        self.renderer.render(frame, area, ctx);
+        self.scroll_view.render(frame, area, ctx);
     }
 
     fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
         // Delegate to the renderer which handles scroll/key/mouse
-        let handled = self.renderer.handle_event(event, ctx);
+        let handled = self.scroll_view.handle_event(event, ctx);
         if handled {
             self.follow_tail = self.is_at_bottom();
         }
@@ -236,11 +241,11 @@ impl DebugLogComponent {
         };
         let mut renderer = TextRendererComponent::new();
         renderer.set_wrap(false);
-        renderer.set_keyboard_enabled(true);
+        // set_keyboard_enabled removed
         (
             Self {
                 handle: handle.clone(),
-                renderer,
+                scroll_view: ScrollViewComponent::new(renderer),
                 follow_tail: true,
                 last_total: 0,
                 last_view: 0,
@@ -262,11 +267,11 @@ impl DebugLogComponent {
     }
 
     fn renderer_offset(&self) -> usize {
-        self.renderer.vertical_offset()
+        self.scroll_view.viewport_handle().info().offset_y
     }
 
     pub fn set_selection_enabled(&mut self, enabled: bool) {
-        self.renderer.set_selection_enabled(enabled);
+        self.scroll_view.content.set_selection_enabled(enabled);
     }
 }
 
@@ -326,7 +331,9 @@ mod tests {
             comp.render(&mut frame, area, &ComponentContext::new(true));
         }
         let max_off = comp.last_total.saturating_sub(comp.last_view);
-        comp.renderer.set_vertical_offset(max_off);
+        comp.scroll_view
+            .viewport_handle()
+            .scroll_vertical_to(max_off);
         comp.follow_tail = true;
 
         comp.handle_event(
@@ -336,9 +343,9 @@ mod tests {
             )),
             &ComponentContext::new(true),
         );
-        assert!(comp.renderer.vertical_offset() < max_off);
+        assert!(comp.renderer_offset() < max_off);
 
-        let before = comp.renderer.vertical_offset();
+        let before = comp.renderer_offset();
         comp.handle_event(
             &Event::Mouse(MouseEvent {
                 kind: MouseEventKind::ScrollDown,
@@ -348,6 +355,6 @@ mod tests {
             }),
             &ComponentContext::new(true),
         );
-        assert!(comp.renderer.vertical_offset() >= before);
+        assert!(comp.renderer_offset() >= before);
     }
 }
