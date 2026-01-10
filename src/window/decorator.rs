@@ -13,13 +13,7 @@ pub enum HeaderAction {
 }
 
 pub trait WindowDecorator: std::fmt::Debug {
-    fn render_window(
-        &self,
-        frame: &mut UiFrame<'_>,
-        rect: Rect,
-        title: &str,
-        focused: bool,
-    );
+    fn render_window(&self, frame: &mut UiFrame<'_>, rect: Rect, title: &str, focused: bool);
 
     fn hit_test(&self, window_rect: Rect, x: u16, y: u16) -> HeaderAction;
 }
@@ -57,13 +51,7 @@ impl WindowDecorator for DefaultDecorator {
         }
     }
 
-    fn render_window(
-        &self,
-        frame: &mut UiFrame<'_>,
-        rect: Rect,
-        title: &str,
-        focused: bool,
-    ) {
+    fn render_window(&self, frame: &mut UiFrame<'_>, rect: Rect, title: &str, focused: bool) {
         let buffer = frame.buffer_mut();
 
         let focused_header_style = Style::default()

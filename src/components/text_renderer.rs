@@ -515,14 +515,14 @@ impl TextRendererContent {
                     row_base.saturating_add(local_row),
                     col_base.saturating_add(local_col),
                 );
-                if range.contains(pos) {
-                    if let Some(cell) = buffer.cell_mut((x, y)) {
-                        let style = cell
-                            .style()
-                            .bg(crate::theme::selection_bg())
-                            .fg(crate::theme::selection_fg());
-                        cell.set_style(style);
-                    }
+                if range.contains(pos)
+                    && let Some(cell) = buffer.cell_mut((x, y))
+                {
+                    let style = cell
+                        .style()
+                        .bg(crate::theme::selection_bg())
+                        .fg(crate::theme::selection_fg());
+                    cell.set_style(style);
                 }
             }
         }

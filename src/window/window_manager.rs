@@ -1566,6 +1566,8 @@ where
             .is_some_and(|layout| layout.root().subtree_any(|node_id| node_id == id))
     }
 
+    // narrow allow: refactor into a small struct if/when argument list needs reduction
+    #[allow(clippy::too_many_arguments)]
     fn move_floating(
         &mut self,
         id: WindowId<R>,
@@ -2884,7 +2886,7 @@ mod tests {
             FloatRectSpec::Absolute(fr) => {
                 // top_allowed = 0 - (4 - MIN_MARGIN) => 0 - (4-4) = 0
                 // but since original y=-3, it should clamp up to 0
-                assert!(fr.y >= 0 || fr.y == 0 || fr.y == -0);
+                assert!(fr.y >= 0);
             }
             _ => panic!("expected absolute rect"),
         }

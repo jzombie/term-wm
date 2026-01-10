@@ -2,8 +2,8 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use crate::components::{Component, ComponentContext};
 use crate::components::ascii_image::AsciiImageComponent;
+use crate::components::{Component, ComponentContext};
 use crate::ui::UiFrame;
 
 enum Pnm {

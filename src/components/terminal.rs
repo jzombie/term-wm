@@ -11,8 +11,7 @@ use ratatui::{
 use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
 use crate::components::{
-    Component,
-    ComponentContext,
+    Component, ComponentContext,
     scroll_view::ScrollViewComponent,
     selectable_text::{
         LogicalPosition, SelectionController, SelectionHost, SelectionViewport,
