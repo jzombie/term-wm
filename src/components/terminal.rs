@@ -10,13 +10,17 @@ use ratatui::{
 };
 use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
-use crate::components::{Component, scroll_view::ScrollViewComponent};
+use crate::components::{Component, ComponentContext};
 use crate::layout::rect_contains;
-use crate::linkifier::{
-    LinkHandler, LinkOverlay, Linkifier, OverlaySignature, decorate_link_style,
-};
 use crate::pty::Pty;
 use crate::ui::UiFrame;
+use crate::utils::linkifier::{
+    LinkHandler, LinkOverlay, Linkifier, OverlaySignature, decorate_link_style,
+};
+use crate::utils::selectable_text::{
+    LogicalPosition, SelectionController, SelectionHost, SelectionViewport, handle_selection_mouse,
+    maintain_selection_drag,
+};
 
 // This controls the scrollback buffer size in the vt100 parser.
 // It determines how many lines you can scroll up to see.
@@ -25,16 +29,18 @@ const DEFAULT_SCROLLBACK_LEN: usize = 2000;
 pub struct TerminalComponent {
     pane: Pty,
     last_size: (u16, u16),
-    scroll_view: ScrollViewComponent,
     last_area: Rect,
     linkifier: Linkifier,
     link_overlay: LinkOverlay,
     link_handler: Option<LinkHandler>,
     command_description: String,
+    selection: SelectionController,
+    selection_enabled: bool,
+    last_scrollback: usize,
 }
 
 impl Component for TerminalComponent {
-    fn resize(&mut self, area: Rect) {
+    fn resize(&mut self, area: Rect, _ctx: &ComponentContext) {
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -50,22 +56,26 @@ impl Component for TerminalComponent {
         }
     }
 
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
+        if !ctx.focused() {
+            self.selection.clear();
+        }
         if area.height == 0 || area.width == 0 {
             self.last_area = Rect::default();
             return;
         }
         self.last_area = area;
         let _exited = self.pane.has_exited();
-        self.render_screen(frame, area, focused);
+        self.render_screen(frame, area, ctx);
     }
 
-    fn handle_event(&mut self, event: &Event) -> bool {
+    fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
         match event {
             Event::Key(key) => {
                 if key.kind == KeyEventKind::Release {
                     return false;
                 }
+                self.selection.clear();
                 if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
                     && key.modifiers.contains(KeyModifiers::SHIFT)
                     && !self.pane.alternate_screen()
@@ -92,10 +102,16 @@ impl Component for TerminalComponent {
                 true
             }
             Event::Mouse(mouse) => {
-                if self.try_handle_link_click(mouse) {
+                if !self.pane.alternate_screen() {
+                    // Logic for scrollbar event was here, but now ScrollView handles it.
+                    // If we need to capture events that ScrollView didn't handle (e.g. if we are not wrapped?),
+                    // but we assume we are wrapped or don't need it.
+                }
+                let selection_ready = self.selection_enabled && !self.pane.alternate_screen();
+                if handle_selection_mouse(self, selection_ready, mouse) {
                     return true;
                 }
-                if !self.pane.alternate_screen() && self.handle_scrollbar_event(event) {
+                if self.try_handle_link_click(mouse) {
                     return true;
                 }
                 if !rect_contains(self.last_area, mouse.column, mouse.row) {
@@ -158,18 +174,18 @@ impl TerminalComponent {
     pub fn spawn(command: CommandBuilder, size: PtySize) -> crate::pty::PtyResult<Self> {
         let command_description = format!("{:?}", command);
         let pane = Pty::spawn_with_scrollback(command, size, DEFAULT_SCROLLBACK_LEN)?;
-        let mut comp = Self {
+        let comp = Self {
             pane,
             last_size: (size.cols, size.rows),
-            scroll_view: ScrollViewComponent::new(),
             last_area: Rect::default(),
             linkifier: Linkifier::new(),
             link_overlay: LinkOverlay::new(),
             link_handler: None,
             command_description,
+            selection: SelectionController::new(),
+            selection_enabled: false,
+            last_scrollback: 0,
         };
-        // Terminal scroll view must not hijack keyboard input; disable by default.
-        comp.scroll_view.set_keyboard_enabled(false);
         Ok(comp)
     }
 
@@ -221,10 +237,57 @@ impl TerminalComponent {
         self.link_handler = Some(Arc::new(handler));
     }
 
-    fn render_screen(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
+    pub fn set_selection_enabled(&mut self, enabled: bool) {
+        if self.selection_enabled == enabled {
+            return;
+        }
+        self.selection_enabled = enabled;
+        if !enabled {
+            self.selection.clear();
+        }
+    }
+
+    fn render_screen(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
+        maintain_selection_drag(self);
+
+        // Synchronize scroll state with the shared Viewport
+        if !self.pane.alternate_screen()
+            && let Some(handle) = ctx.viewport_handle()
+        {
+            let used = self.pane.max_scrollback();
+            let view_height = area.height as usize;
+            let total_height = used + view_height;
+            handle.set_content_size(area.width as usize, total_height);
+
+            let current_sb = self.pane.scrollback();
+            // If scrollback changed internally (keys/output), push to viewport
+            if current_sb != self.last_scrollback {
+                let new_offset = used.saturating_sub(current_sb);
+                handle.scroll_vertical_to(new_offset);
+            } else {
+                // Otherwise sync from viewport (scrollbar/mouse wheel on container)
+                let offset = ctx.viewport().offset_y;
+                let target_sb = used.saturating_sub(offset);
+                if target_sb != current_sb {
+                    self.pane.set_scrollback(target_sb);
+                }
+            }
+        }
+
         let scrollback_value = self.pane.scrollback();
+        self.last_scrollback = scrollback_value;
+
         let show_cursor = scrollback_value == 0;
         let used = self.pane.max_scrollback();
+        let selection_row_base = used.saturating_sub(scrollback_value);
+        let selection_range = if self.selection_enabled {
+            self.selection
+                .selection_range()
+                .filter(|r| r.is_non_empty())
+                .map(|r| r.normalized())
+        } else {
+            None
+        };
         let buffer = frame.buffer_mut();
 
         // Optimally only iterate over the visible intersection
@@ -280,6 +343,7 @@ impl TerminalComponent {
             );
         }
 
+        let focused = ctx.focused();
         for row in start_row..start_row + visible.height {
             for col in start_col..start_col + visible.width {
                 let cell_x = area.x + col;
@@ -321,6 +385,16 @@ impl TerminalComponent {
                         style = decorate_link_style(style);
                     }
 
+                    if let Some(range) = selection_range {
+                        let abs_row = selection_row_base.saturating_add(row as usize);
+                        let abs_col = col as usize;
+                        if range.contains(LogicalPosition::new(abs_row, abs_col)) {
+                            style = style
+                                .bg(crate::theme::selection_bg())
+                                .fg(crate::theme::selection_fg());
+                        }
+                    }
+
                     if let Some(buf_cell) = buffer.cell_mut((cell_x, cell_y)) {
                         let mut buf = [0u8; 4];
                         // If background is transparent (None), force it to Reset to clear underlying content
@@ -347,28 +421,43 @@ impl TerminalComponent {
                 cell.set_style(cell.style().add_modifier(Modifier::REVERSED));
             }
         }
+    }
+}
 
-        if !screen.alternate_screen() && used > 0 {
-            let view = area.height as usize;
-            if view > 0 {
-                let total = used.saturating_add(view);
-                let offset = used.saturating_sub(scrollback_value);
-                self.scroll_view.update(area, total, view);
-                self.scroll_view.set_offset(offset);
-                self.scroll_view.render(frame);
-            }
+impl SelectionViewport for TerminalComponent {
+    fn selection_viewport(&self) -> Rect {
+        self.last_area
+    }
+
+    fn logical_position_from_point(&mut self, column: u16, row: u16) -> Option<LogicalPosition> {
+        TerminalComponent::logical_position_from_point(self, column, row)
+    }
+
+    fn scroll_selection_vertical(&mut self, delta: isize) {
+        if delta == 0 {
+            return;
         }
+        self.scroll_scrollback(-delta);
+    }
+
+    fn scroll_selection_horizontal(&mut self, _delta: isize) {}
+}
+
+impl SelectionHost for TerminalComponent {
+    fn selection_controller(&mut self) -> &mut SelectionController {
+        &mut self.selection
     }
 }
 
 #[cfg(unix)]
 pub fn default_shell() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string())
+    std::env::var("SHELL").unwrap_or_else(|_| crate::constants::DEFAULT_SHELL_FALLBACK.to_string())
 }
 
 #[cfg(windows)]
 pub fn default_shell() -> String {
-    std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
+    std::env::var("COMSPEC")
+        .unwrap_or_else(|_| crate::constants::DEFAULT_SHELL_FALLBACK.to_string())
 }
 
 pub fn default_shell_command() -> CommandBuilder {
@@ -387,17 +476,31 @@ impl TerminalComponent {
         self.pane.set_scrollback(next);
     }
 
-    fn handle_scrollbar_event(&mut self, event: &Event) -> bool {
+    fn logical_position_from_point(&mut self, column: u16, row: u16) -> Option<LogicalPosition> {
+        if self.last_area.width == 0 || self.last_area.height == 0 {
+            return None;
+        }
+        let max_x = self
+            .last_area
+            .x
+            .saturating_add(self.last_area.width)
+            .saturating_sub(1);
+        let max_y = self
+            .last_area
+            .y
+            .saturating_add(self.last_area.height)
+            .saturating_sub(1);
+        let clamped_col = column.clamp(self.last_area.x, max_x);
+        let clamped_row = row.clamp(self.last_area.y, max_y);
+        let local_col = clamped_col.saturating_sub(self.last_area.x) as usize;
+        let local_row = clamped_row.saturating_sub(self.last_area.y) as usize;
+        let scrollback_value = self.pane.scrollback();
         let used = self.pane.max_scrollback();
-        if used == 0 {
-            return false;
-        }
-        let response = self.scroll_view.handle_event(event);
-        if let Some(offset) = response.v_offset {
-            let scrollback = used.saturating_sub(offset);
-            self.pane.set_scrollback(scrollback);
-        }
-        response.handled
+        let row_base = used.saturating_sub(scrollback_value);
+        Some(LogicalPosition::new(
+            row_base.saturating_add(local_row),
+            local_col,
+        ))
     }
 
     /// Terminate the underlying PTY child process.

@@ -10,7 +10,7 @@ Cross-platform Requirement
 - If behavioral differences are unavoidable, document them clearly and include platform-specific tests or CI jobs.
 
 Component Naming
-- All UI widgets must be named `*Component` (e.g., `ScrollViewComponent`, `MarkdownViewerComponent`, `StatusBarComponent`).
+- All UI widgets must be named `*Component` (e.g., `ScrollViewComponent`, `MarkdownViewerComponent`).
 
 Filename Conventions
 - Filenames must be lower_snake_case and derived from the struct name without the `Component` suffix.

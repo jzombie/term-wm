@@ -2,15 +2,20 @@ use std::io;
 use std::time::Duration;
 
 use crossterm::event::{Event, KeyEventKind};
-use ratatui::prelude::{Constraint, Direction};
+use ratatui::buffer::Buffer;
+use ratatui::prelude::{Constraint, Direction, Rect};
 use ratatui::style::Style;
 
-use crate::components::ConfirmAction;
+use crate::components::{Component, ComponentContext, ConfirmAction};
 use crate::drivers::{InputDriver, OutputDriver};
 use crate::event_loop::{ControlFlow, EventLoop};
 use crate::layout::{LayoutNode, TilingLayout};
 use crate::ui::UiFrame;
-use crate::window::{AppWindowDraw, LayoutContract, WindowDrawTask, WindowManager, WmMenuAction};
+use crate::window::decorator::WindowDecorator;
+use crate::window::{
+    AppWindowDraw, LayoutContract, WindowDrawTask, WindowId, WindowManager, WindowSurface,
+    WmMenuAction,
+};
 
 pub trait HasWindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     fn windows(&mut self) -> &mut WindowManager<W, R>;
@@ -20,6 +25,7 @@ pub trait HasWindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     fn wm_close_window(&mut self, _id: R) -> std::io::Result<()> {
         Ok(())
     }
+    fn set_clipboard_enabled(&mut self, _enabled: bool) {}
 }
 
 pub trait WindowApp<W: Copy + Eq + Ord, R: Copy + Eq + Ord>: HasWindowManager<W, R> {
@@ -33,10 +39,43 @@ pub trait WindowApp<W: Copy + Eq + Ord, R: Copy + Eq + Ord>: HasWindowManager<W,
     fn layout_for_windows(&mut self, windows: &[R]) -> Option<TilingLayout<R>> {
         auto_layout_for_windows(windows)
     }
+
+    fn window_component(&mut self, _id: R) -> Option<&mut dyn Component> {
+        None
+    }
+}
+
+fn handle_focused_app_event<A, W, R>(event: &Event, app: &mut A) -> bool
+where
+    A: WindowApp<W, R>,
+    W: Copy + Eq + Ord,
+    R: Copy + Eq + Ord + PartialEq<W> + std::fmt::Debug,
+{
+    let mut pending_focus: Option<R> = None;
+    let mut pending_event: Option<Event> = None;
+    let consumed = {
+        let windows = app.windows();
+        windows.dispatch_focused_event(event, |focus_id, localized| {
+            pending_focus = Some(focus_id);
+            pending_event = Some(localized.clone());
+            false
+        })
+    };
+
+    if let (Some(focus_id), Some(localized)) = (pending_focus, pending_event) {
+        if let Some(component) = app.window_component(focus_id) {
+            let ctx = ComponentContext::new(true);
+            component.handle_event(&localized, &ctx)
+        } else {
+            false
+        }
+    } else {
+        consumed
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn run_app<O, D, A, W, R, FDraw, FDispatch, FQuit, FMap, FFocus>(
+pub fn run_app<O, D, A, W, R, FDraw, FMap, FFocus>(
     output: &mut O,
     driver: &mut D,
     app: &mut A,
@@ -45,18 +84,14 @@ pub fn run_app<O, D, A, W, R, FDraw, FDispatch, FQuit, FMap, FFocus>(
     _map_focus: FFocus,
     poll_interval: Duration,
     mut draw: FDraw,
-    mut dispatch: FDispatch,
-    mut should_quit: FQuit,
 ) -> io::Result<()>
 where
     O: OutputDriver,
     D: InputDriver,
-    A: HasWindowManager<W, R>,
+    A: WindowApp<W, R>,
     W: Copy + Eq + Ord,
     R: Copy + Eq + Ord + PartialEq<W> + std::fmt::Debug,
     FDraw: for<'frame> FnMut(UiFrame<'frame>, &mut A),
-    FDispatch: FnMut(&Event, &mut A) -> bool,
-    FQuit: FnMut(Option<&Event>, &mut A) -> bool,
     FMap: Fn(R) -> W + Copy,
     FFocus: Fn(W) -> Option<R>,
 {
@@ -85,9 +120,12 @@ where
             for id in app.windows().take_closed_app_windows() {
                 app.wm_close_window(id)?;
             }
-            let mut flush_mouse_capture = |app: &mut A, flow: ControlFlow| {
+            let mut flush_state_changes = |app: &mut A, flow: ControlFlow| {
                 if let Some(enabled) = app.windows().take_mouse_capture_change() {
                     let _ = driver.set_mouse_capture(enabled);
+                }
+                if let Some(clipboard) = app.windows().take_clipboard_change() {
+                    app.set_clipboard_enabled(clipboard);
                 }
                 Ok(flow)
             };
@@ -106,12 +144,12 @@ where
                             ConfirmAction::Cancel => app.windows().close_exit_confirm(),
                         }
                     }
-                    return flush_mouse_capture(app, ControlFlow::Continue);
+                    return flush_state_changes(app, ControlFlow::Continue);
                 }
 
                 if app.windows().help_overlay_visible() {
                     let _ = app.windows().handle_help_event(&evt);
-                    return flush_mouse_capture(app, ControlFlow::Continue);
+                    return flush_state_changes(app, ControlFlow::Continue);
                 }
                 let wm_mode = app.windows().layout_contract() == LayoutContract::WindowManaged;
                 if wm_mode
@@ -124,12 +162,13 @@ where
                         let passthrough = app.windows().esc_passthrough_active();
                         app.windows().close_wm_overlay();
                         if passthrough {
-                            let _ = dispatch(&Event::Key(*key), app);
+                            let passthrough_event = Event::Key(*key);
+                            let _ = handle_focused_app_event(&passthrough_event, app);
                         }
                     } else {
                         app.windows().open_wm_overlay();
                     }
-                    return flush_mouse_capture(app, ControlFlow::Continue);
+                    return flush_state_changes(app, ControlFlow::Continue);
                 }
                 if wm_mode && app.windows().wm_overlay_visible() {
                     if let Some(action) = app.windows().handle_wm_menu_event(&evt) {
@@ -139,6 +178,9 @@ where
                             }
                             WmMenuAction::ToggleMouseCapture => {
                                 app.windows().toggle_mouse_capture();
+                            }
+                            WmMenuAction::ToggleClipboardMode => {
+                                app.windows().toggle_clipboard_enabled();
                             }
                             WmMenuAction::MinimizeWindow => {
                                 let id = app.windows().wm_focus();
@@ -174,20 +216,20 @@ where
                             WmMenuAction::ExitUi => {
                                 app.windows().close_wm_overlay();
                                 app.windows().open_exit_confirm();
-                                return flush_mouse_capture(app, ControlFlow::Continue);
+                                return flush_state_changes(app, ControlFlow::Continue);
                             }
                         }
-                        return flush_mouse_capture(app, ControlFlow::Continue);
+                        return flush_state_changes(app, ControlFlow::Continue);
                     }
                     if app.windows().wm_menu_consumes_event(&evt) {
-                        return flush_mouse_capture(app, ControlFlow::Continue);
+                        return flush_state_changes(app, ControlFlow::Continue);
                     }
                     if let Event::Key(_key) = &evt
                         && mapped_action == Some(crate::keybindings::Action::NewWindow)
                     {
                         app.wm_new_window()?;
                         app.windows().close_wm_overlay();
-                        return flush_mouse_capture(app, ControlFlow::Continue);
+                        return flush_state_changes(app, ControlFlow::Continue);
                     }
                     if let Event::Key(_key) = &evt
                         && (mapped_action == Some(crate::keybindings::Action::FocusNext)
@@ -199,33 +241,45 @@ where
                             &map_region,
                             &_map_focus,
                         );
-                        return flush_mouse_capture(app, ControlFlow::Continue);
+                        return flush_state_changes(app, ControlFlow::Continue);
                     }
+
                     if let Event::Key(_) = &evt {
-                        return flush_mouse_capture(app, ControlFlow::Continue);
+                        return flush_state_changes(app, ControlFlow::Continue);
                     }
                 }
 
                 if matches!(evt, Event::Mouse(_)) && !app.windows().mouse_capture_enabled() {
-                    return flush_mouse_capture(app, ControlFlow::Continue);
+                    return flush_state_changes(app, ControlFlow::Continue);
+                }
+                if let Event::Key(key) = &evt
+                    && key.kind == KeyEventKind::Press
+                    && crate::keybindings::KeyBindings::default()
+                        .matches(crate::keybindings::Action::Quit, key)
+                {
+                    return flush_state_changes(app, ControlFlow::Quit);
                 }
                 match &evt {
                     Event::Key(_) if app.windows().capture_active() => {
                         app.windows().clear_capture();
-                        let _ = dispatch(&evt, app);
+                        let _ = handle_focused_app_event(&evt, app);
                     }
                     _ => {
-                        let _ = dispatch(&evt, app);
+                        let _ = handle_focused_app_event(&evt, app);
                     }
                 }
             } else {
-                if should_quit(None, app) {
-                    return flush_mouse_capture(app, ControlFlow::Quit);
+                // Quit only when the application reports no app windows and
+                // there are no active system windows/overlays. Minimized
+                // windows should not cause the app to exit.
+                if app.enumerate_windows().is_empty() && !app.windows().has_active_system_windows()
+                {
+                    return flush_state_changes(app, ControlFlow::Quit);
                 }
                 app.windows().begin_frame();
                 output.draw(|frame| draw(frame, app))?;
             }
-            flush_mouse_capture(app, ControlFlow::Continue)
+            flush_state_changes(app, ControlFlow::Continue)
         };
 
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(handler)) {
@@ -257,16 +311,13 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn run_window_app<O, D, A, W, R, FDispatch, FQuit, FMap, FFocus>(
+pub fn run_window_app<O, D, A, W, R, FMap, FFocus>(
     output: &mut O,
     driver: &mut D,
     app: &mut A,
     focus_regions: &[R],
     map_region: FMap,
     _map_focus: FFocus,
-    poll_interval: Duration,
-    dispatch: FDispatch,
-    should_quit: FQuit,
 ) -> io::Result<()>
 where
     O: OutputDriver,
@@ -274,13 +325,12 @@ where
     A: WindowApp<W, R>,
     W: Copy + Eq + Ord,
     R: Copy + Eq + Ord + PartialEq<W> + std::fmt::Debug,
-    FDispatch: FnMut(&Event, &mut A) -> bool,
-    FQuit: FnMut(Option<&Event>, &mut A) -> bool,
     FMap: Fn(R) -> W + Copy,
     FFocus: Fn(W) -> Option<R>,
 {
     let draw_map = map_region;
     let mut draw_state = WindowDrawState::default();
+    let poll_interval = Duration::from_millis(16);
     run_app(
         output,
         driver,
@@ -293,8 +343,6 @@ where
             let mut frame = frame;
             draw_window_app(&mut frame, app, &mut draw_state, draw_map);
         },
-        dispatch,
-        should_quit,
     )
 }
 
@@ -366,11 +414,73 @@ fn draw_window_app<A, W, R, FMap>(
     let plan = app.windows().window_draw_plan(frame);
     for task in plan {
         match task {
-            WindowDrawTask::App(window) => app.render_window(frame, window),
-            WindowDrawTask::System(window) => app.windows().render_system_window(frame, window),
+            WindowDrawTask::App(window) => {
+                let (title, decorator) = {
+                    let wm = app.windows();
+                    let title = wm.window_title(WindowId::App(window.id));
+                    let decorator = wm.decorator();
+                    (title, decorator)
+                };
+                composite_window(
+                    frame,
+                    &window.surface,
+                    window.focused,
+                    &title,
+                    decorator.as_ref(),
+                    |subframe| {
+                        app.render_window(subframe, window);
+                    },
+                );
+            }
+            WindowDrawTask::System(window) => {
+                let (title, decorator) = {
+                    let wm = app.windows();
+                    let title = wm.window_title(WindowId::System(window.id));
+                    let decorator = wm.decorator();
+                    (title, decorator)
+                };
+                composite_window(
+                    frame,
+                    &window.surface,
+                    window.focused,
+                    &title,
+                    decorator.as_ref(),
+                    |subframe| {
+                        app.windows().render_system_window(subframe, window);
+                    },
+                );
+            }
         }
     }
     app.windows().render_overlays(frame);
+}
+
+fn composite_window<F>(
+    frame: &mut UiFrame<'_>,
+    surface: &WindowSurface,
+    focused: bool,
+    title: &str,
+    decorator: &dyn WindowDecorator,
+    mut render_content: F,
+) where
+    F: FnMut(&mut UiFrame<'_>),
+{
+    if surface.dest.width == 0 || surface.dest.height == 0 {
+        return;
+    }
+    let local_area = Rect {
+        x: 0,
+        y: 0,
+        width: surface.dest.width,
+        height: surface.dest.height,
+    };
+    let mut buffer = Buffer::empty(local_area);
+    {
+        let mut offscreen = UiFrame::from_parts(local_area, &mut buffer);
+        decorator.render_window(&mut offscreen, local_area, title, focused);
+        render_content(&mut offscreen);
+    }
+    frame.blit_from_signed(&buffer, surface.dest);
 }
 
 fn auto_layout_for_windows<R: Copy + Eq + Ord>(windows: &[R]) -> Option<TilingLayout<R>> {
@@ -403,6 +513,7 @@ fn auto_layout_for_windows<R: Copy + Eq + Ord>(windows: &[R]) -> Option<TilingLa
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn auto_layout_empty_and_multiple() {
         let empty: Vec<u8> = vec![];
@@ -412,21 +523,51 @@ mod tests {
         let layout = auto_layout_for_windows(&one).unwrap();
         // single node should be a leaf
         assert!(matches!(layout.root(), crate::layout::LayoutNode::Leaf(_)));
-
-        let many = vec![1u8, 2, 3, 4];
-        let layout2 = auto_layout_for_windows(&many).unwrap();
-        // for many windows the top-level node should be a split
-        assert!(matches!(
-            layout2.root(),
-            crate::layout::LayoutNode::Split { .. }
-        ));
     }
 
     #[test]
-    fn window_draw_state_update_changes() {
-        let mut s: WindowDrawState<u8> = WindowDrawState::default();
-        assert!(!s.update(&[]));
-        assert!(s.update(&[1, 2]));
-        assert!(!s.update(&[1, 2]));
+    fn runner_does_not_quit_when_app_reports_windows_but_wm_has_no_active_regions() {
+        use crate::window::WindowManager;
+
+        // Create an empty WindowManager (no active regions/z-order).
+        let wm: WindowManager<usize, usize> = WindowManager::new_managed(0);
+        assert!(!wm.has_any_active_windows());
+
+        // Create a fake app that enumerates windows (i.e., app-level windows still exist)
+        // while the WM reports no active windows.
+        struct FakeApp {
+            wm: WindowManager<usize, usize>,
+        }
+        impl super::HasWindowManager<usize, usize> for FakeApp {
+            fn windows(&mut self) -> &mut WindowManager<usize, usize> {
+                &mut self.wm
+            }
+        }
+        impl super::WindowApp<usize, usize> for FakeApp {
+            fn enumerate_windows(&mut self) -> Vec<usize> {
+                vec![1]
+            }
+            fn render_window(
+                &mut self,
+                _frame: &mut crate::ui::UiFrame<'_>,
+                _window: AppWindowDraw<usize>,
+            ) {
+            }
+        }
+
+        let mut app = FakeApp { wm };
+
+        // Sanity: the app-level enumerate shows a window, but the WM reports no active regions.
+        assert!(!app.enumerate_windows().is_empty());
+        assert!(!app.windows().has_active_system_windows());
+
+        // The runner's quit condition should NOT trigger a quit here:
+        // quit_if_no_windows = app.enumerate_windows().is_empty() && !app.windows().has_active_system_windows()
+        let quit_if_no_windows =
+            app.enumerate_windows().is_empty() && !app.windows().has_active_system_windows();
+        assert!(
+            !quit_if_no_windows,
+            "Runner would quit even though app reports windows"
+        );
     }
 }

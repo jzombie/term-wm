@@ -6,7 +6,7 @@ use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Text};
 
-use crate::components::{Component, TextRendererComponent};
+use crate::components::{Component, ComponentContext, ScrollViewComponent, TextRendererComponent};
 use crate::ui::UiFrame;
 
 const DEFAULT_MAX_LINES: usize = 2000;
@@ -169,14 +169,14 @@ impl Write for DebugLogWriter {
 #[derive(Debug)]
 pub struct DebugLogComponent {
     handle: DebugLogHandle,
-    renderer: TextRendererComponent,
+    scroll_view: ScrollViewComponent<TextRendererComponent>,
     follow_tail: bool,
     last_total: usize,
     last_view: usize,
 }
 
 impl Component for DebugLogComponent {
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -206,22 +206,27 @@ impl Component for DebugLogComponent {
 
         // Prepare Text for the renderer
         let text = Text::from(lines.into_iter().map(Line::from).collect::<Vec<_>>());
-        self.renderer.set_text(text);
-        self.renderer.set_wrap(false);
+        self.scroll_view.content.set_text(text);
+        self.scroll_view.content.set_wrap(false);
         // Follow tail behavior: set renderer offset to bottom when enabled
         if self.follow_tail {
             // renderer will position itself to the bottom during render via its internal scroll
-            let max_off = total.saturating_sub(view);
-            self.renderer.set_offset(max_off);
+            self.scroll_view
+                .viewport_handle()
+                .scroll_vertical_to(usize::MAX);
         }
+        // We need to render first to update scrollbar/offsets if we want is_at_bottom to reflect *after* render state?
+        // But original code did `follow_tail = is_at_bottom()` BEFORE render (after explicit set offset).
+        // If we just set offset to MAX, then is_at_bottom should be true.
+        // But internal `is_at_bottom` reads `renderer_offset`. `ViewportHandle` updates immediately.
         self.follow_tail = self.is_at_bottom();
 
-        self.renderer.render(frame, area, focused);
+        self.scroll_view.render(frame, area, ctx);
     }
 
-    fn handle_event(&mut self, event: &Event) -> bool {
+    fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
         // Delegate to the renderer which handles scroll/key/mouse
-        let handled = self.renderer.handle_event(event);
+        let handled = self.scroll_view.handle_event(event, ctx);
         if handled {
             self.follow_tail = self.is_at_bottom();
         }
@@ -236,11 +241,11 @@ impl DebugLogComponent {
         };
         let mut renderer = TextRendererComponent::new();
         renderer.set_wrap(false);
-        renderer.set_keyboard_enabled(true);
+        // set_keyboard_enabled removed
         (
             Self {
                 handle: handle.clone(),
-                renderer,
+                scroll_view: ScrollViewComponent::new(renderer),
                 follow_tail: true,
                 last_total: 0,
                 last_view: 0,
@@ -262,15 +267,20 @@ impl DebugLogComponent {
     }
 
     fn renderer_offset(&self) -> usize {
-        self.renderer.offset()
+        self.scroll_view.viewport_handle().info().offset_y
+    }
+
+    pub fn set_selection_enabled(&mut self, enabled: bool) {
+        self.scroll_view.content.set_selection_enabled(enabled);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::UiFrame;
     use crossterm::event::{Event, KeyCode, MouseEvent, MouseEventKind};
-    use ratatui::prelude::Rect;
+    use ratatui::{buffer::Buffer, prelude::Rect};
     use std::io::Write;
 
     #[test]
@@ -315,26 +325,36 @@ mod tests {
             width: 10,
             height: 5,
         };
-        comp.last_total = 20;
-        comp.last_view = 5;
-        comp.renderer.update(area, comp.last_total, comp.last_view);
+        let mut buffer = Buffer::empty(area);
+        {
+            let mut frame = UiFrame::from_parts(area, &mut buffer);
+            comp.render(&mut frame, area, &ComponentContext::new(true));
+        }
         let max_off = comp.last_total.saturating_sub(comp.last_view);
-        comp.renderer.set_offset(max_off);
+        comp.scroll_view
+            .viewport_handle()
+            .scroll_vertical_to(max_off);
         comp.follow_tail = true;
 
-        comp.handle_event(&Event::Key(crossterm::event::KeyEvent::new(
-            KeyCode::PageUp,
-            crossterm::event::KeyModifiers::NONE,
-        )));
-        assert!(comp.renderer.offset() < max_off);
+        comp.handle_event(
+            &Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::PageUp,
+                crossterm::event::KeyModifiers::NONE,
+            )),
+            &ComponentContext::new(true),
+        );
+        assert!(comp.renderer_offset() < max_off);
 
-        let before = comp.renderer.offset();
-        comp.handle_event(&Event::Mouse(MouseEvent {
-            kind: MouseEventKind::ScrollDown,
-            column: 0,
-            row: 0,
-            modifiers: crossterm::event::KeyModifiers::NONE,
-        }));
-        assert!(comp.renderer.offset() >= before);
+        let before = comp.renderer_offset();
+        comp.handle_event(
+            &Event::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: 0,
+                row: 0,
+                modifiers: crossterm::event::KeyModifiers::NONE,
+            }),
+            &ComponentContext::new(true),
+        );
+        assert!(comp.renderer_offset() >= before);
     }
 }

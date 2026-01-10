@@ -1,11 +1,9 @@
 use std::io;
-use std::time::Duration;
 
-use crossterm::event::Event;
 use ratatui::prelude::Rect;
 use ratatui::widgets::Clear;
 
-use term_wm::components::{Component, SvgImageComponent};
+use term_wm::components::{Component, ComponentContext, SvgImageComponent};
 use term_wm::drivers::OutputDriver;
 use term_wm::drivers::console::{ConsoleInputDriver, ConsoleOutputDriver};
 use term_wm::runner::{HasWindowManager, WindowApp, run_window_app};
@@ -31,24 +29,6 @@ fn main() -> io::Result<()> {
         &[PaneId::Left, PaneId::Right],
         |id| id,
         Some,
-        Duration::from_millis(16),
-        |event, app| {
-            if matches!(event, Event::Mouse(_)) && app.windows.handle_managed_event(event) {
-                return true;
-            }
-            match app.windows.focus() {
-                PaneId::Left => app.left.handle_event(event),
-                PaneId::Right => app.right.handle_event(event),
-            }
-        },
-        |event, _app| {
-            if let Some(evt) = event {
-                term_wm::keybindings::KeyBindings::default().action_for_event(evt)
-                    == Some(term_wm::keybindings::Action::Quit)
-            } else {
-                false
-            }
-        },
     );
 
     output.exit()?;
@@ -134,12 +114,19 @@ impl WindowApp<PaneId, PaneId> for App {
     fn empty_window_message(&self) -> &str {
         "no images loaded"
     }
+
+    fn window_component(&mut self, id: PaneId) -> Option<&mut dyn Component> {
+        match id {
+            PaneId::Left => Some(&mut self.left as &mut dyn Component),
+            PaneId::Right => Some(&mut self.right as &mut dyn Component),
+        }
+    }
 }
 
-fn render_pane(frame: &mut UiFrame<'_>, image: &mut SvgImageComponent, area: Rect, _focused: bool) {
+fn render_pane(frame: &mut UiFrame<'_>, image: &mut SvgImageComponent, area: Rect, focused: bool) {
     // Clear the area and render the image directly (no inner decorative frame).
     frame.render_widget(Clear, area);
-    image.render(frame, area, false);
+    image.render(frame, area, &ComponentContext::new(focused));
 }
 
 fn load_into(component: &mut SvgImageComponent, path: &str) -> io::Result<()> {

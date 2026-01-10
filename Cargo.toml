@@ -30,6 +30,7 @@ indoc = "2.0.7"
 ratatui = "0.30.0"
 
 [dependencies]
+arboard = "3.6.1"
 clap = { workspace = true, features = ["derive"] }
 crossterm.workspace = true
 hostname = "0.4.2"

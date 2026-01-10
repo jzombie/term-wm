@@ -1,9 +1,9 @@
 
 # term-wm
 
-[![made-with-rust][rust-logo]][rust-src-page] [![crates.io][crates-badge]][crates-page] [![MIT licensed][mit-license-badge]][mit-license-page] [![Apache 2.0 licensed][apache-2.0-license-badge]][apache-2.0-license-page] [![Coverage][coveralls-badge]][coveralls-page]
+[![made-with-rust][rust-logo]][rust-src-page] [![crates.io][crates-badge]][crates-page] [![MIT licensed][mit-license-badge]][mit-license-page] [![Apache 2.0 licensed][apache-2.0-license-badge]][apache-2.0-license-page] [![CodeQL][codeql-badge]][codeql-page] [![Dependabot][dependabot-badge]][dependabot-page] [![Coverage][coveralls-badge]][coveralls-page]
 
-**WORK IN PROGRESS.**
+**WORK IN PROGRESS. API SUBJECT TO CHANGE.**
 
 A cross-platform terminal multiplexer, window manager, and [Ratatui](https://crates.io/crates/ratatui) component library.
 
@@ -21,7 +21,7 @@ It is controllable via mouse and keyboard and works the same over SSH, Mac, Linu
 
 ## Design Philosophy: Retro-Modern
 
-`term-wm` is heavily inspired by the utilitarian beauty of **90's Unix user interfaces** (like [CDE](https://en.wikipedia.org/wiki/Common_Desktop_Environmen)) and the cooperative tiling of **Windows 1.0**.
+`term-wm` is heavily inspired by the utilitarian beauty of **90's Unix user interfaces** (like [CDE](https://en.wikipedia.org/wiki/Common_Desktop_Environment)) and the cooperative tiling of **Windows 1.0**.
 
 It bridges the gap between standard terminal multiplexers and full desktop environments by adapting GUI metaphors to the command line.
 
@@ -129,16 +129,22 @@ _The benchmark reports frame pacing, render times (avg/1% lows), and cell-update
 See [LICENSE-APACHE](./LICENSE-APACHE) and [LICENSE-MIT](./LICENSE-MIT) for details.
 
 [rust-src-page]: https://www.rust-lang.org/
-[rust-logo]: https://img.shields.io/badge/Made%20with-Rust-black?logo=Rust&style=for-the-badge
+[rust-logo]: https://img.shields.io/badge/Made%20with-Rust-black?logo=Rust
 
 [crates-page]: https://crates.io/crates/term-wm
-[crates-badge]: https://img.shields.io/crates/v/term-wm.svg?style=for-the-badge
+[crates-badge]: https://img.shields.io/crates/v/term-wm.svg
 
 [mit-license-page]: ./LICENSE-MIT
-[mit-license-badge]: https://img.shields.io/badge/license-MIT-blue.svg?style=for-the-badge
+[mit-license-badge]: https://img.shields.io/badge/license-MIT-blue.svg
 
 [apache-2.0-license-page]: ./LICENSE-APACHE
-[apache-2.0-license-badge]: https://img.shields.io/badge/license-Apache%202.0-blue.svg?style=for-the-badge
+[apache-2.0-license-badge]: https://img.shields.io/badge/license-Apache%202.0-blue.svg
+
+[codeql-page]: https://github.com/jzombie/term-wm/actions/workflows/github-code-scanning/codeql
+[codeql-badge]: https://github.com/jzombie/term-wm/actions/workflows/github-code-scanning/codeql/badge.svg
+
+[dependabot-page]:https://github.com/jzombie/term-wm/actions/workflows/dependabot/dependabot-updates
+[dependabot-badge]: https://github.com/jzombie/term-wm/actions/workflows/dependabot/dependabot-updates/badge.svg
 
 [coveralls-page]: https://coveralls.io/github/jzombie/term-wm?branch=main
-[coveralls-badge]: https://img.shields.io/coveralls/github/jzombie/term-wm?style=for-the-badge
+[coveralls-badge]: https://img.shields.io/coveralls/github/jzombie/term-wm

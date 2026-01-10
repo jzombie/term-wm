@@ -1,5 +1,8 @@
 use super::{FloatingPane, RegionMap, rect_contains};
 use ratatui::prelude::Rect;
+use ratatui::style::{Modifier, Style};
+
+use crate::window::FloatRect;
 
 use crate::ui::UiFrame;
 
@@ -29,13 +32,17 @@ pub struct ResizeDrag<R: Copy + Eq + Ord> {
     pub start_rect: Rect,
     pub start_col: u16,
     pub start_row: u16,
+    pub start_x: i32,
+    pub start_y: i32,
+    pub start_width: u16,
+    pub start_height: u16,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct HeaderDrag<R: Copy + Eq + Ord> {
     pub id: R,
-    pub offset_x: u16,
-    pub offset_y: u16,
+    pub initial_x: i32,
+    pub initial_y: i32,
     pub start_x: u16,
     pub start_y: u16,
 }
@@ -200,12 +207,47 @@ pub fn apply_resize_drag(
     bounds: Rect,
     allow_offscreen: bool,
 ) -> Rect {
+    let fr = apply_resize_drag_signed(
+        start.x as i32,
+        start.y as i32,
+        start.width,
+        start.height,
+        edge,
+        column,
+        row,
+        start_col,
+        start_row,
+        bounds,
+        allow_offscreen,
+    );
+    Rect {
+        x: fr.x.max(0) as u16,
+        y: fr.y.max(0) as u16,
+        width: fr.width,
+        height: fr.height,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn apply_resize_drag_signed(
+    start_x: i32,
+    start_y: i32,
+    start_width: u16,
+    start_height: u16,
+    edge: ResizeEdge,
+    column: u16,
+    row: u16,
+    start_col: u16,
+    start_row: u16,
+    bounds: Rect,
+    allow_offscreen: bool,
+) -> FloatRect {
     let dx = column as i32 - start_col as i32;
     let dy = row as i32 - start_row as i32;
-    let mut x = start.x as i32;
-    let mut y = start.y as i32;
-    let mut width = start.width as i32;
-    let mut height = start.height as i32;
+    let mut x = start_x;
+    let mut y = start_y;
+    let mut width = start_width as i32;
+    let mut height = start_height as i32;
 
     match edge {
         ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft => {
@@ -251,89 +293,97 @@ pub fn apply_resize_drag(
 
     let mut width = width.max(1);
     let mut height = height.max(1);
+    let max_dim = u16::MAX as i32;
+    width = width.min(max_dim);
+    height = height.min(max_dim);
 
     if !allow_offscreen {
         width = width.min(bounds.width as i32);
         height = height.min(bounds.height as i32);
     }
 
+    let bounds_left = bounds.x as i32;
+    let bounds_top = bounds.y as i32;
     let max_x = bounds.x.saturating_add(bounds.width.saturating_sub(1)) as i32;
     let max_y = bounds.y.saturating_add(bounds.height.saturating_sub(1)) as i32;
 
-    // Clamp Left
-    if matches!(
-        edge,
-        ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft
-    ) && x < bounds.x as i32
-    {
-        let diff = bounds.x as i32 - x;
-        x = bounds.x as i32;
-        if !allow_offscreen {
-            width -= diff;
-        }
-    }
-
-    // Clamp Top
-    if matches!(
-        edge,
-        ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight
-    ) && y < bounds.y as i32
-    {
-        let diff = bounds.y as i32 - y;
-        y = bounds.y as i32;
-        if !allow_offscreen {
-            height -= diff;
-        }
-    }
-
-    // Clamp Right
-    let right = x + width - 1;
     if !allow_offscreen
-        && right > max_x
+        && matches!(
+            edge,
+            ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft
+        )
+        && x < bounds_left
+    {
+        let diff = bounds_left - x;
+        x = bounds_left;
+        width -= diff;
+    }
+
+    if !allow_offscreen
+        && matches!(
+            edge,
+            ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight
+        )
+        && y < bounds_top
+    {
+        let diff = bounds_top - y;
+        y = bounds_top;
+        height -= diff;
+    }
+
+    if !allow_offscreen
         && matches!(
             edge,
             ResizeEdge::Right | ResizeEdge::TopRight | ResizeEdge::BottomRight
         )
     {
-        width -= right - max_x;
+        let right = x + width - 1;
+        if right > max_x {
+            width -= right - max_x;
+        }
     }
 
-    // Clamp Bottom
-    let bottom = y + height - 1;
     if !allow_offscreen
-        && bottom > max_y
         && matches!(
             edge,
             ResizeEdge::Bottom | ResizeEdge::BottomLeft | ResizeEdge::BottomRight
         )
     {
-        height -= bottom - max_y;
+        let bottom = y + height - 1;
+        if bottom > max_y {
+            height -= bottom - max_y;
+        }
     }
 
-    Rect {
-        x: x.max(0) as u16,
-        y: y.max(0) as u16,
-        width: width.max(1) as u16,
-        height: height.max(1) as u16,
+    if width < 1 {
+        width = 1;
+    }
+    if height < 1 {
+        height = 1;
+    }
+
+    FloatRect {
+        x,
+        y,
+        width: width as u16,
+        height: height as u16,
     }
 }
 
 pub fn render_resize_outline<R: Copy + Eq + Ord>(
     frame: &mut UiFrame<'_>,
-    hovered: Option<R>,
-    dragging: Option<R>,
+    hovered: Option<ResizeHandle<R>>,
+    dragging: Option<ResizeDrag<R>>,
     regions: &RegionMap<R>,
     bounds: Rect,
     floating: &[FloatingPane<R>],
     draw_order: &[R],
 ) {
-    let target = dragging.or(hovered);
-    let Some(id) = target else {
-        return;
-    };
-    let Some(rect) = regions.get(id) else {
-        return;
-    };
+    // Determine the target id and which edge to highlight
+    let target_edge = dragging.map(|d| d.edge).or_else(|| hovered.map(|h| h.edge));
+    let target_id = dragging.map(|d| d.id).or_else(|| hovered.map(|h| h.id));
+    let Some(id) = target_id else { return };
+    let Some(rect) = regions.get(id) else { return };
     if rect.width < 3 || rect.height < 3 {
         return;
     }
@@ -360,84 +410,178 @@ pub fn render_resize_outline<R: Copy + Eq + Ord>(
     let right = rect.x.saturating_add(rect.width.saturating_sub(1));
     let bottom = rect.y.saturating_add(rect.height.saturating_sub(1));
 
-    // Draw resize handles (just highlight the borders)
-    // Top
-    if rect.y >= bounds.y && rect.y < bounds.y + bounds.height {
-        for x in rect.x..=right {
-            if x >= bounds.x
-                && x < bounds.x + bounds.width
-                && !is_obscured(x, rect.y)
-                && let Some(cell) = buffer.cell_mut((x, rect.y))
-            {
-                cell.set_symbol("═");
-            }
-        }
-    }
-    // Bottom
-    if bottom >= bounds.y && bottom < bounds.y + bounds.height {
-        for x in rect.x..=right {
-            if x >= bounds.x
-                && x < bounds.x + bounds.width
-                && !is_obscured(x, bottom)
-                && let Some(cell) = buffer.cell_mut((x, bottom))
-            {
-                cell.set_symbol("═");
-            }
-        }
-    }
-    // Left
-    if rect.x >= bounds.x && rect.x < bounds.x + bounds.width {
-        for y in rect.y..=bottom {
-            if y >= bounds.y
-                && y < bounds.y + bounds.height
-                && !is_obscured(rect.x, y)
-                && let Some(cell) = buffer.cell_mut((rect.x, y))
-            {
-                cell.set_symbol("║");
-            }
-        }
-    }
-    // Right
-    if right >= bounds.x && right < bounds.x + bounds.width {
-        for y in rect.y..=bottom {
-            if y >= bounds.y
-                && y < bounds.y + bounds.height
-                && !is_obscured(right, y)
-                && let Some(cell) = buffer.cell_mut((right, y))
-            {
-                cell.set_symbol("║");
-            }
-        }
-    }
+    let style = Style::default()
+        .fg(crate::theme::accent_alt())
+        .add_modifier(Modifier::BOLD);
 
-    // Corners
-    if rect.x >= bounds.x
-        && rect.y >= bounds.y
-        && !is_obscured(rect.x, rect.y)
-        && let Some(cell) = buffer.cell_mut((rect.x, rect.y))
-    {
-        cell.set_symbol("╔");
-    }
-    if right < bounds.x + bounds.width
-        && rect.y >= bounds.y
-        && !is_obscured(right, rect.y)
-        && let Some(cell) = buffer.cell_mut((right, rect.y))
-    {
-        cell.set_symbol("╗");
-    }
-    if rect.x >= bounds.x
-        && bottom < bounds.y + bounds.height
-        && !is_obscured(rect.x, bottom)
-        && let Some(cell) = buffer.cell_mut((rect.x, bottom))
-    {
-        cell.set_symbol("╚");
-    }
-    if right < bounds.x + bounds.width
-        && bottom < bounds.y + bounds.height
-        && !is_obscured(right, bottom)
-        && let Some(cell) = buffer.cell_mut((right, bottom))
-    {
-        cell.set_symbol("╝");
+    if let Some(edge) = target_edge {
+        match edge {
+            ResizeEdge::Top => {
+                // exclude corners to match decorator (corners drawn separately)
+                if rect.y >= bounds.y && rect.y < bounds.y + bounds.height && rect.width > 2 {
+                    let start_x = rect.x.saturating_add(1);
+                    let end_x = right.saturating_sub(1);
+                    for x in start_x..=end_x {
+                        if x >= bounds.x
+                            && x < bounds.x + bounds.width
+                            && !is_obscured(x, rect.y)
+                            && let Some(cell) = buffer.cell_mut((x, rect.y))
+                        {
+                            cell.set_symbol("═");
+                            cell.set_style(style);
+                        }
+                    }
+                }
+            }
+            ResizeEdge::Bottom => {
+                // exclude corners to match decorator
+                if bottom >= bounds.y && bottom < bounds.y + bounds.height && rect.width > 2 {
+                    let start_x = rect.x.saturating_add(1);
+                    let end_x = right.saturating_sub(1);
+                    for x in start_x..=end_x {
+                        if x >= bounds.x
+                            && x < bounds.x + bounds.width
+                            && !is_obscured(x, bottom)
+                            && let Some(cell) = buffer.cell_mut((x, bottom))
+                        {
+                            cell.set_symbol("═");
+                            cell.set_style(style);
+                        }
+                    }
+                }
+            }
+            ResizeEdge::Left => {
+                // exclude corners to match decorator (corners drawn separately)
+                if rect.x >= bounds.x && rect.x < bounds.x + bounds.width && rect.height > 2 {
+                    let start_y = rect.y.saturating_add(1);
+                    let end_y = bottom.saturating_sub(1);
+                    for y in start_y..=end_y {
+                        if y >= bounds.y
+                            && y < bounds.y + bounds.height
+                            && !is_obscured(rect.x, y)
+                            && let Some(cell) = buffer.cell_mut((rect.x, y))
+                        {
+                            cell.set_symbol("║");
+                            cell.set_style(style);
+                        }
+                    }
+                }
+            }
+            ResizeEdge::Right => {
+                // exclude corners to match decorator
+                if right >= bounds.x && right < bounds.x + bounds.width && rect.height > 2 {
+                    let start_y = rect.y.saturating_add(1);
+                    let end_y = bottom.saturating_sub(1);
+                    for y in start_y..=end_y {
+                        if y >= bounds.y
+                            && y < bounds.y + bounds.height
+                            && !is_obscured(right, y)
+                            && let Some(cell) = buffer.cell_mut((right, y))
+                        {
+                            cell.set_symbol("║");
+                            cell.set_style(style);
+                        }
+                    }
+                }
+            }
+            ResizeEdge::TopLeft => {
+                if rect.x >= bounds.x
+                    && rect.y >= bounds.y
+                    && !is_obscured(rect.x, rect.y)
+                    && let Some(cell) = buffer.cell_mut((rect.x, rect.y))
+                {
+                    cell.set_symbol("╔");
+                    cell.set_style(style);
+                }
+                // small adjacent highlights
+                if rect.y >= bounds.y
+                    && rect.y < bounds.y + bounds.height
+                    && let Some(cell) = buffer.cell_mut((rect.x + 1, rect.y))
+                {
+                    cell.set_symbol("═");
+                    cell.set_style(style);
+                }
+                if rect.x >= bounds.x
+                    && rect.x < bounds.x + bounds.width
+                    && let Some(cell) = buffer.cell_mut((rect.x, rect.y + 1))
+                {
+                    cell.set_symbol("║");
+                    cell.set_style(style);
+                }
+            }
+            ResizeEdge::TopRight => {
+                if right < bounds.x + bounds.width
+                    && rect.y >= bounds.y
+                    && !is_obscured(right, rect.y)
+                    && let Some(cell) = buffer.cell_mut((right, rect.y))
+                {
+                    cell.set_symbol("╗");
+                    cell.set_style(style);
+                }
+                if rect.y >= bounds.y
+                    && rect.y < bounds.y + bounds.height
+                    && let Some(cell) = buffer.cell_mut((right - 1, rect.y))
+                {
+                    cell.set_symbol("═");
+                    cell.set_style(style);
+                }
+                if right >= bounds.x
+                    && right < bounds.x + bounds.width
+                    && let Some(cell) = buffer.cell_mut((right, rect.y + 1))
+                {
+                    cell.set_symbol("║");
+                    cell.set_style(style);
+                }
+            }
+            ResizeEdge::BottomLeft => {
+                if rect.x >= bounds.x
+                    && bottom < bounds.y + bounds.height
+                    && !is_obscured(rect.x, bottom)
+                    && let Some(cell) = buffer.cell_mut((rect.x, bottom))
+                {
+                    cell.set_symbol("╚");
+                    cell.set_style(style);
+                }
+                if bottom >= bounds.y
+                    && bottom < bounds.y + bounds.height
+                    && let Some(cell) = buffer.cell_mut((rect.x + 1, bottom))
+                {
+                    cell.set_symbol("═");
+                    cell.set_style(style);
+                }
+                if rect.x >= bounds.x
+                    && rect.x < bounds.x + bounds.width
+                    && let Some(cell) = buffer.cell_mut((rect.x, bottom - 1))
+                {
+                    cell.set_symbol("║");
+                    cell.set_style(style);
+                }
+            }
+            ResizeEdge::BottomRight => {
+                if right < bounds.x + bounds.width
+                    && bottom < bounds.y + bounds.height
+                    && !is_obscured(right, bottom)
+                    && let Some(cell) = buffer.cell_mut((right, bottom))
+                {
+                    cell.set_symbol("╝");
+                    cell.set_style(style);
+                }
+                if bottom >= bounds.y
+                    && bottom < bounds.y + bounds.height
+                    && let Some(cell) = buffer.cell_mut((right - 1, bottom))
+                {
+                    cell.set_symbol("═");
+                    cell.set_style(style);
+                }
+                if right >= bounds.x
+                    && right < bounds.x + bounds.width
+                    && let Some(cell) = buffer.cell_mut((right, bottom - 1))
+                {
+                    cell.set_symbol("║");
+                    cell.set_style(style);
+                }
+            }
+        }
     }
 }
 
@@ -511,5 +655,43 @@ mod tests {
                 height: 25
             }
         );
+    }
+
+    #[test]
+    fn resize_left_offscreen_preserves_negative_origin() {
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            width: 200,
+            height: 100,
+        };
+        let start_x = -8;
+        let start_y = 10;
+        let start_width = 30u16;
+        let start_height = 12u16;
+        let edge = ResizeEdge::Left;
+        let start_col = 0;
+        let start_row = 15;
+        let col = 4; // drag 4 cells to the right
+        let row = 15;
+
+        let res = apply_resize_drag_signed(
+            start_x,
+            start_y,
+            start_width,
+            start_height,
+            edge,
+            col,
+            row,
+            start_col,
+            start_row,
+            bounds,
+            true,
+        );
+
+        assert_eq!(res.x, start_x + (col as i32 - start_col as i32));
+        assert_eq!(res.width, start_width - (col - start_col));
+        assert_eq!(res.y, start_y);
+        assert_eq!(res.height, start_height);
     }
 }

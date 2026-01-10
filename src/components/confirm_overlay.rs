@@ -3,7 +3,7 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::components::{Component, DialogOverlayComponent};
+use crate::components::{Component, ComponentContext, DialogOverlayComponent};
 use crate::layout::rect_contains;
 use crate::ui::{UiFrame, safe_set_string};
 
@@ -25,16 +25,17 @@ pub struct ConfirmOverlayComponent {
 }
 
 impl Component for ConfirmOverlayComponent {
-    fn resize(&mut self, area: Rect) {
+    fn resize(&mut self, area: Rect, _ctx: &ComponentContext) {
         self.area = area;
     }
 
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
         self.area = area;
         if !self.visible || area.width == 0 || area.height == 0 {
             return;
         }
-        self.dialog.render(frame, area, false);
+        let dialog_ctx = ctx.with_overlay(true).with_focus(true);
+        self.dialog.render(frame, area, &dialog_ctx);
         let rect = self.dialog.rect_for(area);
         if rect.width < 3 || rect.height < 3 {
             return;
@@ -122,7 +123,7 @@ impl Component for ConfirmOverlayComponent {
         });
     }
 
-    fn handle_event(&mut self, event: &Event) -> bool {
+    fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
         if self.handle_confirm_event(event).is_some() {
             return true;
         }
@@ -245,10 +246,11 @@ mod tests {
     #[test]
     fn handle_event_recognizes_keys() {
         let mut o = ConfirmOverlayComponent::new();
-        assert!(o.handle_event(&ev_for(crate::keybindings::Action::ConfirmAccept)));
-        assert!(o.handle_event(&ev_for(crate::keybindings::Action::ConfirmAccept)));
-        assert!(o.handle_event(&ev_for(crate::keybindings::Action::ConfirmCancel)));
-        assert!(o.handle_event(&ev_for(crate::keybindings::Action::ConfirmToggle)));
+        let ctx = ComponentContext::new(true);
+        assert!(o.handle_event(&ev_for(crate::keybindings::Action::ConfirmAccept), &ctx));
+        assert!(o.handle_event(&ev_for(crate::keybindings::Action::ConfirmAccept), &ctx));
+        assert!(o.handle_event(&ev_for(crate::keybindings::Action::ConfirmCancel), &ctx));
+        assert!(o.handle_event(&ev_for(crate::keybindings::Action::ConfirmToggle), &ctx));
     }
 
     #[test]

@@ -58,17 +58,20 @@ impl<R: Copy + Eq + Ord> WindowList<R> {
 #[derive(Debug)]
 struct NotificationArea {
     mouse_capture_rect: Option<Rect>,
+    clipboard_rect: Option<Rect>,
 }
 
 impl NotificationArea {
     fn new() -> Self {
         Self {
             mouse_capture_rect: None,
+            clipboard_rect: None,
         }
     }
 
     fn begin_frame(&mut self) {
         self.mouse_capture_rect = None;
+        self.clipboard_rect = None;
     }
 }
 
@@ -172,6 +175,8 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         display_order: &[R],
         status_line: Option<&str>,
         mouse_capture_enabled: bool,
+        clipboard_enabled: bool,
+        clipboard_available: bool,
         menu_open: bool,
         label_for: F,
     ) where
@@ -270,46 +275,65 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             }
         }
 
-        // TODO: This should use a centralized heuristic to determine if the mouse *can* be captured first
-        let indicator = "🖱";
-        let label = if mouse_capture_enabled {
-            "mouse capture: on"
-        } else {
-            "mouse capture: off"
-        };
-        let total_label = format!("{indicator} {label}");
-        let total_width = total_label.chars().count() as u16;
+        // Simplified text indicators per design: bracketed labels that
+        // light up in green when active. No icons are used.
+        let mouse_chunk = "[ mouse ]";
+        let clip_chunk = "[ clipboard ]";
+        // No separator; render compact indicators side-by-side.
+        let mouse_width = mouse_chunk.chars().count() as u16;
+        let clip_width = clip_chunk.chars().count() as u16;
+        let total_width = mouse_width.saturating_add(clip_width);
         let indicator_x = if total_width >= bounds.width {
             bounds.x
         } else {
             max_x.saturating_sub(total_width)
         };
         if total_width > 0 && indicator_x < max_x {
-            let indicator_style = if mouse_capture_enabled {
+            let mouse_style = if mouse_capture_enabled {
                 Style::default()
-                    .fg(crate::theme::success_fg())
-                    .bg(crate::theme::success_bg())
+                    .fg(crate::theme::success_bg())
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(crate::theme::panel_inactive_fg())
             };
-            safe_set_string(
-                buffer,
-                bounds,
-                indicator_x,
-                y,
-                &total_label,
-                indicator_style,
-            );
-            let available = max_x.saturating_sub(indicator_x);
-            let rect_width = total_width.min(available);
-            if rect_width > 0 {
-                self.notifications.mouse_capture_rect = Some(Rect {
-                    x: indicator_x,
-                    y,
-                    width: rect_width,
-                    height: 1,
-                });
+            let clip_style = if clipboard_available {
+                if clipboard_enabled {
+                    Style::default()
+                        .fg(crate::theme::success_bg())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(crate::theme::panel_inactive_fg())
+                }
+            } else {
+                Style::default()
+                    .fg(crate::theme::panel_inactive_fg())
+                    .add_modifier(Modifier::DIM)
+            };
+            let mut cursor = indicator_x;
+            if mouse_width > 0 && cursor < max_x {
+                safe_set_string(buffer, bounds, cursor, y, mouse_chunk, mouse_style);
+                let width = mouse_width.min(max_x.saturating_sub(cursor));
+                if width > 0 {
+                    self.notifications.mouse_capture_rect = Some(Rect {
+                        x: cursor,
+                        y,
+                        width,
+                        height: 1,
+                    });
+                }
+            }
+            cursor = cursor.saturating_add(mouse_width);
+            if clip_width > 0 && cursor < max_x {
+                safe_set_string(buffer, bounds, cursor, y, clip_chunk, clip_style);
+                let width = clip_width.min(max_x.saturating_sub(cursor));
+                if width > 0 && clipboard_available {
+                    self.notifications.clipboard_rect = Some(Rect {
+                        x: cursor,
+                        y,
+                        width,
+                        height: 1,
+                    });
+                }
             }
         }
         // Render bottom info bar (platform + hostname) if configured
@@ -411,6 +435,19 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             return false;
         }
         if let Some(rect) = self.notifications.mouse_capture_rect {
+            return rect_contains(rect, mouse.column, mouse.row);
+        }
+        false
+    }
+
+    pub fn hit_test_clipboard(&self, event: &Event) -> bool {
+        let Event::Mouse(mouse) = event else {
+            return false;
+        };
+        if !matches!(mouse.kind, MouseEventKind::Down(_)) {
+            return false;
+        }
+        if let Some(rect) = self.notifications.clipboard_rect {
             return rect_contains(rect, mouse.column, mouse.row);
         }
         false

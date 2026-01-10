@@ -9,12 +9,13 @@ use ratatui::style::{Color, Modifier, Style};
 
 use std::sync::Arc;
 
-use crate::components::{Component, TextRendererComponent};
-use crate::linkifier::{LinkFragment, LinkHandler, Linkifier};
+use crate::components::{Component, ComponentContext, TextRendererComponent};
 use crate::ui::UiFrame;
+use crate::utils::linkifier::{LinkFragment, LinkHandler, Linkifier};
 
 pub struct MarkdownViewerComponent {
-    renderer: TextRendererComponent,
+    text: TextRendererComponent,
+    last_render_area: Rect,
     link_handler: Option<LinkHandler>,
     linkifier: Linkifier,
     anchors: HashMap<String, usize>,
@@ -23,25 +24,25 @@ pub struct MarkdownViewerComponent {
 impl fmt::Debug for MarkdownViewerComponent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MarkdownViewerComponent")
-            .field("renderer", &self.renderer)
+            .field("text", &"TextRendererComponent")
             .finish()
     }
 }
 
 impl Component for MarkdownViewerComponent {
-    fn resize(&mut self, area: Rect) {
-        // Respect the allocated height so scrollbar calculations are stable.
-        self.renderer.resize(area);
+    fn resize(&mut self, area: Rect, ctx: &ComponentContext) {
+        self.last_render_area = area;
+        self.text.resize(area, ctx);
     }
 
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _focused: bool) {
-        self.render_content(frame, area);
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
+        self.render_content(frame, area, ctx);
     }
 
-    fn handle_event(&mut self, event: &Event) -> bool {
+    fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
         match event {
-            Event::Mouse(_) => self.handle_pointer_event(event),
-            Event::Key(key) => self.handle_key_event(key),
+            Event::Mouse(_) => self.handle_pointer_event(event, ctx),
+            Event::Key(key) => self.handle_key_event(key, ctx),
             _ => false,
         }
     }
@@ -50,7 +51,8 @@ impl Component for MarkdownViewerComponent {
 impl MarkdownViewerComponent {
     pub fn new() -> Self {
         Self {
-            renderer: TextRendererComponent::new(),
+            text: TextRendererComponent::new(),
+            last_render_area: Rect::default(),
             link_handler: None,
             linkifier: Linkifier::new(),
             anchors: HashMap::new(),
@@ -77,7 +79,7 @@ impl MarkdownViewerComponent {
     }
 
     pub fn reset(&mut self) {
-        self.renderer.reset();
+        self.text.reset();
     }
 
     pub fn set_markdown(&mut self, raw: &str) {
@@ -275,8 +277,8 @@ impl MarkdownViewerComponent {
         }
 
         let linkified = self.linkifier.linkify_fragments(lines);
-        self.renderer.set_linkified_text(linkified);
-        self.renderer.set_wrap(true);
+        self.text.set_linkified_text(linkified);
+        self.text.set_wrap(true);
     }
 
     pub fn set_markdown_bytes(&mut self, bytes: &[u8]) {
@@ -285,81 +287,68 @@ impl MarkdownViewerComponent {
         }
     }
 
-    pub fn handle_pointer_event(&mut self, event: &Event) -> bool {
-        // Deprecated: callers that have area information should use
-        // `handle_pointer_event_in_area` so link hit-testing works reliably.
-        self.renderer.handle_event(event)
+    pub fn rendered_lines(&self) -> Vec<String> {
+        self.text.rendered_lines()
     }
 
-    pub fn handle_pointer_event_in_area(&mut self, event: &Event, area: Rect) -> bool {
-        use crossterm::event::MouseEventKind;
-        if let Event::Mouse(mouse) = event {
-            // Only respond to clicks for opening links; let renderer handle scrolls.
-            if matches!(mouse.kind, MouseEventKind::Down(_))
-                && let Some(url) = self.renderer.link_at(area, *mouse)
-            {
-                if let Some(anchor) = url.strip_prefix('#')
-                    && let Some(&line_idx) = self.anchors.get(anchor)
-                {
-                    self.renderer.jump_to_logical_line(line_idx, area);
-                    return true;
-                }
+    pub fn handle_pointer_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
+        let area = self.last_render_area;
+        self.handle_pointer_event_in_area(event, area, ctx)
+    }
 
-                if self
-                    .link_handler
-                    .as_ref()
-                    .map(|handler| handler(url.as_str()))
-                    .unwrap_or(false)
-                {
-                    return true;
-                }
+    pub fn handle_pointer_event_in_area(
+        &mut self,
+        event: &Event,
+        area: Rect,
+        ctx: &ComponentContext,
+    ) -> bool {
+        use crossterm::event::MouseEventKind;
+        if let Event::Mouse(mouse) = event
+            && matches!(mouse.kind, MouseEventKind::Down(_))
+            && let Some(url) = self.text.link_at(area, *mouse)
+        {
+            if let Some(anchor) = url.strip_prefix('#')
+                && let Some(&line_idx) = self.anchors.get(anchor)
+            {
+                self.text.jump_to_logical_line(line_idx, area);
+                return true;
+            }
+
+            if self
+                .link_handler
+                .as_ref()
+                .map(|handler| handler(url.as_str()))
+                .unwrap_or(false)
+            {
+                return true;
             }
         }
-        self.renderer.handle_event(event)
-    }
-
-    pub fn page_up(&mut self) {
-        let page = self.renderer.view().max(1);
-        let off = self.renderer.offset().saturating_sub(page);
-        self.renderer.set_offset(off);
-    }
-
-    pub fn page_down(&mut self) {
-        let page = self.renderer.view().max(1);
-        let off = self.renderer.offset().saturating_add(page);
-        self.renderer.set_offset(off);
-    }
-
-    pub fn scroll_up(&mut self) {
-        let off = self.renderer.offset().saturating_sub(1);
-        self.renderer.set_offset(off);
-    }
-
-    pub fn scroll_down(&mut self) {
-        let off = self.renderer.offset().saturating_add(1);
-        self.renderer.set_offset(off);
+        self.text.handle_event(event, ctx)
     }
 
     pub fn go_home(&mut self) {
-        self.renderer.set_offset(0);
+        self.text.scroll_vertical_to(0);
     }
 
     pub fn go_end(&mut self) {
-        // set to a large offset; TextRenderer will clamp to max
-        self.renderer.set_offset(usize::MAX);
+        self.text.scroll_vertical_to(usize::MAX);
     }
 
-    pub fn set_keyboard_enabled(&mut self, enabled: bool) {
-        self.renderer.set_keyboard_enabled(enabled);
+    pub fn set_selection_enabled(&mut self, enabled: bool) {
+        self.text.set_selection_enabled(enabled);
     }
 
-    pub fn handle_key_event(&mut self, key: &crossterm::event::KeyEvent) -> bool {
-        // Delegate keyboard handling to renderer
-        self.renderer.handle_event(&Event::Key(*key))
+    pub fn handle_key_event(
+        &mut self,
+        key: &crossterm::event::KeyEvent,
+        ctx: &ComponentContext,
+    ) -> bool {
+        self.text.handle_event(&Event::Key(*key), ctx)
     }
 
-    pub fn render_content(&mut self, frame: &mut UiFrame<'_>, area: Rect) {
-        self.renderer.render(frame, area, false);
+    pub fn render_content(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
+        self.last_render_area = area;
+        self.text.render(frame, area, ctx);
     }
 }
 
@@ -395,6 +384,7 @@ fn slugify(text: &str) -> String {
 #[cfg(test)]
 mod markdown_tests {
     use super::*;
+    use crate::components::ScrollViewComponent;
     use indoc::indoc;
 
     const SAMPLE_HELP_MD: &str = indoc! {
@@ -425,7 +415,7 @@ mod markdown_tests {
     #[test]
     fn help_md_contains_notes_and_list_items() {
         let mv = sample_viewer();
-        let rendered: Vec<String> = mv.renderer.rendered_lines();
+        let rendered = mv.rendered_lines();
         assert!(
             rendered.iter().any(|line| line.contains("Notes:")),
             "help.md should contain 'Notes:'"
@@ -446,7 +436,8 @@ mod markdown_tests {
         use ratatui::buffer::Buffer;
         use ratatui::layout::Rect;
 
-        let mut mv = sample_viewer();
+        let mut scroll = ScrollViewComponent::new(sample_viewer());
+        let ctx = ComponentContext::new(true);
 
         let area = Rect {
             x: 0,
@@ -457,18 +448,17 @@ mod markdown_tests {
         let mut scratch = Buffer::empty(area);
         {
             let mut frame = crate::ui::UiFrame::from_parts(area, &mut scratch);
-            mv.render_content(&mut frame, area);
+            scroll.render(&mut frame, area, &ctx);
         }
 
         let mut buffer = Buffer::empty(area);
         {
-            mv.go_end();
+            scroll.content.go_end();
             let mut frame = crate::ui::UiFrame::from_parts(area, &mut buffer);
-            mv.render_content(&mut frame, area);
+            scroll.render(&mut frame, area, &ctx);
         }
 
-        let mut found_mouse_note = false;
-        let mut found_panel_note = false;
+        let mut rows: Vec<String> = Vec::with_capacity(area.height as usize);
         for y in 0..area.height {
             let mut row = String::new();
             for x in 0..area.width {
@@ -476,75 +466,54 @@ mod markdown_tests {
                     row.push_str(cell.symbol());
                 }
             }
-            if row.contains("- This is a lorem ipsum note") {
-                found_mouse_note = true;
-            }
-            if row.contains("- Another note to validate list rendering") {
-                found_panel_note = true;
-            }
+            rows.push(row.trim_end().to_string());
         }
+        let normalized = rows
+            .into_iter()
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(
-            found_mouse_note,
+            normalized.contains("This is a lorem ipsum note used for tests"),
             "Mouse interactions note should render at bottom"
         );
-        assert!(found_panel_note, "Panel menu note should render at bottom");
+        assert!(
+            normalized.contains("Another note to validate list rendering"),
+            "Panel menu note should render at bottom"
+        );
     }
 
     #[test]
     fn scrollbar_does_not_overlay_text() {
         use ratatui::buffer::Buffer;
         use ratatui::layout::Rect;
-        use ratatui::widgets::{Paragraph, Wrap};
 
-        let mut mv = sample_viewer();
+        let mut scroll = ScrollViewComponent::new(sample_viewer());
 
         // choose a narrow viewport so a scrollbar will be required
         let area = Rect {
             x: 0,
             y: 0,
             width: 30,
-            height: 8,
+            height: 4,
         };
 
         let mut with_scroll = Buffer::empty(area);
         {
             let mut frame = crate::ui::UiFrame::from_parts(area, &mut with_scroll);
-            mv.render_content(&mut frame, area);
+            scroll.render(&mut frame, area, &ComponentContext::new(true));
         }
 
-        // verify that our viewer actually needed a scrollbar
-        // render once into buffer with renderer (which includes scrollbar)
-
-        // render the paragraph into a buffer sized to the content area (width - 1)
-        let content_area = Rect {
-            x: area.x,
-            y: area.y,
-            width: area.width.saturating_sub(1),
-            height: area.height,
-        };
-        let mut content_buf = Buffer::empty(content_area);
-        {
-            let mut frame = crate::ui::UiFrame::from_parts(content_area, &mut content_buf);
-            let mut paragraph =
-                Paragraph::new(mv.renderer.text_ref().clone()).wrap(Wrap { trim: false });
-            paragraph = paragraph.scroll((mv.renderer.offset() as u16, 0));
-            frame.render_widget(paragraph, content_area);
-        }
-
-        // ensure the content columns match between the two buffers (i.e. paragraph wasn't drawn into the last column)
-        for y in 0..area.height {
-            for x in 0..content_area.width {
-                let a = with_scroll
-                    .cell((x, y))
-                    .map(|c| c.symbol().to_string())
-                    .unwrap_or_default();
-                let b = content_buf
-                    .cell((x, y))
-                    .map(|c| c.symbol().to_string())
-                    .unwrap_or_default();
-                assert_eq!(a, b, "Mismatch at ({},{})", x, y);
-            }
-        }
+        let viewport = scroll.viewport_area;
+        assert_eq!(
+            viewport.width + 1,
+            area.width,
+            "Viewport should reserve a column for the scrollbar"
+        );
+        assert_eq!(
+            viewport.height, area.height,
+            "Wrapping content should not require a horizontal scrollbar"
+        );
 
         // verify there's something in the last column (scrollbar glyphs) and it's distinct from content
         let scrollbar_x = area.x + area.width.saturating_sub(1);
@@ -575,7 +544,7 @@ mod markdown_tests {
         };
         let mut mv = MarkdownViewerComponent::new();
         mv.set_markdown(md);
-        let rendered = mv.renderer.rendered_lines();
+        let rendered = mv.rendered_lines();
         let idx = rendered
             .iter()
             .position(|line| line.contains("item two"))
@@ -612,8 +581,9 @@ mod markdown_tests {
             Target line.
             "
         };
-        let mut mv = MarkdownViewerComponent::new();
-        mv.set_markdown(md);
+        let mut viewer = MarkdownViewerComponent::new();
+        viewer.set_markdown(md);
+        let mut scroll = ScrollViewComponent::new(viewer);
 
         let area = Rect {
             x: 0,
@@ -623,8 +593,10 @@ mod markdown_tests {
         };
 
         let mut buffer = ratatui::buffer::Buffer::empty(area);
-        let mut frame = crate::ui::UiFrame::from_parts(area, &mut buffer);
-        mv.render(&mut frame, area, true);
+        {
+            let mut frame = crate::ui::UiFrame::from_parts(area, &mut buffer);
+            scroll.render(&mut frame, area, &ComponentContext::new(true));
+        }
 
         let mouse_event = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -633,14 +605,18 @@ mod markdown_tests {
             modifiers: KeyModifiers::empty(),
         });
 
-        assert_eq!(mv.renderer.offset(), 0);
+        assert_eq!(scroll.viewport_handle().info().offset_y, 0);
 
-        let handled = mv.handle_pointer_event_in_area(&mouse_event, area);
+        let handled = scroll.handle_event(&mouse_event, &ComponentContext::new(true));
 
         assert!(handled, "Event should be handled");
+
+        let offset = scroll.viewport_handle().info().offset_y;
+
         assert!(
-            mv.renderer.offset() > 0,
-            "Should have scrolled down to Section Two"
+            offset > 0,
+            "Should have scrolled down to Section Two but offset was {}",
+            offset
         );
     }
 
@@ -661,6 +637,7 @@ mod markdown_tests {
 
         let mut mv = MarkdownViewerComponent::new();
         mv.set_markdown(md);
+        let mut scroll = ScrollViewComponent::new(mv);
 
         let area = Rect {
             x: 0,
@@ -672,7 +649,7 @@ mod markdown_tests {
         let mut buffer = Buffer::empty(area);
         {
             let mut frame = crate::ui::UiFrame::from_parts(area, &mut buffer);
-            mv.render_content(&mut frame, area);
+            scroll.render(&mut frame, area, &ComponentContext::new(true));
         }
 
         // Find the row that contains the rule glyph and ensure it only

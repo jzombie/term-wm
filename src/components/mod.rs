@@ -9,7 +9,6 @@ pub mod dialog_overlay;
 pub mod list;
 pub mod markdown_viewer;
 pub mod scroll_view;
-pub mod status_bar;
 pub mod svg_image;
 pub mod sys;
 pub mod terminal;
@@ -21,8 +20,9 @@ pub use confirm_overlay::{ConfirmAction, ConfirmOverlayComponent};
 pub use dialog_overlay::DialogOverlayComponent;
 pub use list::ListComponent;
 pub use markdown_viewer::MarkdownViewerComponent;
-pub use scroll_view::ScrollViewComponent;
-pub use status_bar::StatusBarComponent;
+pub use scroll_view::{
+    ScrollViewComponent, ScrollbarAxis, ScrollbarDrag, render_scrollbar, render_scrollbar_oriented,
+};
 pub use svg_image::SvgImageComponent;
 pub use sys::*;
 pub use terminal::{TerminalComponent, default_shell, default_shell_command};
@@ -31,12 +31,14 @@ pub use toggle_list::{ToggleItem, ToggleListComponent};
 
 use std::any::Any;
 
+pub use crate::component_context::ComponentContext;
+
 pub trait Component {
-    fn resize(&mut self, _area: Rect) {}
+    fn resize(&mut self, _area: Rect, _ctx: &ComponentContext) {}
 
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, focused: bool);
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext);
 
-    fn handle_event(&mut self, _event: &Event) -> bool {
+    fn handle_event(&mut self, _event: &Event, _ctx: &ComponentContext) -> bool {
         false
     }
 }
@@ -64,15 +66,18 @@ mod tests {
 
     struct DummyComp;
     impl Component for DummyComp {
-        fn render(&mut self, _frame: &mut UiFrame<'_>, _area: Rect, _focused: bool) {}
+        fn render(&mut self, _frame: &mut UiFrame<'_>, _area: Rect, _ctx: &ComponentContext) {}
     }
 
     #[test]
     fn default_handle_event_returns_false() {
         let mut d = DummyComp;
-        assert!(!d.handle_event(&Event::Key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Char('a'),
-            crossterm::event::KeyModifiers::NONE
-        ))));
+        assert!(!d.handle_event(
+            &Event::Key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('a'),
+                crossterm::event::KeyModifiers::NONE
+            )),
+            &ComponentContext::default()
+        ));
     }
 }
