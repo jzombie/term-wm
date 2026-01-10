@@ -329,17 +329,11 @@ pub fn handle_selection_mouse<H: SelectionHost>(
             // - selection empty: update pointer/cursor like a Drag so the
             //   selection can cross the anchor without freezing.
             if selection.button_down() {
-                if selection
-                    .selection_range()
-                    .is_some_and(|r| r.is_non_empty())
-                {
-                    let controller = host.selection_controller();
-                    controller.set_button_down(false);
-                    let _ = controller.finish_drag();
-                    return true;
-                }
-
-                // selection empty: update pointer and cursor like Drag
+                // Treat a Moved event when our internal button state indicates
+                // the button is still down as equivalent to a Drag event.
+                // This avoids finalizing the selection prematurely when the
+                // input stream sends Moved events during a continuous press
+                // (e.g., due to rapid motion or event coalescing).
                 {
                     let selection = host.selection_controller();
                     selection.set_pointer(mouse.column, mouse.row);
@@ -700,10 +694,13 @@ mod tests {
         ));
         assert!(host.controller().button_down());
 
-        let finished = handle_selection_mouse(&mut host, true, &mouse(6, 2, MouseEventKind::Moved));
-        assert!(finished);
-        assert!(!host.controller().is_dragging());
-        assert!(!host.controller().button_down());
+        // Moved with our internal button-down state should be treated like
+        // a Drag (do not finalize). Ensure drag remains active.
+        let continued =
+            handle_selection_mouse(&mut host, true, &mouse(6, 2, MouseEventKind::Moved));
+        assert!(continued);
+        assert!(host.controller().is_dragging());
+        assert!(host.controller().button_down());
     }
 
     #[test]
