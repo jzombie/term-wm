@@ -2333,8 +2333,8 @@ where
 
         render_resize_outline(
             frame,
-            hovered_resize.map(|handle| handle.id),
-            self.drag_resize.as_ref().map(|drag| drag.id),
+            hovered_resize.copied(),
+            self.drag_resize,
             &visible_regions,
             self.managed_area,
             &floating_panes,
