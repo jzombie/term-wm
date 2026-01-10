@@ -319,11 +319,41 @@ pub fn handle_selection_mouse<H: SelectionHost>(
             true
         }
         MouseEventKind::Moved => {
-            let controller = host.selection_controller();
-            if !controller.is_dragging() || !controller.button_down() {
+            let selection = host.selection_controller();
+            if !selection.is_dragging() {
                 return false;
             }
-            controller.set_button_down(false);
+
+            // If the button is down, differentiate two cases:
+            // - selection non-empty: finalize the drag (tests expect this)
+            // - selection empty: update pointer/cursor like a Drag so the
+            //   selection can cross the anchor without freezing.
+            if selection.button_down() {
+                if selection
+                    .selection_range()
+                    .is_some_and(|r| r.is_non_empty())
+                {
+                    let controller = host.selection_controller();
+                    controller.set_button_down(false);
+                    let _ = controller.finish_drag();
+                    return true;
+                }
+
+                // selection empty: update pointer and cursor like Drag
+                {
+                    let selection = host.selection_controller();
+                    selection.set_pointer(mouse.column, mouse.row);
+                    selection.set_button_down(true);
+                }
+                auto_scroll_selection(host, mouse.column, mouse.row);
+                if let Some(pos) = host.logical_position_from_point(mouse.column, mouse.row) {
+                    host.selection_controller().update_drag(pos);
+                }
+                return true;
+            }
+
+            // Button not down -> finalize as before.
+            let controller = host.selection_controller();
             let _ = controller.finish_drag();
             true
         }
