@@ -269,7 +269,11 @@ where
                     }
                 }
             } else {
-                if !app.windows().has_any_active_windows() {
+                // Quit only when the application reports no app windows and
+                // there are no active system windows/overlays. Minimized
+                // windows should not cause the app to exit.
+                if app.enumerate_windows().is_empty() && !app.windows().has_active_system_windows()
+                {
                     return flush_state_changes(app, ControlFlow::Quit);
                 }
                 app.windows().begin_frame();
@@ -519,5 +523,51 @@ mod tests {
         let layout = auto_layout_for_windows(&one).unwrap();
         // single node should be a leaf
         assert!(matches!(layout.root(), crate::layout::LayoutNode::Leaf(_)));
+    }
+
+    #[test]
+    fn runner_does_not_quit_when_app_reports_windows_but_wm_has_no_active_regions() {
+        use crate::window::WindowManager;
+
+        // Create an empty WindowManager (no active regions/z-order).
+        let wm: WindowManager<usize, usize> = WindowManager::new_managed(0);
+        assert!(!wm.has_any_active_windows());
+
+        // Create a fake app that enumerates windows (i.e., app-level windows still exist)
+        // while the WM reports no active windows.
+        struct FakeApp {
+            wm: WindowManager<usize, usize>,
+        }
+        impl super::HasWindowManager<usize, usize> for FakeApp {
+            fn windows(&mut self) -> &mut WindowManager<usize, usize> {
+                &mut self.wm
+            }
+        }
+        impl super::WindowApp<usize, usize> for FakeApp {
+            fn enumerate_windows(&mut self) -> Vec<usize> {
+                vec![1]
+            }
+            fn render_window(
+                &mut self,
+                _frame: &mut crate::ui::UiFrame<'_>,
+                _window: AppWindowDraw<usize>,
+            ) {
+            }
+        }
+
+        let mut app = FakeApp { wm };
+
+        // Sanity: the app-level enumerate shows a window, but the WM reports no active regions.
+        assert!(!app.enumerate_windows().is_empty());
+        assert!(!app.windows().has_active_system_windows());
+
+        // The runner's quit condition should NOT trigger a quit here:
+        // quit_if_no_windows = app.enumerate_windows().is_empty() && !app.windows().has_active_system_windows()
+        let quit_if_no_windows =
+            app.enumerate_windows().is_empty() && !app.windows().has_active_system_windows();
+        assert!(
+            !quit_if_no_windows,
+            "Runner would quit even though app reports windows"
+        );
     }
 }
