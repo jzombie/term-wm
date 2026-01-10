@@ -11,12 +11,12 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 use crate::component_context::{ViewportContext, ViewportHandle};
 use crate::components::{
     Component, ComponentContext,
-    selectable_text::{
-        LogicalPosition, SelectionController, SelectionHost, SelectionViewport,
-        handle_selection_mouse, maintain_selection_drag,
-    },
 };
-use crate::linkifier::LinkifiedText;
+use crate::utils::linkifier::LinkifiedText;
+use crate::utils::selectable_text::{
+    LogicalPosition, SelectionController, SelectionHost, SelectionViewport, handle_selection_mouse,
+    maintain_selection_drag,
+};
 use crate::ui::UiFrame;
 
 pub struct TextRendererComponent {

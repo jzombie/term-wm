@@ -9,7 +9,6 @@ pub mod dialog_overlay;
 pub mod list;
 pub mod markdown_viewer;
 pub mod scroll_view;
-pub mod selectable_text;
 pub mod svg_image;
 pub mod sys;
 pub mod terminal;
@@ -23,10 +22,6 @@ pub use list::ListComponent;
 pub use markdown_viewer::MarkdownViewerComponent;
 pub use scroll_view::{
     ScrollViewComponent, ScrollbarAxis, ScrollbarDrag, render_scrollbar, render_scrollbar_oriented,
-};
-pub use selectable_text::{
-    LogicalPosition, SelectableSurface, SelectionController, SelectionHost, SelectionRange,
-    SelectionViewport, handle_selection_mouse, maintain_selection_drag,
 };
 pub use svg_image::SvgImageComponent;
 pub use sys::*;

@@ -12,14 +12,14 @@ use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
 use crate::components::{
     Component, ComponentContext,
-    selectable_text::{
-        LogicalPosition, SelectionController, SelectionHost, SelectionViewport,
-        handle_selection_mouse, maintain_selection_drag,
-    },
 };
 use crate::layout::rect_contains;
-use crate::linkifier::{
+use crate::utils::linkifier::{
     LinkHandler, LinkOverlay, Linkifier, OverlaySignature, decorate_link_style,
+};
+use crate::utils::selectable_text::{
+    LogicalPosition, SelectionController, SelectionHost, SelectionViewport, handle_selection_mouse,
+    maintain_selection_drag,
 };
 use crate::pty::Pty;
 use crate::ui::UiFrame;

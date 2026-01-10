@@ -10,7 +10,7 @@ use ratatui::style::{Color, Modifier, Style};
 use std::sync::Arc;
 
 use crate::components::{Component, ComponentContext, TextRendererComponent};
-use crate::linkifier::{LinkFragment, LinkHandler, Linkifier};
+use crate::utils::linkifier::{LinkFragment, LinkHandler, Linkifier};
 use crate::ui::UiFrame;
 
 pub struct MarkdownViewerComponent {
