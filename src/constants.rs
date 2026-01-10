@@ -1,5 +1,7 @@
 //! Shared crate-wide constants.
 
+use std::time::Duration;
+
 /// Minimum number of visible cells a floating window must keep within the
 /// viewport so the user can grab its chrome again.
 pub const MIN_FLOATING_VISIBLE_MARGIN: u16 = 4;
@@ -37,3 +39,7 @@ pub const DEFAULT_SHELL_FALLBACK: &str = "bash";
 
 #[cfg(windows)]
 pub const DEFAULT_SHELL_FALLBACK: &str = "cmd.exe";
+
+pub const TEXT_SELECTION_DRAG_IDLE_TIMEOUT_BASE: Duration = Duration::from_millis(220);
+pub const TEXT_SELECTION_DRAG_IDLE_TIMEOUT_VERTICAL: Duration = Duration::from_millis(600);
+pub const TEXT_SELECTION_DRAG_IDLE_TIMEOUT_HORIZONTAL: Duration = Duration::from_millis(900);

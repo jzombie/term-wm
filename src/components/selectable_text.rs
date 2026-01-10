@@ -10,7 +10,10 @@
 
 use std::time::{Duration, Instant};
 
-use crate::constants::{EDGE_PAD_HORIZONTAL, EDGE_PAD_VERTICAL};
+use crate::constants::{
+    EDGE_PAD_HORIZONTAL, EDGE_PAD_VERTICAL, TEXT_SELECTION_DRAG_IDLE_TIMEOUT_BASE,
+    TEXT_SELECTION_DRAG_IDLE_TIMEOUT_HORIZONTAL, TEXT_SELECTION_DRAG_IDLE_TIMEOUT_VERTICAL,
+};
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 
@@ -439,10 +442,6 @@ fn auto_scroll_selection<V: SelectionViewport>(viewport: &mut V, column: u16, ro
     scrolled
 }
 
-const DRAG_IDLE_TIMEOUT_BASE: Duration = Duration::from_millis(220);
-const DRAG_IDLE_TIMEOUT_VERTICAL: Duration = Duration::from_millis(600);
-const DRAG_IDLE_TIMEOUT_HORIZONTAL: Duration = Duration::from_millis(900);
-
 /// Continue scrolling/selection updates using the last drag pointer, even when
 /// no new mouse events arrive (e.g., cursor held outside the viewport).
 pub fn maintain_selection_drag<H: SelectionHost>(host: &mut H) -> bool {
@@ -502,17 +501,17 @@ fn maintain_selection_drag_active<H: SelectionHost>(host: &mut H) -> bool {
 
 fn drag_idle_timeout(area: Rect, column: u16, row: u16) -> Duration {
     if area.width == 0 || area.height == 0 {
-        return DRAG_IDLE_TIMEOUT_BASE;
+        return TEXT_SELECTION_DRAG_IDLE_TIMEOUT_BASE;
     }
     let horiz_outside = column < area.x || column >= area.x.saturating_add(area.width);
     let vert_outside = row < area.y || row >= area.y.saturating_add(area.height);
 
-    let mut timeout = DRAG_IDLE_TIMEOUT_BASE;
+    let mut timeout = TEXT_SELECTION_DRAG_IDLE_TIMEOUT_BASE;
     if vert_outside {
-        timeout = timeout.max(DRAG_IDLE_TIMEOUT_VERTICAL);
+        timeout = timeout.max(TEXT_SELECTION_DRAG_IDLE_TIMEOUT_VERTICAL);
     }
     if horiz_outside {
-        timeout = timeout.max(DRAG_IDLE_TIMEOUT_HORIZONTAL);
+        timeout = timeout.max(TEXT_SELECTION_DRAG_IDLE_TIMEOUT_HORIZONTAL);
     }
     timeout
 }
