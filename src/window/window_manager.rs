@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{Event, MouseEventKind};
+use crossterm::event::{Event, MouseEvent, MouseEventKind};
 use ratatui::prelude::Rect;
 use ratatui::widgets::Clear;
 
@@ -922,6 +922,28 @@ where
 
     pub fn region(&self, id: R) -> Rect {
         self.region_for_id(WindowId::app(id))
+    }
+
+    /// Translate a mouse event into the local coordinate space for the given app window.
+    /// Returns a new `Event` when translation occurs; otherwise returns `None`.
+    pub fn localize_event_to_app(&self, id: R, event: &Event) -> Option<Event> {
+        self.localize_event(WindowId::app(id), event)
+    }
+
+    /// Translate mouse coordinates into the local coordinate space for the provided window id.
+    pub fn localize_event(&self, id: WindowId<R>, event: &Event) -> Option<Event> {
+        match event {
+            Event::Mouse(mouse) => {
+                let rect = self.region_for_id(id);
+                Some(Event::Mouse(MouseEvent {
+                    column: mouse.column.saturating_sub(rect.x),
+                    row: mouse.row.saturating_sub(rect.y),
+                    kind: mouse.kind,
+                    modifiers: mouse.modifiers,
+                }))
+            }
+            _ => None,
+        }
     }
 
     fn full_region_for_id(&self, id: WindowId<R>) -> Rect {
@@ -2922,6 +2944,35 @@ mod tests {
                 assert_eq!(fr.height, wm.managed_area.height);
             }
             _ => panic!("expected absolute rect"),
+        }
+    }
+
+    #[test]
+    fn localize_event_converts_to_local_coords() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let mut wm = WindowManager::<usize, usize>::new_managed(0);
+        let target_rect = ratatui::layout::Rect {
+            x: 10,
+            y: 5,
+            width: 20,
+            height: 8,
+        };
+        wm.set_region(1, target_rect);
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 15,
+            row: 9,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+        let event = Event::Mouse(mouse);
+        let localized = wm
+            .localize_event_to_app(1, &event)
+            .expect("mouse localized");
+        if let Event::Mouse(local) = localized {
+            assert_eq!(local.column, 4);
+            assert_eq!(local.row, 2);
+        } else {
+            panic!("expected mouse event");
         }
     }
 }

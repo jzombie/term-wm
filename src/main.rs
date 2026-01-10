@@ -83,7 +83,14 @@ fn main() -> io::Result<()> {
             }
             if let Some(pane) = app.terminals.get_mut(app.windows.focus()) {
                 pane.set_selection_enabled(app.windows.clipboard_enabled());
-                return pane.handle_event(event, &term_wm::components::ComponentContext::new(true));
+                let mut localized = None;
+                let focus = app.windows.focus();
+                if let Some(loc_event) = app.windows.localize_event_to_app(focus, event) {
+                    localized = Some(loc_event);
+                }
+                let event_ref = localized.as_ref().unwrap_or(event);
+                return pane
+                    .handle_event(event_ref, &term_wm::components::ComponentContext::new(true));
             }
             false
         },
