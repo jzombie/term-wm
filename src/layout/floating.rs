@@ -380,18 +380,8 @@ pub fn render_resize_outline<R: Copy + Eq + Ord>(
     draw_order: &[R],
 ) {
     // Determine the target id and which edge to highlight
-    let target_edge = if let Some(drag) = dragging {
-        Some(drag.edge)
-    } else if let Some(handle) = hovered {
-        Some(handle.edge)
-    } else {
-        None
-    };
-    let target_id = if dragging.is_some() {
-        dragging.map(|d| d.id)
-    } else {
-        hovered.map(|h| h.id)
-    };
+    let target_edge = dragging.map(|d| d.edge).or_else(|| hovered.map(|h| h.edge));
+    let target_id = dragging.map(|d| d.id).or_else(|| hovered.map(|h| h.id));
     let Some(id) = target_id else { return };
     let Some(rect) = regions.get(id) else { return };
     if rect.width < 3 || rect.height < 3 {
@@ -428,76 +418,68 @@ pub fn render_resize_outline<R: Copy + Eq + Ord>(
         match edge {
             ResizeEdge::Top => {
                 // exclude corners to match decorator (corners drawn separately)
-                if rect.y >= bounds.y && rect.y < bounds.y + bounds.height {
-                    if rect.width > 2 {
-                        let start_x = rect.x.saturating_add(1);
-                        let end_x = right.saturating_sub(1);
-                        for x in start_x..=end_x {
-                            if x >= bounds.x
-                                && x < bounds.x + bounds.width
-                                && !is_obscured(x, rect.y)
-                                && let Some(cell) = buffer.cell_mut((x, rect.y))
-                            {
-                                cell.set_symbol("═");
-                                cell.set_style(style);
-                            }
+                if rect.y >= bounds.y && rect.y < bounds.y + bounds.height && rect.width > 2 {
+                    let start_x = rect.x.saturating_add(1);
+                    let end_x = right.saturating_sub(1);
+                    for x in start_x..=end_x {
+                        if x >= bounds.x
+                            && x < bounds.x + bounds.width
+                            && !is_obscured(x, rect.y)
+                            && let Some(cell) = buffer.cell_mut((x, rect.y))
+                        {
+                            cell.set_symbol("═");
+                            cell.set_style(style);
                         }
                     }
                 }
             }
             ResizeEdge::Bottom => {
                 // exclude corners to match decorator
-                if bottom >= bounds.y && bottom < bounds.y + bounds.height {
-                    if rect.width > 2 {
-                        let start_x = rect.x.saturating_add(1);
-                        let end_x = right.saturating_sub(1);
-                        for x in start_x..=end_x {
-                            if x >= bounds.x
-                                && x < bounds.x + bounds.width
-                                && !is_obscured(x, bottom)
-                                && let Some(cell) = buffer.cell_mut((x, bottom))
-                            {
-                                cell.set_symbol("═");
-                                cell.set_style(style);
-                            }
+                if bottom >= bounds.y && bottom < bounds.y + bounds.height && rect.width > 2 {
+                    let start_x = rect.x.saturating_add(1);
+                    let end_x = right.saturating_sub(1);
+                    for x in start_x..=end_x {
+                        if x >= bounds.x
+                            && x < bounds.x + bounds.width
+                            && !is_obscured(x, bottom)
+                            && let Some(cell) = buffer.cell_mut((x, bottom))
+                        {
+                            cell.set_symbol("═");
+                            cell.set_style(style);
                         }
                     }
                 }
             }
             ResizeEdge::Left => {
                 // exclude corners to match decorator (corners drawn separately)
-                if rect.x >= bounds.x && rect.x < bounds.x + bounds.width {
-                    if rect.height > 2 {
-                        let start_y = rect.y.saturating_add(1);
-                        let end_y = bottom.saturating_sub(1);
-                        for y in start_y..=end_y {
-                            if y >= bounds.y
-                                && y < bounds.y + bounds.height
-                                && !is_obscured(rect.x, y)
-                                && let Some(cell) = buffer.cell_mut((rect.x, y))
-                            {
-                                cell.set_symbol("║");
-                                cell.set_style(style);
-                            }
+                if rect.x >= bounds.x && rect.x < bounds.x + bounds.width && rect.height > 2 {
+                    let start_y = rect.y.saturating_add(1);
+                    let end_y = bottom.saturating_sub(1);
+                    for y in start_y..=end_y {
+                        if y >= bounds.y
+                            && y < bounds.y + bounds.height
+                            && !is_obscured(rect.x, y)
+                            && let Some(cell) = buffer.cell_mut((rect.x, y))
+                        {
+                            cell.set_symbol("║");
+                            cell.set_style(style);
                         }
                     }
                 }
             }
             ResizeEdge::Right => {
                 // exclude corners to match decorator
-                if right >= bounds.x && right < bounds.x + bounds.width {
-                    if rect.height > 2 {
-                        let start_y = rect.y.saturating_add(1);
-                        let end_y = bottom.saturating_sub(1);
-                        for y in start_y..=end_y {
-                            if y >= bounds.y
-                                && y < bounds.y + bounds.height
-                                && !is_obscured(right, y)
-                                && let Some(cell) = buffer.cell_mut((right, y))
-                            {
-                                cell.set_symbol("║");
-                                cell.set_style(style);
-                            }
+                if right >= bounds.x && right < bounds.x + bounds.width && rect.height > 2 {
+                    let start_y = rect.y.saturating_add(1);
+                    let end_y = bottom.saturating_sub(1);
+                    for y in start_y..=end_y {
+                        if y >= bounds.y
+                            && y < bounds.y + bounds.height
+                            && !is_obscured(right, y)
+                            && let Some(cell) = buffer.cell_mut((right, y))
+                        {
+                            cell.set_symbol("║");
+                            cell.set_style(style);
                         }
                     }
                 }
@@ -512,17 +494,19 @@ pub fn render_resize_outline<R: Copy + Eq + Ord>(
                     cell.set_style(style);
                 }
                 // small adjacent highlights
-                if rect.y >= bounds.y && rect.y < bounds.y + bounds.height {
-                    if let Some(cell) = buffer.cell_mut((rect.x + 1, rect.y)) {
-                        cell.set_symbol("═");
-                        cell.set_style(style);
-                    }
+                if rect.y >= bounds.y
+                    && rect.y < bounds.y + bounds.height
+                    && let Some(cell) = buffer.cell_mut((rect.x + 1, rect.y))
+                {
+                    cell.set_symbol("═");
+                    cell.set_style(style);
                 }
-                if rect.x >= bounds.x && rect.x < bounds.x + bounds.width {
-                    if let Some(cell) = buffer.cell_mut((rect.x, rect.y + 1)) {
-                        cell.set_symbol("║");
-                        cell.set_style(style);
-                    }
+                if rect.x >= bounds.x
+                    && rect.x < bounds.x + bounds.width
+                    && let Some(cell) = buffer.cell_mut((rect.x, rect.y + 1))
+                {
+                    cell.set_symbol("║");
+                    cell.set_style(style);
                 }
             }
             ResizeEdge::TopRight => {
@@ -534,17 +518,19 @@ pub fn render_resize_outline<R: Copy + Eq + Ord>(
                     cell.set_symbol("╗");
                     cell.set_style(style);
                 }
-                if rect.y >= bounds.y && rect.y < bounds.y + bounds.height {
-                    if let Some(cell) = buffer.cell_mut((right - 1, rect.y)) {
-                        cell.set_symbol("═");
-                        cell.set_style(style);
-                    }
+                if rect.y >= bounds.y
+                    && rect.y < bounds.y + bounds.height
+                    && let Some(cell) = buffer.cell_mut((right - 1, rect.y))
+                {
+                    cell.set_symbol("═");
+                    cell.set_style(style);
                 }
-                if right >= bounds.x && right < bounds.x + bounds.width {
-                    if let Some(cell) = buffer.cell_mut((right, rect.y + 1)) {
-                        cell.set_symbol("║");
-                        cell.set_style(style);
-                    }
+                if right >= bounds.x
+                    && right < bounds.x + bounds.width
+                    && let Some(cell) = buffer.cell_mut((right, rect.y + 1))
+                {
+                    cell.set_symbol("║");
+                    cell.set_style(style);
                 }
             }
             ResizeEdge::BottomLeft => {
@@ -556,17 +542,19 @@ pub fn render_resize_outline<R: Copy + Eq + Ord>(
                     cell.set_symbol("╚");
                     cell.set_style(style);
                 }
-                if bottom >= bounds.y && bottom < bounds.y + bounds.height {
-                    if let Some(cell) = buffer.cell_mut((rect.x + 1, bottom)) {
-                        cell.set_symbol("═");
-                        cell.set_style(style);
-                    }
+                if bottom >= bounds.y
+                    && bottom < bounds.y + bounds.height
+                    && let Some(cell) = buffer.cell_mut((rect.x + 1, bottom))
+                {
+                    cell.set_symbol("═");
+                    cell.set_style(style);
                 }
-                if rect.x >= bounds.x && rect.x < bounds.x + bounds.width {
-                    if let Some(cell) = buffer.cell_mut((rect.x, bottom - 1)) {
-                        cell.set_symbol("║");
-                        cell.set_style(style);
-                    }
+                if rect.x >= bounds.x
+                    && rect.x < bounds.x + bounds.width
+                    && let Some(cell) = buffer.cell_mut((rect.x, bottom - 1))
+                {
+                    cell.set_symbol("║");
+                    cell.set_style(style);
                 }
             }
             ResizeEdge::BottomRight => {
@@ -578,17 +566,19 @@ pub fn render_resize_outline<R: Copy + Eq + Ord>(
                     cell.set_symbol("╝");
                     cell.set_style(style);
                 }
-                if bottom >= bounds.y && bottom < bounds.y + bounds.height {
-                    if let Some(cell) = buffer.cell_mut((right - 1, bottom)) {
-                        cell.set_symbol("═");
-                        cell.set_style(style);
-                    }
+                if bottom >= bounds.y
+                    && bottom < bounds.y + bounds.height
+                    && let Some(cell) = buffer.cell_mut((right - 1, bottom))
+                {
+                    cell.set_symbol("═");
+                    cell.set_style(style);
                 }
-                if right >= bounds.x && right < bounds.x + bounds.width {
-                    if let Some(cell) = buffer.cell_mut((right, bottom - 1)) {
-                        cell.set_symbol("║");
-                        cell.set_style(style);
-                    }
+                if right >= bounds.x
+                    && right < bounds.x + bounds.width
+                    && let Some(cell) = buffer.cell_mut((right, bottom - 1))
+                {
+                    cell.set_symbol("║");
+                    cell.set_style(style);
                 }
             }
         }
