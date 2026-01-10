@@ -102,13 +102,13 @@ cargo run -p term-bench -- --duration 5.0
 See [LICENSE-APACHE](../../LICENSE-APACHE) and [LICENSE-MIT](../../LICENSE-MIT) for details.
 
 [rust-src-page]: https://www.rust-lang.org/
-[rust-logo]: https://img.shields.io/badge/Made%20with-Rust-black?logo=Rust&style=for-the-badge
+[rust-logo]: https://img.shields.io/badge/Made%20with-Rust-black?logo=Rust
 
 [crates-page]: https://crates.io/crates/term-bench
-[crates-badge]: https://img.shields.io/crates/v/term-bench.svg?style=for-the-badge
+[crates-badge]: https://img.shields.io/crates/v/term-bench.svg
 
 [mit-license-page]: ../../LICENSE-MIT
-[mit-license-badge]: https://img.shields.io/badge/license-MIT-blue.svg?style=for-the-badge
+[mit-license-badge]: https://img.shields.io/badge/license-MIT-blue.svg
 
 [apache-2.0-license-page]: ../../LICENSE-APACHE
-[apache-2.0-license-badge]: https://img.shields.io/badge/license-Apache%202.0-blue.svg?style=for-the-badge
+[apache-2.0-license-badge]: https://img.shields.io/badge/license-Apache%202.0-blue.svg
