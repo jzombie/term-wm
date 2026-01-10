@@ -28,3 +28,12 @@ pub const EDGE_PAD_HORIZONTAL: u16 = 2;
 /// aggressive; decrease to require the pointer to move farther outside
 /// the viewport before scrolling starts.
 pub const EDGE_PAD_VERTICAL: u16 = 1;
+
+// Fallback defaults for shells when environment variables are not set.
+// These are intentionally centralized so downstream consumers can override
+// or configure them from a single location.
+#[cfg(unix)]
+pub const DEFAULT_SHELL_FALLBACK: &str = "bash";
+
+#[cfg(windows)]
+pub const DEFAULT_SHELL_FALLBACK: &str = "cmd.exe";

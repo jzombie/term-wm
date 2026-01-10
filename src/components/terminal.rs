@@ -453,12 +453,13 @@ impl SelectionHost for TerminalComponent {
 
 #[cfg(unix)]
 pub fn default_shell() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string())
+    std::env::var("SHELL").unwrap_or_else(|_| crate::constants::DEFAULT_SHELL_FALLBACK.to_string())
 }
 
 #[cfg(windows)]
 pub fn default_shell() -> String {
-    std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
+    std::env::var("COMSPEC")
+        .unwrap_or_else(|_| crate::constants::DEFAULT_SHELL_FALLBACK.to_string())
 }
 
 pub fn default_shell_command() -> CommandBuilder {
