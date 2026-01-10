@@ -21,7 +21,7 @@ It is controllable via mouse and keyboard and works the same over SSH, Mac, Linu
 
 ## Design Philosophy: Retro-Modern
 
-`term-wm` is heavily inspired by the utilitarian beauty of **90's Unix user interfaces** (like [CDE](https://en.wikipedia.org/wiki/Common_Desktop_Environmen)) and the cooperative tiling of **Windows 1.0**.
+`term-wm` is heavily inspired by the utilitarian beauty of **90's Unix user interfaces** (like [CDE](https://en.wikipedia.org/wiki/Common_Desktop_Environment)) and the cooperative tiling of **Windows 1.0**.
 
 It bridges the gap between standard terminal multiplexers and full desktop environments by adapting GUI metaphors to the command line.
 
