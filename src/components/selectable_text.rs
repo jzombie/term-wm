@@ -459,13 +459,15 @@ pub fn maintain_selection_drag<H: SelectionHost>(host: &mut H) -> bool {
         return false;
     };
 
-    let timeout = drag_idle_timeout(host.selection_viewport(), column, row);
+    let area = host.selection_viewport();
+    let inside_viewport = rect_contains(area, column, row);
+    let timeout = drag_idle_timeout(area, column, row);
     let stale = {
         let selection = host.selection_controller();
         if !selection.button_down() {
             true
         } else {
-            selection.pointer_stale(Instant::now(), timeout)
+            selection.pointer_stale(Instant::now(), timeout) && !inside_viewport
         }
     };
 
