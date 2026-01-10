@@ -2015,9 +2015,7 @@ where
 
         // If we found a focused region, split it
         if let Some(target) = target_r {
-            // Prefer splitting horizontally (side-by-side) for wide windows, vertically for tall?
-            // Or just default to Right/Bottom.
-            // Let's default to Right for now as it's common.
+            // Default to splitting to the right to keep new windows side-by-side.
             if layout
                 .root_mut()
                 .insert_leaf(target, id, InsertPosition::Right)

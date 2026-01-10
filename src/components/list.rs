@@ -34,18 +34,8 @@ impl Component for ListComponent {
         let total_height = self.items.len();
         let max_width = self.items.iter().map(|s| s.len()).max().unwrap_or(0);
 
-        // Report content size to viewport handle if available.
-        // We add 2 to height/width to account for borders if we consider the list
-        // to be the "whole component" including borders.
-        // However, standard lists usually scroll the *content*.
-        // To accurately emulate "content inside borders", we report content size
-        // effectively as if the border didn't exist? No.
-        // If we want to scroll to the end, we need the scrollbar to allow us to reach indices.
-        //
-        // Strategy: Report raw content size. But we must be aware that our "viewport"
-        // is smaller than `area`.
-        // If `ScrollViewComponent` uses `area.height`, and we only use `area.height - 2`...
-        // We need to pad the content size by 2 so `ScrollViewComponent` allows enough offset.
+        // Report content size including the border rows/cols so the scrollbar can
+        // reach the last item while the list is rendered inside the border.
         if let Some(handle) = ctx.viewport_handle() {
             handle.set_content_size(max_width + 2, total_height + 2);
             // Ensure selection is visible within our logic
@@ -54,36 +44,8 @@ impl Component for ListComponent {
         }
 
         let vp = ctx.viewport();
-        // If we padded content by 2, then offset 0 = Top Border.
-        // It makes sense to say Item 0 starts at virtual offset 1.
-        // So effective item offset = vp.offset_y (saturating sub 1?)
-        // If offset is 0. Item 0 is at relative y=1. (Correct).
-        // If offset is 1. Item 0 is at relative y=0. (clipped by top border). Item 1 is at y=1.
-
-        // But if offset_y is 0, start_index is 0.
-        // Draw at y = 1 - 0 = 1.
-        // If offset_y is 10. start_index is 9.
-        // Item 9 at y = 1 - 10 + 9 = 0. (Clipped).
-        // Item 10 at y = 1.
-
-        // Wait, precise math:
-        // We iterate items `i`.
-        // Render Position Y = (rect.y + 1) + i - (vp.offset_y - ???)
-        // Let's assume Virtual Space maps directly:
-        // Line 0: [Border]
-        // Line 1: Item 0
-        // ...
-        // Line N+1: Item N
-        // Line N+2: [Border]
-
-        // Render wants to draw visible lines relative to `inner`.
-        // `inner` is already `area` shrunk by 1.
-        // So Item 0 should be at `inner.y` if `vp.offset_y` corresponds to Item 0's start.
-
-        // If `vp.offset_y` == 1 (The position of Item 0 in Virtual Space).
-        // Then we should draw Item 0 at `inner.y`.
-
-        // Skip count = `vp.offset_y.saturating_sub(1)`.
+        // Viewport offsets include the top border, so item 0 starts at virtual row 1.
+        // Skip rows before that when building the visible slice.
 
         let skip_n = vp.offset_y.saturating_sub(1);
         let items_iter = self.items.iter().enumerate().skip(skip_n);
