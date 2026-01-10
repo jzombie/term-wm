@@ -275,27 +275,14 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             }
         }
 
-        let mouse_chunk = if mouse_capture_enabled {
-            "🖱 mouse capture: on"
-        } else {
-            "🖱 mouse capture: off"
-        };
-        let clip_chunk = if clipboard_available {
-            if clipboard_enabled {
-                "📋 clipboard: on"
-            } else {
-                "📋 clipboard: off"
-            }
-        } else {
-            "📋 clipboard: unavailable"
-        };
-        let separator = " | ";
+        // Simplified text indicators per design: bracketed labels that
+        // light up in green when active. No icons are used.
+        let mouse_chunk = "[ mouse ]";
+        let clip_chunk = "[ clipboard ]";
+        // No separator; render compact indicators side-by-side.
         let mouse_width = mouse_chunk.chars().count() as u16;
-        let sep_width = separator.chars().count() as u16;
         let clip_width = clip_chunk.chars().count() as u16;
-        let total_width = mouse_width
-            .saturating_add(sep_width)
-            .saturating_add(clip_width);
+        let total_width = mouse_width.saturating_add(clip_width);
         let indicator_x = if total_width >= bounds.width {
             bounds.x
         } else {
@@ -304,8 +291,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         if total_width > 0 && indicator_x < max_x {
             let mouse_style = if mouse_capture_enabled {
                 Style::default()
-                    .fg(crate::theme::success_fg())
-                    .bg(crate::theme::success_bg())
+                    .fg(crate::theme::success_bg())
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(crate::theme::panel_inactive_fg())
@@ -313,8 +299,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             let clip_style = if clipboard_available {
                 if clipboard_enabled {
                     Style::default()
-                        .fg(crate::theme::success_fg())
-                        .bg(crate::theme::success_bg())
+                        .fg(crate::theme::success_bg())
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(crate::theme::panel_inactive_fg())
@@ -338,10 +323,6 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
                 }
             }
             cursor = cursor.saturating_add(mouse_width);
-            if sep_width > 0 && cursor < max_x {
-                safe_set_string(buffer, bounds, cursor, y, separator, Style::default());
-            }
-            cursor = cursor.saturating_add(sep_width);
             if clip_width > 0 && cursor < max_x {
                 safe_set_string(buffer, bounds, cursor, y, clip_chunk, clip_style);
                 let width = clip_width.min(max_x.saturating_sub(cursor));
