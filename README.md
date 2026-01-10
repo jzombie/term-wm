@@ -1,7 +1,7 @@
 
 # term-wm
 
-[![made-with-rust][rust-logo]][rust-src-page] [![crates.io][crates-badge]][crates-page] [![MIT licensed][mit-license-badge]][mit-license-page] [![Apache 2.0 licensed][apache-2.0-license-badge]][apache-2.0-license-page] [![CodeQL][codeql-badge]][codeql-page] [![Coverage][coveralls-badge]][coveralls-page]
+[![made-with-rust][rust-logo]][rust-src-page] [![crates.io][crates-badge]][crates-page] [![MIT licensed][mit-license-badge]][mit-license-page] [![Apache 2.0 licensed][apache-2.0-license-badge]][apache-2.0-license-page] [![CodeQL][codeql-badge]][codeql-page] [![Dependabot][dependabot-badge]][dependabot-page] [![Coverage][coveralls-badge]][coveralls-page]
 
 **WORK IN PROGRESS. API SUBJECT TO CHANGE.**
 
@@ -142,6 +142,9 @@ See [LICENSE-APACHE](./LICENSE-APACHE) and [LICENSE-MIT](./LICENSE-MIT) for deta
 
 [codeql-page]: https://github.com/jzombie/term-wm/actions/workflows/github-code-scanning/codeql
 [codeql-badge]: https://github.com/jzombie/term-wm/actions/workflows/github-code-scanning/codeql/badge.svg
+
+[dependabot-page]:https://github.com/jzombie/term-wm/actions/workflows/dependabot/dependabot-updates
+[dependabot-badge]: https://github.com/jzombie/term-wm/actions/workflows/dependabot/dependabot-updates/badge.svg
 
 [coveralls-page]: https://coveralls.io/github/jzombie/term-wm?branch=main
 [coveralls-badge]: https://img.shields.io/coveralls/github/jzombie/term-wm
