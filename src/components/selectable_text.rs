@@ -1,3 +1,5 @@
+// TODO: Either make this a component or extract from components directory as a helper
+
 //! Shared selection and clipboard plumbing for text-oriented components.
 //!
 //! This module wires together the concepts needed by both the terminal and
