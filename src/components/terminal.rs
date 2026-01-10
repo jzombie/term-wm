@@ -10,10 +10,10 @@ use ratatui::{
 };
 use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
-use crate::components::{
-    Component, ComponentContext,
-};
+use crate::components::{Component, ComponentContext};
 use crate::layout::rect_contains;
+use crate::pty::Pty;
+use crate::ui::UiFrame;
 use crate::utils::linkifier::{
     LinkHandler, LinkOverlay, Linkifier, OverlaySignature, decorate_link_style,
 };
@@ -21,8 +21,6 @@ use crate::utils::selectable_text::{
     LogicalPosition, SelectionController, SelectionHost, SelectionViewport, handle_selection_mouse,
     maintain_selection_drag,
 };
-use crate::pty::Pty;
-use crate::ui::UiFrame;
 
 // This controls the scrollback buffer size in the vt100 parser.
 // It determines how many lines you can scroll up to see.
