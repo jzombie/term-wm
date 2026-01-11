@@ -1,13 +1,14 @@
 use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::text::Text;
+use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders, Clear};
 
 use crate::components::{
     Component, ComponentContext, DialogOverlayComponent, ScrollViewComponent, TextRendererComponent,
 };
 use crate::keybindings::{Action, KeyBindings};
-use crate::ui::UiFrame;
+use crate::ui::{UiFrame, safe_set_string};
 
 #[derive(Debug)]
 pub struct SelectionPreviewOverlayComponent {
@@ -28,9 +29,19 @@ impl Component for SelectionPreviewOverlayComponent {
             return;
         }
         self.dialog.render_backdrop(frame, area);
-        let rect = self.dialog.rect_for(area);
+        let base = self.dialog.rect_for(area);
+        let rect = Rect {
+            x: area.x,
+            y: area
+                .y
+                .saturating_add(area.height.saturating_sub(base.height) / 2),
+            width: area.width,
+            height: base.height,
+        };
         frame.render_widget(Clear, rect);
-        let block = Block::default().title("Selection Preview").borders(Borders::ALL);
+        let block = Block::default()
+            .title("Selection Preview")
+            .borders(Borders::ALL);
         let inner = Rect {
             x: rect.x.saturating_add(1),
             y: rect.y.saturating_add(1),
@@ -38,8 +49,20 @@ impl Component for SelectionPreviewOverlayComponent {
             height: rect.height.saturating_sub(2),
         };
         frame.render_widget(block, rect);
-        let viewer_ctx = ComponentContext::new(true).with_overlay(true);
-        self.viewer.render(frame, inner, &viewer_ctx);
+        let info = "Use your OS copy shortcut here (Cmd+C on macOS, Ctrl+C elsewhere).";
+        if inner.height > 0 {
+            safe_set_string(frame.buffer_mut(), rect, inner.x, inner.y, info, Style::default());
+        }
+        let viewer_area = Rect {
+            x: inner.x,
+            y: inner.y.saturating_add(1),
+            width: inner.width,
+            height: inner.height.saturating_sub(1),
+        };
+        if viewer_area.width > 0 && viewer_area.height > 0 {
+            let viewer_ctx = ComponentContext::new(true).with_overlay(true);
+            self.viewer.render(frame, viewer_area, &viewer_ctx);
+        }
     }
 
     fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
