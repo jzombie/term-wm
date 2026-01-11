@@ -9,12 +9,12 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::component_context::{ViewportContext, ViewportHandle};
-use crate::components::{Component, ComponentContext};
+use crate::components::{Component, ComponentContext, SelectionStatus};
 use crate::ui::UiFrame;
 use crate::utils::linkifier::LinkifiedText;
 use crate::utils::selectable_text::{
-    LogicalPosition, SelectionController, SelectionHost, SelectionViewport, handle_selection_mouse,
-    maintain_selection_drag,
+    LogicalPosition, SelectionController, SelectionHost, SelectionRange, SelectionViewport,
+    handle_selection_mouse, maintain_selection_drag,
 };
 
 pub struct TextRendererComponent {
@@ -193,6 +193,27 @@ impl Component for TextRendererComponent {
             _ => false,
         }
     }
+
+    fn selection_status(&self) -> SelectionStatus {
+        if !self.selection_enabled {
+            return SelectionStatus::default();
+        }
+        SelectionStatus {
+            active: self.selection.has_selection(),
+            dragging: self.selection.is_dragging(),
+        }
+    }
+
+    fn selection_text(&mut self) -> Option<String> {
+        if !self.selection_enabled {
+            return None;
+        }
+        let range = self.selection.selection_range()?.normalized();
+        if !range.is_non_empty() {
+            return None;
+        }
+        self.text_for_range(range)
+    }
 }
 
 // removed usage of ScrollAreaContent
@@ -364,6 +385,75 @@ impl TextRendererComponent {
                 }
             }
         }
+    }
+
+    fn text_for_range(&self, range: SelectionRange) -> Option<String> {
+        let width = self.content_width.max(1);
+        let height = self.content_height.max(1);
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        let max_row = height.saturating_sub(1);
+        let mut end_row = range.end.row.min(height);
+        let mut end_col = range.end.column;
+        if end_col == 0 && end_row > range.start.row {
+            end_row = end_row.saturating_sub(1);
+            end_col = width;
+        }
+        end_row = end_row.min(max_row);
+        let start_row = range.start.row.min(max_row);
+        if start_row > end_row {
+            return None;
+        }
+
+        let render_rows = end_row.saturating_sub(start_row).saturating_add(1);
+        let mut paragraph = Paragraph::new(self.text.clone());
+        if self.wrap {
+            paragraph = paragraph.wrap(Wrap { trim: false });
+        }
+        paragraph = paragraph.scroll((start_row as u16, 0));
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            width: width as u16,
+            height: render_rows as u16,
+        };
+        let mut buffer = Buffer::empty(rect);
+        paragraph.render(rect, &mut buffer);
+
+        let mut out = String::new();
+        for row in start_row..=end_row {
+            let row_index = row.saturating_sub(start_row) as u16;
+            let start_col = if row == range.start.row {
+                range.start.column.min(width)
+            } else {
+                0
+            };
+            let end_col = if row == end_row {
+                end_col.min(width)
+            } else {
+                width
+            };
+            if end_col <= start_col {
+                continue;
+            }
+            let mut line = String::new();
+            for col in start_col..end_col {
+                if let Some(cell) = buffer.cell((col as u16, row_index)) {
+                    line.push(cell.symbol().chars().next().unwrap_or(' '));
+                } else {
+                    line.push(' ');
+                }
+            }
+            let trimmed = line.trim_end_matches(' ').to_string();
+            out.push_str(&trimmed);
+            if row < end_row {
+                out.push('\n');
+            }
+        }
+
+        Some(out)
     }
 
     fn build_hit_test_palette(&self) -> Option<HitTestPalette> {

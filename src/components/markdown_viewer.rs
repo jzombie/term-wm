@@ -46,6 +46,14 @@ impl Component for MarkdownViewerComponent {
             _ => false,
         }
     }
+
+    fn selection_status(&self) -> crate::components::SelectionStatus {
+        self.text.selection_status()
+    }
+
+    fn selection_text(&mut self) -> Option<String> {
+        self.text.selection_text()
+    }
 }
 
 impl MarkdownViewerComponent {

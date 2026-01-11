@@ -144,11 +144,18 @@ where
                             ConfirmAction::Cancel => app.windows().close_exit_confirm(),
                         }
                     }
+                    update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Continue);
                 }
 
+                if app.windows().selection_preview_visible() {
+                    let _ = app.windows().handle_selection_preview_event(&evt);
+                    update_selection_snapshot(app);
+                    return flush_state_changes(app, ControlFlow::Continue);
+                }
                 if app.windows().help_overlay_visible() {
                     let _ = app.windows().handle_help_event(&evt);
+                    update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Continue);
                 }
                 let wm_mode = app.windows().layout_contract() == LayoutContract::WindowManaged;
@@ -168,6 +175,7 @@ where
                     } else {
                         app.windows().open_wm_overlay();
                     }
+                    update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Continue);
                 }
                 if wm_mode && app.windows().wm_overlay_visible() {
@@ -216,12 +224,15 @@ where
                             WmMenuAction::ExitUi => {
                                 app.windows().close_wm_overlay();
                                 app.windows().open_exit_confirm();
+                                update_selection_snapshot(app);
                                 return flush_state_changes(app, ControlFlow::Continue);
                             }
                         }
+                        update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue);
                     }
                     if app.windows().wm_menu_consumes_event(&evt) {
+                        update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue);
                     }
                     if let Event::Key(_key) = &evt
@@ -229,6 +240,7 @@ where
                     {
                         app.wm_new_window()?;
                         app.windows().close_wm_overlay();
+                        update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue);
                     }
                     if let Event::Key(_key) = &evt
@@ -241,15 +253,18 @@ where
                             &map_region,
                             &_map_focus,
                         );
+                        update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue);
                     }
 
                     if let Event::Key(_) = &evt {
+                        update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue);
                     }
                 }
 
                 if matches!(evt, Event::Mouse(_)) && !app.windows().mouse_capture_enabled() {
+                    update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Continue);
                 }
                 if let Event::Key(key) = &evt
@@ -257,15 +272,18 @@ where
                     && crate::keybindings::KeyBindings::default()
                         .matches(crate::keybindings::Action::Quit, key)
                 {
+                    update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Quit);
                 }
                 match &evt {
                     Event::Key(_) if app.windows().capture_active() => {
                         app.windows().clear_capture();
                         let _ = handle_focused_app_event(&evt, app);
+                        update_selection_snapshot(app);
                     }
                     _ => {
                         let _ = handle_focused_app_event(&evt, app);
+                        update_selection_snapshot(app);
                     }
                 }
             } else {
@@ -274,8 +292,10 @@ where
                 // windows should not cause the app to exit.
                 if app.enumerate_windows().is_empty() && !app.windows().has_active_system_windows()
                 {
+                    update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Quit);
                 }
+                update_selection_snapshot(app);
                 app.windows().begin_frame();
                 output.draw(|frame| draw(frame, app))?;
             }
@@ -344,6 +364,29 @@ where
             draw_window_app(&mut frame, app, &mut draw_state, draw_map);
         },
     )
+}
+
+fn update_selection_snapshot<A, W, R>(app: &mut A)
+where
+    A: WindowApp<W, R>,
+    W: Copy + Eq + Ord,
+    R: Copy + Eq + Ord + PartialEq<W> + std::fmt::Debug,
+{
+    let focus_id = app.windows().wm_focus_app();
+    if let Some(id) = focus_id
+        && let Some(component) = app.window_component(id)
+    {
+        let status = component.selection_status();
+        let text = if status.active || status.dragging {
+            component.selection_text()
+        } else {
+            None
+        };
+        app.windows()
+            .set_selection_snapshot(status.active, status.dragging, text);
+    } else {
+        app.windows().set_selection_snapshot(false, false, None);
+    }
 }
 
 struct WindowDrawState<R> {

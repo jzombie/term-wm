@@ -10,7 +10,7 @@ use ratatui::{
 };
 use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
-use crate::components::{Component, ComponentContext};
+use crate::components::{Component, ComponentContext, SelectionStatus};
 use crate::layout::rect_contains;
 use crate::pty::Pty;
 use crate::ui::UiFrame;
@@ -18,8 +18,8 @@ use crate::utils::linkifier::{
     LinkHandler, LinkOverlay, Linkifier, OverlaySignature, decorate_link_style,
 };
 use crate::utils::selectable_text::{
-    LogicalPosition, SelectionController, SelectionHost, SelectionViewport, handle_selection_mouse,
-    maintain_selection_drag,
+    LogicalPosition, SelectionController, SelectionHost, SelectionRange, SelectionViewport,
+    handle_selection_mouse, maintain_selection_drag,
 };
 
 // This controls the scrollback buffer size in the vt100 parser.
@@ -151,6 +151,27 @@ impl Component for TerminalComponent {
             }
             _ => false,
         }
+    }
+
+    fn selection_status(&self) -> SelectionStatus {
+        if !self.selection_enabled {
+            return SelectionStatus::default();
+        }
+        SelectionStatus {
+            active: self.selection.has_selection(),
+            dragging: self.selection.is_dragging(),
+        }
+    }
+
+    fn selection_text(&mut self) -> Option<String> {
+        if !self.selection_enabled {
+            return None;
+        }
+        let range = self.selection.selection_range()?.normalized();
+        if !range.is_non_empty() {
+            return None;
+        }
+        self.selection_text_for_range(range)
     }
 }
 
@@ -500,6 +521,42 @@ impl TerminalComponent {
         Some(LogicalPosition::new(
             row_base.saturating_add(local_row),
             local_col,
+        ))
+    }
+
+    fn selection_text_for_range(&mut self, range: SelectionRange) -> Option<String> {
+        let row_base = self
+            .pane
+            .max_scrollback()
+            .saturating_sub(self.pane.scrollback());
+        let screen = self.pane.screen();
+        let (rows, cols) = screen.size();
+        if rows == 0 || cols == 0 {
+            return None;
+        }
+        let (mut end_row, mut end_col) = (range.end.row, range.end.column);
+        if end_col == 0 && end_row > range.start.row {
+            end_row = end_row.saturating_sub(1);
+            end_col = cols as usize;
+        }
+
+        let start_row = range.start.row.saturating_sub(row_base);
+        let end_row = end_row.saturating_sub(row_base);
+        if start_row >= rows as usize {
+            return None;
+        }
+        let end_row = end_row.min(rows.saturating_sub(1) as usize);
+        let start_col = range.start.column.min(cols as usize);
+        let end_col = end_col.min(cols as usize);
+        if end_row < start_row {
+            return None;
+        }
+
+        Some(screen.contents_between(
+            start_row as u16,
+            start_col as u16,
+            end_row as u16,
+            end_col as u16,
         ))
     }
 
