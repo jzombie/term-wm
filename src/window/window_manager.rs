@@ -253,6 +253,8 @@ pub struct WindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     selection_active: bool,
     selection_dragging: bool,
     selection_text: Option<String>,
+    selection_copied: bool,
+    selection_copied_text: Option<String>,
     selection_preview_restore_mouse: Option<bool>,
     layout_contract: LayoutContract,
     wm_overlay_opened_at: Option<Instant>,
@@ -490,6 +492,8 @@ where
             selection_active: false,
             selection_dragging: false,
             selection_text: None,
+            selection_copied: false,
+            selection_copied_text: None,
             selection_preview_restore_mouse: None,
             layout_contract: LayoutContract::AppManaged,
             wm_overlay_opened_at: None,
@@ -631,9 +635,14 @@ where
     }
 
     pub fn set_selection_snapshot(&mut self, active: bool, dragging: bool, text: Option<String>) {
+        let changed = text.as_ref() != self.selection_text.as_ref();
         self.selection_active = active;
         self.selection_dragging = dragging;
         self.selection_text = text;
+        if !self.selection_active || self.selection_text.is_none() || changed {
+            self.selection_copied = false;
+            self.selection_copied_text = None;
+        }
     }
 
     pub fn selection_active(&self) -> bool {
@@ -648,6 +657,10 @@ where
         self.selection_text.as_deref()
     }
 
+    pub fn selection_copied(&self) -> bool {
+        self.selection_copied
+    }
+
     fn copy_selection_to_clipboard(&mut self) {
         if !self.clipboard_available || !self.clipboard_enabled() {
             return;
@@ -655,7 +668,10 @@ where
         let Some(text) = self.selection_text.clone() else {
             return;
         };
-        let _ = clipboard::set(&text);
+        if clipboard::set(&text).is_ok() {
+            self.selection_copied = true;
+            self.selection_copied_text = Some(text);
+        }
     }
 
     fn open_selection_preview_from_selection(&mut self) {
@@ -2478,6 +2494,7 @@ where
             self.selection_active(),
             self.selection_dragging(),
             selection_copy_available,
+            self.selection_copied(),
             self.wm_overlay_visible(),
             move |id| {
                 titles_map.get(&id).cloned().unwrap_or_else(|| match id {

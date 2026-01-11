@@ -189,6 +189,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         selection_active: bool,
         selection_dragging: bool,
         selection_copy_available: bool,
+        selection_copied: bool,
         menu_open: bool,
         label_for: F,
     ) where
@@ -320,9 +321,13 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             };
             let copy_style = if selection_copy_available && clipboard_available && clipboard_enabled
             {
-                Style::default()
+                let mut style = Style::default()
                     .fg(crate::theme::success_bg())
-                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::BOLD);
+                if selection_copied {
+                    style = style.fg(crate::theme::accent());
+                }
+                style
             } else {
                 Style::default().fg(crate::theme::panel_inactive_fg())
             };
