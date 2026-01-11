@@ -1,7 +1,7 @@
 use crossterm::event::Event;
 use ratatui::layout::Rect;
-use ratatui::text::Text;
 use ratatui::style::Style;
+use ratatui::text::Text;
 use ratatui::widgets::{Block, Borders, Clear};
 
 use crate::components::{
@@ -51,7 +51,14 @@ impl Component for SelectionPreviewOverlayComponent {
         frame.render_widget(block, rect);
         let info = "Use your OS copy shortcut here (Cmd+C on macOS, Ctrl+C elsewhere).";
         if inner.height > 0 {
-            safe_set_string(frame.buffer_mut(), rect, inner.x, inner.y, info, Style::default());
+            safe_set_string(
+                frame.buffer_mut(),
+                rect,
+                inner.x,
+                inner.y,
+                info,
+                Style::default(),
+            );
         }
         let viewer_area = Rect {
             x: inner.x,

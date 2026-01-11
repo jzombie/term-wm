@@ -630,12 +630,7 @@ where
         self.state.clipboard_enabled()
     }
 
-    pub fn set_selection_snapshot(
-        &mut self,
-        active: bool,
-        dragging: bool,
-        text: Option<String>,
-    ) {
+    pub fn set_selection_snapshot(&mut self, active: bool, dragging: bool, text: Option<String>) {
         self.selection_active = active;
         self.selection_dragging = dragging;
         self.selection_text = text;
@@ -833,11 +828,10 @@ where
             &ComponentContext::new(true).with_overlay(true),
         );
         let handled = boxed.handle_event(event, &ComponentContext::new(true).with_overlay(true));
-        let should_close =
-            boxed
-                .as_any()
-                .downcast_ref::<SelectionPreviewOverlayComponent>()
-                .is_some_and(|preview| !preview.visible());
+        let should_close = boxed
+            .as_any()
+            .downcast_ref::<SelectionPreviewOverlayComponent>()
+            .is_some_and(|preview| !preview.visible());
         if should_close {
             self.close_selection_preview();
         }
