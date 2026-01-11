@@ -6,7 +6,7 @@ use ratatui::prelude::Rect;
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use crate::component_context::{ViewportHandle, ViewportSharedState};
-use crate::components::{Component, ComponentContext};
+use crate::components::{Component, ComponentContext, SelectionStatus};
 use crate::ui::UiFrame;
 
 // --- Scroll Logic Helpers (Public API) ---
@@ -483,6 +483,14 @@ impl<C: Component> Component for ScrollViewComponent<C> {
         }
 
         false
+    }
+
+    fn selection_status(&self) -> SelectionStatus {
+        self.content.selection_status()
+    }
+
+    fn selection_text(&mut self) -> Option<String> {
+        self.content.selection_text()
     }
 }
 

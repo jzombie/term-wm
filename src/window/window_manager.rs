@@ -13,6 +13,7 @@ use crate::components::{
     Component, ComponentContext, ConfirmAction, ConfirmOverlayComponent, Overlay,
     sys::debug_log::{DebugLogComponent, install_panic_hook, set_global_debug_log},
     sys::help_overlay::HelpOverlayComponent,
+    sys::selection_preview_overlay::SelectionPreviewOverlayComponent,
 };
 use crate::constants::MIN_FLOATING_VISIBLE_MARGIN;
 use crate::layout::floating::*;
@@ -43,6 +44,7 @@ pub enum SystemWindowId {
 pub enum OverlayId {
     Help,
     ExitConfirm,
+    SelectionPreview,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -248,6 +250,10 @@ pub struct WindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
     pending_deadline: Option<Instant>,
     state: AppState,
     clipboard_available: bool,
+    selection_active: bool,
+    selection_dragging: bool,
+    selection_text: Option<String>,
+    selection_preview_restore_mouse: Option<bool>,
     layout_contract: LayoutContract,
     wm_overlay_opened_at: Option<Instant>,
     last_frame_area: ratatui::prelude::Rect,
@@ -481,6 +487,10 @@ where
             pending_deadline: None,
             state,
             clipboard_available,
+            selection_active: false,
+            selection_dragging: false,
+            selection_text: None,
+            selection_preview_restore_mouse: None,
             layout_contract: LayoutContract::AppManaged,
             wm_overlay_opened_at: None,
             last_frame_area: Rect::default(),
@@ -620,6 +630,46 @@ where
         self.state.clipboard_enabled()
     }
 
+    pub fn set_selection_snapshot(
+        &mut self,
+        active: bool,
+        dragging: bool,
+        text: Option<String>,
+    ) {
+        self.selection_active = active;
+        self.selection_dragging = dragging;
+        self.selection_text = text;
+    }
+
+    pub fn selection_active(&self) -> bool {
+        self.selection_active
+    }
+
+    pub fn selection_dragging(&self) -> bool {
+        self.selection_dragging
+    }
+
+    pub fn selection_text(&self) -> Option<&str> {
+        self.selection_text.as_deref()
+    }
+
+    fn copy_selection_to_clipboard(&mut self) {
+        if !self.clipboard_available || !self.clipboard_enabled() {
+            return;
+        }
+        let Some(text) = self.selection_text.clone() else {
+            return;
+        };
+        let _ = clipboard::set(&text);
+    }
+
+    fn open_selection_preview_from_selection(&mut self) {
+        let Some(text) = self.selection_text.clone() else {
+            return;
+        };
+        self.open_selection_preview(text);
+    }
+
     pub fn set_clipboard_enabled(&mut self, enabled: bool) {
         if !self.clipboard_available {
             return;
@@ -713,6 +763,29 @@ where
         self.overlays.remove(&OverlayId::Help);
     }
 
+    pub fn selection_preview_visible(&self) -> bool {
+        self.overlays.contains_key(&OverlayId::SelectionPreview)
+    }
+
+    pub fn open_selection_preview(&mut self, text: String) {
+        let mut preview = SelectionPreviewOverlayComponent::new();
+        preview.set_text(text);
+        preview.show();
+        self.overlays
+            .insert(OverlayId::SelectionPreview, Box::new(preview));
+        if self.selection_preview_restore_mouse.is_none() {
+            self.selection_preview_restore_mouse = Some(self.state.mouse_capture_enabled());
+        }
+        self.set_mouse_capture_enabled(false);
+    }
+
+    pub fn close_selection_preview(&mut self) {
+        self.overlays.remove(&OverlayId::SelectionPreview);
+        if let Some(prev) = self.selection_preview_restore_mouse.take() {
+            self.set_mouse_capture_enabled(prev);
+        }
+    }
+
     /// Set the central default for enabling scroll-keyboard handling.
     pub fn set_scroll_keyboard_enabled(&mut self, enabled: bool) {
         self.scroll_keyboard_enabled_default = enabled;
@@ -748,6 +821,26 @@ where
             self.overlays.remove(&OverlayId::Help);
         }
 
+        handled
+    }
+
+    pub fn handle_selection_preview_event(&mut self, event: &Event) -> bool {
+        let Some(boxed) = self.overlays.get_mut(&OverlayId::SelectionPreview) else {
+            return false;
+        };
+        boxed.resize(
+            self.last_frame_area,
+            &ComponentContext::new(true).with_overlay(true),
+        );
+        let handled = boxed.handle_event(event, &ComponentContext::new(true).with_overlay(true));
+        let should_close =
+            boxed
+                .as_any()
+                .downcast_ref::<SelectionPreviewOverlayComponent>()
+                .is_some_and(|preview| !preview.visible());
+        if should_close {
+            self.close_selection_preview();
+        }
         handled
     }
 
@@ -1301,6 +1394,10 @@ where
                 self.toggle_mouse_capture();
             } else if self.panel.hit_test_clipboard(event) {
                 self.toggle_clipboard_enabled();
+            } else if self.panel.hit_test_copy(event) {
+                self.copy_selection_to_clipboard();
+            } else if self.panel.hit_test_os_copy(event) {
+                self.open_selection_preview_from_selection();
             } else if let Some(id) = self.panel.hit_test_window(event) {
                 // If the clicked window is minimized, restore it first so it appears
                 // in the layout; otherwise just focus and bring to front.
@@ -2373,6 +2470,7 @@ where
             .keys()
             .map(|id| (*id, self.window_title(*id)))
             .collect();
+        let selection_copy_available = self.selection_text.is_some();
 
         self.panel.render(
             frame,
@@ -2383,6 +2481,9 @@ where
             self.mouse_capture_enabled(),
             self.clipboard_enabled(),
             self.clipboard_available(),
+            self.selection_active(),
+            self.selection_dragging(),
+            selection_copy_available,
             self.wm_overlay_visible(),
             move |id| {
                 titles_map.get(&id).cloned().unwrap_or_else(|| match id {
@@ -2425,6 +2526,13 @@ where
         }
         if let Some(help) = self.overlays.get_mut(&OverlayId::Help) {
             help.render(
+                frame,
+                frame.area(),
+                &ComponentContext::new(false).with_overlay(true),
+            );
+        }
+        if let Some(preview) = self.overlays.get_mut(&OverlayId::SelectionPreview) {
+            preview.render(
                 frame,
                 frame.area(),
                 &ComponentContext::new(false).with_overlay(true),

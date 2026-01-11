@@ -59,6 +59,9 @@ impl<R: Copy + Eq + Ord> WindowList<R> {
 struct NotificationArea {
     mouse_capture_rect: Option<Rect>,
     clipboard_rect: Option<Rect>,
+    selection_rect: Option<Rect>,
+    copy_rect: Option<Rect>,
+    os_copy_rect: Option<Rect>,
 }
 
 impl NotificationArea {
@@ -66,12 +69,18 @@ impl NotificationArea {
         Self {
             mouse_capture_rect: None,
             clipboard_rect: None,
+            selection_rect: None,
+            copy_rect: None,
+            os_copy_rect: None,
         }
     }
 
     fn begin_frame(&mut self) {
         self.mouse_capture_rect = None;
         self.clipboard_rect = None;
+        self.selection_rect = None;
+        self.copy_rect = None;
+        self.os_copy_rect = None;
     }
 }
 
@@ -177,6 +186,9 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         mouse_capture_enabled: bool,
         clipboard_enabled: bool,
         clipboard_available: bool,
+        selection_active: bool,
+        selection_dragging: bool,
+        selection_copy_available: bool,
         menu_open: bool,
         label_for: F,
     ) where
@@ -277,18 +289,50 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
 
         // Simplified text indicators per design: bracketed labels that
         // light up in green when active. No icons are used.
+        let selection_chunk = "[ selection ]";
+        let copy_chunk = "[ copy ]";
+        let os_chunk = "[ os ]";
         let mouse_chunk = "[ mouse ]";
         let clip_chunk = "[ clipboard ]";
         // No separator; render compact indicators side-by-side.
+        let selection_width = selection_chunk.chars().count() as u16;
+        let copy_width = copy_chunk.chars().count() as u16;
+        let os_width = os_chunk.chars().count() as u16;
         let mouse_width = mouse_chunk.chars().count() as u16;
         let clip_width = clip_chunk.chars().count() as u16;
-        let total_width = mouse_width.saturating_add(clip_width);
+        let total_width = selection_width
+            .saturating_add(copy_width)
+            .saturating_add(os_width)
+            .saturating_add(mouse_width)
+            .saturating_add(clip_width);
         let indicator_x = if total_width >= bounds.width {
             bounds.x
         } else {
             max_x.saturating_sub(total_width)
         };
         if total_width > 0 && indicator_x < max_x {
+            let selection_style = if selection_active || selection_dragging {
+                Style::default()
+                    .fg(crate::theme::success_bg())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(crate::theme::panel_inactive_fg())
+            };
+            let copy_style = if selection_copy_available && clipboard_available && clipboard_enabled
+            {
+                Style::default()
+                    .fg(crate::theme::success_bg())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(crate::theme::panel_inactive_fg())
+            };
+            let os_style = if selection_copy_available {
+                Style::default()
+                    .fg(crate::theme::success_bg())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(crate::theme::panel_inactive_fg())
+            };
             let mouse_style = if mouse_capture_enabled {
                 Style::default()
                     .fg(crate::theme::success_bg())
@@ -310,6 +354,46 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
                     .add_modifier(Modifier::DIM)
             };
             let mut cursor = indicator_x;
+            if selection_width > 0 && cursor < max_x {
+                safe_set_string(buffer, bounds, cursor, y, selection_chunk, selection_style);
+                let width = selection_width.min(max_x.saturating_sub(cursor));
+                if width > 0 {
+                    self.notifications.selection_rect = Some(Rect {
+                        x: cursor,
+                        y,
+                        width,
+                        height: 1,
+                    });
+                }
+            }
+            cursor = cursor.saturating_add(selection_width);
+            if copy_width > 0 && cursor < max_x {
+                safe_set_string(buffer, bounds, cursor, y, copy_chunk, copy_style);
+                let width = copy_width.min(max_x.saturating_sub(cursor));
+                if width > 0 && selection_copy_available && clipboard_available && clipboard_enabled
+                {
+                    self.notifications.copy_rect = Some(Rect {
+                        x: cursor,
+                        y,
+                        width,
+                        height: 1,
+                    });
+                }
+            }
+            cursor = cursor.saturating_add(copy_width);
+            if os_width > 0 && cursor < max_x {
+                safe_set_string(buffer, bounds, cursor, y, os_chunk, os_style);
+                let width = os_width.min(max_x.saturating_sub(cursor));
+                if width > 0 && selection_copy_available {
+                    self.notifications.os_copy_rect = Some(Rect {
+                        x: cursor,
+                        y,
+                        width,
+                        height: 1,
+                    });
+                }
+            }
+            cursor = cursor.saturating_add(os_width);
             if mouse_width > 0 && cursor < max_x {
                 safe_set_string(buffer, bounds, cursor, y, mouse_chunk, mouse_style);
                 let width = mouse_width.min(max_x.saturating_sub(cursor));
@@ -448,6 +532,32 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             return false;
         }
         if let Some(rect) = self.notifications.clipboard_rect {
+            return rect_contains(rect, mouse.column, mouse.row);
+        }
+        false
+    }
+
+    pub fn hit_test_copy(&self, event: &Event) -> bool {
+        let Event::Mouse(mouse) = event else {
+            return false;
+        };
+        if !matches!(mouse.kind, MouseEventKind::Down(_)) {
+            return false;
+        }
+        if let Some(rect) = self.notifications.copy_rect {
+            return rect_contains(rect, mouse.column, mouse.row);
+        }
+        false
+    }
+
+    pub fn hit_test_os_copy(&self, event: &Event) -> bool {
+        let Event::Mouse(mouse) = event else {
+            return false;
+        };
+        if !matches!(mouse.kind, MouseEventKind::Down(_)) {
+            return false;
+        }
+        if let Some(rect) = self.notifications.os_copy_rect {
             return rect_contains(rect, mouse.column, mouse.row);
         }
         false

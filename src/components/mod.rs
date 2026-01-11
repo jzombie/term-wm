@@ -33,6 +33,12 @@ use std::any::Any;
 
 pub use crate::component_context::ComponentContext;
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SelectionStatus {
+    pub active: bool,
+    pub dragging: bool,
+}
+
 pub trait Component {
     fn resize(&mut self, _area: Rect, _ctx: &ComponentContext) {}
 
@@ -40,6 +46,14 @@ pub trait Component {
 
     fn handle_event(&mut self, _event: &Event, _ctx: &ComponentContext) -> bool {
         false
+    }
+
+    fn selection_status(&self) -> SelectionStatus {
+        SelectionStatus::default()
+    }
+
+    fn selection_text(&mut self) -> Option<String> {
+        None
     }
 }
 
