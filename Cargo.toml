@@ -24,7 +24,7 @@ license = "MIT OR Apache-2.0"
 publish = true
 
 [workspace.dependencies]
-clap = { version = "4.5.54", features = ["derive"] }
+clap = { version = "4.5.56", features = ["derive"] }
 crossterm = "0.29.0"
 indoc = "2.0.7"
 ratatui = "0.30.0"
