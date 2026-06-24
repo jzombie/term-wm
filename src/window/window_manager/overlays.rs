@@ -7,19 +7,19 @@ use crate::window::FloatRectSpec;
 
 impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     pub fn open_wm_overlay(&mut self) {
-        self.state.set_overlay_visible(true);
+        self.overlay_visible = true;
         self.wm_overlay_opened_at = Some(std::time::Instant::now());
-        self.state.set_wm_menu_selected(0);
+        self.wm_menu_selected = 0;
     }
 
     pub fn close_wm_overlay(&mut self) {
-        self.state.set_overlay_visible(false);
+        self.overlay_visible = false;
         self.wm_overlay_opened_at = None;
-        self.state.set_wm_menu_selected(0);
+        self.wm_menu_selected = 0;
     }
 
     pub fn wm_overlay_visible(&self) -> bool {
-        self.state.overlay_visible()
+        self.overlay_visible
     }
 
     pub fn open_exit_confirm(&mut self) {
@@ -72,7 +72,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.overlays
             .insert(OverlayId::SelectionPreview, Box::new(preview));
         if self.selection_preview_restore_mouse.is_none() {
-            self.selection_preview_restore_mouse = Some(self.state.mouse_capture_enabled());
+            self.selection_preview_restore_mouse = Some(self.mouse_capture_enabled);
         }
         self.set_mouse_capture_enabled(false);
     }
@@ -142,7 +142,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         {
             if let Some(index) = self.panel.hit_test_menu_item(event) {
                 let selected = index.min(items.len().saturating_sub(1));
-                self.state.set_wm_menu_selected(selected);
+                self.wm_menu_selected = selected;
                 return items.get(selected).map(|item| item.action);
             }
             if self.panel.menu_icon_contains_point(mouse.column, mouse.row) {
@@ -161,11 +161,11 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         {
             let total = items.len();
             if total > 0 {
-                let current = self.state.wm_menu_selected();
+                let current = self.wm_menu_selected;
                 if current == 0 {
-                    self.state.set_wm_menu_selected(total - 1);
+                    self.wm_menu_selected = total - 1;
                 } else {
-                    self.state.set_wm_menu_selected(current - 1);
+                    self.wm_menu_selected = current - 1;
                 }
             }
             None
@@ -174,14 +174,12 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         {
             let total = items.len();
             if total > 0 {
-                let current = self.state.wm_menu_selected();
-                self.state.set_wm_menu_selected((current + 1) % total);
+                let current = self.wm_menu_selected;
+                self.wm_menu_selected = (current + 1) % total;
             }
             None
         } else if kb.matches(crate::keybindings::Action::MenuSelect, key) {
-            items
-                .get(self.state.wm_menu_selected())
-                .map(|item| item.action)
+            items.get(self.wm_menu_selected).map(|item| item.action)
         } else {
             None
         }
@@ -345,7 +343,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             self.wm_overlay_visible(),
             bounds,
             &menu_labels,
-            self.state.wm_menu_selected(),
+            self.wm_menu_selected,
         );
         self.panel.render_menu_backdrop(
             frame,

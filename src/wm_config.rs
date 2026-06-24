@@ -20,9 +20,10 @@ fn esc_passthrough_window_default() -> Duration {
 ///
 /// Each feature flag is independently toggleable. Preset constructors
 /// (`standalone`, `embedded`) provide sensible defaults for common use cases.
-/// Window-control callbacks (minimize/maximize/close) are only rendered in
-/// titlebars when `Some`.
-pub struct WmConfig<Id> {
+///
+/// Fields marked "initial" set the starting value for a runtime-toggleable
+/// feature — changes made at runtime apply immediately.
+pub struct WmConfig {
     /// Render window title bars and borders.
     pub chrome_enabled: bool,
     /// Support floating (draggable) windows alongside tiled windows.
@@ -31,52 +32,35 @@ pub struct WmConfig<Id> {
     pub panel_enabled: bool,
     /// Enable the WM overlay (menu) toggled by Escape.
     pub wm_overlay_enabled: bool,
-    /// Escape key passes through to the app even when overlay is enabled
-    /// (for the first 300ms after overlay opens).
-    pub esc_passthrough: bool,
     /// Duration of the escape passthrough window.
     pub esc_passthrough_window: Duration,
-
-    // Window control callbacks (titlebar buttons only render if Some)
-    pub on_minimize: Option<Box<dyn FnMut(Id)>>,
-    pub on_maximize: Option<Box<dyn FnMut(Id)>>,
-    pub on_close: Option<Box<dyn FnMut(Id)>>,
-
-    /// Whether scroll-view keyboard handling is enabled by default.
-    pub scroll_keyboard_enabled_default: bool,
     /// Allow floating windows to be dragged/resized off-screen.
     pub floating_resize_offscreen: bool,
-    /// Whether clipboard integration is available.
+    /// Initial value for clipboard integration (runtime-toggleable).
     pub clipboard_enabled: bool,
-    /// Whether mouse capture is enabled by default.
+    /// Initial value for mouse capture (runtime-toggleable).
     pub mouse_capture_enabled: bool,
     /// Custom window decorator (title bar + border renderer).
     pub decorator: Option<Arc<dyn WindowDecorator>>,
 }
 
-impl<Id: 'static> Default for WmConfig<Id> {
+impl Default for WmConfig {
     fn default() -> Self {
         Self::standalone()
     }
 }
 
-impl<Id: 'static> WmConfig<Id> {
+impl WmConfig {
     /// Full standalone window manager preset.
     ///
     /// Chrome, floating windows, panel, and WM overlay are all enabled.
-    /// Escape toggles the WM overlay menu. Default close callback closes the window.
     pub fn standalone() -> Self {
         Self {
             chrome_enabled: true,
             floating_windows_enabled: true,
             panel_enabled: true,
             wm_overlay_enabled: true,
-            esc_passthrough: true,
             esc_passthrough_window: esc_passthrough_window_default(),
-            on_minimize: None,
-            on_maximize: None,
-            on_close: None,
-            scroll_keyboard_enabled_default: true,
             floating_resize_offscreen: true,
             clipboard_enabled: true,
             mouse_capture_enabled: true,
@@ -85,19 +69,13 @@ impl<Id: 'static> WmConfig<Id> {
     }
 
     /// Embedded mode preset: no chrome, no panel, no floating windows, no overlay.
-    /// Escape passes through to the app. No window controls.
     pub fn embedded() -> Self {
         Self {
             chrome_enabled: false,
             floating_windows_enabled: false,
             panel_enabled: false,
             wm_overlay_enabled: false,
-            esc_passthrough: true,
             esc_passthrough_window: esc_passthrough_window_default(),
-            on_minimize: None,
-            on_maximize: None,
-            on_close: None,
-            scroll_keyboard_enabled_default: true,
             floating_resize_offscreen: false,
             clipboard_enabled: true,
             mouse_capture_enabled: true,

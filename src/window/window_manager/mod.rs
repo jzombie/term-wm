@@ -25,7 +25,6 @@ use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLa
 use crate::panel::Panel;
 use crate::ui::UiFrame;
 use crate::wm_config::WmConfig;
-use crate::wm_state::WmState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SystemWindowId {
@@ -198,7 +197,12 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     pub(crate) hover: Option<(u16, u16)>,
     capture_deadline: Option<Instant>,
     pending_deadline: Option<Instant>,
-    state: WmState,
+    mouse_capture_enabled: bool,
+    mouse_capture_dirty: bool,
+    clipboard_enabled: bool,
+    clipboard_dirty: bool,
+    overlay_visible: bool,
+    wm_menu_selected: usize,
     clipboard_available: bool,
     selection_active: bool,
     selection_dragging: bool,
@@ -206,7 +210,7 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     selection_copied: bool,
     selection_copied_text: Option<String>,
     selection_preview_restore_mouse: Option<bool>,
-    config: WmConfig<Id>,
+    config: WmConfig,
     wm_overlay_opened_at: Option<Instant>,
     pub(crate) last_frame_area: ratatui::prelude::Rect,
     overlays: BTreeMap<OverlayId, Box<dyn Overlay>>,
@@ -312,13 +316,11 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         Self::with_config(current, WmConfig::standalone())
     }
 
-    pub fn with_config(current: Id, config: WmConfig<Id>) -> Self {
+    pub fn with_config(current: Id, config: WmConfig) -> Self {
         let clipboard_available = clipboard::available();
-        let mut state = WmState::new();
-        if !clipboard_available {
-            state.set_clipboard_enabled(false);
-        }
-        let selection_enabled = state.clipboard_enabled();
+        let mouse_capture_enabled = config.mouse_capture_enabled;
+        let clipboard_enabled = clipboard_available && config.clipboard_enabled;
+        let selection_enabled = clipboard_enabled;
         let decorator = config.decorator();
         let floating_resize_offscreen = config.floating_resize_offscreen;
         Self {
@@ -342,7 +344,12 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             hover: None,
             capture_deadline: None,
             pending_deadline: None,
-            state,
+            mouse_capture_enabled,
+            mouse_capture_dirty: false,
+            clipboard_enabled,
+            clipboard_dirty: false,
+            overlay_visible: false,
+            wm_menu_selected: 0,
             clipboard_available,
             selection_active: false,
             selection_dragging: false,
@@ -380,7 +387,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         std::mem::take(&mut self.closed_app_windows)
     }
 
-    pub fn config(&self) -> &WmConfig<Id> {
+    pub fn config(&self) -> &WmConfig {
         &self.config
     }
 
@@ -422,16 +429,16 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     pub fn clear_capture(&mut self) {
         self.capture_deadline = None;
         self.pending_deadline = None;
-        self.state.set_overlay_visible(false);
+        self.overlay_visible = false;
         self.wm_overlay_opened_at = None;
-        self.state.set_wm_menu_selected(0);
+        self.wm_menu_selected = 0;
     }
 
     pub fn capture_active(&mut self) -> bool {
-        if !self.state.mouse_capture_enabled() {
+        if !self.mouse_capture_enabled {
             return false;
         }
-        if self.config.wm_overlay_enabled && self.state.overlay_visible() {
+        if self.config.wm_overlay_enabled && self.overlay_visible {
             return true;
         }
         self.refresh_capture();
@@ -439,29 +446,44 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub fn mouse_capture_enabled(&self) -> bool {
-        self.state.mouse_capture_enabled()
+        self.mouse_capture_enabled
     }
 
     pub fn set_mouse_capture_enabled(&mut self, enabled: bool) {
-        self.state.set_mouse_capture_enabled(enabled);
-        if !self.state.mouse_capture_enabled() {
+        if self.mouse_capture_enabled == enabled {
+            return;
+        }
+        self.mouse_capture_enabled = enabled;
+        self.mouse_capture_dirty = true;
+        if !enabled {
             self.clear_capture();
         }
     }
 
     pub fn toggle_mouse_capture(&mut self) {
-        self.state.toggle_mouse_capture();
-        if !self.state.mouse_capture_enabled() {
+        self.mouse_capture_enabled = !self.mouse_capture_enabled;
+        self.mouse_capture_dirty = true;
+        if !self.mouse_capture_enabled {
             self.clear_capture();
         }
     }
 
     pub fn take_mouse_capture_change(&mut self) -> Option<bool> {
-        self.state.take_mouse_capture_change()
+        if self.mouse_capture_dirty {
+            self.mouse_capture_dirty = false;
+            Some(self.mouse_capture_enabled)
+        } else {
+            None
+        }
     }
 
     pub fn take_clipboard_change(&mut self) -> Option<bool> {
-        self.state.take_clipboard_change()
+        if self.clipboard_dirty {
+            self.clipboard_dirty = false;
+            Some(self.clipboard_enabled)
+        } else {
+            None
+        }
     }
 
     pub fn clipboard_available(&self) -> bool {
@@ -469,7 +491,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub fn clipboard_enabled(&self) -> bool {
-        self.state.clipboard_enabled()
+        self.clipboard_enabled
     }
 
     pub fn set_selection_snapshot(&mut self, active: bool, dragging: bool, text: Option<String>) {
@@ -523,10 +545,11 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         if !self.clipboard_available {
             return;
         }
-        if self.state.clipboard_enabled() == enabled {
+        if self.clipboard_enabled == enabled {
             return;
         }
-        self.state.set_clipboard_enabled(enabled);
+        self.clipboard_enabled = enabled;
+        self.clipboard_dirty = true;
         self.apply_clipboard_selection_state(enabled);
     }
 
@@ -534,7 +557,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         if !self.clipboard_available {
             return;
         }
-        let next = !self.state.clipboard_enabled();
+        let next = !self.clipboard_enabled;
         self.set_clipboard_enabled(next);
     }
 
