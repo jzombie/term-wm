@@ -3,9 +3,10 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::components::{Component, ComponentContext, ConfirmAction, DialogOverlayComponent};
-use crate::layout::rect_contains;
-use crate::ui::{UiFrame, safe_set_string};
+use term_wm_core::components::{Component, ComponentContext, ConfirmAction};
+use crate::dialog_overlay::DialogOverlayComponent;
+use term_wm_core::layout::rect_contains;
+use term_wm_core::ui::{UiFrame, safe_set_string};
 
 #[derive(Debug, Default)]
 pub struct ConfirmOverlayComponent {
@@ -224,7 +225,7 @@ mod tests {
     };
 
     fn ev_for(action: crate::keybindings::Action) -> Event {
-        use crate::keybindings::KeyBindings;
+        use term_wm_core::keybindings::KeyBindings;
         use crossterm::event::KeyEvent;
         if let Some(combo) = KeyBindings::default().first_combo(action) {
             Event::Key(KeyEvent::new(combo.code, combo.mods))

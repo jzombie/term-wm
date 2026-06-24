@@ -8,11 +8,11 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
-use crate::component_context::{ViewportContext, ViewportHandle};
-use crate::components::{Component, ComponentContext, SelectionStatus};
-use crate::ui::UiFrame;
-use crate::utils::linkifier::LinkifiedText;
-use crate::utils::selectable_text::{
+use term_wm_core::component_context::{ViewportContext, ViewportHandle};
+use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
+use term_wm_core::ui::UiFrame;
+use term_wm_core::utils::linkifier::LinkifiedText;
+use term_wm_core::utils::selectable_text::{
     LogicalPosition, SelectionController, SelectionHost, SelectionRange, SelectionViewport,
     handle_selection_mouse, maintain_selection_drag,
 };
@@ -89,7 +89,7 @@ impl Component for TextRendererComponent {
         let v_off = viewport_cache.offset_y as u16;
         let h_off = viewport_cache.offset_x as u16;
 
-        use crate::ui::safe_set_string;
+        use term_wm_core::ui::safe_set_string;
 
         const RULE_PLACEHOLDER: &str = "\0RULE\0";
         let usable = usable_width;
@@ -655,8 +655,8 @@ impl Default for TextRendererComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::ScrollViewComponent;
-    use crate::ui::UiFrame;
+    use term_wm_core::components::ScrollViewComponent;
+    use term_wm_core::ui::UiFrame;
     use crossterm::event::{
         Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
         MouseEventKind,

@@ -10,14 +10,14 @@ use ratatui::{
 };
 use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
-use crate::components::{Component, ComponentContext, SelectionStatus};
-use crate::layout::rect_contains;
-use crate::pty::Pty;
-use crate::ui::UiFrame;
-use crate::utils::linkifier::{
+use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
+use term_wm_core::layout::rect_contains;
+use term_wm_core::pty::Pty;
+use term_wm_core::ui::UiFrame;
+use term_wm_core::utils::linkifier::{
     LinkHandler, LinkOverlay, Linkifier, OverlaySignature, decorate_link_style,
 };
-use crate::utils::selectable_text::{
+use term_wm_core::utils::selectable_text::{
     LogicalPosition, SelectionController, SelectionHost, SelectionRange, SelectionViewport,
     handle_selection_mouse, maintain_selection_drag,
 };
@@ -741,7 +741,7 @@ fn resolve_colors(cell: &vt100::Cell, screen: &vt100::Screen) -> (Option<TColor>
 }
 
 fn vt_color_to_ratatui(color: vt100::Color) -> Option<TColor> {
-    use crate::io::utils::term_color::map_rgb_to_color;
+    use term_wm_core::io::utils::term_color::map_rgb_to_color;
     match color {
         vt100::Color::Default => None,
         vt100::Color::Idx(idx) => Some(TColor::Indexed(idx)),

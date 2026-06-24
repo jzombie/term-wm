@@ -4,11 +4,10 @@ use ratatui::style::Style;
 use ratatui::text::Text;
 use ratatui::widgets::{Block, Borders, Clear};
 
-use crate::components::{
-    Component, ComponentContext, DialogOverlayComponent, ScrollViewComponent, TextRendererComponent,
-};
-use crate::keybindings::{Action, KeyBindings};
-use crate::ui::{UiFrame, safe_set_string};
+use term_wm_core::components::{Component, ComponentContext};
+use crate::{DialogOverlayComponent, ScrollViewComponent, TextRendererComponent};
+use term_wm_core::keybindings::{Action, KeyBindings};
+use term_wm_core::ui::{UiFrame, safe_set_string};
 
 #[derive(Debug)]
 pub struct SelectionPreviewOverlayComponent {

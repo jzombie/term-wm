@@ -6,8 +6,9 @@ use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Text};
 
-use crate::components::{Component, ComponentContext, ScrollViewComponent, TextRendererComponent};
-use crate::ui::UiFrame;
+use term_wm_core::components::{Component, ComponentContext};
+use crate::{ScrollViewComponent, TextRendererComponent};
+use term_wm_core::ui::UiFrame;
 
 const DEFAULT_MAX_LINES: usize = 2000;
 static GLOBAL_LOG: OnceLock<DebugLogHandle> = OnceLock::new();
@@ -278,7 +279,7 @@ impl DebugLogComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::UiFrame;
+    use term_wm_core::ui::UiFrame;
     use crossterm::event::{Event, KeyCode, MouseEvent, MouseEventKind};
     use ratatui::{buffer::Buffer, prelude::Rect};
     use std::io::Write;

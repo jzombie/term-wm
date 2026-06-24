@@ -6,17 +6,16 @@
 use std::io;
 
 use clap::Parser;
+use line_ending::LineEnding;
+use portable_pty::CommandBuilder;
 use ratatui::prelude::Rect;
 
-use line_ending::LineEnding;
-use term_wm::components::{
-    Component, ScrollViewComponent, TerminalComponent, default_shell_command,
-};
-use term_wm::io::RenderTarget;
-use term_wm::io::console::{ConsoleEventSource, ConsoleRenderTarget};
+use term_wm::components::{Component, ComponentContext};
+use term_wm::io::{RenderTarget, console::{ConsoleEventSource, ConsoleRenderTarget}};
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
 use term_wm::ui::UiFrame;
 use term_wm::window::{WindowDrawContext, WindowManager};
+use term_wm::{ScrollViewComponent, TerminalComponent, default_shell_command};
 
 type PaneId = usize;
 

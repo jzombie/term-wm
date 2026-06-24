@@ -9,9 +9,10 @@ use ratatui::style::{Color, Modifier, Style};
 
 use std::sync::Arc;
 
-use crate::components::{Component, ComponentContext, TextRendererComponent};
-use crate::ui::UiFrame;
-use crate::utils::linkifier::{LinkFragment, LinkHandler, Linkifier};
+use term_wm_core::components::{Component, ComponentContext};
+use crate::text_renderer::TextRendererComponent;
+use term_wm_core::ui::UiFrame;
+use term_wm_core::utils::linkifier::{LinkFragment, LinkHandler, Linkifier};
 
 pub struct MarkdownViewerComponent {
     text: TextRendererComponent,
@@ -392,7 +393,7 @@ fn slugify(text: &str) -> String {
 #[cfg(test)]
 mod markdown_tests {
     use super::*;
-    use crate::components::ScrollViewComponent;
+    use term_wm_core::components::ScrollViewComponent;
     use indoc::indoc;
 
     const SAMPLE_HELP_MD: &str = indoc! {

@@ -5,9 +5,9 @@ use crossterm::event::{Event, MouseEvent, MouseEventKind};
 use ratatui::prelude::Rect;
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 
-use crate::component_context::{ViewportHandle, ViewportSharedState};
-use crate::components::{Component, ComponentContext, SelectionStatus};
-use crate::ui::UiFrame;
+use term_wm_core::component_context::{ViewportHandle, ViewportSharedState};
+use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
+use term_wm_core::ui::UiFrame;
 
 // --- Scroll Logic Helpers (Public API) ---
 

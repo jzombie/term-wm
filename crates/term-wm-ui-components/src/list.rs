@@ -3,8 +3,8 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem};
 
-use crate::components::{Component, ComponentContext};
-use crate::ui::UiFrame;
+use term_wm_core::components::{Component, ComponentContext};
+use term_wm_core::ui::UiFrame;
 
 pub struct ListComponent {
     items: Vec<String>,
@@ -160,7 +160,7 @@ mod tests {
     fn selection_moves_with_keys() {
         let mut list = ListComponent::new("t");
         list.set_items(vec!["a".into(), "b".into(), "c".into()]);
-        use crate::components::Component;
+        use term_wm_core::components::Component;
         let ctx = ComponentContext::new(true);
         // move down
         let _ = list.handle_event(&key_event(KeyCode::Down), &ctx);
@@ -174,7 +174,7 @@ mod tests {
     fn home_and_end_keys() {
         let mut list = ListComponent::new("t");
         list.set_items(vec!["a".into(), "b".into(), "c".into(), "d".into()]);
-        use crate::components::Component;
+        use term_wm_core::components::Component;
         let ctx = ComponentContext::new(true);
         let _ = list.handle_event(&key_event(KeyCode::End), &ctx);
         assert_eq!(list.selected(), 3);
@@ -186,7 +186,7 @@ mod tests {
     fn page_keys_move_more() {
         let mut list = ListComponent::new("t");
         list.set_items((0..20).map(|i| format!("{}", i)).collect());
-        use crate::components::Component;
+        use term_wm_core::components::Component;
         let ctx = ComponentContext::new(true);
         let _ = list.handle_event(&key_event(KeyCode::PageDown), &ctx);
         assert!(list.selected() >= 5);

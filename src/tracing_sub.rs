@@ -4,7 +4,7 @@ use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{Layer, layer::Context};
 
-use crate::components::debug_log::{DebugLogWriter, global_debug_log, trigger_error};
+use term_wm_ui_components::sys::debug_log::{DebugLogWriter, global_debug_log, trigger_error};
 
 struct ErrorNotifyLayer;
 

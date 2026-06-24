@@ -3,9 +3,9 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-use crate::components::{Component, ComponentContext};
-use crate::layout::rect_contains;
-use crate::ui::UiFrame;
+use term_wm_core::components::{Component, ComponentContext};
+use term_wm_core::layout::rect_contains;
+use term_wm_core::ui::UiFrame;
 
 #[derive(Debug, Clone)]
 pub struct DialogOverlayComponent {

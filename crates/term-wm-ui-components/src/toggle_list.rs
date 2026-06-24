@@ -3,8 +3,8 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem};
 
-use crate::components::{Component, ComponentContext};
-use crate::ui::UiFrame;
+use term_wm_core::components::{Component, ComponentContext};
+use term_wm_core::ui::UiFrame;
 
 #[derive(Clone)]
 pub struct ToggleItem {
@@ -168,7 +168,7 @@ impl ToggleListComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::Component;
+    use term_wm_core::components::Component;
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
     fn make_items(n: usize) -> Vec<ToggleItem> {

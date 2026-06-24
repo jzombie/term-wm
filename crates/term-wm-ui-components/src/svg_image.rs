@@ -2,9 +2,9 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use crate::components::ascii_image::AsciiImageComponent;
-use crate::components::{Component, ComponentContext};
-use crate::ui::UiFrame;
+use crate::ascii_image::AsciiImageComponent;
+use term_wm_core::components::{Component, ComponentContext};
+use term_wm_core::ui::UiFrame;
 
 enum Pnm {
     Luma {

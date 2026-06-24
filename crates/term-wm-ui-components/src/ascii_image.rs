@@ -4,8 +4,8 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use resvg::{tiny_skia, usvg};
 
-use crate::components::{Component, ComponentContext};
-use crate::ui::UiFrame;
+use term_wm_core::components::{Component, ComponentContext};
+use term_wm_core::ui::UiFrame;
 
 const DEFAULT_RAMP: &[char] = &[' ', '.', ':', '-', '=', '+', '*', '#', '%', '@'];
 const MAX_SVG_DIM: u32 = 1024;

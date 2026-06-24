@@ -4,12 +4,10 @@ use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders, Clear};
 
-use crate::components::{
-    Component, ComponentContext, DialogOverlayComponent, MarkdownViewerComponent,
-    ScrollViewComponent,
-};
-use crate::keybindings::{Action, KeyBindings};
-use crate::ui::UiFrame;
+use term_wm_core::components::{Component, ComponentContext};
+use crate::{DialogOverlayComponent, MarkdownViewerComponent, ScrollViewComponent};
+use term_wm_core::keybindings::{Action, KeyBindings};
+use term_wm_core::ui::UiFrame;
 
 const HELP_CONTENT_BYTES: &[u8] =
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/help.md"));
