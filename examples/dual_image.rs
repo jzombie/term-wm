@@ -4,8 +4,8 @@ use ratatui::prelude::Rect;
 use ratatui::widgets::Clear;
 
 use term_wm::components::{Component, ComponentContext, SvgImageComponent};
-use term_wm::drivers::OutputDriver;
-use term_wm::drivers::console::{ConsoleInputDriver, ConsoleOutputDriver};
+use term_wm::io::OutputDriver;
+use term_wm::io::console::{ConsoleInputDriver, ConsoleOutputDriver};
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
 use term_wm::ui::UiFrame;
 use term_wm::window::{WindowDrawContext, WindowManager};

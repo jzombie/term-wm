@@ -741,7 +741,7 @@ fn resolve_colors(cell: &vt100::Cell, screen: &vt100::Screen) -> (Option<TColor>
 }
 
 fn vt_color_to_ratatui(color: vt100::Color) -> Option<TColor> {
-    use crate::drivers::utils::term_color::map_rgb_to_color;
+    use crate::io::utils::term_color::map_rgb_to_color;
     match color {
         vt100::Color::Default => None,
         vt100::Color::Idx(idx) => Some(TColor::Indexed(idx)),
@@ -913,7 +913,7 @@ mod tests {
         );
         assert_eq!(
             vt_color_to_ratatui(vt100::Color::Rgb(1, 2, 3)),
-            Some(crate::drivers::utils::term_color::map_rgb_to_color(1, 2, 3))
+            Some(crate::io::utils::term_color::map_rgb_to_color(1, 2, 3))
         );
 
         // resolve_color: when both default -> None

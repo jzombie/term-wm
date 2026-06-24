@@ -6,8 +6,8 @@ use ratatui::prelude::{Constraint, Direction, Rect};
 use ratatui::style::Style;
 
 use crate::components::{Component, ComponentContext, ConfirmAction};
-use crate::drivers::{InputDriver, OutputDriver};
 use crate::event_loop::{ControlFlow, EventLoop};
+use crate::io::{InputDriver, OutputDriver};
 use crate::layout::{LayoutNode, TilingLayout};
 use crate::ui::UiFrame;
 use crate::window::decorator::WindowDecorator;

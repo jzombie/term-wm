@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crossterm::event::Event;
 
-use crate::drivers::InputDriver;
+use crate::io::InputDriver;
 
 pub enum ControlFlow {
     Continue,
@@ -83,7 +83,7 @@ impl<D: InputDriver> EventLoop<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::drivers::InputDriver;
+    use crate::io::InputDriver;
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
     use std::time::Duration;
 

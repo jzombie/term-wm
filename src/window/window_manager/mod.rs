@@ -15,11 +15,11 @@ use ratatui::prelude::Rect;
 use super::FocusRing;
 use super::decorator::WindowDecorator;
 use super::entry::Window;
-use crate::clipboard;
 use crate::components::{
     Component, ComponentContext, Overlay,
     sys::debug_log::{DebugLogComponent, install_panic_hook, set_global_debug_log},
 };
+use crate::io::clipboard;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
 use crate::panel::Panel;

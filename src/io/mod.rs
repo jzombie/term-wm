@@ -1,3 +1,4 @@
+pub mod clipboard;
 pub mod console;
 pub(crate) mod utils;
 
