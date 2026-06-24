@@ -5,7 +5,7 @@ use ratatui::text::Text;
 use ratatui::widgets::{Block, Borders, Clear};
 
 use crate::{DialogOverlayComponent, ScrollViewComponent, TextRendererComponent};
-use term_wm_core::components::{Component, ComponentContext};
+use term_wm_core::components::{Component, ComponentContext, Overlay};
 use term_wm_core::keybindings::{Action, KeyBindings};
 use term_wm_core::ui::{UiFrame, safe_set_string};
 
@@ -96,6 +96,18 @@ impl Component for SelectionPreviewOverlayComponent {
             }
             _ => false,
         }
+    }
+}
+
+impl Overlay for SelectionPreviewOverlayComponent {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+    fn visible(&self) -> bool {
+        self.visible
     }
 }
 

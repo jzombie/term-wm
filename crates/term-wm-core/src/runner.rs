@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::prelude::{Constraint, Direction, Rect};
 use ratatui::style::Style;
 
-use crate::components::{Component, ComponentContext, ConfirmAction};
+use crate::components::{Component, ComponentContext, ConfirmAction, Overlay};
 use crate::debug_event_flags;
 use crate::event_loop::{ControlFlow, EventLoop};
 use crate::io::{EventSource, RenderTarget};
@@ -48,6 +48,14 @@ impl Component for NoopOverlay {
 impl std::fmt::Debug for NoopOverlay {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NoopOverlay").finish()
+    }
+}
+impl Overlay for NoopOverlay {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
 

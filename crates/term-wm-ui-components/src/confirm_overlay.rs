@@ -4,7 +4,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::dialog_overlay::DialogOverlayComponent;
-use term_wm_core::components::{Component, ComponentContext, ConfirmAction};
+use term_wm_core::components::{Component, ComponentContext, ConfirmAction, Overlay};
 use term_wm_core::layout::rect_contains;
 use term_wm_core::ui::{UiFrame, safe_set_string};
 
@@ -129,6 +129,21 @@ impl Component for ConfirmOverlayComponent {
         kb.matches(term_wm_core::keybindings::Action::ConfirmToggle, key)
             || kb.matches(term_wm_core::keybindings::Action::ConfirmLeft, key)
             || kb.matches(term_wm_core::keybindings::Action::ConfirmRight, key)
+    }
+}
+
+impl Overlay for ConfirmOverlayComponent {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+    fn visible(&self) -> bool {
+        self.visible
+    }
+    fn handle_confirm_event(&mut self, event: &Event) -> Option<ConfirmAction> {
+        self.handle_confirm_event(event)
     }
 }
 

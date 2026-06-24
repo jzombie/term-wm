@@ -5,7 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders, Clear};
 
 use crate::{DialogOverlayComponent, MarkdownViewerComponent, ScrollViewComponent};
-use term_wm_core::components::{Component, ComponentContext};
+use term_wm_core::components::{Component, ComponentContext, Overlay};
 use term_wm_core::keybindings::{Action, KeyBindings};
 use term_wm_core::ui::UiFrame;
 
@@ -53,6 +53,18 @@ impl Component for HelpOverlayComponent {
 
     fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
         self.handle_help_event_in_area(event, self.area, ctx)
+    }
+}
+
+impl Overlay for HelpOverlayComponent {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+    fn visible(&self) -> bool {
+        self.visible
     }
 }
 

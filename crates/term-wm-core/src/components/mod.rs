@@ -49,15 +49,6 @@ pub trait Overlay: Component + std::fmt::Debug + Any {
     }
 }
 
-impl<T: Component + std::fmt::Debug + Any> Overlay for T {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
