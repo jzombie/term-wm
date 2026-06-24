@@ -1,3 +1,4 @@
+// TODO: Figure out how to move this to term-wm-ui-components as well
 use crossterm::event::Event;
 use ratatui::layout::Rect;
 use std::any::Any;
