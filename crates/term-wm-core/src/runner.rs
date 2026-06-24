@@ -287,6 +287,17 @@ where
                     update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Continue);
                 }
+                // Route Tab/Shift+Tab through focus routing for non-overlay mode.
+                // The overlay-only path above handles this when wm_overlay is
+                // visible, but the fallthrough path also needs it.  Mouse focus
+                // switching is handled by handle_managed_event -> focus_window_at,
+                // so we only intercept keyboard events here.
+                if matches!(evt, Event::Key(_))
+                    && app.windows().handle_focus_event(&evt, focus_regions, &map_region)
+                {
+                    update_selection_snapshot(app);
+                    return flush_state_changes(app, ControlFlow::Continue);
+                }
                 if let Event::Key(key) = &evt
                     && key.kind == KeyEventKind::Press
                     && crate::keybindings::KeyBindings::default()
