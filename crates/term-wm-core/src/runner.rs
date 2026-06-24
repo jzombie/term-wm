@@ -9,6 +9,7 @@ use crate::components::{Component, ComponentContext, ConfirmAction, Overlay};
 use crate::debug_event_flags;
 use crate::event_loop::{ControlFlow, EventLoop};
 use crate::io::{EventSource, RenderTarget};
+use crate::keybindings::Action;
 use crate::layout::{LayoutNode, TilingLayout};
 use crate::ui::UiFrame;
 use crate::window::decorator::WindowDecorator;
@@ -28,6 +29,11 @@ pub trait WindowManagerHost<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> {
     fn open_help_overlay(&mut self) {
         self.windows()
             .open_overlay(crate::window::OverlayId::Help, Box::new(NoopOverlay));
+    }
+    fn open_keybindings_overlay(&mut self) {
+        // Default noop; overridden in main.rs for real overlay.
+        self.windows()
+            .open_overlay(crate::window::OverlayId::Keybindings, Box::new(NoopOverlay));
     }
     fn open_exit_confirm(&mut self) {
         self.windows()
@@ -154,12 +160,14 @@ where
                 Ok(flow)
             };
             if let Some(evt) = event {
+                // Pre-compute the keybinding action using the configured
+                // KeyBindings from WindowManager (not hardcoded defaults).
                 let mapped_action = match &evt {
-                    Event::Key(key) => {
-                        crate::keybindings::KeyBindings::default().action_for_key(key)
-                    }
+                    Event::Key(key) => app.windows().keybindings().action_for_key(key),
                     _ => None,
                 };
+
+                // Layer 1: Active overlays (exit confirm, selection preview, help)
                 if app.windows().exit_confirm_visible() {
                     if let Some(action) = app.windows().handle_exit_confirm_event(&evt) {
                         match action {
@@ -181,11 +189,70 @@ where
                     update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Continue);
                 }
+
+                // Layer 2: WM global actions
+                if let Some(action) = mapped_action {
+                    match action {
+                        Action::Quit => {
+                            update_selection_snapshot(app);
+                            return flush_state_changes(app, ControlFlow::Quit);
+                        }
+                        Action::OpenHelp => {
+                            app.open_help_overlay();
+                            update_selection_snapshot(app);
+                            return flush_state_changes(app, ControlFlow::Continue);
+                        }
+                        Action::OpenKeybindings => {
+                            app.open_keybindings_overlay();
+                            update_selection_snapshot(app);
+                            return flush_state_changes(app, ControlFlow::Continue);
+                        }
+                        Action::CycleNextWindow => {
+                            app.windows().advance_focus(true);
+                            update_selection_snapshot(app);
+                            return flush_state_changes(app, ControlFlow::Continue);
+                        }
+                        Action::CyclePrevWindow => {
+                            app.windows().advance_focus(false);
+                            update_selection_snapshot(app);
+                            return flush_state_changes(app, ControlFlow::Continue);
+                        }
+                        Action::NewWindow => {
+                            app.wm_new_window()?;
+                            update_selection_snapshot(app);
+                            return flush_state_changes(app, ControlFlow::Continue);
+                        }
+                        Action::HintToggle => {
+                            let current = app.windows().hint_visibility();
+                            let next = match current {
+                                crate::wm_config::HintVisibility::Always => {
+                                    crate::wm_config::HintVisibility::Never
+                                }
+                                crate::wm_config::HintVisibility::OnDemand => {
+                                    crate::wm_config::HintVisibility::Always
+                                }
+                                crate::wm_config::HintVisibility::Never => {
+                                    crate::wm_config::HintVisibility::Always
+                                }
+                            };
+                            app.windows().set_hint_visibility(next);
+                            update_selection_snapshot(app);
+                            return flush_state_changes(app, ControlFlow::Continue);
+                        }
+                        // FocusNext, FocusPrev — handled by handle_focus_event below
+                        // Scrolling, selection, menu, confirm — pass through to Layer 3
+                        _ => {}
+                    }
+                }
+
+                // WM overlay toggle (special case due to passthrough logic)
                 let wm_mode = app.windows().config().wm_overlay_enabled;
                 if wm_mode
                     && let Event::Key(key) = &evt
                     && key.kind == KeyEventKind::Press
-                    && crate::keybindings::KeyBindings::default()
+                    && app
+                        .windows()
+                        .keybindings()
                         .matches(crate::keybindings::Action::WmToggleOverlay, key)
                 {
                     if app.windows().wm_overlay_visible() {
@@ -258,25 +325,6 @@ where
                         update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue);
                     }
-                    if let Event::Key(_key) = &evt
-                        && mapped_action == Some(crate::keybindings::Action::NewWindow)
-                    {
-                        app.wm_new_window()?;
-                        app.windows().close_wm_overlay();
-                        update_selection_snapshot(app);
-                        return flush_state_changes(app, ControlFlow::Continue);
-                    }
-                    if let Event::Key(_key) = &evt
-                        && (mapped_action == Some(crate::keybindings::Action::FocusNext)
-                            || mapped_action == Some(crate::keybindings::Action::FocusPrev))
-                    {
-                        let _ = app
-                            .windows()
-                            .handle_focus_event(&evt, focus_regions, &map_region);
-                        update_selection_snapshot(app);
-                        return flush_state_changes(app, ControlFlow::Continue);
-                    }
-
                     if let Event::Key(_) = &evt {
                         update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue);
@@ -307,8 +355,6 @@ where
                     }
                 }
                 // Route Tab/Shift+Tab through focus routing for non-overlay mode.
-                // The overlay-only path above handles this when wm_overlay is
-                // visible, but the fallthrough path also needs it.
                 if matches!(evt, Event::Key(_))
                     && app
                         .windows()
@@ -317,14 +363,8 @@ where
                     update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Continue);
                 }
-                if let Event::Key(key) = &evt
-                    && key.kind == KeyEventKind::Press
-                    && crate::keybindings::KeyBindings::default()
-                        .matches(crate::keybindings::Action::Quit, key)
-                {
-                    update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Quit);
-                }
+
+                // Layer 3: Pass-through to focused component
                 match &evt {
                     Event::Key(_) if app.windows().capture_active() => {
                         app.windows().clear_capture();

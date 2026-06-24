@@ -107,7 +107,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let Event::Key(key) = event else {
             return None;
         };
-        let kb = crate::keybindings::KeyBindings::default();
+        let kb = &self.keybindings;
         if kb.matches(crate::keybindings::Action::MenuUp, key)
             || kb.matches(crate::keybindings::Action::MenuPrev, key)
         {
@@ -150,7 +150,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let Event::Key(key) = event else {
             return false;
         };
-        let kb = crate::keybindings::KeyBindings::default();
+        let kb = &self.keybindings;
         kb.matches(crate::keybindings::Action::MenuUp, key)
             || kb.matches(crate::keybindings::Action::MenuDown, key)
             || kb.matches(crate::keybindings::Action::MenuSelect, key)
@@ -253,9 +253,24 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             .collect();
         let selection_copy_available = self.selection_text.is_some();
 
+        // Compute keybinding hints based on visibility mode
+        let panel_active = self.panel_active();
+        match self.hint_visibility {
+            crate::wm_config::HintVisibility::Never => {
+                self.panel.set_keybinding_hints(Vec::new());
+            }
+            crate::wm_config::HintVisibility::OnDemand => {
+                self.panel.set_keybinding_hints(Vec::new());
+            }
+            crate::wm_config::HintVisibility::Always => {
+                let hints = self.keybindings.bottom_hints(6);
+                self.panel.set_keybinding_hints(hints);
+            }
+        }
+
         self.panel.render(
             frame,
-            self.panel_active(),
+            panel_active,
             self.wm_focus.current(),
             &display,
             status_line.as_deref(),
@@ -274,6 +289,11 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 })
             },
         );
+
+        // Standalone hint rendering when panel is inactive but hints are set
+        if !panel_active && !self.panel.keybinding_hints().is_empty() {
+            self.render_hint_strip(frame);
+        }
         let menu_items = super::wm_menu_items(
             self.mouse_capture_enabled(),
             self.clipboard_enabled(),
@@ -319,5 +339,38 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 &ComponentContext::new(false).with_overlay(true),
             );
         }
+    }
+
+    fn render_hint_strip(&mut self, frame: &mut crate::ui::UiFrame<'_>) {
+        use crate::ui::safe_set_string;
+        use ratatui::style::Style;
+
+        let area = frame.area();
+        if area.height < 2 {
+            return;
+        }
+        let y = area.y.saturating_add(area.height).saturating_sub(1);
+        let buffer = frame.buffer_mut();
+        let style = Style::default()
+            .bg(crate::theme::bottom_panel_bg())
+            .fg(crate::theme::bottom_panel_fg());
+
+        for xx in area.x..area.x.saturating_add(area.width) {
+            if let Some(cell) = buffer.cell_mut((xx, y)) {
+                let mut st = cell.style();
+                st.bg = Some(crate::theme::bottom_panel_bg());
+                st.fg = Some(crate::theme::bottom_panel_fg());
+                cell.set_style(st);
+            }
+        }
+
+        let mut hint_parts: Vec<String> = Vec::new();
+        for (action, combos) in self.panel.keybinding_hints() {
+            let combo_str = combos.join("/");
+            hint_parts.push(format!("{combo_str} {action}"));
+        }
+        let hint_text = hint_parts.join(" · ");
+        let text = crate::ui::truncate_to_width(&hint_text, area.width as usize);
+        safe_set_string(buffer, area, area.x, y, &text, style);
     }
 }

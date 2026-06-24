@@ -17,11 +17,12 @@ use super::decorator::WindowDecorator;
 use super::entry::Window;
 use crate::components::Overlay;
 use crate::io::clipboard;
+use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
 use crate::panel::Panel;
 use crate::ui::UiFrame;
-use crate::wm_config::WmConfig;
+use crate::wm_config::{HintVisibility, WmConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SystemWindowId {
@@ -31,6 +32,7 @@ pub enum SystemWindowId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum OverlayId {
     Help,
+    Keybindings,
     ExitConfirm,
     SelectionPreview,
 }
@@ -195,6 +197,8 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     selection_copied_text: Option<String>,
     selection_preview_restore_mouse: Option<bool>,
     config: WmConfig,
+    keybindings: KeyBindings,
+    hint_visibility: HintVisibility,
     wm_overlay_opened_at: Option<Instant>,
     pub(crate) last_frame_area: ratatui::prelude::Rect,
     overlays: BTreeMap<OverlayId, Box<dyn Overlay>>,
@@ -344,6 +348,8 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             selection_copied: false,
             selection_copied_text: None,
             selection_preview_restore_mouse: None,
+            keybindings: config.keybindings.clone(),
+            hint_visibility: config.hint_visibility,
             config,
             wm_overlay_opened_at: None,
             last_frame_area: Rect::default(),
@@ -365,6 +371,18 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
 
     pub fn config(&self) -> &WmConfig {
         &self.config
+    }
+
+    pub fn keybindings(&self) -> &KeyBindings {
+        &self.keybindings
+    }
+
+    pub fn hint_visibility(&self) -> HintVisibility {
+        self.hint_visibility
+    }
+
+    pub fn set_hint_visibility(&mut self, visibility: HintVisibility) {
+        self.hint_visibility = visibility;
     }
 
     pub fn set_floating_resize_offscreen(&mut self, enabled: bool) {

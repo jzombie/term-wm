@@ -180,10 +180,20 @@ impl WindowManagerHost<PaneId> for App {
 
     fn open_help_overlay(&mut self) {
         use term_wm_ui_components::sys::help_overlay::HelpOverlayComponent;
-        let mut h = HelpOverlayComponent::new();
+        let kb = self.windows.keybindings().clone();
+        let mut h = HelpOverlayComponent::new(kb);
         h.show();
         h.set_selection_enabled(self.windows.clipboard_enabled());
         self.windows.open_overlay(OverlayId::Help, Box::new(h));
+    }
+
+    fn open_keybindings_overlay(&mut self) {
+        use term_wm_ui_components::sys::keybinding_overlay::KeybindingOverlayComponent;
+        let kb = self.windows.keybindings().clone();
+        let mut o = KeybindingOverlayComponent::new(kb);
+        o.show();
+        self.windows
+            .open_overlay(OverlayId::Keybindings, Box::new(o));
     }
 
     fn open_exit_confirm(&mut self) {

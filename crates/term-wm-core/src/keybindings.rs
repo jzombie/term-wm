@@ -2,7 +2,7 @@ use std::fmt;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-pub use crate::actions::Action;
+pub use crate::actions::{Action, Category};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyCombo {
@@ -89,6 +89,8 @@ impl Default for KeyBindings {
             FocusPrev: [ (KeyCode::BackTab, KeyModifiers::NONE) ],
             WmToggleOverlay: [ (KeyCode::Esc, KeyModifiers::NONE) ],
             NewWindow: [ (KeyCode::Char('n'), KeyModifiers::NONE) ],
+            OpenKeybindings: [ (KeyCode::F(1), KeyModifiers::NONE) ],
+            HintToggle: [ (KeyCode::Char('h'), KeyModifiers::ALT) ],
             MenuUp: [ (KeyCode::Up, KeyModifiers::NONE) ],
             MenuDown: [ (KeyCode::Down, KeyModifiers::NONE) ],
             MenuSelect: [ (KeyCode::Enter, KeyModifiers::NONE) ],
@@ -166,6 +168,30 @@ impl KeyBindings {
     /// Return the first `KeyCombo` mapped to `action`, if any.
     pub fn first_combo(&self, action: Action) -> Option<KeyCombo> {
         self.map.get(&action).and_then(|list| list.first().cloned())
+    }
+
+    /// Access the underlying binding map (read-only).
+    pub fn map(&self) -> &BTreeMap<Action, Vec<KeyCombo>> {
+        &self.map
+    }
+
+    /// Returns up to `max` hint entries, sorted by `Action::bottom_hint_priority()`.
+    ///
+    /// Each entry is `(Action, Vec<String>)` where the strings are display
+    /// representations of the bound key combos.
+    pub fn bottom_hints(&self, max: usize) -> Vec<(Action, Vec<String>)> {
+        let mut candidates: Vec<(Action, u8, Vec<String>)> = self
+            .map
+            .iter()
+            .filter_map(|(action, combos)| {
+                let priority = action.bottom_hint_priority()?;
+                let displays: Vec<String> = combos.iter().map(|c| c.display()).collect();
+                Some((*action, priority, displays))
+            })
+            .collect();
+        candidates.sort_by_key(|b| std::cmp::Reverse(b.1));
+        candidates.truncate(max);
+        candidates.into_iter().map(|(a, _, d)| (a, d)).collect()
     }
 }
 

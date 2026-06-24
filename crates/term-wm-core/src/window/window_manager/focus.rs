@@ -146,7 +146,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 if !self.keyboard_focus_enabled {
                     return false;
                 }
-                let kb = crate::keybindings::KeyBindings::default();
+                let kb = &self.keybindings;
                 if kb.matches(crate::keybindings::Action::FocusNext, key) {
                     if self.config.wm_overlay_enabled {
                         self.advance_wm_focus(true);

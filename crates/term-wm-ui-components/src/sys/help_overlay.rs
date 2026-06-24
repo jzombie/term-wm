@@ -18,6 +18,7 @@ pub struct HelpOverlayComponent {
     visible: bool,
     viewer: ScrollViewComponent<MarkdownViewerComponent>,
     area: Rect,
+    keybindings: KeyBindings,
 }
 
 impl Component for HelpOverlayComponent {
@@ -80,8 +81,10 @@ impl HelpOverlayComponent {
         }
         match event {
             Event::Key(key) => {
-                let kb = KeyBindings::default();
-                if kb.matches(term_wm_core::keybindings::Action::CloseHelp, key) {
+                if self
+                    .keybindings
+                    .matches(term_wm_core::keybindings::Action::CloseHelp, key)
+                {
                     self.close();
                     true
                 } else {
@@ -104,12 +107,13 @@ impl HelpOverlayComponent {
 }
 
 impl HelpOverlayComponent {
-    pub fn new() -> Self {
+    pub fn new(keybindings: KeyBindings) -> Self {
         let mut overlay = Self {
             dialog: DialogOverlayComponent::new(),
             visible: false,
             viewer: ScrollViewComponent::new(MarkdownViewerComponent::new()),
             area: Rect::default(),
+            keybindings,
         };
         overlay.dialog.set_size(70, 20);
         overlay.dialog.set_dim_backdrop(true);
@@ -133,7 +137,7 @@ impl HelpOverlayComponent {
             // contain the descriptive text while only key combo strings are
             // produced here. This keeps the markdown authoritative and
             // avoids hardcoding user-visible sentences in code.
-            let kb = KeyBindings::default();
+            let kb = &overlay.keybindings;
             let focus_next = kb.combos_for(Action::FocusNext).join(" / ");
             let focus_prev = kb.combos_for(Action::FocusPrev).join(" / ");
             let new_win = kb.combos_for(Action::NewWindow).join(" / ");
@@ -197,8 +201,10 @@ impl HelpOverlayComponent {
     pub fn handle_help_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
         match event {
             Event::Key(key) => {
-                let kb = KeyBindings::default();
-                if kb.matches(term_wm_core::keybindings::Action::CloseHelp, key) {
+                if self
+                    .keybindings
+                    .matches(term_wm_core::keybindings::Action::CloseHelp, key)
+                {
                     self.close();
                     true
                 } else {
@@ -232,7 +238,7 @@ impl HelpOverlayComponent {
 
 impl Default for HelpOverlayComponent {
     fn default() -> Self {
-        Self::new()
+        Self::new(KeyBindings::default())
     }
 }
 
@@ -245,14 +251,14 @@ mod tests {
 
     #[test]
     fn help_constructs() {
-        let h = HelpOverlayComponent::new();
+        let h = HelpOverlayComponent::new(KeyBindings::default());
         // should create without panic
         let _ = h;
     }
 
     #[test]
     fn placeholders_are_replaced_in_markdown() {
-        let mut overlay = HelpOverlayComponent::new();
+        let mut overlay = HelpOverlayComponent::new(KeyBindings::default());
         use ratatui::buffer::Buffer;
 
         // Render the viewer into a buffer and inspect visible text to
@@ -299,7 +305,7 @@ mod tests {
 
     #[test]
     fn show_and_close_toggle_visibility() {
-        let mut overlay = HelpOverlayComponent::new();
+        let mut overlay = HelpOverlayComponent::new(KeyBindings::default());
         assert!(!overlay.visible(), "initially hidden");
 
         overlay.show();
@@ -313,7 +319,7 @@ mod tests {
 
     #[test]
     fn handle_help_event_closes_on_close_key() {
-        let mut overlay = HelpOverlayComponent::new();
+        let mut overlay = HelpOverlayComponent::new(KeyBindings::default());
         overlay.show();
         // Default CloseHelp binding includes Esc
         let ev = Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
@@ -324,7 +330,7 @@ mod tests {
 
     #[test]
     fn clicking_outside_auto_closes_when_enabled() {
-        let mut overlay = HelpOverlayComponent::new();
+        let mut overlay = HelpOverlayComponent::new(KeyBindings::default());
         overlay.dialog.set_auto_close_on_outside_click(true);
         overlay.show();
 
