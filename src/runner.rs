@@ -317,11 +317,7 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn run_window_app<O, D, A, Id>(
-    output: &mut O,
-    driver: &mut D,
-    app: &mut A,
-) -> io::Result<()>
+pub fn run_window_app<O, D, A, Id>(output: &mut O, driver: &mut D, app: &mut A) -> io::Result<()>
 where
     O: OutputDriver,
     D: InputDriver,
