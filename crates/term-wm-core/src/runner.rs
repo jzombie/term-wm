@@ -567,7 +567,7 @@ mod tests {
         use crate::window::WindowManager;
 
         // Create an empty WindowManager (no active regions/z-order).
-        let wm: WindowManager<usize> = WindowManager::new_managed(0);
+        let wm: WindowManager<usize> = WindowManager::new_standalone(0);
         assert!(!wm.has_any_active_windows());
 
         // Create a fake app that enumerates windows (i.e., app-level windows still exist)

@@ -292,11 +292,11 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         }
     }
 
-    pub fn new(current: Id) -> Self {
+    pub fn new_embedded(current: Id) -> Self {
         Self::with_config(current, WmConfig::embedded())
     }
 
-    pub fn new_managed(current: Id) -> Self {
+    pub fn new_standalone(current: Id) -> Self {
         Self::with_config(current, WmConfig::standalone())
     }
 

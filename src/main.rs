@@ -86,7 +86,7 @@ struct App {
 impl App {
     fn new_with(commands: Vec<String>, num_windows: usize) -> io::Result<Self> {
         let mut app = Self {
-            windows: WindowManager::new_managed(0),
+            windows: WindowManager::new_standalone(0),
             terminals: Vec::new(),
         };
 
