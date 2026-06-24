@@ -10,7 +10,6 @@ pub mod layout;
 pub mod panel;
 pub mod pty;
 pub mod runner;
-pub mod term_color;
 pub mod theme;
 pub mod tracing_sub;
 pub mod ui;

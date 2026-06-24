@@ -1,5 +1,5 @@
 pub mod console;
-mod utils;
+pub(crate) mod utils;
 
 pub mod input_driver;
 pub use input_driver::InputDriver;
