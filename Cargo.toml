@@ -47,14 +47,16 @@ tracing-subscriber = "0.3.22"
 vt100 = "0.16.2"
 webbrowser = "1.0.6"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO"] }
+term-wm-core = { path = "crates/term-wm-core", version = "0.5.1-alpha" }
+term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.5.1-alpha" }
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
 line-ending = { workspace = true }
 portable-pty = { workspace = true }
 ratatui = { workspace = true }
-term-wm-core = { path = "crates/term-wm-core" }
-term-wm-ui-components = { path = "crates/term-wm-ui-components" }
+term-wm-core = { workspace = true }
+term-wm-ui-components = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 webbrowser = { workspace = true }

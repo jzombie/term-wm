@@ -15,7 +15,7 @@ pulldown-cmark = { workspace = true }
 ratatui = { workspace = true }
 resvg = { workspace = true }
 shell-words = { workspace = true }
-term-wm-core = { path = "../term-wm-core" }
+term-wm-core = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 vt100 = { workspace = true }
