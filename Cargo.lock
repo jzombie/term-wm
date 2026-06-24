@@ -2162,7 +2162,6 @@ dependencies = [
  "line-ending",
  "portable-pty",
  "ratatui",
- "tempfile",
  "term-wm-core",
  "term-wm-ui-components",
  "tracing",
@@ -2203,7 +2202,6 @@ dependencies = [
  "tracing",
  "vt100",
  "webbrowser",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
