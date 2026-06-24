@@ -44,6 +44,10 @@ pub trait WindowProvider<Id: Copy + Eq + Ord + std::fmt::Debug + 'static>:
     fn window_component(&mut self, _id: Id) -> Option<&mut dyn Component> {
         None
     }
+
+    fn focus_regions(&mut self) -> Vec<Id> {
+        self.enumerate_windows()
+    }
 }
 
 fn handle_focused_app_event<A, Id>(event: &Event, app: &mut A) -> bool
@@ -317,7 +321,6 @@ pub fn run_window_app<O, D, A, Id>(
     output: &mut O,
     driver: &mut D,
     app: &mut A,
-    focus_regions: &[Id],
 ) -> io::Result<()>
 where
     O: OutputDriver,
@@ -327,11 +330,12 @@ where
 {
     let mut draw_state = WindowDrawState::<Id>::default();
     let poll_interval = Duration::from_millis(16);
+    let focus_regions: Vec<Id> = app.focus_regions();
     run_app(
         output,
         driver,
         app,
-        focus_regions,
+        &focus_regions,
         |id| id,
         poll_interval,
         move |frame, app| {

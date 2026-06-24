@@ -63,14 +63,11 @@ fn main() -> io::Result<()> {
         })
     };
     let mut app = App::new_with(cli.cmds, total)?;
-    // Use the initial window indices as focus regions; the WindowManager
-    // will track additional windows as they are created.
-    let focus_regions: Vec<PaneId> = (0..total).collect();
     let mut output = ConsoleOutputDriver::new()?;
     output.enter()?;
     let mut input = ConsoleInputDriver::new();
 
-    let result = run_window_app(&mut output, &mut input, &mut app, &focus_regions);
+    let result = run_window_app(&mut output, &mut input, &mut app);
 
     output.exit()?;
 

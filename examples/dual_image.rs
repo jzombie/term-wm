@@ -22,12 +22,7 @@ fn main() -> io::Result<()> {
     output.enter()?;
     let mut input = ConsoleInputDriver::new();
 
-    let result = run_window_app(
-        &mut output,
-        &mut input,
-        &mut app,
-        &[PaneId::Left, PaneId::Right],
-    );
+    let result = run_window_app(&mut output, &mut input, &mut app);
 
     output.exit()?;
 
