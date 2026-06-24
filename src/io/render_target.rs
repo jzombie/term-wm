@@ -2,7 +2,7 @@ use crate::ui::UiFrame;
 use ratatui::backend::Backend;
 use std::io;
 
-pub trait OutputDriver {
+pub trait RenderTarget {
     type Backend: Backend;
 
     fn enter(&mut self) -> io::Result<()>;

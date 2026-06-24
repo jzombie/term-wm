@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crossterm::event::Event;
 
-use crate::io::InputDriver;
+use crate::io::EventSource;
 
 pub enum ControlFlow {
     Continue,
@@ -24,7 +24,7 @@ pub struct EventLoop<D> {
     driver: D,
 }
 
-impl<D: InputDriver> EventLoop<D> {
+impl<D: EventSource> EventLoop<D> {
     pub fn new(driver: D) -> Self {
         Self { driver }
     }
@@ -83,21 +83,21 @@ impl<D: InputDriver> EventLoop<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::InputDriver;
+use crate::io::EventSource;
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
     use std::time::Duration;
 
-    struct DummyDriver {
+    struct DummyEventSource {
         polls: usize,
     }
 
-    impl DummyDriver {
+    impl DummyEventSource {
         fn new() -> Self {
             Self { polls: 0 }
         }
     }
 
-    impl InputDriver for DummyDriver {
+    impl EventSource for DummyEventSource {
         fn poll(&mut self, _timeout: Duration) -> std::io::Result<bool> {
             self.polls += 1;
             // return true only once
@@ -122,7 +122,7 @@ mod tests {
 
     #[test]
     fn poll_returns_event_when_available() {
-        let d = DummyDriver::new();
+        let d = DummyEventSource::new();
         let mut ev = EventLoop::new(d);
         // first poll should cause read to be called
         let res = ev.poll().unwrap();
@@ -134,11 +134,11 @@ mod tests {
 
     #[test]
     fn run_calls_handler_and_respects_quit() {
-        let d = DummyDriver::new();
+        let d = DummyEventSource::new();
         let mut ev = EventLoop::new(d);
         let mut count = 0;
         let handler =
-            |_driver: &mut DummyDriver, _evt: Option<Event>| -> std::io::Result<ControlFlow> {
+            |_driver: &mut DummyEventSource, _evt: Option<Event>| -> std::io::Result<ControlFlow> {
                 count += 1;
                 Ok(ControlFlow::Quit)
             };

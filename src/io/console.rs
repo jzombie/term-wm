@@ -11,23 +11,23 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use super::utils::KeyboardNormalizer;
-use super::{InputDriver, OutputDriver};
+use super::{EventSource, RenderTarget};
 use crate::ui::UiFrame;
 
-pub struct ConsoleInputDriver {
+pub struct ConsoleEventSource {
     normalizer: KeyboardNormalizer,
     event_queue: VecDeque<Event>,
     last_event_at: Option<Instant>,
     was_idle: Cell<bool>,
 }
 
-impl Default for ConsoleInputDriver {
+impl Default for ConsoleEventSource {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ConsoleInputDriver {
+impl ConsoleEventSource {
     pub fn new() -> Self {
         Self {
             normalizer: KeyboardNormalizer::new(),
@@ -47,7 +47,7 @@ impl ConsoleInputDriver {
     }
 }
 
-impl InputDriver for ConsoleInputDriver {
+impl EventSource for ConsoleEventSource {
     fn poll(&mut self, timeout: Duration) -> io::Result<bool> {
         if !self.event_queue.is_empty() {
             self.last_event_at = Some(Instant::now());
@@ -148,12 +148,12 @@ impl InputDriver for ConsoleInputDriver {
     }
 }
 
-pub struct ConsoleOutputDriver {
+pub struct ConsoleRenderTarget {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     entered: bool,
 }
 
-impl ConsoleOutputDriver {
+impl ConsoleRenderTarget {
     pub fn new() -> io::Result<Self> {
         let stdout = io::stdout();
         let backend = CrosstermBackend::new(stdout);
@@ -165,7 +165,7 @@ impl ConsoleOutputDriver {
     }
 }
 
-impl OutputDriver for ConsoleOutputDriver {
+impl RenderTarget for ConsoleRenderTarget {
     type Backend = CrosstermBackend<Stdout>;
 
     fn enter(&mut self) -> io::Result<()> {
@@ -208,7 +208,7 @@ impl OutputDriver for ConsoleOutputDriver {
     }
 }
 
-impl Drop for ConsoleOutputDriver {
+impl Drop for ConsoleRenderTarget {
     fn drop(&mut self) {
         let _ = self.exit();
     }
@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn next_key_from_queue() {
-        let mut d = ConsoleInputDriver::new();
+        let mut d = ConsoleEventSource::new();
         d.event_queue.push_back(Event::Key(KeyEvent::new(
             KeyCode::Char('a'),
             KeyModifiers::NONE,
@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn next_mouse_from_queue() {
-        let mut d = ConsoleInputDriver::new();
+        let mut d = ConsoleEventSource::new();
         d.event_queue.push_back(Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
             column: 2,
@@ -254,7 +254,7 @@ mod tests {
 
     #[test]
     fn poll_and_read_from_queue() {
-        let mut d = ConsoleInputDriver::new();
+        let mut d = ConsoleEventSource::new();
         d.event_queue.push_back(Event::Key(KeyEvent::new(
             KeyCode::Char('z'),
             KeyModifiers::NONE,

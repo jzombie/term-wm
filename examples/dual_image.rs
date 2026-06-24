@@ -4,8 +4,8 @@ use ratatui::prelude::Rect;
 use ratatui::widgets::Clear;
 
 use term_wm::components::{Component, ComponentContext, SvgImageComponent};
-use term_wm::io::OutputDriver;
-use term_wm::io::console::{ConsoleInputDriver, ConsoleOutputDriver};
+use term_wm::io::RenderTarget;
+use term_wm::io::console::{ConsoleEventSource, ConsoleRenderTarget};
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
 use term_wm::ui::UiFrame;
 use term_wm::window::{WindowDrawContext, WindowManager};
@@ -18,9 +18,9 @@ enum PaneId {
 
 fn main() -> io::Result<()> {
     let mut app = App::new(std::env::args().skip(1).collect())?;
-    let mut output = ConsoleOutputDriver::new()?;
+    let mut output = ConsoleRenderTarget::new()?;
     output.enter()?;
-    let mut input = ConsoleInputDriver::new();
+    let mut input = ConsoleEventSource::new();
 
     let result = run_window_app(&mut output, &mut input, &mut app);
 

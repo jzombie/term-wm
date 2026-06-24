@@ -7,7 +7,7 @@ use ratatui::style::Style;
 
 use crate::components::{Component, ComponentContext, ConfirmAction};
 use crate::event_loop::{ControlFlow, EventLoop};
-use crate::io::{InputDriver, OutputDriver};
+use crate::io::{EventSource, RenderTarget};
 use crate::layout::{LayoutNode, TilingLayout};
 use crate::ui::UiFrame;
 use crate::window::decorator::WindowDecorator;
@@ -87,8 +87,8 @@ pub fn run_app<O, D, A, Id, FDraw, FMap>(
     mut draw: FDraw,
 ) -> io::Result<()>
 where
-    O: OutputDriver,
-    D: InputDriver,
+    O: RenderTarget,
+    D: EventSource,
     A: WindowProvider<Id>,
     Id: Copy + Eq + Ord + std::fmt::Debug + 'static,
     FDraw: for<'frame> FnMut(UiFrame<'frame>, &mut A),
@@ -317,8 +317,8 @@ where
 #[allow(clippy::too_many_arguments)]
 pub fn run_window_app<O, D, A, Id>(output: &mut O, driver: &mut D, app: &mut A) -> io::Result<()>
 where
-    O: OutputDriver,
-    D: InputDriver,
+    O: RenderTarget,
+    D: EventSource,
     A: WindowProvider<Id>,
     Id: Copy + Eq + Ord + std::fmt::Debug + 'static,
 {

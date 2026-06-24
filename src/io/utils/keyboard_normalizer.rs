@@ -3,7 +3,7 @@
 // and filtering key-release events). It is _not_ a standalone keyboard
 // driver. The actual input driver behavior (queueing, `next_key`, and
 // combined keyboard/mouse handling) is implemented in
-// `src/drivers/console.rs` under the consolidated `InputDriver` trait.
+// `src/io/console.rs` under the consolidated `EventSource` trait.
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 
 #[derive(Default)]

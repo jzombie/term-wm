@@ -2,7 +2,7 @@ use ::crossterm::event::{Event, KeyEvent, MouseEvent};
 use std::io;
 use std::time::Duration;
 
-pub trait InputDriver {
+pub trait EventSource {
     fn poll(&mut self, timeout: Duration) -> io::Result<bool>;
     fn read(&mut self) -> io::Result<Event>;
     fn next_key(&mut self) -> io::Result<KeyEvent>;
@@ -11,9 +11,9 @@ pub trait InputDriver {
         Ok(())
     }
 
-    /// Returns the suggested polling interval for this driver.
+    /// Returns the suggested polling interval for this event source.
     ///
-    /// The event loop calls this before each poll cycle. Drivers may
+    /// The event loop calls this before each poll cycle. Sources may
     /// return a shorter interval when the user is actively interacting
     /// and a longer interval when idle to reduce CPU usage.
     fn poll_interval(&self) -> Duration {
@@ -21,7 +21,7 @@ pub trait InputDriver {
     }
 }
 
-impl<T: InputDriver + ?Sized> InputDriver for &mut T {
+impl<T: EventSource + ?Sized> EventSource for &mut T {
     fn poll(&mut self, timeout: Duration) -> io::Result<bool> {
         (**self).poll(timeout)
     }
@@ -54,7 +54,7 @@ mod tests {
     use std::time::Duration;
 
     struct Dummy;
-    impl InputDriver for Dummy {
+    impl EventSource for Dummy {
         fn poll(&mut self, _timeout: Duration) -> std::io::Result<bool> {
             Ok(true)
         }
