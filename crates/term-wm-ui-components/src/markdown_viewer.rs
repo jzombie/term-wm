@@ -9,8 +9,8 @@ use ratatui::style::{Color, Modifier, Style};
 
 use std::sync::Arc;
 
-use term_wm_core::components::{Component, ComponentContext};
 use crate::text_renderer::TextRendererComponent;
+use term_wm_core::components::{Component, ComponentContext};
 use term_wm_core::ui::UiFrame;
 use term_wm_core::utils::linkifier::{LinkFragment, LinkHandler, Linkifier};
 
@@ -48,7 +48,7 @@ impl Component for MarkdownViewerComponent {
         }
     }
 
-    fn selection_status(&self) -> crate::components::SelectionStatus {
+    fn selection_status(&self) -> term_wm_core::components::SelectionStatus {
         self.text.selection_status()
     }
 
@@ -393,7 +393,7 @@ fn slugify(text: &str) -> String {
 #[cfg(test)]
 mod markdown_tests {
     use super::*;
-    use term_wm_core::components::ScrollViewComponent;
+    use crate::ScrollViewComponent;
     use indoc::indoc;
 
     const SAMPLE_HELP_MD: &str = indoc! {
@@ -456,14 +456,14 @@ mod markdown_tests {
         };
         let mut scratch = Buffer::empty(area);
         {
-            let mut frame = crate::ui::UiFrame::from_parts(area, &mut scratch);
+            let mut frame = term_wm_core::ui::UiFrame::from_parts(area, &mut scratch);
             scroll.render(&mut frame, area, &ctx);
         }
 
         let mut buffer = Buffer::empty(area);
         {
             scroll.content.go_end();
-            let mut frame = crate::ui::UiFrame::from_parts(area, &mut buffer);
+            let mut frame = term_wm_core::ui::UiFrame::from_parts(area, &mut buffer);
             scroll.render(&mut frame, area, &ctx);
         }
 
@@ -509,7 +509,7 @@ mod markdown_tests {
 
         let mut with_scroll = Buffer::empty(area);
         {
-            let mut frame = crate::ui::UiFrame::from_parts(area, &mut with_scroll);
+            let mut frame = term_wm_core::ui::UiFrame::from_parts(area, &mut with_scroll);
             scroll.render(&mut frame, area, &ComponentContext::new(true));
         }
 
@@ -603,7 +603,7 @@ mod markdown_tests {
 
         let mut buffer = ratatui::buffer::Buffer::empty(area);
         {
-            let mut frame = crate::ui::UiFrame::from_parts(area, &mut buffer);
+            let mut frame = term_wm_core::ui::UiFrame::from_parts(area, &mut buffer);
             scroll.render(&mut frame, area, &ComponentContext::new(true));
         }
 
@@ -657,7 +657,7 @@ mod markdown_tests {
 
         let mut buffer = Buffer::empty(area);
         {
-            let mut frame = crate::ui::UiFrame::from_parts(area, &mut buffer);
+            let mut frame = term_wm_core::ui::UiFrame::from_parts(area, &mut buffer);
             scroll.render(&mut frame, area, &ComponentContext::new(true));
         }
 

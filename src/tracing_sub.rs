@@ -4,7 +4,8 @@ use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{Layer, layer::Context};
 
-use term_wm_ui_components::sys::debug_log::{DebugLogWriter, global_debug_log, trigger_error};
+use term_wm_core::debug_event_flags::trigger_error_pending;
+use term_wm_ui_components::sys::debug_log::{DebugLogWriter, global_debug_log};
 
 struct ErrorNotifyLayer;
 
@@ -14,7 +15,7 @@ where
 {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
         if *event.metadata().level() == Level::ERROR {
-            trigger_error();
+            trigger_error_pending();
         }
     }
 }

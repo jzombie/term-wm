@@ -6,6 +6,7 @@ use ratatui::prelude::{Constraint, Direction, Rect};
 use ratatui::style::Style;
 
 use crate::components::{Component, ComponentContext, ConfirmAction};
+use crate::debug_event_flags;
 use crate::event_loop::{ControlFlow, EventLoop};
 use crate::io::{EventSource, RenderTarget};
 use crate::layout::{LayoutNode, TilingLayout};
@@ -24,6 +25,30 @@ pub trait WindowManagerHost<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> {
         Ok(())
     }
     fn set_clipboard_enabled(&mut self, _enabled: bool) {}
+    fn open_help_overlay(&mut self) {
+        self.windows()
+            .open_overlay(crate::window::OverlayId::Help, Box::new(NoopOverlay));
+    }
+    fn open_exit_confirm(&mut self) {
+        self.windows()
+            .open_overlay(crate::window::OverlayId::ExitConfirm, Box::new(NoopOverlay));
+    }
+}
+
+struct NoopOverlay;
+impl Component for NoopOverlay {
+    fn render(
+        &mut self,
+        _frame: &mut crate::ui::UiFrame<'_>,
+        _area: ratatui::layout::Rect,
+        _ctx: &ComponentContext,
+    ) {
+    }
+}
+impl std::fmt::Debug for NoopOverlay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NoopOverlay").finish()
+    }
 }
 
 pub trait WindowProvider<Id: Copy + Eq + Ord + std::fmt::Debug + 'static>:
@@ -101,10 +126,10 @@ where
 
     event_loop.run(|driver, event| {
         let handler = || -> io::Result<ControlFlow> {
-            if crate::components::sys::debug_log::take_panic_pending() {
+            if debug_event_flags::take_panic_pending() {
                 app.windows().open_debug_window();
             }
-            if crate::components::sys::debug_log::take_error_pending() {
+            if debug_event_flags::take_error_pending() {
                 app.windows().open_debug_window();
             }
 
@@ -204,7 +229,7 @@ where
                                 app.windows().close_wm_overlay();
                             }
                             WmMenuAction::Help => {
-                                app.windows().open_help_overlay();
+                                app.open_help_overlay();
                                 app.windows().close_wm_overlay();
                             }
                             WmMenuAction::BringFloatingFront => {
@@ -213,7 +238,7 @@ where
                             }
                             WmMenuAction::ExitUi => {
                                 app.windows().close_wm_overlay();
-                                app.windows().open_exit_confirm();
+                                app.open_exit_confirm();
                                 update_selection_snapshot(app);
                                 return flush_state_changes(app, ControlFlow::Continue);
                             }

@@ -7,15 +7,20 @@ use std::io;
 
 use clap::Parser;
 use line_ending::LineEnding;
-use portable_pty::CommandBuilder;
 use ratatui::prelude::Rect;
 
-use term_wm::components::{Component, ComponentContext};
-use term_wm::io::{RenderTarget, console::{ConsoleEventSource, ConsoleRenderTarget}};
+use term_wm::components::Component;
+use term_wm::io::{
+    RenderTarget,
+    console::{ConsoleEventSource, ConsoleRenderTarget},
+};
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
 use term_wm::ui::UiFrame;
-use term_wm::window::{WindowDrawContext, WindowManager};
+use term_wm::window::{OverlayId, SystemWindowId, WindowDrawContext, WindowManager};
 use term_wm::{ScrollViewComponent, TerminalComponent, default_shell_command};
+use term_wm_ui_components::sys::debug_log::{
+    DebugLogComponent, install_panic_hook, set_global_debug_log,
+};
 
 type PaneId = usize;
 
@@ -85,6 +90,26 @@ impl App {
             terminals: Vec::new(),
         };
 
+        // Initialize debug log system window
+        {
+            let (mut component, handle) = DebugLogComponent::new_default();
+            component.set_selection_enabled(app.windows.clipboard_enabled());
+            set_global_debug_log(handle);
+            app.windows
+                .set_system_window(SystemWindowId::DebugLog, Box::new(component));
+            install_panic_hook();
+            term_wm::tracing_sub::init_default();
+        }
+
+        // Set up selection preview factory
+        app.windows.set_selection_preview_factory(Box::new(|text| {
+            use term_wm_ui_components::sys::selection_preview_overlay::SelectionPreviewOverlayComponent;
+            let mut preview = SelectionPreviewOverlayComponent::new();
+            preview.set_text(text);
+            preview.show();
+            Box::new(preview)
+        }));
+
         let mut error_occurred = false;
 
         // If commands provided, open one per command; otherwise open `num_windows`
@@ -121,10 +146,10 @@ impl App {
         }
 
         if error_occurred {
-            app.windows.open_debug_window();
+            app.windows().open_debug_window();
         }
 
-        app.windows.open_help_overlay();
+        app.open_help_overlay();
         Ok(app)
     }
 
@@ -151,6 +176,25 @@ impl App {
 impl WindowManagerHost<PaneId> for App {
     fn windows(&mut self) -> &mut WindowManager<PaneId> {
         &mut self.windows
+    }
+
+    fn open_help_overlay(&mut self) {
+        use term_wm_ui_components::sys::help_overlay::HelpOverlayComponent;
+        let mut h = HelpOverlayComponent::new();
+        h.show();
+        h.set_selection_enabled(self.windows.clipboard_enabled());
+        self.windows.open_overlay(OverlayId::Help, Box::new(h));
+    }
+
+    fn open_exit_confirm(&mut self) {
+        use term_wm_ui_components::confirm_overlay::ConfirmOverlayComponent;
+        let mut confirm = ConfirmOverlayComponent::new();
+        confirm.open(
+            "Exit App",
+            "Exit the application?\nUnsaved changes will be lost.",
+        );
+        self.windows
+            .open_overlay(OverlayId::ExitConfirm, Box::new(confirm));
     }
 
     fn wm_new_window(&mut self) -> io::Result<()> {

@@ -4,8 +4,8 @@ use ratatui::style::Style;
 use ratatui::text::Text;
 use ratatui::widgets::{Block, Borders, Clear};
 
-use term_wm_core::components::{Component, ComponentContext};
 use crate::{DialogOverlayComponent, ScrollViewComponent, TextRendererComponent};
+use term_wm_core::components::{Component, ComponentContext};
 use term_wm_core::keybindings::{Action, KeyBindings};
 use term_wm_core::ui::{UiFrame, safe_set_string};
 
@@ -110,7 +110,7 @@ impl SelectionPreviewOverlayComponent {
         overlay.dialog.set_size(70, 20);
         overlay.dialog.set_dim_backdrop(true);
         overlay.dialog.set_auto_close_on_outside_click(true);
-        overlay.dialog.set_bg(crate::theme::dialog_bg());
+        overlay.dialog.set_bg(term_wm_core::theme::dialog_bg());
         overlay.viewer.set_keyboard_enabled(true);
         overlay.viewer.content.set_selection_enabled(false);
         overlay

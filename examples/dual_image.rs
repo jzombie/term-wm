@@ -3,7 +3,8 @@ use std::io;
 use ratatui::prelude::Rect;
 use ratatui::widgets::Clear;
 
-use term_wm::components::{Component, ComponentContext, SvgImageComponent};
+use term_wm::SvgImageComponent;
+use term_wm::components::{Component, ComponentContext};
 use term_wm::io::RenderTarget;
 use term_wm::io::console::{ConsoleEventSource, ConsoleRenderTarget};
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};

@@ -50,7 +50,7 @@ impl<'a> UiFrame<'a> {
     /// This powers offscreen rendering paths where components should draw into
     /// their logical window size before being composited onto the visible
     /// terminal buffer.
-    pub(crate) fn from_parts(area: Rect, buffer: &'a mut Buffer) -> Self {
+    pub fn from_parts(area: Rect, buffer: &'a mut Buffer) -> Self {
         Self { area, buffer }
     }
 
@@ -131,7 +131,7 @@ impl<'a> UiFrame<'a> {
     }
 }
 
-pub(crate) fn safe_set_string(
+pub fn safe_set_string(
     buffer: &mut Buffer,
     bounds: Rect,
     x: u16,

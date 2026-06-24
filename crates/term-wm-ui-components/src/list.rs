@@ -18,7 +18,7 @@ impl Component for ListComponent {
             Block::default()
                 .borders(Borders::ALL)
                 .title(format!("{} (focus)", self.title))
-                .border_style(Style::default().fg(crate::theme::success_fg()))
+                .border_style(Style::default().fg(term_wm_core::theme::success_fg()))
         } else {
             Block::default()
                 .borders(Borders::ALL)
@@ -70,27 +70,27 @@ impl Component for ListComponent {
 
     fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
         if let Event::Key(key) = event {
-            let kb = crate::keybindings::KeyBindings::default();
-            if kb.matches(crate::keybindings::Action::MenuUp, key)
-                || kb.matches(crate::keybindings::Action::MenuPrev, key)
+            let kb = term_wm_core::keybindings::KeyBindings::default();
+            if kb.matches(term_wm_core::keybindings::Action::MenuUp, key)
+                || kb.matches(term_wm_core::keybindings::Action::MenuPrev, key)
             {
                 self.bump_selection(-1);
                 return true;
-            } else if kb.matches(crate::keybindings::Action::MenuDown, key)
-                || kb.matches(crate::keybindings::Action::MenuNext, key)
+            } else if kb.matches(term_wm_core::keybindings::Action::MenuDown, key)
+                || kb.matches(term_wm_core::keybindings::Action::MenuNext, key)
             {
                 self.bump_selection(1);
                 return true;
-            } else if kb.matches(crate::keybindings::Action::ScrollPageUp, key) {
+            } else if kb.matches(term_wm_core::keybindings::Action::ScrollPageUp, key) {
                 self.bump_selection(-5);
                 return true;
-            } else if kb.matches(crate::keybindings::Action::ScrollPageDown, key) {
+            } else if kb.matches(term_wm_core::keybindings::Action::ScrollPageDown, key) {
                 self.bump_selection(5);
                 return true;
-            } else if kb.matches(crate::keybindings::Action::ScrollHome, key) {
+            } else if kb.matches(term_wm_core::keybindings::Action::ScrollHome, key) {
                 self.selected = 0;
                 return true;
-            } else if kb.matches(crate::keybindings::Action::ScrollEnd, key) {
+            } else if kb.matches(term_wm_core::keybindings::Action::ScrollEnd, key) {
                 if !self.items.is_empty() {
                     self.selected = self.items.len() - 1;
                 }

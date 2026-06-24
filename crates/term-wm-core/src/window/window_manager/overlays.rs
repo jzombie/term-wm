@@ -2,6 +2,7 @@ use crossterm::event::{Event, MouseEventKind};
 use ratatui::prelude::Rect;
 
 use super::{OverlayId, SystemWindowId, WindowId, WindowManager};
+use crate::components::{ComponentContext, ConfirmAction, Overlay};
 use crate::layout::{FloatingPane, rect_contains, render_handles_masked};
 use crate::window::FloatRectSpec;
 
@@ -22,17 +23,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.overlay_visible
     }
 
-    pub fn open_exit_confirm(&mut self) {
-        use crate::components::ConfirmOverlayComponent;
-        let mut confirm = ConfirmOverlayComponent::new();
-        confirm.open(
-            "Exit App",
-            "Exit the application?\nUnsaved changes will be lost.",
-        );
-        self.overlays
-            .insert(OverlayId::ExitConfirm, Box::new(confirm));
-    }
-
     pub fn close_exit_confirm(&mut self) {
         self.overlays.remove(&OverlayId::ExitConfirm);
     }
@@ -45,36 +35,12 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.overlays.contains_key(&OverlayId::Help)
     }
 
-    pub fn open_help_overlay(&mut self) {
-        use crate::components::sys::help_overlay::HelpOverlayComponent;
-        let mut h = HelpOverlayComponent::new();
-        h.show();
-        h.set_selection_enabled(self.clipboard_enabled());
-        if !self.scroll_keyboard_enabled_default {
-            h.set_keyboard_enabled(false);
-        }
-        self.overlays.insert(OverlayId::Help, Box::new(h));
-    }
-
     pub fn close_help_overlay(&mut self) {
         self.overlays.remove(&OverlayId::Help);
     }
 
     pub fn selection_preview_visible(&self) -> bool {
         self.overlays.contains_key(&OverlayId::SelectionPreview)
-    }
-
-    pub fn open_selection_preview(&mut self, text: String) {
-        use crate::components::sys::selection_preview_overlay::SelectionPreviewOverlayComponent;
-        let mut preview = SelectionPreviewOverlayComponent::new();
-        preview.set_text(text);
-        preview.show();
-        self.overlays
-            .insert(OverlayId::SelectionPreview, Box::new(preview));
-        if self.selection_preview_restore_mouse.is_none() {
-            self.selection_preview_restore_mouse = Some(self.mouse_capture_enabled);
-        }
-        self.set_mouse_capture_enabled(false);
     }
 
     pub fn close_selection_preview(&mut self) {
@@ -85,7 +51,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub fn handle_help_event(&mut self, event: &Event) -> bool {
-        use crate::components::{ComponentContext, sys::help_overlay::HelpOverlayComponent};
         let Some(boxed) = self.overlays.get_mut(&OverlayId::Help) else {
             return false;
         };
@@ -94,22 +59,13 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             &ComponentContext::new(true).with_overlay(true),
         );
         let handled = boxed.handle_event(event, &ComponentContext::new(true).with_overlay(true));
-        let should_close = if let Some(help) = boxed.as_any().downcast_ref::<HelpOverlayComponent>()
-        {
-            !help.visible()
-        } else {
-            false
-        };
-        if should_close {
+        if !boxed.visible() {
             self.overlays.remove(&OverlayId::Help);
         }
         handled
     }
 
     pub fn handle_selection_preview_event(&mut self, event: &Event) -> bool {
-        use crate::components::{
-            ComponentContext, sys::selection_preview_overlay::SelectionPreviewOverlayComponent,
-        };
         let Some(boxed) = self.overlays.get_mut(&OverlayId::SelectionPreview) else {
             return false;
         };
@@ -118,11 +74,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             &ComponentContext::new(true).with_overlay(true),
         );
         let handled = boxed.handle_event(event, &ComponentContext::new(true).with_overlay(true));
-        let should_close = boxed
-            .as_any()
-            .downcast_ref::<SelectionPreviewOverlayComponent>()
-            .is_some_and(|preview| !preview.visible());
-        if should_close {
+        if !boxed.visible() {
             self.close_selection_preview();
         }
         handled
@@ -185,16 +137,10 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         }
     }
 
-    pub fn handle_exit_confirm_event(
-        &mut self,
-        event: &Event,
-    ) -> Option<crate::components::ConfirmAction> {
-        use crate::components::ConfirmOverlayComponent;
+    pub fn handle_exit_confirm_event(&mut self, event: &Event) -> Option<ConfirmAction> {
         let comp = self.overlays.get_mut(&OverlayId::ExitConfirm)?;
-        if let Some(confirm) = comp.as_any_mut().downcast_mut::<ConfirmOverlayComponent>() {
-            return confirm.handle_confirm_event(event);
-        }
-        None
+        let overlay: &mut dyn Overlay = &mut **comp;
+        overlay.handle_confirm_event(event)
     }
 
     pub fn wm_menu_consumes_event(&self, event: &Event) -> bool {

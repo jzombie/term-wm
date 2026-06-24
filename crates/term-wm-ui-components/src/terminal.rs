@@ -188,11 +188,11 @@ impl TerminalComponent {
     }
 
     /// Convenience spawn that uses `default_pty_size()`.
-    pub fn spawn_default(command: CommandBuilder) -> crate::pty::PtyResult<Self> {
+    pub fn spawn_default(command: CommandBuilder) -> term_wm_core::pty::PtyResult<Self> {
         Self::spawn(command, Self::default_pty_size())
     }
 
-    pub fn spawn(command: CommandBuilder, size: PtySize) -> crate::pty::PtyResult<Self> {
+    pub fn spawn(command: CommandBuilder, size: PtySize) -> term_wm_core::pty::PtyResult<Self> {
         let command_description = format!("{:?}", command);
         let pane = Pty::spawn_with_scrollback(command, size, DEFAULT_SCROLLBACK_LEN)?;
         let comp = Self {
@@ -411,8 +411,8 @@ impl TerminalComponent {
                         let abs_col = col as usize;
                         if range.contains(LogicalPosition::new(abs_row, abs_col)) {
                             style = style
-                                .bg(crate::theme::selection_bg())
-                                .fg(crate::theme::selection_fg());
+                                .bg(term_wm_core::theme::selection_bg())
+                                .fg(term_wm_core::theme::selection_fg());
                         }
                     }
 
@@ -472,13 +472,14 @@ impl SelectionHost for TerminalComponent {
 
 #[cfg(unix)]
 pub fn default_shell() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| crate::constants::DEFAULT_SHELL_FALLBACK.to_string())
+    std::env::var("SHELL")
+        .unwrap_or_else(|_| term_wm_core::constants::DEFAULT_SHELL_FALLBACK.to_string())
 }
 
 #[cfg(windows)]
 pub fn default_shell() -> String {
     std::env::var("COMSPEC")
-        .unwrap_or_else(|_| crate::constants::DEFAULT_SHELL_FALLBACK.to_string())
+        .unwrap_or_else(|_| term_wm_core::constants::DEFAULT_SHELL_FALLBACK.to_string())
 }
 
 pub fn default_shell_command() -> CommandBuilder {
@@ -913,7 +914,9 @@ mod tests {
         );
         assert_eq!(
             vt_color_to_ratatui(vt100::Color::Rgb(1, 2, 3)),
-            Some(crate::io::utils::term_color::map_rgb_to_color(1, 2, 3))
+            Some(term_wm_core::io::utils::term_color::map_rgb_to_color(
+                1, 2, 3
+            ))
         );
 
         // resolve_color: when both default -> None

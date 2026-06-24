@@ -4,8 +4,8 @@ use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders, Clear};
 
-use term_wm_core::components::{Component, ComponentContext};
 use crate::{DialogOverlayComponent, MarkdownViewerComponent, ScrollViewComponent};
+use term_wm_core::components::{Component, ComponentContext};
 use term_wm_core::keybindings::{Action, KeyBindings};
 use term_wm_core::ui::UiFrame;
 
@@ -69,7 +69,7 @@ impl HelpOverlayComponent {
         match event {
             Event::Key(key) => {
                 let kb = KeyBindings::default();
-                if kb.matches(crate::keybindings::Action::CloseHelp, key) {
+                if kb.matches(term_wm_core::keybindings::Action::CloseHelp, key) {
                     self.close();
                     true
                 } else {
@@ -103,7 +103,7 @@ impl HelpOverlayComponent {
         overlay.dialog.set_dim_backdrop(true);
         // allow clicking outside the help dialog to auto-close it
         overlay.dialog.set_auto_close_on_outside_click(true);
-        overlay.dialog.set_bg(crate::theme::dialog_bg());
+        overlay.dialog.set_bg(term_wm_core::theme::dialog_bg());
         // substitute package/version placeholders and set markdown
         if let Ok(raw) = str::from_utf8(HELP_CONTENT_BYTES) {
             // Build a compile-time platform string (OS/ARCH) to indicate the
@@ -186,7 +186,7 @@ impl HelpOverlayComponent {
         match event {
             Event::Key(key) => {
                 let kb = KeyBindings::default();
-                if kb.matches(crate::keybindings::Action::CloseHelp, key) {
+                if kb.matches(term_wm_core::keybindings::Action::CloseHelp, key) {
                     self.close();
                     true
                 } else {
@@ -253,7 +253,7 @@ mod tests {
         };
         let mut buffer = Buffer::empty(area);
         {
-            let mut frame = crate::ui::UiFrame::from_parts(area, &mut buffer);
+            let mut frame = term_wm_core::ui::UiFrame::from_parts(area, &mut buffer);
             overlay
                 .viewer
                 .render(&mut frame, area, &overlay.viewer_context());

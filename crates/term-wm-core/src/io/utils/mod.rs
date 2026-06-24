@@ -1,3 +1,3 @@
 pub(crate) mod keyboard_normalizer;
 pub(crate) use keyboard_normalizer::KeyboardNormalizer;
-pub(crate) mod term_color;
+pub mod term_color;

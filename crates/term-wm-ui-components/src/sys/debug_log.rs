@@ -6,16 +6,15 @@ use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Text};
 
-use term_wm_core::components::{Component, ComponentContext};
 use crate::{ScrollViewComponent, TextRendererComponent};
+use term_wm_core::components::{Component, ComponentContext};
+use term_wm_core::debug_event_flags;
 use term_wm_core::ui::UiFrame;
+use term_wm_core::window::{SystemWindowView, WindowSurface};
 
 const DEFAULT_MAX_LINES: usize = 2000;
 static GLOBAL_LOG: OnceLock<DebugLogHandle> = OnceLock::new();
 static PANIC_HOOK_INSTALLED: OnceLock<()> = OnceLock::new();
-use std::sync::atomic::{AtomicBool, Ordering};
-static PANIC_PENDING: AtomicBool = AtomicBool::new(false);
-static ERROR_PENDING: AtomicBool = AtomicBool::new(false);
 
 pub fn set_global_debug_log(handle: DebugLogHandle) -> bool {
     GLOBAL_LOG.set(handle).is_ok()
@@ -26,7 +25,7 @@ pub fn global_debug_log() -> Option<DebugLogHandle> {
 }
 
 pub fn trigger_error() {
-    ERROR_PENDING.store(true, Ordering::SeqCst);
+    debug_event_flags::trigger_error_pending();
 }
 
 pub fn install_panic_hook() {
@@ -61,17 +60,9 @@ pub fn install_panic_hook() {
             handle.push("============".to_string());
         }
         // Mark that a panic occurred so the UI can react in the next frame.
-        PANIC_PENDING.store(true, Ordering::SeqCst);
+        debug_event_flags::trigger_panic_pending();
         prev(info);
     }));
-}
-
-pub fn take_panic_pending() -> bool {
-    PANIC_PENDING.swap(false, Ordering::SeqCst)
-}
-
-pub fn take_error_pending() -> bool {
-    ERROR_PENDING.swap(false, Ordering::SeqCst)
 }
 
 #[derive(Debug)]
@@ -276,13 +267,33 @@ impl DebugLogComponent {
     }
 }
 
+impl SystemWindowView for DebugLogComponent {
+    fn render(
+        &mut self,
+        frame: &mut term_wm_core::ui::UiFrame<'_>,
+        surface: WindowSurface,
+        focused: bool,
+    ) {
+        let ctx = ComponentContext::new(focused);
+        <DebugLogComponent as Component>::render(self, frame, surface.inner, &ctx);
+    }
+
+    fn handle_event(&mut self, event: &Event) -> bool {
+        Component::handle_event(self, event, &ComponentContext::default())
+    }
+
+    fn set_selection_enabled(&mut self, enabled: bool) {
+        DebugLogComponent::set_selection_enabled(self, enabled);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use term_wm_core::ui::UiFrame;
     use crossterm::event::{Event, KeyCode, MouseEvent, MouseEventKind};
     use ratatui::{buffer::Buffer, prelude::Rect};
     use std::io::Write;
+    use term_wm_core::ui::UiFrame;
 
     #[test]
     fn debug_log_handle_and_buffer_limits() {
@@ -329,7 +340,7 @@ mod tests {
         let mut buffer = Buffer::empty(area);
         {
             let mut frame = UiFrame::from_parts(area, &mut buffer);
-            comp.render(&mut frame, area, &ComponentContext::new(true));
+            Component::render(&mut comp, &mut frame, area, &ComponentContext::new(true));
         }
         let max_off = comp.last_total.saturating_sub(comp.last_view);
         comp.scroll_view
@@ -337,7 +348,8 @@ mod tests {
             .scroll_vertical_to(max_off);
         comp.follow_tail = true;
 
-        comp.handle_event(
+        Component::handle_event(
+            &mut comp,
             &Event::Key(crossterm::event::KeyEvent::new(
                 KeyCode::PageUp,
                 crossterm::event::KeyModifiers::NONE,
@@ -347,7 +359,8 @@ mod tests {
         assert!(comp.renderer_offset() < max_off);
 
         let before = comp.renderer_offset();
-        comp.handle_event(
+        Component::handle_event(
+            &mut comp,
             &Event::Mouse(MouseEvent {
                 kind: MouseEventKind::ScrollDown,
                 column: 0,

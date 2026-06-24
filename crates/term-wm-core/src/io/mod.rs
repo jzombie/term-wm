@@ -1,6 +1,6 @@
 pub mod clipboard;
 pub mod console;
-pub(crate) mod utils;
+pub mod utils;
 
 pub mod event_source;
 pub use event_source::EventSource;

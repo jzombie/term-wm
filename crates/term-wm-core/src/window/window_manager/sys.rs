@@ -1,6 +1,7 @@
 use crossterm::event::{Event, MouseEventKind};
 
 use super::{SystemWindowId, WindowId, WindowManager};
+use crate::components::Overlay;
 
 impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     pub(super) fn system_window_entry(
@@ -198,14 +199,11 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub(super) fn apply_clipboard_selection_state(&mut self, enabled: bool) {
-        use crate::components::sys::help_overlay::HelpOverlayComponent;
         for entry in self.system_windows.values_mut() {
             entry.set_selection_enabled(enabled);
         }
         for overlay in self.overlays.values_mut() {
-            if let Some(help) = overlay.as_any_mut().downcast_mut::<HelpOverlayComponent>() {
-                help.set_selection_enabled(enabled);
-            }
+            Overlay::set_selection_enabled(&mut **overlay, enabled);
         }
     }
 }

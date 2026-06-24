@@ -15,10 +15,7 @@ use ratatui::prelude::Rect;
 use super::FocusRing;
 use super::decorator::WindowDecorator;
 use super::entry::Window;
-use crate::components::{
-    Component, ComponentContext, Overlay,
-    sys::debug_log::{DebugLogComponent, install_panic_hook, set_global_debug_log},
-};
+use crate::components::Overlay;
 use crate::io::clipboard;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
@@ -121,25 +118,10 @@ pub struct SystemWindowDraw {
     pub focused: bool,
 }
 
-trait SystemWindowView {
+pub trait SystemWindowView {
     fn render(&mut self, frame: &mut UiFrame<'_>, surface: WindowSurface, focused: bool);
     fn handle_event(&mut self, event: &Event) -> bool;
     fn set_selection_enabled(&mut self, _enabled: bool) {}
-}
-
-impl SystemWindowView for DebugLogComponent {
-    fn render(&mut self, frame: &mut UiFrame<'_>, surface: WindowSurface, focused: bool) {
-        let ctx = ComponentContext::new(focused);
-        <DebugLogComponent as Component>::render(self, frame, surface.inner, &ctx);
-    }
-
-    fn handle_event(&mut self, event: &Event) -> bool {
-        Component::handle_event(self, event, &ComponentContext::default())
-    }
-
-    fn set_selection_enabled(&mut self, enabled: bool) {
-        DebugLogComponent::set_selection_enabled(self, enabled);
-    }
 }
 
 struct SystemWindowEntry {
@@ -220,6 +202,8 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     pub(crate) z_order: Vec<WindowId<Id>>,
     pub(crate) drag_snap: Option<(Option<WindowId<Id>>, InsertPosition, Rect)>,
     system_windows: BTreeMap<SystemWindowId, SystemWindowEntry>,
+    #[allow(clippy::type_complexity)]
+    selection_preview_factory: Option<Box<dyn FnMut(String) -> Box<dyn Overlay>>>,
     next_window_seq: usize,
 }
 
@@ -320,7 +304,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let clipboard_available = clipboard::available();
         let mouse_capture_enabled = config.mouse_capture_enabled;
         let clipboard_enabled = clipboard_available && config.clipboard_enabled;
-        let selection_enabled = clipboard_enabled;
         let decorator = config.decorator();
         let floating_resize_offscreen = config.floating_resize_offscreen;
         Self {
@@ -366,19 +349,8 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             floating_resize_offscreen,
             z_order: Vec::new(),
             drag_snap: None,
-            system_windows: {
-                let (mut component, handle) = DebugLogComponent::new_default();
-                component.set_selection_enabled(selection_enabled);
-                set_global_debug_log(handle);
-                crate::tracing_sub::init_default();
-                install_panic_hook();
-                let mut map = BTreeMap::new();
-                map.insert(
-                    SystemWindowId::DebugLog,
-                    SystemWindowEntry::new(Box::new(component)),
-                );
-                map
-            },
+            system_windows: BTreeMap::new(),
+            selection_preview_factory: None,
             next_window_seq: 0,
         }
     }
@@ -407,7 +379,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.managed_draw_order.clear();
         self.managed_draw_order_app.clear();
         self.panel.begin_frame();
-        if crate::components::sys::debug_log::take_panic_pending() {
+        if crate::debug_event_flags::take_panic_pending() {
             self.show_system_window(SystemWindowId::DebugLog);
         }
         if !self.config.wm_overlay_enabled {
@@ -538,7 +510,21 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let Some(text) = self.selection_text.clone() else {
             return;
         };
-        self.open_selection_preview(text);
+        if let Some(factory) = &mut self.selection_preview_factory {
+            let overlay = factory(text);
+            if self.selection_preview_restore_mouse.is_none() {
+                self.selection_preview_restore_mouse = Some(self.mouse_capture_enabled);
+            }
+            self.set_mouse_capture_enabled(false);
+            self.overlays.insert(OverlayId::SelectionPreview, overlay);
+        }
+    }
+
+    pub fn set_selection_preview_factory(
+        &mut self,
+        factory: Box<dyn FnMut(String) -> Box<dyn Overlay>>,
+    ) {
+        self.selection_preview_factory = Some(factory);
     }
 
     pub fn set_clipboard_enabled(&mut self, enabled: bool) {
@@ -572,6 +558,15 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         {
             self.pending_deadline = None;
         }
+    }
+
+    pub fn set_system_window(&mut self, id: SystemWindowId, component: Box<dyn SystemWindowView>) {
+        self.system_windows
+            .insert(id, SystemWindowEntry::new(component));
+    }
+
+    pub fn open_overlay(&mut self, id: OverlayId, overlay: Box<dyn Overlay>) {
+        self.overlays.insert(id, overlay);
     }
 
     pub fn set_scroll_keyboard_enabled(&mut self, enabled: bool) {
@@ -1199,9 +1194,25 @@ mod tests {
 
     #[test]
     fn system_window_header_drag_detaches_to_floating() {
+        use crate::ui::UiFrame;
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
+        struct DummyDebugComponent;
+        impl SystemWindowView for DummyDebugComponent {
+            fn render(
+                &mut self,
+                _frame: &mut UiFrame<'_>,
+                _surface: WindowSurface,
+                _focused: bool,
+            ) {
+            }
+            fn handle_event(&mut self, _event: &Event) -> bool {
+                false
+            }
+        }
+
         let mut wm = WindowManager::<usize>::new_managed(0);
+        wm.set_system_window(SystemWindowId::DebugLog, Box::new(DummyDebugComponent));
         wm.set_panel_visible(false);
         wm.show_system_window(SystemWindowId::DebugLog);
         wm.register_managed_layout(Rect {

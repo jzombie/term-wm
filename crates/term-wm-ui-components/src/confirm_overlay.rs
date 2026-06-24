@@ -3,8 +3,8 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use term_wm_core::components::{Component, ComponentContext, ConfirmAction};
 use crate::dialog_overlay::DialogOverlayComponent;
+use term_wm_core::components::{Component, ComponentContext, ConfirmAction};
 use term_wm_core::layout::rect_contains;
 use term_wm_core::ui::{UiFrame, safe_set_string};
 
@@ -65,10 +65,10 @@ impl Component for ConfirmOverlayComponent {
         };
         let paragraph = Paragraph::new(self.body.as_str())
             .alignment(Alignment::Left)
-            .style(Style::default().fg(crate::theme::dialog_fg()))
+            .style(Style::default().fg(term_wm_core::theme::dialog_fg()))
             .wrap(Wrap { trim: true });
         frame.render_widget(paragraph, body_rect);
-        let separator_style = Style::default().fg(crate::theme::dialog_separator());
+        let separator_style = Style::default().fg(term_wm_core::theme::dialog_separator());
         let buffer = frame.buffer_mut();
         let bounds = area.intersection(buffer.area);
         if bounds.width == 0 || bounds.height == 0 {
@@ -83,12 +83,12 @@ impl Component for ConfirmOverlayComponent {
         let cancel = "[ Cancel ]";
         let confirm = "[ Exit ]";
         let selected_style = Style::default()
-            .fg(crate::theme::decorator_header_fg())
-            .bg(crate::theme::decorator_header_bg())
+            .fg(term_wm_core::theme::decorator_header_fg())
+            .bg(term_wm_core::theme::decorator_header_bg())
             .add_modifier(Modifier::BOLD);
         let unselected_style = Style::default()
-            .fg(crate::theme::dialog_fg())
-            .bg(crate::theme::panel_bg());
+            .fg(term_wm_core::theme::dialog_fg())
+            .bg(term_wm_core::theme::panel_bg());
 
         let (cancel_style, confirm_style) = if self.selected_confirm {
             // confirm is selected
@@ -125,17 +125,17 @@ impl Component for ConfirmOverlayComponent {
         let Event::Key(key) = event else {
             return false;
         };
-        let kb = crate::keybindings::KeyBindings::default();
-        kb.matches(crate::keybindings::Action::ConfirmToggle, key)
-            || kb.matches(crate::keybindings::Action::ConfirmLeft, key)
-            || kb.matches(crate::keybindings::Action::ConfirmRight, key)
+        let kb = term_wm_core::keybindings::KeyBindings::default();
+        kb.matches(term_wm_core::keybindings::Action::ConfirmToggle, key)
+            || kb.matches(term_wm_core::keybindings::Action::ConfirmLeft, key)
+            || kb.matches(term_wm_core::keybindings::Action::ConfirmRight, key)
     }
 }
 
 impl ConfirmOverlayComponent {
     pub fn new() -> Self {
         let mut dialog = DialogOverlayComponent::new();
-        dialog.set_bg(crate::theme::dialog_bg());
+        dialog.set_bg(term_wm_core::theme::dialog_bg());
         dialog.set_auto_close_on_outside_click(false);
         Self {
             dialog,
@@ -190,23 +190,23 @@ impl ConfirmOverlayComponent {
                 None
             }
             Event::Key(key) => {
-                let kb = crate::keybindings::KeyBindings::default();
-                if kb.matches(crate::keybindings::Action::ConfirmToggle, key) {
+                let kb = term_wm_core::keybindings::KeyBindings::default();
+                if kb.matches(term_wm_core::keybindings::Action::ConfirmToggle, key) {
                     self.selected_confirm = !self.selected_confirm;
                     None
-                } else if kb.matches(crate::keybindings::Action::ConfirmLeft, key) {
+                } else if kb.matches(term_wm_core::keybindings::Action::ConfirmLeft, key) {
                     self.selected_confirm = false;
                     None
-                } else if kb.matches(crate::keybindings::Action::ConfirmRight, key) {
+                } else if kb.matches(term_wm_core::keybindings::Action::ConfirmRight, key) {
                     self.selected_confirm = true;
                     None
-                } else if kb.matches(crate::keybindings::Action::ConfirmAccept, key) {
+                } else if kb.matches(term_wm_core::keybindings::Action::ConfirmAccept, key) {
                     if self.selected_confirm {
                         Some(ConfirmAction::Confirm)
                     } else {
                         Some(ConfirmAction::Cancel)
                     }
-                } else if kb.matches(crate::keybindings::Action::ConfirmCancel, key) {
+                } else if kb.matches(term_wm_core::keybindings::Action::ConfirmCancel, key) {
                     Some(ConfirmAction::Cancel)
                 } else {
                     None
@@ -224,9 +224,9 @@ mod tests {
         Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
 
-    fn ev_for(action: crate::keybindings::Action) -> Event {
-        use term_wm_core::keybindings::KeyBindings;
+    fn ev_for(action: term_wm_core::keybindings::Action) -> Event {
         use crossterm::event::KeyEvent;
+        use term_wm_core::keybindings::KeyBindings;
         if let Some(combo) = KeyBindings::default().first_combo(action) {
             Event::Key(KeyEvent::new(combo.code, combo.mods))
         } else {
@@ -242,10 +242,22 @@ mod tests {
     fn handle_event_recognizes_keys() {
         let mut o = ConfirmOverlayComponent::new();
         let ctx = ComponentContext::new(true);
-        assert!(o.handle_event(&ev_for(crate::keybindings::Action::ConfirmAccept), &ctx));
-        assert!(o.handle_event(&ev_for(crate::keybindings::Action::ConfirmAccept), &ctx));
-        assert!(o.handle_event(&ev_for(crate::keybindings::Action::ConfirmCancel), &ctx));
-        assert!(o.handle_event(&ev_for(crate::keybindings::Action::ConfirmToggle), &ctx));
+        assert!(o.handle_event(
+            &ev_for(term_wm_core::keybindings::Action::ConfirmAccept),
+            &ctx
+        ));
+        assert!(o.handle_event(
+            &ev_for(term_wm_core::keybindings::Action::ConfirmAccept),
+            &ctx
+        ));
+        assert!(o.handle_event(
+            &ev_for(term_wm_core::keybindings::Action::ConfirmCancel),
+            &ctx
+        ));
+        assert!(o.handle_event(
+            &ev_for(term_wm_core::keybindings::Action::ConfirmToggle),
+            &ctx
+        ));
     }
 
     #[test]

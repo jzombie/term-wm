@@ -34,27 +34,27 @@ pub struct ViewportContext {
 
 #[derive(Debug, Clone)]
 pub struct ViewportHandle {
-    pub(crate) shared: Rc<RefCell<ViewportSharedState>>,
+    pub shared: Rc<RefCell<ViewportSharedState>>,
 }
 
 #[derive(Debug, Default)]
 pub struct ViewportSharedState {
-    pub(crate) offset_x: usize,
-    pub(crate) offset_y: usize,
-    pub(crate) width: usize,
-    pub(crate) height: usize,
-    pub(crate) content_width: usize,
-    pub(crate) content_height: usize,
-    pub(crate) pending_offset_x: Option<usize>,
-    pub(crate) pending_offset_y: Option<usize>,
+    pub offset_x: usize,
+    pub offset_y: usize,
+    pub width: usize,
+    pub height: usize,
+    pub content_width: usize,
+    pub content_height: usize,
+    pub pending_offset_x: Option<usize>,
+    pub pending_offset_y: Option<usize>,
 }
 
 impl ViewportSharedState {
-    pub(crate) fn max_offset_x(&self) -> usize {
+    pub fn max_offset_x(&self) -> usize {
         self.content_width.saturating_sub(self.width)
     }
 
-    pub(crate) fn max_offset_y(&self) -> usize {
+    pub fn max_offset_y(&self) -> usize {
         self.content_height.saturating_sub(self.height)
     }
 }

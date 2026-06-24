@@ -60,10 +60,14 @@ impl Component for AsciiImageComponent {
                 if let Some(buf_cell) = buffer.cell_mut((x, y)) {
                     let mut style = Style::default();
                     if let Some((r, g, b)) = cell.fg {
-                        style = style.fg(crate::io::utils::term_color::map_rgb_to_color(r, g, b));
+                        style = style.fg(term_wm_core::io::utils::term_color::map_rgb_to_color(
+                            r, g, b,
+                        ));
                     }
                     if let Some((r, g, b)) = cell.bg {
-                        style = style.bg(crate::io::utils::term_color::map_rgb_to_color(r, g, b));
+                        style = style.bg(term_wm_core::io::utils::term_color::map_rgb_to_color(
+                            r, g, b,
+                        ));
                     }
                     let mut buf = [0u8; 4];
                     let sym = cell.ch.encode_utf8(&mut buf);

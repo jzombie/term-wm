@@ -379,8 +379,8 @@ impl TextRendererComponent {
                 {
                     let style = cell
                         .style()
-                        .bg(crate::theme::selection_bg())
-                        .fg(crate::theme::selection_fg());
+                        .bg(term_wm_core::theme::selection_bg())
+                        .fg(term_wm_core::theme::selection_fg());
                     cell.set_style(style);
                 }
             }
@@ -655,13 +655,13 @@ impl Default for TextRendererComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use term_wm_core::components::ScrollViewComponent;
-    use term_wm_core::ui::UiFrame;
+    use crate::ScrollViewComponent;
     use crossterm::event::{
         Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
         MouseEventKind,
     };
     use ratatui::{buffer::Buffer, layout::Rect, text::Text};
+    use term_wm_core::ui::UiFrame;
 
     fn key_event(code: KeyCode) -> KeyEvent {
         let mut ev = KeyEvent::new(code, KeyModifiers::NONE);
@@ -757,7 +757,7 @@ mod tests {
         let area = Rect::new(0, 0, 20, 5);
         let mut buffer = ratatui::buffer::Buffer::empty(area);
         {
-            let mut frame = crate::ui::UiFrame::from_parts(area, &mut buffer);
+            let mut frame = term_wm_core::ui::UiFrame::from_parts(area, &mut buffer);
             scroll_view.render(&mut frame, area, &ComponentContext::new(true));
         }
 

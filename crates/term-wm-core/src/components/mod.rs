@@ -1,18 +1,9 @@
-// TODO: Rename file to `component.rs`
 use crossterm::event::Event;
 use ratatui::layout::Rect;
 use std::any::Any;
 
 pub use crate::component_context::ComponentContext;
 use crate::ui::UiFrame;
-
-pub mod confirm_overlay;
-pub mod dialog_overlay;
-pub mod sys;
-
-pub use confirm_overlay::ConfirmOverlayComponent;
-pub use dialog_overlay::DialogOverlayComponent;
-pub use sys::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfirmAction {
@@ -42,11 +33,20 @@ pub trait Component {
     fn selection_text(&mut self) -> Option<String> {
         None
     }
+
+    fn set_selection_enabled(&mut self, _enabled: bool) {}
 }
 
 pub trait Overlay: Component + std::fmt::Debug + Any {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn visible(&self) -> bool {
+        true
+    }
+    fn set_selection_enabled(&mut self, _enabled: bool) {}
+    fn handle_confirm_event(&mut self, _event: &Event) -> Option<ConfirmAction> {
+        None
+    }
 }
 
 impl<T: Component + std::fmt::Debug + Any> Overlay for T {

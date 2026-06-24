@@ -83,7 +83,7 @@ impl<D: EventSource> EventLoop<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-use crate::io::EventSource;
+    use crate::io::EventSource;
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
     use std::time::Duration;
 
