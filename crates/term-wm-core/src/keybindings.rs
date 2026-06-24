@@ -114,9 +114,26 @@ impl KeyBindings {
         Self::default()
     }
 
-    /// Embedded-mode defaults: only Esc bindings (same as library default).
+    /// Embedded-mode defaults: no overlay, no new-window, no menu bindings.
     pub fn embedded() -> Self {
-        Self::default()
+        default_keybindings! {
+            Quit: [ (KeyCode::Char('q'), KeyModifiers::CONTROL) ],
+            CloseHelp: [ (KeyCode::Esc, KeyModifiers::NONE), (KeyCode::Enter, KeyModifiers::NONE), (KeyCode::Char('q'), KeyModifiers::NONE) ],
+            FocusNext: [ (KeyCode::Tab, KeyModifiers::NONE) ],
+            FocusPrev: [ (KeyCode::BackTab, KeyModifiers::NONE) ],
+            ConfirmToggle: [ (KeyCode::Tab, KeyModifiers::NONE), (KeyCode::BackTab, KeyModifiers::NONE) ],
+            ConfirmLeft: [ (KeyCode::Left, KeyModifiers::NONE) ],
+            ConfirmRight: [ (KeyCode::Right, KeyModifiers::NONE) ],
+            ConfirmAccept: [ (KeyCode::Enter, KeyModifiers::NONE), (KeyCode::Char('y'), KeyModifiers::NONE) ],
+            ConfirmCancel: [ (KeyCode::Esc, KeyModifiers::NONE), (KeyCode::Char('n'), KeyModifiers::NONE) ],
+            ScrollPageUp: [ (KeyCode::PageUp, KeyModifiers::NONE) ],
+            ScrollPageDown: [ (KeyCode::PageDown, KeyModifiers::NONE) ],
+            ScrollHome: [ (KeyCode::Home, KeyModifiers::NONE) ],
+            ScrollEnd: [ (KeyCode::End, KeyModifiers::NONE) ],
+            ScrollUp: [ (KeyCode::Up, KeyModifiers::NONE) ],
+            ScrollDown: [ (KeyCode::Down, KeyModifiers::NONE) ],
+            ToggleSelection: [ (KeyCode::Char(' '), KeyModifiers::NONE) ],
+        }
     }
 
     pub fn new() -> Self {

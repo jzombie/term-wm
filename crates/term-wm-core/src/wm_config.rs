@@ -31,26 +31,13 @@ pub const HINT_MIN_ROWS: u16 = 5;
 
 /// Validate a `KeyBindings` configuration on startup.
 ///
-/// Detects collisions, ensures mandatory actions have bindings, and
-/// falls back to safe defaults if core mappings are missing.
+/// Detects collisions between actions and logs warnings for missing
+/// mandatory bindings (like Quit).
 pub fn validate_keybindings(kb: &KeyBindings) -> KeyBindings {
-    let mut validated = kb.clone();
-    let mandatory = [Action::Quit, Action::OpenKeybindings];
+    let validated = kb.clone();
 
-    for &action in &mandatory {
-        if validated.combos_for(action).is_empty() {
-            tracing::warn!(
-                "No keybinding configured for mandatory action {:?}; applying safe default",
-                action
-            );
-            // Re-apply defaults for missing mandatory actions
-            let defaults = KeyBindings::default();
-            if let Some(combos) = defaults.map().get(&action) {
-                for combo in combos {
-                    validated.add(action, combo.clone());
-                }
-            }
-        }
+    if validated.combos_for(Action::Quit).is_empty() {
+        tracing::warn!("No keybinding configured for Quit — user must have alternate exit path");
     }
 
     let mut collision_log: Vec<String> = Vec::new();
