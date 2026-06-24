@@ -1,7 +1,15 @@
 pub mod decorator;
-
+mod entry;
+pub mod focus_ring;
 mod window_manager;
+
 use ratatui::prelude::Rect;
+
+pub use focus_ring::FocusRing;
+pub use window_manager::{
+    DrawTask, ScrollState, SystemWindowDraw, SystemWindowId, WindowDrawContext, WindowId,
+    WindowManager, WindowSurface, WmMenuAction,
+};
 
 /// Signed floating rectangle origin with unsigned size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,7 +51,6 @@ impl FloatRectSpec {
                 width,
                 height,
             } => {
-                // Percent values are in 0..=100
                 let bx = bounds.x as i32;
                 let by = bounds.y as i32;
                 let bw = bounds.width as i32;
@@ -60,42 +67,5 @@ impl FloatRectSpec {
                 }
             }
         }
-    }
-}
-
-pub use window_manager::{
-    DrawTask, ScrollState, SystemWindowDraw, SystemWindowId, WindowDrawContext, WindowId,
-    WindowManager, WindowSurface, WmMenuAction,
-};
-
-#[derive(Debug, Clone)]
-struct Window {
-    title: Option<String>,
-    minimized: bool,
-    floating_rect: Option<FloatRectSpec>,
-    prev_floating_rect: Option<FloatRectSpec>,
-    creation_order: usize,
-}
-
-impl Window {
-    fn new(creation_order: usize) -> Self {
-        Self {
-            title: None,
-            minimized: false,
-            floating_rect: None,
-            prev_floating_rect: None,
-            creation_order,
-        }
-    }
-
-    fn title_or_default<R: Copy + Eq + Ord + std::fmt::Debug>(&self, id: WindowId<R>) -> String {
-        self.title.clone().unwrap_or_else(|| match id {
-            WindowId::App(app_id) => format!("{:?}", app_id),
-            WindowId::System(SystemWindowId::DebugLog) => "Debug Log".to_string(),
-        })
-    }
-
-    fn is_floating(&self) -> bool {
-        self.floating_rect.is_some()
     }
 }
