@@ -495,6 +495,7 @@ fn draw_window_app<A, W, R, FMap>(
             }
         }
     }
+    app.windows().render_split_handles(frame);
     app.windows().render_overlays(frame);
 }
 

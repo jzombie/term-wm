@@ -19,7 +19,7 @@ use crate::constants::MIN_FLOATING_VISIBLE_MARGIN;
 use crate::layout::floating::*;
 use crate::layout::{
     FloatingPane, InsertPosition, LayoutNode, LayoutPlan, RegionMap, SplitHandle, TilingLayout,
-    rect_contains, render_handles_masked,
+    rect_contains, render_handles, render_handles_masked,
 };
 use crate::panel::Panel;
 use crate::state::AppState;
@@ -1437,6 +1437,30 @@ where
             return layout.handle_event(event, self.managed_area);
         }
         false
+    }
+
+    /// Forward mouse events to the managed layout for split handle drag resizing.
+    /// Intended for use in any layout contract mode. Returns true when the event
+    /// was consumed by a layout interaction (e.g. dragging a split handle).
+    pub fn handle_layout_event(&mut self, event: &Event) -> bool {
+        if let Event::Mouse(mouse) = event {
+            self.hover = Some((mouse.column, mouse.row));
+        }
+        if let Some(layout) = self.managed_layout.as_mut() {
+            return layout.handle_event(event, self.managed_area);
+        }
+        false
+    }
+
+    /// Render the split handle indicators ("· · ·" dots) between tiled windows.
+    pub fn render_split_handles(&self, frame: &mut UiFrame<'_>) {
+        let hovered = self.hover.and_then(|(col, row)| {
+            self.handles
+                .iter()
+                .find(|h| rect_contains(h.rect, col, row))
+                .cloned()
+        });
+        render_handles(frame, &self.handles, hovered.as_ref());
     }
 
     pub fn minimize_window(&mut self, id: WindowId<R>) {
