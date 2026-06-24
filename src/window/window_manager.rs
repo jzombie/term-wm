@@ -1387,10 +1387,9 @@ where
     }
 
     pub fn handle_managed_event(&mut self, event: &Event) -> bool {
-        if self.layout_contract != LayoutContract::WindowManaged {
-            return false;
-        }
-        if let Event::Mouse(mouse) = event
+        let wm_mode = self.layout_contract == LayoutContract::WindowManaged;
+        if wm_mode
+            && let Event::Mouse(mouse) = event
             && self.panel_active()
             && rect_contains(self.panel.area(), mouse.column, mouse.row)
         {
@@ -1409,8 +1408,6 @@ where
             } else if self.panel.hit_test_os_copy(event) {
                 self.open_selection_preview_from_selection();
             } else if let Some(id) = self.panel.hit_test_window(event) {
-                // If the clicked window is minimized, restore it first so it appears
-                // in the layout; otherwise just focus and bring to front.
                 if self.is_minimized(id) {
                     self.restore_minimized(id);
                 }
@@ -1420,31 +1417,18 @@ where
         }
         if let Event::Mouse(mouse) = event {
             self.hover = Some((mouse.column, mouse.row));
-            if matches!(mouse.kind, MouseEventKind::Down(_)) {
+            if wm_mode && matches!(mouse.kind, MouseEventKind::Down(_)) {
                 self.focus_window_at(mouse.column, mouse.row);
             }
         }
-        if self.handle_resize_event(event) {
+        if wm_mode && self.handle_resize_event(event) {
             return true;
         }
-        if self.handle_header_drag_event(event) {
+        if wm_mode && self.handle_header_drag_event(event) {
             return true;
         }
         if self.handle_system_window_event(event) {
             return true;
-        }
-        if let Some(layout) = self.managed_layout.as_mut() {
-            return layout.handle_event(event, self.managed_area);
-        }
-        false
-    }
-
-    /// Forward mouse events to the managed layout for split handle drag resizing.
-    /// Intended for use in any layout contract mode. Returns true when the event
-    /// was consumed by a layout interaction (e.g. dragging a split handle).
-    pub fn handle_layout_event(&mut self, event: &Event) -> bool {
-        if let Event::Mouse(mouse) = event {
-            self.hover = Some((mouse.column, mouse.row));
         }
         if let Some(layout) = self.managed_layout.as_mut() {
             return layout.handle_event(event, self.managed_area);
