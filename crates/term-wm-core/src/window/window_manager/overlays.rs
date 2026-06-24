@@ -364,13 +364,27 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             }
         }
 
-        let mut hint_parts: Vec<String> = Vec::new();
+        let available = area.width as usize;
+
+        // Build hint text, dropping lowest-priority entries until they fit
+        let mut hint_text = String::new();
         for (action, combos) in self.panel.keybinding_hints() {
             let combo_str = combos.join("/");
-            hint_parts.push(format!("{combo_str} {action}"));
+            let part = format!("{combo_str} {action}");
+            let candidate = if hint_text.is_empty() {
+                part.clone()
+            } else {
+                format!("{hint_text} · {part}")
+            };
+            if candidate.chars().count() <= available {
+                hint_text = candidate;
+            } else if hint_text.is_empty() {
+                hint_text = crate::ui::truncate_to_width(&part, available);
+            } else {
+                break;
+            }
         }
-        let hint_text = hint_parts.join(" · ");
-        let text = crate::ui::truncate_to_width(&hint_text, area.width as usize);
-        safe_set_string(buffer, area, area.x, y, &text, style);
+
+        safe_set_string(buffer, area, area.x, y, &hint_text, style);
     }
 }

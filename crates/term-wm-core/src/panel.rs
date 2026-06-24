@@ -469,13 +469,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
 
         // Render keybinding hints left-aligned if available
         if !self.keybinding_hints.is_empty() {
-            let mut hint_parts: Vec<String> = Vec::new();
-            for (action, combos) in &self.keybinding_hints {
-                let combo_str = combos.join("/");
-                hint_parts.push(format!("{combo_str} {action}"));
-            }
-            let mut hint_text = hint_parts.join(" · ");
-            // Reserve space on the right for the info string
+            // Build platform/info string (shared with fallback)
             let platform = std::env::consts::OS;
             const PKG_NAME: &str = env!("CARGO_PKG_NAME");
             const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -492,16 +486,28 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             };
             let info = format!("{pkg_label} · {platform} · {hostname}");
             let info_width = info.chars().count() as u16;
-            // Ensure we have at least info_width + 2 for a separator
             let available = bounds.width.saturating_sub(info_width + 2).max(1);
-            if hint_text.chars().count() as u16 > available {
-                hint_text = truncate_to_width(&hint_text, available as usize);
-                // Add ellipsis if truncated
-                if hint_text.len() >= 3 {
-                    hint_text.truncate(hint_text.len().saturating_sub(3));
-                    hint_text.push('…');
+
+            // Build hint parts, dropping lowest-priority entries until they fit
+            let mut hint_text = String::new();
+            for (action, combos) in &self.keybinding_hints {
+                let combo_str = combos.join("/");
+                let part = format!("{combo_str} {action}");
+                let candidate = if hint_text.is_empty() {
+                    part.clone()
+                } else {
+                    format!("{hint_text} · {part}")
+                };
+                if candidate.chars().count() as u16 <= available {
+                    hint_text = candidate;
+                } else if hint_text.is_empty() {
+                    // Even a single hint doesn't fit; show it truncated
+                    hint_text = truncate_to_width(&part, available as usize);
+                } else {
+                    break;
                 }
             }
+
             // Write hints left-aligned
             safe_set_string(buffer, bounds, bounds.x, area.y, &hint_text, style);
             // Write info right-aligned
