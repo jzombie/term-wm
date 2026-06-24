@@ -28,24 +28,39 @@ license = "MIT OR Apache-2.0"
 publish = true
 
 [workspace.dependencies]
+arboard = "3.6.1"
 clap = { version = "4.5.54", features = ["derive"] }
 crossterm = "0.29.0"
+hostname = "0.4.2"
 indoc = "2.0.7"
+line-ending = "1.5.1"
+linkify = "0.10.0"
+portable-pty = "0.9.0"
+pulldown-cmark = "0.13.0"
 ratatui = "0.30.0"
+resvg = "0.45.1"
+shell-words = "1.1.1"
+tempfile = "3.24.0"
+thiserror = "2.0.17"
+tracing = "0.1.44"
+tracing-subscriber = "0.3.22"
+vt100 = "0.16.2"
+webbrowser = "1.0.6"
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO"] }
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
-line-ending = "1.5.1"
-portable-pty = "0.9.0"
-ratatui.workspace = true
+line-ending = { workspace = true }
+portable-pty = { workspace = true }
+ratatui = { workspace = true }
 term-wm-core = { path = "crates/term-wm-core" }
 term-wm-ui-components = { path = "crates/term-wm-ui-components" }
-tracing = "0.1.44"
-tracing-subscriber = "0.3.22"
-webbrowser = "1.0.6"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+webbrowser = { workspace = true }
 
 [build-dependencies]
-indoc = "2.0.7"
+indoc = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3.24.0"
+tempfile = { workspace = true }
