@@ -1220,6 +1220,10 @@ where
         Arc::clone(&self.decorator)
     }
 
+    pub fn set_decorator(&mut self, decorator: Arc<dyn WindowDecorator>) {
+        self.decorator = decorator;
+    }
+
     pub fn register_managed_layout(&mut self, area: Rect) {
         self.last_frame_area = area;
         let (_, _, managed_area) = self.panel.split_area(self.panel_active(), area);
