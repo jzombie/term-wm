@@ -290,7 +290,8 @@ where
                 // Direct focus switching for mouse clicks.  Uses the live window
                 // set from managed_draw_order (repopulated every draw) instead of
                 // the static focus_regions snapshot captured at startup.
-                if let Event::Mouse(mouse) = &evt
+                if app.windows().mouse_focus_click_enabled()
+                    && let Event::Mouse(mouse) = &evt
                     && matches!(mouse.kind, MouseEventKind::Down(_))
                 {
                     let targets = app.windows().managed_draw_order().to_vec();
@@ -309,7 +310,9 @@ where
                 // The overlay-only path above handles this when wm_overlay is
                 // visible, but the fallthrough path also needs it.
                 if matches!(evt, Event::Key(_))
-                    && app.windows().handle_focus_event(&evt, focus_regions, &map_region)
+                    && app
+                        .windows()
+                        .handle_focus_event(&evt, focus_regions, &map_region)
                 {
                     update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Continue);

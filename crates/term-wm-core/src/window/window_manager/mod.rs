@@ -181,6 +181,8 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     pending_deadline: Option<Instant>,
     mouse_capture_enabled: bool,
     mouse_capture_dirty: bool,
+    keyboard_focus_enabled: bool,
+    mouse_focus_click_enabled: bool,
     clipboard_enabled: bool,
     clipboard_dirty: bool,
     overlay_visible: bool,
@@ -329,6 +331,8 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             pending_deadline: None,
             mouse_capture_enabled,
             mouse_capture_dirty: false,
+            keyboard_focus_enabled: config.keyboard_focus_enabled,
+            mouse_focus_click_enabled: config.mouse_focus_click_enabled,
             clipboard_enabled,
             clipboard_dirty: false,
             overlay_visible: false,
@@ -419,6 +423,22 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
 
     pub fn mouse_capture_enabled(&self) -> bool {
         self.mouse_capture_enabled
+    }
+
+    pub fn keyboard_focus_enabled(&self) -> bool {
+        self.keyboard_focus_enabled
+    }
+
+    pub fn set_keyboard_focus_enabled(&mut self, enabled: bool) {
+        self.keyboard_focus_enabled = enabled;
+    }
+
+    pub fn mouse_focus_click_enabled(&self) -> bool {
+        self.mouse_focus_click_enabled
+    }
+
+    pub fn set_mouse_focus_click_enabled(&mut self, enabled: bool) {
+        self.mouse_focus_click_enabled = enabled;
     }
 
     pub fn set_mouse_capture_enabled(&mut self, enabled: bool) {

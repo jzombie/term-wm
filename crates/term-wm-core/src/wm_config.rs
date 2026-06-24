@@ -40,6 +40,10 @@ pub struct WmConfig {
     pub clipboard_enabled: bool,
     /// Initial value for mouse capture (runtime-toggleable).
     pub mouse_capture_enabled: bool,
+    /// Enable keyboard (Tab/Shift+Tab) focus switching between windows.
+    pub keyboard_focus_enabled: bool,
+    /// Enable mouse click focus switching between windows.
+    pub mouse_focus_click_enabled: bool,
     /// Custom window decorator (title bar + border renderer).
     pub decorator: Option<Arc<dyn WindowDecorator>>,
 }
@@ -64,6 +68,8 @@ impl WmConfig {
             floating_resize_offscreen: true,
             clipboard_enabled: true,
             mouse_capture_enabled: true,
+            keyboard_focus_enabled: true,
+            mouse_focus_click_enabled: true,
             decorator: Some(Arc::new(DefaultDecorator::new())),
         }
     }
@@ -79,6 +85,8 @@ impl WmConfig {
             floating_resize_offscreen: false,
             clipboard_enabled: true,
             mouse_capture_enabled: true,
+            keyboard_focus_enabled: true,
+            mouse_focus_click_enabled: true,
             decorator: Some(Arc::new(DefaultDecorator::without_buttons())),
         }
     }
