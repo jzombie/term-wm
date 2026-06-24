@@ -217,11 +217,6 @@ where
                             update_selection_snapshot(app);
                             return flush_state_changes(app, ControlFlow::Continue);
                         }
-                        Action::NewWindow => {
-                            app.wm_new_window()?;
-                            update_selection_snapshot(app);
-                            return flush_state_changes(app, ControlFlow::Continue);
-                        }
                         Action::HintToggle => {
                             let current = app.windows().hint_visibility();
                             let next = match current {
