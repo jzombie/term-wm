@@ -1391,9 +1391,10 @@ where
     }
 
     pub fn handle_managed_event(&mut self, event: &Event) -> bool {
-        let wm_mode = self.layout_contract == LayoutContract::WindowManaged;
-        if wm_mode
-            && let Event::Mouse(mouse) = event
+        if self.layout_contract != LayoutContract::WindowManaged {
+            return false;
+        }
+        if let Event::Mouse(mouse) = event
             && self.panel_active()
             && rect_contains(self.panel.area(), mouse.column, mouse.row)
         {
@@ -1421,18 +1422,30 @@ where
         }
         if let Event::Mouse(mouse) = event {
             self.hover = Some((mouse.column, mouse.row));
-            if wm_mode && matches!(mouse.kind, MouseEventKind::Down(_)) {
+            if matches!(mouse.kind, MouseEventKind::Down(_)) {
                 self.focus_window_at(mouse.column, mouse.row);
             }
         }
-        if wm_mode && self.handle_resize_event(event) {
+        if self.handle_resize_event(event) {
             return true;
         }
-        if wm_mode && self.handle_header_drag_event(event) {
+        if self.handle_header_drag_event(event) {
             return true;
         }
         if self.handle_system_window_event(event) {
             return true;
+        }
+        if let Some(layout) = self.managed_layout.as_mut() {
+            return layout.handle_event(event, self.managed_area);
+        }
+        false
+    }
+
+    /// Forward events to the managed layout for split handle drag resizing.
+    /// Useful in `AppManaged` mode where `handle_managed_event` is a no-op.
+    pub fn handle_layout_event(&mut self, event: &Event) -> bool {
+        if let Event::Mouse(mouse) = event {
+            self.hover = Some((mouse.column, mouse.row));
         }
         if let Some(layout) = self.managed_layout.as_mut() {
             return layout.handle_event(event, self.managed_area);
