@@ -22,19 +22,15 @@ pub enum ControlFlow {
 /// blocking the UI, but they feed data into the state that this loop renders.
 pub struct EventLoop<D> {
     driver: D,
-    poll_interval: Duration,
 }
 
 impl<D: InputDriver> EventLoop<D> {
-    pub fn new(driver: D, poll_interval: Duration) -> Self {
-        Self {
-            driver,
-            poll_interval,
-        }
+    pub fn new(driver: D) -> Self {
+        Self { driver }
     }
 
     pub fn poll(&mut self) -> io::Result<Option<Event>> {
-        if self.driver.poll(self.poll_interval)? {
+        if self.driver.poll(self.driver.poll_interval())? {
             Ok(Some(self.driver.read()?))
         } else {
             Ok(None)
@@ -65,7 +61,7 @@ impl<D: InputDriver> EventLoop<D> {
                 break;
             }
 
-            if self.driver.poll(self.poll_interval)? {
+            if self.driver.poll(self.driver.poll_interval())? {
                 // Drain the event queue to prevent input lag during high-frequency event bursts
                 // (e.g. mouse drags, scrolling). If we only processed one event per poll,
                 // the rendering loop would fall behind the input stream.
@@ -127,7 +123,7 @@ mod tests {
     #[test]
     fn poll_returns_event_when_available() {
         let d = DummyDriver::new();
-        let mut ev = EventLoop::new(d, Duration::from_millis(0));
+        let mut ev = EventLoop::new(d);
         // first poll should cause read to be called
         let res = ev.poll().unwrap();
         assert!(res.is_some());
@@ -139,7 +135,7 @@ mod tests {
     #[test]
     fn run_calls_handler_and_respects_quit() {
         let d = DummyDriver::new();
-        let mut ev = EventLoop::new(d, Duration::from_millis(0));
+        let mut ev = EventLoop::new(d);
         let mut count = 0;
         let handler =
             |_driver: &mut DummyDriver, _evt: Option<Event>| -> std::io::Result<ControlFlow> {

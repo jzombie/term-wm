@@ -1,5 +1,4 @@
 use std::io;
-use std::time::Duration;
 
 use crossterm::event::{Event, KeyEventKind};
 use ratatui::buffer::Buffer;
@@ -85,7 +84,6 @@ pub fn run_app<O, D, A, Id, FDraw, FMap>(
     app: &mut A,
     focus_regions: &[Id],
     map_region: FMap,
-    poll_interval: Duration,
     mut draw: FDraw,
 ) -> io::Result<()>
 where
@@ -96,7 +94,7 @@ where
     FDraw: for<'frame> FnMut(UiFrame<'frame>, &mut A),
     FMap: Fn(Id) -> Id + Copy,
 {
-    let mut event_loop = EventLoop::new(driver, poll_interval);
+    let mut event_loop = EventLoop::new(driver);
     event_loop
         .driver()
         .set_mouse_capture(app.windows().mouse_capture_enabled())?;
@@ -325,7 +323,6 @@ where
     Id: Copy + Eq + Ord + std::fmt::Debug + 'static,
 {
     let mut draw_state = WindowDrawState::<Id>::default();
-    let poll_interval = Duration::from_millis(16);
     let focus_regions: Vec<Id> = app.focus_regions();
     run_app(
         output,
@@ -333,7 +330,6 @@ where
         app,
         &focus_regions,
         |id| id,
-        poll_interval,
         move |frame, app| {
             let mut frame = frame;
             draw_window_app(&mut frame, app, &mut draw_state);

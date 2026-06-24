@@ -10,6 +10,15 @@ pub trait InputDriver {
     fn set_mouse_capture(&mut self, _enabled: bool) -> io::Result<()> {
         Ok(())
     }
+
+    /// Returns the suggested polling interval for this driver.
+    ///
+    /// The event loop calls this before each poll cycle. Drivers may
+    /// return a shorter interval when the user is actively interacting
+    /// and a longer interval when idle to reduce CPU usage.
+    fn poll_interval(&self) -> Duration {
+        Duration::from_millis(16)
+    }
 }
 
 impl<T: InputDriver + ?Sized> InputDriver for &mut T {
@@ -31,6 +40,10 @@ impl<T: InputDriver + ?Sized> InputDriver for &mut T {
 
     fn set_mouse_capture(&mut self, enabled: bool) -> io::Result<()> {
         (**self).set_mouse_capture(enabled)
+    }
+
+    fn poll_interval(&self) -> Duration {
+        (**self).poll_interval()
     }
 }
 
