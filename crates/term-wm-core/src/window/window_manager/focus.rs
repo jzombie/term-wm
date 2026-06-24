@@ -43,6 +43,13 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.app_focus.set_current(focus);
     }
 
+    pub fn focus_app_window(&mut self, id: Id) {
+        self.app_focus.set_current(id);
+        self.set_wm_focus(WindowId::app(id));
+        self.bring_to_front_id(WindowId::app(id));
+        self.managed_draw_order = self.z_order.clone();
+    }
+
     pub fn set_focus_order(&mut self, order: Vec<Id>) {
         self.app_focus.set_order(order);
         if !self.app_focus.order.is_empty()

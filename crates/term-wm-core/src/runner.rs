@@ -1,6 +1,6 @@
 use std::io;
 
-use crossterm::event::{Event, KeyEventKind};
+use crossterm::event::{Event, KeyEventKind, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::prelude::{Constraint, Direction, Rect};
 use ratatui::style::Style;
@@ -287,11 +287,27 @@ where
                     update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Continue);
                 }
+                // Direct focus switching for mouse clicks.  Uses the live window
+                // set from managed_draw_order (repopulated every draw) instead of
+                // the static focus_regions snapshot captured at startup.
+                if let Event::Mouse(mouse) = &evt
+                    && matches!(mouse.kind, MouseEventKind::Down(_))
+                {
+                    let targets = app.windows().managed_draw_order().to_vec();
+                    for &id in &targets {
+                        let rect = app.windows().full_region(id);
+                        if rect.width > 0
+                            && rect.height > 0
+                            && crate::layout::rect_contains(rect, mouse.column, mouse.row)
+                        {
+                            app.windows().focus_app_window(id);
+                            break;
+                        }
+                    }
+                }
                 // Route Tab/Shift+Tab through focus routing for non-overlay mode.
                 // The overlay-only path above handles this when wm_overlay is
-                // visible, but the fallthrough path also needs it.  Mouse focus
-                // switching is handled by handle_managed_event -> focus_window_at,
-                // so we only intercept keyboard events here.
+                // visible, but the fallthrough path also needs it.
                 if matches!(evt, Event::Key(_))
                     && app.windows().handle_focus_event(&evt, focus_regions, &map_region)
                 {
