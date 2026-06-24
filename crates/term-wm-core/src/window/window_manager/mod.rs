@@ -848,7 +848,7 @@ mod tests {
     #[test]
     fn click_focusing_topmost_window() {
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::new_managed(0);
+        let mut wm = WindowManager::<usize>::new_standalone(0);
 
         let r1 = Rect {
             x: 0,
@@ -886,7 +886,7 @@ mod tests {
     #[test]
     fn enforce_min_visible_margin_horizontal() {
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::<usize>::new_managed(0);
+        let mut wm = WindowManager::<usize>::new_standalone(0);
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
             WindowId::app(1usize),
@@ -920,7 +920,7 @@ mod tests {
     #[test]
     fn enforce_min_visible_margin_vertical() {
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::<usize>::new_managed(0);
+        let mut wm = WindowManager::<usize>::new_standalone(0);
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
             WindowId::app(2usize),
@@ -951,7 +951,7 @@ mod tests {
     #[test]
     fn maximize_persists_across_resize() {
         use crate::window::FloatRectSpec;
-        let mut wm = WindowManager::<usize>::new_managed(0);
+        let mut wm = WindowManager::<usize>::new_standalone(0);
         wm.register_managed_layout(ratatui::layout::Rect {
             x: 0,
             y: 0,
@@ -980,7 +980,7 @@ mod tests {
     #[test]
     fn localize_event_converts_to_local_coords() {
         use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::new_managed(0);
+        let mut wm = WindowManager::<usize>::new_standalone(0);
         let target_rect = ratatui::layout::Rect {
             x: 10,
             y: 5,
@@ -1020,7 +1020,7 @@ mod tests {
     fn localize_event_handles_negative_origin() {
         use crate::window::{FloatRect, FloatRectSpec};
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::new_managed(0);
+        let mut wm = WindowManager::<usize>::new_standalone(0);
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
             WindowId::app(1usize),
@@ -1069,7 +1069,7 @@ mod tests {
     #[test]
     fn hit_test_uses_visible_bounds_for_floating_windows() {
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::<usize>::new_managed(0);
+        let mut wm = WindowManager::<usize>::new_standalone(0);
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
             WindowId::app(1usize),
@@ -1105,7 +1105,7 @@ mod tests {
     fn hover_targets_respects_occlusion() {
         use crate::layout::floating::{ResizeEdge, ResizeHandle};
         use crate::layout::tiling::SplitHandle;
-        let mut wm = WindowManager::<usize>::new_managed(0);
+        let mut wm = WindowManager::<usize>::new_standalone(0);
         wm.regions.set(
             WindowId::app(1usize),
             Rect {
@@ -1211,7 +1211,7 @@ mod tests {
             }
         }
 
-        let mut wm = WindowManager::<usize>::new_managed(0);
+        let mut wm = WindowManager::<usize>::new_standalone(0);
         wm.set_system_window(SystemWindowId::DebugLog, Box::new(DummyDebugComponent));
         wm.set_panel_visible(false);
         wm.show_system_window(SystemWindowId::DebugLog);
@@ -1274,7 +1274,7 @@ mod tests {
     #[test]
     fn adjust_event_rebases_app_mouse_coordinates() {
         use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::new_managed(0);
+        let mut wm = WindowManager::<usize>::new_standalone(0);
         let full = Rect {
             x: 10,
             y: 3,
@@ -1308,7 +1308,7 @@ mod tests {
     #[test]
     fn adjust_event_rebases_system_mouse_coordinates() {
         use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::new_managed(0);
+        let mut wm = WindowManager::<usize>::new_standalone(0);
         let full = Rect {
             x: 2,
             y: 4,
