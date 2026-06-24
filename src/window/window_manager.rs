@@ -1392,61 +1392,50 @@ where
     }
 
     pub fn handle_managed_event(&mut self, event: &Event) -> bool {
-        if self.layout_contract != LayoutContract::WindowManaged {
-            return false;
-        }
-        if let Event::Mouse(mouse) = event
-            && self.panel_active()
-            && rect_contains(self.panel.area(), mouse.column, mouse.row)
-        {
-            if self.panel.hit_test_menu(event) {
-                if self.wm_overlay_visible() {
-                    self.close_wm_overlay();
-                } else {
-                    self.open_wm_overlay();
-                }
-            } else if self.panel.hit_test_mouse_capture(event) {
-                self.toggle_mouse_capture();
-            } else if self.panel.hit_test_clipboard(event) {
-                self.toggle_clipboard_enabled();
-            } else if self.panel.hit_test_copy(event) {
-                self.copy_selection_to_clipboard();
-            } else if self.panel.hit_test_os_copy(event) {
-                self.open_selection_preview_from_selection();
-            } else if let Some(id) = self.panel.hit_test_window(event) {
-                if self.is_minimized(id) {
-                    self.restore_minimized(id);
-                }
-                self.focus_window_id(id);
-            }
-            return true;
-        }
         if let Event::Mouse(mouse) = event {
             self.hover = Some((mouse.column, mouse.row));
-            if matches!(mouse.kind, MouseEventKind::Down(_)) {
+        }
+        if self.layout_contract == LayoutContract::WindowManaged {
+            if let Event::Mouse(mouse) = event
+                && self.panel_active()
+                && rect_contains(self.panel.area(), mouse.column, mouse.row)
+            {
+                if self.panel.hit_test_menu(event) {
+                    if self.wm_overlay_visible() {
+                        self.close_wm_overlay();
+                    } else {
+                        self.open_wm_overlay();
+                    }
+                } else if self.panel.hit_test_mouse_capture(event) {
+                    self.toggle_mouse_capture();
+                } else if self.panel.hit_test_clipboard(event) {
+                    self.toggle_clipboard_enabled();
+                } else if self.panel.hit_test_copy(event) {
+                    self.copy_selection_to_clipboard();
+                } else if self.panel.hit_test_os_copy(event) {
+                    self.open_selection_preview_from_selection();
+                } else if let Some(id) = self.panel.hit_test_window(event) {
+                    if self.is_minimized(id) {
+                        self.restore_minimized(id);
+                    }
+                    self.focus_window_id(id);
+                }
+                return true;
+            }
+            if let Event::Mouse(mouse) = event
+                && matches!(mouse.kind, MouseEventKind::Down(_))
+            {
                 self.focus_window_at(mouse.column, mouse.row);
             }
-        }
-        if self.handle_resize_event(event) {
-            return true;
-        }
-        if self.handle_header_drag_event(event) {
-            return true;
-        }
-        if self.handle_system_window_event(event) {
-            return true;
-        }
-        if let Some(layout) = self.managed_layout.as_mut() {
-            return layout.handle_event(event, self.managed_area);
-        }
-        false
-    }
-
-    /// Forward events to the managed layout for split handle drag resizing.
-    /// Useful in `AppManaged` mode where `handle_managed_event` is a no-op.
-    pub fn handle_layout_event(&mut self, event: &Event) -> bool {
-        if let Event::Mouse(mouse) = event {
-            self.hover = Some((mouse.column, mouse.row));
+            if self.handle_resize_event(event) {
+                return true;
+            }
+            if self.handle_header_drag_event(event) {
+                return true;
+            }
+            if self.handle_system_window_event(event) {
+                return true;
+            }
         }
         if let Some(layout) = self.managed_layout.as_mut() {
             return layout.handle_event(event, self.managed_area);
@@ -1454,7 +1443,8 @@ where
         false
     }
 
-    /// Render the split handle indicators ("· · ·" dots) between tiled windows.
+    /// Render the split handle indicators between tiled windows.
+    /// Called by `render_overlays`; no need to call this manually.
     pub fn render_split_handles(&self, frame: &mut UiFrame<'_>) {
         let hovered = self.hover.and_then(|(col, row)| {
             self.handles
