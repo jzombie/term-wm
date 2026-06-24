@@ -87,8 +87,6 @@ impl Default for KeyBindings {
             FocusNext: [ (KeyCode::Tab, KeyModifiers::NONE) ],
             FocusPrev: [ (KeyCode::BackTab, KeyModifiers::NONE) ],
             WmToggleOverlay: [ (KeyCode::Esc, KeyModifiers::NONE) ],
-            OpenKeybindings: [ (KeyCode::F(1), KeyModifiers::NONE) ],
-            HintToggle: [ (KeyCode::F(2), KeyModifiers::NONE) ],
             MenuUp: [ (KeyCode::Up, KeyModifiers::NONE) ],
             MenuDown: [ (KeyCode::Down, KeyModifiers::NONE) ],
             MenuSelect: [ (KeyCode::Enter, KeyModifiers::NONE) ],
@@ -111,34 +109,14 @@ impl Default for KeyBindings {
 }
 
 impl KeyBindings {
-    /// Standalone defaults with the same set defined in `Default::default()`.
+    /// Full standalone defaults — same as `Default`.
     pub fn standalone() -> Self {
         Self::default()
     }
 
-    /// Embedded-mode defaults: no overlay, no new-window, no menu bindings.
+    /// Embedded-mode defaults: only Esc bindings (same as library default).
     pub fn embedded() -> Self {
-        default_keybindings! {
-            Quit: [ (KeyCode::Char('q'), KeyModifiers::CONTROL) ],
-            CloseHelp: [ (KeyCode::Esc, KeyModifiers::NONE), (KeyCode::Enter, KeyModifiers::NONE), (KeyCode::Char('q'), KeyModifiers::NONE) ],
-            FocusNext: [ (KeyCode::Tab, KeyModifiers::NONE) ],
-            FocusPrev: [ (KeyCode::BackTab, KeyModifiers::NONE) ],
-            OpenHelp: [],
-            OpenKeybindings: [ (KeyCode::F(1), KeyModifiers::NONE) ],
-            HintToggle: [ (KeyCode::F(2), KeyModifiers::NONE) ],
-            ConfirmToggle: [ (KeyCode::Tab, KeyModifiers::NONE), (KeyCode::BackTab, KeyModifiers::NONE) ],
-            ConfirmLeft: [ (KeyCode::Left, KeyModifiers::NONE) ],
-            ConfirmRight: [ (KeyCode::Right, KeyModifiers::NONE) ],
-            ConfirmAccept: [ (KeyCode::Enter, KeyModifiers::NONE), (KeyCode::Char('y'), KeyModifiers::NONE) ],
-            ConfirmCancel: [ (KeyCode::Esc, KeyModifiers::NONE), (KeyCode::Char('n'), KeyModifiers::NONE) ],
-            ScrollPageUp: [ (KeyCode::PageUp, KeyModifiers::NONE) ],
-            ScrollPageDown: [ (KeyCode::PageDown, KeyModifiers::NONE) ],
-            ScrollHome: [ (KeyCode::Home, KeyModifiers::NONE) ],
-            ScrollEnd: [ (KeyCode::End, KeyModifiers::NONE) ],
-            ScrollUp: [ (KeyCode::Up, KeyModifiers::NONE) ],
-            ScrollDown: [ (KeyCode::Down, KeyModifiers::NONE) ],
-            ToggleSelection: [ (KeyCode::Char(' '), KeyModifiers::NONE) ],
-        }
+        Self::default()
     }
 
     pub fn new() -> Self {

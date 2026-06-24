@@ -16,7 +16,6 @@ _See also: [No-Keybinding-Conflict Philosophy](#no-keybinding-conflict-philosoph
 While the menu is open:
 
 * **%FOCUS_NEXT% / %FOCUS_PREV%**: Cycle focus between windows.
-* **%NEW_WINDOW%**: Create a new window.
 * **%MENU_NAV%** or **%MENU_ALT%**: Move up/down in lists and menus.
 * **%MENU_SELECT%**: Activate the selected menu item.
 * **%HELP_MENU%**: Open the full help overlay (Panel menu: Top-left -> Help).
