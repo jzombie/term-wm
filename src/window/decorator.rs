@@ -19,19 +19,39 @@ pub trait WindowDecorator: std::fmt::Debug {
 }
 
 #[derive(Debug)]
-pub struct DefaultDecorator;
+pub struct DefaultDecorator {
+    show_buttons: bool,
+}
+
+impl DefaultDecorator {
+    pub fn new() -> Self {
+        Self { show_buttons: true }
+    }
+
+    pub fn without_buttons() -> Self {
+        Self { show_buttons: false }
+    }
+}
+
+impl Default for DefaultDecorator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl WindowDecorator for DefaultDecorator {
     fn hit_test(&self, rect: Rect, x: u16, y: u16) -> HeaderAction {
+        if !self.show_buttons {
+            return HeaderAction::Drag;
+        }
+
         let outer_left = rect.x;
         let outer_right = rect.x.saturating_add(rect.width).saturating_sub(1);
         let header_y = rect.y.saturating_add(1);
 
-        // Check if inside header row
         if y != header_y {
             return HeaderAction::None;
         }
-        // Check if within horizontal bounds
         if x <= outer_left || x >= outer_right {
             return HeaderAction::None;
         }
@@ -96,53 +116,38 @@ impl WindowDecorator for DefaultDecorator {
                 }
             }
         }
-        let close_x = outer_right.saturating_sub(1);
-        let max_x = close_x.saturating_sub(2);
-        let min_x = max_x.saturating_sub(2);
-        let buttons = [(min_x, "_"), (max_x, "▢"), (close_x, "✖")];
-        for (bx, sym) in buttons {
-            if let Some(cell) = buffer.cell_mut((bx, header_y)) {
-                cell.set_symbol(sym);
-                cell.set_style(header_style);
+        if self.show_buttons {
+            let close_x = outer_right.saturating_sub(1);
+            let max_x = close_x.saturating_sub(2);
+            let min_x = max_x.saturating_sub(2);
+            for (bx, sym) in [(min_x, "_"), (max_x, "▢"), (close_x, "✖")] {
+                if let Some(cell) = buffer.cell_mut((bx, header_y)) {
+                    cell.set_symbol(sym);
+                    cell.set_style(header_style);
+                }
             }
         }
 
         // Borders
-        // Top
         for x in outer_left..=outer_right {
             if let Some(cell) = buffer.cell_mut((x, outer_top)) {
-                if x == outer_left {
-                    cell.set_symbol("┌");
-                } else if x == outer_right {
-                    cell.set_symbol("┐");
-                } else {
-                    cell.set_symbol("─");
-                }
+                let sym = if x == outer_left { "┌" } else if x == outer_right { "┐" } else { "─" };
+                cell.set_symbol(sym);
                 cell.set_style(border_style);
             }
         }
-        // Bottom
         for x in outer_left..=outer_right {
             if let Some(cell) = buffer.cell_mut((x, outer_bottom)) {
-                if x == outer_left {
-                    cell.set_symbol("└");
-                } else if x == outer_right {
-                    cell.set_symbol("┘");
-                } else {
-                    cell.set_symbol("─");
-                }
+                let sym = if x == outer_left { "└" } else if x == outer_right { "┘" } else { "─" };
+                cell.set_symbol(sym);
                 cell.set_style(border_style);
             }
         }
-        // Left
         for y in outer_top.saturating_add(1)..outer_bottom {
             if let Some(cell) = buffer.cell_mut((outer_left, y)) {
                 cell.set_symbol("│");
                 cell.set_style(border_style);
             }
-        }
-        // Right
-        for y in outer_top.saturating_add(1)..outer_bottom {
             if let Some(cell) = buffer.cell_mut((outer_right, y)) {
                 cell.set_symbol("│");
                 cell.set_style(border_style);
@@ -157,14 +162,14 @@ mod tests {
 
     #[test]
     fn open_step_decorator_debug_format() {
-        let dec = DefaultDecorator;
+        let dec = DefaultDecorator::new();
         let s = format!("{:?}", dec);
         assert!(s.contains("DefaultDecorator"));
     }
 
     #[test]
     fn hit_test_returns_expected_actions() {
-        let dec = DefaultDecorator;
+        let dec = DefaultDecorator::new();
         let rect = Rect {
             x: 10,
             y: 5,
@@ -198,8 +203,8 @@ mod tests {
 }
 
 /// A decorator that renders nothing. Useful when window chrome is not desired
-/// (e.g. in `AppManaged` mode) but the app may later want to inject a custom
-/// decorator with specific controls.
+/// (e.g. when the app provides its own frame) but the app may later want to
+/// inject a custom decorator with specific controls.
 #[derive(Debug)]
 pub struct NoopDecorator;
 

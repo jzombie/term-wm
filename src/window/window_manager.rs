@@ -501,7 +501,7 @@ where
             esc_passthrough_window: esc_passthrough_window_default(),
             overlays: BTreeMap::new(),
             scroll_keyboard_enabled_default: true,
-            decorator: Arc::new(DefaultDecorator),
+            decorator: Arc::new(DefaultDecorator::without_buttons()),
             floating_resize_offscreen: true,
             z_order: Vec::new(),
             drag_snap: None,
@@ -527,6 +527,7 @@ where
     pub fn new_managed(current: W) -> Self {
         let mut manager = Self::new(current);
         manager.layout_contract = LayoutContract::WindowManaged;
+        manager.decorator = Arc::new(DefaultDecorator::new());
         manager
     }
 
