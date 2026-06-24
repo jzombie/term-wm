@@ -153,7 +153,7 @@ impl WmConfig {
             mouse_focus_click_enabled: true,
             decorator: Some(Arc::new(DefaultDecorator::without_buttons())),
             keybindings: validate_keybindings(&KeyBindings::default()),
-            hint_visibility: HintVisibility::Never,
+            hint_visibility: HintVisibility::Always,
         }
     }
 
