@@ -1,0 +1,2 @@
+- App-configurable keybindings and centralized ability to render them (i.e. bottom panel for most used; and overlay for extra context)
+- Should WmState be called WmConfig instead?
