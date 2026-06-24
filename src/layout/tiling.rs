@@ -441,11 +441,9 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
                 }
             }
             MouseEventKind::Moved => {}
-            MouseEventKind::Up(_) => {
-                if self.drag.is_some() {
-                    self.drag = None;
-                    return true;
-                }
+            MouseEventKind::Up(_) if self.drag.is_some() => {
+                self.drag = None;
+                return true;
             }
             _ => {}
         }

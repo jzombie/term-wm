@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, Copy)]
-pub struct AppState {
+pub struct WmState {
     mouse_capture_enabled: bool,
     mouse_capture_dirty: bool,
     clipboard_enabled: bool,
@@ -8,7 +8,7 @@ pub struct AppState {
     wm_menu_selected: usize,
 }
 
-impl AppState {
+impl WmState {
     pub fn new() -> Self {
         Self {
             mouse_capture_enabled: true,
@@ -93,7 +93,7 @@ impl AppState {
     }
 }
 
-impl Default for AppState {
+impl Default for WmState {
     fn default() -> Self {
         Self::new()
     }
@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn mouse_capture_toggle_and_take_change() {
-        let mut s = AppState::new();
+        let mut s = WmState::new();
         assert!(s.mouse_capture_enabled());
         s.set_mouse_capture_enabled(true);
         // no change -> None
@@ -121,7 +121,7 @@ mod tests {
 
     #[test]
     fn clipboard_toggle_and_take_change() {
-        let mut s = AppState::new();
+        let mut s = WmState::new();
         assert!(s.clipboard_enabled());
         s.set_clipboard_enabled(true);
         assert!(s.take_clipboard_change().is_none());

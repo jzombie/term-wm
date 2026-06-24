@@ -10,7 +10,7 @@ fn default_shell_nonempty() {
 
 #[test]
 fn app_state_mouse_capture_flow() {
-    let mut s = term_wm::state::AppState::new();
+    let mut s = term_wm::wm_state::WmState::new();
     // default starts enabled
     assert!(s.mouse_capture_enabled());
     // setting the same value shouldn't mark change

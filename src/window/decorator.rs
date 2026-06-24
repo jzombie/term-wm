@@ -29,7 +29,9 @@ impl DefaultDecorator {
     }
 
     pub fn without_buttons() -> Self {
-        Self { show_buttons: false }
+        Self {
+            show_buttons: false,
+        }
     }
 }
 
@@ -131,14 +133,26 @@ impl WindowDecorator for DefaultDecorator {
         // Borders
         for x in outer_left..=outer_right {
             if let Some(cell) = buffer.cell_mut((x, outer_top)) {
-                let sym = if x == outer_left { "┌" } else if x == outer_right { "┐" } else { "─" };
+                let sym = if x == outer_left {
+                    "┌"
+                } else if x == outer_right {
+                    "┐"
+                } else {
+                    "─"
+                };
                 cell.set_symbol(sym);
                 cell.set_style(border_style);
             }
         }
         for x in outer_left..=outer_right {
             if let Some(cell) = buffer.cell_mut((x, outer_bottom)) {
-                let sym = if x == outer_left { "└" } else if x == outer_right { "┘" } else { "─" };
+                let sym = if x == outer_left {
+                    "└"
+                } else if x == outer_right {
+                    "┘"
+                } else {
+                    "─"
+                };
                 cell.set_symbol(sym);
                 cell.set_style(border_style);
             }

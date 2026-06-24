@@ -64,8 +64,8 @@ impl FloatRectSpec {
 }
 
 pub use window_manager::{
-    AppWindowDraw, LayoutContract, ScrollState, SystemWindowDraw, SystemWindowId, WindowDrawTask,
-    WindowId, WindowManager, WindowSurface, WmMenuAction,
+    DrawTask, ScrollState, SystemWindowDraw, SystemWindowId, WindowDrawContext, WindowId,
+    WindowManager, WindowSurface, WmMenuAction,
 };
 
 #[derive(Debug, Clone)]

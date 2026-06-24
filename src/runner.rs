@@ -13,45 +13,45 @@ use crate::layout::{LayoutNode, TilingLayout};
 use crate::ui::UiFrame;
 use crate::window::decorator::WindowDecorator;
 use crate::window::{
-    AppWindowDraw, LayoutContract, WindowDrawTask, WindowId, WindowManager, WindowSurface,
-    WmMenuAction,
+    DrawTask, WindowDrawContext, WindowId, WindowManager, WindowSurface, WmMenuAction,
 };
 
-pub trait HasWindowManager<W: Copy + Eq + Ord, R: Copy + Eq + Ord> {
-    fn windows(&mut self) -> &mut WindowManager<W, R>;
+pub trait WindowManagerHost<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> {
+    fn windows(&mut self) -> &mut WindowManager<Id>;
     fn wm_new_window(&mut self) -> std::io::Result<()> {
         Ok(())
     }
-    fn wm_close_window(&mut self, _id: R) -> std::io::Result<()> {
+    fn wm_close_window(&mut self, _id: Id) -> std::io::Result<()> {
         Ok(())
     }
     fn set_clipboard_enabled(&mut self, _enabled: bool) {}
 }
 
-pub trait WindowApp<W: Copy + Eq + Ord, R: Copy + Eq + Ord>: HasWindowManager<W, R> {
-    fn enumerate_windows(&mut self) -> Vec<R>;
-    fn render_window(&mut self, frame: &mut UiFrame<'_>, window: AppWindowDraw<R>);
+pub trait WindowProvider<Id: Copy + Eq + Ord + std::fmt::Debug + 'static>:
+    WindowManagerHost<Id>
+{
+    fn enumerate_windows(&mut self) -> Vec<Id>;
+    fn render_window(&mut self, frame: &mut UiFrame<'_>, window: WindowDrawContext<Id>);
 
     fn empty_window_message(&self) -> &str {
         "No windows"
     }
 
-    fn layout_for_windows(&mut self, windows: &[R]) -> Option<TilingLayout<R>> {
+    fn layout_for_windows(&mut self, windows: &[Id]) -> Option<TilingLayout<Id>> {
         auto_layout_for_windows(windows)
     }
 
-    fn window_component(&mut self, _id: R) -> Option<&mut dyn Component> {
+    fn window_component(&mut self, _id: Id) -> Option<&mut dyn Component> {
         None
     }
 }
 
-fn handle_focused_app_event<A, W, R>(event: &Event, app: &mut A) -> bool
+fn handle_focused_app_event<A, Id>(event: &Event, app: &mut A) -> bool
 where
-    A: WindowApp<W, R>,
-    W: Copy + Eq + Ord,
-    R: Copy + Eq + Ord + PartialEq<W> + std::fmt::Debug,
+    A: WindowProvider<Id>,
+    Id: Copy + Eq + Ord + std::fmt::Debug + 'static,
 {
-    let mut pending_focus: Option<R> = None;
+    let mut pending_focus: Option<Id> = None;
     let mut pending_event: Option<Event> = None;
     let consumed = {
         let windows = app.windows();
@@ -75,48 +75,37 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn run_app<O, D, A, W, R, FDraw, FMap, FFocus>(
+pub fn run_app<O, D, A, Id, FDraw, FMap>(
     output: &mut O,
     driver: &mut D,
     app: &mut A,
-    focus_regions: &[R],
+    focus_regions: &[Id],
     map_region: FMap,
-    _map_focus: FFocus,
     poll_interval: Duration,
     mut draw: FDraw,
 ) -> io::Result<()>
 where
     O: OutputDriver,
     D: InputDriver,
-    A: WindowApp<W, R>,
-    W: Copy + Eq + Ord,
-    R: Copy + Eq + Ord + PartialEq<W> + std::fmt::Debug,
+    A: WindowProvider<Id>,
+    Id: Copy + Eq + Ord + std::fmt::Debug + 'static,
     FDraw: for<'frame> FnMut(UiFrame<'frame>, &mut A),
-    FMap: Fn(R) -> W + Copy,
-    FFocus: Fn(W) -> Option<R>,
+    FMap: Fn(Id) -> Id + Copy,
 {
     let mut event_loop = EventLoop::new(driver, poll_interval);
     event_loop
         .driver()
         .set_mouse_capture(app.windows().mouse_capture_enabled())?;
 
-    // The WindowManager now provides `take_closed_app_windows()` to drain app ids
-    // whose windows were closed; we'll poll that each loop and call `app.wm_close_window`.
-    // No additional setup required here.
-
     event_loop.run(|driver, event| {
         let handler = || -> io::Result<ControlFlow> {
-            // Check if a panic occurred (e.g. in a background thread or previous iteration)
-            // and force the debug window open if so.
             if crate::components::sys::debug_log::take_panic_pending() {
                 app.windows().open_debug_window();
             }
-            // Also check for reported non-fatal errors that should pop the debug log
             if crate::components::sys::debug_log::take_error_pending() {
                 app.windows().open_debug_window();
             }
 
-            // Drain any pending closed app ids recorded by the WindowManager and invoke app cleanup.
             for id in app.windows().take_closed_app_windows() {
                 app.wm_close_window(id)?;
             }
@@ -130,7 +119,6 @@ where
                 Ok(flow)
             };
             if let Some(evt) = event {
-                // Map key events to high-level `Action`s once to prefer action-based handling
                 let mapped_action = match &evt {
                     Event::Key(key) => {
                         crate::keybindings::KeyBindings::default().action_for_key(key)
@@ -158,7 +146,7 @@ where
                     update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Continue);
                 }
-                let wm_mode = app.windows().layout_contract() == LayoutContract::WindowManaged;
+                let wm_mode = app.windows().config().wm_overlay_enabled;
                 if wm_mode
                     && let Event::Key(key) = &evt
                     && key.kind == KeyEventKind::Press
@@ -247,12 +235,9 @@ where
                         && (mapped_action == Some(crate::keybindings::Action::FocusNext)
                             || mapped_action == Some(crate::keybindings::Action::FocusPrev))
                     {
-                        let _ = app.windows().handle_focus_event(
-                            &evt,
-                            focus_regions,
-                            &map_region,
-                            &_map_focus,
-                        );
+                        let _ = app
+                            .windows()
+                            .handle_focus_event(&evt, focus_regions, &map_region);
                         update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue);
                     }
@@ -287,9 +272,6 @@ where
                     }
                 }
             } else {
-                // Quit only when the application reports no app windows and
-                // there are no active system windows/overlays. Minimized
-                // windows should not cause the app to exit.
                 if app.enumerate_windows().is_empty() && !app.windows().has_active_system_windows()
                 {
                     update_selection_snapshot(app);
@@ -331,46 +313,38 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn run_window_app<O, D, A, W, R, FMap, FFocus>(
+pub fn run_window_app<O, D, A, Id>(
     output: &mut O,
     driver: &mut D,
     app: &mut A,
-    focus_regions: &[R],
-    map_region: FMap,
-    _map_focus: FFocus,
+    focus_regions: &[Id],
 ) -> io::Result<()>
 where
     O: OutputDriver,
     D: InputDriver,
-    A: WindowApp<W, R>,
-    W: Copy + Eq + Ord,
-    R: Copy + Eq + Ord + PartialEq<W> + std::fmt::Debug,
-    FMap: Fn(R) -> W + Copy,
-    FFocus: Fn(W) -> Option<R>,
+    A: WindowProvider<Id>,
+    Id: Copy + Eq + Ord + std::fmt::Debug + 'static,
 {
-    let draw_map = map_region;
-    let mut draw_state = WindowDrawState::default();
+    let mut draw_state = WindowDrawState::<Id>::default();
     let poll_interval = Duration::from_millis(16);
     run_app(
         output,
         driver,
         app,
         focus_regions,
-        map_region,
-        _map_focus,
+        |id| id,
         poll_interval,
         move |frame, app| {
             let mut frame = frame;
-            draw_window_app(&mut frame, app, &mut draw_state, draw_map);
+            draw_window_app(&mut frame, app, &mut draw_state);
         },
     )
 }
 
-fn update_selection_snapshot<A, W, R>(app: &mut A)
+fn update_selection_snapshot<A, Id>(app: &mut A)
 where
-    A: WindowApp<W, R>,
-    W: Copy + Eq + Ord,
-    R: Copy + Eq + Ord + PartialEq<W> + std::fmt::Debug,
+    A: WindowProvider<Id>,
+    Id: Copy + Eq + Ord + std::fmt::Debug + 'static,
 {
     let focus_id = app.windows().wm_focus_app();
     if let Some(id) = focus_id
@@ -389,18 +363,18 @@ where
     }
 }
 
-struct WindowDrawState<R> {
-    known: Vec<R>,
+struct WindowDrawState<Id> {
+    known: Vec<Id>,
 }
 
-impl<R> Default for WindowDrawState<R> {
+impl<Id> Default for WindowDrawState<Id> {
     fn default() -> Self {
         Self { known: Vec::new() }
     }
 }
 
-impl<R: Copy + Eq> WindowDrawState<R> {
-    fn update(&mut self, windows: &[R]) -> bool {
+impl<Id: Copy + Eq> WindowDrawState<Id> {
+    fn update(&mut self, windows: &[Id]) -> bool {
         if self.known == windows {
             false
         } else {
@@ -410,23 +384,14 @@ impl<R: Copy + Eq> WindowDrawState<R> {
     }
 }
 
-fn draw_window_app<A, W, R, FMap>(
-    frame: &mut UiFrame<'_>,
-    app: &mut A,
-    state: &mut WindowDrawState<R>,
-    map_region: FMap,
-) where
-    A: WindowApp<W, R>,
-    W: Copy + Eq + Ord,
-    R: Copy + Eq + Ord + PartialEq<W> + std::fmt::Debug,
-    FMap: Fn(R) -> W,
+fn draw_window_app<A, Id>(frame: &mut UiFrame<'_>, app: &mut A, state: &mut WindowDrawState<Id>)
+where
+    A: WindowProvider<Id>,
+    Id: Copy + Eq + Ord + std::fmt::Debug + 'static,
 {
     let area = frame.area();
     let windows = app.enumerate_windows();
     let windows_changed = state.update(&windows);
-    // If no application windows, we still might need to draw system windows (e.g. debug log).
-    // The previous check `if windows.is_empty() { return }` prevented this.
-    // We now allow proceeding, ensuring the layout is handled gracefully.
 
     if windows_changed {
         if let Some(layout) = app.layout_for_windows(&windows) {
@@ -449,7 +414,7 @@ fn draw_window_app<A, W, R, FMap>(
         }
     }
 
-    let focus_order: Vec<W> = windows.iter().copied().map(map_region).collect();
+    let focus_order: Vec<Id> = windows.to_vec();
     if !focus_order.is_empty() {
         app.windows().set_focus_order(focus_order);
     }
@@ -457,7 +422,7 @@ fn draw_window_app<A, W, R, FMap>(
     let plan = app.windows().window_draw_plan(frame);
     for task in plan {
         match task {
-            WindowDrawTask::App(window) => {
+            DrawTask::App(window) => {
                 let (title, decorator) = {
                     let wm = app.windows();
                     let title = wm.window_title(WindowId::App(window.id));
@@ -475,7 +440,7 @@ fn draw_window_app<A, W, R, FMap>(
                     },
                 );
             }
-            WindowDrawTask::System(window) => {
+            DrawTask::System(window) => {
                 let (title, decorator) = {
                     let wm = app.windows();
                     let title = wm.window_title(WindowId::System(window.id));
@@ -526,7 +491,7 @@ fn composite_window<F>(
     frame.blit_from_signed(&buffer, surface.dest);
 }
 
-fn auto_layout_for_windows<R: Copy + Eq + Ord>(windows: &[R]) -> Option<TilingLayout<R>> {
+fn auto_layout_for_windows<Id: Copy + Eq + Ord>(windows: &[Id]) -> Option<TilingLayout<Id>> {
     let node = match windows.len() {
         0 => return None,
         1 => LayoutNode::leaf(windows[0]),
@@ -573,27 +538,27 @@ mod tests {
         use crate::window::WindowManager;
 
         // Create an empty WindowManager (no active regions/z-order).
-        let wm: WindowManager<usize, usize> = WindowManager::new_managed(0);
+        let wm: WindowManager<usize> = WindowManager::new_managed(0);
         assert!(!wm.has_any_active_windows());
 
         // Create a fake app that enumerates windows (i.e., app-level windows still exist)
         // while the WM reports no active windows.
         struct FakeApp {
-            wm: WindowManager<usize, usize>,
+            wm: WindowManager<usize>,
         }
-        impl super::HasWindowManager<usize, usize> for FakeApp {
-            fn windows(&mut self) -> &mut WindowManager<usize, usize> {
+        impl super::WindowManagerHost<usize> for FakeApp {
+            fn windows(&mut self) -> &mut WindowManager<usize> {
                 &mut self.wm
             }
         }
-        impl super::WindowApp<usize, usize> for FakeApp {
+        impl super::WindowProvider<usize> for FakeApp {
             fn enumerate_windows(&mut self) -> Vec<usize> {
                 vec![1]
             }
             fn render_window(
                 &mut self,
                 _frame: &mut crate::ui::UiFrame<'_>,
-                _window: AppWindowDraw<usize>,
+                _window: WindowDrawContext<usize>,
             ) {
             }
         }

@@ -14,9 +14,9 @@ use term_wm::components::{
 };
 use term_wm::drivers::OutputDriver;
 use term_wm::drivers::console::{ConsoleInputDriver, ConsoleOutputDriver};
-use term_wm::runner::{HasWindowManager, WindowApp, run_window_app};
+use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
 use term_wm::ui::UiFrame;
-use term_wm::window::{AppWindowDraw, WindowManager};
+use term_wm::window::{WindowDrawContext, WindowManager};
 
 type PaneId = usize;
 
@@ -70,14 +70,7 @@ fn main() -> io::Result<()> {
     output.enter()?;
     let mut input = ConsoleInputDriver::new();
 
-    let result = run_window_app(
-        &mut output,
-        &mut input,
-        &mut app,
-        &focus_regions,
-        |id| id,
-        Some,
-    );
+    let result = run_window_app(&mut output, &mut input, &mut app, &focus_regions);
 
     output.exit()?;
 
@@ -85,7 +78,7 @@ fn main() -> io::Result<()> {
 }
 
 struct App {
-    windows: WindowManager<PaneId, PaneId>,
+    windows: WindowManager<PaneId>,
     terminals: Vec<ScrollViewComponent<TerminalComponent>>,
 }
 
@@ -159,8 +152,8 @@ impl App {
     }
 }
 
-impl HasWindowManager<PaneId, PaneId> for App {
-    fn windows(&mut self) -> &mut WindowManager<PaneId, PaneId> {
+impl WindowManagerHost<PaneId> for App {
+    fn windows(&mut self) -> &mut WindowManager<PaneId> {
         &mut self.windows
     }
 
@@ -200,7 +193,7 @@ impl HasWindowManager<PaneId, PaneId> for App {
     }
 }
 
-impl WindowApp<PaneId, PaneId> for App {
+impl WindowProvider<PaneId> for App {
     fn enumerate_windows(&mut self) -> Vec<PaneId> {
         self.terminals
             .iter_mut()
@@ -209,7 +202,7 @@ impl WindowApp<PaneId, PaneId> for App {
             .collect()
     }
 
-    fn render_window(&mut self, frame: &mut UiFrame<'_>, window: AppWindowDraw<PaneId>) {
+    fn render_window(&mut self, frame: &mut UiFrame<'_>, window: WindowDrawContext<PaneId>) {
         render_pane(frame, self, window.id, window.surface.inner, window.focused);
     }
 

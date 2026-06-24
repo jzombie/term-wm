@@ -6,9 +6,9 @@ use ratatui::widgets::Clear;
 use term_wm::components::{Component, ComponentContext, SvgImageComponent};
 use term_wm::drivers::OutputDriver;
 use term_wm::drivers::console::{ConsoleInputDriver, ConsoleOutputDriver};
-use term_wm::runner::{HasWindowManager, WindowApp, run_window_app};
+use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
 use term_wm::ui::UiFrame;
-use term_wm::window::{AppWindowDraw, WindowManager};
+use term_wm::window::{WindowDrawContext, WindowManager};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum PaneId {
@@ -27,8 +27,6 @@ fn main() -> io::Result<()> {
         &mut input,
         &mut app,
         &[PaneId::Left, PaneId::Right],
-        |id| id,
-        Some,
     );
 
     output.exit()?;
@@ -37,7 +35,7 @@ fn main() -> io::Result<()> {
 }
 
 struct App {
-    windows: WindowManager<PaneId, PaneId>,
+    windows: WindowManager<PaneId>,
     left: SvgImageComponent,
     right: SvgImageComponent,
     pending_paths: Vec<String>,
@@ -74,8 +72,8 @@ impl App {
     }
 }
 
-impl HasWindowManager<PaneId, PaneId> for App {
-    fn windows(&mut self) -> &mut WindowManager<PaneId, PaneId> {
+impl WindowManagerHost<PaneId> for App {
+    fn windows(&mut self) -> &mut WindowManager<PaneId> {
         &mut self.windows
     }
 
@@ -95,12 +93,12 @@ impl HasWindowManager<PaneId, PaneId> for App {
     }
 }
 
-impl WindowApp<PaneId, PaneId> for App {
+impl WindowProvider<PaneId> for App {
     fn enumerate_windows(&mut self) -> Vec<PaneId> {
         vec![PaneId::Left, PaneId::Right]
     }
 
-    fn render_window(&mut self, frame: &mut UiFrame<'_>, window: AppWindowDraw<PaneId>) {
+    fn render_window(&mut self, frame: &mut UiFrame<'_>, window: WindowDrawContext<PaneId>) {
         match window.id {
             PaneId::Left => {
                 render_pane(frame, &mut self.left, window.surface.inner, window.focused)

@@ -167,7 +167,7 @@ impl AsciiImageComponent {
         self.width = width;
         self.height = height;
         self.alpha = Some(alpha);
-        self.luma_avg = if count == 0 { 0 } else { (sum / count) as u8 };
+        self.luma_avg = sum.checked_div(count).unwrap_or(0) as u8;
         self.luma = luma;
         self.dirty = true;
     }
