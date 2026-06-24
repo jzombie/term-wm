@@ -1,37 +1,15 @@
 use crossterm::event::Event;
 use ratatui::layout::Rect;
-
-use crate::ui::UiFrame;
-
-pub mod ascii_image;
-pub mod confirm_overlay;
-pub mod dialog_overlay;
-pub mod list;
-pub mod markdown_viewer;
-pub mod scroll_view;
-pub mod svg_image;
-pub mod sys;
-pub mod terminal;
-pub mod text_renderer;
-pub mod toggle_list;
-
-pub use ascii_image::AsciiImageComponent;
-pub use confirm_overlay::{ConfirmAction, ConfirmOverlayComponent};
-pub use dialog_overlay::DialogOverlayComponent;
-pub use list::ListComponent;
-pub use markdown_viewer::MarkdownViewerComponent;
-pub use scroll_view::{
-    ScrollViewComponent, ScrollbarAxis, ScrollbarDrag, render_scrollbar, render_scrollbar_oriented,
-};
-pub use svg_image::SvgImageComponent;
-pub use sys::*;
-pub use terminal::{TerminalComponent, default_shell, default_shell_command};
-pub use text_renderer::TextRendererComponent;
-pub use toggle_list::{ToggleItem, ToggleListComponent};
-
 use std::any::Any;
 
-pub use crate::component_context::ComponentContext;
+use crate::component_context::ComponentContext;
+use crate::ui::UiFrame;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmAction {
+    Confirm,
+    Cancel,
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SelectionStatus {

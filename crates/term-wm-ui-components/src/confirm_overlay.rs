@@ -3,15 +3,9 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::components::{Component, ComponentContext, DialogOverlayComponent};
+use crate::components::{Component, ComponentContext, ConfirmAction, DialogOverlayComponent};
 use crate::layout::rect_contains;
 use crate::ui::{UiFrame, safe_set_string};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConfirmAction {
-    Confirm,
-    Cancel,
-}
 
 #[derive(Debug, Default)]
 pub struct ConfirmOverlayComponent {
