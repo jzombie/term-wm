@@ -236,15 +236,6 @@ impl WindowManagerHost<PaneId> for App {
     }
 }
 
-impl App {
-    fn update_selection_state(&mut self) {
-        let enabled = self.windows.window_selection_enabled();
-        for sv in &mut self.terminals {
-            sv.content.set_selection_enabled(enabled);
-        }
-    }
-}
-
 impl WindowProvider<PaneId> for App {
     fn enumerate_windows(&mut self) -> Vec<PaneId> {
         self.terminals
