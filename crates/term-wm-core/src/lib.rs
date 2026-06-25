@@ -7,6 +7,7 @@ pub mod event_loop;
 pub mod io;
 pub mod keybindings;
 pub mod layout;
+pub mod pane;
 pub mod panel;
 pub mod pty;
 pub mod runner;

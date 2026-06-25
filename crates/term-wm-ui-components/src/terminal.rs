@@ -12,7 +12,7 @@ use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::layout::rect_contains;
-use term_wm_core::pty::Pty;
+use term_wm_core::pane::Pane;
 use term_wm_core::ui::UiFrame;
 use term_wm_core::utils::linkifier::{
     LinkHandler, LinkOverlay, Linkifier, OverlaySignature, decorate_link_style,
@@ -27,7 +27,7 @@ use term_wm_core::utils::selectable_text::{
 const DEFAULT_SCROLLBACK_LEN: usize = 2000;
 
 pub struct TerminalComponent {
-    pane: Pty,
+    pane: Box<dyn Pane>,
     last_size: (u16, u16),
     last_area: Rect,
     linkifier: Linkifier,
@@ -195,9 +195,30 @@ impl TerminalComponent {
         Self::spawn(command, Self::default_pty_size())
     }
 
+    /// Construct a terminal wrapper around any Pane implementation.
+    pub fn from_pane(pane: Box<dyn Pane>) -> Self {
+        Self {
+            pane,
+            last_size: (80, 24),
+            last_area: Rect::default(),
+            linkifier: Linkifier::new(),
+            link_overlay: LinkOverlay::new(),
+            link_handler: None,
+            command_description: "pane-override".to_string(),
+            selection: SelectionController::new(),
+            selection_enabled: false,
+            last_scrollback: 0,
+            last_max_scrollback: 0,
+        }
+    }
+
     pub fn spawn(command: CommandBuilder, size: PtySize) -> term_wm_core::pty::PtyResult<Self> {
         let command_description = format!("{:?}", command);
-        let pane = Pty::spawn_with_scrollback(command, size, DEFAULT_SCROLLBACK_LEN)?;
+        let pane: Box<dyn Pane> = Box::new(term_wm_core::pty::Pty::spawn_with_scrollback(
+            command,
+            size,
+            DEFAULT_SCROLLBACK_LEN,
+        )?);
         let comp = Self {
             pane,
             last_size: (size.cols, size.rows),
@@ -260,6 +281,22 @@ impl TerminalComponent {
         F: Fn(&str) -> bool + Send + Sync + 'static,
     {
         self.link_handler = Some(Arc::new(handler));
+    }
+
+    /// Direct access to internal state for testing scroll sync logic.
+    #[cfg(test)]
+    pub fn set_last_scrollback(&mut self, val: usize) {
+        self.last_scrollback = val;
+    }
+
+    #[cfg(test)]
+    pub fn set_last_max_scrollback(&mut self, val: usize) {
+        self.last_max_scrollback = val;
+    }
+
+    #[cfg(test)]
+    pub fn pane_mut(&mut self) -> &mut Box<dyn Pane> {
+        &mut self.pane
     }
 
     pub fn set_selection_enabled(&mut self, enabled: bool) {
@@ -786,12 +823,102 @@ fn brighten_indexed(color: Option<TColor>) -> Option<TColor> {
     }
 }
 
+/// Simulated terminal pane for testing scroll synchronization logic without a
+/// real PTY process.
+#[cfg(test)]
+struct TestPane {
+    parser: vt100::Parser,
+    current_scrollback: usize,
+    max_sb: usize,
+    alt_screen: bool,
+}
+
+#[cfg(test)]
+impl TestPane {
+    fn new(max_sb: usize) -> Self {
+        Self {
+            parser: vt100::Parser::new(1, 1, 0),
+            current_scrollback: 0,
+            max_sb,
+            alt_screen: false,
+        }
+    }
+
+    fn set_scrollback_value(&mut self, val: usize) {
+        self.current_scrollback = val.min(self.max_sb);
+    }
+}
+
+#[cfg(test)]
+impl Pane for TestPane {
+    fn resize(&mut self, _size: PtySize) -> term_wm_core::pty::PtyResult<()> {
+        Ok(())
+    }
+
+    fn has_exited(&mut self) -> bool {
+        false
+    }
+
+    fn alternate_screen(&mut self) -> bool {
+        self.alt_screen
+    }
+
+    fn scrollback(&mut self) -> usize {
+        self.current_scrollback
+    }
+
+    fn set_scrollback(&mut self, rows: usize) {
+        self.current_scrollback = rows.min(self.max_sb);
+    }
+
+    fn write_bytes(&mut self, _input: &[u8]) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn screen(&mut self) -> &vt100::Screen {
+        self.parser.screen()
+    }
+
+    fn max_scrollback(&mut self) -> usize {
+        self.max_sb
+    }
+
+    fn scrollback_len(&self) -> usize {
+        0
+    }
+
+    fn take_exit_status(&mut self) -> Option<portable_pty::ExitStatus> {
+        None
+    }
+
+    fn exit_status(&self) -> Option<portable_pty::ExitStatus> {
+        None
+    }
+
+    fn bytes_received(&self) -> usize {
+        0
+    }
+
+    fn last_bytes_text(&self) -> String {
+        String::new()
+    }
+
+    fn kill_child(&mut self) -> term_wm_core::pty::PtyResult<()> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crossterm::event::{
         KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
+    use ratatui::buffer::Buffer;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use term_wm_core::component_context::ViewportHandle;
+    use term_wm_core::ui::UiFrame;
     use vt100::MouseProtocolMode;
 
     fn key(k: KeyCode, mods: KeyModifiers) -> KeyEvent {
@@ -799,6 +926,325 @@ mod tests {
         ev.kind = KeyEventKind::Press;
         ev
     }
+
+    fn make_ctx(view_offset: usize, handle: ViewportHandle) -> ComponentContext {
+        ComponentContext::default().with_viewport(
+            term_wm_core::component_context::ViewportContext {
+                offset_x: 0,
+                offset_y: view_offset,
+                width: 80,
+                height: 24,
+            },
+            Some(handle),
+        )
+    }
+
+    fn make_handle() -> (
+        ViewportHandle,
+        Rc<RefCell<term_wm_core::component_context::ViewportSharedState>>,
+    ) {
+        let shared = Rc::new(RefCell::new(
+            term_wm_core::component_context::ViewportSharedState {
+                offset_x: 0,
+                offset_y: 0,
+                width: 80,
+                height: 24,
+                content_width: 80,
+                content_height: 24,
+                pending_offset_x: None,
+                pending_offset_y: None,
+            },
+        ));
+        (
+            ViewportHandle {
+                shared: shared.clone(),
+            },
+            shared,
+        )
+    }
+
+    fn run_sync(
+        term: &mut TerminalComponent,
+        view_offset: usize,
+    ) -> (
+        Rc<RefCell<term_wm_core::component_context::ViewportSharedState>>,
+        usize,
+    ) {
+        let (handle, shared) = make_handle();
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let mut buffer = Buffer::empty(area);
+        let mut frame = UiFrame::from_parts(area, &mut buffer);
+        let ctx = make_ctx(view_offset, handle);
+        term.render(&mut frame, area, &ctx);
+        let sb = term.pane_mut().scrollback();
+        (shared, sb)
+    }
+
+    fn run_sync_with_handle(
+        term: &mut TerminalComponent,
+        shared: &Rc<RefCell<term_wm_core::component_context::ViewportSharedState>>,
+    ) -> usize {
+        let handle = ViewportHandle {
+            shared: shared.clone(),
+        };
+        let view_offset = shared.borrow().offset_y;
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let mut buffer = Buffer::empty(area);
+        let mut frame = UiFrame::from_parts(area, &mut buffer);
+        let ctx = make_ctx(view_offset, handle);
+        term.render(&mut frame, area, &ctx);
+        term.pane_mut().scrollback()
+    }
+
+    // --- Scroll sync tests ---
+
+    #[test]
+    fn scroll_sync_current_sb_zero_view_offset_below_last_max_syncs_scrollback() {
+        // current_sb=0, view_offset < last_max_scrollback - 1
+        // Expect: set_scrollback is called (scrollback becomes non-zero)
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        term.set_last_scrollback(0);
+        // last_max_scrollback was 100 from previous render, viewport is at offset 50
+        term.set_last_max_scrollback(100);
+        let (shared, sb) = run_sync(&mut term, 50);
+        assert!(sb > 0, "should have scrolled back from viewport offset");
+        let max_sb = term.pane_mut().max_scrollback();
+        assert_eq!(
+            sb,
+            max_sb.saturating_sub(50),
+            "scrollback should equal used - view_offset"
+        );
+        // handle should NOT have scroll_vertical_to (set_content_size doesn't set pending)
+        assert_eq!(
+            shared.borrow().offset_y, 0,
+            "viewport offset should be 0 (set by content_size init)"
+        );
+        assert!(
+            shared.borrow().pending_offset_y.is_none(),
+            "scroll_vertical_to should not have been called"
+        );
+    }
+
+    #[test]
+    fn scroll_sync_current_sb_zero_view_offset_at_last_max_follows_tail() {
+        // current_sb=0, view_offset >= last_max_scrollback - 1
+        // Expect: scroll_vertical_to(usize::MAX) is called
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        term.set_last_scrollback(0);
+        term.set_last_max_scrollback(100);
+        let (shared, sb) = run_sync(&mut term, 99);
+        assert_eq!(sb, 0, "should remain at bottom");
+        assert_eq!(
+            shared.borrow().pending_offset_y,
+            Some(200),
+            "viewport should be scrolled to max (200)"
+        );
+    }
+
+    #[test]
+    fn scroll_sync_current_sb_zero_view_offset_greater_than_last_max_follows_tail() {
+        // view_offset > last_max_scrollback - 1 also triggers follow-tail
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        term.set_last_scrollback(0);
+        term.set_last_max_scrollback(100);
+        let (shared, sb) = run_sync(&mut term, 150);
+        assert_eq!(sb, 0, "should remain at bottom");
+        assert_eq!(
+            shared.borrow().pending_offset_y,
+            Some(200),
+            "viewport should be scrolled to max"
+        );
+    }
+
+    #[test]
+    fn scroll_sync_current_sb_changed_from_last_pushes_to_viewport() {
+        // current_sb != last_scrollback — push internal scrollback to viewport
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        term.pane_mut().set_scrollback(50);
+        term.set_last_scrollback(0);
+        term.set_last_max_scrollback(200);
+        let (shared, sb) = run_sync(&mut term, 0);
+        assert_eq!(sb, 50, "scrollback unchanged by sync");
+        assert_eq!(
+            shared.borrow().pending_offset_y,
+            Some(150),
+            "viewport should show offset = used - scrollback = 200-50"
+        );
+    }
+
+    #[test]
+    fn scroll_sync_current_sb_matches_last_syncs_from_viewport() {
+        // current_sb == last_scrollback > 0 — sync from viewport
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        term.pane_mut().set_scrollback(50);
+        term.set_last_scrollback(50);
+        term.set_last_max_scrollback(200);
+        // viewport at offset 100 means target_sb = 200-100 = 100
+        let (shared, sb) = run_sync(&mut term, 100);
+        assert_eq!(sb, 100, "should sync scrollback from viewport offset");
+        assert_eq!(
+            shared.borrow().pending_offset_y,
+            None,
+            "viewport should NOT be scrolled"
+        );
+    }
+
+    #[test]
+    fn scroll_sync_current_sb_matches_last_viewport_same_does_nothing() {
+        // current_sb == last_scrollback AND target_sb == current_sb — no-op
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        term.pane_mut().set_scrollback(100);
+        term.set_last_scrollback(100);
+        term.set_last_max_scrollback(200);
+        // viewport offset 100 → target_sb = 200-100 = 100 → same as current → no-op
+        let (shared, sb) = run_sync(&mut term, 100);
+        assert_eq!(sb, 100, "scrollback unchanged");
+        assert!(
+            shared.borrow().pending_offset_y.is_none(),
+            "viewport unchanged"
+        );
+    }
+
+    #[test]
+    fn scroll_sync_alternate_screen_skips_sync() {
+        // When alternate_screen is true, the entire sync block is skipped
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        term.pane_mut().set_scrollback(50);
+        term.set_last_scrollback(50);
+        term.set_last_max_scrollback(200);
+        // Hack: need a way to set alt_screen — TestPane controls it
+        // TestPane is private to this module, so we need to access it via pane_mut
+        // But pane_mut returns &mut Box<dyn Pane>, not &mut TestPane...
+        // We need to downcast or add a method.
+        // Instead, let's use a different approach: make a TestPane, set alt_screen,
+        // then call sync logic directly
+        let mut pane = TestPane::new(200);
+        pane.alt_screen = true;
+        pane.set_scrollback(50);
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        term.set_last_scrollback(50);
+        term.set_last_max_scrollback(200);
+        let (handle, shared) = make_handle();
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let mut buffer = Buffer::empty(area);
+        let mut frame = UiFrame::from_parts(area, &mut buffer);
+        let ctx = make_ctx(100, handle);
+        term.render(&mut frame, area, &ctx);
+        let sb = term.pane_mut().scrollback();
+        assert_eq!(sb, 50, "scrollback should be unchanged during alt screen");
+        assert!(
+            shared.borrow().pending_offset_y.is_none(),
+            "viewport should NOT be touched during alt screen"
+        );
+        assert_eq!(
+            shared.borrow().content_height,
+            24,
+            "content size should NOT have been set during alt screen"
+        );
+    }
+
+    #[test]
+    fn scroll_sync_current_sb_zero_view_offset_zero_content_grows() {
+        // Empty pane, 0 max_scrollback, content just started filling
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+        term.set_last_scrollback(0);
+        term.set_last_max_scrollback(0);
+        let (shared, sb) = run_sync(&mut term, 0);
+        assert_eq!(sb, 0, "should stay at bottom");
+        assert_eq!(
+            shared.borrow().pending_offset_y,
+            Some(0),
+            "viewport should be at 0 (max of 0)"
+        );
+    }
+
+    #[test]
+    fn scroll_sync_user_scrolls_up_then_content_added() {
+        // User scrolled up to offset 50, then content grew from 100 to 200
+        // current_sb=0, view_offset=50, last_max_scrollback=100
+        // Expect: sync from viewport since view_offset < last_max
+        let pane = TestPane::new(200);
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        term.set_last_scrollback(0);
+        term.set_last_max_scrollback(100);
+        let (shared, sb) = run_sync(&mut term, 50);
+        assert_eq!(sb, 150, "scrollback = used(200) - view_offset(50)");
+        assert!(
+            shared.borrow().pending_offset_y == Some(0)
+                || shared.borrow().pending_offset_y.is_none(),
+            "viewport offset should be set by set_content_size, not scroll_vertical_to"
+        );
+    }
+
+    #[test]
+    fn scroll_sync_two_renders_user_scrolls_then_stays_synced() {
+        // First render: at bottom, content grows from 0 to 100
+        let pane = TestPane::new(100);
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        let (handle, shared) = make_handle();
+        let area = Rect { x: 0, y: 0, width: 80, height: 24 };
+        let mut buffer = Buffer::empty(area);
+        let mut frame = UiFrame::from_parts(area, &mut buffer);
+        let ctx = make_ctx(0, handle);
+        term.render(&mut frame, area, &ctx);
+        // After first render, last_max=100, last_sb=0, viewport at max (offset=100)
+        let sb2 = run_sync_with_handle(&mut term, &shared);
+        assert_eq!(sb2, 0, "at bottom");
+        assert_eq!(
+            shared.borrow().offset_y, 100,
+            "viewport at max"
+        );
+    }
+
+    #[test]
+    fn scroll_sync_user_manually_drags_scrollbar() {
+        // User drags scrollbar, viewport offset changes independently
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(100)));
+        term.set_last_scrollback(0);
+        term.set_last_max_scrollback(100);
+        // view_offset=30, but last_max was 100
+        let (_, sb) = run_sync(&mut term, 30);
+        assert_eq!(sb, 70, "scrollback = 100 - 30 = 70");
+    }
+
+    #[test]
+    fn scroll_sync_user_at_bottom_content_grows_pane_updated() {
+        // User at bottom (current_sb=0, view_offset at max), content grows
+        // from 100 to 200 between render 1 and render 2
+        let pane = TestPane::new(100);
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        let _ = run_sync(&mut term, 100);
+        // Now grow content: we need a new pane, since TestPane has fixed max_sb
+        let mut pane2 = TestPane::new(200);
+        pane2.set_scrollback_value(0);
+        let mut term2 = TerminalComponent::from_pane(Box::new(pane2));
+        term2.set_last_scrollback(0);
+        term2.set_last_max_scrollback(100);
+        let (shared, sb) = run_sync(&mut term2, 100);
+        assert_eq!(sb, 0, "at bottom");
+        assert_eq!(
+            shared.borrow().pending_offset_y,
+            Some(200),
+            "viewport should follow to new max"
+        );
+    }
+
+    // --- Original utility tests ---
 
     #[test]
     fn key_to_bytes_char_and_controls() {
@@ -963,5 +1409,28 @@ mod tests {
             Some(TColor::Indexed(8))
         );
         assert_eq!(brighten_indexed(None), None);
+    }
+
+    #[test]
+    fn scroll_sync_prevents_stuck_at_top_on_fill() {
+        let pane = TestPane::new(0);
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        let (shared, _) = run_sync(&mut term, 0);
+        assert_eq!(
+            shared.borrow().offset_y,
+            0,
+            "empty pane should leave viewport at 0"
+        );
+        let pane2 = TestPane::new(100);
+        let mut term2 = TerminalComponent::from_pane(Box::new(pane2));
+        term2.set_last_scrollback(0);
+        term2.set_last_max_scrollback(0);
+        let (shared2, sb) = run_sync(&mut term2, 0);
+        assert_eq!(sb, 0, "content-filled pane should stay at bottom");
+        assert_eq!(
+            shared2.borrow().offset_y,
+            100,
+            "viewport should follow new content to max"
+        );
     }
 }
