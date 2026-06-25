@@ -7,6 +7,7 @@ pub struct Window {
     pub floating_rect: Option<FloatRectSpec>,
     pub prev_floating_rect: Option<FloatRectSpec>,
     pub creation_order: usize,
+    pub keyboard_capture_disabled: bool,
 }
 
 impl Window {
@@ -17,6 +18,7 @@ impl Window {
             floating_rect: None,
             prev_floating_rect: None,
             creation_order,
+            keyboard_capture_disabled: false,
         }
     }
 

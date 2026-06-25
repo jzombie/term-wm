@@ -191,6 +191,17 @@ where
                     return flush_state_changes(app, ControlFlow::Continue);
                 }
 
+                // If keyboard capture is disabled for the focused window, key events
+                // bypass all WM interception and go directly to the terminal.
+                if let Event::Key(_) = &evt {
+                    let focus_id = app.windows().wm_focus();
+                    if app.windows().keyboard_capture_disabled(focus_id) {
+                        let _ = handle_focused_app_event(&evt, app);
+                        update_selection_snapshot(app);
+                        return flush_state_changes(app, ControlFlow::Continue);
+                    }
+                }
+
                 // Layer 2: WM global actions
                 if let Some(action) = mapped_action {
                     match action {
@@ -549,11 +560,12 @@ where
     for task in plan {
         match task {
             DrawTask::App(window) => {
-                let (title, decorator) = {
+                let (title, decorator, kb_disabled) = {
                     let wm = app.windows();
                     let title = wm.window_title(WindowId::App(window.id));
                     let decorator = wm.decorator();
-                    (title, decorator)
+                    let kb_disabled = wm.keyboard_capture_disabled(WindowId::App(window.id));
+                    (title, decorator, kb_disabled)
                 };
                 composite_window(
                     frame,
@@ -561,17 +573,19 @@ where
                     window.focused,
                     &title,
                     decorator.as_ref(),
+                    kb_disabled,
                     |subframe| {
                         app.render_window(subframe, window);
                     },
                 );
             }
             DrawTask::System(window) => {
-                let (title, decorator) = {
+                let (title, decorator, kb_disabled) = {
                     let wm = app.windows();
                     let title = wm.window_title(WindowId::System(window.id));
                     let decorator = wm.decorator();
-                    (title, decorator)
+                    let kb_disabled = wm.keyboard_capture_disabled(WindowId::System(window.id));
+                    (title, decorator, kb_disabled)
                 };
                 composite_window(
                     frame,
@@ -579,6 +593,7 @@ where
                     window.focused,
                     &title,
                     decorator.as_ref(),
+                    kb_disabled,
                     |subframe| {
                         app.windows().render_system_window(subframe, window);
                     },
@@ -596,6 +611,7 @@ fn composite_window<F>(
     focused: bool,
     title: &str,
     decorator: &dyn WindowDecorator,
+    keyboard_capture_disabled: bool,
     mut render_content: F,
 ) where
     F: FnMut(&mut UiFrame<'_>),
@@ -612,7 +628,7 @@ fn composite_window<F>(
     let mut buffer = Buffer::empty(local_area);
     {
         let mut offscreen = UiFrame::from_parts(local_area, &mut buffer);
-        decorator.render_window(&mut offscreen, local_area, title, focused);
+        decorator.render_window(&mut offscreen, local_area, title, focused, keyboard_capture_disabled);
         render_content(&mut offscreen);
     }
     if !focused {

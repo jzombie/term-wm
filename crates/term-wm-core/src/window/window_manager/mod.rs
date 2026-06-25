@@ -284,6 +284,20 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.window(id).is_some_and(|window| window.is_floating())
     }
 
+    pub fn keyboard_capture_disabled(&self, id: WindowId<Id>) -> bool {
+        self.window(id)
+            .is_some_and(|window| window.keyboard_capture_disabled)
+    }
+
+    pub fn set_keyboard_capture_disabled(&mut self, id: WindowId<Id>, value: bool) {
+        self.window_mut(id).keyboard_capture_disabled = value;
+    }
+
+    pub fn toggle_keyboard_capture(&mut self, id: WindowId<Id>) {
+        let current = self.keyboard_capture_disabled(id);
+        self.set_keyboard_capture_disabled(id, !current);
+    }
+
     pub fn window_title(&self, id: WindowId<Id>) -> String {
         self.window(id)
             .map(|window| window.title_or_default(id))

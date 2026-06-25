@@ -9,11 +9,19 @@ pub enum HeaderAction {
     Maximize,
     Close,
     Drag,
+    ToggleKeyboardCapture,
     None,
 }
 
 pub trait WindowDecorator: std::fmt::Debug {
-    fn render_window(&self, frame: &mut UiFrame<'_>, rect: Rect, title: &str, focused: bool);
+    fn render_window(
+        &self,
+        frame: &mut UiFrame<'_>,
+        rect: Rect,
+        title: &str,
+        focused: bool,
+        keyboard_capture_disabled: bool,
+    );
 
     fn hit_test(&self, window_rect: Rect, x: u16, y: u16) -> HeaderAction;
 }
@@ -61,6 +69,7 @@ impl WindowDecorator for DefaultDecorator {
         let close_x = outer_right.saturating_sub(1);
         let max_x = close_x.saturating_sub(2);
         let min_x = max_x.saturating_sub(2);
+        let kb_x = min_x.saturating_sub(2);
 
         if x == close_x {
             HeaderAction::Close
@@ -68,12 +77,21 @@ impl WindowDecorator for DefaultDecorator {
             HeaderAction::Maximize
         } else if x == min_x {
             HeaderAction::Minimize
+        } else if x == kb_x {
+            HeaderAction::ToggleKeyboardCapture
         } else {
             HeaderAction::Drag
         }
     }
 
-    fn render_window(&self, frame: &mut UiFrame<'_>, rect: Rect, title: &str, focused: bool) {
+    fn render_window(
+        &self,
+        frame: &mut UiFrame<'_>,
+        rect: Rect,
+        title: &str,
+        focused: bool,
+        keyboard_capture_disabled: bool,
+    ) {
         let buffer = frame.buffer_mut();
 
         let focused_header_style = Style::default()
@@ -128,10 +146,18 @@ impl WindowDecorator for DefaultDecorator {
             let close_x = outer_right.saturating_sub(1);
             let max_x = close_x.saturating_sub(2);
             let min_x = max_x.saturating_sub(2);
-            for (bx, sym) in [(min_x, "_"), (max_x, "▢"), (close_x, "✖")] {
+            let kb_x = min_x.saturating_sub(2);
+            for (bx, sym) in [(kb_x, "K"), (min_x, "_"), (max_x, "▢"), (close_x, "✖")] {
                 if let Some(cell) = buffer.cell_mut((bx, header_y)) {
                     cell.set_symbol(sym);
-                    cell.set_style(header_style);
+                    let style = if bx == kb_x && keyboard_capture_disabled && focused {
+                        Style::default()
+                            .bg(crate::theme::decorator_header_fg())
+                            .fg(crate::theme::decorator_header_bg())
+                    } else {
+                        header_style
+                    };
+                    cell.set_style(style);
                 }
             }
         }
@@ -211,10 +237,15 @@ mod tests {
         let close_x = outer_right.saturating_sub(1);
         let max_x = close_x.saturating_sub(2);
         let min_x = max_x.saturating_sub(2);
+        let kb_x = min_x.saturating_sub(2);
 
         assert_eq!(dec.hit_test(rect, close_x, header_y), HeaderAction::Close);
         assert_eq!(dec.hit_test(rect, max_x, header_y), HeaderAction::Maximize);
         assert_eq!(dec.hit_test(rect, min_x, header_y), HeaderAction::Minimize);
+        assert_eq!(
+            dec.hit_test(rect, kb_x, header_y),
+            HeaderAction::ToggleKeyboardCapture
+        );
 
         // middle area -> drag
         let mid = rect.x + rect.width / 2;
@@ -229,7 +260,15 @@ mod tests {
 pub struct NoopDecorator;
 
 impl WindowDecorator for NoopDecorator {
-    fn render_window(&self, _frame: &mut UiFrame<'_>, _rect: Rect, _title: &str, _focused: bool) {}
+    fn render_window(
+        &self,
+        _frame: &mut UiFrame<'_>,
+        _rect: Rect,
+        _title: &str,
+        _focused: bool,
+        _keyboard_capture_disabled: bool,
+    ) {
+    }
     fn hit_test(&self, _window_rect: Rect, _x: u16, _y: u16) -> HeaderAction {
         HeaderAction::None
     }

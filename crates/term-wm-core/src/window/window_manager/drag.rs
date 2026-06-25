@@ -55,6 +55,11 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                             self.last_header_click = None;
                             return true;
                         }
+                        HeaderAction::ToggleKeyboardCapture => {
+                            self.toggle_keyboard_capture(header.id);
+                            self.last_header_click = None;
+                            return true;
+                        }
                         HeaderAction::Drag => {
                             let now = Instant::now();
                             if let Some((prev_id, prev)) = self.last_header_click
