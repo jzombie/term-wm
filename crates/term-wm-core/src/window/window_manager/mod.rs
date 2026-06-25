@@ -739,10 +739,8 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             None
         };
         let display = self.build_display_order();
-        let titles_map: std::collections::BTreeMap<WindowId<Id>, String> = self
-            .window_titles()
-            .into_iter()
-            .collect();
+        let titles_map: std::collections::BTreeMap<WindowId<Id>, String> =
+            self.window_titles().into_iter().collect();
         let selection_copy_available = self.selection_text.is_some();
         let panel_active = self.panel_active();
         self.panel.render(

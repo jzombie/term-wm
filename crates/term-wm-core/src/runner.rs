@@ -565,11 +565,8 @@ where
         }
     }
     app.windows().register_managed_layout(area);
-    let all_titles: std::collections::BTreeMap<WindowId<Id>, String> = app
-        .windows()
-        .window_titles()
-        .into_iter()
-        .collect();
+    let all_titles: std::collections::BTreeMap<WindowId<Id>, String> =
+        app.windows().window_titles().into_iter().collect();
     let plan = app.windows().window_draw_plan(frame);
     for task in plan {
         match task {

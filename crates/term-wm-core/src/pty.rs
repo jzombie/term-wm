@@ -145,11 +145,10 @@ impl Pty {
             })
     }
 
-    #[cfg(unix)]
     fn poll_foreground(&mut self) {
         if self.last_fg_check.elapsed() >= std::time::Duration::from_secs(1) {
             self.last_fg_check = Instant::now();
-            if let Some(fg_pid) = self.master.process_group_leader().map(|p| p as u32)
+            if let Some(fg_pid) = self.foreground_pid()
                 && fg_pid != self.last_fg_pid
             {
                 self.last_fg_pid = fg_pid;
@@ -163,8 +162,23 @@ impl Pty {
         }
     }
 
+    #[cfg(unix)]
+    fn foreground_pid(&self) -> Option<u32> {
+        self.master.process_group_leader().map(|p| p as u32)
+    }
+
+    #[cfg(windows)]
+    fn foreground_pid(&self) -> Option<u32> {
+        let shell_pid = self.child.as_ref().and_then(|c| c.process_id())?;
+        find_foreground_process_windows(shell_pid)
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    fn foreground_pid(&self) -> Option<u32> {
+        None
+    }
+
     pub fn update(&mut self) {
-        #[cfg(unix)]
         self.poll_foreground();
 
         let bytes = {
@@ -449,7 +463,109 @@ fn get_process_name(pid: u32) -> Option<String> {
         .map(|s| s.trim().to_string())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(windows)]
+fn get_process_name(pid: u32) -> Option<String> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    let handle = unsafe { kernel32::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return None;
+    }
+    let mut buf = [0u16; 260];
+    let mut size = buf.len() as u32;
+    let result =
+        unsafe { kernel32::QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut size) };
+    unsafe { kernel32::CloseHandle(handle) };
+    if result == 0 {
+        return None;
+    }
+    let path = OsString::from_wide(&buf[..size as usize]);
+    std::path::Path::new(&path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+}
+
+#[cfg(windows)]
+fn find_foreground_process_windows(shell_pid: u32) -> Option<u32> {
+    let snapshot = unsafe { kernel32::CreateToolhelp32Snapshot(0x00000002, 0) };
+    if snapshot == kernel32::INVALID_HANDLE_VALUE {
+        return None;
+    }
+    let mut children: Vec<(u32, u32)> = Vec::new();
+    let mut entry = std::mem::MaybeUninit::<kernel32::PROCESSENTRY32W>::zeroed();
+    unsafe {
+        (*entry.as_mut_ptr()).dwSize = std::mem::size_of::<kernel32::PROCESSENTRY32W>() as u32;
+        if kernel32::Process32FirstW(snapshot, entry.as_mut_ptr()) != 0 {
+            loop {
+                let e = entry.assume_init();
+                children.push((e.th32ProcessID, e.th32ParentProcessID));
+                if kernel32::Process32NextW(snapshot, entry.as_mut_ptr()) == 0 {
+                    break;
+                }
+            }
+        }
+        kernel32::CloseHandle(snapshot);
+    }
+    let mut current = shell_pid;
+    loop {
+        let next = children
+            .iter()
+            .find(|&&(pid, parent)| parent == current && pid != current)
+            .map(|&(pid, _)| pid);
+        match next {
+            Some(next) => current = next,
+            None => break,
+        }
+    }
+    if current != shell_pid {
+        Some(current)
+    } else {
+        None
+    }
+}
+
+#[cfg(windows)]
+mod kernel32 {
+    use std::ffi::c_void;
+
+    pub const INVALID_HANDLE_VALUE: isize = -1;
+
+    #[repr(C)]
+    pub struct PROCESSENTRY32W {
+        pub dwSize: u32,
+        pub cntUsage: u32,
+        pub th32ProcessID: u32,
+        pub th32DefaultHeapID: usize,
+        pub th32ModuleID: u32,
+        pub cntThreads: u32,
+        pub th32ParentProcessID: u32,
+        pub pcPriClassBase: i32,
+        pub dwFlags: u32,
+        pub szExeFile: [u16; 260],
+    }
+
+    extern "system" {
+        pub fn CreateToolhelp32Snapshot(dwFlags: u32, th32ProcessID: u32) -> isize;
+        pub fn Process32FirstW(hSnapshot: isize, lppe: *mut PROCESSENTRY32W) -> i32;
+        pub fn Process32NextW(hSnapshot: isize, lppe: *mut PROCESSENTRY32W) -> i32;
+        pub fn CloseHandle(hObject: isize) -> i32;
+        pub fn OpenProcess(
+            dwDesiredAccess: u32,
+            bInheritHandle: i32,
+            dwProcessId: u32,
+        ) -> *mut c_void;
+        pub fn QueryFullProcessImageNameW(
+            hProcess: *mut c_void,
+            dwFlags: u32,
+            lpExeName: *mut u16,
+            lpdwSize: *mut u32,
+        ) -> i32;
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 fn get_process_name(_pid: u32) -> Option<String> {
     None
 }
