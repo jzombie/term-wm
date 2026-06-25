@@ -290,16 +290,8 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             },
         );
 
-        // Standalone hint rendering when panel is inactive but hints are set
-        if !panel_active && !self.panel.keybinding_hints().is_empty() {
-            let area = frame.area();
-            let bottom = Rect {
-                x: area.x,
-                y: area.y.saturating_add(area.height).saturating_sub(1),
-                width: area.width,
-                height: 1,
-            };
-            self.panel.set_bottom_area(bottom);
+        // Standalone hint rendering when panel is inactive
+        if !panel_active {
             self.panel.render_hints(frame);
         }
         let menu_items = super::wm_menu_items(
