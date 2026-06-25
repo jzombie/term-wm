@@ -102,12 +102,7 @@ impl Component for TerminalComponent {
                 true
             }
             Event::Mouse(mouse) => {
-                if !self.pane.alternate_screen() {
-                    // Logic for scrollbar event was here, but now ScrollView handles it.
-                    // If we need to capture events that ScrollView didn't handle (e.g. if we are not wrapped?),
-                    // but we assume we are wrapped or don't need it.
-                }
-                let selection_ready = self.selection_enabled && !self.pane.alternate_screen();
+                let selection_ready = self.selection_enabled;
                 if handle_selection_mouse(self, selection_ready, mouse) {
                     return true;
                 }
