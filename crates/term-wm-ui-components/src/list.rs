@@ -1,4 +1,4 @@
-use crossterm::event::Event;
+use crossterm::event::{Event, MouseButton, MouseEventKind};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem};
@@ -10,10 +10,16 @@ pub struct ListComponent {
     items: Vec<String>,
     selected: usize,
     title: String,
+    last_area: Rect,
 }
 
 impl Component for ListComponent {
+    fn resize(&mut self, area: Rect, _ctx: &ComponentContext) {
+        self.last_area = area;
+    }
+
     fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
+        self.last_area = area;
         let block = if ctx.focused() {
             Block::default()
                 .borders(Borders::ALL)
@@ -68,7 +74,7 @@ impl Component for ListComponent {
         frame.render_widget(list, inner);
     }
 
-    fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
+    fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
         if let Event::Key(key) = event {
             let kb = term_wm_core::keybindings::KeyBindings::default();
             if kb.matches(term_wm_core::keybindings::Action::MenuUp, key)
@@ -96,6 +102,27 @@ impl Component for ListComponent {
                 }
                 return true;
             }
+        } else if let Event::Mouse(mouse) = event
+            // Mouse click selection: compute which item the user clicked based on the
+            // row within the inner (post-border) area offset by the current viewport scroll.
+            // Event coordinates are window-relative (same as `self.last_area` from resize/render).
+            //   mouse.row - (self.last_area.y + 1)  →  row inside the border
+            //   vp.offset_y.saturating_sub(1)        →  first visible item index
+            && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            && ctx.focused()
+            && !self.items.is_empty()
+            && self.last_area.width > 0
+            && self.last_area.height > 0
+            && mouse.row > self.last_area.y
+        {
+            let vp = ctx.viewport();
+            let skip_n = vp.offset_y.saturating_sub(1);
+            let visible_row = (mouse.row - (self.last_area.y + 1)) as usize;
+            let index = skip_n + visible_row;
+            if index < self.items.len() {
+                self.selected = index;
+                return true;
+            }
         }
         false
     }
@@ -107,6 +134,7 @@ impl ListComponent {
             items: Vec::new(),
             selected: 0,
             title: title.into(),
+            last_area: Rect::default(),
         }
     }
 
