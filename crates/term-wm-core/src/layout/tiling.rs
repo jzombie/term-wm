@@ -730,8 +730,7 @@ pub fn render_handles_masked<F>(
                 .fg(crate::theme::menu_selected_bg())
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default()
-                .fg(crate::theme::decorator_border_active())
+            Style::default().fg(crate::theme::decorator_border_active())
         };
         let clip = handle.rect.intersection(buffer.area);
         if clip.width > 0 && clip.height > 0 {

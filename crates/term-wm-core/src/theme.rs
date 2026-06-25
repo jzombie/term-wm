@@ -71,7 +71,7 @@ pub const NOIR: Theme = Theme {
     // Chrome
     decorator_header_bg: Color::Rgb(38, 42, 58),
     decorator_header_fg: Color::Rgb(225, 225, 235),
-    decorator_border: Color::Rgb(72, 76, 90),
+    decorator_border: Color::Rgb(105, 110, 125),
     decorator_border_active: Color::Rgb(110, 118, 140),
     // Menu
     menu_bg: Color::Rgb(25, 28, 40),
@@ -84,7 +84,7 @@ pub const NOIR: Theme = Theme {
     // Dialog
     dialog_bg: Color::Rgb(20, 22, 30),
     dialog_fg: Color::Rgb(225, 225, 235),
-    dialog_separator: Color::Rgb(55, 58, 70),
+    dialog_separator: Color::Rgb(100, 102, 115),
     // Selection
     selection_bg: Color::Rgb(0, 230, 118),
     selection_fg: Color::Rgb(10, 10, 15),
@@ -258,62 +258,163 @@ mod tests {
 
     type ColorFn = fn() -> Color;
 
-    // All foreground-on-background pairs that appear in the UI.
-    // Each entry: (fg_color, bg_color, min_ratio, label)
-    const CONTRAST_CHECKS: &[(ColorFn, ColorFn, f64, &str)] = &[
-        // text on surfaces
-        (super::panel_fg, super::panel_bg, 4.5, "panel fg on bg"),
-        (
-            super::panel_inactive_fg,
-            super::panel_bg,
-            3.0,
-            "inactive fg on bg",
-        ),
-        (
-            super::panel_active_fg,
-            super::panel_active_bg,
-            4.5,
-            "active fg on active bg",
-        ),
-        (super::menu_fg, super::menu_bg, 4.5, "menu fg on bg"),
-        (
-            super::menu_selected_fg,
-            super::menu_selected_bg,
-            4.5,
-            "selected fg on selected bg",
-        ),
+    // Every actual foreground+background pair rendered in the UI.
+    // Thresholds: 4.5:1 for text (WCAG AA normal), 3.0:1 for UI/large.
+    const PAIRS: &[(ColorFn, ColorFn, f64, &str)] = &[
+        // === Top panel bar (bg = bottom_panel_bg) ===
         (
             super::bottom_panel_fg,
             super::bottom_panel_bg,
             4.5,
-            "bottom fg on bg",
+            "top panel fill",
         ),
-        (super::dialog_fg, super::dialog_bg, 4.5, "dialog fg on bg"),
+        (super::menu_fg, super::menu_bg, 4.5, "menu icon open"),
+        (
+            super::menu_selected_fg,
+            super::menu_selected_bg,
+            4.5,
+            "focused window tab",
+        ),
+        (
+            super::panel_inactive_fg,
+            super::bottom_panel_bg,
+            4.5,
+            "unfocused window tab",
+        ),
+        (
+            super::success_bg,
+            super::bottom_panel_bg,
+            3.0,
+            "active indicator",
+        ),
+        (
+            super::accent,
+            super::bottom_panel_bg,
+            3.0,
+            "copied indicator",
+        ),
+        (
+            super::panel_inactive_fg,
+            super::bottom_panel_bg,
+            3.0,
+            "inactive indicator",
+        ),
+        // === Bottom status bar (bg = bottom_panel_bg) ===
+        (
+            super::bottom_panel_fg,
+            super::bottom_panel_bg,
+            4.5,
+            "status text",
+        ),
+        (
+            super::menu_selected_fg,
+            super::menu_selected_bg,
+            4.5,
+            "keybinding combo",
+        ),
+        // === Window decorator ===
         (
             super::decorator_header_fg,
             super::decorator_header_bg,
             4.5,
-            "header fg on bg",
+            "focused header text",
         ),
+        (
+            super::decorator_header_fg,
+            super::panel_bg,
+            4.5,
+            "unfocused header text",
+        ),
+        (
+            super::decorator_border,
+            super::panel_bg,
+            3.0,
+            "inactive window border",
+        ),
+        (
+            super::decorator_border_active,
+            super::panel_bg,
+            3.0,
+            "active window border",
+        ),
+        // === Menu dropdown ===
+        (super::menu_fg, super::menu_bg, 4.5, "menu item text"),
+        (
+            super::menu_selected_fg,
+            super::menu_selected_bg,
+            4.5,
+            "selected menu item",
+        ),
+        (
+            super::menu_fg,
+            super::panel_active_bg,
+            4.5,
+            "hovered menu item",
+        ),
+        // === Dialogs ===
+        (super::dialog_fg, super::dialog_bg, 4.5, "dialog body text"),
+        (
+            super::dialog_fg,
+            super::panel_bg,
+            4.5,
+            "unselected dialog button",
+        ),
+        (
+            super::decorator_header_fg,
+            super::decorator_header_bg,
+            4.5,
+            "selected dialog button",
+        ),
+        (
+            super::dialog_separator,
+            super::dialog_bg,
+            3.0,
+            "dialog separator",
+        ),
+        // === Selection ===
         (
             super::selection_fg,
             super::selection_bg,
             4.5,
-            "selection fg on bg",
+            "selection highlight",
         ),
-        // accent (used as fg) on panel bg
-        (super::accent, super::panel_bg, 3.0, "accent on panel bg"),
+        // === Links (appear in dialogs and panels) ===
+        (super::link_color, super::dialog_bg, 4.5, "link in dialog"),
+        (super::link_color, super::panel_bg, 4.5, "link in panel"),
+        // === Focused list/toggle-list borders ===
+        (
+            super::success_fg,
+            super::panel_bg,
+            3.0,
+            "focused list border",
+        ),
+        // === Layout indicators ===
+        (
+            super::decorator_border_active,
+            super::panel_bg,
+            3.0,
+            "tiling handle",
+        ),
+        (
+            super::menu_selected_bg,
+            super::panel_bg,
+            3.0,
+            "hovered tiling handle",
+        ),
         (
             super::accent_alt,
             super::panel_bg,
             3.0,
-            "accent_alt on panel bg",
+            "handle hover border / resize outline",
         ),
+        // === Drag-snap preview ===
+        (super::accent, super::panel_bg, 3.0, "drag-snap fill"),
+        // === Debug log ===
         (
-            super::success_bg,
+            super::debug_highlight,
             super::panel_bg,
             3.0,
-            "success on panel bg",
+            "debug highlight",
         ),
     ];
 
@@ -325,14 +426,19 @@ mod tests {
 
     #[test]
     fn wcag_aa_contrast_compliance() {
-        for &(fg_fn, bg_fn, min_ratio, label) in CONTRAST_CHECKS {
+        let mut failures = Vec::new();
+        for &(fg_fn, bg_fn, min_ratio, label) in PAIRS {
             let fg = fg_fn();
             let bg = bg_fn();
             let ratio = contrast_ratio(fg, bg);
-            assert!(
-                ratio >= min_ratio,
-                "{label}: contrast ratio {ratio:.2}:1 < {min_ratio}:1 (fg={fg:?}, bg={bg:?})",
-            );
+            if ratio < min_ratio {
+                failures.push(format!(
+                    "{label}: {ratio:.2}:1 < {min_ratio}:1 (fg={fg:?}, bg={bg:?})"
+                ));
+            }
+        }
+        if !failures.is_empty() {
+            panic!("WCAG AA contrast failures:\n  {}", failures.join("\n  "));
         }
     }
 

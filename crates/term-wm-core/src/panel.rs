@@ -772,7 +772,13 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
                 break;
             }
             let is_hovered = hovered_idx == Some(idx);
-            let marker = if idx == selected { ">" } else if is_hovered { "▸" } else { " " };
+            let marker = if idx == selected {
+                ">"
+            } else if is_hovered {
+                "▸"
+            } else {
+                " "
+            };
             let line = if let Some(icon) = icon {
                 format!("{marker} {icon} {label}")
             } else {
