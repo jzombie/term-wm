@@ -281,12 +281,11 @@ impl TerminalComponent {
             handle.set_content_size(area.width as usize, total_height);
 
             let current_sb = self.pane.scrollback();
-            // Follow tail: if user is viewing latest content, keep viewport at bottom
             if current_sb == 0 {
+                // Follow tail: user is at bottom, keep viewport tracking new content
                 handle.scroll_vertical_to(usize::MAX);
-            }
-            // If scrollback changed internally (keys/output), push to viewport
-            if current_sb != self.last_scrollback {
+            } else if current_sb != self.last_scrollback {
+                // If scrollback changed internally (keys/output), push to viewport
                 let new_offset = used.saturating_sub(current_sb);
                 handle.scroll_vertical_to(new_offset);
             } else {
