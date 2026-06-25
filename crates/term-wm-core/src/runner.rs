@@ -565,13 +565,21 @@ where
         }
     }
     app.windows().register_managed_layout(area);
+    let all_titles: std::collections::BTreeMap<WindowId<Id>, String> = app
+        .windows()
+        .window_titles()
+        .into_iter()
+        .collect();
     let plan = app.windows().window_draw_plan(frame);
     for task in plan {
         match task {
             DrawTask::App(window) => {
                 let (title, decorator, kb_disabled) = {
                     let wm = app.windows();
-                    let title = wm.window_title(WindowId::App(window.id));
+                    let title = all_titles
+                        .get(&WindowId::App(window.id))
+                        .map(String::as_str)
+                        .unwrap_or("");
                     let decorator = wm.decorator();
                     let kb_disabled = wm.keyboard_capture_disabled(WindowId::App(window.id));
                     (title, decorator, kb_disabled)
@@ -580,7 +588,7 @@ where
                     frame,
                     &window.surface,
                     window.focused,
-                    &title,
+                    title,
                     decorator.as_ref(),
                     kb_disabled,
                     |subframe| {
@@ -591,7 +599,10 @@ where
             DrawTask::System(window) => {
                 let (title, decorator, kb_disabled) = {
                     let wm = app.windows();
-                    let title = wm.window_title(WindowId::System(window.id));
+                    let title = all_titles
+                        .get(&WindowId::System(window.id))
+                        .map(String::as_str)
+                        .unwrap_or("");
                     let decorator = wm.decorator();
                     let kb_disabled = wm.keyboard_capture_disabled(WindowId::System(window.id));
                     (title, decorator, kb_disabled)
@@ -600,7 +611,7 @@ where
                     frame,
                     &window.surface,
                     window.focused,
-                    &title,
+                    title,
                     decorator.as_ref(),
                     kb_disabled,
                     |subframe| {

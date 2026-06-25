@@ -333,7 +333,17 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub fn set_window_title(&mut self, id: Id, title: impl Into<String>) {
-        self.window_mut(WindowId::app(id)).title = Some(title.into());
+        let title = title.into();
+        let prev = self
+            .window(WindowId::app(id))
+            .and_then(|w| w.title.as_deref().map(|t| t.to_string()));
+        if prev.as_deref() != Some(&title) {
+            let seq = self.next_title_seq;
+            self.next_title_seq += 1;
+            let window = self.window_mut(WindowId::app(id));
+            window.title = Some(title);
+            window.title_set_order = Some(seq);
+        }
     }
 
     pub fn render_split_handles(&self, frame: &mut crate::ui::UiFrame<'_>) {

@@ -210,6 +210,7 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     pub(crate) drag_snap: Option<(Option<WindowId<Id>>, InsertPosition, Rect)>,
     system_windows: BTreeMap<SystemWindowId, SystemWindowEntry>,
     next_window_seq: usize,
+    next_title_seq: usize,
     synthetic_event: Option<Event>,
     clipboard: Option<crate::io::clipboard::Clipboard>,
 }
@@ -307,30 +308,60 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 WindowId::System(SystemWindowId::DebugLog) => "Debug Log".to_string(),
             });
         let order = self.build_display_order();
-        let freq = order
+        let same: Vec<&WindowId<Id>> = order
             .iter()
-            .filter(|&oid| {
-                self.window(*oid)
-                    .map(|w| w.title_or_default(*oid))
+            .filter(|oid| {
+                self.window(**oid)
+                    .map(|w| w.title_or_default(**oid))
                     .as_deref()
                     == Some(base.as_str())
             })
-            .count();
-        if freq <= 1 {
+            .collect();
+        if same.len() <= 1 {
             return base;
         }
-        let nth = order
-            .iter()
-            .take_while(|&&oid| oid != id)
-            .filter(|&oid| {
-                self.window(*oid)
-                    .map(|w| w.title_or_default(*oid))
-                    .as_deref()
-                    == Some(base.as_str())
-            })
-            .count()
-            + 1;
+        let nth = same.iter().position(|&&oid| oid == id).unwrap_or(0) + 1;
         format!("{} ({})", base, nth)
+    }
+
+    /// Pre-compute all display titles in one pass from a single snapshot of
+    /// `build_display_order()`.  Same-title windows are numbered by the order
+    /// the title was assigned (`title_set_order`), so the first window to get
+    /// "htop" is "htop (1)" regardless of creation order.
+    pub fn window_titles(&self) -> Vec<(WindowId<Id>, String)> {
+        let order = self.build_display_order();
+        #[allow(clippy::type_complexity)]
+        let mut groups: std::collections::BTreeMap<
+            String,
+            Vec<(WindowId<Id>, Option<usize>)>,
+        > = std::collections::BTreeMap::new();
+        for &oid in &order {
+            let base = self
+                .window(oid)
+                .map(|w| w.title_or_default(oid))
+                .unwrap_or_else(|| format!("{:?}", oid));
+            let set_order = self.window(oid).and_then(|w| w.title_set_order);
+            groups.entry(base).or_default().push((oid, set_order));
+        }
+        for group in groups.values_mut() {
+            group.sort_by_key(|(_, order)| order.unwrap_or(usize::MAX));
+        }
+        let mut out = Vec::with_capacity(order.len());
+        for &oid in &order {
+            let base = self
+                .window(oid)
+                .map(|w| w.title_or_default(oid))
+                .unwrap_or_else(|| format!("{:?}", oid));
+            let group = &groups[&base];
+            let title = if group.len() <= 1 {
+                base
+            } else {
+                let nth = group.iter().position(|&(g, _)| g == oid).unwrap_or(0) + 1;
+                format!("{} ({})", base, nth)
+            };
+            out.push((oid, title));
+        }
+        out
     }
 
     fn clear_all_floating(&mut self) {
@@ -409,6 +440,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             drag_snap: None,
             system_windows: BTreeMap::new(),
             next_window_seq: 0,
+            next_title_seq: 0,
             synthetic_event: None,
             clipboard,
         }
@@ -708,9 +740,8 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         };
         let display = self.build_display_order();
         let titles_map: std::collections::BTreeMap<WindowId<Id>, String> = self
-            .windows
-            .keys()
-            .map(|id| (*id, self.window_title(*id)))
+            .window_titles()
+            .into_iter()
             .collect();
         let selection_copy_available = self.selection_text.is_some();
         let panel_active = self.panel_active();
