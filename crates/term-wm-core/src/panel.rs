@@ -494,10 +494,6 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
                 .fg(crate::theme::menu_selected_fg())
                 .bg(crate::theme::menu_selected_bg())
                 .add_modifier(Modifier::BOLD);
-            let sep_style = Style::default()
-                .fg(crate::theme::panel_inactive_fg())
-                .bg(crate::theme::bottom_panel_bg());
-
             let mut cursor_x = bounds.x;
             for (action, combos) in &self.keybinding_hints {
                 if cursor_x >= max_hint_x {
@@ -527,10 +523,10 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
                 safe_set_string(buffer, bounds, cursor_x, area.y, &desc, style);
                 cursor_x = cursor_x.saturating_add(desc.chars().count() as u16);
 
-                // Separator between entries
+                // Space between entries
                 if cursor_x < max_hint_x {
-                    safe_set_string(buffer, bounds, cursor_x, area.y, " ·", sep_style);
-                    cursor_x = cursor_x.saturating_add(2);
+                    safe_set_string(buffer, bounds, cursor_x, area.y, "|", Style::default());
+                    cursor_x = cursor_x.saturating_add(1);
                 }
             }
 
