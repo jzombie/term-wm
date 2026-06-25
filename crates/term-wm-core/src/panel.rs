@@ -381,8 +381,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             if copy_width > 0 && cursor < max_x {
                 safe_set_string(buffer, bounds, cursor, y, copy_chunk, copy_style);
                 let width = copy_width.min(max_x.saturating_sub(cursor));
-                if width > 0 && selection_copy_available && clipboard_enabled
-                {
+                if width > 0 && selection_copy_available && clipboard_enabled {
                     self.notifications.copy_rect = Some(Rect {
                         x: cursor,
                         y,
