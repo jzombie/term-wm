@@ -196,8 +196,9 @@ where
                 if let Some(action) = mapped_action {
                     match action {
                         Action::Quit => {
+                            app.open_exit_confirm();
                             update_selection_snapshot(app);
-                            return flush_state_changes(app, ControlFlow::Quit);
+                            return flush_state_changes(app, ControlFlow::Continue);
                         }
                         Action::OpenHelp => {
                             app.open_help_overlay();
