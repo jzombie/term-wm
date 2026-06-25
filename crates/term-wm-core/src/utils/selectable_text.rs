@@ -171,6 +171,26 @@ impl SelectionController {
         self.state = SelectionState::default();
     }
 
+    /// Record a mouse-down position for a potential drag selection. Does NOT
+    /// start the drag phase — that happens on first mouse movement via
+    /// [`activate_drag`]. This lets simple clicks pass through to the component
+    /// while still tracking for selection-on-drag.
+    pub fn prepare_drag(&mut self, pos: LogicalPosition) {
+        self.state.anchor = Some(pos);
+        self.state.cursor = Some(pos);
+        self.state.button_down = true;
+        self.touch_pointer_clock();
+    }
+
+    /// Activate a drag that was prepared by [`prepare_drag`]. The anchor stays
+    /// at the original down position; `pos` becomes the cursor.
+    pub fn activate_drag(&mut self, pos: LogicalPosition) {
+        self.state.cursor = Some(pos);
+        self.state.phase = Phase::Dragging;
+        self.state.button_down = true;
+        self.touch_pointer_clock();
+    }
+
     /// Begin a drag selection at the provided logical position.
     pub fn begin_drag(&mut self, pos: LogicalPosition) {
         self.state.anchor = Some(pos);
@@ -285,22 +305,26 @@ pub fn handle_selection_mouse<H: SelectionHost>(
             if rect_contains(area, mouse.column, mouse.row)
                 && let Some(pos) = host.logical_position_from_point(mouse.column, mouse.row)
             {
-                {
-                    let selection = host.selection_controller();
-                    selection.begin_drag(pos);
-                    selection.set_pointer(mouse.column, mouse.row);
-                    selection.set_button_down(true);
-                }
-                return true;
+                let selection = host.selection_controller();
+                selection.set_pointer(mouse.column, mouse.row);
+                selection.prepare_drag(pos);
             }
             false
         }
         MouseEventKind::Drag(MouseButton::Left) => {
-            {
-                let selection = host.selection_controller();
-                if !selection.is_dragging() {
+            let selection = host.selection_controller();
+            if !selection.is_dragging() {
+                if !selection.button_down() {
                     return false;
                 }
+                if let Some(pos) = host.logical_position_from_point(mouse.column, mouse.row) {
+                    let selection = host.selection_controller();
+                    selection.activate_drag(pos);
+                    selection.set_pointer(mouse.column, mouse.row);
+                    selection.set_button_down(true);
+                }
+            } else {
+                let selection = host.selection_controller();
                 selection.set_pointer(mouse.column, mouse.row);
                 selection.set_button_down(true);
             }
@@ -311,13 +335,16 @@ pub fn handle_selection_mouse<H: SelectionHost>(
             true
         }
         MouseEventKind::Up(MouseButton::Left) => {
-            if !host.selection_controller().is_dragging() {
-                return false;
+            if host.selection_controller().is_dragging() {
+                let controller = host.selection_controller();
+                controller.set_button_down(false);
+                let _ = controller.finish_drag();
+                return true;
             }
-            let controller = host.selection_controller();
-            controller.set_button_down(false);
-            let _ = controller.finish_drag();
-            true
+            if host.selection_controller().button_down() {
+                host.selection_controller().set_button_down(false);
+            }
+            false
         }
         MouseEventKind::Moved => {
             let selection = host.selection_controller();
@@ -661,18 +688,29 @@ mod tests {
     #[test]
     fn mouse_up_clears_button_state() {
         let mut host = TestHost::new(Rect::new(0, 0, 10, 5));
-        assert!(handle_selection_mouse(
+        // Down records position but doesn't consume — clicks pass through
+        assert!(!handle_selection_mouse(
             &mut host,
             true,
             &mouse(1, 1, MouseEventKind::Down(MouseButton::Left))
         ));
-        assert!(host.controller().is_dragging());
+        assert!(!host.controller().is_dragging());
         assert!(host.controller().button_down());
 
+        // First Drag activates the selection
         assert!(handle_selection_mouse(
             &mut host,
             true,
-            &mouse(1, 1, MouseEventKind::Up(MouseButton::Left))
+            &mouse(3, 1, MouseEventKind::Drag(MouseButton::Left))
+        ));
+        assert!(host.controller().is_dragging());
+        assert!(host.controller().button_down());
+
+        // Up finishes the drag
+        assert!(handle_selection_mouse(
+            &mut host,
+            true,
+            &mouse(3, 1, MouseEventKind::Up(MouseButton::Left))
         ));
         assert!(!host.controller().is_dragging());
         assert!(!host.controller().button_down());
@@ -681,16 +719,22 @@ mod tests {
     #[test]
     fn moved_event_treats_drag_as_complete() {
         let mut host = TestHost::new(Rect::new(0, 0, 10, 5));
-        assert!(handle_selection_mouse(
+        // Down records anchor but doesn't consume
+        handle_selection_mouse(
             &mut host,
             true,
-            &mouse(2, 2, MouseEventKind::Down(MouseButton::Left))
-        ));
+            &mouse(2, 2, MouseEventKind::Down(MouseButton::Left)),
+        );
+        assert!(host.controller().button_down());
+        assert!(!host.controller().is_dragging());
+
+        // First Drag activates the selection
         assert!(handle_selection_mouse(
             &mut host,
             true,
             &mouse(4, 2, MouseEventKind::Drag(MouseButton::Left))
         ));
+        assert!(host.controller().is_dragging());
         assert!(host.controller().button_down());
 
         // Moved with our internal button-down state should be treated like
@@ -705,10 +749,16 @@ mod tests {
     #[test]
     fn maintain_stops_when_button_released() {
         let mut host = TestHost::new(Rect::new(0, 0, 10, 5));
+        // Down + Drag to activate selection
+        handle_selection_mouse(
+            &mut host,
+            true,
+            &mouse(1, 1, MouseEventKind::Down(MouseButton::Left)),
+        );
         assert!(handle_selection_mouse(
             &mut host,
             true,
-            &mouse(1, 1, MouseEventKind::Down(MouseButton::Left))
+            &mouse(3, 1, MouseEventKind::Drag(MouseButton::Left))
         ));
         host.selection_controller().set_pointer(0, 0);
         host.selection_controller().set_button_down(false);
@@ -722,10 +772,16 @@ mod tests {
     #[test]
     fn maintain_scrolls_when_button_down() {
         let mut host = TestHost::new(Rect::new(5, 5, 10, 5));
+        // Down + Drag to activate selection
+        handle_selection_mouse(
+            &mut host,
+            true,
+            &mouse(6, 6, MouseEventKind::Down(MouseButton::Left)),
+        );
         assert!(handle_selection_mouse(
             &mut host,
             true,
-            &mouse(6, 6, MouseEventKind::Down(MouseButton::Left))
+            &mouse(8, 6, MouseEventKind::Drag(MouseButton::Left))
         ));
         // Simulate pointer beyond the right edge to trigger horizontal scrolling.
         host.selection_controller().set_pointer(20, 6);
