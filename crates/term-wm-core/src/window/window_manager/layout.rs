@@ -103,7 +103,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         }
     }
 
-    pub(super) fn full_region_for_id(&self, id: WindowId<Id>) -> Rect {
+    pub fn full_region_for_id(&self, id: WindowId<Id>) -> Rect {
         self.regions.get(id).unwrap_or_default()
     }
 
@@ -293,6 +293,11 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
 
     pub fn managed_draw_order(&self) -> &[Id] {
         &self.managed_draw_order_app
+    }
+
+    /// Returns the full draw order including both app and system windows.
+    pub fn managed_draw_order_all(&self) -> &[WindowId<Id>] {
+        &self.managed_draw_order
     }
 
     pub fn build_display_order(&self) -> Vec<WindowId<Id>> {

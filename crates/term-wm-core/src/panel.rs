@@ -507,9 +507,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
                 let entry = format!("{combo_str} {action}");
                 let entry_width = entry.chars().count() as u16;
 
-                if cursor_x.saturating_add(entry_width) > max_hint_x
-                    && cursor_x > bounds.x
-                {
+                if cursor_x.saturating_add(entry_width) > max_hint_x && cursor_x > bounds.x {
                     // Not enough room for this hint; skip it
                     break;
                 }

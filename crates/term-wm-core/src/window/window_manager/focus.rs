@@ -80,7 +80,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         }
     }
 
-    pub(super) fn focus_window_id(&mut self, id: WindowId<Id>) {
+    pub fn focus_window_id(&mut self, id: WindowId<Id>) {
         self.set_wm_focus(id);
         self.bring_to_front_id(id);
         self.managed_draw_order = self.z_order.clone();

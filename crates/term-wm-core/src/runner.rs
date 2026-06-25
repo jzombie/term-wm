@@ -337,14 +337,19 @@ where
                     && let Event::Mouse(mouse) = &evt
                     && matches!(mouse.kind, MouseEventKind::Down(_))
                 {
-                    let targets = app.windows().managed_draw_order().to_vec();
-                    for &id in &targets {
-                        let rect = app.windows().full_region(id);
+                    let targets = app.windows().managed_draw_order_all().to_vec();
+                    // managed_draw_order is bottom-to-top; iterate in reverse
+                    // to find the topmost window under the cursor.
+                    for &id in targets.iter().rev() {
+                        let rect = app.windows().full_region_for_id(id);
                         if rect.width > 0
                             && rect.height > 0
                             && crate::layout::rect_contains(rect, mouse.column, mouse.row)
                         {
-                            app.windows().focus_app_window(id);
+                            match id {
+                                WindowId::App(app_id) => app.windows().focus_app_window(app_id),
+                                WindowId::System(_) => app.windows().focus_window_id(id),
+                            }
                             break;
                         }
                     }
