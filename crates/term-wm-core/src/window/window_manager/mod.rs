@@ -16,7 +16,6 @@ use super::FocusRing;
 use super::decorator::WindowDecorator;
 use super::entry::Window;
 use crate::components::Overlay;
-use crate::io::clipboard;
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
@@ -191,7 +190,6 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     clipboard_dirty: bool,
     overlay_visible: bool,
     wm_menu_selected: usize,
-    clipboard_available: bool,
     selection_active: bool,
     selection_dragging: bool,
     selection_text: Option<String>,
@@ -380,14 +378,8 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub fn with_config(current: Id, config: WmConfig) -> Self {
-        let clipboard_available = clipboard::available();
         let mouse_capture_enabled = config.mouse_capture_enabled;
-        let clipboard_enabled = clipboard_available && config.clipboard_enabled;
-        let clipboard = if clipboard_available {
-            crate::io::clipboard::Clipboard::new().ok()
-        } else {
-            None
-        };
+        let clipboard = Some(crate::io::clipboard::Clipboard::new());
         let decorator = config.decorator();
         let floating_resize_offscreen = config.floating_resize_offscreen;
         Self {
@@ -415,17 +407,16 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             mouse_capture_dirty: false,
             keyboard_focus_enabled: config.keyboard_focus_enabled,
             mouse_focus_click_enabled: config.mouse_focus_click_enabled,
-            clipboard_enabled,
+            clipboard_enabled: config.clipboard_enabled,
             clipboard_dirty: false,
             overlay_visible: false,
             wm_menu_selected: 0,
-            clipboard_available,
             selection_active: false,
             selection_dragging: false,
             selection_text: None,
             selection_copied: false,
             selection_copied_text: None,
-            window_selection_enabled: clipboard_available && config.window_selection_enabled,
+            window_selection_enabled: config.window_selection_enabled,
             window_selection_dirty: false,
             keybindings: config.keybindings.clone(),
             hint_visibility: config.hint_visibility,
@@ -581,10 +572,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         }
     }
 
-    pub fn clipboard_available(&self) -> bool {
-        self.clipboard_available
-    }
-
     pub fn clipboard_enabled(&self) -> bool {
         self.clipboard_enabled
     }
@@ -621,7 +608,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub fn copy_selection_to_clipboard(&mut self) {
-        if !self.clipboard_available || !self.clipboard_enabled() {
+        if !self.clipboard_enabled() {
             return;
         }
         let Some(text) = self.selection_text.clone() else {
@@ -662,9 +649,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub fn set_clipboard_enabled(&mut self, enabled: bool) {
-        if !self.clipboard_available {
-            return;
-        }
         if self.clipboard_enabled == enabled {
             return;
         }
@@ -674,9 +658,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub fn toggle_clipboard_enabled(&mut self) {
-        if !self.clipboard_available {
-            return;
-        }
         let next = !self.clipboard_enabled;
         self.set_clipboard_enabled(next);
     }
@@ -751,7 +732,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             status_line.as_deref(),
             self.mouse_capture_enabled(),
             self.clipboard_enabled(),
-            self.clipboard_available(),
             self.window_selection_enabled(),
             self.selection_active(),
             self.selection_dragging(),
@@ -778,7 +758,6 @@ struct WmMenuItem {
 fn wm_menu_items(
     mouse_capture_enabled: bool,
     clipboard_enabled: bool,
-    clipboard_available: bool,
     window_selection_enabled: bool,
 ) -> [WmMenuItem; 9] {
     let mouse_label = if mouse_capture_enabled {
@@ -786,14 +765,10 @@ fn wm_menu_items(
     } else {
         "Mouse Capture: Off"
     };
-    let clipboard_label = if clipboard_available {
-        if clipboard_enabled {
-            "Clipboard Mode: On"
-        } else {
-            "Clipboard Mode: Off"
-        }
+    let clipboard_label = if clipboard_enabled {
+        "Clipboard Mode: On"
     } else {
-        "Clipboard Mode: Unavailable"
+        "Clipboard Mode: Off"
     };
     let selection_label = if window_selection_enabled {
         "Window Selection: On"

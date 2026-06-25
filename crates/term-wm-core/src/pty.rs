@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
-use crate::io::clipboard::extract_osc52_text;
+use crate::io::clipboard::{extract_osc52_text, try_set};
 use crate::io::title::extract_osc_title;
 
 pub type PtyResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -221,13 +221,10 @@ impl Pty {
             let _ = self.write_bytes(response.as_bytes());
         }
         // Intercept OSC 52 clipboard sequences from the child process and
-        // forward the decoded text to the local system clipboard.  This makes
-        // copy-from-inside work when term-wm runs locally (the OSC 52 written
-        // by the child would otherwise be silently consumed by the parser).
-        if let Some(text) = extract_osc52_text(&bytes)
-            && let Ok(mut cb) = arboard::Clipboard::new()
-        {
-            let _ = cb.set_text(text);
+        // forward them via the shared helper (tries arboard first, falls
+        // back to OSC 52 passthrough to stdout for SSH/tmux/Zed remote).
+        if let Some(text) = extract_osc52_text(&bytes) {
+            try_set(&text);
         }
 
         if let Some(title) = extract_osc_title(&bytes) {

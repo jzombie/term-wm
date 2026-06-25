@@ -205,7 +205,6 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         status_line: Option<&str>,
         mouse_capture_enabled: bool,
         clipboard_enabled: bool,
-        clipboard_available: bool,
         window_selection_enabled: bool,
         _selection_active: bool,
         _selection_dragging: bool,
@@ -340,8 +339,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             } else {
                 Style::default().fg(crate::theme::panel_inactive_fg())
             };
-            let copy_style = if selection_copy_available && clipboard_available && clipboard_enabled
-            {
+            let copy_style = if selection_copy_available && clipboard_enabled {
                 let mut style = Style::default()
                     .fg(crate::theme::success_bg())
                     .add_modifier(Modifier::BOLD);
@@ -359,18 +357,12 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             } else {
                 Style::default().fg(crate::theme::panel_inactive_fg())
             };
-            let clip_style = if clipboard_available {
-                if clipboard_enabled {
-                    Style::default()
-                        .fg(crate::theme::success_bg())
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(crate::theme::panel_inactive_fg())
-                }
-            } else {
+            let clip_style = if clipboard_enabled {
                 Style::default()
-                    .fg(crate::theme::panel_inactive_fg())
-                    .add_modifier(Modifier::DIM)
+                    .fg(crate::theme::success_bg())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(crate::theme::panel_inactive_fg())
             };
             let mut cursor = indicator_x;
             if selection_width > 0 && cursor < max_x {
@@ -389,7 +381,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             if copy_width > 0 && cursor < max_x {
                 safe_set_string(buffer, bounds, cursor, y, copy_chunk, copy_style);
                 let width = copy_width.min(max_x.saturating_sub(cursor));
-                if width > 0 && selection_copy_available && clipboard_available && clipboard_enabled
+                if width > 0 && selection_copy_available && clipboard_enabled
                 {
                     self.notifications.copy_rect = Some(Rect {
                         x: cursor,
@@ -416,7 +408,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             if clip_width > 0 && cursor < max_x {
                 safe_set_string(buffer, bounds, cursor, y, clip_chunk, clip_style);
                 let width = clip_width.min(max_x.saturating_sub(cursor));
-                if width > 0 && clipboard_available {
+                if width > 0 {
                     self.notifications.clipboard_rect = Some(Rect {
                         x: cursor,
                         y,

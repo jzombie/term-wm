@@ -61,7 +61,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let items = super::wm_menu_items(
             self.mouse_capture_enabled(),
             self.clipboard_enabled(),
-            self.clipboard_available(),
             self.window_selection_enabled(),
         );
         if let Event::Mouse(mouse) = event
@@ -212,7 +211,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let menu_items = super::wm_menu_items(
             self.mouse_capture_enabled(),
             self.clipboard_enabled(),
-            self.clipboard_available(),
             self.window_selection_enabled(),
         );
         let menu_labels = menu_items

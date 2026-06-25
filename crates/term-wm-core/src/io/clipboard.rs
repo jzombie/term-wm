@@ -8,7 +8,8 @@
 //!    writes to the real system clipboard.
 //!
 //! 2. **`arboard`** – a persistent handle for direct access (local fallback
-//!    and clipboard reads).
+//!    and clipboard reads).  When running over SSH the arboard handle may not
+//!    initialise; OSC 52 alone is sufficient for copy.
 
 use std::io::Write;
 
@@ -22,6 +23,9 @@ pub enum ClipboardError {
 
     #[error("I/O error writing OSC 52 sequence: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("clipboard backend not available (running remotely?)")]
+    NotAvailable,
 }
 
 /// Build the raw bytes of an OSC 52 clipboard sequence.
@@ -52,60 +56,39 @@ pub fn set_via_osc52_with_writer(text: &str, writer: &mut dyn Write) -> Result<(
     Ok(())
 }
 
-/// Abstraction over the platform-specific clipboard access so tests can
-/// inject a recording stub and verify the arboard path was exercised.
-pub trait ClipboardBackend {
-    fn set_text(&mut self, text: &str) -> Result<(), ClipboardError>;
-    fn get_text(&mut self) -> Result<String, ClipboardError>;
-}
-
-/// Real backend backed by `arboard`.
-pub(crate) struct ArboardBackend(pub(crate) arboard::Clipboard);
-
-impl ClipboardBackend for ArboardBackend {
-    fn set_text(&mut self, text: &str) -> Result<(), ClipboardError> {
-        self.0
-            .set_text(text.to_owned())
-            .map_err(ClipboardError::from)
-    }
-
-    fn get_text(&mut self) -> Result<String, ClipboardError> {
-        self.0.get_text().map_err(ClipboardError::from)
-    }
-}
-
-/// A persistent clipboard handle backed by `arboard` and OSC 52.
+/// A persistent clipboard handle backed by `arboard` (optional) and OSC 52.
 ///
 /// Holding a long-lived [`arboard::Clipboard`] instance avoids the macOS
 /// problem where a short-lived connection is torn down before the pasteboard
 /// server finishes processing the write.
+///
+/// When running over SSH the arboard handle will be `None`; `set()` still
+/// works via OSC 52 emitted to stdout, but `get()` returns
+/// `ClipboardError::NotAvailable`.
 pub struct Clipboard {
-    inner: Box<dyn ClipboardBackend>,
+    arboard: Option<arboard::Clipboard>,
     /// Captured OSC 52 output — only present in test builds so that tests
     /// can verify the OSC 52 path was exercised alongside the arboard path.
     #[cfg(test)]
     pub osc52_output: Vec<u8>,
 }
 
-impl Clipboard {
-    /// Create a new clipboard handle with the real arboard backend.
-    ///
-    /// Fails if the platform clipboard backend cannot be initialised
-    /// (e.g. no Wayland clipboard provider, no X11 display, etc.).
-    pub fn new() -> Result<Self, ClipboardError> {
-        let inner = arboard::Clipboard::new()?;
-        Ok(Self {
-            inner: Box::new(ArboardBackend(inner)),
-            #[cfg(test)]
-            osc52_output: Vec::new(),
-        })
+impl Default for Clipboard {
+    fn default() -> Self {
+        Self::new()
     }
+}
 
-    /// Create a clipboard handle with an injectable back-end for testing.
-    #[cfg(test)]
-    pub fn with_backend(inner: Box<dyn ClipboardBackend>) -> Self {
+impl Clipboard {
+    /// Create a new clipboard handle.  Always succeeds.
+    ///
+    /// The arboard backend is initialised when a local display is available;
+    /// when running remotely (SSH, no display) it is silently absent and
+    /// only the OSC 52 fallback will be available.
+    pub fn new() -> Self {
         Self {
-            inner,
+            arboard: arboard::Clipboard::new().ok(),
+            #[cfg(test)]
             osc52_output: Vec::new(),
         }
     }
@@ -113,10 +96,15 @@ impl Clipboard {
     /// Read the clipboard as a `String`.
     ///
     /// Only works in local environments where `arboard` can reach the
-    /// system clipboard.  Does **not** attempt OSC 52 reads because most
-    /// terminal emulators do not support them.
+    /// system clipboard.  Over SSH this returns `ClipboardError::NotAvailable`.
+    /// Does **not** attempt OSC 52 reads because most terminal emulators
+    /// do not support them.
     pub fn get(&mut self) -> Result<String, ClipboardError> {
-        self.inner.get_text()
+        self.arboard
+            .as_mut()
+            .ok_or(ClipboardError::NotAvailable)?
+            .get_text()
+            .map_err(ClipboardError::from)
     }
 
     /// Set the system clipboard to `text`.
@@ -129,9 +117,8 @@ impl Clipboard {
     ///    remote/embedded terminals (Zed, tmux, SSH) where the host
     ///    terminal intercepts the sequence.
     ///
-    /// Errors from OSC 52 are silently ignored because stdout may not
-    /// be a terminal.  arboard errors are propagated so callers can
-    /// decide whether to surface a failure.
+    /// Errors from either path are silently ignored — at least one of
+    /// the two is expected to fail depending on the environment.
     pub fn set(&mut self, text: &str) -> Result<(), ClipboardError> {
         // Always write OSC 52 for the host terminal — this is the only
         // mechanism that reaches the real clipboard when term-wm runs
@@ -148,16 +135,25 @@ impl Clipboard {
         }
 
         // Also write via arboard for the local case.
-        self.inner.set_text(text)
+        if let Some(cb) = &mut self.arboard {
+            let _ = cb.set_text(text.to_owned());
+        }
+
+        Ok(())
     }
 }
 
-/// Quick check whether the `arboard` backend is reachable.
+/// Stateless one-shot: try arboard, fall back to OSC 52 passthrough to stdout.
 ///
-/// This creates and immediately drops a temporary handle, so it is safe to
-/// call at startup to decide whether clipboard features should be enabled.
-pub fn available() -> bool {
-    arboard::Clipboard::new().is_ok()
+/// Used by `Pty::update()` when intercepting child OSC 52 sequences —
+/// no persistent handle needed since this runs in the PTY read path
+/// which doesn't have access to the shared `Clipboard` instance.
+pub fn try_set(text: &str) {
+    if let Ok(mut cb) = arboard::Clipboard::new() {
+        let _ = cb.set_text(text.to_owned());
+    } else {
+        let _ = set_via_osc52_with_writer(text, &mut std::io::stdout().lock());
+    }
 }
 
 /// Scan `data` for a complete OSC 52 clipboard sequence
@@ -225,65 +221,11 @@ pub fn extract_osc52_text(data: &[u8]) -> Option<String> {
 mod tests {
     use super::*;
 
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
-    /// Shared record kept by `RecordingBackend` so tests can verify the
-    /// arboard `set_text` path was exercised.
-    #[derive(Default)]
-    struct RecordingData {
-        set_called: bool,
-        set_text: String,
-    }
-
-    /// Stub `ClipboardBackend` that records invocations instead of touching
-    /// the real system clipboard.
-    struct RecordingBackend {
-        calls: Rc<RefCell<RecordingData>>,
-    }
-
-    impl RecordingBackend {
-        fn new() -> (Self, Rc<RefCell<RecordingData>>) {
-            let calls = Rc::new(RefCell::new(RecordingData::default()));
-            (
-                Self {
-                    calls: calls.clone(),
-                },
-                calls,
-            )
-        }
-    }
-
-    impl ClipboardBackend for RecordingBackend {
-        fn set_text(&mut self, text: &str) -> Result<(), ClipboardError> {
-            let mut data = self.calls.borrow_mut();
-            data.set_called = true;
-            data.set_text = text.to_string();
-            Ok(())
-        }
-
-        fn get_text(&mut self) -> Result<String, ClipboardError> {
-            Ok(String::new())
-        }
-    }
-
     #[test]
-    fn clipboard_set_calls_both_backends() {
-        let (backend, calls) = RecordingBackend::new();
-        let mut cb = Clipboard::with_backend(Box::new(backend));
-
+    fn clipboard_set_emits_osc52() {
+        let mut cb = Clipboard::new();
         cb.set("hello from test").unwrap();
 
-        // ═══ arboard path ═══
-        let data = calls.borrow();
-        assert!(data.set_called, "arboard set_text must have been called");
-        assert_eq!(
-            data.set_text, "hello from test",
-            "arboard must receive the correct text"
-        );
-        drop(data);
-
-        // ═══ OSC 52 path ═══
         assert!(
             !cb.osc52_output.is_empty(),
             "OSC 52 output must not be empty"
