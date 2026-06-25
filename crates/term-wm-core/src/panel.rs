@@ -131,6 +131,10 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         self.visible
     }
 
+    pub(crate) fn set_bottom_area(&mut self, area: Rect) {
+        self.bottom_area = area;
+    }
+
     pub fn height(&self) -> u16 {
         self.height
     }
@@ -442,7 +446,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         }
     }
 
-    fn render_bottom(&mut self, frame: &mut UiFrame<'_>) {
+    pub(crate) fn render_bottom(&mut self, frame: &mut UiFrame<'_>) {
         let area = self.bottom_area;
         if area.width == 0 || area.height == 0 {
             return;

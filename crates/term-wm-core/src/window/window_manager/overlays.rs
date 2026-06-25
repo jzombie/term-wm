@@ -292,7 +292,15 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
 
         // Standalone hint rendering when panel is inactive but hints are set
         if !panel_active && !self.panel.keybinding_hints().is_empty() {
-            self.render_hint_strip(frame);
+            let area = frame.area();
+            let bottom = Rect {
+                x: area.x,
+                y: area.y.saturating_add(area.height).saturating_sub(1),
+                width: area.width,
+                height: 1,
+            };
+            self.panel.set_bottom_area(bottom);
+            self.panel.render_bottom(frame);
         }
         let menu_items = super::wm_menu_items(
             self.mouse_capture_enabled(),
@@ -339,52 +347,5 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 &ComponentContext::new(false).with_overlay(true),
             );
         }
-    }
-
-    fn render_hint_strip(&mut self, frame: &mut crate::ui::UiFrame<'_>) {
-        use crate::ui::safe_set_string;
-        use ratatui::style::Style;
-
-        let area = frame.area();
-        if area.height < 2 {
-            return;
-        }
-        let y = area.y.saturating_add(area.height).saturating_sub(1);
-        let buffer = frame.buffer_mut();
-        let style = Style::default()
-            .bg(crate::theme::bottom_panel_bg())
-            .fg(crate::theme::bottom_panel_fg());
-
-        for xx in area.x..area.x.saturating_add(area.width) {
-            if let Some(cell) = buffer.cell_mut((xx, y)) {
-                let mut st = cell.style();
-                st.bg = Some(crate::theme::bottom_panel_bg());
-                st.fg = Some(crate::theme::bottom_panel_fg());
-                cell.set_style(st);
-            }
-        }
-
-        let available = area.width as usize;
-
-        // Build hint text, dropping lowest-priority entries until they fit
-        let mut hint_text = String::new();
-        for (action, combos) in self.panel.keybinding_hints() {
-            let combo_str = combos.join("/");
-            let part = format!("{combo_str} {action}");
-            let candidate = if hint_text.is_empty() {
-                part.clone()
-            } else {
-                format!("{hint_text} · {part}")
-            };
-            if candidate.chars().count() <= available {
-                hint_text = candidate;
-            } else if hint_text.is_empty() {
-                hint_text = crate::ui::truncate_to_width(&part, available);
-            } else {
-                break;
-            }
-        }
-
-        safe_set_string(buffer, area, area.x, y, &hint_text, style);
     }
 }
