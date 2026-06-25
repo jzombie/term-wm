@@ -21,6 +21,7 @@ pub struct Pty {
     last_bytes: Arc<Mutex<Vec<u8>>>,
     dsr_requested: Arc<AtomicBool>,
     pending_title: Arc<Mutex<Option<String>>>,
+    foreground_title: Arc<Mutex<Option<String>>>,
     last_fg_pid: u32,
     last_fg_check: Instant,
     history: Vec<u8>,
@@ -71,6 +72,7 @@ impl Pty {
         let reader_last = Arc::clone(&last_bytes);
         let reader_dsr = Arc::clone(&dsr_requested);
         let pending_title = Arc::new(Mutex::new(None));
+        let foreground_title = Arc::new(Mutex::new(None));
         let reader_handle = thread::spawn(move || {
             read_loop(
                 reader,
@@ -89,6 +91,7 @@ impl Pty {
             last_bytes,
             dsr_requested,
             pending_title,
+            foreground_title,
             last_fg_pid: 0,
             last_fg_check: Instant::now(),
             history: Vec::new(),
@@ -130,10 +133,16 @@ impl Pty {
     }
 
     pub fn take_pending_title(&self) -> Option<String> {
-        self.pending_title
+        self.foreground_title
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .take()
+            .or_else(|| {
+                self.pending_title
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .take()
+            })
     }
 
     pub fn update(&mut self) {
@@ -200,7 +209,7 @@ impl Pty {
                 self.last_fg_pid = fg_pid;
                 if let Some(name) = get_process_name(fg_pid) {
                     *self
-                        .pending_title
+                        .foreground_title
                         .lock()
                         .unwrap_or_else(|err| err.into_inner()) = Some(name);
                 }
