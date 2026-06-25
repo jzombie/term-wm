@@ -35,48 +35,79 @@ pub fn format_osc52_bytes(text: &str) -> Vec<u8> {
     format!("\x1b]52;c;{encoded}\x07").into_bytes()
 }
 
-/// Write `text` to the system clipboard via the **OSC 52** escape sequence,
-/// using the provided writer (typically `std::io::stdout().lock()`).
+/// Write `text` to the host terminal's clipboard via the **OSC 52** escape
+/// sequence, using the provided writer.
 ///
 /// The host terminal emulator intercepts the sequence and places the
-/// decoded text on the real system clipboard.  This is the only clipboard
-/// mechanism that works reliably when term-wm runs inside a remote or
-/// embedded terminal (e.g. Zed's remote terminal, tmux, SSH).
+/// decoded text on the real system clipboard.  This works when term-wm
+/// runs inside a remote or embedded terminal (e.g. Zed's remote terminal,
+/// tmux, SSH).
 ///
-/// `writer` is a parameter so that tests can capture the output instead of
-/// writing to a real terminal.
-pub fn set_via_osc52_with_writer(
-    text: &str,
-    writer: &mut dyn Write,
-) -> Result<(), ClipboardError> {
+/// `writer` is a parameter so tests can capture the output into a `Vec<u8>`
+/// instead of writing to a real terminal.
+pub fn set_via_osc52_with_writer(text: &str, writer: &mut dyn Write) -> Result<(), ClipboardError> {
     let seq = format_osc52_bytes(text);
     writer.write_all(&seq)?;
     writer.flush()?;
     Ok(())
 }
 
-/// Convenience wrapper that writes OSC 52 to `stdout`.
-fn set_via_osc52(text: &str) -> Result<(), ClipboardError> {
-    set_via_osc52_with_writer(text, &mut std::io::stdout().lock())
+/// Abstraction over the platform-specific clipboard access so tests can
+/// inject a recording stub and verify the arboard path was exercised.
+pub trait ClipboardBackend {
+    fn set_text(&mut self, text: &str) -> Result<(), ClipboardError>;
+    fn get_text(&mut self) -> Result<String, ClipboardError>;
 }
 
-/// A persistent clipboard handle backed by `arboard`.
+/// Real backend backed by `arboard`.
+pub(crate) struct ArboardBackend(pub(crate) arboard::Clipboard);
+
+impl ClipboardBackend for ArboardBackend {
+    fn set_text(&mut self, text: &str) -> Result<(), ClipboardError> {
+        self.0
+            .set_text(text.to_owned())
+            .map_err(ClipboardError::from)
+    }
+
+    fn get_text(&mut self) -> Result<String, ClipboardError> {
+        self.0.get_text().map_err(ClipboardError::from)
+    }
+}
+
+/// A persistent clipboard handle backed by `arboard` and OSC 52.
 ///
 /// Holding a long-lived [`arboard::Clipboard`] instance avoids the macOS
 /// problem where a short-lived connection is torn down before the pasteboard
 /// server finishes processing the write.
 pub struct Clipboard {
-    inner: arboard::Clipboard,
+    inner: Box<dyn ClipboardBackend>,
+    /// Captured OSC 52 output — only present in test builds so that tests
+    /// can verify the OSC 52 path was exercised alongside the arboard path.
+    #[cfg(test)]
+    pub osc52_output: Vec<u8>,
 }
 
 impl Clipboard {
-    /// Create a new clipboard handle.
+    /// Create a new clipboard handle with the real arboard backend.
     ///
     /// Fails if the platform clipboard backend cannot be initialised
     /// (e.g. no Wayland clipboard provider, no X11 display, etc.).
     pub fn new() -> Result<Self, ClipboardError> {
         let inner = arboard::Clipboard::new()?;
-        Ok(Self { inner })
+        Ok(Self {
+            inner: Box::new(ArboardBackend(inner)),
+            #[cfg(test)]
+            osc52_output: Vec::new(),
+        })
+    }
+
+    /// Create a clipboard handle with an injectable back-end for testing.
+    #[cfg(test)]
+    pub fn with_backend(inner: Box<dyn ClipboardBackend>) -> Self {
+        Self {
+            inner,
+            osc52_output: Vec::new(),
+        }
     }
 
     /// Read the clipboard as a `String`.
@@ -85,7 +116,7 @@ impl Clipboard {
     /// system clipboard.  Does **not** attempt OSC 52 reads because most
     /// terminal emulators do not support them.
     pub fn get(&mut self) -> Result<String, ClipboardError> {
-        self.inner.get_text().map_err(ClipboardError::from)
+        self.inner.get_text()
     }
 
     /// Set the system clipboard to `text`.
@@ -105,12 +136,19 @@ impl Clipboard {
         // Always write OSC 52 for the host terminal — this is the only
         // mechanism that reaches the real clipboard when term-wm runs
         // inside Zed's remote terminal, tmux, or over SSH.
-        let _ = set_via_osc52(text);
+        #[cfg(not(test))]
+        let _ = set_via_osc52_with_writer(text, &mut std::io::stdout().lock());
+
+        // In tests, capture to osc52_output instead of stdout.
+        #[cfg(test)]
+        {
+            let mut buf = Vec::new();
+            let _ = set_via_osc52_with_writer(text, &mut buf);
+            self.osc52_output = buf;
+        }
 
         // Also write via arboard for the local case.
-        self.inner
-            .set_text(text.to_owned())
-            .map_err(ClipboardError::from)
+        self.inner.set_text(text)
     }
 }
 
@@ -186,6 +224,85 @@ pub fn extract_osc52_text(data: &[u8]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// Shared record kept by `RecordingBackend` so tests can verify the
+    /// arboard `set_text` path was exercised.
+    #[derive(Default)]
+    struct RecordingData {
+        set_called: bool,
+        set_text: String,
+    }
+
+    /// Stub `ClipboardBackend` that records invocations instead of touching
+    /// the real system clipboard.
+    struct RecordingBackend {
+        calls: Rc<RefCell<RecordingData>>,
+    }
+
+    impl RecordingBackend {
+        fn new() -> (Self, Rc<RefCell<RecordingData>>) {
+            let calls = Rc::new(RefCell::new(RecordingData::default()));
+            (
+                Self {
+                    calls: calls.clone(),
+                },
+                calls,
+            )
+        }
+    }
+
+    impl ClipboardBackend for RecordingBackend {
+        fn set_text(&mut self, text: &str) -> Result<(), ClipboardError> {
+            let mut data = self.calls.borrow_mut();
+            data.set_called = true;
+            data.set_text = text.to_string();
+            Ok(())
+        }
+
+        fn get_text(&mut self) -> Result<String, ClipboardError> {
+            Ok(String::new())
+        }
+    }
+
+    #[test]
+    fn clipboard_set_calls_both_backends() {
+        let (backend, calls) = RecordingBackend::new();
+        let mut cb = Clipboard::with_backend(Box::new(backend));
+
+        cb.set("hello from test").unwrap();
+
+        // ═══ arboard path ═══
+        let data = calls.borrow();
+        assert!(data.set_called, "arboard set_text must have been called");
+        assert_eq!(
+            data.set_text, "hello from test",
+            "arboard must receive the correct text"
+        );
+        drop(data);
+
+        // ═══ OSC 52 path ═══
+        assert!(
+            !cb.osc52_output.is_empty(),
+            "OSC 52 output must not be empty"
+        );
+        let seq = String::from_utf8_lossy(&cb.osc52_output);
+        assert!(
+            seq.starts_with("\x1b]52;c;"),
+            "OSC 52 must start with correct header, got: {seq:?}"
+        );
+        assert!(
+            seq.ends_with('\x07'),
+            "OSC 52 must end with BEL, got: {seq:?}"
+        );
+        assert_eq!(
+            extract_osc52_text(&cb.osc52_output),
+            Some("hello from test".to_string()),
+            "OSC 52 output must survive extract roundtrip"
+        );
+    }
 
     #[test]
     fn extract_osc52_bel_terminated() {
@@ -277,10 +394,9 @@ mod tests {
     }
 
     #[test]
-    fn osc52_set_via_osc52_error_does_not_panic() {
-        // set_via_osc52 writes to stdout which is fine in tests
-        // We just verify the function runs without panicking
-        let _ = set_via_osc52("test");
+    fn osc52_set_via_osc52_writer_does_not_panic() {
+        let mut buf = Vec::new();
+        let _ = set_via_osc52_with_writer("test", &mut buf);
     }
 
     // --- Writer-capture test: proves OSC 52 bytes are emitted by set_via_osc52_with_writer ---
@@ -290,7 +406,10 @@ mod tests {
         let mut buf = Vec::new();
         set_via_osc52_with_writer("hello world", &mut buf).unwrap();
         let expected = format_osc52_bytes("hello world");
-        assert_eq!(buf, expected, "writer should contain exactly the OSC 52 sequence");
+        assert_eq!(
+            buf, expected,
+            "writer should contain exactly the OSC 52 sequence"
+        );
     }
 
     #[test]
@@ -322,7 +441,10 @@ mod tests {
         let mut buf = Vec::new();
         set_via_osc52_with_writer("clip test", &mut buf).unwrap();
         let seq = String::from_utf8_lossy(&buf);
-        assert!(seq.starts_with("\x1b]52;c;"), "should start with OSC 52 header");
+        assert!(
+            seq.starts_with("\x1b]52;c;"),
+            "should start with OSC 52 header"
+        );
         assert!(seq.ends_with('\x07'), "should end with BEL terminator");
         assert_eq!(extract_osc52_text(&buf), Some("clip test".to_string()));
     }
