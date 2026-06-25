@@ -729,22 +729,26 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             width,
             height,
         });
+        let selected_row = (selected as u16).saturating_add(1);
         for row in 0..height {
             let y = start_y.saturating_add(row);
             if y < bounds.y || y >= bounds.y.saturating_add(bounds.height) {
                 continue;
             }
+            let row_style = if row == selected_row {
+                selected_style
+            } else {
+                menu_style
+            };
             for col in 0..width {
                 let x = start_x.saturating_add(col);
                 if x >= bounds.x.saturating_add(bounds.width) {
                     break;
                 }
                 if let Some(cell) = buffer.cell_mut((x, y)) {
-                    // Prevent potential color bleed-through
                     cell.reset();
-
                     cell.set_symbol(" ");
-                    cell.set_style(menu_style);
+                    cell.set_style(row_style);
                 }
             }
         }

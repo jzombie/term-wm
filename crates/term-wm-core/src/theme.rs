@@ -68,9 +68,9 @@ pub const NOIR: Theme = Theme {
     warning: Color::Rgb(255, 193, 7),
     error: Color::Rgb(255, 61, 61),
     // Chrome
-    decorator_header_bg: Color::Rgb(25, 28, 40),
+    decorator_header_bg: Color::Rgb(38, 42, 58),
     decorator_header_fg: Color::Rgb(225, 225, 235),
-    decorator_border: Color::Rgb(55, 58, 70),
+    decorator_border: Color::Rgb(85, 90, 110),
     // Menu
     menu_bg: Color::Rgb(25, 28, 40),
     menu_fg: Color::Rgb(225, 225, 235),
