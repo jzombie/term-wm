@@ -24,6 +24,9 @@ pub trait WindowDecorator: std::fmt::Debug {
     );
 
     fn hit_test(&self, window_rect: Rect, x: u16, y: u16) -> HeaderAction;
+
+    /// Returns the content area inside the decorations, relative to `window_rect`.
+    fn content_area(&self, window_rect: Rect) -> Rect;
 }
 
 #[derive(Debug)]
@@ -200,6 +203,15 @@ impl WindowDecorator for DefaultDecorator {
             }
         }
     }
+
+    fn content_area(&self, window_rect: Rect) -> Rect {
+        Rect {
+            x: window_rect.x.saturating_add(1),
+            y: window_rect.y.saturating_add(2),
+            width: window_rect.width.saturating_sub(2),
+            height: window_rect.height.saturating_sub(3),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -271,5 +283,9 @@ impl WindowDecorator for NoopDecorator {
     }
     fn hit_test(&self, _window_rect: Rect, _x: u16, _y: u16) -> HeaderAction {
         HeaderAction::None
+    }
+
+    fn content_area(&self, window_rect: Rect) -> Rect {
+        window_rect
     }
 }

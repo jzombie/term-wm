@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crossterm::event::{Event, MouseEvent};
 use ratatui::prelude::Rect;
 use ratatui::widgets::Clear;
@@ -406,6 +408,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     ) -> Vec<super::DrawTask<Id>> {
         let mut plan = Vec::new();
         let focused_window = self.wm_focus.current();
+        let decorator = Arc::clone(&self.decorator);
         for &id in &self.managed_draw_order {
             let full = self.full_region_for_id(id);
             if full.width == 0 || full.height == 0 {
@@ -422,12 +425,12 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                         continue;
                     }
                     let inner_abs = self.region_for_id(id);
-                    let inner = Rect {
+                    let inner = decorator.content_area(Rect {
                         x: inner_abs.x.saturating_sub(full.x),
                         y: inner_abs.y.saturating_sub(full.y),
                         width: inner_abs.width,
                         height: inner_abs.height,
-                    };
+                    });
                     if inner.width == 0 || inner.height == 0 {
                         continue;
                     }
@@ -439,12 +442,12 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 }
                 WindowId::App(app_id) => {
                     let inner_abs = self.region(app_id);
-                    let inner = Rect {
+                    let inner = decorator.content_area(Rect {
                         x: inner_abs.x.saturating_sub(full.x),
                         y: inner_abs.y.saturating_sub(full.y),
                         width: inner_abs.width,
                         height: inner_abs.height,
-                    };
+                    });
                     if inner.width == 0 || inner.height == 0 {
                         continue;
                     }
