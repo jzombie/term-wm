@@ -731,8 +731,7 @@ pub fn render_handles_masked<F>(
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
-                .fg(crate::theme::menu_bg())
-                .add_modifier(Modifier::DIM)
+                .fg(crate::theme::decorator_border_active())
         };
         let clip = handle.rect.intersection(buffer.area);
         if clip.width > 0 && clip.height > 0 {

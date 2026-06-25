@@ -71,7 +71,7 @@ pub const NOIR: Theme = Theme {
     // Chrome
     decorator_header_bg: Color::Rgb(38, 42, 58),
     decorator_header_fg: Color::Rgb(225, 225, 235),
-    decorator_border: Color::Rgb(55, 58, 70),
+    decorator_border: Color::Rgb(72, 76, 90),
     decorator_border_active: Color::Rgb(110, 118, 140),
     // Menu
     menu_bg: Color::Rgb(25, 28, 40),
