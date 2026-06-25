@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crossterm::event::{Event, MouseEventKind};
+use crossterm::event::{Event, KeyEvent, KeyEventKind, KeyEventState, MouseEventKind};
 
 use super::{WindowId, WindowManager};
 
@@ -58,6 +58,22 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             if self.handle_system_window_event(event) {
                 return true;
             }
+        }
+        // Hint click in bottom bar — works in both standalone and embedded modes
+        if let Event::Mouse(mouse) = event
+            && matches!(mouse.kind, MouseEventKind::Down(_))
+            && crate::layout::rect_contains(self.panel.bottom_area(), mouse.column, mouse.row)
+            && let Some(action) = self.panel.hit_test_hint(event)
+        {
+            if let Some(combo) = self.keybindings.first_combo(action) {
+                self.synthetic_event = Some(Event::Key(KeyEvent {
+                    code: combo.code,
+                    modifiers: combo.mods,
+                    kind: KeyEventKind::Press,
+                    state: KeyEventState::NONE,
+                }));
+            }
+            return true;
         }
         if let Some(layout) = self.managed_layout.as_mut() {
             return layout.handle_event(event, self.managed_area);

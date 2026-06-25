@@ -96,6 +96,7 @@ pub struct Panel<R: Copy + Eq + Ord> {
     notifications: NotificationArea,
     hostname: Option<String>,
     keybinding_hints: Vec<(Action, Vec<String>)>,
+    hint_rects: Vec<(Rect, Action)>,
 }
 
 impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
@@ -110,6 +111,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             notifications: NotificationArea::new(),
             hostname: None,
             keybinding_hints: Vec::new(),
+            hint_rects: Vec::new(),
         }
     }
 
@@ -125,6 +127,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         self.list.begin_frame();
         self.activation.begin_frame();
         self.notifications.begin_frame();
+        self.hint_rects.clear();
     }
 
     pub fn visible(&self) -> bool {
@@ -137,6 +140,10 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
 
     pub fn area(&self) -> Rect {
         self.area
+    }
+
+    pub fn bottom_area(&self) -> Rect {
+        self.bottom_area
     }
 
     pub fn set_visible(&mut self, visible: bool) {
@@ -525,6 +532,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
                 .bg(crate::theme::menu_selected_bg())
                 .add_modifier(Modifier::BOLD);
             let mut cursor_x = bounds.x;
+            self.hint_rects.clear();
             for (action, combos) in &self.keybinding_hints {
                 if cursor_x >= max_hint_x {
                     break;
@@ -543,8 +551,28 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
                     // Even a single hint doesn't fully fit; show it truncated
                     let text = truncate_to_width(&entry, available_w as usize);
                     safe_set_string(buffer, bounds, cursor_x, area.y, &text, style);
+                    self.hint_rects.push((
+                        Rect {
+                            x: cursor_x,
+                            y: area.y,
+                            width: available_w,
+                            height: 1,
+                        },
+                        *action,
+                    ));
                     break;
                 }
+
+                // Record clickable rect
+                self.hint_rects.push((
+                    Rect {
+                        x: cursor_x,
+                        y: area.y,
+                        width: entry_width,
+                        height: 1,
+                    },
+                    *action,
+                ));
 
                 // Render combo in accent, action in default
                 safe_set_string(buffer, bounds, cursor_x, area.y, &combo_str, combo_style);
@@ -574,6 +602,21 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             };
             safe_set_string(buffer, bounds, start_x.max(bounds.x), area.y, &text, style);
         }
+    }
+
+    pub fn hit_test_hint(&self, event: &Event) -> Option<Action> {
+        let Event::Mouse(mouse) = event else {
+            return None;
+        };
+        if !matches!(mouse.kind, MouseEventKind::Down(_)) {
+            return None;
+        }
+        for (rect, action) in &self.hint_rects {
+            if rect_contains(*rect, mouse.column, mouse.row) {
+                return Some(*action);
+            }
+        }
+        None
     }
 
     pub fn hit_test_menu(&self, event: &Event) -> bool {

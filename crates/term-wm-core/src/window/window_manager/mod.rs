@@ -211,6 +211,7 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     #[allow(clippy::type_complexity)]
     selection_preview_factory: Option<Box<dyn FnMut(String) -> Box<dyn Overlay>>>,
     next_window_seq: usize,
+    synthetic_event: Option<Event>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -362,11 +363,16 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             system_windows: BTreeMap::new(),
             selection_preview_factory: None,
             next_window_seq: 0,
+            synthetic_event: None,
         }
     }
 
     pub fn take_closed_app_windows(&mut self) -> Vec<Id> {
         std::mem::take(&mut self.closed_app_windows)
+    }
+
+    pub fn take_synthetic_event(&mut self) -> Option<Event> {
+        self.synthetic_event.take()
     }
 
     pub fn config(&self) -> &WmConfig {

@@ -3,7 +3,7 @@ use std::io;
 use crossterm::event::{Event, KeyEventKind, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::prelude::{Constraint, Direction, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 
 use crate::components::{Component, ComponentContext, ConfirmAction, Overlay};
 use crate::debug_event_flags;
@@ -160,6 +160,8 @@ where
                 Ok(flow)
             };
             if let Some(evt) = event {
+                // Synthesized key event from bottom-panel hint click takes priority
+                let evt = app.windows().take_synthetic_event().unwrap_or(evt);
                 // Pre-compute the keybinding action using the configured
                 // KeyBindings from WindowManager (not hardcoded defaults).
                 let mapped_action = match &evt {
@@ -587,6 +589,11 @@ fn composite_window<F>(
         let mut offscreen = UiFrame::from_parts(local_area, &mut buffer);
         decorator.render_window(&mut offscreen, local_area, title, focused);
         render_content(&mut offscreen);
+    }
+    if !focused {
+        for cell in buffer.content.iter_mut() {
+            cell.modifier.insert(Modifier::DIM);
+        }
     }
     frame.blit_from_signed(&buffer, surface.dest);
 }

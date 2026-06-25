@@ -192,33 +192,87 @@ pub fn rgb_to_color(rgb: (u8, u8, u8)) -> Color {
     crate::io::utils::term_color::map_rgb_to_color(rgb.0, rgb.1, rgb.2)
 }
 
-pub fn accent() -> Color { current().fg(FgColor::Accent) }
-pub fn accent_alt() -> Color { current().fg(FgColor::AccentAlt) }
-pub fn panel_bg() -> Color { current().bg(BgColor::PanelBg) }
-pub fn panel_fg() -> Color { current().fg(FgColor::PanelFg) }
-pub fn panel_inactive_fg() -> Color { current().fg(FgColor::PanelInactiveFg) }
-pub fn panel_active_bg() -> Color { current().bg(BgColor::PanelActiveBg) }
-pub fn panel_active_fg() -> Color { current().fg(FgColor::PanelActiveFg) }
-pub fn menu_bg() -> Color { current().bg(BgColor::MenuBg) }
-pub fn menu_fg() -> Color { current().fg(FgColor::MenuFg) }
-pub fn menu_selected_bg() -> Color { current().bg(BgColor::MenuSelectedBg) }
-pub fn menu_selected_fg() -> Color { current().fg(FgColor::MenuSelectedFg) }
-pub fn success_bg() -> Color { current().fg(FgColor::Success) }
-pub fn success_fg() -> Color { current().fg(FgColor::Success) }
-pub fn selection_bg() -> Color { current().bg(BgColor::SelectionBg) }
-pub fn selection_fg() -> Color { current().fg(FgColor::SelectionFg) }
-pub fn dialog_bg() -> Color { current().bg(BgColor::DialogBg) }
-pub fn dialog_fg() -> Color { current().fg(FgColor::DialogFg) }
-pub fn dialog_separator() -> Color { current().fg(FgColor::DialogSeparator) }
-pub fn link_color() -> Color { current().fg(FgColor::LinkColor) }
-pub fn link_underline() -> bool { current().link_underline }
-pub fn decorator_header_bg() -> Color { current().bg(BgColor::DecoratorHeaderBg) }
-pub fn decorator_header_fg() -> Color { current().fg(FgColor::DecoratorHeaderFg) }
-pub fn decorator_border() -> Color { current().fg(FgColor::DecoratorBorder) }
-pub fn decorator_border_active() -> Color { current().fg(FgColor::DecoratorBorderActive) }
-pub fn debug_highlight() -> Color { current().fg(FgColor::DebugHighlight) }
-pub fn bottom_panel_bg() -> Color { current().bg(BgColor::BottomPanelBg) }
-pub fn bottom_panel_fg() -> Color { current().fg(FgColor::BottomPanelFg) }
+pub fn accent() -> Color {
+    current().fg(FgColor::Accent)
+}
+pub fn accent_alt() -> Color {
+    current().fg(FgColor::AccentAlt)
+}
+pub fn panel_bg() -> Color {
+    current().bg(BgColor::PanelBg)
+}
+pub fn panel_fg() -> Color {
+    current().fg(FgColor::PanelFg)
+}
+pub fn panel_inactive_fg() -> Color {
+    current().fg(FgColor::PanelInactiveFg)
+}
+pub fn panel_active_bg() -> Color {
+    current().bg(BgColor::PanelActiveBg)
+}
+pub fn panel_active_fg() -> Color {
+    current().fg(FgColor::PanelActiveFg)
+}
+pub fn menu_bg() -> Color {
+    current().bg(BgColor::MenuBg)
+}
+pub fn menu_fg() -> Color {
+    current().fg(FgColor::MenuFg)
+}
+pub fn menu_selected_bg() -> Color {
+    current().bg(BgColor::MenuSelectedBg)
+}
+pub fn menu_selected_fg() -> Color {
+    current().fg(FgColor::MenuSelectedFg)
+}
+pub fn success_bg() -> Color {
+    current().fg(FgColor::Success)
+}
+pub fn success_fg() -> Color {
+    current().fg(FgColor::Success)
+}
+pub fn selection_bg() -> Color {
+    current().bg(BgColor::SelectionBg)
+}
+pub fn selection_fg() -> Color {
+    current().fg(FgColor::SelectionFg)
+}
+pub fn dialog_bg() -> Color {
+    current().bg(BgColor::DialogBg)
+}
+pub fn dialog_fg() -> Color {
+    current().fg(FgColor::DialogFg)
+}
+pub fn dialog_separator() -> Color {
+    current().fg(FgColor::DialogSeparator)
+}
+pub fn link_color() -> Color {
+    current().fg(FgColor::LinkColor)
+}
+pub fn link_underline() -> bool {
+    current().link_underline
+}
+pub fn decorator_header_bg() -> Color {
+    current().bg(BgColor::DecoratorHeaderBg)
+}
+pub fn decorator_header_fg() -> Color {
+    current().fg(FgColor::DecoratorHeaderFg)
+}
+pub fn decorator_border() -> Color {
+    current().fg(FgColor::DecoratorBorder)
+}
+pub fn decorator_border_active() -> Color {
+    current().fg(FgColor::DecoratorBorderActive)
+}
+pub fn debug_highlight() -> Color {
+    current().fg(FgColor::DebugHighlight)
+}
+pub fn bottom_panel_bg() -> Color {
+    current().bg(BgColor::BottomPanelBg)
+}
+pub fn bottom_panel_fg() -> Color {
+    current().fg(FgColor::BottomPanelFg)
+}
 
 // ---------------------------------------------------------------------------
 // WCAG contrast helpers & tests
@@ -226,7 +280,11 @@ pub fn bottom_panel_fg() -> Color { current().fg(FgColor::BottomPanelFg) }
 
 fn srgb_linearize(c: u8) -> f64 {
     let v = c as f64 / 255.0;
-    if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    if v <= 0.04045 {
+        v / 12.92
+    } else {
+        ((v + 0.055) / 1.055).powf(2.4)
+    }
 }
 
 fn relative_luminance(color: Color) -> f64 {
@@ -270,13 +328,25 @@ mod tests {
         // Near-black text (L≈0.002) chosen for 13:1 on bright green.
         // To reach 3:1 on dark bgs it would need L≥0.11, but then it
         // couldn't reach 4.5:1 on green (needs L≤0.09).
-        (FgColor::MenuSelectedFg, BgColor::PanelBg, "dark text can't also be light enough for dark bg"),
-        (FgColor::MenuSelectedFg, BgColor::PanelActiveBg, "same luminance conflict"),
+        (
+            FgColor::MenuSelectedFg,
+            BgColor::PanelBg,
+            "dark text can't also be light enough for dark bg",
+        ),
+        (
+            FgColor::MenuSelectedFg,
+            BgColor::PanelActiveBg,
+            "same luminance conflict",
+        ),
         (FgColor::MenuSelectedFg, BgColor::MenuBg, "same"),
         (FgColor::MenuSelectedFg, BgColor::DialogBg, "same"),
         (FgColor::MenuSelectedFg, BgColor::DecoratorHeaderBg, "same"),
         (FgColor::MenuSelectedFg, BgColor::BottomPanelBg, "same"),
-        (FgColor::SelectionFg, BgColor::PanelBg, "same — near-black only on green"),
+        (
+            FgColor::SelectionFg,
+            BgColor::PanelBg,
+            "same — near-black only on green",
+        ),
         (FgColor::SelectionFg, BgColor::PanelActiveBg, "same"),
         (FgColor::SelectionFg, BgColor::MenuBg, "same"),
         (FgColor::SelectionFg, BgColor::DialogBg, "same"),
@@ -287,42 +357,134 @@ mod tests {
         (FgColor::Success, BgColor::SelectionBg, "green on green"),
         (FgColor::Accent, BgColor::MenuSelectedBg, "green on green"),
         (FgColor::Accent, BgColor::SelectionBg, "green on green"),
-        (FgColor::MenuSelectedBg, BgColor::MenuSelectedBg, "green on green"),
-        (FgColor::MenuSelectedBg, BgColor::SelectionBg, "green on green"),
+        (
+            FgColor::MenuSelectedBg,
+            BgColor::MenuSelectedBg,
+            "green on green",
+        ),
+        (
+            FgColor::MenuSelectedBg,
+            BgColor::SelectionBg,
+            "green on green",
+        ),
         // Dialog separator is dialog-internal only
-        (FgColor::DialogSeparator, BgColor::PanelBg, "dialog-internal only"),
+        (
+            FgColor::DialogSeparator,
+            BgColor::PanelBg,
+            "dialog-internal only",
+        ),
         (FgColor::DialogSeparator, BgColor::PanelActiveBg, "same"),
         (FgColor::DialogSeparator, BgColor::MenuBg, "same"),
         (FgColor::DialogSeparator, BgColor::DecoratorHeaderBg, "same"),
         // Border colors on incompatible backgrounds
-        (FgColor::DecoratorBorder, BgColor::PanelActiveBg, "border never on active panel"),
-        (FgColor::DecoratorBorder, BgColor::DecoratorHeaderBg, "border never on header"),
-        (FgColor::DecoratorBorderActive, BgColor::PanelActiveBg, "never combined"),
-        (FgColor::DecoratorBorderActive, BgColor::MenuSelectedBg, "never combined"),
-        (FgColor::DecoratorBorderActive, BgColor::SelectionBg, "never combined"),
+        (
+            FgColor::DecoratorBorder,
+            BgColor::PanelActiveBg,
+            "border never on active panel",
+        ),
+        (
+            FgColor::DecoratorBorder,
+            BgColor::DecoratorHeaderBg,
+            "border never on header",
+        ),
+        (
+            FgColor::DecoratorBorderActive,
+            BgColor::PanelActiveBg,
+            "never combined",
+        ),
+        (
+            FgColor::DecoratorBorderActive,
+            BgColor::MenuSelectedBg,
+            "never combined",
+        ),
+        (
+            FgColor::DecoratorBorderActive,
+            BgColor::SelectionBg,
+            "never combined",
+        ),
         // Various fg colors that only appear on their designated bg
-        (FgColor::DebugHighlight, BgColor::MenuSelectedBg, "never combined"),
-        (FgColor::DebugHighlight, BgColor::SelectionBg, "never combined"),
-        (FgColor::LinkColor, BgColor::MenuSelectedBg, "never combined"),
+        (
+            FgColor::DebugHighlight,
+            BgColor::MenuSelectedBg,
+            "never combined",
+        ),
+        (
+            FgColor::DebugHighlight,
+            BgColor::SelectionBg,
+            "never combined",
+        ),
+        (
+            FgColor::LinkColor,
+            BgColor::MenuSelectedBg,
+            "never combined",
+        ),
         (FgColor::LinkColor, BgColor::SelectionBg, "never combined"),
-        (FgColor::BottomPanelFg, BgColor::MenuSelectedBg, "never combined"),
-        (FgColor::BottomPanelFg, BgColor::SelectionBg, "never combined"),
+        (
+            FgColor::BottomPanelFg,
+            BgColor::MenuSelectedBg,
+            "never combined",
+        ),
+        (
+            FgColor::BottomPanelFg,
+            BgColor::SelectionBg,
+            "never combined",
+        ),
         (FgColor::DialogFg, BgColor::MenuSelectedBg, "never combined"),
         (FgColor::DialogFg, BgColor::SelectionBg, "never combined"),
-        (FgColor::DecoratorHeaderFg, BgColor::MenuSelectedBg, "never combined"),
-        (FgColor::DecoratorHeaderFg, BgColor::SelectionBg, "never combined"),
+        (
+            FgColor::DecoratorHeaderFg,
+            BgColor::MenuSelectedBg,
+            "never combined",
+        ),
+        (
+            FgColor::DecoratorHeaderFg,
+            BgColor::SelectionBg,
+            "never combined",
+        ),
         // Light text (L≈0.78) on bright green — never combined
-        (FgColor::PanelActiveFg, BgColor::MenuSelectedBg, "never combined"),
-        (FgColor::PanelActiveFg, BgColor::SelectionBg, "never combined"),
-        (FgColor::MenuFg, BgColor::MenuSelectedBg, "light text on green — never combined"),
+        (
+            FgColor::PanelActiveFg,
+            BgColor::MenuSelectedBg,
+            "never combined",
+        ),
+        (
+            FgColor::PanelActiveFg,
+            BgColor::SelectionBg,
+            "never combined",
+        ),
+        (
+            FgColor::MenuFg,
+            BgColor::MenuSelectedBg,
+            "light text on green — never combined",
+        ),
         (FgColor::MenuFg, BgColor::SelectionBg, "never combined"),
-        (FgColor::PanelFg, BgColor::MenuSelectedBg, "light text on green — never combined"),
+        (
+            FgColor::PanelFg,
+            BgColor::MenuSelectedBg,
+            "light text on green — never combined",
+        ),
         (FgColor::PanelFg, BgColor::SelectionBg, "never combined"),
-        (FgColor::PanelInactiveFg, BgColor::MenuSelectedBg, "light text on green — never combined"),
-        (FgColor::PanelInactiveFg, BgColor::SelectionBg, "never combined"),
-        (FgColor::AccentAlt, BgColor::MenuSelectedBg, "amber on green — never combined"),
+        (
+            FgColor::PanelInactiveFg,
+            BgColor::MenuSelectedBg,
+            "light text on green — never combined",
+        ),
+        (
+            FgColor::PanelInactiveFg,
+            BgColor::SelectionBg,
+            "never combined",
+        ),
+        (
+            FgColor::AccentAlt,
+            BgColor::MenuSelectedBg,
+            "amber on green — never combined",
+        ),
         (FgColor::AccentAlt, BgColor::SelectionBg, "never combined"),
-        (FgColor::DialogFg, BgColor::MenuSelectedBg, "already excluded above"),
+        (
+            FgColor::DialogFg,
+            BgColor::MenuSelectedBg,
+            "already excluded above",
+        ),
     ];
 
     /// Every FgColor × BgColor pair at 3.0:1 (WCAG AA UI/large).
@@ -336,7 +498,10 @@ mod tests {
 
         for fg in FgColor::iter() {
             for bg in BgColor::iter() {
-                if PHYSICALLY_IMPOSSIBLE.iter().any(|(f, b, _)| *f == fg && *b == bg) {
+                if PHYSICALLY_IMPOSSIBLE
+                    .iter()
+                    .any(|(f, b, _)| *f == fg && *b == bg)
+                {
                     excluded += 1;
                     continue;
                 }
