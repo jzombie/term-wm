@@ -27,6 +27,29 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         if matches!(event, Event::Mouse(_)) && self.handle_managed_event(event) {
             return true;
         }
+
+        // Hover-to-scroll: route scroll events to the window under the cursor
+        // without changing keyboard focus. This lets you scroll any visible
+        // window while keeping keyboard input directed at the active window.
+        if let Event::Mouse(mouse) = event
+            && matches!(
+                mouse.kind,
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+            )
+            && let Some(hovered) =
+                self.hit_test_region_topmost(mouse.column, mouse.row, &self.managed_draw_order)
+            && hovered != self.focused_window()
+            && let Some(localized) = self.localize_event_content(hovered, event)
+        {
+            let adjusted = self.adjust_event_for_window(hovered, &localized);
+            return match hovered {
+                WindowId::App(id) => on_app(id, &adjusted),
+                WindowId::System(system_id) => {
+                    self.dispatch_system_window_event_localized(system_id, &adjusted)
+                }
+            };
+        }
+
         let Some((window_id, localized)) = self.focused_window_event(event) else {
             return false;
         };
