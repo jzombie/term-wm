@@ -1,0 +1,29 @@
+[package]
+name = "term-wm-ui-components"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+crossterm = { workspace = true }
+indoc = { workspace = true }
+linkify = { workspace = true }
+portable-pty = { workspace = true }
+pulldown-cmark = { workspace = true }
+ratatui = { workspace = true }
+resvg = { workspace = true }
+shell-words = { workspace = true }
+term-wm-core = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+vt100 = { workspace = true }
+webbrowser = { workspace = true }
+
+[dev-dependencies]
+# proptest was previously used for property-based scroll-sync tests.
+# If re-adding property tests, uncomment and ensure proptest-regressions/
+# is maintained.
+# proptest = { workspace = true }
+tempfile = { workspace = true }

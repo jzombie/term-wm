@@ -2,25 +2,26 @@ use ratatui::layout::Rect;
 
 #[test]
 fn default_shell_nonempty() {
-    let s = term_wm::components::default_shell();
+    let s = term_wm::default_shell();
     assert!(!s.is_empty());
     // ensure the command builder can be constructed without panicking
-    let _ = term_wm::components::default_shell_command();
+    let _ = term_wm::default_shell_command();
 }
 
 #[test]
-fn app_state_mouse_capture_flow() {
-    let mut s = term_wm::state::AppState::new();
-    // default starts enabled
-    assert!(s.mouse_capture_enabled());
+fn mouse_capture_flow_through_window_manager() {
+    let mut wm: term_wm::window::WindowManager<usize> =
+        term_wm::window::WindowManager::new_standalone(0);
+    // default starts enabled (from config)
+    assert!(wm.mouse_capture_enabled());
     // setting the same value shouldn't mark change
-    s.set_mouse_capture_enabled(true);
-    assert!(s.take_mouse_capture_change().is_none());
+    wm.set_mouse_capture_enabled(true);
+    assert!(wm.take_mouse_capture_change().is_none());
     // flip it and observe the change
-    s.set_mouse_capture_enabled(false);
-    assert_eq!(s.take_mouse_capture_change(), Some(false));
+    wm.set_mouse_capture_enabled(false);
+    assert_eq!(wm.take_mouse_capture_change(), Some(false));
     // consumed
-    assert!(s.take_mouse_capture_change().is_none());
+    assert!(wm.take_mouse_capture_change().is_none());
 }
 
 #[test]
@@ -39,7 +40,7 @@ fn panel_split_area_basic() {
 
 #[test]
 fn sanity_list_behavior() {
-    let mut list = term_wm::components::list::ListComponent::new("t");
+    let mut list = term_wm::list::ListComponent::new("t");
     list.set_items(vec!["a".into(), "b".into(), "c".into()]);
     assert_eq!(list.items().len(), 3);
     list.move_selection(1);

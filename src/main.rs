@@ -6,17 +6,21 @@
 use std::io;
 
 use clap::Parser;
+use line_ending::LineEnding;
 use ratatui::prelude::Rect;
 
-use line_ending::LineEnding;
-use term_wm::components::{
-    Component, ScrollViewComponent, TerminalComponent, default_shell_command,
+use term_wm::components::Component;
+use term_wm::io::{
+    RenderTarget,
+    console::{ConsoleEventSource, ConsoleRenderTarget},
 };
-use term_wm::drivers::OutputDriver;
-use term_wm::drivers::console::{ConsoleInputDriver, ConsoleOutputDriver};
-use term_wm::runner::{HasWindowManager, WindowApp, run_window_app};
+use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
 use term_wm::ui::UiFrame;
-use term_wm::window::{AppWindowDraw, WindowManager};
+use term_wm::window::{OverlayId, SystemWindowId, WindowDrawContext, WindowManager};
+use term_wm::{ScrollViewComponent, TerminalComponent, default_shell_command};
+use term_wm_ui_components::sys::debug_log::{
+    DebugLogComponent, install_panic_hook, set_global_debug_log,
+};
 
 type PaneId = usize;
 
@@ -63,21 +67,11 @@ fn main() -> io::Result<()> {
         })
     };
     let mut app = App::new_with(cli.cmds, total)?;
-    // Use the initial window indices as focus regions; the WindowManager
-    // will track additional windows as they are created.
-    let focus_regions: Vec<PaneId> = (0..total).collect();
-    let mut output = ConsoleOutputDriver::new()?;
+    let mut output = ConsoleRenderTarget::new()?;
     output.enter()?;
-    let mut input = ConsoleInputDriver::new();
+    let mut input = ConsoleEventSource::new();
 
-    let result = run_window_app(
-        &mut output,
-        &mut input,
-        &mut app,
-        &focus_regions,
-        |id| id,
-        Some,
-    );
+    let result = run_window_app(&mut output, &mut input, &mut app);
 
     output.exit()?;
 
@@ -85,16 +79,27 @@ fn main() -> io::Result<()> {
 }
 
 struct App {
-    windows: WindowManager<PaneId, PaneId>,
+    windows: WindowManager<PaneId>,
     terminals: Vec<ScrollViewComponent<TerminalComponent>>,
 }
 
 impl App {
     fn new_with(commands: Vec<String>, num_windows: usize) -> io::Result<Self> {
         let mut app = Self {
-            windows: WindowManager::new_managed(0),
+            windows: WindowManager::new_standalone(0),
             terminals: Vec::new(),
         };
+
+        // Initialize debug log system window
+        {
+            let (mut component, handle) = DebugLogComponent::new_default();
+            component.set_selection_enabled(app.windows.clipboard_enabled());
+            set_global_debug_log(handle);
+            app.windows
+                .set_system_window(SystemWindowId::DebugLog, Box::new(component));
+            install_panic_hook();
+            term_wm::tracing_sub::init_default();
+        }
 
         let mut error_occurred = false;
 
@@ -132,10 +137,10 @@ impl App {
         }
 
         if error_occurred {
-            app.windows.open_debug_window();
+            app.windows().open_debug_window();
         }
 
-        app.windows.open_help_overlay();
+        app.open_help_overlay();
         Ok(app)
     }
 
@@ -159,9 +164,38 @@ impl App {
     }
 }
 
-impl HasWindowManager<PaneId, PaneId> for App {
-    fn windows(&mut self) -> &mut WindowManager<PaneId, PaneId> {
+impl WindowManagerHost<PaneId> for App {
+    fn windows(&mut self) -> &mut WindowManager<PaneId> {
         &mut self.windows
+    }
+
+    fn open_help_overlay(&mut self) {
+        use term_wm_ui_components::sys::help_overlay::HelpOverlayComponent;
+        let kb = self.windows.keybindings().clone();
+        let mut h = HelpOverlayComponent::new(kb);
+        h.show();
+        h.set_selection_enabled(self.windows.clipboard_enabled());
+        self.windows.open_overlay(OverlayId::Help, Box::new(h));
+    }
+
+    fn open_keybindings_overlay(&mut self) {
+        use term_wm_ui_components::sys::keybinding_overlay::KeybindingOverlayComponent;
+        let kb = self.windows.keybindings().clone();
+        let mut o = KeybindingOverlayComponent::new(kb);
+        o.show();
+        self.windows
+            .open_overlay(OverlayId::Keybindings, Box::new(o));
+    }
+
+    fn open_exit_confirm(&mut self) {
+        use term_wm_ui_components::confirm_overlay::ConfirmOverlayComponent;
+        let mut confirm = ConfirmOverlayComponent::new();
+        confirm.open(
+            "Exit App",
+            "Exit the application?\nUnsaved changes will be lost.",
+        );
+        self.windows
+            .open_overlay(OverlayId::ExitConfirm, Box::new(confirm));
     }
 
     fn wm_new_window(&mut self) -> io::Result<()> {
@@ -193,14 +227,16 @@ impl HasWindowManager<PaneId, PaneId> for App {
         Ok(())
     }
 
-    fn set_clipboard_enabled(&mut self, enabled: bool) {
+    fn set_clipboard_enabled(&mut self, _enabled: bool) {}
+
+    fn set_window_selection_enabled(&mut self, enabled: bool) {
         for sv in &mut self.terminals {
             sv.content.set_selection_enabled(enabled);
         }
     }
 }
 
-impl WindowApp<PaneId, PaneId> for App {
+impl WindowProvider<PaneId> for App {
     fn enumerate_windows(&mut self) -> Vec<PaneId> {
         self.terminals
             .iter_mut()
@@ -209,7 +245,7 @@ impl WindowApp<PaneId, PaneId> for App {
             .collect()
     }
 
-    fn render_window(&mut self, frame: &mut UiFrame<'_>, window: AppWindowDraw<PaneId>) {
+    fn render_window(&mut self, frame: &mut UiFrame<'_>, window: WindowDrawContext<PaneId>) {
         render_pane(frame, self, window.id, window.surface.inner, window.focused);
     }
 
@@ -221,6 +257,12 @@ impl WindowApp<PaneId, PaneId> for App {
         self.terminals
             .get_mut(id)
             .map(|sv| sv as &mut dyn Component)
+    }
+
+    fn window_pane_title(&mut self, id: PaneId) -> Option<String> {
+        self.terminals
+            .get_mut(id)
+            .and_then(|sv| sv.content.take_pending_title())
     }
 }
 

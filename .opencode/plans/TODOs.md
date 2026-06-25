@@ -1,0 +1,2 @@
+- App-configurable keybindings and centralized ability to render them (i.e. bottom panel for most used; and overlay for extra context)
+- What are ways to emulate drag events on mobile?  Current thought is making an overlay with arrow buttons on it; how to determine if mobile to begin with?
