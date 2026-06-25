@@ -145,7 +145,28 @@ impl Pty {
             })
     }
 
+    #[cfg(unix)]
+    fn poll_foreground(&mut self) {
+        if self.last_fg_check.elapsed() >= std::time::Duration::from_secs(1) {
+            self.last_fg_check = Instant::now();
+            if let Some(fg_pid) = self.master.process_group_leader().map(|p| p as u32)
+                && fg_pid != self.last_fg_pid
+            {
+                self.last_fg_pid = fg_pid;
+                if let Some(name) = get_process_name(fg_pid) {
+                    *self
+                        .foreground_title
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner()) = Some(name);
+                }
+            }
+        }
+    }
+
     pub fn update(&mut self) {
+        #[cfg(unix)]
+        self.poll_foreground();
+
         let bytes = {
             let mut pending = self.pending.lock().unwrap_or_else(|err| err.into_inner());
             if pending.is_empty() {
@@ -198,22 +219,6 @@ impl Pty {
                 .pending_title
                 .lock()
                 .unwrap_or_else(|err| err.into_inner()) = Some(title);
-        }
-
-        #[cfg(unix)]
-        if self.last_fg_check.elapsed() >= std::time::Duration::from_secs(1) {
-            self.last_fg_check = Instant::now();
-            if let Some(fg_pid) = self.master.process_group_leader().map(|p| p as u32)
-                && fg_pid != self.last_fg_pid
-            {
-                self.last_fg_pid = fg_pid;
-                if let Some(name) = get_process_name(fg_pid) {
-                    *self
-                        .foreground_title
-                        .lock()
-                        .unwrap_or_else(|err| err.into_inner()) = Some(name);
-                }
-            }
         }
 
         let added = bytes.iter().filter(|b| **b == b'\n').count();
