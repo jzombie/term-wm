@@ -628,7 +628,13 @@ fn composite_window<F>(
     let mut buffer = Buffer::empty(local_area);
     {
         let mut offscreen = UiFrame::from_parts(local_area, &mut buffer);
-        decorator.render_window(&mut offscreen, local_area, title, focused, keyboard_capture_disabled);
+        decorator.render_window(
+            &mut offscreen,
+            local_area,
+            title,
+            focused,
+            keyboard_capture_disabled,
+        );
         render_content(&mut offscreen);
     }
     if !focused {
