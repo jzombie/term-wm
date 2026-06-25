@@ -172,6 +172,16 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
 
     pub fn register_managed_layout(&mut self, area: Rect) {
         self.last_frame_area = area;
+        // Compute hints before layout so split_area can reserve space for them
+        match self.hint_visibility {
+            crate::wm_config::HintVisibility::Always => {
+                let hints = self.keybindings.bottom_hints(6);
+                self.panel.set_keybinding_hints(hints);
+            }
+            _ => {
+                self.panel.set_keybinding_hints(Vec::new());
+            }
+        }
         let (_, _, managed_area) = self.panel.split_area(self.panel_active(), area);
         let prev_managed = self.managed_area;
         self.managed_area = managed_area;

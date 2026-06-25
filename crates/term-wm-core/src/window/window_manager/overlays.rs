@@ -1,7 +1,7 @@
 use crossterm::event::{Event, MouseEventKind};
 use ratatui::prelude::Rect;
 
-use super::{OverlayId, SystemWindowId, WindowId, WindowManager};
+use super::{OverlayId, WindowId, WindowManager};
 use crate::components::{ComponentContext, ConfirmAction, Overlay};
 use crate::layout::{FloatingPane, rect_contains, render_handles_masked};
 use crate::window::FloatRectSpec;
@@ -160,7 +160,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
 
     pub fn render_overlays(&mut self, frame: &mut crate::ui::UiFrame<'_>) {
         use crate::components::ComponentContext;
-        use std::collections::BTreeMap;
 
         let (hovered, hovered_resize) = self.hover_targets();
         let obscuring: Vec<Rect> = self
@@ -235,65 +234,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             }
         }
 
-        let status_line = if self.wm_overlay_visible() {
-            let esc_state = if let Some(remaining) = self.esc_passthrough_remaining() {
-                format!("Esc passthrough: active ({}ms)", remaining.as_millis())
-            } else {
-                "Esc passthrough: inactive".to_string()
-            };
-            Some(format!("{esc_state} · Tab/Shift-Tab: cycle windows"))
-        } else {
-            None
-        };
-        let display = self.build_display_order();
-        let titles_map: BTreeMap<WindowId<Id>, String> = self
-            .windows
-            .keys()
-            .map(|id| (*id, self.window_title(*id)))
-            .collect();
-        let selection_copy_available = self.selection_text.is_some();
-
-        // Compute keybinding hints based on visibility mode
-        let panel_active = self.panel_active();
-        match self.hint_visibility {
-            crate::wm_config::HintVisibility::Never => {
-                self.panel.set_keybinding_hints(Vec::new());
-            }
-            crate::wm_config::HintVisibility::OnDemand => {
-                self.panel.set_keybinding_hints(Vec::new());
-            }
-            crate::wm_config::HintVisibility::Always => {
-                let hints = self.keybindings.bottom_hints(6);
-                self.panel.set_keybinding_hints(hints);
-            }
-        }
-
-        self.panel.render(
-            frame,
-            panel_active,
-            self.wm_focus.current(),
-            &display,
-            status_line.as_deref(),
-            self.mouse_capture_enabled(),
-            self.clipboard_enabled(),
-            self.clipboard_available(),
-            self.selection_active(),
-            self.selection_dragging(),
-            selection_copy_available,
-            self.selection_copied(),
-            self.wm_overlay_visible(),
-            move |id| {
-                titles_map.get(&id).cloned().unwrap_or_else(|| match id {
-                    WindowId::App(app_id) => format!("{:?}", app_id),
-                    WindowId::System(SystemWindowId::DebugLog) => "Debug Log".to_string(),
-                })
-            },
-        );
-
-        // Standalone hint rendering when panel is inactive
-        if !panel_active {
-            self.panel.render_hints(frame);
-        }
         let menu_items = super::wm_menu_items(
             self.mouse_capture_enabled(),
             self.clipboard_enabled(),

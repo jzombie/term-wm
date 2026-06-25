@@ -559,6 +559,7 @@ where
             }
         }
     }
+    app.windows().render_panel(frame);
     app.windows().render_overlays(frame);
 }
 

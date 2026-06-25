@@ -131,10 +131,6 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         self.visible
     }
 
-    pub(crate) fn set_bottom_area(&mut self, area: Rect) {
-        self.bottom_area = area;
-    }
-
     pub fn height(&self) -> u16 {
         self.height
     }
@@ -158,14 +154,19 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
     ///
     /// If `active` is false the panel areas are cleared and the entire `area`
     /// is returned as the managed region.
+    /// When inactive, the bottom row is still reserved if hints are set.
     pub fn split_area(&mut self, active: bool, area: Rect) -> (Rect, Rect, Rect) {
-        if !active {
-            self.area = Rect::default();
-            self.bottom_area = Rect::default();
-            return (Rect::default(), Rect::default(), area);
-        }
-        let top_h = self.height.min(area.height);
-        let bottom_h = 1u16.min(area.height.saturating_sub(top_h));
+        let top_h = if active {
+            self.height.min(area.height)
+        } else {
+            0
+        };
+        let has_hints = !self.keybinding_hints.is_empty();
+        let bottom_h = if has_hints || active {
+            1u16.min(area.height.saturating_sub(top_h))
+        } else {
+            0
+        };
         let panel = Rect {
             x: area.x,
             y: area.y,
@@ -211,6 +212,9 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         F: Fn(R) -> String,
     {
         if !active {
+            if !self.keybinding_hints.is_empty() {
+                self.render_hints(frame);
+            }
             return;
         }
         let area = self.area;
@@ -501,9 +505,15 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         };
 
         // Compute max x for hints (reserve space for info text when showing it)
-        let info_width = info_opt.as_ref().map(|s| s.chars().count() as u16).unwrap_or(0);
+        let info_width = info_opt
+            .as_ref()
+            .map(|s| s.chars().count() as u16)
+            .unwrap_or(0);
         let max_hint_x = if info_width > 0 {
-            bounds.x.saturating_add(bounds.width).saturating_sub(info_width + 2)
+            bounds
+                .x
+                .saturating_add(bounds.width)
+                .saturating_sub(info_width + 2)
         } else {
             bounds.x.saturating_add(bounds.width)
         };
@@ -557,7 +567,10 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             let start_x = if text_width >= bounds.width {
                 bounds.x
             } else {
-                bounds.x.saturating_add(bounds.width).saturating_sub(text_width)
+                bounds
+                    .x
+                    .saturating_add(bounds.width)
+                    .saturating_sub(text_width)
             };
             safe_set_string(buffer, bounds, start_x.max(bounds.x), area.y, &text, style);
         }

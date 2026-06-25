@@ -630,6 +630,48 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         }
         Some(self.config.esc_passthrough_window.saturating_sub(elapsed))
     }
+
+    pub fn render_panel(&mut self, frame: &mut UiFrame<'_>) {
+        let status_line = if self.wm_overlay_visible() {
+            let esc_state = if let Some(remaining) = self.esc_passthrough_remaining() {
+                format!("Esc passthrough: active ({}ms)", remaining.as_millis())
+            } else {
+                "Esc passthrough: inactive".to_string()
+            };
+            Some(format!("{esc_state} · Tab/Shift-Tab: cycle windows"))
+        } else {
+            None
+        };
+        let display = self.build_display_order();
+        let titles_map: std::collections::BTreeMap<WindowId<Id>, String> = self
+            .windows
+            .keys()
+            .map(|id| (*id, self.window_title(*id)))
+            .collect();
+        let selection_copy_available = self.selection_text.is_some();
+        let panel_active = self.panel_active();
+        self.panel.render(
+            frame,
+            panel_active,
+            self.wm_focus.current(),
+            &display,
+            status_line.as_deref(),
+            self.mouse_capture_enabled(),
+            self.clipboard_enabled(),
+            self.clipboard_available(),
+            self.selection_active(),
+            self.selection_dragging(),
+            selection_copy_available,
+            self.selection_copied(),
+            self.wm_overlay_visible(),
+            move |id| {
+                titles_map.get(&id).cloned().unwrap_or_else(|| match id {
+                    WindowId::App(app_id) => format!("{:?}", app_id),
+                    WindowId::System(SystemWindowId::DebugLog) => "Debug Log".to_string(),
+                })
+            },
+        );
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
