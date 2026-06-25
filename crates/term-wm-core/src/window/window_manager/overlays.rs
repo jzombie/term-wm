@@ -300,7 +300,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 height: 1,
             };
             self.panel.set_bottom_area(bottom);
-            self.panel.render_bottom(frame);
+            self.panel.render_hints(frame);
         }
         let menu_items = super::wm_menu_items(
             self.mouse_capture_enabled(),

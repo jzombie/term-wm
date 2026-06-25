@@ -447,6 +447,14 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
     }
 
     pub(crate) fn render_bottom(&mut self, frame: &mut UiFrame<'_>) {
+        self.render_bottom_impl(frame, true);
+    }
+
+    pub(crate) fn render_hints(&mut self, frame: &mut UiFrame<'_>) {
+        self.render_bottom_impl(frame, false);
+    }
+
+    fn render_bottom_impl(&mut self, frame: &mut UiFrame<'_>, show_info: bool) {
         let area = self.bottom_area;
         if area.width == 0 || area.height == 0 {
             return;
@@ -471,9 +479,8 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             .fg(crate::theme::bottom_panel_fg())
             .bg(crate::theme::bottom_panel_bg());
 
-        // Render keybinding hints left-aligned if available
-        if !self.keybinding_hints.is_empty() {
-            // Build platform/info string (shared with fallback)
+        // Build info text if needed
+        let info_opt = if show_info {
             let platform = std::env::consts::OS;
             const PKG_NAME: &str = env!("CARGO_PKG_NAME");
             const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -488,12 +495,21 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
                 self.hostname = Some(h.clone());
                 h
             };
-            let info = format!("{pkg_label} · {platform} · {hostname}");
-            let info_width = info.chars().count() as u16;
-            let max_hint_x = bounds
-                .x
-                .saturating_add(bounds.width)
-                .saturating_sub(info_width + 2);
+            Some(format!("{pkg_label} · {platform} · {hostname}"))
+        } else {
+            None
+        };
+
+        // Compute max x for hints (reserve space for info text when showing it)
+        let info_width = info_opt.as_ref().map(|s| s.chars().count() as u16).unwrap_or(0);
+        let max_hint_x = if info_width > 0 {
+            bounds.x.saturating_add(bounds.width).saturating_sub(info_width + 2)
+        } else {
+            bounds.x.saturating_add(bounds.width)
+        };
+
+        // Render keybinding hints left-aligned if available
+        if !self.keybinding_hints.is_empty() {
             let combo_style = Style::default()
                 .fg(crate::theme::menu_selected_fg())
                 .bg(crate::theme::menu_selected_bg())
@@ -527,45 +543,21 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
                 safe_set_string(buffer, bounds, cursor_x, area.y, &desc, style);
                 cursor_x = cursor_x.saturating_add(desc.chars().count() as u16);
 
-                // Space between entries
                 if cursor_x < max_hint_x {
                     safe_set_string(buffer, bounds, cursor_x, area.y, "|", Style::default());
                     cursor_x = cursor_x.saturating_add(1);
                 }
             }
+        }
 
-            // Write info right-aligned
-            let info_x = bounds
-                .x
-                .saturating_add(bounds.width)
-                .saturating_sub(info_width);
-            safe_set_string(buffer, bounds, info_x.max(bounds.x), area.y, &info, style);
-        } else {
-            // Fallback: right-align info only (original behavior)
-            let platform = std::env::consts::OS;
-            const PKG_NAME: &str = env!("CARGO_PKG_NAME");
-            const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
-            let pkg_label = format!("{PKG_NAME} {PKG_VERSION}");
-            let hostname = if let Some(ref h) = self.hostname {
-                h.clone()
-            } else {
-                let h = hostname::get()
-                    .ok()
-                    .and_then(|s| s.into_string().ok())
-                    .unwrap_or_else(|| "unknown-host".to_string());
-                self.hostname = Some(h.clone());
-                h
-            };
-            let info = format!("{pkg_label} · {platform} · {hostname}");
-            let text = truncate_to_width(&info, bounds.width as usize);
+        // Write info right-aligned
+        if let Some(ref info) = info_opt {
+            let text = truncate_to_width(info, bounds.width as usize);
             let text_width = text.chars().count() as u16;
             let start_x = if text_width >= bounds.width {
                 bounds.x
             } else {
-                bounds
-                    .x
-                    .saturating_add(bounds.width)
-                    .saturating_sub(text_width)
+                bounds.x.saturating_add(bounds.width).saturating_sub(text_width)
             };
             safe_set_string(buffer, bounds, start_x.max(bounds.x), area.y, &text, style);
         }
