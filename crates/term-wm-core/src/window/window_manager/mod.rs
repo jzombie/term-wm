@@ -1456,4 +1456,145 @@ mod tests {
         assert_eq!(result.column, global.column - full.x);
         assert_eq!(result.row, global.row - full.y);
     }
+
+    #[test]
+    fn hover_scroll_routes_to_non_focused_window() {
+        use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+        let mut wm = WindowManager::<usize>::new_standalone(0);
+
+        let r1 = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
+        let r2 = Rect {
+            x: 5,
+            y: 5,
+            width: 10,
+            height: 10,
+        };
+        wm.regions.set(WindowId::app(1usize), r1);
+        wm.regions.set(WindowId::app(2usize), r2);
+        // Window 2 is topmost (last in draw order)
+        wm.z_order = vec![WindowId::app(1usize), WindowId::app(2usize)];
+        wm.managed_draw_order = wm.z_order.clone();
+        // Focus on window 1 without altering z_order (unlike focus_app_window which brings to front)
+        wm.app_focus.set_current(1usize);
+        wm.wm_focus.set_current(WindowId::app(1usize));
+        assert_eq!(wm.focus(), 1usize);
+        assert_eq!(wm.focused_window(), WindowId::app(1usize));
+
+        let scroll = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 6,
+            row: 6,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        let mut received_id = None;
+        let mut received_event = None;
+        let _consumed = wm.dispatch_focused_event(&scroll, |id, evt| {
+            received_id = Some(id);
+            received_event = Some(evt.clone());
+            true
+        });
+
+        assert_eq!(received_id, Some(2usize));
+
+        if let Some(Event::Mouse(m)) = received_event {
+            // Chrome adds 1-col / 2-row offset: content starts at (6,7) relative
+            // to full window origin (5,5), so mouse at global (6,6) maps to
+            // content-local (0,0) then adjust_event adds chrome back: (1,2)
+            assert_eq!(m.column, 1);
+            assert_eq!(m.row, 2);
+            assert_eq!(m.kind, MouseEventKind::ScrollUp);
+        } else {
+            panic!("expected localized mouse event");
+        }
+
+        assert_eq!(wm.focus(), 1usize, "focus must not change");
+    }
+
+    #[test]
+    fn hover_scroll_over_focused_window_routes_normally() {
+        use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+        let mut wm = WindowManager::<usize>::new_standalone(0);
+
+        let r1 = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
+        let r2 = Rect {
+            x: 5,
+            y: 5,
+            width: 10,
+            height: 10,
+        };
+        wm.regions.set(WindowId::app(1usize), r1);
+        wm.regions.set(WindowId::app(2usize), r2);
+        wm.z_order.push(WindowId::app(1usize));
+        wm.z_order.push(WindowId::app(2usize));
+        wm.managed_draw_order = wm.z_order.clone();
+
+        wm.focus_app_window(2usize);
+
+        let scroll = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 6,
+            row: 6,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        let mut received_id = None;
+        wm.dispatch_focused_event(&scroll, |id, _| {
+            received_id = Some(id);
+            true
+        });
+
+        assert_eq!(received_id, Some(2usize));
+    }
+
+    #[test]
+    fn hover_scroll_outside_all_windows_routes_to_focused() {
+        use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+        let mut wm = WindowManager::<usize>::new_standalone(0);
+
+        let r1 = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
+        let r2 = Rect {
+            x: 5,
+            y: 5,
+            width: 10,
+            height: 10,
+        };
+        wm.regions.set(WindowId::app(1usize), r1);
+        wm.regions.set(WindowId::app(2usize), r2);
+        wm.z_order.push(WindowId::app(1usize));
+        wm.z_order.push(WindowId::app(2usize));
+        wm.managed_draw_order = wm.z_order.clone();
+
+        wm.focus_app_window(1usize);
+
+        let scroll = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 20,
+            row: 20,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        let mut received_id = None;
+        wm.dispatch_focused_event(&scroll, |id, _| {
+            received_id = Some(id);
+            true
+        });
+
+        assert_eq!(received_id, Some(1usize));
+    }
 }
