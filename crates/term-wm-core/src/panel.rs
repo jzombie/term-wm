@@ -491,8 +491,9 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
                 .saturating_add(bounds.width)
                 .saturating_sub(info_width + 2);
             let combo_style = Style::default()
-                .fg(crate::theme::bottom_panel_fg())
-                .bg(crate::theme::menu_bg());
+                .fg(crate::theme::menu_selected_fg())
+                .bg(crate::theme::menu_selected_bg())
+                .add_modifier(Modifier::BOLD);
             let sep_style = Style::default()
                 .fg(crate::theme::panel_inactive_fg())
                 .bg(crate::theme::bottom_panel_bg());
