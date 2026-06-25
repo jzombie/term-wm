@@ -37,6 +37,7 @@ pub struct TerminalComponent {
     selection: SelectionController,
     selection_enabled: bool,
     last_scrollback: usize,
+    last_max_scrollback: usize,
 }
 
 impl Component for TerminalComponent {
@@ -208,6 +209,7 @@ impl TerminalComponent {
             selection: SelectionController::new(),
             selection_enabled: false,
             last_scrollback: 0,
+            last_max_scrollback: 0,
         };
         Ok(comp)
     }
@@ -283,21 +285,30 @@ impl TerminalComponent {
             handle.set_content_size(area.width as usize, total_height);
 
             let current_sb = self.pane.scrollback();
+            let view_offset = ctx.viewport().offset_y;
             if current_sb == 0 {
-                // Follow tail: user is at bottom, keep viewport tracking new content
-                handle.scroll_vertical_to(usize::MAX);
+                // If viewport was scrolled away from where we left it (user
+                // scrolled via mouse wheel / scrollbar), sync scrollback from
+                // the viewport instead of forcing back to bottom.
+                if view_offset < self.last_max_scrollback.saturating_sub(1) {
+                    let target_sb = used.saturating_sub(view_offset);
+                    self.pane.set_scrollback(target_sb);
+                } else {
+                    // Follow tail: user is at bottom, keep viewport tracking new content
+                    handle.scroll_vertical_to(usize::MAX);
+                }
             } else if current_sb != self.last_scrollback {
                 // If scrollback changed internally (keys/output), push to viewport
                 let new_offset = used.saturating_sub(current_sb);
                 handle.scroll_vertical_to(new_offset);
             } else {
                 // Otherwise sync from viewport (scrollbar/mouse wheel on container)
-                let offset = ctx.viewport().offset_y;
-                let target_sb = used.saturating_sub(offset);
+                let target_sb = used.saturating_sub(view_offset);
                 if target_sb != current_sb {
                     self.pane.set_scrollback(target_sb);
                 }
             }
+            self.last_max_scrollback = used;
         }
 
         let scrollback_value = self.pane.scrollback();
