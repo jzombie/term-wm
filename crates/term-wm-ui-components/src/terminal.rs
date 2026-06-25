@@ -309,6 +309,10 @@ impl TerminalComponent {
         }
     }
 
+    pub fn take_pending_title(&mut self) -> Option<String> {
+        self.pane.take_pending_title()
+    }
+
     fn render_screen(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
         maintain_selection_drag(self);
 
@@ -831,6 +835,7 @@ struct TestPane {
     current_scrollback: usize,
     max_sb: usize,
     alt_screen: bool,
+    pending_title: Option<String>,
 }
 
 #[cfg(test)]
@@ -841,11 +846,17 @@ impl TestPane {
             current_scrollback: 0,
             max_sb,
             alt_screen: false,
+            pending_title: None,
         }
     }
 
     fn set_scrollback_value(&mut self, val: usize) {
         self.current_scrollback = val.min(self.max_sb);
+    }
+
+    #[allow(dead_code)]
+    fn set_pending_title(&mut self, title: &str) {
+        self.pending_title = Some(title.to_string());
     }
 }
 
@@ -905,6 +916,10 @@ impl Pane for TestPane {
 
     fn kill_child(&mut self) -> term_wm_core::pty::PtyResult<()> {
         Ok(())
+    }
+
+    fn take_pending_title(&mut self) -> Option<String> {
+        self.pending_title.take()
     }
 }
 

@@ -1,5 +1,6 @@
 pub mod clipboard;
 pub mod console;
+pub mod title;
 pub mod utils;
 
 pub mod event_source;

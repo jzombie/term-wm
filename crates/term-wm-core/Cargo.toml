@@ -11,6 +11,7 @@ arboard = { workspace = true }
 base64 = { workspace = true }
 crossterm = { workspace = true }
 hostname = { workspace = true }
+libc = { workspace = true }
 linkify = { workspace = true }
 portable-pty = { workspace = true }
 ratatui = { workspace = true }

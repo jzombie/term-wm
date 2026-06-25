@@ -299,12 +299,38 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub fn window_title(&self, id: WindowId<Id>) -> String {
-        self.window(id)
+        let base = self
+            .window(id)
             .map(|window| window.title_or_default(id))
             .unwrap_or_else(|| match id {
                 WindowId::App(app_id) => format!("{:?}", app_id),
                 WindowId::System(SystemWindowId::DebugLog) => "Debug Log".to_string(),
+            });
+        let order = self.build_display_order();
+        let freq = order
+            .iter()
+            .filter(|&oid| {
+                self.window(*oid)
+                    .map(|w| w.title_or_default(*oid))
+                    .as_deref()
+                    == Some(base.as_str())
             })
+            .count();
+        if freq <= 1 {
+            return base;
+        }
+        let nth = order
+            .iter()
+            .take_while(|&&oid| oid != id)
+            .filter(|&oid| {
+                self.window(*oid)
+                    .map(|w| w.title_or_default(*oid))
+                    .as_deref()
+                    == Some(base.as_str())
+            })
+            .count()
+            + 1;
+        format!("{} ({})", base, nth)
     }
 
     fn clear_all_floating(&mut self) {
@@ -1683,7 +1709,10 @@ mod tests {
         // The K button position must match what hit_test computes
         // using the full window rect (not the inset header rect).
         let full_rect = wm.full_region_for_id(win_id);
-        let outer_right = full_rect.x.saturating_add(full_rect.width).saturating_sub(1);
+        let outer_right = full_rect
+            .x
+            .saturating_add(full_rect.width)
+            .saturating_sub(1);
         let close_x = outer_right.saturating_sub(1);
         let max_x = close_x.saturating_sub(2);
         let min_x = max_x.saturating_sub(2);

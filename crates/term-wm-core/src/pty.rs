@@ -4,10 +4,12 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::thread::{self, JoinHandle};
+use std::time::Instant;
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use crate::io::clipboard::extract_osc52_text;
+use crate::io::title::extract_osc_title;
 
 pub type PtyResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -18,6 +20,9 @@ pub struct Pty {
     bytes_received: Arc<AtomicUsize>,
     last_bytes: Arc<Mutex<Vec<u8>>>,
     dsr_requested: Arc<AtomicBool>,
+    pending_title: Arc<Mutex<Option<String>>>,
+    last_fg_pid: u32,
+    last_fg_check: Instant,
     history: Vec<u8>,
     parser: vt100::Parser,
     size: PtySize,
@@ -65,6 +70,7 @@ impl Pty {
         let reader_bytes = Arc::clone(&bytes_received);
         let reader_last = Arc::clone(&last_bytes);
         let reader_dsr = Arc::clone(&dsr_requested);
+        let pending_title = Arc::new(Mutex::new(None));
         let reader_handle = thread::spawn(move || {
             read_loop(
                 reader,
@@ -82,6 +88,9 @@ impl Pty {
             bytes_received,
             last_bytes,
             dsr_requested,
+            pending_title,
+            last_fg_pid: 0,
+            last_fg_check: Instant::now(),
             history: Vec::new(),
             parser,
             size,
@@ -118,6 +127,13 @@ impl Pty {
 
     pub fn write_str(&mut self, input: &str) -> std::io::Result<()> {
         self.write_bytes(input.as_bytes())
+    }
+
+    pub fn take_pending_title(&self) -> Option<String> {
+        self.pending_title
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .take()
     }
 
     pub fn update(&mut self) {
@@ -166,6 +182,29 @@ impl Pty {
             && let Ok(mut cb) = arboard::Clipboard::new()
         {
             let _ = cb.set_text(text);
+        }
+
+        if let Some(title) = extract_osc_title(&bytes) {
+            *self
+                .pending_title
+                .lock()
+                .unwrap_or_else(|err| err.into_inner()) = Some(title);
+        }
+
+        #[cfg(unix)]
+        if self.last_fg_check.elapsed() >= std::time::Duration::from_secs(1) {
+            self.last_fg_check = Instant::now();
+            if let Some(fg_pid) = self.master.process_group_leader().map(|p| p as u32)
+                && fg_pid != self.last_fg_pid
+            {
+                self.last_fg_pid = fg_pid;
+                if let Some(name) = get_process_name(fg_pid) {
+                    *self
+                        .pending_title
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner()) = Some(name);
+                }
+            }
         }
 
         let added = bytes.iter().filter(|b| **b == b'\n').count();
@@ -366,6 +405,39 @@ fn bytes_to_debug_text(bytes: &[u8], max_len: usize) -> String {
         }
     }
     out
+}
+
+/// Get the process name for a given PID. On macOS uses `proc_name` from
+/// libproc. On Linux reads `/proc/<pid>/comm`. On other platforms returns None.
+#[cfg(target_os = "macos")]
+fn get_process_name(pid: u32) -> Option<String> {
+    let mut name = [0u8; 64];
+    let result = unsafe {
+        libc::proc_name(
+            pid as libc::c_int,
+            name.as_mut_ptr() as *mut libc::c_void,
+            name.len() as u32,
+        )
+    };
+    if result > 0 {
+        let len = name.iter().position(|&b| b == 0).unwrap_or(name.len());
+        Some(String::from_utf8_lossy(&name[..len]).into_owned())
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn get_process_name(pid: u32) -> Option<String> {
+    let path = format!("/proc/{pid}/comm");
+    std::fs::read_to_string(&path)
+        .ok()
+        .map(|s| s.trim().to_string())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn get_process_name(_pid: u32) -> Option<String> {
+    None
 }
 
 #[cfg(test)]

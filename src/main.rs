@@ -258,6 +258,12 @@ impl WindowProvider<PaneId> for App {
             .get_mut(id)
             .map(|sv| sv as &mut dyn Component)
     }
+
+    fn window_pane_title(&mut self, id: PaneId) -> Option<String> {
+        self.terminals
+            .get_mut(id)
+            .and_then(|sv| sv.content.take_pending_title())
+    }
 }
 
 fn render_pane(frame: &mut UiFrame<'_>, app: &mut App, id: PaneId, area: Rect, focused: bool) {

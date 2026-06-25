@@ -19,6 +19,9 @@ pub trait Pane {
     fn bytes_received(&self) -> usize;
     fn last_bytes_text(&self) -> String;
     fn kill_child(&mut self) -> PtyResult<()>;
+    fn take_pending_title(&mut self) -> Option<String> {
+        None
+    }
 }
 
 impl Pane for crate::pty::Pty {
@@ -76,5 +79,9 @@ impl Pane for crate::pty::Pty {
 
     fn kill_child(&mut self) -> PtyResult<()> {
         self.kill_child()
+    }
+
+    fn take_pending_title(&mut self) -> Option<String> {
+        crate::pty::Pty::take_pending_title(self)
     }
 }

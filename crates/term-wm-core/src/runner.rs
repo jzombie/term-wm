@@ -84,6 +84,10 @@ pub trait WindowProvider<Id: Copy + Eq + Ord + std::fmt::Debug + 'static>:
         None
     }
 
+    fn window_pane_title(&mut self, _id: Id) -> Option<String> {
+        None
+    }
+
     fn focus_regions(&mut self) -> Vec<Id> {
         self.enumerate_windows()
     }
@@ -555,6 +559,11 @@ where
     if !focus_order.is_empty() {
         app.windows().set_focus_order(focus_order);
     }
+    for &id in &windows {
+        if let Some(title) = app.window_pane_title(id) {
+            app.windows().set_window_title(id, title);
+        }
+    }
     app.windows().register_managed_layout(area);
     let plan = app.windows().window_draw_plan(frame);
     for task in plan {
@@ -736,8 +745,8 @@ mod tests {
 
     #[test]
     fn handle_focused_app_event_routes_key_to_window_component() {
-        use crate::window::WindowManager;
         use crate::components::ComponentContext;
+        use crate::window::WindowManager;
 
         struct KeyRecorder {
             received_key: bool,
@@ -816,14 +825,20 @@ mod tests {
         });
 
         let consumed = handle_focused_app_event(&evt, &mut app);
-        assert!(consumed, "handle_focused_app_event must route key to component");
-        assert!(app.recorder.received_key, "component must receive the key event");
+        assert!(
+            consumed,
+            "handle_focused_app_event must route key to component"
+        );
+        assert!(
+            app.recorder.received_key,
+            "component must receive the key event"
+        );
     }
 
     #[test]
     fn handle_focused_app_event_with_keyboard_capture_disabled_still_routes() {
-        use crate::window::WindowManager;
         use crate::components::ComponentContext;
+        use crate::window::WindowManager;
 
         struct KeyRecorder {
             received_key: bool,
@@ -906,7 +921,10 @@ mod tests {
         });
 
         let consumed = handle_focused_app_event(&evt, &mut app);
-        assert!(consumed, "event must route even when keyboard_capture_disabled is true");
+        assert!(
+            consumed,
+            "event must route even when keyboard_capture_disabled is true"
+        );
         assert!(app.recorder.received_key, "component must receive the key");
     }
 }
