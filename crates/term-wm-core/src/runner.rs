@@ -469,6 +469,7 @@ where
     A: WindowProvider<Id>,
     Id: Copy + Eq + Ord + std::fmt::Debug + 'static,
 {
+    let was_dragging = app.windows().selection_dragging();
     let focus_id = app.windows().wm_focus_app();
     if let Some(id) = focus_id
         && let Some(component) = app.window_component(id)
@@ -481,6 +482,9 @@ where
         };
         app.windows()
             .set_selection_snapshot(status.active, status.dragging, text);
+        if was_dragging && !status.dragging && status.active {
+            app.windows().copy_selection_to_clipboard();
+        }
     } else {
         app.windows().set_selection_snapshot(false, false, None);
     }
