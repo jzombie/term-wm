@@ -83,6 +83,8 @@ pub struct WmConfig {
     pub floating_resize_offscreen: bool,
     /// Initial value for clipboard integration (runtime-toggleable).
     pub clipboard_enabled: bool,
+    /// Initial value for window text selection (runtime-toggleable).
+    pub window_selection_enabled: bool,
     /// Initial value for mouse capture (runtime-toggleable).
     pub mouse_capture_enabled: bool,
     /// Enable keyboard (Tab/Shift+Tab) focus switching between windows.
@@ -116,6 +118,7 @@ impl WmConfig {
             esc_passthrough_window: esc_passthrough_window_default(),
             floating_resize_offscreen: true,
             clipboard_enabled: true,
+            window_selection_enabled: true,
             mouse_capture_enabled: true,
             keyboard_focus_enabled: true,
             mouse_focus_click_enabled: true,
@@ -135,6 +138,7 @@ impl WmConfig {
             esc_passthrough_window: esc_passthrough_window_default(),
             floating_resize_offscreen: false,
             clipboard_enabled: true,
+            window_selection_enabled: true,
             mouse_capture_enabled: true,
             keyboard_focus_enabled: true,
             mouse_focus_click_enabled: true,

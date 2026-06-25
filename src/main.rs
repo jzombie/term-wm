@@ -101,15 +101,6 @@ impl App {
             term_wm::tracing_sub::init_default();
         }
 
-        // Set up selection preview factory
-        app.windows.set_selection_preview_factory(Box::new(|text| {
-            use term_wm_ui_components::sys::selection_preview_overlay::SelectionPreviewOverlayComponent;
-            let mut preview = SelectionPreviewOverlayComponent::new();
-            preview.set_text(text);
-            preview.show();
-            Box::new(preview)
-        }));
-
         let mut error_occurred = false;
 
         // If commands provided, open one per command; otherwise open `num_windows`
@@ -236,7 +227,9 @@ impl WindowManagerHost<PaneId> for App {
         Ok(())
     }
 
-    fn set_clipboard_enabled(&mut self, enabled: bool) {
+    fn set_clipboard_enabled(&mut self, _enabled: bool) {}
+
+    fn set_window_selection_enabled(&mut self, enabled: bool) {
         for sv in &mut self.terminals {
             sv.content.set_selection_enabled(enabled);
         }

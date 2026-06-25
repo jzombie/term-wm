@@ -183,6 +183,8 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     pending_deadline: Option<Instant>,
     mouse_capture_enabled: bool,
     mouse_capture_dirty: bool,
+    window_selection_enabled: bool,
+    window_selection_dirty: bool,
     keyboard_focus_enabled: bool,
     mouse_focus_click_enabled: bool,
     clipboard_enabled: bool,
@@ -195,7 +197,6 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     selection_text: Option<String>,
     selection_copied: bool,
     selection_copied_text: Option<String>,
-    selection_preview_restore_mouse: Option<bool>,
     config: WmConfig,
     keybindings: KeyBindings,
     hint_visibility: HintVisibility,
@@ -208,8 +209,6 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     pub(crate) z_order: Vec<WindowId<Id>>,
     pub(crate) drag_snap: Option<(Option<WindowId<Id>>, InsertPosition, Rect)>,
     system_windows: BTreeMap<SystemWindowId, SystemWindowEntry>,
-    #[allow(clippy::type_complexity)]
-    selection_preview_factory: Option<Box<dyn FnMut(String) -> Box<dyn Overlay>>>,
     next_window_seq: usize,
     synthetic_event: Option<Event>,
     clipboard: Option<crate::io::clipboard::Clipboard>,
@@ -228,6 +227,7 @@ pub enum WmMenuAction {
     CloseWindow,
     ToggleMouseCapture,
     ToggleClipboardMode,
+    ToggleWindowSelection,
 }
 
 impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
@@ -354,7 +354,8 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             selection_text: None,
             selection_copied: false,
             selection_copied_text: None,
-            selection_preview_restore_mouse: None,
+            window_selection_enabled: clipboard_available && config.window_selection_enabled,
+            window_selection_dirty: false,
             keybindings: config.keybindings.clone(),
             hint_visibility: config.hint_visibility,
             config,
@@ -367,7 +368,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             z_order: Vec::new(),
             drag_snap: None,
             system_windows: BTreeMap::new(),
-            selection_preview_factory: None,
             next_window_seq: 0,
             synthetic_event: None,
             clipboard,
@@ -563,25 +563,30 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         }
     }
 
-    fn open_selection_preview_from_selection(&mut self) {
-        let Some(text) = self.selection_text.clone() else {
-            return;
-        };
-        if let Some(factory) = &mut self.selection_preview_factory {
-            let overlay = factory(text);
-            if self.selection_preview_restore_mouse.is_none() {
-                self.selection_preview_restore_mouse = Some(self.mouse_capture_enabled);
-            }
-            self.set_mouse_capture_enabled(false);
-            self.overlays.insert(OverlayId::SelectionPreview, overlay);
-        }
+    pub fn window_selection_enabled(&self) -> bool {
+        self.window_selection_enabled
     }
 
-    pub fn set_selection_preview_factory(
-        &mut self,
-        factory: Box<dyn FnMut(String) -> Box<dyn Overlay>>,
-    ) {
-        self.selection_preview_factory = Some(factory);
+    pub fn toggle_window_selection(&mut self) {
+        let next = !self.window_selection_enabled;
+        self.set_window_selection_enabled(next);
+    }
+
+    pub fn set_window_selection_enabled(&mut self, enabled: bool) {
+        if self.window_selection_enabled == enabled {
+            return;
+        }
+        self.window_selection_enabled = enabled;
+        self.window_selection_dirty = true;
+    }
+
+    pub fn take_window_selection_change(&mut self) -> Option<bool> {
+        if self.window_selection_dirty {
+            self.window_selection_dirty = false;
+            Some(self.window_selection_enabled)
+        } else {
+            None
+        }
     }
 
     pub fn set_clipboard_enabled(&mut self, enabled: bool) {
@@ -678,6 +683,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             self.mouse_capture_enabled(),
             self.clipboard_enabled(),
             self.clipboard_available(),
+            self.window_selection_enabled(),
             self.selection_active(),
             self.selection_dragging(),
             selection_copy_available,
@@ -704,7 +710,8 @@ fn wm_menu_items(
     mouse_capture_enabled: bool,
     clipboard_enabled: bool,
     clipboard_available: bool,
-) -> [WmMenuItem; 8] {
+    window_selection_enabled: bool,
+) -> [WmMenuItem; 9] {
     let mouse_label = if mouse_capture_enabled {
         "Mouse Capture: On"
     } else {
@@ -718,6 +725,11 @@ fn wm_menu_items(
         }
     } else {
         "Clipboard Mode: Unavailable"
+    };
+    let selection_label = if window_selection_enabled {
+        "Window Selection: On"
+    } else {
+        "Window Selection: Off"
     };
     [
         WmMenuItem {
@@ -734,6 +746,11 @@ fn wm_menu_items(
             label: clipboard_label,
             icon: Some("📋"),
             action: WmMenuAction::ToggleClipboardMode,
+        },
+        WmMenuItem {
+            label: selection_label,
+            icon: Some("✎"),
+            action: WmMenuAction::ToggleWindowSelection,
         },
         WmMenuItem {
             label: "Floating Front",

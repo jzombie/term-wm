@@ -30,12 +30,12 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                     }
                 } else if self.panel.hit_test_mouse_capture(event) {
                     self.toggle_mouse_capture();
+                } else if self.panel.hit_test_selection(event) {
+                    self.toggle_window_selection();
                 } else if self.panel.hit_test_clipboard(event) {
                     self.toggle_clipboard_enabled();
                 } else if self.panel.hit_test_copy(event) {
                     self.copy_selection_to_clipboard();
-                } else if self.panel.hit_test_os_copy(event) {
-                    self.open_selection_preview_from_selection();
                 } else if let Some(id) = self.panel.hit_test_window(event) {
                     if self.is_minimized(id) {
                         self.restore_minimized(id);

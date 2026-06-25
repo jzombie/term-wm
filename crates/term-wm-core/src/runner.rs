@@ -26,6 +26,7 @@ pub trait WindowManagerHost<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> {
         Ok(())
     }
     fn set_clipboard_enabled(&mut self, _enabled: bool) {}
+    fn set_window_selection_enabled(&mut self, _enabled: bool) {}
     fn open_help_overlay(&mut self) {
         self.windows()
             .open_overlay(crate::window::OverlayId::Help, Box::new(NoopOverlay));
@@ -157,6 +158,9 @@ where
                 if let Some(clipboard) = app.windows().take_clipboard_change() {
                     app.set_clipboard_enabled(clipboard);
                 }
+                if let Some(sel_enabled) = app.windows().take_window_selection_change() {
+                    app.set_window_selection_enabled(sel_enabled);
+                }
                 Ok(flow)
             };
             if let Some(evt) = event {
@@ -181,11 +185,6 @@ where
                     return flush_state_changes(app, ControlFlow::Continue);
                 }
 
-                if app.windows().selection_preview_visible() {
-                    let _ = app.windows().handle_selection_preview_event(&evt);
-                    update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue);
-                }
                 if app.windows().help_overlay_visible() {
                     let _ = app.windows().handle_help_event(&evt);
                     update_selection_snapshot(app);
@@ -243,10 +242,7 @@ where
                             return flush_state_changes(app, ControlFlow::Continue);
                         }
                         Action::PasteClipboard => {
-                            let text = app
-                                .windows()
-                                .clipboard_mut()
-                                .and_then(|cb| cb.get().ok());
+                            let text = app.windows().clipboard_mut().and_then(|cb| cb.get().ok());
                             if let Some(text) = text
                                 && !text.is_empty()
                             {
@@ -298,6 +294,9 @@ where
                             }
                             WmMenuAction::ToggleClipboardMode => {
                                 app.windows().toggle_clipboard_enabled();
+                            }
+                            WmMenuAction::ToggleWindowSelection => {
+                                app.windows().toggle_window_selection();
                             }
                             WmMenuAction::MinimizeWindow => {
                                 let id = app.windows().wm_focus();

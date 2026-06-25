@@ -79,9 +79,9 @@ impl Action {
             | Action::ScrollEnd
             | Action::ScrollUp
             | Action::ScrollDown => Category::Scrolling,
-            Action::ToggleSelection
-            | Action::CopySelection
-            | Action::PasteClipboard => Category::Selection,
+            Action::ToggleSelection | Action::CopySelection | Action::PasteClipboard => {
+                Category::Selection
+            }
         }
     }
 

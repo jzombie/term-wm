@@ -39,17 +39,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.overlays.remove(&OverlayId::Help);
     }
 
-    pub fn selection_preview_visible(&self) -> bool {
-        self.overlays.contains_key(&OverlayId::SelectionPreview)
-    }
-
-    pub fn close_selection_preview(&mut self) {
-        self.overlays.remove(&OverlayId::SelectionPreview);
-        if let Some(prev) = self.selection_preview_restore_mouse.take() {
-            self.set_mouse_capture_enabled(prev);
-        }
-    }
-
     pub fn handle_help_event(&mut self, event: &Event) -> bool {
         let Some(boxed) = self.overlays.get_mut(&OverlayId::Help) else {
             return false;
@@ -65,21 +54,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         handled
     }
 
-    pub fn handle_selection_preview_event(&mut self, event: &Event) -> bool {
-        let Some(boxed) = self.overlays.get_mut(&OverlayId::SelectionPreview) else {
-            return false;
-        };
-        boxed.resize(
-            self.last_frame_area,
-            &ComponentContext::new(true).with_overlay(true),
-        );
-        let handled = boxed.handle_event(event, &ComponentContext::new(true).with_overlay(true));
-        if !boxed.visible() {
-            self.close_selection_preview();
-        }
-        handled
-    }
-
     pub fn handle_wm_menu_event(&mut self, event: &Event) -> Option<super::WmMenuAction> {
         if !self.wm_overlay_visible() {
             return None;
@@ -88,6 +62,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             self.mouse_capture_enabled(),
             self.clipboard_enabled(),
             self.clipboard_available(),
+            self.window_selection_enabled(),
         );
         if let Event::Mouse(mouse) = event
             && matches!(mouse.kind, MouseEventKind::Down(_))
@@ -238,6 +213,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             self.mouse_capture_enabled(),
             self.clipboard_enabled(),
             self.clipboard_available(),
+            self.window_selection_enabled(),
         );
         let menu_labels = menu_items
             .iter()
@@ -268,13 +244,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         }
         if let Some(help) = self.overlays.get_mut(&OverlayId::Help) {
             help.render(
-                frame,
-                frame.area(),
-                &ComponentContext::new(false).with_overlay(true),
-            );
-        }
-        if let Some(preview) = self.overlays.get_mut(&OverlayId::SelectionPreview) {
-            preview.render(
                 frame,
                 frame.area(),
                 &ComponentContext::new(false).with_overlay(true),
