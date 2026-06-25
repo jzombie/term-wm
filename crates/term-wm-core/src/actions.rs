@@ -108,7 +108,7 @@ impl fmt::Display for Action {
             Action::OpenKeybindings => "Open keybindings",
             Action::FocusNext => "Focus next",
             Action::FocusPrev => "Focus previous",
-            Action::WmToggleOverlay => "Toggle WM overlay",
+            Action::WmToggleOverlay => "Menu",
             Action::NewWindow => "New window",
             Action::HintToggle => "Toggle hints",
             Action::MenuUp => "Menu up",
