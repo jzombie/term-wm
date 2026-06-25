@@ -104,6 +104,8 @@ impl Default for KeyBindings {
             ScrollUp: [ (KeyCode::Up, KeyModifiers::NONE) ],
             ScrollDown: [ (KeyCode::Down, KeyModifiers::NONE) ],
             ToggleSelection: [ (KeyCode::Char(' '), KeyModifiers::NONE) ],
+            CopySelection: [ (KeyCode::Char('c'), KeyModifiers::CONTROL | KeyModifiers::SHIFT) ],
+            PasteClipboard: [ (KeyCode::Char('v'), KeyModifiers::CONTROL | KeyModifiers::SHIFT) ],
         }
     }
 }

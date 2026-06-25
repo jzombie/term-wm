@@ -212,6 +212,7 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     selection_preview_factory: Option<Box<dyn FnMut(String) -> Box<dyn Overlay>>>,
     next_window_seq: usize,
     synthetic_event: Option<Event>,
+    clipboard: Option<crate::io::clipboard::Clipboard>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -311,6 +312,11 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let clipboard_available = clipboard::available();
         let mouse_capture_enabled = config.mouse_capture_enabled;
         let clipboard_enabled = clipboard_available && config.clipboard_enabled;
+        let clipboard = if clipboard_available {
+            crate::io::clipboard::Clipboard::new().ok()
+        } else {
+            None
+        };
         let decorator = config.decorator();
         let floating_resize_offscreen = config.floating_resize_offscreen;
         Self {
@@ -364,6 +370,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             selection_preview_factory: None,
             next_window_seq: 0,
             synthetic_event: None,
+            clipboard,
         }
     }
 
@@ -510,6 +517,10 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.clipboard_enabled
     }
 
+    pub fn clipboard_mut(&mut self) -> Option<&mut crate::io::clipboard::Clipboard> {
+        self.clipboard.as_mut()
+    }
+
     pub fn set_selection_snapshot(&mut self, active: bool, dragging: bool, text: Option<String>) {
         let changed = text.as_ref() != self.selection_text.as_ref();
         self.selection_active = active;
@@ -537,14 +548,16 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.selection_copied
     }
 
-    fn copy_selection_to_clipboard(&mut self) {
+    pub fn copy_selection_to_clipboard(&mut self) {
         if !self.clipboard_available || !self.clipboard_enabled() {
             return;
         }
         let Some(text) = self.selection_text.clone() else {
             return;
         };
-        if clipboard::set(&text).is_ok() {
+        if let Some(cb) = &mut self.clipboard
+            && cb.set(&text).is_ok()
+        {
             self.selection_copied = true;
             self.selection_copied_text = Some(text);
         }

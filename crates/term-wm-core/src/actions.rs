@@ -36,6 +36,9 @@ pub enum Action {
     ScrollDown,
     // Selection toggle
     ToggleSelection,
+    // Clipboard
+    CopySelection,
+    PasteClipboard,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -76,7 +79,9 @@ impl Action {
             | Action::ScrollEnd
             | Action::ScrollUp
             | Action::ScrollDown => Category::Scrolling,
-            Action::ToggleSelection => Category::Selection,
+            Action::ToggleSelection
+            | Action::CopySelection
+            | Action::PasteClipboard => Category::Selection,
         }
     }
 
@@ -92,6 +97,8 @@ impl Action {
             Action::CyclePrevWindow => Some(55),
             Action::NewWindow => Some(50),
             Action::HintToggle => Some(40),
+            Action::CopySelection => Some(30),
+            Action::PasteClipboard => Some(25),
             _ => None,
         }
     }
@@ -128,6 +135,8 @@ impl fmt::Display for Action {
             Action::ScrollUp => "Scroll up",
             Action::ScrollDown => "Scroll down",
             Action::ToggleSelection => "Toggle selection",
+            Action::CopySelection => "Copy selection",
+            Action::PasteClipboard => "Paste clipboard",
         };
         write!(f, "{}", s)
     }

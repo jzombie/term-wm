@@ -173,6 +173,13 @@ impl Component for TerminalComponent {
         }
         self.selection_text_for_range(range)
     }
+
+    fn paste(&mut self, text: &str) -> bool {
+        if text.is_empty() {
+            return false;
+        }
+        self.pane.write_bytes(text.as_bytes()).is_ok()
+    }
 }
 
 impl TerminalComponent {

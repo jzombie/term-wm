@@ -2235,6 +2235,7 @@ name = "term-wm-core"
 version = "0.5.1-alpha"
 dependencies = [
  "arboard",
+ "base64",
  "crossterm",
  "hostname",
  "linkify",

@@ -237,6 +237,27 @@ where
                             update_selection_snapshot(app);
                             return flush_state_changes(app, ControlFlow::Continue);
                         }
+                        Action::CopySelection => {
+                            app.windows().copy_selection_to_clipboard();
+                            update_selection_snapshot(app);
+                            return flush_state_changes(app, ControlFlow::Continue);
+                        }
+                        Action::PasteClipboard => {
+                            let text = app
+                                .windows()
+                                .clipboard_mut()
+                                .and_then(|cb| cb.get().ok());
+                            if let Some(text) = text
+                                && !text.is_empty()
+                            {
+                                let focus_id = app.windows().focus();
+                                if let Some(comp) = app.window_component(focus_id) {
+                                    comp.paste(&text);
+                                }
+                            }
+                            update_selection_snapshot(app);
+                            return flush_state_changes(app, ControlFlow::Continue);
+                        }
                         // FocusNext, FocusPrev — handled by handle_focus_event below
                         // Scrolling, selection, menu, confirm — pass through to Layer 3
                         _ => {}

@@ -35,6 +35,10 @@ pub trait Component {
     }
 
     fn set_selection_enabled(&mut self, _enabled: bool) {}
+
+    fn paste(&mut self, _text: &str) -> bool {
+        false
+    }
 }
 
 pub trait Overlay: Component + std::fmt::Debug + Any {
