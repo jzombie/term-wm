@@ -419,19 +419,18 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 continue;
             }
             let dest = self.window_dest(id, full);
+            let inner = decorator.content_area(Rect {
+                x: 0,
+                y: 0,
+                width: full.width,
+                height: full.height,
+            });
+            if inner.width == 0 || inner.height == 0 {
+                continue;
+            }
             match id {
                 WindowId::System(system_id) => {
                     if !self.system_window_visible(system_id) {
-                        continue;
-                    }
-                    let inner_abs = self.region_for_id(id);
-                    let inner = decorator.content_area(Rect {
-                        x: inner_abs.x.saturating_sub(full.x),
-                        y: inner_abs.y.saturating_sub(full.y),
-                        width: inner_abs.width,
-                        height: inner_abs.height,
-                    });
-                    if inner.width == 0 || inner.height == 0 {
                         continue;
                     }
                     plan.push(super::DrawTask::System(super::SystemWindowDraw {
@@ -441,16 +440,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                     }));
                 }
                 WindowId::App(app_id) => {
-                    let inner_abs = self.region(app_id);
-                    let inner = decorator.content_area(Rect {
-                        x: inner_abs.x.saturating_sub(full.x),
-                        y: inner_abs.y.saturating_sub(full.y),
-                        width: inner_abs.width,
-                        height: inner_abs.height,
-                    });
-                    if inner.width == 0 || inner.height == 0 {
-                        continue;
-                    }
                     plan.push(super::DrawTask::App(super::WindowDrawContext {
                         id: app_id,
                         surface: super::WindowSurface { full, inner, dest },
