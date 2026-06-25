@@ -44,6 +44,7 @@ pub enum Category {
     Navigation,
     Windows,
     Scrolling,
+    Menu,
     Dialogs,
     Selection,
 }
@@ -63,7 +64,7 @@ impl Action {
             | Action::MenuDown
             | Action::MenuSelect
             | Action::MenuNext
-            | Action::MenuPrev => Category::Dialogs,
+            | Action::MenuPrev => Category::Menu,
             Action::ConfirmToggle
             | Action::ConfirmLeft
             | Action::ConfirmRight

@@ -55,12 +55,13 @@ impl KeybindingOverlayComponent {
         let mut lines = Vec::new();
         for (cat, entries) in &by_category {
             let header = match cat {
-                Category::System => " System",
-                Category::Navigation => " Navigation",
-                Category::Windows => " Windows & Panes",
-                Category::Scrolling => " Scrolling",
-                Category::Dialogs => " Dialogs & Menus",
-                Category::Selection => " Selection",
+                Category::System => "System",
+                Category::Navigation => "Navigation",
+                Category::Windows => "Windows & Panes",
+                Category::Scrolling => "Scrolling",
+                Category::Menu => "Menus",
+                Category::Dialogs => "Dialogs",
+                Category::Selection => "Selection",
             };
             lines.push(header.to_string());
             lines.push("".to_string());
