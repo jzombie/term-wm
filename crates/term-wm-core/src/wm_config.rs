@@ -25,10 +25,6 @@ pub enum HintVisibility {
     Never,
 }
 
-/// Minimum vertical rows required for hint rendering before automatic
-/// suppression kicks in to avoid UI collapse.
-pub const HINT_MIN_ROWS: u16 = 5;
-
 /// Validate a `KeyBindings` configuration on startup.
 ///
 /// Detects collisions between actions and logs warnings for missing
