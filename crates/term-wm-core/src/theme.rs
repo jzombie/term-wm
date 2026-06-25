@@ -27,6 +27,7 @@ pub struct Theme {
     pub decorator_header_bg: Color,
     pub decorator_header_fg: Color,
     pub decorator_border: Color,
+    pub decorator_border_active: Color,
     pub menu_bg: Color,
     pub menu_fg: Color,
     pub menu_selected_bg: Color,
@@ -70,7 +71,8 @@ pub const NOIR: Theme = Theme {
     // Chrome
     decorator_header_bg: Color::Rgb(38, 42, 58),
     decorator_header_fg: Color::Rgb(225, 225, 235),
-    decorator_border: Color::Rgb(85, 90, 110),
+    decorator_border: Color::Rgb(55, 58, 70),
+    decorator_border_active: Color::Rgb(110, 118, 140),
     // Menu
     menu_bg: Color::Rgb(25, 28, 40),
     menu_fg: Color::Rgb(225, 225, 235),
@@ -202,6 +204,10 @@ pub fn decorator_header_fg() -> Color {
 
 pub fn decorator_border() -> Color {
     current().decorator_border
+}
+
+pub fn decorator_border_active() -> Color {
+    current().decorator_border_active
 }
 
 pub fn debug_highlight() -> Color {

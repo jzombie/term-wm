@@ -250,6 +250,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             bounds,
             &menu_labels,
             self.wm_menu_selected,
+            self.hover,
         );
         self.panel.render_menu_backdrop(
             frame,

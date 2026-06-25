@@ -676,6 +676,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         bounds: Rect,
         items: &[(Option<&str>, &str)],
         selected: usize,
+        hover_pos: Option<(u16, u16)>,
     ) {
         if !open {
             return;
@@ -729,7 +730,16 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             width,
             height,
         });
+        let hovered_style = Style::default()
+            .bg(crate::theme::panel_active_bg())
+            .fg(crate::theme::menu_fg());
         let selected_row = (selected as u16).saturating_add(1);
+        let hovered_idx = hover_pos.and_then(|(_mx, my)| {
+            (my >= start_y.saturating_add(1) && my < start_y.saturating_add(items.len() as u16 + 1))
+                .then(|| (my - start_y - 1) as usize)
+                .filter(|&idx| idx < items.len())
+        });
+        let hovered_row = hovered_idx.map(|i| i as u16 + 1);
         for row in 0..height {
             let y = start_y.saturating_add(row);
             if y < bounds.y || y >= bounds.y.saturating_add(bounds.height) {
@@ -737,6 +747,8 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             }
             let row_style = if row == selected_row {
                 selected_style
+            } else if Some(row) == hovered_row {
+                hovered_style
             } else {
                 menu_style
             };
@@ -759,7 +771,8 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             if y < bounds.y || y >= bounds.y.saturating_add(bounds.height) {
                 break;
             }
-            let marker = if idx == selected { ">" } else { " " };
+            let is_hovered = hovered_idx == Some(idx);
+            let marker = if idx == selected { ">" } else if is_hovered { "▸" } else { " " };
             let line = if let Some(icon) = icon {
                 format!("{marker} {icon} {label}")
             } else {
@@ -768,6 +781,8 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             let text = truncate_to_width(&line, inner_width as usize);
             let style = if idx == selected {
                 selected_style
+            } else if is_hovered {
+                hovered_style
             } else {
                 menu_style
             };

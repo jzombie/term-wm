@@ -83,9 +83,15 @@ impl WindowDecorator for DefaultDecorator {
         let normal_header_style = Style::default()
             .bg(crate::theme::panel_bg())
             .fg(crate::theme::decorator_header_fg());
-        let border_style = Style::default()
-            .fg(crate::theme::decorator_border())
-            .bg(Color::Reset);
+        let border_style = if focused {
+            Style::default()
+                .fg(crate::theme::decorator_border_active())
+                .bg(Color::Reset)
+        } else {
+            Style::default()
+                .fg(crate::theme::decorator_border())
+                .bg(Color::Reset)
+        };
 
         let header_style = if focused {
             focused_header_style
