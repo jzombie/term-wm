@@ -1611,4 +1611,166 @@ mod tests {
 
         assert_eq!(received_id, Some(1usize));
     }
+
+    #[test]
+    fn keyboard_capture_defaults_to_false() {
+        let mut wm = WindowManager::<usize>::new_standalone(0);
+        wm.focus_app_window(0);
+        let focus = wm.wm_focus();
+        assert!(!wm.keyboard_capture_disabled(focus));
+    }
+
+    #[test]
+    fn keyboard_capture_toggle_cycles_state() {
+        let mut wm = WindowManager::<usize>::new_standalone(0);
+        wm.focus_app_window(0);
+        let focus = wm.wm_focus();
+
+        assert!(!wm.keyboard_capture_disabled(focus));
+        wm.toggle_keyboard_capture(focus);
+        assert!(wm.keyboard_capture_disabled(focus));
+        wm.toggle_keyboard_capture(focus);
+        assert!(!wm.keyboard_capture_disabled(focus));
+    }
+
+    #[test]
+    fn keyboard_capture_set_get_roundtrip() {
+        let mut wm = WindowManager::<usize>::new_standalone(0);
+        let id = WindowId::app(42usize);
+        assert!(!wm.keyboard_capture_disabled(id), "default is false");
+
+        wm.set_keyboard_capture_disabled(id, true);
+        assert!(wm.keyboard_capture_disabled(id));
+
+        wm.set_keyboard_capture_disabled(id, false);
+        assert!(!wm.keyboard_capture_disabled(id));
+    }
+
+    #[test]
+    fn keyboard_capture_is_per_window() {
+        let mut wm = WindowManager::<usize>::new_standalone(0);
+        let id_a = WindowId::app(1usize);
+        let id_b = WindowId::app(2usize);
+
+        wm.set_keyboard_capture_disabled(id_a, true);
+        assert!(wm.keyboard_capture_disabled(id_a));
+        assert!(!wm.keyboard_capture_disabled(id_b));
+    }
+
+    #[test]
+    fn keyboard_capture_header_click_toggles_flag() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let mut wm = WindowManager::<usize>::new_standalone(0);
+        wm.set_panel_visible(false);
+
+        // Create a proper managed layout with window 1
+        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(1usize)));
+        wm.managed_draw_order = vec![WindowId::App(1usize)];
+        wm.z_order = vec![WindowId::App(1usize)];
+
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_app_window(1usize);
+
+        let win_id = WindowId::App(1usize);
+
+        // The K button position must match what hit_test computes
+        // using the full window rect (not the inset header rect).
+        let full_rect = wm.full_region_for_id(win_id);
+        let outer_right = full_rect.x.saturating_add(full_rect.width).saturating_sub(1);
+        let close_x = outer_right.saturating_sub(1);
+        let max_x = close_x.saturating_sub(2);
+        let min_x = max_x.saturating_sub(2);
+        let kb_x = min_x.saturating_sub(2);
+        let kb_y = full_rect.y.saturating_add(1); // header row
+        assert_eq!(
+            wm.decorator().hit_test(full_rect, kb_x, kb_y),
+            crate::window::decorator::HeaderAction::ToggleKeyboardCapture,
+            "hit_test should detect K button at ({},{}) on {:?}",
+            kb_x,
+            kb_y,
+            full_rect
+        );
+
+        assert!(!wm.keyboard_capture_disabled(win_id), "starts off");
+
+        let click = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: kb_x,
+            row: kb_y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(
+            wm.handle_managed_event(&click),
+            "header K button click should be handled"
+        );
+        assert!(
+            wm.keyboard_capture_disabled(win_id),
+            "clicking K toggles keyboard_capture_disabled to true"
+        );
+
+        let click2 = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: kb_x,
+            row: kb_y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(wm.handle_managed_event(&click2));
+        assert!(
+            !wm.keyboard_capture_disabled(win_id),
+            "second click toggles back to false"
+        );
+    }
+
+    #[test]
+    fn keyboard_capture_header_click_on_non_button_area_does_not_toggle() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let mut wm = WindowManager::<usize>::new_standalone(0);
+        wm.set_panel_visible(false);
+
+        // Create a proper managed layout with window 1
+        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(1usize)));
+        wm.managed_draw_order = vec![WindowId::App(1usize)];
+        wm.z_order = vec![WindowId::App(1usize)];
+
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_app_window(1usize);
+
+        let win_id = WindowId::App(1usize);
+        let header = wm
+            .floating_headers
+            .iter()
+            .find(|h| h.id == win_id)
+            .expect("floating header for window 1");
+
+        let drag_x = header.rect.x.saturating_add(header.rect.width) / 2;
+        let drag_y = header.rect.y;
+
+        assert!(!wm.keyboard_capture_disabled(win_id));
+
+        let click = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: drag_x,
+            row: drag_y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(wm.handle_managed_event(&click));
+        assert!(
+            !wm.keyboard_capture_disabled(win_id),
+            "drag area click must not toggle"
+        );
+    }
 }

@@ -675,6 +675,7 @@ fn auto_layout_for_windows<Id: Copy + Eq + Ord>(windows: &[Id]) -> Option<Tiling
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
     #[test]
     fn auto_layout_empty_and_multiple() {
@@ -731,5 +732,181 @@ mod tests {
             !quit_if_no_windows,
             "Runner would quit even though app reports windows"
         );
+    }
+
+    #[test]
+    fn handle_focused_app_event_routes_key_to_window_component() {
+        use crate::window::WindowManager;
+        use crate::components::ComponentContext;
+
+        struct KeyRecorder {
+            received_key: bool,
+        }
+        impl Component for KeyRecorder {
+            fn render(
+                &mut self,
+                _frame: &mut crate::ui::UiFrame<'_>,
+                _area: ratatui::layout::Rect,
+                _ctx: &ComponentContext,
+            ) {
+            }
+            fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
+                if matches!(event, Event::Key(_)) {
+                    self.received_key = true;
+                }
+                true
+            }
+        }
+
+        struct FakeApp {
+            wm: WindowManager<usize>,
+            recorder: KeyRecorder,
+        }
+        impl super::WindowManagerHost<usize> for FakeApp {
+            fn windows(&mut self) -> &mut WindowManager<usize> {
+                &mut self.wm
+            }
+        }
+        impl super::WindowProvider<usize> for FakeApp {
+            fn enumerate_windows(&mut self) -> Vec<usize> {
+                vec![1]
+            }
+            fn render_window(
+                &mut self,
+                _frame: &mut crate::ui::UiFrame<'_>,
+                _window: WindowDrawContext<usize>,
+            ) {
+            }
+            fn window_component(&mut self, _id: usize) -> Option<&mut dyn Component> {
+                Some(&mut self.recorder)
+            }
+            fn focus_regions(&mut self) -> Vec<usize> {
+                vec![1]
+            }
+        }
+
+        let mut app = FakeApp {
+            wm: WindowManager::<usize>::new_standalone(0),
+            recorder: KeyRecorder {
+                received_key: false,
+            },
+        };
+        app.wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        app.wm.regions.set(
+            WindowId::App(1usize),
+            Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        app.wm.focus_app_window(1usize);
+
+        let evt = Event::Key(KeyEvent {
+            code: KeyCode::Char('x'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        });
+
+        let consumed = handle_focused_app_event(&evt, &mut app);
+        assert!(consumed, "handle_focused_app_event must route key to component");
+        assert!(app.recorder.received_key, "component must receive the key event");
+    }
+
+    #[test]
+    fn handle_focused_app_event_with_keyboard_capture_disabled_still_routes() {
+        use crate::window::WindowManager;
+        use crate::components::ComponentContext;
+
+        struct KeyRecorder {
+            received_key: bool,
+        }
+        impl Component for KeyRecorder {
+            fn render(
+                &mut self,
+                _frame: &mut crate::ui::UiFrame<'_>,
+                _area: ratatui::layout::Rect,
+                _ctx: &ComponentContext,
+            ) {
+            }
+            fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
+                if matches!(event, Event::Key(_)) {
+                    self.received_key = true;
+                }
+                true
+            }
+        }
+
+        struct FakeApp {
+            wm: WindowManager<usize>,
+            recorder: KeyRecorder,
+        }
+        impl super::WindowManagerHost<usize> for FakeApp {
+            fn windows(&mut self) -> &mut WindowManager<usize> {
+                &mut self.wm
+            }
+        }
+        impl super::WindowProvider<usize> for FakeApp {
+            fn enumerate_windows(&mut self) -> Vec<usize> {
+                vec![1]
+            }
+            fn render_window(
+                &mut self,
+                _frame: &mut crate::ui::UiFrame<'_>,
+                _window: WindowDrawContext<usize>,
+            ) {
+            }
+            fn window_component(&mut self, _id: usize) -> Option<&mut dyn Component> {
+                Some(&mut self.recorder)
+            }
+            fn focus_regions(&mut self) -> Vec<usize> {
+                vec![1]
+            }
+        }
+
+        let mut app = FakeApp {
+            wm: WindowManager::<usize>::new_standalone(0),
+            recorder: KeyRecorder {
+                received_key: false,
+            },
+        };
+        app.wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        app.wm.regions.set(
+            WindowId::App(1usize),
+            Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        app.wm.focus_app_window(1usize);
+
+        let focus_id = app.wm.wm_focus();
+        app.wm.set_keyboard_capture_disabled(focus_id, true);
+        assert!(app.wm.keyboard_capture_disabled(focus_id));
+
+        let evt = Event::Key(KeyEvent {
+            code: KeyCode::Char('x'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        });
+
+        let consumed = handle_focused_app_event(&evt, &mut app);
+        assert!(consumed, "event must route even when keyboard_capture_disabled is true");
+        assert!(app.recorder.received_key, "component must receive the key");
     }
 }
