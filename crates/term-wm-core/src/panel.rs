@@ -486,30 +486,55 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             };
             let info = format!("{pkg_label} · {platform} · {hostname}");
             let info_width = info.chars().count() as u16;
-            let available = bounds.width.saturating_sub(info_width + 2).max(1);
+            let max_hint_x = bounds
+                .x
+                .saturating_add(bounds.width)
+                .saturating_sub(info_width + 2);
+            let combo_style = Style::default()
+                .fg(crate::theme::bottom_panel_fg())
+                .bg(crate::theme::menu_bg());
+            let sep_style = Style::default()
+                .fg(crate::theme::panel_inactive_fg())
+                .bg(crate::theme::bottom_panel_bg());
 
-            // Build hint parts, dropping lowest-priority entries until they fit
-            let mut hint_text = String::new();
+            let mut cursor_x = bounds.x;
             for (action, combos) in &self.keybinding_hints {
-                let combo_str = combos.join("/");
-                let part = format!("{combo_str} {action}");
-                let candidate = if hint_text.is_empty() {
-                    part.clone()
-                } else {
-                    format!("{hint_text} · {part}")
-                };
-                if candidate.chars().count() as u16 <= available {
-                    hint_text = candidate;
-                } else if hint_text.is_empty() {
-                    // Even a single hint doesn't fit; show it truncated
-                    hint_text = truncate_to_width(&part, available as usize);
-                } else {
+                if cursor_x >= max_hint_x {
                     break;
+                }
+                let combo_str = combos.join("/");
+                let entry = format!("{combo_str} {action}");
+                let entry_width = entry.chars().count() as u16;
+
+                if cursor_x.saturating_add(entry_width) > max_hint_x
+                    && cursor_x > bounds.x
+                {
+                    // Not enough room for this hint; skip it
+                    break;
+                }
+
+                let available_w = max_hint_x.saturating_sub(cursor_x);
+                if cursor_x == bounds.x && entry_width > available_w {
+                    // Even a single hint doesn't fully fit; show it truncated
+                    let text = truncate_to_width(&entry, available_w as usize);
+                    safe_set_string(buffer, bounds, cursor_x, area.y, &text, style);
+                    break;
+                }
+
+                // Render combo in accent, action in default
+                safe_set_string(buffer, bounds, cursor_x, area.y, &combo_str, combo_style);
+                cursor_x = cursor_x.saturating_add(combo_str.chars().count() as u16);
+                let desc = format!(" {}", action);
+                safe_set_string(buffer, bounds, cursor_x, area.y, &desc, style);
+                cursor_x = cursor_x.saturating_add(desc.chars().count() as u16);
+
+                // Separator between entries
+                if cursor_x < max_hint_x {
+                    safe_set_string(buffer, bounds, cursor_x, area.y, " ·", sep_style);
+                    cursor_x = cursor_x.saturating_add(2);
                 }
             }
 
-            // Write hints left-aligned
-            safe_set_string(buffer, bounds, bounds.x, area.y, &hint_text, style);
             // Write info right-aligned
             let info_x = bounds
                 .x
