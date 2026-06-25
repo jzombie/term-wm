@@ -1026,7 +1026,8 @@ mod tests {
         );
         // handle should NOT have scroll_vertical_to (set_content_size doesn't set pending)
         assert_eq!(
-            shared.borrow().offset_y, 0,
+            shared.borrow().offset_y,
+            0,
             "viewport offset should be 0 (set by content_size init)"
         );
         assert!(
@@ -1197,7 +1198,12 @@ mod tests {
         let pane = TestPane::new(100);
         let mut term = TerminalComponent::from_pane(Box::new(pane));
         let (handle, shared) = make_handle();
-        let area = Rect { x: 0, y: 0, width: 80, height: 24 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         let mut buffer = Buffer::empty(area);
         let mut frame = UiFrame::from_parts(area, &mut buffer);
         let ctx = make_ctx(0, handle);
@@ -1205,10 +1211,7 @@ mod tests {
         // After first render, last_max=100, last_sb=0, viewport at max (offset=100)
         let sb2 = run_sync_with_handle(&mut term, &shared);
         assert_eq!(sb2, 0, "at bottom");
-        assert_eq!(
-            shared.borrow().offset_y, 100,
-            "viewport at max"
-        );
+        assert_eq!(shared.borrow().offset_y, 100, "viewport at max");
     }
 
     #[test]

@@ -7,6 +7,8 @@ use std::thread::{self, JoinHandle};
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
+use crate::io::clipboard::extract_osc52_text;
+
 pub type PtyResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 pub struct Pty {
@@ -156,6 +158,16 @@ impl Pty {
             let response = format!("\x1b[{};{}R", row.saturating_add(1), col.saturating_add(1));
             let _ = self.write_bytes(response.as_bytes());
         }
+        // Intercept OSC 52 clipboard sequences from the child process and
+        // forward the decoded text to the local system clipboard.  This makes
+        // copy-from-inside work when term-wm runs locally (the OSC 52 written
+        // by the child would otherwise be silently consumed by the parser).
+        if let Some(text) = extract_osc52_text(&bytes)
+            && let Ok(mut cb) = arboard::Clipboard::new()
+        {
+            let _ = cb.set_text(text);
+        }
+
         let added = bytes.iter().filter(|b| **b == b'\n').count();
         if added > 0 && self.scrollback_len > 0 {
             self.scrollback_used = (self.scrollback_used + added).min(self.scrollback_len);
