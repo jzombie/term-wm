@@ -113,7 +113,10 @@ impl Component for ListComponent {
             && !self.items.is_empty()
             && self.last_area.width > 0
             && self.last_area.height > 0
+            && mouse.column >= self.last_area.x
+            && mouse.column < self.last_area.x + self.last_area.width
             && mouse.row > self.last_area.y
+            && mouse.row < self.last_area.y + self.last_area.height
         {
             let vp = ctx.viewport();
             let skip_n = vp.offset_y.saturating_sub(1);

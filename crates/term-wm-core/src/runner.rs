@@ -88,6 +88,10 @@ pub trait WindowProvider<Id: Copy + Eq + Ord + std::fmt::Debug + 'static>:
         None
     }
 
+    fn handle_app_event(&mut self, _event: &Event) -> bool {
+        false
+    }
+
     fn focus_regions(&mut self) -> Vec<Id> {
         self.enumerate_windows()
     }
@@ -206,7 +210,13 @@ where
                     }
                 }
 
-                // Layer 2: WM global actions
+                // Layer 2a: App-level event handler (before WM actions, after overlays)
+                if app.handle_app_event(&evt) {
+                    update_selection_snapshot(app);
+                    return flush_state_changes(app, ControlFlow::Continue);
+                }
+
+                // Layer 2b: WM global actions
                 if let Some(action) = mapped_action {
                     match action {
                         Action::Quit => {
