@@ -173,7 +173,7 @@ impl SelectionController {
 
     /// Record a mouse-down position for a potential drag selection. Does NOT
     /// start the drag phase — that happens on first mouse movement via
-    /// [`activate_drag`]. This lets simple clicks pass through to the component
+    /// [`Self::activate_drag`]. This lets simple clicks pass through to the component
     /// while still tracking for selection-on-drag.
     pub fn prepare_drag(&mut self, pos: LogicalPosition) {
         self.state.anchor = Some(pos);
@@ -182,7 +182,7 @@ impl SelectionController {
         self.touch_pointer_clock();
     }
 
-    /// Activate a drag that was prepared by [`prepare_drag`]. The anchor stays
+    /// Activate a drag that was prepared by [`Self::prepare_drag`]. The anchor stays
     /// at the original down position; `pos` becomes the cursor.
     pub fn activate_drag(&mut self, pos: LogicalPosition) {
         self.state.cursor = Some(pos);
