@@ -1,7 +1,6 @@
-use crossterm::event::{Event, MouseEventKind};
-use ratatui::prelude::Rect;
+use crossterm::event::Event;
 
-use super::{OverlayId, WindowId, WindowManager};
+use super::{WmMenuAction, WindowId, WindowManager};
 use crate::components::{ConfirmAction, Overlay};
 use crate::layout::{FloatingPane, rect_contains, render_handles_masked};
 use crate::window::FloatRectSpec;
@@ -10,25 +9,19 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     pub fn open_wm_overlay(&mut self) {
         self.overlay_visible = true;
         self.overlay_opened_at = Some(std::time::Instant::now());
-        self.wm_menu_selected = 0;
-        self.panel.restore();
+        self.menu_overlay.restore();
     }
 
-    /// Opens the WM overlay without starting the Super-passthrough timer.
-    /// Used when the overlay was triggered by a Direct-mode double-Super (both
-    /// presses consumed) — no Super key remains to pass through.
     pub fn open_wm_overlay_no_passthrough(&mut self) {
         self.overlay_visible = true;
         self.overlay_opened_at = None;
-        self.wm_menu_selected = 0;
-        self.panel.restore();
+        self.menu_overlay.restore();
     }
 
     pub fn close_wm_overlay(&mut self) {
         self.overlay_visible = false;
         self.overlay_opened_at = None;
-        self.wm_menu_selected = 0;
-        self.panel.restore();
+        self.menu_overlay.restore();
     }
 
     pub fn wm_overlay_visible(&self) -> bool {
@@ -36,100 +29,47 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub fn fold_menu(&mut self) {
-        self.panel.fold();
+        self.menu_overlay.outline();
     }
 
     pub fn close_exit_confirm(&mut self) {
-        self.overlays.remove(&OverlayId::ExitConfirm);
+        self.overlays.remove(&super::OverlayId::ExitConfirm);
     }
 
     pub fn exit_confirm_visible(&self) -> bool {
-        self.overlays.contains_key(&OverlayId::ExitConfirm)
+        self.overlays.contains_key(&super::OverlayId::ExitConfirm)
     }
 
     pub fn help_overlay_visible(&self) -> bool {
-        self.overlays.contains_key(&OverlayId::Help)
+        self.overlays.contains_key(&super::OverlayId::Help)
     }
 
     pub fn close_help_overlay(&mut self) {
-        self.overlays.remove(&OverlayId::Help);
+        self.overlays.remove(&super::OverlayId::Help);
     }
 
     pub fn handle_help_event(&mut self, event: &Event) -> bool {
         let ctx = self.component_context(true).with_overlay(true);
-        let Some(boxed) = self.overlays.get_mut(&OverlayId::Help) else {
+        let Some(boxed) = self.overlays.get_mut(&super::OverlayId::Help) else {
             return false;
         };
         boxed.resize(self.last_frame_area, &ctx);
         let handled = boxed.handle_event(event, &ctx);
         if !boxed.visible() {
-            self.overlays.remove(&OverlayId::Help);
+            self.overlays.remove(&super::OverlayId::Help);
         }
         handled
     }
 
-    pub fn handle_wm_menu_event(&mut self, event: &Event) -> Option<super::WmMenuAction> {
+    pub fn handle_wm_menu_event(&mut self, event: &Event) -> Option<WmMenuAction> {
         if !self.wm_overlay_visible() {
             return None;
         }
-        let items = super::wm_menu_items(
-            self.mouse_capture_enabled(),
-            self.clipboard_enabled(),
-            self.window_selection_enabled(),
-        );
-        if let Event::Mouse(mouse) = event
-            && matches!(mouse.kind, MouseEventKind::Down(_))
-        {
-            if let Some(index) = self.panel.hit_test_menu_item(event) {
-                self.panel.restore();
-                let selected = index.min(items.len().saturating_sub(1));
-                self.wm_menu_selected = selected;
-                return items.get(selected).map(|item| item.action);
-            }
-            if self.panel.menu_icon_contains_point(mouse.column, mouse.row) {
-                return Some(super::WmMenuAction::CloseMenu);
-            }
-            if !self.panel.menu_contains_point(mouse.column, mouse.row) {
-                return Some(super::WmMenuAction::CloseMenu);
-            }
-        }
-        let Event::Key(key) = event else {
-            return None;
-        };
-        let kb = &self.keybindings;
-        if kb.matches(crate::keybindings::Action::MenuUp, key)
-            || kb.matches(crate::keybindings::Action::MenuPrev, key)
-        {
-            self.panel.restore();
-            let total = items.len();
-            if total > 0 {
-                let current = self.wm_menu_selected;
-                if current == 0 {
-                    self.wm_menu_selected = total - 1;
-                } else {
-                    self.wm_menu_selected = current - 1;
-                }
-            }
-            None
-        } else if kb.matches(crate::keybindings::Action::MenuDown, key)
-            || kb.matches(crate::keybindings::Action::MenuNext, key)
-        {
-            self.panel.restore();
-            let total = items.len();
-            if total > 0 {
-                let current = self.wm_menu_selected;
-                self.wm_menu_selected = (current + 1) % total;
-            }
-            None
-        } else if kb.matches(crate::keybindings::Action::MenuSelect, key) {
-            items.get(self.wm_menu_selected).map(|item| item.action)
-        } else {
-            None
-        }
+        self.menu_overlay.handle_event(event)
     }
 
     pub fn handle_exit_confirm_event(&mut self, event: &Event) -> Option<ConfirmAction> {
-        let comp = self.overlays.get_mut(&OverlayId::ExitConfirm)?;
+        let comp = self.overlays.get_mut(&super::OverlayId::ExitConfirm)?;
         let overlay: &mut dyn Overlay = &mut **comp;
         overlay.handle_confirm_event(event)
     }
@@ -138,20 +78,12 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         if !self.wm_overlay_visible() {
             return false;
         }
-        let Event::Key(key) = event else {
-            return false;
-        };
-        let kb = &self.keybindings;
-        kb.matches(crate::keybindings::Action::MenuUp, key)
-            || kb.matches(crate::keybindings::Action::MenuDown, key)
-            || kb.matches(crate::keybindings::Action::MenuSelect, key)
-            || kb.matches(crate::keybindings::Action::MenuNext, key)
-            || kb.matches(crate::keybindings::Action::MenuPrev, key)
+        self.menu_overlay.consumes_event(event)
     }
 
     pub fn render_overlays(&mut self, frame: &mut crate::ui::UiFrame<'_>) {
         let (hovered, hovered_resize) = self.hover_targets();
-        let obscuring: Vec<Rect> = self
+        let obscuring: Vec<ratatui::prelude::Rect> = self
             .managed_draw_order
             .iter()
             .filter_map(|&id| self.regions.get(id))
@@ -166,7 +98,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 window.floating_rect.map(|rect| match rect {
                     FloatRectSpec::Absolute(fr) => FloatingPane {
                         id,
-                        rect: crate::layout::RectSpec::Absolute(Rect {
+                        rect: crate::layout::RectSpec::Absolute(ratatui::prelude::Rect {
                             x: fr.x.max(0) as u16,
                             y: fr.y.max(0) as u16,
                             width: fr.width,
@@ -223,31 +155,17 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             }
         }
 
-        let menu_items = super::wm_menu_items(
-            self.mouse_capture_enabled(),
-            self.clipboard_enabled(),
-            self.window_selection_enabled(),
-        );
-        let menu_labels = menu_items
-            .iter()
-            .map(|item| (item.icon, item.label))
-            .collect::<Vec<_>>();
-        self.panel.render_overlay(
-            frame,
-            self.wm_overlay_visible(),
-            self.managed_area,
-            self.panel.area(),
-            &menu_labels,
-            self.wm_menu_selected,
-            self.hover,
-        );
+        if self.wm_overlay_visible() {
+            let anchor = self.panel.menu_icon_rect().map(|r| (r.x, r.y.saturating_add(r.height)));
+            self.menu_overlay.render(frame, anchor, self.managed_area);
+        }
 
         let confirm_ctx = self.component_context(false).with_overlay(true);
         let help_ctx = self.component_context(false).with_overlay(true);
-        if let Some(confirm) = self.overlays.get_mut(&OverlayId::ExitConfirm) {
+        if let Some(confirm) = self.overlays.get_mut(&super::OverlayId::ExitConfirm) {
             confirm.render(frame, frame.area(), &confirm_ctx);
         }
-        if let Some(help) = self.overlays.get_mut(&OverlayId::Help) {
+        if let Some(help) = self.overlays.get_mut(&super::OverlayId::Help) {
             help.render(frame, frame.area(), &help_ctx);
         }
     }

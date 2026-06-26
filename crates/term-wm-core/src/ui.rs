@@ -155,7 +155,7 @@ pub fn safe_set_string(
     buffer.set_string(x, y, text, style);
 }
 
-pub(crate) fn truncate_to_width(value: &str, width: usize) -> String {
+pub fn truncate_to_width(value: &str, width: usize) -> String {
     if value.chars().count() <= width {
         return value.to_string();
     }

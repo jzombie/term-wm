@@ -20,7 +20,8 @@ use crate::components::{ComponentContext, Overlay};
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
-use crate::panel::Panel;
+use crate::menu_trait::MenuOverlay;
+use crate::panel_trait::Panel;
 use crate::ui::UiFrame;
 use crate::wm_config::{HintVisibility, WmConfig};
 
@@ -186,7 +187,8 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     closed_app_windows: Vec<Id>,
     pub(crate) managed_area: Rect,
     app_ctx: Arc<AppContext>,
-    panel: Panel<WindowId<Id>>,
+    panel: Box<dyn Panel<WindowId<Id>>>,
+    menu_overlay: Box<dyn MenuOverlay<WmMenuAction>>,
     pub(crate) drag_header: Option<HeaderDrag<WindowId<Id>>>,
     pub(crate) last_header_click: Option<(WindowId<Id>, Instant)>,
     pub(crate) drag_resize: Option<ResizeDrag<WindowId<Id>>>,
@@ -202,7 +204,7 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     clipboard_enabled: bool,
     clipboard_dirty: bool,
     overlay_visible: bool,
-    wm_menu_selected: usize,
+    
     selection_active: bool,
     selection_dragging: bool,
     selection_text: Option<String>,
@@ -382,22 +384,67 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         }
     }
 
-    pub fn new_embedded(current: Id, app_ctx: AppContext) -> Self {
-        Self::with_config(current, WmConfig::embedded(), Arc::new(app_ctx))
-    }
-
+    #[cfg(test)]
     pub fn new_standalone(current: Id, app_ctx: AppContext) -> Self {
-        Self::with_config(current, WmConfig::standalone(), Arc::new(app_ctx))
+        use crate::menu_trait::MenuItem;
+
+        #[derive(Debug)]
+        struct TestPanel<I>(std::marker::PhantomData<I>);
+        impl<I: Copy + Eq + Ord + std::fmt::Debug> Panel<WindowId<I>> for TestPanel<I> {
+            fn begin_frame(&mut self) {}
+            fn visible(&self) -> bool { false }
+            fn height(&self) -> u16 { 0 }
+            fn area(&self) -> Rect { Rect::default() }
+            fn bottom_area(&self) -> Rect { Rect::default() }
+            fn set_visible(&mut self, _v: bool) {}
+            fn set_height(&mut self, _h: u16) {}
+            fn set_keybinding_hints(&mut self, _h: Vec<(crate::keybindings::Action, Vec<String>)>) {}
+            fn keybinding_hints(&self) -> &[(crate::keybindings::Action, Vec<String>)] { &[] }
+            fn set_hostname(&mut self, _hostname: &str) {}
+            fn split_area(&mut self, _active: bool, area: Rect) -> (Rect, Rect, Rect) {
+                (Rect::default(), Rect::default(), area)
+            }
+            fn render(&mut self, _frame: &mut crate::ui::UiFrame<'_>, _active: bool, _focus_current: WindowId<I>, _display_order: &[WindowId<I>], _status_line: Option<&str>, _mouse_capture_enabled: bool, _clipboard_enabled: bool, _window_selection_enabled: bool, _selection_active: bool, _selection_dragging: bool, _selection_copy_available: bool, _selection_copied: bool, _menu_open: bool, _label_for: &dyn Fn(WindowId<I>) -> String) {}
+            fn menu_icon_rect(&self) -> Option<Rect> { None }
+            fn menu_icon_contains_point(&self, _col: u16, _row: u16) -> bool { false }
+            fn hit_test_mouse_capture(&self, _e: &Event) -> bool { false }
+            fn hit_test_selection(&self, _e: &Event) -> bool { false }
+            fn hit_test_clipboard(&self, _e: &Event) -> bool { false }
+            fn hit_test_copy(&self, _e: &Event) -> bool { false }
+            fn hit_test_window(&self, _e: &Event) -> Option<WindowId<I>> { None }
+            fn hit_test_hint(&self, _e: &Event) -> Option<crate::keybindings::Action> { None }
+        }
+
+        #[derive(Debug)]
+        struct TestMenu;
+        impl crate::menu_trait::MenuOverlay<WmMenuAction> for TestMenu {
+            fn handle_event(&mut self, _e: &Event) -> Option<WmMenuAction> { None }
+            fn consumes_event(&self, _e: &Event) -> bool { false }
+            fn outline(&mut self) {}
+            fn restore(&mut self) {}
+            fn set_items(&mut self, _items: Vec<MenuItem<WmMenuAction>>) {}
+            fn set_outline_timeout(&mut self, _timeout: Duration) {}
+            fn render(&mut self, _frame: &mut crate::ui::UiFrame<'_>, _anchor: Option<(u16, u16)>, _managed: Rect) {}
+        }
+
+        let p: Box<TestPanel<Id>> = Box::new(TestPanel(std::marker::PhantomData));
+        let m: Box<TestMenu> = Box::new(TestMenu);
+        let panel: Box<dyn Panel<WindowId<Id>>> = p;
+        let menu: Box<dyn MenuOverlay<WmMenuAction>> = m;
+        Self::with_config(current, WmConfig::standalone(), Arc::new(app_ctx), panel, menu)
     }
 
-    pub fn with_config(current: Id, config: WmConfig, app_ctx: Arc<AppContext>) -> Self {
+    pub fn with_config(
+        current: Id,
+        config: WmConfig,
+        app_ctx: Arc<AppContext>,
+        panel: Box<dyn Panel<WindowId<Id>>>,
+        menu_overlay: Box<dyn MenuOverlay<WmMenuAction>>,
+    ) -> Self {
         let mouse_capture_enabled = config.mouse_capture_enabled;
         let clipboard = Some(crate::io::clipboard::Clipboard::new());
         let decorator = config.decorator();
         let floating_resize_offscreen = config.floating_resize_offscreen;
-        let hostname = app_ctx.hostname.as_deref();
-        let mut panel = Panel::new(&app_ctx.app_name, &app_ctx.app_version, hostname);
-        panel.set_menu_outline_timeout(config.menu_outline_timeout);
         Self {
             app_focus: FocusRing::new(current),
             wm_focus: FocusRing::new(WindowId::system(SystemWindowId::DebugLog)),
@@ -414,6 +461,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             managed_area: Rect::default(),
             app_ctx,
             panel,
+            menu_overlay,
             drag_header: None,
             last_header_click: None,
             drag_resize: None,
@@ -427,7 +475,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             clipboard_enabled: config.clipboard_enabled,
             clipboard_dirty: false,
             overlay_visible: false,
-            wm_menu_selected: 0,
             selection_active: false,
             selection_dragging: false,
             selection_text: None,
@@ -526,7 +573,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.overlay_visible = false;
         self.overlay_opened_at = None;
         self.super_pending = None;
-        self.wm_menu_selected = 0;
+        self.menu_overlay.restore();
     }
 
     pub fn capture_active(&mut self) -> bool {
@@ -820,7 +867,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             selection_copy_available,
             self.selection_copied(),
             self.wm_overlay_visible(),
-            move |id| {
+            &move |id| {
                 titles_map.get(&id).cloned().unwrap_or_else(|| match id {
                     WindowId::App(app_id) => format!("{:?}", app_id),
                     WindowId::System(SystemWindowId::DebugLog) => "Debug Log".to_string(),
@@ -828,82 +875,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             },
         );
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct WmMenuItem {
-    label: &'static str,
-    icon: Option<&'static str>,
-    action: WmMenuAction,
-}
-
-fn wm_menu_items(
-    mouse_capture_enabled: bool,
-    clipboard_enabled: bool,
-    window_selection_enabled: bool,
-) -> [WmMenuItem; 9] {
-    let mouse_label = if mouse_capture_enabled {
-        "Mouse Capture: On"
-    } else {
-        "Mouse Capture: Off"
-    };
-    let clipboard_label = if clipboard_enabled {
-        "Clipboard Mode: On"
-    } else {
-        "Clipboard Mode: Off"
-    };
-    let selection_label = if window_selection_enabled {
-        "Window Selection: On"
-    } else {
-        "Window Selection: Off"
-    };
-    [
-        WmMenuItem {
-            label: "Resume",
-            icon: None,
-            action: WmMenuAction::CloseMenu,
-        },
-        WmMenuItem {
-            label: mouse_label,
-            icon: Some("🖱"),
-            action: WmMenuAction::ToggleMouseCapture,
-        },
-        WmMenuItem {
-            label: clipboard_label,
-            icon: Some("📋"),
-            action: WmMenuAction::ToggleClipboardMode,
-        },
-        WmMenuItem {
-            label: selection_label,
-            icon: Some("✎"),
-            action: WmMenuAction::ToggleWindowSelection,
-        },
-        WmMenuItem {
-            label: "Floating Front",
-            icon: Some("↑"),
-            action: WmMenuAction::BringFloatingFront,
-        },
-        WmMenuItem {
-            label: "New Window",
-            icon: Some("+"),
-            action: WmMenuAction::NewWindow,
-        },
-        WmMenuItem {
-            label: "Debug Log",
-            icon: Some("≣"),
-            action: WmMenuAction::ToggleDebugWindow,
-        },
-        WmMenuItem {
-            label: "Help",
-            icon: Some("?"),
-            action: WmMenuAction::Help,
-        },
-        WmMenuItem {
-            label: "Exit UI",
-            icon: Some("⏻"),
-            action: WmMenuAction::ExitUi,
-        },
-    ]
 }
 
 fn clamp_rect(area: Rect, bounds: Rect) -> Rect {

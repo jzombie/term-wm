@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use ratatui::layout::Rect;
 
 #[test]
@@ -10,10 +12,20 @@ fn default_shell_nonempty() {
 
 #[test]
 fn mouse_capture_flow_through_window_manager() {
+    let ctx = Arc::new(term_wm::AppContext::new("test", "0.0.0"));
+    let panel: Box<dyn term_wm_core::panel_trait::Panel<term_wm_core::window::WindowId<usize>>> =
+        Box::new(term_wm_ui_components::PanelComponent::new(
+            &ctx.app_name, &ctx.app_version, None,
+        ));
+    let menu: Box<dyn term_wm_core::menu_trait::MenuOverlay<term_wm_core::window::WmMenuAction>> =
+        Box::new(term_wm_ui_components::WmMenuOverlay::new());
     let mut wm: term_wm::window::WindowManager<usize> =
-        term_wm::window::WindowManager::new_standalone(
+        term_wm::window::WindowManager::with_config(
             0,
-            term_wm::AppContext::new("test", "0.0.0"),
+            term_wm::wm_config::WmConfig::standalone(),
+            ctx,
+            panel,
+            menu,
         );
     // default starts enabled (from config)
     assert!(wm.mouse_capture_enabled());
@@ -29,8 +41,7 @@ fn mouse_capture_flow_through_window_manager() {
 
 #[test]
 fn panel_split_area_basic() {
-    let mut p: term_wm::panel::Panel<u8> =
-        term_wm::panel::Panel::new("test", "0.0.0", Some("host"));
+    let mut p = term_wm_ui_components::PanelComponent::<u8>::new("test", "0.0.0", Some("host"));
     let area = Rect {
         x: 0,
         y: 0,

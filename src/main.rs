@@ -96,8 +96,23 @@ impl App {
                     .unwrap_or_else(|| "unknown-host".to_string()),
             ),
         );
+        let hostname = app_ctx.hostname.as_deref();
+        let panel: Box<dyn term_wm_core::panel_trait::Panel<term_wm_core::window::WindowId<usize>>> =
+            Box::new(term_wm_ui_components::PanelComponent::new(
+                &app_ctx.app_name,
+                &app_ctx.app_version,
+                hostname,
+            ));
+        let menu_overlay: Box<dyn term_wm_core::menu_trait::MenuOverlay<term_wm_core::window::WmMenuAction>> =
+            Box::new(term_wm_ui_components::WmMenuOverlay::new());
         let mut app = Self {
-            windows: WindowManager::with_config(0, WmConfig::standalone(), Arc::clone(&app_ctx)),
+            windows: WindowManager::with_config(
+                0,
+                WmConfig::standalone(),
+                Arc::clone(&app_ctx),
+                panel,
+                menu_overlay,
+            ),
             terminals: Vec::new(),
         };
 

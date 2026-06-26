@@ -22,7 +22,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 && self.panel_active()
                 && crate::layout::rect_contains(self.panel.area(), mouse.column, mouse.row)
             {
-                if self.panel.hit_test_menu(event) {
+                if self.panel.menu_icon_contains_point(mouse.column, mouse.row) {
                     if self.wm_overlay_visible() {
                         self.close_wm_overlay();
                     } else {

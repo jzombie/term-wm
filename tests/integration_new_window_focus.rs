@@ -1,10 +1,23 @@
+use std::sync::Arc;
+
 use term_wm::window::WindowManager;
 
 #[test]
 fn new_window_is_focused() {
-    // Create a window manager in managed mode.
-    let mut wm =
-        WindowManager::<usize>::new_standalone(0, term_wm::AppContext::new("test", "0.0.0"));
+    let ctx = Arc::new(term_wm::AppContext::new("test", "0.0.0"));
+    let panel: Box<dyn term_wm_core::panel_trait::Panel<term_wm_core::window::WindowId<usize>>> =
+        Box::new(term_wm_ui_components::PanelComponent::new(
+            &ctx.app_name, &ctx.app_version, None,
+        ));
+    let menu: Box<dyn term_wm_core::menu_trait::MenuOverlay<term_wm_core::window::WmMenuAction>> =
+        Box::new(term_wm_ui_components::WmMenuOverlay::new());
+    let mut wm = WindowManager::<usize>::with_config(
+        0,
+        term_wm::wm_config::WmConfig::standalone(),
+        ctx,
+        panel,
+        menu,
+    );
 
     // Initially there should be no app-level focused window.
     assert_eq!(wm.wm_focus_app(), None);

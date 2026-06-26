@@ -1,4 +1,5 @@
 use std::io;
+use std::sync::Arc;
 
 use ratatui::prelude::Rect;
 use ratatui::widgets::Clear;
@@ -10,6 +11,7 @@ use term_wm::io::console::{ConsoleEventSource, ConsoleRenderTarget};
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
 use term_wm::ui::UiFrame;
 use term_wm::window::{WindowDrawContext, WindowManager};
+use term_wm::wm_config::WmConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum PaneId {
@@ -52,9 +54,19 @@ impl App {
         if paths.len() == 1 {
             paths.push(paths[0].clone());
         }
-        let mut windows = WindowManager::new_standalone(
+        let hostname = None;
+        let panel: Box<dyn term_wm_core::panel_trait::Panel<term_wm_core::window::WindowId<PaneId>>> =
+            Box::new(term_wm_ui_components::PanelComponent::new(
+                "example", "0.0.0", hostname,
+            ));
+        let menu_overlay: Box<dyn term_wm_core::menu_trait::MenuOverlay<term_wm_core::window::WmMenuAction>> =
+            Box::new(term_wm_ui_components::WmMenuOverlay::new());
+        let mut windows = WindowManager::with_config(
             PaneId::Left,
-            term_wm::AppContext::new("example", "0.0.0"),
+            WmConfig::standalone(),
+            Arc::new(term_wm::AppContext::new("example", "0.0.0")),
+            panel,
+            menu_overlay,
         );
         windows.set_focus_order(vec![PaneId::Left, PaneId::Right]);
         let mut app = Self {
