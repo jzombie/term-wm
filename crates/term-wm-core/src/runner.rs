@@ -179,7 +179,10 @@ where
                 // Only Global-layer actions are proactively dispatched;
                 // WmMode actions are handled when the WM overlay is open.
                 let mapped_action = match &evt {
-                    Event::Key(key) => app.windows().keybindings().action_for_key_in_layer(key, crate::keybindings::ActionLayer::Global),
+                    Event::Key(key) => app
+                        .windows()
+                        .keybindings()
+                        .action_for_key_in_layer(key, crate::keybindings::ActionLayer::Global),
                     _ => None,
                 };
 
@@ -271,7 +274,10 @@ where
 
                 // Pre-compute WmMode-layer action for use inside the overlay section.
                 let mapped_action_wm_mode = match &evt {
-                    Event::Key(key) => app.windows().keybindings().action_for_key_in_layer(key, crate::keybindings::ActionLayer::WmMode),
+                    Event::Key(key) => app
+                        .windows()
+                        .keybindings()
+                        .action_for_key_in_layer(key, crate::keybindings::ActionLayer::WmMode),
                     _ => None,
                 };
 
@@ -359,7 +365,10 @@ where
                         return flush_state_changes(app, ControlFlow::Continue);
                     }
                     // Focus routing in WM mode (Tab/Shift+Tab)
-                    if app.windows().handle_focus_event(&evt, focus_regions, &map_region) {
+                    if app
+                        .windows()
+                        .handle_focus_event(&evt, focus_regions, &map_region)
+                    {
                         update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue);
                     }
