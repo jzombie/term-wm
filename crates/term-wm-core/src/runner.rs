@@ -242,6 +242,12 @@ where
                     }
                 }
 
+                // Pre-compute WmMode-layer action for use inside the overlay section.
+                let mapped_action_wm_mode = match &evt {
+                    Event::Key(key) => app.windows().keybindings().action_for_key_in_layer(key, crate::keybindings::ActionLayer::WmMode),
+                    _ => None,
+                };
+
                 // WM overlay toggle (special case due to passthrough logic)
                 let wm_mode = app.windows().config().wm_overlay_enabled;
                 if wm_mode
@@ -329,6 +335,57 @@ where
                     if app.windows().handle_focus_event(&evt, focus_regions, &map_region) {
                         update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue);
+                    }
+                    // Dispatch remaining WmMode actions (Quit, OpenHelp, etc.)
+                    // while the WM overlay is open.
+                    if let Some(action) = mapped_action_wm_mode {
+                        match action {
+                            Action::Quit => {
+                                app.open_exit_confirm();
+                                update_selection_snapshot(app);
+                                return flush_state_changes(app, ControlFlow::Continue);
+                            }
+                            Action::OpenHelp => {
+                                app.open_help_overlay();
+                                app.windows().close_wm_overlay();
+                                update_selection_snapshot(app);
+                                return flush_state_changes(app, ControlFlow::Continue);
+                            }
+                            Action::OpenKeybindings => {
+                                app.open_keybindings_overlay();
+                                app.windows().close_wm_overlay();
+                                update_selection_snapshot(app);
+                                return flush_state_changes(app, ControlFlow::Continue);
+                            }
+                            Action::CycleNextWindow => {
+                                app.windows().advance_focus(true);
+                                update_selection_snapshot(app);
+                                return flush_state_changes(app, ControlFlow::Continue);
+                            }
+                            Action::CyclePrevWindow => {
+                                app.windows().advance_focus(false);
+                                update_selection_snapshot(app);
+                                return flush_state_changes(app, ControlFlow::Continue);
+                            }
+                            Action::HintToggle => {
+                                let current = app.windows().hint_visibility();
+                                let next = match current {
+                                    crate::wm_config::HintVisibility::Always => {
+                                        crate::wm_config::HintVisibility::Never
+                                    }
+                                    crate::wm_config::HintVisibility::OnDemand => {
+                                        crate::wm_config::HintVisibility::Always
+                                    }
+                                    crate::wm_config::HintVisibility::Never => {
+                                        crate::wm_config::HintVisibility::Always
+                                    }
+                                };
+                                app.windows().set_hint_visibility(next);
+                                update_selection_snapshot(app);
+                                return flush_state_changes(app, ControlFlow::Continue);
+                            }
+                            _ => {}
+                        }
                     }
                     if let Event::Key(_) = &evt {
                         update_selection_snapshot(app);
