@@ -19,6 +19,7 @@ pub trait MenuOverlay<R>: std::fmt::Debug {
     fn restore(&mut self);
     fn set_items(&mut self, items: Vec<MenuItem<R>>);
     fn set_outline_timeout(&mut self, timeout: Duration);
+    fn set_hover_pos(&mut self, pos: Option<(u16, u16)>);
     fn render(
         &mut self,
         frame: &mut UiFrame<'_>,

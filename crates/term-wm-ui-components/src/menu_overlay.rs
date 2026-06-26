@@ -8,7 +8,6 @@ use ratatui::{
 };
 
 use term_wm_core::{
-    components::Component,
     layout::rect_contains,
     menu_trait::{MenuItem, MenuOverlay},
     theme,
@@ -25,6 +24,7 @@ pub struct WmMenuOverlay<R> {
     outline_timeout: Duration,
     menu_bounds_cache: Option<Rect>,
     item_hits: Vec<(usize, Rect)>,
+    hover_pos: Option<(u16, u16)>,
 }
 
 impl<R: std::fmt::Debug + Clone> WmMenuOverlay<R> {
@@ -36,6 +36,7 @@ impl<R: std::fmt::Debug + Clone> WmMenuOverlay<R> {
             outline_timeout: Duration::ZERO,
             menu_bounds_cache: None,
             item_hits: Vec::new(),
+            hover_pos: None,
         }
     }
 
@@ -48,7 +49,7 @@ impl<R: std::fmt::Debug + Clone> WmMenuOverlay<R> {
         }
     }
 
-    fn render_menu(&mut self, frame: &mut UiFrame<'_>, anchor: (u16, u16), managed_area: Rect) {
+    fn render_menu(&mut self, frame: &mut UiFrame<'_>, anchor: (u16, u16), managed_area: Rect, hover_pos: Option<(u16, u16)>) {
         let item_count = self.menu.items().len();
         if item_count == 0 {
             return;
@@ -101,7 +102,12 @@ impl<R: std::fmt::Debug + Clone> WmMenuOverlay<R> {
             return;
         }
 
-        self.menu.render(frame, drop_rect, &Default::default());
+        let hovered_idx = hover_pos.and_then(|(_mx, my)| {
+            (my >= drop_rect.y.saturating_add(1) && my < drop_rect.y.saturating_add(item_count as u16 + 1))
+                .then(|| (my - drop_rect.y - 1) as usize)
+                .filter(|&idx| idx < item_count)
+        });
+        self.menu.render_items(frame, drop_rect, hovered_idx);
 
         self.item_hits.clear();
         for idx in 0..item_count.min((drop_rect.height.saturating_sub(1)) as usize) {
@@ -216,6 +222,10 @@ impl<R: std::fmt::Debug + Clone> MenuOverlay<R> for WmMenuOverlay<R> {
         self.outline_timeout = timeout;
     }
 
+    fn set_hover_pos(&mut self, pos: Option<(u16, u16)>) {
+        self.hover_pos = pos;
+    }
+
     fn render(
         &mut self,
         frame: &mut UiFrame<'_>,
@@ -226,7 +236,7 @@ impl<R: std::fmt::Debug + Clone> MenuOverlay<R> for WmMenuOverlay<R> {
         if self.outlined {
             self.render_outline(frame);
         } else if let Some(anchor) = anchor {
-            self.render_menu(frame, anchor, managed_area);
+            self.render_menu(frame, anchor, managed_area, self.hover_pos);
         }
     }
 }

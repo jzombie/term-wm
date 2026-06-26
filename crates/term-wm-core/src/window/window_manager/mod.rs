@@ -424,6 +424,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             fn restore(&mut self) {}
             fn set_items(&mut self, _items: Vec<MenuItem<WmMenuAction>>) {}
             fn set_outline_timeout(&mut self, _timeout: Duration) {}
+            fn set_hover_pos(&mut self, _pos: Option<(u16, u16)>) {}
             fn render(&mut self, _frame: &mut crate::ui::UiFrame<'_>, _anchor: Option<(u16, u16)>, _managed: Rect) {}
         }
 

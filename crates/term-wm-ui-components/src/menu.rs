@@ -93,7 +93,7 @@ impl<R> MenuComponent<R> {
             || self.nav_keys.matches(Action::MenuPrev, key)
     }
 
-    fn render_items(&self, frame: &mut UiFrame<'_>, area: Rect) {
+    pub fn render_items(&self, frame: &mut UiFrame<'_>, area: Rect, hovered_idx: Option<usize>) {
         if self.items.is_empty() || area.width < 3 || area.height < 3 {
             return;
         }
@@ -110,6 +110,9 @@ impl<R> MenuComponent<R> {
             .bg(theme::menu_selected_bg())
             .fg(theme::menu_selected_fg())
             .add_modifier(Modifier::BOLD);
+        let hovered_style = Style::default()
+            .bg(theme::panel_active_bg())
+            .fg(theme::menu_fg());
 
         let inner_x = area.x.saturating_add(1);
         let inner_width = area.width.saturating_sub(2).max(1);
@@ -140,7 +143,8 @@ impl<R> MenuComponent<R> {
             }
             let item = &self.items[idx];
             let is_selected = idx == self.selected;
-            let marker = if is_selected { ">" } else { " " };
+            let is_hovered = hovered_idx == Some(idx);
+            let marker = if is_selected { ">" } else if is_hovered { "▸" } else { " " };
             let line = if let Some(icon) = item.icon {
                 format!("{marker} {icon} {label}", label = item.label)
             } else {
@@ -149,6 +153,8 @@ impl<R> MenuComponent<R> {
             let text: String = line.chars().take(inner_width as usize).collect();
             let style = if is_selected {
                 selected_style
+            } else if is_hovered {
+                hovered_style
             } else {
                 menu_style
             };
@@ -159,7 +165,7 @@ impl<R> MenuComponent<R> {
 
 impl<R> Component for MenuComponent<R> {
     fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _ctx: &ComponentContext) {
-        self.render_items(frame, area);
+        self.render_items(frame, area, None);
     }
 
     fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
