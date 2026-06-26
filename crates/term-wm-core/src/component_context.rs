@@ -26,6 +26,7 @@ pub struct ComponentContext {
     viewport: ViewportContext,
     viewport_handle: Option<ViewportHandle>,
     app_ctx: Arc<AppContext>,
+    hover_pos: Option<(u16, u16)>,
 }
 
 /// Viewport metadata describing how the component is projected into a
@@ -180,6 +181,7 @@ impl ComponentContext {
             },
             viewport_handle: None,
             app_ctx: Arc::new(AppContext::new("", "")),
+            hover_pos: None,
         }
     }
 
@@ -218,6 +220,10 @@ impl ComponentContext {
         self.app_ctx.hostname.as_deref()
     }
 
+    pub fn hover_pos(&self) -> Option<(u16, u16)> {
+        self.hover_pos
+    }
+
     /// Return a new `ComponentContext` with an attached [`AppContext`].
     ///
     /// Uses [`Arc::clone`], which is a cheap reference-count bump — the
@@ -246,6 +252,13 @@ impl ComponentContext {
         let mut ctx = self.clone();
         ctx.viewport = viewport;
         ctx.viewport_handle = handle;
+        ctx
+    }
+
+    /// Return a new `ComponentContext` with a hover position.
+    pub fn with_hover_pos(&self, pos: Option<(u16, u16)>) -> Self {
+        let mut ctx = self.clone();
+        ctx.hover_pos = pos;
         ctx
     }
 }

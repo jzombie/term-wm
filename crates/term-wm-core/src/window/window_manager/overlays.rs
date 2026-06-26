@@ -175,8 +175,10 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             );
             self.menu_overlay.set_items(menu_items);
             let anchor = self.panel.menu_icon_rect().map(|r| (r.x, r.y.saturating_add(r.height)));
-            self.menu_overlay.set_hover_pos(self.hover);
-            self.menu_overlay.render(frame, anchor, self.managed_area);
+            let menu_ctx = self.component_context(false)
+                .with_overlay(true)
+                .with_hover_pos(self.hover);
+            self.menu_overlay.render(frame, anchor, self.managed_area, &menu_ctx);
         }
 
         let confirm_ctx = self.component_context(false).with_overlay(true);

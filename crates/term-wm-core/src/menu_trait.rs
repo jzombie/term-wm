@@ -3,6 +3,7 @@ use std::time::Duration;
 use crossterm::event::Event;
 use ratatui::prelude::Rect;
 
+use crate::component_context::ComponentContext;
 use crate::ui::UiFrame;
 
 #[derive(Debug, Clone)]
@@ -19,11 +20,11 @@ pub trait MenuOverlay<R>: std::fmt::Debug {
     fn restore(&mut self);
     fn set_items(&mut self, items: Vec<MenuItem<R>>);
     fn set_outline_timeout(&mut self, timeout: Duration);
-    fn set_hover_pos(&mut self, pos: Option<(u16, u16)>);
     fn render(
         &mut self,
         frame: &mut UiFrame<'_>,
         anchor: Option<(u16, u16)>,
         managed_area: Rect,
+        ctx: &ComponentContext,
     );
 }
