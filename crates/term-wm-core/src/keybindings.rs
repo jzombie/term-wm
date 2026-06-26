@@ -1,0 +1,256 @@
+use std::fmt;
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+pub use crate::actions::{Action, ActionLayer, Category};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyCombo {
+    pub code: KeyCode,
+    pub mods: KeyModifiers,
+}
+
+impl KeyCombo {
+    pub fn new(code: KeyCode, mods: KeyModifiers) -> Self {
+        Self { code, mods }
+    }
+
+    pub fn matches(&self, key: &KeyEvent) -> bool {
+        key.code == self.code && key.modifiers == self.mods
+    }
+
+    pub fn display(&self) -> String {
+        let mut parts = Vec::new();
+        if self.mods.contains(KeyModifiers::CONTROL) {
+            parts.push("Ctrl".to_string());
+        }
+        if self.mods.contains(KeyModifiers::SHIFT) {
+            parts.push("Shift".to_string());
+        }
+        if self.mods.contains(KeyModifiers::ALT) {
+            parts.push("Alt".to_string());
+        }
+        let code = match self.code {
+            KeyCode::Char(c) => c.to_ascii_uppercase().to_string(),
+            KeyCode::Esc => "Esc".to_string(),
+            KeyCode::Enter => "Enter".to_string(),
+            KeyCode::Tab => "Tab".to_string(),
+            KeyCode::Backspace => "Backspace".to_string(),
+            KeyCode::Left => "Left".to_string(),
+            KeyCode::Right => "Right".to_string(),
+            KeyCode::Up => "Up".to_string(),
+            KeyCode::Down => "Down".to_string(),
+            KeyCode::Home => "Home".to_string(),
+            KeyCode::End => "End".to_string(),
+            KeyCode::PageUp => "PageUp".to_string(),
+            KeyCode::PageDown => "PageDown".to_string(),
+            KeyCode::Delete => "Delete".to_string(),
+            KeyCode::Insert => "Insert".to_string(),
+            KeyCode::F(n) => format!("F{}", n),
+            _ => format!("{:?}", self.code),
+        };
+        parts.push(code);
+        parts.join("+")
+    }
+}
+
+impl fmt::Display for KeyCombo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.display())
+    }
+}
+
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone)]
+pub struct KeyBindings {
+    map: BTreeMap<Action, Vec<KeyCombo>>,
+}
+
+macro_rules! default_keybindings {
+    ( $( $action:ident : [ $( ($code:expr, $mods:expr) ),* $(,)? ] ),* $(,)? ) => {{
+        let mut kb = KeyBindings::new();
+        $(
+            $(
+                kb.add(Action::$action, KeyCombo::new($code, $mods));
+            )*
+        )*
+        kb
+    }};
+}
+
+impl Default for KeyBindings {
+    fn default() -> Self {
+        default_keybindings! {
+            Quit: [ (KeyCode::Char('q'), KeyModifiers::CONTROL) ],
+            CloseHelp: [ (KeyCode::Esc, KeyModifiers::NONE), (KeyCode::Enter, KeyModifiers::NONE), (KeyCode::Char('q'), KeyModifiers::NONE) ],
+            FocusNext: [ (KeyCode::Tab, KeyModifiers::NONE) ],
+            FocusPrev: [ (KeyCode::BackTab, KeyModifiers::NONE) ],
+            WmToggleOverlay: [ (KeyCode::Esc, KeyModifiers::NONE) ],
+            MenuUp: [ (KeyCode::Up, KeyModifiers::NONE) ],
+            MenuDown: [ (KeyCode::Down, KeyModifiers::NONE) ],
+            MenuSelect: [ (KeyCode::Enter, KeyModifiers::NONE) ],
+            MenuNext: [ (KeyCode::Char('j'), KeyModifiers::NONE) ],
+            MenuPrev: [ (KeyCode::Char('k'), KeyModifiers::NONE) ],
+            ConfirmToggle: [ (KeyCode::Tab, KeyModifiers::NONE), (KeyCode::BackTab, KeyModifiers::NONE) ],
+            ConfirmLeft: [ (KeyCode::Left, KeyModifiers::NONE) ],
+            ConfirmRight: [ (KeyCode::Right, KeyModifiers::NONE) ],
+            ConfirmAccept: [ (KeyCode::Enter, KeyModifiers::NONE), (KeyCode::Char('y'), KeyModifiers::NONE) ],
+            ConfirmCancel: [ (KeyCode::Esc, KeyModifiers::NONE), (KeyCode::Char('n'), KeyModifiers::NONE) ],
+            ScrollPageUp: [ (KeyCode::PageUp, KeyModifiers::NONE) ],
+            ScrollPageDown: [ (KeyCode::PageDown, KeyModifiers::NONE) ],
+            ScrollHome: [ (KeyCode::Home, KeyModifiers::NONE) ],
+            ScrollEnd: [ (KeyCode::End, KeyModifiers::NONE) ],
+            ScrollUp: [ (KeyCode::Up, KeyModifiers::NONE) ],
+            ScrollDown: [ (KeyCode::Down, KeyModifiers::NONE) ],
+            ToggleSelection: [ (KeyCode::Char(' '), KeyModifiers::NONE) ],
+        }
+    }
+}
+
+impl KeyBindings {
+    /// Full standalone defaults — same as `Default`.
+    pub fn standalone() -> Self {
+        Self::default()
+    }
+
+    /// Embedded-mode defaults: excludes Windows and Menu category actions.
+    pub fn embedded() -> Self {
+        let mut kb = Self::default();
+        kb.map.retain(|action, _| {
+            let cat = action.category();
+            cat != Category::Windows && cat != Category::Menu
+        });
+        kb
+    }
+
+    pub fn new() -> Self {
+        Self {
+            map: BTreeMap::new(),
+        }
+    }
+
+    pub fn add(&mut self, action: Action, combo: KeyCombo) {
+        self.map.entry(action).or_default().push(combo);
+    }
+
+    pub fn matches(&self, action: Action, key: &KeyEvent) -> bool {
+        if let Some(list) = self.map.get(&action) {
+            list.iter().any(|c| c.matches(key))
+        } else {
+            false
+        }
+    }
+
+    pub fn action_for_key(&self, key: &KeyEvent) -> Option<Action> {
+        for (act, list) in &self.map {
+            if list.iter().any(|c| c.matches(key)) {
+                return Some(*act);
+            }
+        }
+        None
+    }
+
+    /// Map a full `Event` to an `Action`, if the event is a key event.
+    /// Look up `key` against only actions in the given layer.
+    pub fn action_for_key_in_layer(&self, key: &KeyEvent, layer: ActionLayer) -> Option<Action> {
+        for (act, list) in &self.map {
+            if act.layer() != layer {
+                continue;
+            }
+            if list.iter().any(|c| c.matches(key)) {
+                return Some(*act);
+            }
+        }
+        None
+    }
+
+    pub fn action_for_event(&self, evt: &crossterm::event::Event) -> Option<Action> {
+        if let crossterm::event::Event::Key(k) = evt {
+            self.action_for_key(k)
+        } else {
+            None
+        }
+    }
+
+    pub fn help_entries(&self) -> Vec<(Action, Vec<String>)> {
+        let mut v = Vec::new();
+        for (act, list) in &self.map {
+            v.push((*act, list.iter().map(|c| c.display()).collect()));
+        }
+        v
+    }
+
+    /// Return the display strings for all combos mapped to `action`.
+    pub fn combos_for(&self, action: Action) -> Vec<String> {
+        self.map
+            .get(&action)
+            .map(|list| list.iter().map(|c| c.display()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Return the first `KeyCombo` mapped to `action`, if any.
+    pub fn first_combo(&self, action: Action) -> Option<KeyCombo> {
+        self.map.get(&action).and_then(|list| list.first().cloned())
+    }
+
+    /// Access the underlying binding map (read-only).
+    pub fn map(&self) -> &BTreeMap<Action, Vec<KeyCombo>> {
+        &self.map
+    }
+
+    /// Returns up to `max` hint entries for actions matching `layer`,
+    /// sorted by `Action::bottom_hint_priority()`.
+    ///
+    /// Each entry is `(Action, Vec<String>)` where the strings are display
+    /// representations of the bound key combos.
+    pub fn bottom_hints(&self, max: usize) -> Vec<(Action, Vec<String>)> {
+        self.bottom_hints_filtered(max, None)
+    }
+
+    /// Like `bottom_hints` but filtered to a specific layer.
+    pub fn bottom_hints_for_layer(
+        &self,
+        max: usize,
+        layer: ActionLayer,
+    ) -> Vec<(Action, Vec<String>)> {
+        self.bottom_hints_filtered(max, Some(layer))
+    }
+
+    fn bottom_hints_filtered(
+        &self,
+        max: usize,
+        layer: Option<ActionLayer>,
+    ) -> Vec<(Action, Vec<String>)> {
+        let mut candidates: Vec<(Action, u8, Vec<String>)> = self
+            .map
+            .iter()
+            .filter_map(|(action, combos)| {
+                if let Some(layer) = layer
+                    && action.layer() != layer
+                {
+                    return None;
+                }
+                let priority = action.bottom_hint_priority()?;
+                let displays: Vec<String> = combos.iter().map(|c| c.display()).collect();
+                Some((*action, priority, displays))
+            })
+            .collect();
+        candidates.sort_by_key(|b| std::cmp::Reverse(b.1));
+        candidates.truncate(max);
+        candidates.into_iter().map(|(a, _, d)| (a, d)).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::KeyEvent;
+
+    #[test]
+    fn defaults_match_quit() {
+        let kb = KeyBindings::default();
+        let ev = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
+        assert!(kb.matches(Action::Quit, &ev));
+    }
+}
