@@ -11,6 +11,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.overlay_visible = true;
         self.overlay_opened_at = Some(std::time::Instant::now());
         self.wm_menu_selected = 0;
+        self.panel.unfold();
     }
 
     /// Opens the WM overlay without starting the Super-passthrough timer.
@@ -20,12 +21,14 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.overlay_visible = true;
         self.overlay_opened_at = None;
         self.wm_menu_selected = 0;
+        self.panel.unfold();
     }
 
     pub fn close_wm_overlay(&mut self) {
         self.overlay_visible = false;
         self.overlay_opened_at = None;
         self.wm_menu_selected = 0;
+        self.panel.unfold();
     }
 
     pub fn wm_overlay_visible(&self) -> bool {
