@@ -25,7 +25,7 @@ pub struct ComponentContext {
     overlay: bool,
     viewport: ViewportContext,
     viewport_handle: Option<ViewportHandle>,
-    app_ctx: Option<Arc<AppContext>>,
+    app_ctx: Arc<AppContext>,
 }
 
 /// Viewport metadata describing how the component is projected into a
@@ -179,7 +179,7 @@ impl ComponentContext {
                 height: 0,
             },
             viewport_handle: None,
-            app_ctx: None,
+            app_ctx: Arc::new(AppContext::new("", "")),
         }
     }
 
@@ -203,29 +203,19 @@ impl ComponentContext {
         self.viewport_handle.clone()
     }
 
-    /// Returns the application name carried by this context, or `""` if none
-    /// has been configured.
+    /// Returns the application name carried by this context.
     pub fn app_name(&self) -> &str {
-        self.app_ctx
-            .as_ref()
-            .map(|ctx| ctx.app_name.as_str())
-            .unwrap_or("")
+        &self.app_ctx.app_name
     }
 
-    /// Returns the application version carried by this context, or `""` if none
-    /// has been configured.
+    /// Returns the application version carried by this context.
     pub fn app_version(&self) -> &str {
-        self.app_ctx
-            .as_ref()
-            .map(|ctx| ctx.app_version.as_str())
-            .unwrap_or("")
+        &self.app_ctx.app_version
     }
 
     /// Returns the optional hostname carried by this context.
     pub fn app_hostname(&self) -> Option<&str> {
-        self.app_ctx
-            .as_ref()
-            .and_then(|ctx| ctx.hostname.as_deref())
+        self.app_ctx.hostname.as_deref()
     }
 
     /// Return a new `ComponentContext` with an attached [`AppContext`].
@@ -233,7 +223,7 @@ impl ComponentContext {
     /// Uses [`Arc::clone`], which is a cheap reference-count bump — the
     /// underlying strings are not copied.
     pub fn with_app_context(mut self, app_ctx: Arc<AppContext>) -> Self {
-        self.app_ctx = Some(app_ctx);
+        self.app_ctx = app_ctx;
         self
     }
 
