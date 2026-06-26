@@ -11,7 +11,7 @@ fn default_shell_nonempty() {
 #[test]
 fn mouse_capture_flow_through_window_manager() {
     let mut wm: term_wm::window::WindowManager<usize> =
-        term_wm::window::WindowManager::new_standalone(0, std::sync::Arc::new(term_wm::app_context::AppContext::new("test", "0.0.0")));
+        term_wm::window::WindowManager::new_standalone(0, term_wm::app_context::AppContext::new("test", "0.0.0"));
     // default starts enabled (from config)
     assert!(wm.mouse_capture_enabled());
     // setting the same value shouldn't mark change

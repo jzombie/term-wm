@@ -382,12 +382,12 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         }
     }
 
-    pub fn new_embedded(current: Id, app_ctx: Arc<AppContext>) -> Self {
-        Self::with_config(current, WmConfig::embedded(), app_ctx)
+    pub fn new_embedded(current: Id, app_ctx: AppContext) -> Self {
+        Self::with_config(current, WmConfig::embedded(), Arc::new(app_ctx))
     }
 
-    pub fn new_standalone(current: Id, app_ctx: Arc<AppContext>) -> Self {
-        Self::with_config(current, WmConfig::standalone(), app_ctx)
+    pub fn new_standalone(current: Id, app_ctx: AppContext) -> Self {
+        Self::with_config(current, WmConfig::standalone(), Arc::new(app_ctx))
     }
 
     pub fn with_config(current: Id, config: WmConfig, app_ctx: Arc<AppContext>) -> Self {
@@ -1090,7 +1090,7 @@ mod tests {
     #[test]
     fn click_focusing_topmost_window() {
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::new_standalone(0, Arc::new(AppContext::new("test", "0.0.0")));
+        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
 
         let r1 = Rect {
             x: 0,
@@ -1128,7 +1128,7 @@ mod tests {
     #[test]
     fn enforce_min_visible_margin_horizontal() {
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::<usize>::new_standalone(0, Arc::new(AppContext::new("test", "0.0.0")));
+        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
             WindowId::app(1usize),
@@ -1162,7 +1162,7 @@ mod tests {
     #[test]
     fn enforce_min_visible_margin_vertical() {
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::<usize>::new_standalone(0, Arc::new(AppContext::new("test", "0.0.0")));
+        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
             WindowId::app(2usize),
@@ -1193,7 +1193,7 @@ mod tests {
     #[test]
     fn maximize_persists_across_resize() {
         use crate::window::FloatRectSpec;
-        let mut wm = WindowManager::<usize>::new_standalone(0, Arc::new(AppContext::new("test", "0.0.0")));
+        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
         wm.register_managed_layout(ratatui::layout::Rect {
             x: 0,
             y: 0,
@@ -1222,7 +1222,7 @@ mod tests {
     #[test]
     fn localize_event_converts_to_local_coords() {
         use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::new_standalone(0, Arc::new(AppContext::new("test", "0.0.0")));
+        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
         let target_rect = ratatui::layout::Rect {
             x: 10,
             y: 5,
@@ -1262,7 +1262,7 @@ mod tests {
     fn localize_event_handles_negative_origin() {
         use crate::window::{FloatRect, FloatRectSpec};
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::new_standalone(0, Arc::new(AppContext::new("test", "0.0.0")));
+        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
             WindowId::app(1usize),
@@ -1311,7 +1311,7 @@ mod tests {
     #[test]
     fn hit_test_uses_visible_bounds_for_floating_windows() {
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::<usize>::new_standalone(0, Arc::new(AppContext::new("test", "0.0.0")));
+        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
             WindowId::app(1usize),
@@ -1347,7 +1347,7 @@ mod tests {
     fn hover_targets_respects_occlusion() {
         use crate::layout::floating::{ResizeEdge, ResizeHandle};
         use crate::layout::tiling::SplitHandle;
-        let mut wm = WindowManager::<usize>::new_standalone(0, Arc::new(AppContext::new("test", "0.0.0")));
+        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
         wm.regions.set(
             WindowId::app(1usize),
             Rect {
@@ -1453,7 +1453,7 @@ mod tests {
             }
         }
 
-        let mut wm = WindowManager::<usize>::new_standalone(0, Arc::new(AppContext::new("test", "0.0.0")));
+        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
         wm.set_system_window(SystemWindowId::DebugLog, Box::new(DummyDebugComponent));
         wm.set_panel_visible(false);
         wm.show_system_window(SystemWindowId::DebugLog);
@@ -1516,7 +1516,7 @@ mod tests {
     #[test]
     fn adjust_event_rebases_app_mouse_coordinates() {
         use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::new_standalone(0, Arc::new(AppContext::new("test", "0.0.0")));
+        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
         let full = Rect {
             x: 10,
             y: 3,
@@ -1550,7 +1550,7 @@ mod tests {
     #[test]
     fn adjust_event_rebases_system_mouse_coordinates() {
         use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::new_standalone(0, Arc::new(AppContext::new("test", "0.0.0")));
+        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
         let full = Rect {
             x: 2,
             y: 4,
@@ -1586,7 +1586,7 @@ mod tests {
     #[test]
     fn hover_scroll_routes_to_non_focused_window() {
         use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::new_standalone(0, Arc::new(AppContext::new("test", "0.0.0")));
+        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
 
         let r1 = Rect {
             x: 0,
@@ -1645,7 +1645,7 @@ mod tests {
     #[test]
     fn hover_scroll_over_focused_window_routes_normally() {
         use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::new_standalone(0, Arc::new(AppContext::new("test", "0.0.0")));
+        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
 
         let r1 = Rect {
             x: 0,
@@ -1686,7 +1686,7 @@ mod tests {
     #[test]
     fn hover_scroll_outside_all_windows_routes_to_focused() {
         use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::new_standalone(0, Arc::new(AppContext::new("test", "0.0.0")));
+        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
 
         let r1 = Rect {
             x: 0,
@@ -1726,7 +1726,7 @@ mod tests {
 
     #[test]
     fn direct_mode_defaults_to_false() {
-        let mut wm = WindowManager::<usize>::new_standalone(0, Arc::new(AppContext::new("test", "0.0.0")));
+        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
         wm.focus_app_window(0);
         let focus = wm.wm_focus();
         assert!(!wm.direct_mode(focus));
@@ -1734,7 +1734,7 @@ mod tests {
 
     #[test]
     fn direct_mode_toggle_cycles_state() {
-        let mut wm = WindowManager::<usize>::new_standalone(0, Arc::new(AppContext::new("test", "0.0.0")));
+        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
         wm.focus_app_window(0);
         let focus = wm.wm_focus();
 
@@ -1747,7 +1747,7 @@ mod tests {
 
     #[test]
     fn direct_mode_set_get_roundtrip() {
-        let mut wm = WindowManager::<usize>::new_standalone(0, Arc::new(AppContext::new("test", "0.0.0")));
+        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
         let id = WindowId::app(42usize);
         assert!(!wm.direct_mode(id), "default is false");
 
@@ -1760,7 +1760,7 @@ mod tests {
 
     #[test]
     fn direct_mode_is_per_window() {
-        let mut wm = WindowManager::<usize>::new_standalone(0, Arc::new(AppContext::new("test", "0.0.0")));
+        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
         let id_a = WindowId::app(1usize);
         let id_b = WindowId::app(2usize);
 
@@ -1774,7 +1774,7 @@ mod tests {
         use crate::layout::{LayoutNode, TilingLayout};
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-        let mut wm = WindowManager::<usize>::new_standalone(0, Arc::new(AppContext::new("test", "0.0.0")));
+        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
         wm.set_panel_visible(false);
 
         // Create a proper managed layout with window 1
@@ -1848,7 +1848,7 @@ mod tests {
         use crate::layout::{LayoutNode, TilingLayout};
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-        let mut wm = WindowManager::<usize>::new_standalone(0, Arc::new(AppContext::new("test", "0.0.0")));
+        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
         wm.set_panel_visible(false);
 
         // Create a proper managed layout with window 1
