@@ -11,6 +11,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.overlay_visible = true;
         self.overlay_opened_at = Some(std::time::Instant::now());
         self.wm_menu_selected = 0;
+        self.wm_menu_folded = false;
     }
 
     /// Opens the WM overlay without starting the Super-passthrough timer.
@@ -20,16 +21,30 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.overlay_visible = true;
         self.overlay_opened_at = None;
         self.wm_menu_selected = 0;
+        self.wm_menu_folded = false;
     }
 
     pub fn close_wm_overlay(&mut self) {
         self.overlay_visible = false;
         self.overlay_opened_at = None;
         self.wm_menu_selected = 0;
+        self.wm_menu_folded = false;
     }
 
     pub fn wm_overlay_visible(&self) -> bool {
         self.overlay_visible
+    }
+
+    pub fn wm_menu_folded(&self) -> bool {
+        self.wm_menu_folded
+    }
+
+    pub fn fold_wm_menu(&mut self) {
+        self.wm_menu_folded = true;
+    }
+
+    fn unfold_wm_menu(&mut self) {
+        self.wm_menu_folded = false;
     }
 
     pub fn close_exit_confirm(&mut self) {
@@ -74,6 +89,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             && matches!(mouse.kind, MouseEventKind::Down(_))
         {
             if let Some(index) = self.panel.hit_test_menu_item(event) {
+                self.unfold_wm_menu();
                 let selected = index.min(items.len().saturating_sub(1));
                 self.wm_menu_selected = selected;
                 return items.get(selected).map(|item| item.action);
@@ -92,6 +108,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         if kb.matches(crate::keybindings::Action::MenuUp, key)
             || kb.matches(crate::keybindings::Action::MenuPrev, key)
         {
+            self.unfold_wm_menu();
             let total = items.len();
             if total > 0 {
                 let current = self.wm_menu_selected;
@@ -105,6 +122,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         } else if kb.matches(crate::keybindings::Action::MenuDown, key)
             || kb.matches(crate::keybindings::Action::MenuNext, key)
         {
+            self.unfold_wm_menu();
             let total = items.len();
             if total > 0 {
                 let current = self.wm_menu_selected;
@@ -213,30 +231,34 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             }
         }
 
-        let menu_items = super::wm_menu_items(
-            self.mouse_capture_enabled(),
-            self.clipboard_enabled(),
-            self.window_selection_enabled(),
-        );
-        let menu_labels = menu_items
-            .iter()
-            .map(|item| (item.icon, item.label))
-            .collect::<Vec<_>>();
         let bounds = frame.area();
-        self.panel.render_menu(
-            frame,
-            self.wm_overlay_visible(),
-            bounds,
-            &menu_labels,
-            self.wm_menu_selected,
-            self.hover,
-        );
-        self.panel.render_menu_backdrop(
-            frame,
-            self.wm_overlay_visible(),
-            self.managed_area,
-            self.panel.area(),
-        );
+        if self.wm_menu_folded {
+            self.panel.render_menu_outline(frame, self.wm_overlay_visible());
+        } else {
+            let menu_items = super::wm_menu_items(
+                self.mouse_capture_enabled(),
+                self.clipboard_enabled(),
+                self.window_selection_enabled(),
+            );
+            let menu_labels = menu_items
+                .iter()
+                .map(|item| (item.icon, item.label))
+                .collect::<Vec<_>>();
+            self.panel.render_menu(
+                frame,
+                self.wm_overlay_visible(),
+                bounds,
+                &menu_labels,
+                self.wm_menu_selected,
+                self.hover,
+            );
+            self.panel.render_menu_backdrop(
+                frame,
+                self.wm_overlay_visible(),
+                self.managed_area,
+                self.panel.area(),
+            );
+        }
 
         let confirm_ctx = self.component_context(false).with_overlay(true);
         let help_ctx = self.component_context(false).with_overlay(true);

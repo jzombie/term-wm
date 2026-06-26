@@ -366,10 +366,12 @@ where
                         return flush_state_changes(app, ControlFlow::Continue);
                     }
                     // Focus routing in WM mode (Tab/Shift+Tab)
+                    // Fold menu to outline so user can see the window they focused.
                     if app
                         .windows()
                         .handle_focus_event(&evt, focus_regions, &map_region)
                     {
+                        app.windows().fold_wm_menu();
                         update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue);
                     }

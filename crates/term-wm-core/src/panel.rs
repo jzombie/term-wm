@@ -2,6 +2,7 @@ use crossterm::event::{Event, MouseEventKind};
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
+    widgets::{Block, Borders},
 };
 
 use crate::keybindings::Action;
@@ -91,6 +92,7 @@ pub struct Panel<R: Copy + Eq + Ord> {
     activation: ActivationMenu,
     list: WindowList<R>,
     notifications: NotificationArea,
+    menu_bounds_cache: Option<Rect>,
     app_name: String,
     app_version: String,
     hostname: Option<String>,
@@ -108,6 +110,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             activation: ActivationMenu::new(),
             list: WindowList::new(),
             notifications: NotificationArea::new(),
+            menu_bounds_cache: None,
             app_name: app_name.to_string(),
             app_version: app_version.to_string(),
             hostname: hostname.map(|h| h.to_string()),
@@ -740,6 +743,12 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             width,
             height,
         });
+        self.menu_bounds_cache = Some(Rect {
+            x: start_x,
+            y: start_y,
+            width,
+            height,
+        });
         let hovered_style = Style::default()
             .bg(crate::theme::panel_active_bg())
             .fg(crate::theme::menu_fg());
@@ -813,6 +822,23 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
                 },
             });
         }
+    }
+
+    pub fn render_menu_outline(
+        &self,
+        frame: &mut UiFrame<'_>,
+        open: bool,
+    ) {
+        if !open {
+            return;
+        }
+        let Some(menu_bounds) = self.menu_bounds_cache else {
+            return;
+        };
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(crate::theme::menu_fg()).add_modifier(Modifier::DIM));
+        frame.render_widget(block, menu_bounds);
     }
 
     pub fn hit_test_menu_item(&self, event: &Event) -> Option<usize> {
