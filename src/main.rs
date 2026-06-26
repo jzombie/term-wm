@@ -12,7 +12,6 @@ use ratatui::prelude::Rect;
 
 use term_wm::app_context::AppContext;
 use term_wm::components::{Component, ComponentContext};
-use term_wm::wm_config::WmConfig;
 use term_wm::io::{
     RenderTarget,
     console::{ConsoleEventSource, ConsoleRenderTarget},
@@ -20,6 +19,7 @@ use term_wm::io::{
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
 use term_wm::ui::UiFrame;
 use term_wm::window::{OverlayId, SystemWindowId, WindowDrawContext, WindowManager};
+use term_wm::wm_config::WmConfig;
 use term_wm::{ScrollViewComponent, TerminalComponent, default_shell_command};
 use term_wm_ui_components::sys::debug_log::{
     DebugLogComponent, install_panic_hook, set_global_debug_log,

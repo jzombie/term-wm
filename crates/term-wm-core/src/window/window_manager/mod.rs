@@ -489,8 +489,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     /// Create a [`ComponentContext`] pre-populated with the application
     /// identity from this window manager's [`AppContext`].
     pub fn component_context(&self, focused: bool) -> ComponentContext {
-        ComponentContext::new(focused)
-            .with_app_context(Arc::clone(&self.app_ctx))
+        ComponentContext::new(focused).with_app_context(Arc::clone(&self.app_ctx))
     }
 
     pub fn begin_frame(&mut self) {

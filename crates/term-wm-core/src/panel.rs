@@ -467,15 +467,12 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         let info_opt = if show_info {
             let platform = std::env::consts::OS;
             let pkg_label = format!("{} {}", self.app_name, self.app_version);
-            let hostname = self
-                .hostname
-                .clone()
-                .unwrap_or_else(|| {
-                    hostname::get()
-                        .ok()
-                        .and_then(|s| s.into_string().ok())
-                        .unwrap_or_else(|| "unknown-host".to_string())
-                });
+            let hostname = self.hostname.clone().unwrap_or_else(|| {
+                hostname::get()
+                    .ok()
+                    .and_then(|s| s.into_string().ok())
+                    .unwrap_or_else(|| "unknown-host".to_string())
+            });
             Some(format!("{pkg_label} · {platform} · {hostname}"))
         } else {
             None
@@ -967,7 +964,10 @@ mod tests {
             let cell = buf.cell((xx, area.y)).expect("cell present");
             rendered.push_str(cell.symbol());
         }
-        assert!(rendered.contains("my-machine"), "bottom bar should include hostname");
+        assert!(
+            rendered.contains("my-machine"),
+            "bottom bar should include hostname"
+        );
     }
 
     #[test]

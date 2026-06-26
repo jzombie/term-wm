@@ -3,7 +3,8 @@ use term_wm::window::WindowManager;
 #[test]
 fn new_window_is_focused() {
     // Create a window manager in managed mode.
-    let mut wm = WindowManager::<usize>::new_standalone(0, term_wm::AppContext::new("test", "0.0.0"));
+    let mut wm =
+        WindowManager::<usize>::new_standalone(0, term_wm::AppContext::new("test", "0.0.0"));
 
     // Initially there should be no app-level focused window.
     assert_eq!(wm.wm_focus_app(), None);

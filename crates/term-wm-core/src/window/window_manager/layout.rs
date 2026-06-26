@@ -188,11 +188,15 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         match self.hint_visibility {
             crate::wm_config::HintVisibility::Always => {
                 if self.config.wm_overlay_enabled {
-                    let hints = self.keybindings.bottom_hints_for_layer(crate::constants::MAX_BOTTOM_HINTS, active_layer);
+                    let hints = self
+                        .keybindings
+                        .bottom_hints_for_layer(crate::constants::MAX_BOTTOM_HINTS, active_layer);
                     self.panel.set_keybinding_hints(hints);
                 } else {
                     // Embedded mode: no overlay, all actions are always dispatchable.
-                    let hints = self.keybindings.bottom_hints(crate::constants::MAX_BOTTOM_HINTS);
+                    let hints = self
+                        .keybindings
+                        .bottom_hints(crate::constants::MAX_BOTTOM_HINTS);
                     self.panel.set_keybinding_hints(hints);
                 }
             }
