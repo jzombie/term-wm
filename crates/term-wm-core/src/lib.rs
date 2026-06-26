@@ -1,5 +1,6 @@
 pub mod actions;
 pub mod app_context;
+pub use app_context::AppContext;
 pub mod component_context;
 pub mod components;
 pub mod constants;

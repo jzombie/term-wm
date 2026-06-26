@@ -776,7 +776,7 @@ mod tests {
         use crate::window::WindowManager;
 
         // Create an empty WindowManager (no active regions/z-order).
-        let wm: WindowManager<usize> = WindowManager::new_standalone(0, crate::app_context::AppContext::new("test", "0.0.0"));
+        let wm: WindowManager<usize> = WindowManager::new_standalone(0, crate::AppContext::new("test", "0.0.0"));
         assert!(!wm.has_any_active_windows());
 
         // Create a fake app that enumerates windows (i.e., app-level windows still exist)
@@ -869,7 +869,7 @@ mod tests {
         }
 
         let mut app = FakeApp {
-            wm: WindowManager::<usize>::new_standalone(0, crate::app_context::AppContext::new("test", "0.0.0")),
+            wm: WindowManager::<usize>::new_standalone(0, crate::AppContext::new("test", "0.0.0")),
             recorder: KeyRecorder {
                 received_key: false,
             },
@@ -961,7 +961,7 @@ mod tests {
         }
 
         let mut app = FakeApp {
-            wm: WindowManager::<usize>::new_standalone(0, crate::app_context::AppContext::new("test", "0.0.0")),
+            wm: WindowManager::<usize>::new_standalone(0, crate::AppContext::new("test", "0.0.0")),
             recorder: KeyRecorder {
                 received_key: false,
             },
