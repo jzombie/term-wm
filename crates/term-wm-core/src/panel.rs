@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use crossterm::event::{Event, MouseEventKind};
 use ratatui::{
     layout::Rect,
@@ -94,6 +96,7 @@ pub struct Panel<R: Copy + Eq + Ord> {
     notifications: NotificationArea,
     menu_bounds_cache: Option<Rect>,
     folded: bool,
+    folded_at: Option<Instant>,
     app_name: String,
     app_version: String,
     hostname: Option<String>,
@@ -113,6 +116,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             notifications: NotificationArea::new(),
             menu_bounds_cache: None,
             folded: false,
+            folded_at: None,
             app_name: app_name.to_string(),
             app_version: app_version.to_string(),
             hostname: hostname.map(|h| h.to_string()),
@@ -690,10 +694,12 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
 
     pub fn fold(&mut self) {
         self.folded = true;
+        self.folded_at = Some(Instant::now());
     }
 
     pub fn unfold(&mut self) {
         self.folded = false;
+        self.folded_at = None;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -709,6 +715,12 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
     ) {
         if !open {
             return;
+        }
+        if self.folded
+            && let Some(folded_at) = self.folded_at
+            && folded_at.elapsed() > std::time::Duration::from_secs(3)
+        {
+            self.unfold();
         }
         if self.folded {
             self.render_menu_outline(frame, open);
