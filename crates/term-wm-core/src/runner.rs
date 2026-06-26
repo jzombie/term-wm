@@ -202,13 +202,40 @@ where
                 }
 
                 // If keyboard capture is disabled for the focused window, key events
-                // bypass all WM interception and go directly to the terminal.
-                if let Event::Key(_) = &evt {
+                // bypass all WM interception and go directly to the terminal,
+                // except when the WM overlay is visible — overlay takes priority.
+                // Uses the unified double-Esc handler: first Esc is deferred (panel
+                // shows countdown), second Esc within window opens overlay, timeout
+                // (checked in idle path) forwards the first Esc to the terminal.
+                if let Event::Key(key) = &evt {
                     let focus_id = app.windows().wm_focus();
-                    if app.windows().keyboard_capture_disabled(focus_id) {
-                        let _ = handle_focused_app_event(&evt, app);
-                        update_selection_snapshot(app);
-                        return flush_state_changes(app, ControlFlow::Continue);
+                    if app.windows().keyboard_capture_disabled(focus_id)
+                        && !app.windows().wm_overlay_visible()
+                        && key.kind == KeyEventKind::Press
+                    {
+                        let is_wm_key = app
+                            .windows()
+                            .keybindings()
+                            .matches(crate::keybindings::Action::WmToggleOverlay, key);
+                        match app.windows().handle_esc_press(key, is_wm_key) {
+                            crate::window::EscPressResult::DoubleEsc => {
+                                app.windows().open_wm_overlay();
+                                update_selection_snapshot(app);
+                                return flush_state_changes(app, ControlFlow::Continue);
+                            }
+                            crate::window::EscPressResult::Pending => {
+                                // First Esc of a pair — deferred. Panel shows countdown.
+                                // Timeout forwarding happens in the idle path below.
+                                update_selection_snapshot(app);
+                                return flush_state_changes(app, ControlFlow::Continue);
+                            }
+                            crate::window::EscPressResult::Forward => {
+                                // Non-wm-toggle key → forward to terminal immediately.
+                                let _ = handle_focused_app_event(&evt, app);
+                                update_selection_snapshot(app);
+                                return flush_state_changes(app, ControlFlow::Continue);
+                            }
+                        }
                     }
                 }
 
@@ -450,6 +477,10 @@ where
                 {
                     update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Quit);
+                }
+                // Forward any timed-out pending Esc to the terminal.
+                if let Some(esc_event) = app.windows().take_expired_esc_event() {
+                    let _ = handle_focused_app_event(&esc_event, app);
                 }
                 update_selection_snapshot(app);
                 app.windows().begin_frame();

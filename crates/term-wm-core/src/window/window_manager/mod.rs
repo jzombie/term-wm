@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crossterm::event::Event;
+use crossterm::event::{Event, KeyEvent};
 use ratatui::prelude::Rect;
 
 use super::FocusRing;
@@ -90,6 +90,17 @@ impl ScrollState {
             self.offset = max_offset;
         }
     }
+}
+
+/// Result of a double-Esc press check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EscPressResult {
+    /// Second press of WmToggleOverlay within passthrough window → open overlay.
+    DoubleEsc,
+    /// First press of WmToggleOverlay — deferred until timeout or second press.
+    Pending,
+    /// Not a WmToggleOverlay key — forward immediately.
+    Forward,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -199,6 +210,7 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     keybindings: KeyBindings,
     hint_visibility: HintVisibility,
     wm_overlay_opened_at: Option<Instant>,
+    esc_pending: Option<(Instant, KeyEvent)>,
     pub(crate) last_frame_area: ratatui::prelude::Rect,
     overlays: BTreeMap<OverlayId, Box<dyn Overlay>>,
     scroll_keyboard_enabled_default: bool,
@@ -422,6 +434,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             hint_visibility: config.hint_visibility,
             config,
             wm_overlay_opened_at: None,
+            esc_pending: None,
             last_frame_area: Rect::default(),
             overlays: BTreeMap::new(),
             scroll_keyboard_enabled_default: true,
@@ -501,6 +514,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.pending_deadline = None;
         self.overlay_visible = false;
         self.wm_overlay_opened_at = None;
+        self.esc_pending = None;
         self.wm_menu_selected = 0;
     }
 
@@ -692,6 +706,54 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.config.panel_enabled && self.panel.visible() && self.panel.height() > 0
     }
 
+    /// Unified double-Esc press handler.
+    /// - `Pending`: first press of WmToggleOverlay — deferred, timeout will forward.
+    /// - `DoubleEsc`: second press within window — caller should open overlay.
+    /// - `Forward`: not a WmToggleOverlay key — forward immediately.
+    pub fn handle_esc_press(&mut self, key: &KeyEvent, is_wm_toggle_key: bool) -> EscPressResult {
+        if is_wm_toggle_key {
+            if let Some((pressed_at, _)) = &self.esc_pending
+                && pressed_at.elapsed() < self.config.esc_passthrough_window
+            {
+                self.esc_pending = None;
+                return EscPressResult::DoubleEsc;
+            }
+            self.esc_pending = Some((Instant::now(), *key));
+            EscPressResult::Pending
+        } else {
+            self.esc_pending = None;
+            EscPressResult::Forward
+        }
+    }
+
+    /// If a pending first-Esc has timed out, return it for forwarding to the
+    /// focused window. Called once per frame in the idle event path.
+    pub fn take_expired_esc_event(&mut self) -> Option<Event> {
+        let expired = self.esc_pending.is_some_and(|(pressed_at, _)| {
+            pressed_at.elapsed() >= self.config.esc_passthrough_window
+        });
+        if expired {
+            let (_, key) = self
+                .esc_pending
+                .take()
+                .expect("esc_pending was just checked");
+            Some(Event::Key(key))
+        } else {
+            None
+        }
+    }
+
+    /// Time remaining before a deferred first-Esc is forwarded to the terminal.
+    /// Returns `None` when no Esc is pending.
+    pub fn esc_pending_remaining(&self) -> Option<Duration> {
+        let (pressed_at, _) = self.esc_pending.as_ref()?;
+        let elapsed = pressed_at.elapsed();
+        if elapsed >= self.config.esc_passthrough_window {
+            return None;
+        }
+        Some(self.config.esc_passthrough_window.saturating_sub(elapsed))
+    }
+
     pub fn esc_passthrough_active(&self) -> bool {
         self.esc_passthrough_remaining().is_some()
     }
@@ -717,7 +779,12 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             };
             Some(format!("{esc_state} · Tab/Shift-Tab: cycle windows"))
         } else {
-            None
+            self.esc_pending_remaining().map(|remaining| {
+                format!(
+                    "Esc pending: {}ms · press Esc again within window to open menu",
+                    remaining.as_millis()
+                )
+            })
         };
         let display = self.build_display_order();
         let titles_map: std::collections::BTreeMap<WindowId<Id>, String> =
