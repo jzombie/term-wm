@@ -50,12 +50,12 @@ Unlike other multiplexers that require complex prefix chords (like `Ctrl+b`), `t
 
 It provides a framework to render Ratatui components in a fashion that automatically handles focus routing and view lifecycle, letting you focus on component creation while term-wm enforces consistent layout.
 
-### Layout Contracts
+### Operation Modes
 
-The library uses **Layout Contracts** to define how screen real estate is negotiated between your application logic and the term-wm engine:
+The library provides two presets via `WmConfig`:
 
-- **AppManaged:** The application retains full control. You set regions and coordinates directly; the WM steps back.
-- **WindowManaged:** The window manager (WM) takes ownership. It enforces tiling, floating rules, and standard constraints, managing the dimensions of your components automatically.
+- **`WmConfig::standalone()`** — Full window manager with chrome, panel, floating windows, overlays, and WM mode toggle. Used by the `term-wm` binary.
+- **`WmConfig::embedded()`** — Minimal mode: no floating window management features by default. Designed for embedding term-wm components inside another application.
 
 ### Integration
 
