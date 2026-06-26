@@ -118,11 +118,20 @@ impl<R> MenuComponent<R> {
         let inner_width = area.width.saturating_sub(2).max(1);
         let visible_items = (area.height.saturating_sub(1)).min(self.items.len() as u16) as usize;
 
-        for row in 0..area.height.min(1 + visible_items as u16 + 1) {
-            let y = area.y.saturating_add(row);
+        for idx in 0..visible_items {
+            let y = area.y.saturating_add(idx as u16 + 1);
             if y < bounds.y || y >= bounds.y.saturating_add(bounds.height) {
-                continue;
+                break;
             }
+            let is_selected = idx == self.selected;
+            let is_hovered = hovered_idx == Some(idx);
+            let row_style = if is_selected {
+                selected_style
+            } else if is_hovered {
+                hovered_style
+            } else {
+                menu_style
+            };
             for col in 0..area.width {
                 let x = area.x.saturating_add(col);
                 if x >= bounds.x.saturating_add(bounds.width) {
@@ -131,19 +140,10 @@ impl<R> MenuComponent<R> {
                 if let Some(cell) = buffer.cell_mut((x, y)) {
                     cell.reset();
                     cell.set_symbol(" ");
-                    cell.set_style(menu_style);
+                    cell.set_style(row_style);
                 }
             }
-        }
-
-        for idx in 0..visible_items {
-            let y = area.y.saturating_add(idx as u16 + 1);
-            if y < bounds.y || y >= bounds.y.saturating_add(bounds.height) {
-                break;
-            }
             let item = &self.items[idx];
-            let is_selected = idx == self.selected;
-            let is_hovered = hovered_idx == Some(idx);
             let marker = if is_selected { ">" } else if is_hovered { "▸" } else { " " };
             let line = if let Some(icon) = item.icon {
                 format!("{marker} {icon} {label}", label = item.label)
@@ -151,14 +151,7 @@ impl<R> MenuComponent<R> {
                 format!("{marker}   {label}", label = item.label)
             };
             let text: String = line.chars().take(inner_width as usize).collect();
-            let style = if is_selected {
-                selected_style
-            } else if is_hovered {
-                hovered_style
-            } else {
-                menu_style
-            };
-            safe_set_string(buffer, bounds, inner_x, y, &text, style);
+            safe_set_string(buffer, bounds, inner_x, y, &text, row_style);
         }
     }
 }
