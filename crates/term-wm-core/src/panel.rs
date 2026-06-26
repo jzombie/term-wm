@@ -95,14 +95,14 @@ pub struct Panel<R: Copy + Eq + Ord> {
     list: WindowList<R>,
     notifications: NotificationArea,
     menu_bounds_cache: Option<Rect>,
-    folded: bool,
-    folded_at: Option<Instant>,
+    outlined: bool,
+    outlined_at: Option<Instant>,
     app_name: String,
     app_version: String,
     hostname: Option<String>,
     keybinding_hints: Vec<(Action, Vec<String>)>,
     hint_rects: Vec<(Rect, Action)>,
-    menu_fold_timeout: Duration,
+    menu_outline_timeout: Duration,
 }
 
 impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
@@ -116,19 +116,19 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             list: WindowList::new(),
             notifications: NotificationArea::new(),
             menu_bounds_cache: None,
-            folded: false,
-            folded_at: None,
+            outlined: false,
+            outlined_at: None,
             app_name: app_name.to_string(),
             app_version: app_version.to_string(),
             hostname: hostname.map(|h| h.to_string()),
             keybinding_hints: Vec::new(),
             hint_rects: Vec::new(),
-            menu_fold_timeout: Duration::ZERO,
+            menu_outline_timeout: Duration::ZERO,
         }
     }
 
-    pub fn set_menu_fold_timeout(&mut self, timeout: Duration) {
-        self.menu_fold_timeout = timeout;
+    pub fn set_menu_outline_timeout(&mut self, timeout: Duration) {
+        self.menu_outline_timeout = timeout;
     }
 
     pub fn set_hostname(&mut self, hostname: &str) {
@@ -694,18 +694,18 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             .map(|hit| hit.id)
     }
 
-    pub fn is_folded(&self) -> bool {
-        self.folded
+    pub fn is_outlined(&self) -> bool {
+        self.outlined
     }
 
     pub fn fold(&mut self) {
-        self.folded = true;
-        self.folded_at = Some(Instant::now());
+        self.outlined = true;
+        self.outlined_at = Some(Instant::now());
     }
 
-    pub fn unfold(&mut self) {
-        self.folded = false;
-        self.folded_at = None;
+    pub fn restore(&mut self) {
+        self.outlined = false;
+        self.outlined_at = None;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -722,13 +722,13 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         if !open {
             return;
         }
-        if self.folded
-            && let Some(folded_at) = self.folded_at
-            && folded_at.elapsed() > self.menu_fold_timeout
+        if self.outlined
+            && let Some(outlined_at) = self.outlined_at
+            && outlined_at.elapsed() > self.menu_outline_timeout
         {
-            self.unfold();
+            self.restore();
         }
-        if self.folded {
+        if self.outlined {
             self.render_menu_outline(frame, open);
         } else {
             let bounds = frame.area();

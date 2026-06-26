@@ -11,7 +11,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.overlay_visible = true;
         self.overlay_opened_at = Some(std::time::Instant::now());
         self.wm_menu_selected = 0;
-        self.panel.unfold();
+        self.panel.restore();
     }
 
     /// Opens the WM overlay without starting the Super-passthrough timer.
@@ -21,14 +21,14 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.overlay_visible = true;
         self.overlay_opened_at = None;
         self.wm_menu_selected = 0;
-        self.panel.unfold();
+        self.panel.restore();
     }
 
     pub fn close_wm_overlay(&mut self) {
         self.overlay_visible = false;
         self.overlay_opened_at = None;
         self.wm_menu_selected = 0;
-        self.panel.unfold();
+        self.panel.restore();
     }
 
     pub fn wm_overlay_visible(&self) -> bool {
@@ -81,7 +81,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             && matches!(mouse.kind, MouseEventKind::Down(_))
         {
             if let Some(index) = self.panel.hit_test_menu_item(event) {
-                self.panel.unfold();
+                self.panel.restore();
                 let selected = index.min(items.len().saturating_sub(1));
                 self.wm_menu_selected = selected;
                 return items.get(selected).map(|item| item.action);
@@ -100,7 +100,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         if kb.matches(crate::keybindings::Action::MenuUp, key)
             || kb.matches(crate::keybindings::Action::MenuPrev, key)
         {
-            self.panel.unfold();
+            self.panel.restore();
             let total = items.len();
             if total > 0 {
                 let current = self.wm_menu_selected;
@@ -114,7 +114,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         } else if kb.matches(crate::keybindings::Action::MenuDown, key)
             || kb.matches(crate::keybindings::Action::MenuNext, key)
         {
-            self.panel.unfold();
+            self.panel.restore();
             let total = items.len();
             if total > 0 {
                 let current = self.wm_menu_selected;

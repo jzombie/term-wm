@@ -397,7 +397,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let floating_resize_offscreen = config.floating_resize_offscreen;
         let hostname = app_ctx.hostname.as_deref();
         let mut panel = Panel::new(&app_ctx.app_name, &app_ctx.app_version, hostname);
-        panel.set_menu_fold_timeout(config.menu_fold_timeout);
+        panel.set_menu_outline_timeout(config.menu_outline_timeout);
         Self {
             app_focus: FocusRing::new(current),
             wm_focus: FocusRing::new(WindowId::system(SystemWindowId::DebugLog)),

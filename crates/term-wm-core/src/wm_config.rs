@@ -85,8 +85,8 @@ pub struct WmConfig {
     pub mouse_capture_enabled: bool,
     /// Enable keyboard (Tab/Shift+Tab) focus switching between windows.
     pub keyboard_focus_enabled: bool,
-    /// How long the folded menu outline stays visible before auto-unfolding.
-    pub menu_fold_timeout: Duration,
+    /// How long the menu outline stays visible before restoring the full menu.
+    pub menu_outline_timeout: Duration,
     /// Enable mouse click focus switching between windows.
     pub mouse_focus_click_enabled: bool,
     /// Custom window decorator (title bar + border renderer).
@@ -123,7 +123,7 @@ impl WmConfig {
             decorator: Some(Arc::new(DefaultDecorator::new())),
             keybindings: validate_keybindings(&KeyBindings::standalone()),
             hint_visibility: HintVisibility::Always,
-            menu_fold_timeout: Duration::from_millis(500),
+            menu_outline_timeout: Duration::from_millis(500),
         }
     }
 
@@ -144,7 +144,7 @@ impl WmConfig {
             decorator: Some(Arc::new(DefaultDecorator::without_buttons())),
             keybindings: validate_keybindings(&KeyBindings::embedded()),
             hint_visibility: HintVisibility::Always,
-            menu_fold_timeout: Duration::ZERO,
+            menu_outline_timeout: Duration::ZERO,
         }
     }
 
