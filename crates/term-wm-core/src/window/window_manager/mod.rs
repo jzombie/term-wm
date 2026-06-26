@@ -20,7 +20,7 @@ use crate::components::{ComponentContext, Overlay};
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
-use crate::menu_trait::MenuOverlay;
+use crate::menu_trait::{MenuItem, MenuOverlay};
 use crate::panel_trait::Panel;
 use crate::ui::UiFrame;
 use crate::wm_config::{HintVisibility, WmConfig};
@@ -875,6 +875,75 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             },
         );
     }
+}
+
+pub fn wm_menu_items(
+    mouse_capture_enabled: bool,
+    clipboard_enabled: bool,
+    window_selection_enabled: bool,
+) -> Vec<MenuItem<WmMenuAction>> {
+    let mouse_label = if mouse_capture_enabled {
+        "Mouse Capture: On"
+    } else {
+        "Mouse Capture: Off"
+    };
+    let clipboard_label = if clipboard_enabled {
+        "Clipboard Mode: On"
+    } else {
+        "Clipboard Mode: Off"
+    };
+    let selection_label = if window_selection_enabled {
+        "Window Selection: On"
+    } else {
+        "Window Selection: Off"
+    };
+    vec![
+        MenuItem {
+            label: "Resume",
+            icon: None,
+            action: WmMenuAction::CloseMenu,
+        },
+        MenuItem {
+            label: mouse_label,
+            icon: Some("🖱"),
+            action: WmMenuAction::ToggleMouseCapture,
+        },
+        MenuItem {
+            label: clipboard_label,
+            icon: Some("📋"),
+            action: WmMenuAction::ToggleClipboardMode,
+        },
+        MenuItem {
+            label: selection_label,
+            icon: Some("✎"),
+            action: WmMenuAction::ToggleWindowSelection,
+        },
+        MenuItem {
+            label: "Floating Front",
+            icon: Some("↑"),
+            action: WmMenuAction::BringFloatingFront,
+        },
+        MenuItem {
+            label: "New Window",
+            icon: Some("+"),
+            action: WmMenuAction::NewWindow,
+        },
+        MenuItem {
+            label: "Debug Log",
+            icon: Some("≣"),
+            action: WmMenuAction::ToggleDebugWindow,
+        },
+        MenuItem {
+            label: "Help",
+            icon: Some("?"),
+            action: WmMenuAction::Help,
+        },
+        MenuItem {
+            label: "Exit UI",
+            icon: Some("⏻"),
+            action: WmMenuAction::ExitUi,
+        },
+    ]
 }
 
 fn clamp_rect(area: Rect, bounds: Rect) -> Rect {
