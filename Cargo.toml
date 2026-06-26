@@ -8,49 +8,63 @@ repository.workspace = true
 license.workspace = true
 publish.workspace = true
 
-[package.metadata.cargo-udeps.ignore]
-normal = ["windows-sys"]
-
 [workspace]
-members = ["crates/term-bench"]
+members = [
+    "crates/term-bench",
+    "crates/term-wm-core",
+    "crates/term-wm-ui-components",
+]
 resolver = "2"
 
 [workspace.package]
 authors = ["Jeremy Harris <jeremy.harris@zenosmosis.com>"]
-version = "0.5.1-alpha"
+version = "0.6.0-alpha"
 edition = "2024"
 repository = "https://github.com/jzombie/term-wm"
 license = "MIT OR Apache-2.0"
 publish = true
 
 [workspace.dependencies]
-clap = { version = "4.5.54", features = ["derive"] }
+arboard = "3.6.1"
+base64 = "0.22.1"
+clap = { version = "4.6.1", features = ["derive"] }
 crossterm = "0.29.0"
-indoc = "2.0.7"
-ratatui = "0.30.0"
-
-[dependencies]
-clap = { workspace = true, features = ["derive"] }
-crossterm.workspace = true
 hostname = "0.4.2"
-indoc.workspace = true
-libc = "0.2.176"
+indoc = "2.0.7"
+libc = "0.2.186"
 line-ending = "1.5.1"
 linkify = "0.10.0"
 portable-pty = "0.9.0"
+# proptest was previously used for property-based scroll-sync tests.
+# If re-adding, uncomment here and in the crate Cargo.toml.
+# proptest = "1.11.0"
 pulldown-cmark = "0.13.0"
-ratatui.workspace = true
-resvg = "0.45.1"
+ratatui = "0.30.0"
+resvg = "0.47.0"
 shell-words = "1.1.1"
-thiserror = "2.0.17"
+strum = { version = "0.28", features = ["derive"] }
+tempfile = "3.24.0"
+term-wm-core = { path = "crates/term-wm-core", version = "0.6.0-alpha" }
+term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.6.0-alpha" }
+thiserror = "2.0.18"
 tracing = "0.1.44"
 tracing-subscriber = "0.3.22"
 vt100 = "0.16.2"
-webbrowser = "1.0.6"
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO"] }
+webbrowser = "1.2.1"
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+hostname = { workspace = true }
+line-ending = { workspace = true }
+portable-pty = { workspace = true }
+ratatui = { workspace = true }
+term-wm-core = { workspace = true }
+term-wm-ui-components = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+webbrowser = { workspace = true }
 
 [build-dependencies]
-indoc = "2.0.7"
+indoc = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3.24.0"

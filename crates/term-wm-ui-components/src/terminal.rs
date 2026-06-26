@@ -1,0 +1,1454 @@
+use std::sync::Arc;
+
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
+use portable_pty::{CommandBuilder, PtySize};
+use ratatui::{
+    layout::Rect,
+    style::{Color as TColor, Modifier, Style},
+};
+use vt100::{MouseProtocolEncoding, MouseProtocolMode};
+
+use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
+use term_wm_core::layout::rect_contains;
+use term_wm_core::pane::Pane;
+use term_wm_core::ui::UiFrame;
+use term_wm_core::utils::linkifier::{
+    LinkHandler, LinkOverlay, Linkifier, OverlaySignature, decorate_link_style,
+};
+use term_wm_core::utils::selectable_text::{
+    LogicalPosition, SelectionController, SelectionHost, SelectionRange, SelectionViewport,
+    handle_selection_mouse, maintain_selection_drag,
+};
+
+// This controls the scrollback buffer size in the vt100 parser.
+// It determines how many lines you can scroll up to see.
+const DEFAULT_SCROLLBACK_LEN: usize = 2000;
+
+pub struct TerminalComponent {
+    pane: Box<dyn Pane>,
+    last_size: (u16, u16),
+    last_area: Rect,
+    linkifier: Linkifier,
+    link_overlay: LinkOverlay,
+    link_handler: Option<LinkHandler>,
+    command_description: String,
+    selection: SelectionController,
+    selection_enabled: bool,
+    last_scrollback: usize,
+    last_max_scrollback: usize,
+}
+
+impl Component for TerminalComponent {
+    fn resize(&mut self, area: Rect, _ctx: &ComponentContext) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        let size = (area.width, area.height);
+        if size != self.last_size {
+            let _ = self.pane.resize(PtySize {
+                rows: area.height,
+                cols: area.width,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
+            self.last_size = size;
+        }
+    }
+
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
+        if !ctx.focused() {
+            self.selection.clear();
+        }
+        if area.height == 0 || area.width == 0 {
+            self.last_area = Rect::default();
+            return;
+        }
+        self.last_area = area;
+        let _exited = self.pane.has_exited();
+        self.render_screen(frame, area, ctx);
+    }
+
+    fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
+        match event {
+            Event::Key(key) => {
+                if key.kind == KeyEventKind::Release {
+                    return false;
+                }
+                self.selection.clear();
+                if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
+                    && key.modifiers.contains(KeyModifiers::SHIFT)
+                    && !self.pane.alternate_screen()
+                {
+                    let delta = if key.code == KeyCode::PageUp {
+                        10isize
+                    } else {
+                        -10isize
+                    };
+                    self.scroll_scrollback(delta);
+                    return true;
+                }
+                let bytes = key_to_bytes(*key);
+                if bytes.is_empty() {
+                    return false;
+                }
+                if self.pane.scrollback() > 0 {
+                    self.pane.set_scrollback(0);
+                }
+                if let Err(_err) = self.pane.write_bytes(&bytes) {
+                    #[cfg(windows)]
+                    eprintln!("terminal input write failed: {_err}");
+                }
+                true
+            }
+            Event::Mouse(mouse) => {
+                let selection_ready = self.selection_enabled;
+                if handle_selection_mouse(self, selection_ready, mouse) {
+                    return true;
+                }
+                if self.try_handle_link_click(mouse) {
+                    return true;
+                }
+                if !rect_contains(self.last_area, mouse.column, mouse.row) {
+                    return false;
+                }
+                // Forward mouse events only when the nested app enabled mouse reporting
+                // (either SGR or the legacy/default X11-style protocol).
+                let screen = self.pane.screen();
+                let encoding = screen.mouse_protocol_encoding();
+
+                match encoding {
+                    MouseProtocolEncoding::Default | MouseProtocolEncoding::Sgr => {}
+                    _ => return false,
+                }
+
+                let mode = screen.mouse_protocol_mode();
+                // Avoid emitting sequences for modes the app didn't request.
+                if !mouse_event_allowed(mode, mouse.kind) {
+                    return false;
+                }
+                // Convert global coordinates into the PTY-local viewport.
+                let local = MouseEvent {
+                    column: mouse.column.saturating_sub(self.last_area.x),
+                    row: mouse.row.saturating_sub(self.last_area.y),
+                    kind: mouse.kind,
+                    modifiers: mouse.modifiers,
+                };
+                let bytes = mouse_event_to_bytes(local, encoding);
+                if bytes.is_empty() {
+                    return false;
+                }
+                if let Err(_err) = self.pane.write_bytes(&bytes) {
+                    #[cfg(windows)]
+                    eprintln!("terminal mouse write failed: {_err}");
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn selection_status(&self) -> SelectionStatus {
+        if !self.selection_enabled {
+            return SelectionStatus::default();
+        }
+        SelectionStatus {
+            active: self.selection.has_selection(),
+            dragging: self.selection.is_dragging(),
+        }
+    }
+
+    fn selection_text(&mut self) -> Option<String> {
+        if !self.selection_enabled {
+            return None;
+        }
+        let range = self.selection.selection_range()?.normalized();
+        if !range.is_non_empty() {
+            return None;
+        }
+        self.selection_text_for_range(range)
+    }
+
+    fn paste(&mut self, text: &str) -> bool {
+        if text.is_empty() {
+            return false;
+        }
+        self.pane.write_bytes(text.as_bytes()).is_ok()
+    }
+}
+
+impl TerminalComponent {
+    /// Return a reasonable default PTY size used when spawning a terminal
+    /// when the caller doesn't need to pick a custom size.
+    pub fn default_pty_size() -> PtySize {
+        PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        }
+    }
+
+    /// Convenience spawn that uses `default_pty_size()`.
+    pub fn spawn_default(command: CommandBuilder) -> term_wm_core::pty::PtyResult<Self> {
+        Self::spawn(command, Self::default_pty_size())
+    }
+
+    /// Construct a terminal wrapper around any Pane implementation.
+    pub fn from_pane(pane: Box<dyn Pane>) -> Self {
+        Self {
+            pane,
+            last_size: (80, 24),
+            last_area: Rect::default(),
+            linkifier: Linkifier::new(),
+            link_overlay: LinkOverlay::new(),
+            link_handler: None,
+            command_description: "pane-override".to_string(),
+            selection: SelectionController::new(),
+            selection_enabled: false,
+            last_scrollback: 0,
+            last_max_scrollback: 0,
+        }
+    }
+
+    pub fn spawn(command: CommandBuilder, size: PtySize) -> term_wm_core::pty::PtyResult<Self> {
+        let command_description = format!("{:?}", command);
+        let pane: Box<dyn Pane> = Box::new(term_wm_core::pty::Pty::spawn_with_scrollback(
+            command,
+            size,
+            DEFAULT_SCROLLBACK_LEN,
+        )?);
+        let comp = Self {
+            pane,
+            last_size: (size.cols, size.rows),
+            last_area: Rect::default(),
+            linkifier: Linkifier::new(),
+            link_overlay: LinkOverlay::new(),
+            link_handler: None,
+            command_description,
+            selection: SelectionController::new(),
+            selection_enabled: false,
+            last_scrollback: 0,
+            last_max_scrollback: 0,
+        };
+        Ok(comp)
+    }
+
+    pub fn write_bytes(&mut self, input: &[u8]) -> std::io::Result<()> {
+        self.pane.write_bytes(input)
+    }
+
+    pub fn has_exited(&mut self) -> bool {
+        let exited = self.pane.has_exited();
+        if exited {
+            // If exiting with error, log it to global log which will trigger debug window
+            if let Some(status) = self.pane.take_exit_status()
+                && !status.success()
+            {
+                tracing::error!(
+                    "Terminal exited with error: {:?} (Command: {})",
+                    status,
+                    self.command_description
+                );
+            }
+        }
+        exited
+    }
+
+    pub fn exit_status(&self) -> Option<portable_pty::ExitStatus> {
+        self.pane.exit_status()
+    }
+
+    pub fn take_exit_status(&mut self) -> Option<portable_pty::ExitStatus> {
+        self.pane.take_exit_status()
+    }
+
+    pub fn bytes_received(&self) -> usize {
+        self.pane.bytes_received()
+    }
+
+    pub fn last_bytes_text(&self) -> String {
+        self.pane.last_bytes_text()
+    }
+
+    pub fn set_link_handler(&mut self, handler: Option<LinkHandler>) {
+        self.link_handler = handler;
+    }
+
+    pub fn set_link_handler_fn<F>(&mut self, handler: F)
+    where
+        F: Fn(&str) -> bool + Send + Sync + 'static,
+    {
+        self.link_handler = Some(Arc::new(handler));
+    }
+
+    /// Direct access to internal state for testing scroll sync logic.
+    #[cfg(test)]
+    pub fn set_last_scrollback(&mut self, val: usize) {
+        self.last_scrollback = val;
+    }
+
+    #[cfg(test)]
+    pub fn set_last_max_scrollback(&mut self, val: usize) {
+        self.last_max_scrollback = val;
+    }
+
+    #[cfg(test)]
+    pub fn pane_mut(&mut self) -> &mut Box<dyn Pane> {
+        &mut self.pane
+    }
+
+    pub fn set_selection_enabled(&mut self, enabled: bool) {
+        if self.selection_enabled == enabled {
+            return;
+        }
+        self.selection_enabled = enabled;
+        if !enabled {
+            self.selection.clear();
+        }
+    }
+
+    pub fn take_pending_title(&mut self) -> Option<String> {
+        self.pane.take_pending_title()
+    }
+
+    fn render_screen(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
+        maintain_selection_drag(self);
+
+        // Synchronize scroll state with the shared Viewport
+        if !self.pane.alternate_screen()
+            && let Some(handle) = ctx.viewport_handle()
+        {
+            let used = self.pane.max_scrollback();
+            let view_height = area.height as usize;
+            let total_height = used + view_height;
+            handle.set_content_size(area.width as usize, total_height);
+
+            let current_sb = self.pane.scrollback();
+            let view_offset = ctx.viewport().offset_y;
+            if current_sb == 0 {
+                // If viewport was scrolled away from where we left it (user
+                // scrolled via mouse wheel / scrollbar), sync scrollback from
+                // the viewport instead of forcing back to bottom.
+                if view_offset < self.last_max_scrollback.saturating_sub(1) {
+                    let target_sb = used.saturating_sub(view_offset);
+                    self.pane.set_scrollback(target_sb);
+                } else {
+                    // Follow tail: user is at bottom, keep viewport tracking new content
+                    handle.scroll_vertical_to(usize::MAX);
+                }
+            } else if current_sb != self.last_scrollback {
+                // If scrollback changed internally (keys/output), push to viewport
+                let new_offset = used.saturating_sub(current_sb);
+                handle.scroll_vertical_to(new_offset);
+            } else {
+                // Otherwise sync from viewport (scrollbar/mouse wheel on container)
+                let target_sb = used.saturating_sub(view_offset);
+                if target_sb != current_sb {
+                    self.pane.set_scrollback(target_sb);
+                }
+            }
+            self.last_max_scrollback = used;
+        }
+
+        let scrollback_value = self.pane.scrollback();
+        self.last_scrollback = scrollback_value;
+
+        let show_cursor = scrollback_value == 0;
+        let used = self.pane.max_scrollback();
+        let selection_row_base = used.saturating_sub(scrollback_value);
+        let selection_range = if self.selection_enabled {
+            self.selection
+                .selection_range()
+                .filter(|r| r.is_non_empty())
+                .map(|r| r.normalized())
+        } else {
+            None
+        };
+        let buffer = frame.buffer_mut();
+
+        // Optimally only iterate over the visible intersection
+        let visible = area.intersection(buffer.area);
+        if visible.width == 0 || visible.height == 0 {
+            self.link_overlay.clear();
+            return;
+        }
+
+        // Calculate offset into the PTY screen
+        let start_col = visible.x.saturating_sub(area.x);
+        let start_row = visible.y.saturating_sub(area.y);
+
+        let bytes_seen = self.pane.bytes_received();
+        let screen = self.pane.screen();
+        let signature = OverlaySignature::new(
+            bytes_seen,
+            scrollback_value,
+            area.width,
+            area.height,
+            start_row,
+            start_col,
+        );
+        if !self.link_overlay.is_signature_current(&signature) {
+            let viewport_height = area.height as usize;
+            let viewport_width = area.width as usize;
+            let mut row_data: Vec<(usize, usize, String, Vec<usize>)> =
+                Vec::with_capacity(visible.height as usize);
+            for row in start_row..start_row + visible.height {
+                let viewport_row = row.saturating_sub(start_row) as usize;
+                if viewport_row >= viewport_height {
+                    continue;
+                }
+                let mut line = String::with_capacity(visible.width as usize);
+                let mut offsets = Vec::with_capacity(visible.width as usize + 1);
+                offsets.push(0);
+                for col in start_col..start_col + visible.width {
+                    let ch = screen
+                        .cell(row, col)
+                        .and_then(|cell| cell.contents().chars().next())
+                        .unwrap_or(' ');
+                    line.push(ch);
+                    offsets.push(line.len());
+                }
+                row_data.push((viewport_row, start_col as usize, line, offsets));
+            }
+            self.link_overlay.update_view(
+                signature,
+                viewport_height,
+                viewport_width,
+                &row_data,
+                &self.linkifier,
+            );
+        }
+
+        let focused = ctx.focused();
+        for row in start_row..start_row + visible.height {
+            for col in start_col..start_col + visible.width {
+                let cell_x = area.x + col;
+                let cell_y = area.y + row;
+                let viewport_row = row.saturating_sub(start_row) as usize;
+                let viewport_col = col.saturating_sub(start_col) as usize;
+
+                // If we have a PTY cell, render it
+                if let Some(cell) = screen.cell(row, col) {
+                    let mut symbol = cell.contents().chars().next().unwrap_or(' ');
+                    let (fg, bg) = resolve_colors(cell, screen);
+                    let mut style = Style::default();
+                    if let Some(fg) = fg {
+                        style = style.fg(fg);
+                    }
+                    if let Some(bg) = bg {
+                        style = style.bg(bg);
+                    }
+                    if cell.bold() {
+                        style = style.add_modifier(Modifier::BOLD);
+                    }
+                    if cell.dim() {
+                        style = style.add_modifier(Modifier::DIM);
+                    }
+                    if cell.italic() {
+                        style = style.add_modifier(Modifier::ITALIC);
+                    }
+                    if cell.underline() {
+                        style = style.add_modifier(Modifier::UNDERLINED);
+                    }
+                    if cell.inverse() {
+                        style = style.add_modifier(Modifier::REVERSED);
+                    }
+                    if cell.is_wide_continuation() {
+                        symbol = ' ';
+                    }
+
+                    if self.link_overlay.is_link_cell(viewport_row, viewport_col) {
+                        style = decorate_link_style(style);
+                    }
+
+                    if let Some(range) = selection_range {
+                        let abs_row = selection_row_base.saturating_add(row as usize);
+                        let abs_col = col as usize;
+                        if range.contains(LogicalPosition::new(abs_row, abs_col)) {
+                            style = style
+                                .bg(term_wm_core::theme::selection_bg())
+                                .fg(term_wm_core::theme::selection_fg());
+                        }
+                    }
+
+                    if let Some(buf_cell) = buffer.cell_mut((cell_x, cell_y)) {
+                        let mut buf = [0u8; 4];
+                        // If background is transparent (None), force it to Reset to clear underlying content
+                        if bg.is_none() {
+                            buf_cell.reset();
+                        }
+                        let sym = symbol.encode_utf8(&mut buf);
+                        buf_cell.set_symbol(sym).set_style(style);
+                    }
+                } else if let Some(buf_cell) = buffer.cell_mut((cell_x, cell_y)) {
+                    // Otherwise clear the cell so we don't bleed background
+                    buf_cell.reset();
+                    buf_cell.set_symbol(" ");
+                }
+            }
+        }
+
+        if focused && !screen.hide_cursor() && show_cursor {
+            let (row, col) = screen.cursor_position();
+            if row < area.height
+                && col < area.width
+                && let Some(cell) = buffer.cell_mut((area.x + col, area.y + row))
+            {
+                cell.set_style(cell.style().add_modifier(Modifier::REVERSED));
+            }
+        }
+    }
+}
+
+impl SelectionViewport for TerminalComponent {
+    fn selection_viewport(&self) -> Rect {
+        self.last_area
+    }
+
+    fn logical_position_from_point(&mut self, column: u16, row: u16) -> Option<LogicalPosition> {
+        TerminalComponent::logical_position_from_point(self, column, row)
+    }
+
+    fn scroll_selection_vertical(&mut self, delta: isize) {
+        if delta == 0 {
+            return;
+        }
+        self.scroll_scrollback(-delta);
+    }
+
+    fn scroll_selection_horizontal(&mut self, _delta: isize) {}
+}
+
+impl SelectionHost for TerminalComponent {
+    fn selection_controller(&mut self) -> &mut SelectionController {
+        &mut self.selection
+    }
+}
+
+#[cfg(unix)]
+pub fn default_shell() -> String {
+    std::env::var("SHELL")
+        .unwrap_or_else(|_| term_wm_core::constants::DEFAULT_SHELL_FALLBACK.to_string())
+}
+
+#[cfg(windows)]
+pub fn default_shell() -> String {
+    std::env::var("COMSPEC")
+        .unwrap_or_else(|_| term_wm_core::constants::DEFAULT_SHELL_FALLBACK.to_string())
+}
+
+pub fn default_shell_command() -> CommandBuilder {
+    let mut cmd = CommandBuilder::new(default_shell());
+    if let Ok(cwd) = std::env::current_dir() {
+        cmd.cwd(cwd);
+    }
+
+    cmd
+}
+
+impl TerminalComponent {
+    fn scroll_scrollback(&mut self, delta: isize) {
+        let current = self.pane.scrollback() as isize;
+        let next = (current + delta).clamp(0, self.pane.scrollback_len() as isize) as usize;
+        self.pane.set_scrollback(next);
+    }
+
+    fn logical_position_from_point(&mut self, column: u16, row: u16) -> Option<LogicalPosition> {
+        if self.last_area.width == 0 || self.last_area.height == 0 {
+            return None;
+        }
+        let max_x = self
+            .last_area
+            .x
+            .saturating_add(self.last_area.width)
+            .saturating_sub(1);
+        let max_y = self
+            .last_area
+            .y
+            .saturating_add(self.last_area.height)
+            .saturating_sub(1);
+        let clamped_col = column.clamp(self.last_area.x, max_x);
+        let clamped_row = row.clamp(self.last_area.y, max_y);
+        let local_col = clamped_col.saturating_sub(self.last_area.x) as usize;
+        let local_row = clamped_row.saturating_sub(self.last_area.y) as usize;
+        let scrollback_value = self.pane.scrollback();
+        let used = self.pane.max_scrollback();
+        let row_base = used.saturating_sub(scrollback_value);
+        Some(LogicalPosition::new(
+            row_base.saturating_add(local_row),
+            local_col,
+        ))
+    }
+
+    fn selection_text_for_range(&mut self, range: SelectionRange) -> Option<String> {
+        let row_base = self
+            .pane
+            .max_scrollback()
+            .saturating_sub(self.pane.scrollback());
+        let screen = self.pane.screen();
+        let (rows, cols) = screen.size();
+        if rows == 0 || cols == 0 {
+            return None;
+        }
+        let (mut end_row, mut end_col) = (range.end.row, range.end.column);
+        if end_col == 0 && end_row > range.start.row {
+            end_row = end_row.saturating_sub(1);
+            end_col = cols as usize;
+        }
+
+        let start_row = range.start.row.saturating_sub(row_base);
+        let end_row = end_row.saturating_sub(row_base);
+        if start_row >= rows as usize {
+            return None;
+        }
+        let end_row = end_row.min(rows.saturating_sub(1) as usize);
+        let start_col = range.start.column.min(cols as usize);
+        let end_col = end_col.min(cols as usize);
+        if end_row < start_row {
+            return None;
+        }
+
+        Some(screen.contents_between(
+            start_row as u16,
+            start_col as u16,
+            end_row as u16,
+            end_col as u16,
+        ))
+    }
+
+    /// Terminate the underlying PTY child process.
+    pub fn terminate(&mut self) {
+        let _ = self.pane.kill_child();
+    }
+
+    fn link_at_position(&self, mouse: &MouseEvent) -> Option<String> {
+        if self.last_area.width == 0 || self.last_area.height == 0 {
+            return None;
+        }
+        if mouse.column < self.last_area.x
+            || mouse.column >= self.last_area.x.saturating_add(self.last_area.width)
+            || mouse.row < self.last_area.y
+            || mouse.row >= self.last_area.y.saturating_add(self.last_area.height)
+        {
+            return None;
+        }
+        let local_x = (mouse.column - self.last_area.x) as usize;
+        let local_y = (mouse.row - self.last_area.y) as usize;
+        self.link_overlay.link_at(local_y, local_x)
+    }
+
+    fn try_handle_link_click(&mut self, mouse: &MouseEvent) -> bool {
+        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            return false;
+        }
+
+        if let Some(url) = self.link_at_position(mouse)
+            && self.invoke_link_handler(&url)
+        {
+            return true;
+        }
+
+        false
+    }
+
+    fn invoke_link_handler(&self, url: &str) -> bool {
+        if let Some(handler) = &self.link_handler {
+            handler(url)
+        } else {
+            webbrowser::open(url).is_ok()
+        }
+    }
+}
+
+fn key_to_bytes(key: KeyEvent) -> Vec<u8> {
+    match key.code {
+        KeyCode::Char(c) => {
+            if key.modifiers.contains(KeyModifiers::CONTROL)
+                && let Some(byte) = ctrl_char(c)
+            {
+                return vec![byte];
+            }
+            c.to_string().into_bytes()
+        }
+        KeyCode::Enter => vec![b'\r'],
+        KeyCode::Backspace => vec![0x7f],
+        KeyCode::Esc => vec![0x1b],
+        KeyCode::Tab => vec![b'\t'],
+        KeyCode::BackTab => b"\x1b[Z".to_vec(),
+        KeyCode::Up => b"\x1b[A".to_vec(),
+        KeyCode::Down => b"\x1b[B".to_vec(),
+        KeyCode::Right => b"\x1b[C".to_vec(),
+        KeyCode::Left => b"\x1b[D".to_vec(),
+        KeyCode::Home => b"\x1b[H".to_vec(),
+        KeyCode::End => b"\x1b[F".to_vec(),
+        KeyCode::PageUp => b"\x1b[5~".to_vec(),
+        KeyCode::PageDown => b"\x1b[6~".to_vec(),
+        _ => Vec::new(),
+    }
+}
+
+fn ctrl_char(c: char) -> Option<u8> {
+    let c = c.to_ascii_lowercase();
+    if c.is_ascii_lowercase() {
+        Some((c as u8) - b'a' + 1)
+    } else {
+        None
+    }
+}
+
+// Only forward events that match the active mouse reporting mode.
+fn mouse_event_allowed(mode: MouseProtocolMode, kind: MouseEventKind) -> bool {
+    use MouseEventKind::*;
+    match mode {
+        MouseProtocolMode::None => false,
+        MouseProtocolMode::Press => matches!(kind, Down(_)),
+        MouseProtocolMode::PressRelease => matches!(kind, Down(_) | Up(_)),
+        MouseProtocolMode::ButtonMotion => matches!(kind, Down(_) | Up(_) | Drag(_)),
+        MouseProtocolMode::AnyMotion => true,
+    }
+}
+
+fn mouse_event_to_bytes(mouse: MouseEvent, encoding: MouseProtocolEncoding) -> Vec<u8> {
+    let (mut code, release): (u8, bool) = match mouse.kind {
+        MouseEventKind::Down(button) => (
+            match button {
+                MouseButton::Left => 0,
+                MouseButton::Middle => 1,
+                MouseButton::Right => 2,
+            },
+            false,
+        ),
+        MouseEventKind::Up(button) => (
+            match button {
+                MouseButton::Left => 0,
+                MouseButton::Middle => 1,
+                MouseButton::Right => 2,
+            },
+            true,
+        ),
+        MouseEventKind::Drag(button) => (
+            32 + match button {
+                MouseButton::Left => 0,
+                MouseButton::Middle => 1,
+                MouseButton::Right => 2,
+            },
+            false,
+        ),
+        MouseEventKind::Moved => (35, false),
+        MouseEventKind::ScrollUp => (64, false),
+        MouseEventKind::ScrollDown => (65, false),
+        MouseEventKind::ScrollLeft => (66, false),
+        MouseEventKind::ScrollRight => (67, false),
+    };
+    if mouse.modifiers.contains(KeyModifiers::SHIFT) {
+        code |= 4;
+    }
+    if mouse.modifiers.contains(KeyModifiers::ALT) {
+        code |= 8;
+    }
+    if mouse.modifiers.contains(KeyModifiers::CONTROL) {
+        code |= 16;
+    }
+    let col = mouse.column.saturating_add(1);
+    let row = mouse.row.saturating_add(1);
+
+    // Two encodings are supported:
+    // - SGR (`CSI < Cb ; Cx ; Cy M/m`) which conveys presses/releases
+    //   with explicit button numbers and is preferred by many modern apps.
+    // - Legacy/X11 (`CSI M Cb Cx Cy`) used by older apps; for releases the
+    //   canonical base button code is 3. Modifier bits are preserved when
+    //   constructing the Cb byte for legacy encoding.
+    match encoding {
+        MouseProtocolEncoding::Sgr => {
+            let action = if release { 'm' } else { 'M' };
+            format!("\x1b[<{};{};{}{}", code, col, row, action).into_bytes()
+        }
+        MouseProtocolEncoding::Default => {
+            // X11 (CSI M) encoding: Cb Cx Cy. For button releases the base
+            // button code is 3; preserve modifier bits when constructing Cb.
+            let x11_code = if release {
+                let mods = code & (4 | 8 | 16);
+                3 | mods
+            } else {
+                code
+            };
+
+            let cb = x11_code.saturating_add(32);
+            let cx = mouse.column.saturating_add(33);
+            let cy = mouse.row.saturating_add(33);
+
+            if cx > 255 || cy > 255 {
+                return Vec::new();
+            }
+
+            vec![0x1b, b'[', b'M', cb, cx as u8, cy as u8]
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn resolve_colors(cell: &vt100::Cell, screen: &vt100::Screen) -> (Option<TColor>, Option<TColor>) {
+    let mut fg = resolve_color(cell.fgcolor(), screen.fgcolor());
+    let bg = resolve_color(cell.bgcolor(), screen.bgcolor());
+    if cell.bold() {
+        fg = brighten_indexed(fg);
+    }
+    (fg, bg)
+}
+
+fn vt_color_to_ratatui(color: vt100::Color) -> Option<TColor> {
+    use term_wm_core::io::utils::term_color::map_rgb_to_color;
+    match color {
+        vt100::Color::Default => None,
+        vt100::Color::Idx(idx) => Some(TColor::Indexed(idx)),
+        vt100::Color::Rgb(r, g, b) => Some(map_rgb_to_color(r, g, b)),
+    }
+}
+
+fn resolve_color(color: vt100::Color, screen_default: vt100::Color) -> Option<TColor> {
+    match color {
+        vt100::Color::Default => match screen_default {
+            // Default to Reset (No Color) which ratatui treats as "Inherit" or "Transparent" usually.
+            // But since this is a Terminal component, we treat Default as Black/Opaque if undefined,
+            // otherwise we risk bleeding through windows underneath.
+            vt100::Color::Default => None,
+            other => vt_color_to_ratatui(other),
+        },
+        other => vt_color_to_ratatui(other),
+    }
+}
+
+fn brighten_indexed(color: Option<TColor>) -> Option<TColor> {
+    match color {
+        Some(TColor::Indexed(idx)) if idx < 8 => Some(TColor::Indexed(idx + 8)),
+        _ => color,
+    }
+}
+
+/// Simulated terminal pane for testing scroll synchronization logic without a
+/// real PTY process.
+#[cfg(test)]
+struct TestPane {
+    parser: vt100::Parser,
+    current_scrollback: usize,
+    max_sb: usize,
+    alt_screen: bool,
+    pending_title: Option<String>,
+}
+
+#[cfg(test)]
+impl TestPane {
+    fn new(max_sb: usize) -> Self {
+        Self {
+            parser: vt100::Parser::new(1, 1, 0),
+            current_scrollback: 0,
+            max_sb,
+            alt_screen: false,
+            pending_title: None,
+        }
+    }
+
+    fn set_scrollback_value(&mut self, val: usize) {
+        self.current_scrollback = val.min(self.max_sb);
+    }
+
+    #[allow(dead_code)]
+    fn set_pending_title(&mut self, title: &str) {
+        self.pending_title = Some(title.to_string());
+    }
+}
+
+#[cfg(test)]
+impl Pane for TestPane {
+    fn resize(&mut self, _size: PtySize) -> term_wm_core::pty::PtyResult<()> {
+        Ok(())
+    }
+
+    fn has_exited(&mut self) -> bool {
+        false
+    }
+
+    fn alternate_screen(&mut self) -> bool {
+        self.alt_screen
+    }
+
+    fn scrollback(&mut self) -> usize {
+        self.current_scrollback
+    }
+
+    fn set_scrollback(&mut self, rows: usize) {
+        self.current_scrollback = rows.min(self.max_sb);
+    }
+
+    fn write_bytes(&mut self, _input: &[u8]) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn screen(&mut self) -> &vt100::Screen {
+        self.parser.screen()
+    }
+
+    fn max_scrollback(&mut self) -> usize {
+        self.max_sb
+    }
+
+    fn scrollback_len(&self) -> usize {
+        0
+    }
+
+    fn take_exit_status(&mut self) -> Option<portable_pty::ExitStatus> {
+        None
+    }
+
+    fn exit_status(&self) -> Option<portable_pty::ExitStatus> {
+        None
+    }
+
+    fn bytes_received(&self) -> usize {
+        0
+    }
+
+    fn last_bytes_text(&self) -> String {
+        String::new()
+    }
+
+    fn kill_child(&mut self) -> term_wm_core::pty::PtyResult<()> {
+        Ok(())
+    }
+
+    fn take_pending_title(&mut self) -> Option<String> {
+        self.pending_title.take()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
+    use ratatui::buffer::Buffer;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use term_wm_core::component_context::ViewportHandle;
+    use term_wm_core::ui::UiFrame;
+    use vt100::MouseProtocolMode;
+
+    fn key(k: KeyCode, mods: KeyModifiers) -> KeyEvent {
+        let mut ev = KeyEvent::new(k, mods);
+        ev.kind = KeyEventKind::Press;
+        ev
+    }
+
+    fn make_ctx(view_offset: usize, handle: ViewportHandle) -> ComponentContext {
+        ComponentContext::default().with_viewport(
+            term_wm_core::component_context::ViewportContext {
+                offset_x: 0,
+                offset_y: view_offset,
+                width: 80,
+                height: 24,
+            },
+            Some(handle),
+        )
+    }
+
+    fn make_handle() -> (
+        ViewportHandle,
+        Rc<RefCell<term_wm_core::component_context::ViewportSharedState>>,
+    ) {
+        let shared = Rc::new(RefCell::new(
+            term_wm_core::component_context::ViewportSharedState {
+                offset_x: 0,
+                offset_y: 0,
+                width: 80,
+                height: 24,
+                content_width: 80,
+                content_height: 24,
+                pending_offset_x: None,
+                pending_offset_y: None,
+            },
+        ));
+        (
+            ViewportHandle {
+                shared: shared.clone(),
+            },
+            shared,
+        )
+    }
+
+    fn run_sync(
+        term: &mut TerminalComponent,
+        view_offset: usize,
+    ) -> (
+        Rc<RefCell<term_wm_core::component_context::ViewportSharedState>>,
+        usize,
+    ) {
+        let (handle, shared) = make_handle();
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let mut buffer = Buffer::empty(area);
+        let mut frame = UiFrame::from_parts(area, &mut buffer);
+        let ctx = make_ctx(view_offset, handle);
+        term.render(&mut frame, area, &ctx);
+        let sb = term.pane_mut().scrollback();
+        (shared, sb)
+    }
+
+    fn run_sync_with_handle(
+        term: &mut TerminalComponent,
+        shared: &Rc<RefCell<term_wm_core::component_context::ViewportSharedState>>,
+    ) -> usize {
+        let handle = ViewportHandle {
+            shared: shared.clone(),
+        };
+        let view_offset = shared.borrow().offset_y;
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let mut buffer = Buffer::empty(area);
+        let mut frame = UiFrame::from_parts(area, &mut buffer);
+        let ctx = make_ctx(view_offset, handle);
+        term.render(&mut frame, area, &ctx);
+        term.pane_mut().scrollback()
+    }
+
+    // --- Scroll sync tests ---
+
+    #[test]
+    fn scroll_sync_current_sb_zero_view_offset_below_last_max_syncs_scrollback() {
+        // current_sb=0, view_offset < last_max_scrollback - 1
+        // Expect: set_scrollback is called (scrollback becomes non-zero)
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        term.set_last_scrollback(0);
+        // last_max_scrollback was 100 from previous render, viewport is at offset 50
+        term.set_last_max_scrollback(100);
+        let (shared, sb) = run_sync(&mut term, 50);
+        assert!(sb > 0, "should have scrolled back from viewport offset");
+        let max_sb = term.pane_mut().max_scrollback();
+        assert_eq!(
+            sb,
+            max_sb.saturating_sub(50),
+            "scrollback should equal used - view_offset"
+        );
+        // handle should NOT have scroll_vertical_to (set_content_size doesn't set pending)
+        assert_eq!(
+            shared.borrow().offset_y,
+            0,
+            "viewport offset should be 0 (set by content_size init)"
+        );
+        assert!(
+            shared.borrow().pending_offset_y.is_none(),
+            "scroll_vertical_to should not have been called"
+        );
+    }
+
+    #[test]
+    fn scroll_sync_current_sb_zero_view_offset_at_last_max_follows_tail() {
+        // current_sb=0, view_offset >= last_max_scrollback - 1
+        // Expect: scroll_vertical_to(usize::MAX) is called
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        term.set_last_scrollback(0);
+        term.set_last_max_scrollback(100);
+        let (shared, sb) = run_sync(&mut term, 99);
+        assert_eq!(sb, 0, "should remain at bottom");
+        assert_eq!(
+            shared.borrow().pending_offset_y,
+            Some(200),
+            "viewport should be scrolled to max (200)"
+        );
+    }
+
+    #[test]
+    fn scroll_sync_current_sb_zero_view_offset_greater_than_last_max_follows_tail() {
+        // view_offset > last_max_scrollback - 1 also triggers follow-tail
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        term.set_last_scrollback(0);
+        term.set_last_max_scrollback(100);
+        let (shared, sb) = run_sync(&mut term, 150);
+        assert_eq!(sb, 0, "should remain at bottom");
+        assert_eq!(
+            shared.borrow().pending_offset_y,
+            Some(200),
+            "viewport should be scrolled to max"
+        );
+    }
+
+    #[test]
+    fn scroll_sync_current_sb_changed_from_last_pushes_to_viewport() {
+        // current_sb != last_scrollback — push internal scrollback to viewport
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        term.pane_mut().set_scrollback(50);
+        term.set_last_scrollback(0);
+        term.set_last_max_scrollback(200);
+        let (shared, sb) = run_sync(&mut term, 0);
+        assert_eq!(sb, 50, "scrollback unchanged by sync");
+        assert_eq!(
+            shared.borrow().pending_offset_y,
+            Some(150),
+            "viewport should show offset = used - scrollback = 200-50"
+        );
+    }
+
+    #[test]
+    fn scroll_sync_current_sb_matches_last_syncs_from_viewport() {
+        // current_sb == last_scrollback > 0 — sync from viewport
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        term.pane_mut().set_scrollback(50);
+        term.set_last_scrollback(50);
+        term.set_last_max_scrollback(200);
+        // viewport at offset 100 means target_sb = 200-100 = 100
+        let (shared, sb) = run_sync(&mut term, 100);
+        assert_eq!(sb, 100, "should sync scrollback from viewport offset");
+        assert_eq!(
+            shared.borrow().pending_offset_y,
+            None,
+            "viewport should NOT be scrolled"
+        );
+    }
+
+    #[test]
+    fn scroll_sync_current_sb_matches_last_viewport_same_does_nothing() {
+        // current_sb == last_scrollback AND target_sb == current_sb — no-op
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        term.pane_mut().set_scrollback(100);
+        term.set_last_scrollback(100);
+        term.set_last_max_scrollback(200);
+        // viewport offset 100 → target_sb = 200-100 = 100 → same as current → no-op
+        let (shared, sb) = run_sync(&mut term, 100);
+        assert_eq!(sb, 100, "scrollback unchanged");
+        assert!(
+            shared.borrow().pending_offset_y.is_none(),
+            "viewport unchanged"
+        );
+    }
+
+    #[test]
+    fn scroll_sync_alternate_screen_skips_sync() {
+        // When alternate_screen is true, the entire sync block is skipped
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        term.pane_mut().set_scrollback(50);
+        term.set_last_scrollback(50);
+        term.set_last_max_scrollback(200);
+        // Hack: need a way to set alt_screen — TestPane controls it
+        // TestPane is private to this module, so we need to access it via pane_mut
+        // But pane_mut returns &mut Box<dyn Pane>, not &mut TestPane...
+        // We need to downcast or add a method.
+        // Instead, let's use a different approach: make a TestPane, set alt_screen,
+        // then call sync logic directly
+        let mut pane = TestPane::new(200);
+        pane.alt_screen = true;
+        pane.set_scrollback(50);
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        term.set_last_scrollback(50);
+        term.set_last_max_scrollback(200);
+        let (handle, shared) = make_handle();
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let mut buffer = Buffer::empty(area);
+        let mut frame = UiFrame::from_parts(area, &mut buffer);
+        let ctx = make_ctx(100, handle);
+        term.render(&mut frame, area, &ctx);
+        let sb = term.pane_mut().scrollback();
+        assert_eq!(sb, 50, "scrollback should be unchanged during alt screen");
+        assert!(
+            shared.borrow().pending_offset_y.is_none(),
+            "viewport should NOT be touched during alt screen"
+        );
+        assert_eq!(
+            shared.borrow().content_height,
+            24,
+            "content size should NOT have been set during alt screen"
+        );
+    }
+
+    #[test]
+    fn scroll_sync_current_sb_zero_view_offset_zero_content_grows() {
+        // Empty pane, 0 max_scrollback, content just started filling
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+        term.set_last_scrollback(0);
+        term.set_last_max_scrollback(0);
+        let (shared, sb) = run_sync(&mut term, 0);
+        assert_eq!(sb, 0, "should stay at bottom");
+        assert_eq!(
+            shared.borrow().pending_offset_y,
+            Some(0),
+            "viewport should be at 0 (max of 0)"
+        );
+    }
+
+    #[test]
+    fn scroll_sync_user_scrolls_up_then_content_added() {
+        // User scrolled up to offset 50, then content grew from 100 to 200
+        // current_sb=0, view_offset=50, last_max_scrollback=100
+        // Expect: sync from viewport since view_offset < last_max
+        let pane = TestPane::new(200);
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        term.set_last_scrollback(0);
+        term.set_last_max_scrollback(100);
+        let (shared, sb) = run_sync(&mut term, 50);
+        assert_eq!(sb, 150, "scrollback = used(200) - view_offset(50)");
+        assert!(
+            shared.borrow().pending_offset_y == Some(0)
+                || shared.borrow().pending_offset_y.is_none(),
+            "viewport offset should be set by set_content_size, not scroll_vertical_to"
+        );
+    }
+
+    #[test]
+    fn scroll_sync_two_renders_user_scrolls_then_stays_synced() {
+        // First render: at bottom, content grows from 0 to 100
+        let pane = TestPane::new(100);
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        let (handle, shared) = make_handle();
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let mut buffer = Buffer::empty(area);
+        let mut frame = UiFrame::from_parts(area, &mut buffer);
+        let ctx = make_ctx(0, handle);
+        term.render(&mut frame, area, &ctx);
+        // After first render, last_max=100, last_sb=0, viewport at max (offset=100)
+        let sb2 = run_sync_with_handle(&mut term, &shared);
+        assert_eq!(sb2, 0, "at bottom");
+        assert_eq!(shared.borrow().offset_y, 100, "viewport at max");
+    }
+
+    #[test]
+    fn scroll_sync_user_manually_drags_scrollbar() {
+        // User drags scrollbar, viewport offset changes independently
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(100)));
+        term.set_last_scrollback(0);
+        term.set_last_max_scrollback(100);
+        // view_offset=30, but last_max was 100
+        let (_, sb) = run_sync(&mut term, 30);
+        assert_eq!(sb, 70, "scrollback = 100 - 30 = 70");
+    }
+
+    #[test]
+    fn scroll_sync_user_at_bottom_content_grows_pane_updated() {
+        // User at bottom (current_sb=0, view_offset at max), content grows
+        // from 100 to 200 between render 1 and render 2
+        let pane = TestPane::new(100);
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        let _ = run_sync(&mut term, 100);
+        // Now grow content: we need a new pane, since TestPane has fixed max_sb
+        let mut pane2 = TestPane::new(200);
+        pane2.set_scrollback_value(0);
+        let mut term2 = TerminalComponent::from_pane(Box::new(pane2));
+        term2.set_last_scrollback(0);
+        term2.set_last_max_scrollback(100);
+        let (shared, sb) = run_sync(&mut term2, 100);
+        assert_eq!(sb, 0, "at bottom");
+        assert_eq!(
+            shared.borrow().pending_offset_y,
+            Some(200),
+            "viewport should follow to new max"
+        );
+    }
+
+    // --- Original utility tests ---
+
+    #[test]
+    fn key_to_bytes_char_and_controls() {
+        let b = key_to_bytes(key(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(b, b"x".to_vec());
+
+        let enter = key_to_bytes(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(enter, vec![b'\r']);
+
+        let back = key_to_bytes(key(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(back, vec![0x7f]);
+
+        let ctrl_a = key_to_bytes(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(ctrl_a, vec![1u8]);
+    }
+
+    #[test]
+    fn ctrl_char_edges() {
+        assert_eq!(ctrl_char('a'), Some(1));
+        assert_eq!(ctrl_char('z'), Some(26));
+        assert_eq!(ctrl_char('A'), Some(1));
+        assert_eq!(ctrl_char('1'), None);
+    }
+
+    #[test]
+    fn mouse_event_allowed_modes() {
+        use MouseEventKind::*;
+        assert!(!mouse_event_allowed(
+            MouseProtocolMode::None,
+            Down(MouseButton::Left)
+        ));
+        assert!(mouse_event_allowed(
+            MouseProtocolMode::Press,
+            Down(MouseButton::Left)
+        ));
+        assert!(!mouse_event_allowed(
+            MouseProtocolMode::Press,
+            Up(MouseButton::Left)
+        ));
+        assert!(mouse_event_allowed(
+            MouseProtocolMode::PressRelease,
+            Up(MouseButton::Left)
+        ));
+        assert!(mouse_event_allowed(
+            MouseProtocolMode::ButtonMotion,
+            MouseEventKind::Drag(MouseButton::Left)
+        ));
+        assert!(mouse_event_allowed(
+            MouseProtocolMode::AnyMotion,
+            MouseEventKind::Moved
+        ));
+    }
+
+    #[test]
+    fn mouse_event_to_bytes_format_and_mods() {
+        let m = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 2,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        };
+        // Test SGR
+        let bytes = mouse_event_to_bytes(m, MouseProtocolEncoding::Sgr);
+        let s = String::from_utf8(bytes).unwrap();
+        assert!(s.starts_with("\x1b[<0;3;4M"));
+
+        // Test Default encoding
+        let bytes_def = mouse_event_to_bytes(m, MouseProtocolEncoding::Default);
+        // CSI M Cb Cx Cy
+        // Cb = 0 + 32 = 32 (' ')
+        // Cx = 2 + 33 = 35 ('#')
+        // Cy = 3 + 33 = 36 ('$')
+        assert_eq!(bytes_def, vec![0x1b, b'[', b'M', 32, 35, 36]);
+
+        let m2 = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Right),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::SHIFT | KeyModifiers::ALT,
+        };
+        let s2 = String::from_utf8(mouse_event_to_bytes(m2, MouseProtocolEncoding::Sgr)).unwrap();
+        // code should include modifier bits
+        assert!(s2.contains(';'));
+        assert!(s2.ends_with('m'));
+    }
+
+    #[test]
+    fn mouse_event_x11_release_and_modifiers() {
+        // 1. Simple Release (Left Up) -> Code 3
+        let m_up = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        // Cb = 3 + 32 = 35 ('#'). Cx, Cy = 0 + 33 = 33 ('!')
+        let bytes = mouse_event_to_bytes(m_up, MouseProtocolEncoding::Default);
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 35, 33, 33]);
+
+        // 2. Release with Shift -> Code 3 + 4 = 7
+        let m_up_shift = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::SHIFT,
+        };
+        // Cb = 7 + 32 = 39 ('\'')
+        let bytes = mouse_event_to_bytes(m_up_shift, MouseProtocolEncoding::Default);
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 39, 33, 33]);
+
+        // 3. Press Right with Control -> Code 2 + 16 = 18
+        let m_down_ctrl = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::CONTROL,
+        };
+        // Cb = 18 + 32 = 50 ('2')
+        let bytes = mouse_event_to_bytes(m_down_ctrl, MouseProtocolEncoding::Default);
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 50, 33, 33]);
+    }
+
+    #[test]
+    fn vt_color_and_resolve_color() {
+        assert_eq!(vt_color_to_ratatui(vt100::Color::Default), None);
+        assert_eq!(
+            vt_color_to_ratatui(vt100::Color::Idx(5)),
+            Some(TColor::Indexed(5))
+        );
+        assert_eq!(
+            vt_color_to_ratatui(vt100::Color::Rgb(1, 2, 3)),
+            Some(term_wm_core::io::utils::term_color::map_rgb_to_color(
+                1, 2, 3
+            ))
+        );
+
+        // resolve_color: when both default -> None
+        assert_eq!(
+            resolve_color(vt100::Color::Default, vt100::Color::Default),
+            None
+        );
+        // when screen default is idx, default maps to that
+        assert_eq!(
+            resolve_color(vt100::Color::Default, vt100::Color::Idx(7)),
+            Some(TColor::Indexed(7))
+        );
+    }
+
+    #[test]
+    fn brighten_indexed_moves_0_7_to_8_15() {
+        assert_eq!(
+            brighten_indexed(Some(TColor::Indexed(0))),
+            Some(TColor::Indexed(8))
+        );
+        assert_eq!(
+            brighten_indexed(Some(TColor::Indexed(7))),
+            Some(TColor::Indexed(15))
+        );
+        // values >=8 unchanged
+        assert_eq!(
+            brighten_indexed(Some(TColor::Indexed(8))),
+            Some(TColor::Indexed(8))
+        );
+        assert_eq!(brighten_indexed(None), None);
+    }
+
+    #[test]
+    fn scroll_sync_prevents_stuck_at_top_on_fill() {
+        let pane = TestPane::new(0);
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        let (shared, _) = run_sync(&mut term, 0);
+        assert_eq!(
+            shared.borrow().offset_y,
+            0,
+            "empty pane should leave viewport at 0"
+        );
+        let pane2 = TestPane::new(100);
+        let mut term2 = TerminalComponent::from_pane(Box::new(pane2));
+        term2.set_last_scrollback(0);
+        term2.set_last_max_scrollback(0);
+        let (shared2, sb) = run_sync(&mut term2, 0);
+        assert_eq!(sb, 0, "content-filled pane should stay at bottom");
+        assert_eq!(
+            shared2.borrow().offset_y,
+            100,
+            "viewport should follow new content to max"
+        );
+    }
+}

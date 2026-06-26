@@ -1,16 +1,15 @@
 use std::io;
-use std::time::Duration;
 
-use crossterm::event::Event;
 use ratatui::prelude::Rect;
 use ratatui::widgets::Clear;
 
-use term_wm::components::{Component, SvgImageComponent};
-use term_wm::drivers::OutputDriver;
-use term_wm::drivers::console::{ConsoleInputDriver, ConsoleOutputDriver};
-use term_wm::runner::{HasWindowManager, WindowApp, run_window_app};
+use term_wm::SvgImageComponent;
+use term_wm::components::{Component, ComponentContext};
+use term_wm::io::RenderTarget;
+use term_wm::io::console::{ConsoleEventSource, ConsoleRenderTarget};
+use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
 use term_wm::ui::UiFrame;
-use term_wm::window::{AppWindowDraw, WindowManager};
+use term_wm::window::{WindowDrawContext, WindowManager};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum PaneId {
@@ -20,36 +19,11 @@ enum PaneId {
 
 fn main() -> io::Result<()> {
     let mut app = App::new(std::env::args().skip(1).collect())?;
-    let mut output = ConsoleOutputDriver::new()?;
+    let mut output = ConsoleRenderTarget::new()?;
     output.enter()?;
-    let mut input = ConsoleInputDriver::new();
+    let mut input = ConsoleEventSource::new();
 
-    let result = run_window_app(
-        &mut output,
-        &mut input,
-        &mut app,
-        &[PaneId::Left, PaneId::Right],
-        |id| id,
-        Some,
-        Duration::from_millis(16),
-        |event, app| {
-            if matches!(event, Event::Mouse(_)) && app.windows.handle_managed_event(event) {
-                return true;
-            }
-            match app.windows.focus() {
-                PaneId::Left => app.left.handle_event(event),
-                PaneId::Right => app.right.handle_event(event),
-            }
-        },
-        |event, _app| {
-            if let Some(evt) = event {
-                term_wm::keybindings::KeyBindings::default().action_for_event(evt)
-                    == Some(term_wm::keybindings::Action::Quit)
-            } else {
-                false
-            }
-        },
-    );
+    let result = run_window_app(&mut output, &mut input, &mut app);
 
     output.exit()?;
 
@@ -57,7 +31,7 @@ fn main() -> io::Result<()> {
 }
 
 struct App {
-    windows: WindowManager<PaneId, PaneId>,
+    windows: WindowManager<PaneId>,
     left: SvgImageComponent,
     right: SvgImageComponent,
     pending_paths: Vec<String>,
@@ -78,7 +52,10 @@ impl App {
         if paths.len() == 1 {
             paths.push(paths[0].clone());
         }
-        let mut windows = WindowManager::new_managed(PaneId::Left);
+        let mut windows = WindowManager::new_standalone(
+            PaneId::Left,
+            term_wm::AppContext::new("example", "0.0.0"),
+        );
         windows.set_focus_order(vec![PaneId::Left, PaneId::Right]);
         let mut app = Self {
             windows,
@@ -94,8 +71,8 @@ impl App {
     }
 }
 
-impl HasWindowManager<PaneId, PaneId> for App {
-    fn windows(&mut self) -> &mut WindowManager<PaneId, PaneId> {
+impl WindowManagerHost<PaneId> for App {
+    fn windows(&mut self) -> &mut WindowManager<PaneId> {
         &mut self.windows
     }
 
@@ -115,12 +92,12 @@ impl HasWindowManager<PaneId, PaneId> for App {
     }
 }
 
-impl WindowApp<PaneId, PaneId> for App {
+impl WindowProvider<PaneId> for App {
     fn enumerate_windows(&mut self) -> Vec<PaneId> {
         vec![PaneId::Left, PaneId::Right]
     }
 
-    fn render_window(&mut self, frame: &mut UiFrame<'_>, window: AppWindowDraw<PaneId>) {
+    fn render_window(&mut self, frame: &mut UiFrame<'_>, window: WindowDrawContext<PaneId>) {
         match window.id {
             PaneId::Left => {
                 render_pane(frame, &mut self.left, window.surface.inner, window.focused)
@@ -134,12 +111,19 @@ impl WindowApp<PaneId, PaneId> for App {
     fn empty_window_message(&self) -> &str {
         "no images loaded"
     }
+
+    fn window_component(&mut self, id: PaneId) -> Option<&mut dyn Component> {
+        match id {
+            PaneId::Left => Some(&mut self.left as &mut dyn Component),
+            PaneId::Right => Some(&mut self.right as &mut dyn Component),
+        }
+    }
 }
 
-fn render_pane(frame: &mut UiFrame<'_>, image: &mut SvgImageComponent, area: Rect, _focused: bool) {
+fn render_pane(frame: &mut UiFrame<'_>, image: &mut SvgImageComponent, area: Rect, focused: bool) {
     // Clear the area and render the image directly (no inner decorative frame).
     frame.render_widget(Clear, area);
-    image.render(frame, area, false);
+    image.render(frame, area, &ComponentContext::new(focused));
 }
 
 fn load_into(component: &mut SvgImageComponent, path: &str) -> io::Result<()> {
