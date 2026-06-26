@@ -40,6 +40,9 @@ pub const DEFAULT_SHELL_FALLBACK: &str = "bash";
 #[cfg(windows)]
 pub const DEFAULT_SHELL_FALLBACK: &str = "cmd.exe";
 
+/// Maximum number of keybinding hint entries shown in the bottom panel.
+pub const MAX_BOTTOM_HINTS: usize = 6;
+
 pub const TEXT_SELECTION_DRAG_IDLE_TIMEOUT_BASE: Duration = Duration::from_millis(220);
 pub const TEXT_SELECTION_DRAG_IDLE_TIMEOUT_VERTICAL: Duration = Duration::from_millis(600);
 pub const TEXT_SELECTION_DRAG_IDLE_TIMEOUT_HORIZONTAL: Duration = Duration::from_millis(900);
