@@ -1,6 +1,14 @@
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ActionLayer {
+    /// Always active. Only `WmToggleOverlay` (Esc) is in this layer.
+    Global,
+    /// Only active when the WM overlay (menu) is visible.
+    WmMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Action {
     Quit,
     CloseHelp,
@@ -53,6 +61,13 @@ pub enum Category {
 }
 
 impl Action {
+    pub fn layer(&self) -> ActionLayer {
+        match self {
+            Action::WmToggleOverlay => ActionLayer::Global,
+            _ => ActionLayer::WmMode,
+        }
+    }
+
     pub fn category(&self) -> Category {
         match self {
             Action::Quit | Action::CloseHelp | Action::OpenHelp | Action::OpenKeybindings => {
@@ -97,8 +112,7 @@ impl Action {
             Action::CyclePrevWindow => Some(55),
             Action::NewWindow => Some(50),
             Action::HintToggle => Some(40),
-            Action::CopySelection => Some(30),
-            Action::PasteClipboard => Some(25),
+
             _ => None,
         }
     }

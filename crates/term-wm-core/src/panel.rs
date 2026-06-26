@@ -91,13 +91,15 @@ pub struct Panel<R: Copy + Eq + Ord> {
     activation: ActivationMenu,
     list: WindowList<R>,
     notifications: NotificationArea,
+    app_name: String,
+    app_version: String,
     hostname: Option<String>,
     keybinding_hints: Vec<(Action, Vec<String>)>,
     hint_rects: Vec<(Rect, Action)>,
 }
 
 impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
-    pub fn new() -> Self {
+    pub fn new(app_name: &str, app_version: &str, hostname: Option<&str>) -> Self {
         Self {
             visible: true,
             height: 1,
@@ -106,10 +108,16 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             activation: ActivationMenu::new(),
             list: WindowList::new(),
             notifications: NotificationArea::new(),
-            hostname: None,
+            app_name: app_name.to_string(),
+            app_version: app_version.to_string(),
+            hostname: hostname.map(|h| h.to_string()),
             keybinding_hints: Vec::new(),
             hint_rects: Vec::new(),
         }
+    }
+
+    pub fn set_hostname(&mut self, hostname: &str) {
+        self.hostname = Some(hostname.to_string());
     }
 
     pub fn set_keybinding_hints(&mut self, hints: Vec<(Action, Vec<String>)>) {
@@ -245,8 +253,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         let mut x = area.x;
         let y = area.y;
         let max_x = area.x.saturating_add(area.width);
-        const CRATE_NAME: &str = env!("CARGO_PKG_NAME");
-        let menu_icon = format!("≡ {CRATE_NAME}");
+        let menu_icon = format!("≡ {}", self.app_name);
         let menu_width = menu_icon.chars().count() as u16;
         if x.saturating_add(menu_width) <= max_x {
             let menu_style = if menu_open {
@@ -459,19 +466,13 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         // Build info text if needed
         let info_opt = if show_info {
             let platform = std::env::consts::OS;
-            const PKG_NAME: &str = env!("CARGO_PKG_NAME");
-            const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
-            let pkg_label = format!("{PKG_NAME} {PKG_VERSION}");
-            let hostname = if let Some(ref h) = self.hostname {
-                h.clone()
-            } else {
-                let h = hostname::get()
+            let pkg_label = format!("{} {}", self.app_name, self.app_version);
+            let hostname = self.hostname.clone().unwrap_or_else(|| {
+                hostname::get()
                     .ok()
                     .and_then(|s| s.into_string().ok())
-                    .unwrap_or_else(|| "unknown-host".to_string());
-                self.hostname = Some(h.clone());
-                h
-            };
+                    .unwrap_or_else(|| "unknown-host".to_string())
+            });
             Some(format!("{pkg_label} · {platform} · {hostname}"))
         } else {
             None
@@ -862,7 +863,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
 
 impl<R: Copy + Eq + Ord + std::fmt::Debug> Default for Panel<R> {
     fn default() -> Self {
-        Self::new()
+        Self::new("unknown", "0.0.0", None)
     }
 }
 
@@ -908,7 +909,7 @@ mod tests {
 
     #[test]
     fn panel_basic_methods_and_split_area() {
-        let mut p: Panel<usize> = Panel::new();
+        let mut p: Panel<usize> = Panel::new("test-app", "1.0.0", Some("test-host"));
         assert!(p.visible());
         p.set_visible(false);
         assert!(!p.visible());
@@ -938,33 +939,35 @@ mod tests {
     }
 
     #[test]
-    fn render_bottom_populates_hostname_cache_and_is_idempotent() {
+    fn render_bottom_renders_provided_hostname() {
         use ratatui::buffer::Buffer;
         use ratatui::layout::Rect;
 
-        let mut p: Panel<usize> = Panel::new();
-        assert!(p.hostname.is_none());
+        let mut p: Panel<usize> = Panel::new("app", "1.0", Some("my-machine"));
+        assert_eq!(p.hostname, Some("my-machine".to_string()));
 
         let area = Rect {
             x: 0,
             y: 0,
-            width: 20,
+            width: 80,
             height: 1,
         };
         p.bottom_area = area;
         let mut buf = Buffer::empty(area);
         let mut ui = crate::ui::UiFrame::from_parts(area, &mut buf);
 
-        // First render should populate the cached hostname.
         p.render_bottom(&mut ui);
-        assert!(p.hostname.is_some());
-        let first = p.hostname.clone();
 
-        // Second render should not change the cached value.
-        p.render_bottom(&mut ui);
-        assert_eq!(p.hostname, first);
-        // cached hostname should be non-empty string
-        assert!(!p.hostname.as_ref().unwrap().is_empty());
+        // The info text should contain the provided hostname.
+        let mut rendered = String::new();
+        for xx in area.x..area.x.saturating_add(area.width) {
+            let cell = buf.cell((xx, area.y)).expect("cell present");
+            rendered.push_str(cell.symbol());
+        }
+        assert!(
+            rendered.contains("my-machine"),
+            "bottom bar should include hostname"
+        );
     }
 
     #[test]
@@ -972,7 +975,7 @@ mod tests {
         use ratatui::buffer::Buffer;
         use ratatui::layout::Rect;
 
-        let mut p: Panel<usize> = Panel::new();
+        let mut p: Panel<usize> = Panel::new("test", "0.0.1", Some("h"));
         let area = Rect {
             x: 0,
             y: 0,
@@ -1006,11 +1009,11 @@ mod tests {
     }
 
     #[test]
-    fn render_bottom_includes_package_and_version() {
+    fn render_bottom_includes_app_name_and_version() {
         use ratatui::buffer::Buffer;
         use ratatui::layout::Rect;
 
-        let mut p: Panel<usize> = Panel::new();
+        let mut p: Panel<usize> = Panel::new("my-app", "2.0.0", Some("my-host"));
         let area = Rect {
             x: 0,
             y: 0,
@@ -1030,16 +1033,17 @@ mod tests {
             rendered.push_str(cell.symbol());
         }
 
-        let pkg = env!("CARGO_PKG_NAME");
-        let ver = env!("CARGO_PKG_VERSION");
-
         assert!(
-            rendered.contains(pkg),
-            "bottom bar should include package name"
+            rendered.contains("my-app"),
+            "bottom bar should include app name"
         );
         assert!(
-            rendered.contains(ver),
-            "bottom bar should include package version"
+            rendered.contains("2.0.0"),
+            "bottom bar should include app version"
+        );
+        assert!(
+            rendered.contains("my-host"),
+            "bottom bar should include hostname"
         );
     }
 }

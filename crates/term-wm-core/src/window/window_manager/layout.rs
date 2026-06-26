@@ -5,6 +5,7 @@ use ratatui::prelude::Rect;
 use ratatui::widgets::Clear;
 
 use super::{SystemWindowId, WindowId, WindowManager};
+use crate::keybindings::ActionLayer;
 use crate::layout::floating::*;
 use crate::layout::{LayoutNode, LayoutPlan, RegionMap, SplitHandle, TilingLayout};
 use crate::window::FloatRectSpec;
@@ -174,11 +175,30 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
 
     pub fn register_managed_layout(&mut self, area: Rect) {
         self.last_frame_area = area;
-        // Compute hints before layout so split_area can reserve space for them
+        // Compute hints before layout so split_area can reserve space for them.
+        // Show Global-layer hints (WmToggleOverlay only) when overlay closed,
+        // WmMode hints when overlay is open.
+        // In embedded mode (wm_overlay_enabled = false) there is no overlay
+        // distinction, so show all hints unconditionally.
+        let active_layer = if self.config.wm_overlay_enabled && self.wm_overlay_visible() {
+            ActionLayer::WmMode
+        } else {
+            ActionLayer::Global
+        };
         match self.hint_visibility {
             crate::wm_config::HintVisibility::Always => {
-                let hints = self.keybindings.bottom_hints(6);
-                self.panel.set_keybinding_hints(hints);
+                if self.config.wm_overlay_enabled {
+                    let hints = self
+                        .keybindings
+                        .bottom_hints_for_layer(crate::constants::MAX_BOTTOM_HINTS, active_layer);
+                    self.panel.set_keybinding_hints(hints);
+                } else {
+                    // Embedded mode: no overlay, all actions are always dispatchable.
+                    let hints = self
+                        .keybindings
+                        .bottom_hints(crate::constants::MAX_BOTTOM_HINTS);
+                    self.panel.set_keybinding_hints(hints);
+                }
             }
             _ => {
                 self.panel.set_keybinding_hints(Vec::new());

@@ -102,6 +102,8 @@ where
     A: WindowProvider<Id>,
     Id: Copy + Eq + Ord + std::fmt::Debug + 'static,
 {
+    let ctx = app.windows().component_context(true);
+
     let mut pending_focus: Option<Id> = None;
     let mut pending_event: Option<Event> = None;
     let consumed = {
@@ -115,7 +117,6 @@ where
 
     if let (Some(focus_id), Some(localized)) = (pending_focus, pending_event) {
         if let Some(component) = app.window_component(focus_id) {
-            let ctx = ComponentContext::new(true);
             component.handle_event(&localized, &ctx)
         } else {
             false
@@ -176,8 +177,13 @@ where
                 let evt = app.windows().take_synthetic_event().unwrap_or(evt);
                 // Pre-compute the keybinding action using the configured
                 // KeyBindings from WindowManager (not hardcoded defaults).
+                // Only Global-layer actions are proactively dispatched;
+                // WmMode actions are handled when the WM overlay is open.
                 let mapped_action = match &evt {
-                    Event::Key(key) => app.windows().keybindings().action_for_key(key),
+                    Event::Key(key) => app
+                        .windows()
+                        .keybindings()
+                        .action_for_key_in_layer(key, crate::keybindings::ActionLayer::Global),
                     _ => None,
                 };
 
@@ -200,13 +206,40 @@ where
                 }
 
                 // If keyboard capture is disabled for the focused window, key events
-                // bypass all WM interception and go directly to the terminal.
-                if let Event::Key(_) = &evt {
+                // bypass all WM interception and go directly to the terminal,
+                // except when the WM overlay is visible — overlay takes priority.
+                // Uses the unified double-Super handler: first Super is deferred (panel
+                // shows countdown), second Super within window opens overlay, timeout
+                // (checked in idle path) forwards the first Super to the terminal.
+                if let Event::Key(key) = &evt {
                     let focus_id = app.windows().wm_focus();
-                    if app.windows().keyboard_capture_disabled(focus_id) {
-                        let _ = handle_focused_app_event(&evt, app);
-                        update_selection_snapshot(app);
-                        return flush_state_changes(app, ControlFlow::Continue);
+                    if app.windows().direct_mode(focus_id)
+                        && !app.windows().wm_overlay_visible()
+                        && key.kind == KeyEventKind::Press
+                    {
+                        let is_wm_key = app
+                            .windows()
+                            .keybindings()
+                            .matches(crate::keybindings::Action::WmToggleOverlay, key);
+                        match app.windows().handle_super_press(key, is_wm_key) {
+                            crate::window::SuperPressResult::DoubleSuper => {
+                                app.windows().open_wm_overlay_no_passthrough();
+                                update_selection_snapshot(app);
+                                return flush_state_changes(app, ControlFlow::Continue);
+                            }
+                            crate::window::SuperPressResult::Pending => {
+                                // First Super of a pair — deferred. Panel shows countdown.
+                                // Timeout forwarding happens in the idle path below.
+                                update_selection_snapshot(app);
+                                return flush_state_changes(app, ControlFlow::Continue);
+                            }
+                            crate::window::SuperPressResult::Forward => {
+                                // Non-wm-toggle key → forward to terminal immediately.
+                                let _ = handle_focused_app_event(&evt, app);
+                                update_selection_snapshot(app);
+                                return flush_state_changes(app, ControlFlow::Continue);
+                            }
+                        }
                     }
                 }
 
@@ -216,7 +249,9 @@ where
                     return flush_state_changes(app, ControlFlow::Continue);
                 }
 
-                // Layer 2b: WM global actions
+                // Layer 2b: WM global actions (Global layer only — currently just Esc)
+                // All other actions (FocusNext, scrolling, etc.) are WmMode and only
+                // dispatched when the WM overlay is visible (see below).
                 if let Some(action) = mapped_action {
                     match action {
                         Action::Quit => {
@@ -234,56 +269,18 @@ where
                             update_selection_snapshot(app);
                             return flush_state_changes(app, ControlFlow::Continue);
                         }
-                        Action::CycleNextWindow => {
-                            app.windows().advance_focus(true);
-                            update_selection_snapshot(app);
-                            return flush_state_changes(app, ControlFlow::Continue);
-                        }
-                        Action::CyclePrevWindow => {
-                            app.windows().advance_focus(false);
-                            update_selection_snapshot(app);
-                            return flush_state_changes(app, ControlFlow::Continue);
-                        }
-                        Action::HintToggle => {
-                            let current = app.windows().hint_visibility();
-                            let next = match current {
-                                crate::wm_config::HintVisibility::Always => {
-                                    crate::wm_config::HintVisibility::Never
-                                }
-                                crate::wm_config::HintVisibility::OnDemand => {
-                                    crate::wm_config::HintVisibility::Always
-                                }
-                                crate::wm_config::HintVisibility::Never => {
-                                    crate::wm_config::HintVisibility::Always
-                                }
-                            };
-                            app.windows().set_hint_visibility(next);
-                            update_selection_snapshot(app);
-                            return flush_state_changes(app, ControlFlow::Continue);
-                        }
-                        Action::CopySelection => {
-                            app.windows().copy_selection_to_clipboard();
-                            update_selection_snapshot(app);
-                            return flush_state_changes(app, ControlFlow::Continue);
-                        }
-                        Action::PasteClipboard => {
-                            let text = app.windows().clipboard_mut().and_then(|cb| cb.get().ok());
-                            if let Some(text) = text
-                                && !text.is_empty()
-                            {
-                                let focus_id = app.windows().focus();
-                                if let Some(comp) = app.window_component(focus_id) {
-                                    comp.paste(&text);
-                                }
-                            }
-                            update_selection_snapshot(app);
-                            return flush_state_changes(app, ControlFlow::Continue);
-                        }
-                        // FocusNext, FocusPrev — handled by handle_focus_event below
-                        // Scrolling, selection, menu, confirm — pass through to Layer 3
                         _ => {}
                     }
                 }
+
+                // Pre-compute WmMode-layer action for use inside the overlay section.
+                let mapped_action_wm_mode = match &evt {
+                    Event::Key(key) => app
+                        .windows()
+                        .keybindings()
+                        .action_for_key_in_layer(key, crate::keybindings::ActionLayer::WmMode),
+                    _ => None,
+                };
 
                 // WM overlay toggle (special case due to passthrough logic)
                 let wm_mode = app.windows().config().wm_overlay_enabled;
@@ -296,7 +293,7 @@ where
                         .matches(crate::keybindings::Action::WmToggleOverlay, key)
                 {
                     if app.windows().wm_overlay_visible() {
-                        let passthrough = app.windows().esc_passthrough_active();
+                        let passthrough = app.windows().super_passthrough_active();
                         app.windows().close_wm_overlay();
                         if passthrough {
                             let passthrough_event = Event::Key(*key);
@@ -368,6 +365,65 @@ where
                         update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue);
                     }
+                    // Focus routing in WM mode (Tab/Shift+Tab)
+                    if app
+                        .windows()
+                        .handle_focus_event(&evt, focus_regions, &map_region)
+                    {
+                        update_selection_snapshot(app);
+                        return flush_state_changes(app, ControlFlow::Continue);
+                    }
+                    // Dispatch remaining WmMode actions (Quit, OpenHelp, etc.)
+                    // while the WM overlay is open.
+                    if let Some(action) = mapped_action_wm_mode {
+                        match action {
+                            Action::Quit => {
+                                app.open_exit_confirm();
+                                update_selection_snapshot(app);
+                                return flush_state_changes(app, ControlFlow::Continue);
+                            }
+                            Action::OpenHelp => {
+                                app.open_help_overlay();
+                                app.windows().close_wm_overlay();
+                                update_selection_snapshot(app);
+                                return flush_state_changes(app, ControlFlow::Continue);
+                            }
+                            Action::OpenKeybindings => {
+                                app.open_keybindings_overlay();
+                                app.windows().close_wm_overlay();
+                                update_selection_snapshot(app);
+                                return flush_state_changes(app, ControlFlow::Continue);
+                            }
+                            Action::CycleNextWindow => {
+                                app.windows().advance_focus(true);
+                                update_selection_snapshot(app);
+                                return flush_state_changes(app, ControlFlow::Continue);
+                            }
+                            Action::CyclePrevWindow => {
+                                app.windows().advance_focus(false);
+                                update_selection_snapshot(app);
+                                return flush_state_changes(app, ControlFlow::Continue);
+                            }
+                            Action::HintToggle => {
+                                let current = app.windows().hint_visibility();
+                                let next = match current {
+                                    crate::wm_config::HintVisibility::Always => {
+                                        crate::wm_config::HintVisibility::Never
+                                    }
+                                    crate::wm_config::HintVisibility::OnDemand => {
+                                        crate::wm_config::HintVisibility::Always
+                                    }
+                                    crate::wm_config::HintVisibility::Never => {
+                                        crate::wm_config::HintVisibility::Always
+                                    }
+                                };
+                                app.windows().set_hint_visibility(next);
+                                update_selection_snapshot(app);
+                                return flush_state_changes(app, ControlFlow::Continue);
+                            }
+                            _ => {}
+                        }
+                    }
                     if let Event::Key(_) = &evt {
                         update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue);
@@ -402,8 +458,10 @@ where
                         }
                     }
                 }
-                // Route Tab/Shift+Tab through focus routing for non-overlay mode.
-                if matches!(evt, Event::Key(_))
+                // Route Tab/Shift+Tab through focus routing for embedded mode only.
+                // In standalone mode without the open overlay, Tab passes through.
+                if !wm_mode
+                    && matches!(evt, Event::Key(_))
                     && app
                         .windows()
                         .handle_focus_event(&evt, focus_regions, &map_region)
@@ -429,6 +487,10 @@ where
                 {
                     update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Quit);
+                }
+                // Forward any timed-out pending Esc to the terminal.
+                if let Some(super_event) = app.windows().take_expired_super_event() {
+                    let _ = handle_focused_app_event(&super_event, app);
                 }
                 update_selection_snapshot(app);
                 app.windows().begin_frame();
@@ -588,7 +650,7 @@ where
                         .map(String::as_str)
                         .unwrap_or("");
                     let decorator = wm.decorator();
-                    let kb_disabled = wm.keyboard_capture_disabled(WindowId::App(window.id));
+                    let kb_disabled = wm.direct_mode(WindowId::App(window.id));
                     (title, decorator, kb_disabled)
                 };
                 composite_window(
@@ -611,7 +673,7 @@ where
                         .map(String::as_str)
                         .unwrap_or("");
                     let decorator = wm.decorator();
-                    let kb_disabled = wm.keyboard_capture_disabled(WindowId::System(window.id));
+                    let kb_disabled = wm.direct_mode(WindowId::System(window.id));
                     (title, decorator, kb_disabled)
                 };
                 composite_window(
@@ -638,7 +700,7 @@ fn composite_window<F>(
     focused: bool,
     title: &str,
     decorator: &dyn WindowDecorator,
-    keyboard_capture_disabled: bool,
+    direct_mode: bool,
     mut render_content: F,
 ) where
     F: FnMut(&mut UiFrame<'_>),
@@ -655,13 +717,7 @@ fn composite_window<F>(
     let mut buffer = Buffer::empty(local_area);
     {
         let mut offscreen = UiFrame::from_parts(local_area, &mut buffer);
-        decorator.render_window(
-            &mut offscreen,
-            local_area,
-            title,
-            focused,
-            keyboard_capture_disabled,
-        );
+        decorator.render_window(&mut offscreen, local_area, title, focused, direct_mode);
         render_content(&mut offscreen);
     }
     if !focused {
@@ -720,7 +776,8 @@ mod tests {
         use crate::window::WindowManager;
 
         // Create an empty WindowManager (no active regions/z-order).
-        let wm: WindowManager<usize> = WindowManager::new_standalone(0);
+        let wm: WindowManager<usize> =
+            WindowManager::new_standalone(0, crate::AppContext::new("test", "0.0.0"));
         assert!(!wm.has_any_active_windows());
 
         // Create a fake app that enumerates windows (i.e., app-level windows still exist)
@@ -813,7 +870,7 @@ mod tests {
         }
 
         let mut app = FakeApp {
-            wm: WindowManager::<usize>::new_standalone(0),
+            wm: WindowManager::<usize>::new_standalone(0, crate::AppContext::new("test", "0.0.0")),
             recorder: KeyRecorder {
                 received_key: false,
             },
@@ -854,7 +911,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_focused_app_event_with_keyboard_capture_disabled_still_routes() {
+    fn handle_focused_app_event_with_direct_mode_still_routes() {
         use crate::components::ComponentContext;
         use crate::window::WindowManager;
 
@@ -905,7 +962,7 @@ mod tests {
         }
 
         let mut app = FakeApp {
-            wm: WindowManager::<usize>::new_standalone(0),
+            wm: WindowManager::<usize>::new_standalone(0, crate::AppContext::new("test", "0.0.0")),
             recorder: KeyRecorder {
                 received_key: false,
             },
@@ -928,8 +985,8 @@ mod tests {
         app.wm.focus_app_window(1usize);
 
         let focus_id = app.wm.wm_focus();
-        app.wm.set_keyboard_capture_disabled(focus_id, true);
-        assert!(app.wm.keyboard_capture_disabled(focus_id));
+        app.wm.set_direct_mode(focus_id, true);
+        assert!(app.wm.direct_mode(focus_id));
 
         let evt = Event::Key(KeyEvent {
             code: KeyCode::Char('x'),
@@ -939,10 +996,7 @@ mod tests {
         });
 
         let consumed = handle_focused_app_event(&evt, &mut app);
-        assert!(
-            consumed,
-            "event must route even when keyboard_capture_disabled is true"
-        );
+        assert!(consumed, "event must route even when direct_mode is true");
         assert!(app.recorder.received_key, "component must receive the key");
     }
 }

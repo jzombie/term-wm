@@ -52,7 +52,10 @@ impl App {
         if paths.len() == 1 {
             paths.push(paths[0].clone());
         }
-        let mut windows = WindowManager::new_standalone(PaneId::Left);
+        let mut windows = WindowManager::new_standalone(
+            PaneId::Left,
+            term_wm::AppContext::new("example", "0.0.0"),
+        );
         windows.set_focus_order(vec![PaneId::Left, PaneId::Right]);
         let mut app = Self {
             windows,

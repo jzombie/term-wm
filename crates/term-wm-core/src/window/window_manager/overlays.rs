@@ -2,20 +2,29 @@ use crossterm::event::{Event, MouseEventKind};
 use ratatui::prelude::Rect;
 
 use super::{OverlayId, WindowId, WindowManager};
-use crate::components::{ComponentContext, ConfirmAction, Overlay};
+use crate::components::{ConfirmAction, Overlay};
 use crate::layout::{FloatingPane, rect_contains, render_handles_masked};
 use crate::window::FloatRectSpec;
 
 impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     pub fn open_wm_overlay(&mut self) {
         self.overlay_visible = true;
-        self.wm_overlay_opened_at = Some(std::time::Instant::now());
+        self.overlay_opened_at = Some(std::time::Instant::now());
+        self.wm_menu_selected = 0;
+    }
+
+    /// Opens the WM overlay without starting the Super-passthrough timer.
+    /// Used when the overlay was triggered by a Direct-mode double-Super (both
+    /// presses consumed) — no Super key remains to pass through.
+    pub fn open_wm_overlay_no_passthrough(&mut self) {
+        self.overlay_visible = true;
+        self.overlay_opened_at = None;
         self.wm_menu_selected = 0;
     }
 
     pub fn close_wm_overlay(&mut self) {
         self.overlay_visible = false;
-        self.wm_overlay_opened_at = None;
+        self.overlay_opened_at = None;
         self.wm_menu_selected = 0;
     }
 
@@ -40,14 +49,12 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub fn handle_help_event(&mut self, event: &Event) -> bool {
+        let ctx = self.component_context(true).with_overlay(true);
         let Some(boxed) = self.overlays.get_mut(&OverlayId::Help) else {
             return false;
         };
-        boxed.resize(
-            self.last_frame_area,
-            &ComponentContext::new(true).with_overlay(true),
-        );
-        let handled = boxed.handle_event(event, &ComponentContext::new(true).with_overlay(true));
+        boxed.resize(self.last_frame_area, &ctx);
+        let handled = boxed.handle_event(event, &ctx);
         if !boxed.visible() {
             self.overlays.remove(&OverlayId::Help);
         }
@@ -133,8 +140,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub fn render_overlays(&mut self, frame: &mut crate::ui::UiFrame<'_>) {
-        use crate::components::ComponentContext;
-
         let (hovered, hovered_resize) = self.hover_targets();
         let obscuring: Vec<Rect> = self
             .managed_draw_order
@@ -233,19 +238,13 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             self.panel.area(),
         );
 
+        let confirm_ctx = self.component_context(false).with_overlay(true);
+        let help_ctx = self.component_context(false).with_overlay(true);
         if let Some(confirm) = self.overlays.get_mut(&OverlayId::ExitConfirm) {
-            confirm.render(
-                frame,
-                frame.area(),
-                &ComponentContext::new(false).with_overlay(true),
-            );
+            confirm.render(frame, frame.area(), &confirm_ctx);
         }
         if let Some(help) = self.overlays.get_mut(&OverlayId::Help) {
-            help.render(
-                frame,
-                frame.area(),
-                &ComponentContext::new(false).with_overlay(true),
-            );
+            help.render(frame, frame.area(), &help_ctx);
         }
     }
 }

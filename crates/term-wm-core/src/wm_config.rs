@@ -4,7 +4,7 @@ use std::time::Duration;
 use crate::keybindings::{Action, KeyBindings};
 use crate::window::decorator::{DefaultDecorator, WindowDecorator};
 
-fn esc_passthrough_window_default() -> Duration {
+fn super_passthrough_window_default() -> Duration {
     const ESC_PASSTHROUGH_DEFAULT: u64 = 600;
 
     #[cfg(windows)]
@@ -74,7 +74,7 @@ pub struct WmConfig {
     /// Enable the WM overlay (menu) toggled by Escape.
     pub wm_overlay_enabled: bool,
     /// Duration of the escape passthrough window.
-    pub esc_passthrough_window: Duration,
+    pub super_passthrough_window: Duration,
     /// Allow floating windows to be dragged/resized off-screen.
     pub floating_resize_offscreen: bool,
     /// Initial value for clipboard integration (runtime-toggleable).
@@ -111,7 +111,7 @@ impl WmConfig {
             floating_windows_enabled: true,
             panel_enabled: true,
             wm_overlay_enabled: true,
-            esc_passthrough_window: esc_passthrough_window_default(),
+            super_passthrough_window: super_passthrough_window_default(),
             floating_resize_offscreen: true,
             clipboard_enabled: true,
             window_selection_enabled: true,
@@ -131,7 +131,7 @@ impl WmConfig {
             floating_windows_enabled: false,
             panel_enabled: false,
             wm_overlay_enabled: false,
-            esc_passthrough_window: esc_passthrough_window_default(),
+            super_passthrough_window: super_passthrough_window_default(),
             floating_resize_offscreen: false,
             clipboard_enabled: true,
             window_selection_enabled: true,

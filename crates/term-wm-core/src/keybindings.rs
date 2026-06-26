@@ -2,7 +2,7 @@ use std::fmt;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-pub use crate::actions::{Action, Category};
+pub use crate::actions::{Action, ActionLayer, Category};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyCombo {
@@ -104,8 +104,6 @@ impl Default for KeyBindings {
             ScrollUp: [ (KeyCode::Up, KeyModifiers::NONE) ],
             ScrollDown: [ (KeyCode::Down, KeyModifiers::NONE) ],
             ToggleSelection: [ (KeyCode::Char(' '), KeyModifiers::NONE) ],
-            CopySelection: [ (KeyCode::Char('c'), KeyModifiers::CONTROL | KeyModifiers::SHIFT) ],
-            PasteClipboard: [ (KeyCode::Char('v'), KeyModifiers::CONTROL | KeyModifiers::SHIFT) ],
         }
     }
 }
@@ -154,6 +152,19 @@ impl KeyBindings {
     }
 
     /// Map a full `Event` to an `Action`, if the event is a key event.
+    /// Look up `key` against only actions in the given layer.
+    pub fn action_for_key_in_layer(&self, key: &KeyEvent, layer: ActionLayer) -> Option<Action> {
+        for (act, list) in &self.map {
+            if act.layer() != layer {
+                continue;
+            }
+            if list.iter().any(|c| c.matches(key)) {
+                return Some(*act);
+            }
+        }
+        None
+    }
+
     pub fn action_for_event(&self, evt: &crossterm::event::Event) -> Option<Action> {
         if let crossterm::event::Event::Key(k) = evt {
             self.action_for_key(k)
@@ -188,15 +199,38 @@ impl KeyBindings {
         &self.map
     }
 
-    /// Returns up to `max` hint entries, sorted by `Action::bottom_hint_priority()`.
+    /// Returns up to `max` hint entries for actions matching `layer`,
+    /// sorted by `Action::bottom_hint_priority()`.
     ///
     /// Each entry is `(Action, Vec<String>)` where the strings are display
     /// representations of the bound key combos.
     pub fn bottom_hints(&self, max: usize) -> Vec<(Action, Vec<String>)> {
+        self.bottom_hints_filtered(max, None)
+    }
+
+    /// Like `bottom_hints` but filtered to a specific layer.
+    pub fn bottom_hints_for_layer(
+        &self,
+        max: usize,
+        layer: ActionLayer,
+    ) -> Vec<(Action, Vec<String>)> {
+        self.bottom_hints_filtered(max, Some(layer))
+    }
+
+    fn bottom_hints_filtered(
+        &self,
+        max: usize,
+        layer: Option<ActionLayer>,
+    ) -> Vec<(Action, Vec<String>)> {
         let mut candidates: Vec<(Action, u8, Vec<String>)> = self
             .map
             .iter()
             .filter_map(|(action, combos)| {
+                if let Some(layer) = layer
+                    && action.layer() != layer
+                {
+                    return None;
+                }
                 let priority = action.bottom_hint_priority()?;
                 let displays: Vec<String> = combos.iter().map(|c| c.display()).collect();
                 Some((*action, priority, displays))
