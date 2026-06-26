@@ -48,6 +48,27 @@ cargo test
 
 If failures appear unrelated to your change, stop and ask for guidance.
 
+Pane Trait for Testability
+- `TerminalComponent` stores `Box<dyn Pane>` (defined in `crates/term-wm-core/src/pane.rs`).
+- Always use the `Pane` trait (not `Pty` directly) as the field type so that tests can inject `TestPane`.
+- `TestPane` lives in `crates/term-wm-ui-components/src/terminal.rs` under `#[cfg(test)]`. It wraps a `vt100::Parser` (for `screen()`) but tracks `scrollback`, `max_sb`, and `alt_screen` with its own fields.
+- To create a `TerminalComponent` for tests: `TerminalComponent::from_pane(Box::new(TestPane::new(max_sb)))`.
+- Use `term.set_last_scrollback(n)` and `term.set_last_max_scrollback(n)` (no-op outside tests) to prime terminal state before exercising sync.
+
+Scroll Sync Testing
+- All scroll-sync logic lives in `render_screen` in `terminal.rs`. It is tested via `TerminalComponent::render()` with a real `ViewportHandle` + `UiFrame`.
+- Test helpers: `make_handle()` creates a `(ViewportHandle, Rc<RefCell<ViewportSharedState>>)` pair. `run_sync(term, view_offset)` does one render pass. `run_sync_with_handle(term, &shared)` reuses an existing handle across renders.
+- Coverage must include: each branch of the `if current_sb == 0` / `else if` / `else` chain, edge cases (`saturating_sub` underflow, zero content), alternate screen skip, and the two-render sequence.
+
+Property Testing with proptest
+- A pure model function `model_scroll_sync(...)` replicates the sync decision logic outside of rendering infrastructure.
+- Property tests verify invariants: scrollback never exceeds `max_scrollback`, viewport offset never exceeds content, follow-tail behavior, and correct push/sync decisions.
+- Always include `prop_assume!(current_sb <= used)` since that invariant is guaranteed by the real `Pty`.
+
+In-Memory Rendering Pattern
+- `Buffer::empty(area) + UiFrame::from_parts(area, &mut buffer)` creates a headless render target used in tests throughout the project.
+- Use this pattern when testing components with `Component::render`.
+
 Examples / Common Edits
 - Rename `ScrollView` → `ScrollViewComponent` and update imports in files like `markdown_viewer.rs`, `list.rs`, `terminal.rs`, `debug_log.rs`, and `toggle_list.rs`.
 - Move `impl Component for FooComponent {}` immediately below `struct FooComponent` in `src/components/foo.rs`.
@@ -56,4 +77,3 @@ Examples / Common Edits
 Notes for Automation/Agents
 - Automation editing component files should prefer minimal, surgical changes via `apply_patch`.
 - Where work spans multiple files, agents must create a `manage_todo_list` plan first and provide concise progress updates after batches of changes.
-
