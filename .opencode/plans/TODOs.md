@@ -1,0 +1,4 @@
+- Fix issue where mouse Y-axis coordinates trigger highlights in Super menu, regardless if they are hovered via X-axis as well
+- App-configurable keybindings and centralized ability to render them (i.e. bottom panel for most used; and overlay for extra context)
+- What are ways to emulate drag events on mobile?  Current thought is making an overlay with arrow buttons on it; how to determine if mobile to begin with?
+- Figure out why `man` pages inside of terminal apps don't scroll with arrow keys (page down/up works though).

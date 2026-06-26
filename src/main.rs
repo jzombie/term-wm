@@ -1,21 +1,29 @@
 //! This default application is a simple terminal app, which opens two sub-shells in side-by-side
 //! windows, where more windows can be added, or windows can be removed.
 
+// TODO: Add mode to auto-open debug window
+
 use std::io;
-use std::time::Duration;
+use std::sync::Arc;
 
 use clap::Parser;
-use crossterm::event::Event;
+use line_ending::LineEnding;
 use ratatui::prelude::Rect;
 
-use line_ending::LineEnding;
-use term_wm::components::{Component, TerminalComponent, default_shell_command};
-use term_wm::drivers::OutputDriver;
-use term_wm::drivers::console::{ConsoleInputDriver, ConsoleOutputDriver};
-use term_wm::keybindings::{Action, KeyBindings};
-use term_wm::runner::{HasWindowManager, WindowApp, run_window_app};
+use term_wm::app_context::AppContext;
+use term_wm::components::{Component, ComponentContext};
+use term_wm::io::{
+    RenderTarget,
+    console::{ConsoleEventSource, ConsoleRenderTarget},
+};
+use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
 use term_wm::ui::UiFrame;
-use term_wm::window::{AppWindowDraw, WindowManager};
+use term_wm::window::{OverlayId, SystemWindowId, WindowDrawContext, WindowManager};
+use term_wm::wm_config::WmConfig;
+use term_wm::{ScrollViewComponent, TerminalComponent, default_shell_command};
+use term_wm_ui_components::sys::debug_log::{
+    DebugLogComponent, install_panic_hook, set_global_debug_log,
+};
 
 type PaneId = usize;
 
@@ -62,44 +70,11 @@ fn main() -> io::Result<()> {
         })
     };
     let mut app = App::new_with(cli.cmds, total)?;
-    // Use the initial window indices as focus regions; the WindowManager
-    // will track additional windows as they are created.
-    let focus_regions: Vec<PaneId> = (0..total).collect();
-    let mut output = ConsoleOutputDriver::new()?;
+    let mut output = ConsoleRenderTarget::new()?;
     output.enter()?;
-    let mut input = ConsoleInputDriver::new();
+    let mut input = ConsoleEventSource::new();
 
-    let result = run_window_app(
-        &mut output,
-        &mut input,
-        &mut app,
-        &focus_regions,
-        |id| id,
-        Some,
-        Duration::from_millis(16),
-        |event, app| {
-            if matches!(event, Event::Mouse(_)) && app.windows.handle_managed_event(event) {
-                return true;
-            }
-            if let Some(pane) = app.terminals.get_mut(app.windows.focus()) {
-                return pane.handle_event(event);
-            }
-            false
-        },
-        |event, app| {
-            if let Some(Event::Key(key)) = event {
-                let kb = KeyBindings::default();
-                if kb.matches(Action::Quit, key) {
-                    return true;
-                }
-            }
-
-            if app.check_quit() {
-                return true;
-            }
-            false
-        },
-    );
+    let result = run_window_app(&mut output, &mut input, &mut app);
 
     output.exit()?;
 
@@ -107,16 +82,35 @@ fn main() -> io::Result<()> {
 }
 
 struct App {
-    windows: WindowManager<PaneId, PaneId>,
-    terminals: Vec<TerminalComponent>,
+    windows: WindowManager<PaneId>,
+    terminals: Vec<ScrollViewComponent<TerminalComponent>>,
 }
 
 impl App {
     fn new_with(commands: Vec<String>, num_windows: usize) -> io::Result<Self> {
+        let app_ctx = Arc::new(
+            AppContext::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")).with_hostname(
+                &hostname::get()
+                    .ok()
+                    .and_then(|s| s.into_string().ok())
+                    .unwrap_or_else(|| "unknown-host".to_string()),
+            ),
+        );
         let mut app = Self {
-            windows: WindowManager::new_managed(0),
+            windows: WindowManager::with_config(0, WmConfig::standalone(), Arc::clone(&app_ctx)),
             terminals: Vec::new(),
         };
+
+        // Initialize debug log system window
+        {
+            let (mut component, handle) = DebugLogComponent::new_default();
+            component.set_selection_enabled(app.windows.clipboard_enabled());
+            set_global_debug_log(handle);
+            app.windows
+                .set_system_window(SystemWindowId::DebugLog, Box::new(component));
+            install_panic_hook();
+            term_wm::tracing_sub::init_default();
+        }
 
         let mut error_occurred = false;
 
@@ -137,7 +131,7 @@ impl App {
                     if !error_occurred && let Some(pane) = app.terminals.last_mut() {
                         let mut line = cmd;
                         line.push_str(LineEnding::from_current_platform().as_str());
-                        let _ = pane.write_bytes(line.as_bytes());
+                        let _ = pane.content.write_bytes(line.as_bytes());
                     }
                 } else if let Err(e) = app.wm_new_window() {
                     tracing::error!("Window spawn error: {}", e);
@@ -154,10 +148,10 @@ impl App {
         }
 
         if error_occurred {
-            app.windows.open_debug_window();
+            app.windows().open_debug_window();
         }
 
-        app.windows.open_help_overlay();
+        app.open_help_overlay();
         Ok(app)
     }
 
@@ -167,8 +161,12 @@ impl App {
             let _ = webbrowser::open(url);
             true
         });
+        let mut sv = ScrollViewComponent::new(pane);
+        sv.set_keyboard_enabled(false);
+        sv.content
+            .set_selection_enabled(self.windows.clipboard_enabled());
         let id = self.terminals.len();
-        self.terminals.push(pane);
+        self.terminals.push(sv);
         self.windows.set_focus(id);
         self.windows.tile_window(id);
         self.windows
@@ -177,9 +175,38 @@ impl App {
     }
 }
 
-impl HasWindowManager<PaneId, PaneId> for App {
-    fn windows(&mut self) -> &mut WindowManager<PaneId, PaneId> {
+impl WindowManagerHost<PaneId> for App {
+    fn windows(&mut self) -> &mut WindowManager<PaneId> {
         &mut self.windows
+    }
+
+    fn open_help_overlay(&mut self) {
+        use term_wm_ui_components::sys::help_overlay::HelpOverlayComponent;
+        let kb = self.windows.keybindings().clone();
+        let mut h = HelpOverlayComponent::new(kb);
+        h.show();
+        h.set_selection_enabled(self.windows.clipboard_enabled());
+        self.windows.open_overlay(OverlayId::Help, Box::new(h));
+    }
+
+    fn open_keybindings_overlay(&mut self) {
+        use term_wm_ui_components::sys::keybinding_overlay::KeybindingOverlayComponent;
+        let kb = self.windows.keybindings().clone();
+        let mut o = KeybindingOverlayComponent::new(kb);
+        o.show();
+        self.windows
+            .open_overlay(OverlayId::Keybindings, Box::new(o));
+    }
+
+    fn open_exit_confirm(&mut self) {
+        use term_wm_ui_components::confirm_overlay::ConfirmOverlayComponent;
+        let mut confirm = ConfirmOverlayComponent::new();
+        confirm.open(
+            "Exit App",
+            "Exit the application?\nUnsaved changes will be lost.",
+        );
+        self.windows
+            .open_overlay(OverlayId::ExitConfirm, Box::new(confirm));
     }
 
     fn wm_new_window(&mut self) -> io::Result<()> {
@@ -189,8 +216,12 @@ impl HasWindowManager<PaneId, PaneId> for App {
             let _ = webbrowser::open(url);
             true
         });
+        let mut sv = ScrollViewComponent::new(pane);
+        sv.set_keyboard_enabled(false);
+        sv.content
+            .set_selection_enabled(self.windows.clipboard_enabled());
         let id = self.terminals.len();
-        self.terminals.push(pane);
+        self.terminals.push(sv);
         self.windows.set_focus(id);
         self.windows.tile_window(id);
         // Set a user-visible title for the newly created pane.
@@ -200,45 +231,65 @@ impl HasWindowManager<PaneId, PaneId> for App {
     }
 
     fn wm_close_window(&mut self, id: PaneId) -> io::Result<()> {
-        if let Some(pane) = self.terminals.get_mut(id) {
+        if let Some(sv) = self.terminals.get_mut(id) {
             // TODO: Show confirmation before abrupt termination
-            pane.terminate();
+            sv.content.terminate();
         }
         Ok(())
     }
-}
 
-impl App {
-    fn check_quit(&mut self) -> bool {
-        // Quit when the window manager reports no active windows remaining.
-        !self.windows.has_any_active_windows()
+    fn set_clipboard_enabled(&mut self, _enabled: bool) {}
+
+    fn set_window_selection_enabled(&mut self, enabled: bool) {
+        for sv in &mut self.terminals {
+            sv.content.set_selection_enabled(enabled);
+        }
     }
 }
 
-impl WindowApp<PaneId, PaneId> for App {
+impl WindowProvider<PaneId> for App {
     fn enumerate_windows(&mut self) -> Vec<PaneId> {
         self.terminals
             .iter_mut()
             .enumerate()
-            .filter_map(|(id, pane)| (!pane.has_exited()).then_some(id))
+            .filter_map(|(id, sv)| (!sv.content.has_exited()).then_some(id))
             .collect()
     }
 
-    fn render_window(&mut self, frame: &mut UiFrame<'_>, window: AppWindowDraw<PaneId>) {
-        render_pane(frame, self, window.id, window.surface.inner, window.focused);
+    fn render_window(&mut self, frame: &mut UiFrame<'_>, window: WindowDrawContext<PaneId>) {
+        let ctx = self.windows.component_context(window.focused);
+        render_pane(frame, self, window.id, window.surface.inner, ctx);
     }
 
     fn empty_window_message(&self) -> &str {
         "all shells exited"
     }
+
+    fn window_component(&mut self, id: PaneId) -> Option<&mut dyn Component> {
+        self.terminals
+            .get_mut(id)
+            .map(|sv| sv as &mut dyn Component)
+    }
+
+    fn window_pane_title(&mut self, id: PaneId) -> Option<String> {
+        self.terminals
+            .get_mut(id)
+            .and_then(|sv| sv.content.take_pending_title())
+    }
 }
 
-fn render_pane(frame: &mut UiFrame<'_>, app: &mut App, id: PaneId, area: Rect, focused: bool) {
+fn render_pane(
+    frame: &mut UiFrame<'_>,
+    app: &mut App,
+    id: PaneId,
+    area: Rect,
+    ctx: ComponentContext,
+) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    if let Some(pane) = app.terminals.get_mut(id) {
-        pane.resize(area);
-        pane.render(frame, area, focused);
+    if let Some(sv) = app.terminals.get_mut(id) {
+        sv.resize(area, &ctx);
+        sv.render(frame, area, &ctx);
     }
 }
