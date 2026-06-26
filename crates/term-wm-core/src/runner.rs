@@ -207,12 +207,12 @@ where
                 // If keyboard capture is disabled for the focused window, key events
                 // bypass all WM interception and go directly to the terminal,
                 // except when the WM overlay is visible — overlay takes priority.
-                // Uses the unified double-Esc handler: first Esc is deferred (panel
-                // shows countdown), second Esc within window opens overlay, timeout
-                // (checked in idle path) forwards the first Esc to the terminal.
+                // Uses the unified double-Super handler: first Super is deferred (panel
+                // shows countdown), second Super within window opens overlay, timeout
+                // (checked in idle path) forwards the first Super to the terminal.
                 if let Event::Key(key) = &evt {
                     let focus_id = app.windows().wm_focus();
-                    if app.windows().keyboard_capture_disabled(focus_id)
+                    if app.windows().direct_mode(focus_id)
                         && !app.windows().wm_overlay_visible()
                         && key.kind == KeyEventKind::Press
                     {
@@ -220,19 +220,19 @@ where
                             .windows()
                             .keybindings()
                             .matches(crate::keybindings::Action::WmToggleOverlay, key);
-                        match app.windows().handle_esc_press(key, is_wm_key) {
-                            crate::window::EscPressResult::DoubleEsc => {
+                        match app.windows().handle_super_press(key, is_wm_key) {
+                            crate::window::SuperPressResult::DoubleSuper => {
                                 app.windows().open_wm_overlay_no_passthrough();
                                 update_selection_snapshot(app);
                                 return flush_state_changes(app, ControlFlow::Continue);
                             }
-                            crate::window::EscPressResult::Pending => {
-                                // First Esc of a pair — deferred. Panel shows countdown.
+                            crate::window::SuperPressResult::Pending => {
+                                // First Super of a pair — deferred. Panel shows countdown.
                                 // Timeout forwarding happens in the idle path below.
                                 update_selection_snapshot(app);
                                 return flush_state_changes(app, ControlFlow::Continue);
                             }
-                            crate::window::EscPressResult::Forward => {
+                            crate::window::SuperPressResult::Forward => {
                                 // Non-wm-toggle key → forward to terminal immediately.
                                 let _ = handle_focused_app_event(&evt, app);
                                 update_selection_snapshot(app);
@@ -292,7 +292,7 @@ where
                         .matches(crate::keybindings::Action::WmToggleOverlay, key)
                 {
                     if app.windows().wm_overlay_visible() {
-                        let passthrough = app.windows().esc_passthrough_active();
+                        let passthrough = app.windows().super_passthrough_active();
                         app.windows().close_wm_overlay();
                         if passthrough {
                             let passthrough_event = Event::Key(*key);
@@ -488,8 +488,8 @@ where
                     return flush_state_changes(app, ControlFlow::Quit);
                 }
                 // Forward any timed-out pending Esc to the terminal.
-                if let Some(esc_event) = app.windows().take_expired_esc_event() {
-                    let _ = handle_focused_app_event(&esc_event, app);
+                if let Some(super_event) = app.windows().take_expired_super_event() {
+                    let _ = handle_focused_app_event(&super_event, app);
                 }
                 update_selection_snapshot(app);
                 app.windows().begin_frame();
@@ -649,7 +649,7 @@ where
                         .map(String::as_str)
                         .unwrap_or("");
                     let decorator = wm.decorator();
-                    let kb_disabled = wm.keyboard_capture_disabled(WindowId::App(window.id));
+                    let kb_disabled = wm.direct_mode(WindowId::App(window.id));
                     (title, decorator, kb_disabled)
                 };
                 composite_window(
@@ -672,7 +672,7 @@ where
                         .map(String::as_str)
                         .unwrap_or("");
                     let decorator = wm.decorator();
-                    let kb_disabled = wm.keyboard_capture_disabled(WindowId::System(window.id));
+                    let kb_disabled = wm.direct_mode(WindowId::System(window.id));
                     (title, decorator, kb_disabled)
                 };
                 composite_window(
@@ -699,7 +699,7 @@ fn composite_window<F>(
     focused: bool,
     title: &str,
     decorator: &dyn WindowDecorator,
-    keyboard_capture_disabled: bool,
+    direct_mode: bool,
     mut render_content: F,
 ) where
     F: FnMut(&mut UiFrame<'_>),
@@ -716,13 +716,7 @@ fn composite_window<F>(
     let mut buffer = Buffer::empty(local_area);
     {
         let mut offscreen = UiFrame::from_parts(local_area, &mut buffer);
-        decorator.render_window(
-            &mut offscreen,
-            local_area,
-            title,
-            focused,
-            keyboard_capture_disabled,
-        );
+        decorator.render_window(&mut offscreen, local_area, title, focused, direct_mode);
         render_content(&mut offscreen);
     }
     if !focused {
@@ -915,7 +909,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_focused_app_event_with_keyboard_capture_disabled_still_routes() {
+    fn handle_focused_app_event_with_direct_mode_still_routes() {
         use crate::components::ComponentContext;
         use crate::window::WindowManager;
 
@@ -989,8 +983,8 @@ mod tests {
         app.wm.focus_app_window(1usize);
 
         let focus_id = app.wm.wm_focus();
-        app.wm.set_keyboard_capture_disabled(focus_id, true);
-        assert!(app.wm.keyboard_capture_disabled(focus_id));
+        app.wm.set_direct_mode(focus_id, true);
+        assert!(app.wm.direct_mode(focus_id));
 
         let evt = Event::Key(KeyEvent {
             code: KeyCode::Char('x'),
@@ -1000,10 +994,7 @@ mod tests {
         });
 
         let consumed = handle_focused_app_event(&evt, &mut app);
-        assert!(
-            consumed,
-            "event must route even when keyboard_capture_disabled is true"
-        );
+        assert!(consumed, "event must route even when direct_mode is true");
         assert!(app.recorder.received_key, "component must receive the key");
     }
 }

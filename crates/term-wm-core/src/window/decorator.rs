@@ -9,7 +9,7 @@ pub enum HeaderAction {
     Maximize,
     Close,
     Drag,
-    ToggleKeyboardCapture,
+    ToggleDirectMode,
     None,
 }
 
@@ -20,7 +20,7 @@ pub trait WindowDecorator: std::fmt::Debug {
         rect: Rect,
         title: &str,
         focused: bool,
-        keyboard_capture_disabled: bool,
+        direct_mode: bool,
     );
 
     fn hit_test(&self, window_rect: Rect, x: u16, y: u16) -> HeaderAction;
@@ -81,7 +81,7 @@ impl WindowDecorator for DefaultDecorator {
         } else if x == min_x {
             HeaderAction::Minimize
         } else if x == kb_x {
-            HeaderAction::ToggleKeyboardCapture
+            HeaderAction::ToggleDirectMode
         } else {
             HeaderAction::Drag
         }
@@ -93,7 +93,7 @@ impl WindowDecorator for DefaultDecorator {
         rect: Rect,
         title: &str,
         focused: bool,
-        keyboard_capture_disabled: bool,
+        direct_mode: bool,
     ) {
         let buffer = frame.buffer_mut();
 
@@ -150,10 +150,10 @@ impl WindowDecorator for DefaultDecorator {
             let max_x = close_x.saturating_sub(2);
             let min_x = max_x.saturating_sub(2);
             let kb_x = min_x.saturating_sub(2);
-            for (bx, sym) in [(kb_x, "K"), (min_x, "_"), (max_x, "▢"), (close_x, "✖")] {
+            for (bx, sym) in [(kb_x, "D"), (min_x, "_"), (max_x, "▢"), (close_x, "✖")] {
                 if let Some(cell) = buffer.cell_mut((bx, header_y)) {
                     cell.set_symbol(sym);
-                    let style = if bx == kb_x && keyboard_capture_disabled && focused {
+                    let style = if bx == kb_x && direct_mode && focused {
                         Style::default()
                             .bg(crate::theme::decorator_header_fg())
                             .fg(crate::theme::decorator_header_bg())
@@ -256,7 +256,7 @@ mod tests {
         assert_eq!(dec.hit_test(rect, min_x, header_y), HeaderAction::Minimize);
         assert_eq!(
             dec.hit_test(rect, kb_x, header_y),
-            HeaderAction::ToggleKeyboardCapture
+            HeaderAction::ToggleDirectMode
         );
 
         // middle area -> drag
@@ -278,7 +278,7 @@ impl WindowDecorator for NoopDecorator {
         _rect: Rect,
         _title: &str,
         _focused: bool,
-        _keyboard_capture_disabled: bool,
+        _direct_mode: bool,
     ) {
     }
     fn hit_test(&self, _window_rect: Rect, _x: u16, _y: u16) -> HeaderAction {

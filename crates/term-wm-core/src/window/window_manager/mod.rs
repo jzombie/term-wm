@@ -94,9 +94,9 @@ impl ScrollState {
 
 /// Result of a double-Esc press check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EscPressResult {
+pub enum SuperPressResult {
     /// Second press of WmToggleOverlay within passthrough window → open overlay.
-    DoubleEsc,
+    DoubleSuper,
     /// First press of WmToggleOverlay — deferred until timeout or second press.
     Pending,
     /// Not a WmToggleOverlay key — forward immediately.
@@ -209,8 +209,8 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     config: WmConfig,
     keybindings: KeyBindings,
     hint_visibility: HintVisibility,
-    wm_overlay_opened_at: Option<Instant>,
-    esc_pending: Option<(Instant, KeyEvent)>,
+    overlay_opened_at: Option<Instant>,
+    super_pending: Option<(Instant, KeyEvent)>,
     pub(crate) last_frame_area: ratatui::prelude::Rect,
     overlays: BTreeMap<OverlayId, Box<dyn Overlay>>,
     scroll_keyboard_enabled_default: bool,
@@ -295,18 +295,17 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.window(id).is_some_and(|window| window.is_floating())
     }
 
-    pub fn keyboard_capture_disabled(&self, id: WindowId<Id>) -> bool {
-        self.window(id)
-            .is_some_and(|window| window.keyboard_capture_disabled)
+    pub fn direct_mode(&self, id: WindowId<Id>) -> bool {
+        self.window(id).is_some_and(|window| window.direct_mode)
     }
 
-    pub fn set_keyboard_capture_disabled(&mut self, id: WindowId<Id>, value: bool) {
-        self.window_mut(id).keyboard_capture_disabled = value;
+    pub fn set_direct_mode(&mut self, id: WindowId<Id>, value: bool) {
+        self.window_mut(id).direct_mode = value;
     }
 
-    pub fn toggle_keyboard_capture(&mut self, id: WindowId<Id>) {
-        let current = self.keyboard_capture_disabled(id);
-        self.set_keyboard_capture_disabled(id, !current);
+    pub fn toggle_direct_mode(&mut self, id: WindowId<Id>) {
+        let current = self.direct_mode(id);
+        self.set_direct_mode(id, !current);
     }
 
     pub fn window_title(&self, id: WindowId<Id>) -> String {
@@ -433,8 +432,8 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             keybindings: config.keybindings.clone(),
             hint_visibility: config.hint_visibility,
             config,
-            wm_overlay_opened_at: None,
-            esc_pending: None,
+            overlay_opened_at: None,
+            super_pending: None,
             last_frame_area: Rect::default(),
             overlays: BTreeMap::new(),
             scroll_keyboard_enabled_default: true,
@@ -513,8 +512,8 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.capture_deadline = None;
         self.pending_deadline = None;
         self.overlay_visible = false;
-        self.wm_overlay_opened_at = None;
-        self.esc_pending = None;
+        self.overlay_opened_at = None;
+        self.super_pending = None;
         self.wm_menu_selected = 0;
     }
 
@@ -708,35 +707,39 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
 
     /// Unified double-Esc press handler.
     /// - `Pending`: first press of WmToggleOverlay — deferred, timeout will forward.
-    /// - `DoubleEsc`: second press within window — caller should open overlay.
+    /// - `DoubleSuper`: second press within window — caller should open overlay.
     /// - `Forward`: not a WmToggleOverlay key — forward immediately.
-    pub fn handle_esc_press(&mut self, key: &KeyEvent, is_wm_toggle_key: bool) -> EscPressResult {
+    pub fn handle_super_press(
+        &mut self,
+        key: &KeyEvent,
+        is_wm_toggle_key: bool,
+    ) -> SuperPressResult {
         if is_wm_toggle_key {
-            if let Some((pressed_at, _)) = &self.esc_pending
-                && pressed_at.elapsed() < self.config.esc_passthrough_window
+            if let Some((pressed_at, _)) = &self.super_pending
+                && pressed_at.elapsed() < self.config.super_passthrough_window
             {
-                self.esc_pending = None;
-                return EscPressResult::DoubleEsc;
+                self.super_pending = None;
+                return SuperPressResult::DoubleSuper;
             }
-            self.esc_pending = Some((Instant::now(), *key));
-            EscPressResult::Pending
+            self.super_pending = Some((Instant::now(), *key));
+            SuperPressResult::Pending
         } else {
-            self.esc_pending = None;
-            EscPressResult::Forward
+            self.super_pending = None;
+            SuperPressResult::Forward
         }
     }
 
     /// If a pending first-Esc has timed out, return it for forwarding to the
     /// focused window. Called once per frame in the idle event path.
-    pub fn take_expired_esc_event(&mut self) -> Option<Event> {
-        let expired = self.esc_pending.is_some_and(|(pressed_at, _)| {
-            pressed_at.elapsed() >= self.config.esc_passthrough_window
+    pub fn take_expired_super_event(&mut self) -> Option<Event> {
+        let expired = self.super_pending.is_some_and(|(pressed_at, _)| {
+            pressed_at.elapsed() >= self.config.super_passthrough_window
         });
         if expired {
             let (_, key) = self
-                .esc_pending
+                .super_pending
                 .take()
-                .expect("esc_pending was just checked");
+                .expect("super_pending was just checked");
             Some(Event::Key(key))
         } else {
             None
@@ -745,43 +748,43 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
 
     /// Time remaining before a deferred first-Esc is forwarded to the terminal.
     /// Returns `None` when no Esc is pending.
-    pub fn esc_pending_remaining(&self) -> Option<Duration> {
-        let (pressed_at, _) = self.esc_pending.as_ref()?;
+    pub fn super_pending_remaining(&self) -> Option<Duration> {
+        let (pressed_at, _) = self.super_pending.as_ref()?;
         let elapsed = pressed_at.elapsed();
-        if elapsed >= self.config.esc_passthrough_window {
+        if elapsed >= self.config.super_passthrough_window {
             return None;
         }
-        Some(self.config.esc_passthrough_window.saturating_sub(elapsed))
+        Some(self.config.super_passthrough_window.saturating_sub(elapsed))
     }
 
-    pub fn esc_passthrough_active(&self) -> bool {
-        self.esc_passthrough_remaining().is_some()
+    pub fn super_passthrough_active(&self) -> bool {
+        self.super_passthrough_remaining().is_some()
     }
 
-    pub fn esc_passthrough_remaining(&self) -> Option<Duration> {
+    pub fn super_passthrough_remaining(&self) -> Option<Duration> {
         if !self.wm_overlay_visible() {
             return None;
         }
-        let opened_at = self.wm_overlay_opened_at?;
+        let opened_at = self.overlay_opened_at?;
         let elapsed = opened_at.elapsed();
-        if elapsed >= self.config.esc_passthrough_window {
+        if elapsed >= self.config.super_passthrough_window {
             return None;
         }
-        Some(self.config.esc_passthrough_window.saturating_sub(elapsed))
+        Some(self.config.super_passthrough_window.saturating_sub(elapsed))
     }
 
     pub fn render_panel(&mut self, frame: &mut UiFrame<'_>) {
         let status_line = if self.wm_overlay_visible() {
-            let esc_state = if let Some(remaining) = self.esc_passthrough_remaining() {
-                format!("Esc passthrough: active ({}ms)", remaining.as_millis())
+            let esc_state = if let Some(remaining) = self.super_passthrough_remaining() {
+                format!("Super passthrough: active ({}ms)", remaining.as_millis())
             } else {
-                "Esc passthrough: inactive".to_string()
+                "Super passthrough: inactive".to_string()
             };
             Some(format!("{esc_state} · Tab/Shift-Tab: cycle windows"))
         } else {
-            self.esc_pending_remaining().map(|remaining| {
+            self.super_pending_remaining().map(|remaining| {
                 format!(
-                    "Esc pending: {}ms · press Esc again within window to open menu",
+                    "Super pending: {}ms · press Super again within window to open menu",
                     remaining.as_millis()
                 )
             })
@@ -1710,52 +1713,52 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_capture_defaults_to_false() {
+    fn direct_mode_defaults_to_false() {
         let mut wm = WindowManager::<usize>::new_standalone(0);
         wm.focus_app_window(0);
         let focus = wm.wm_focus();
-        assert!(!wm.keyboard_capture_disabled(focus));
+        assert!(!wm.direct_mode(focus));
     }
 
     #[test]
-    fn keyboard_capture_toggle_cycles_state() {
+    fn direct_mode_toggle_cycles_state() {
         let mut wm = WindowManager::<usize>::new_standalone(0);
         wm.focus_app_window(0);
         let focus = wm.wm_focus();
 
-        assert!(!wm.keyboard_capture_disabled(focus));
-        wm.toggle_keyboard_capture(focus);
-        assert!(wm.keyboard_capture_disabled(focus));
-        wm.toggle_keyboard_capture(focus);
-        assert!(!wm.keyboard_capture_disabled(focus));
+        assert!(!wm.direct_mode(focus));
+        wm.toggle_direct_mode(focus);
+        assert!(wm.direct_mode(focus));
+        wm.toggle_direct_mode(focus);
+        assert!(!wm.direct_mode(focus));
     }
 
     #[test]
-    fn keyboard_capture_set_get_roundtrip() {
+    fn direct_mode_set_get_roundtrip() {
         let mut wm = WindowManager::<usize>::new_standalone(0);
         let id = WindowId::app(42usize);
-        assert!(!wm.keyboard_capture_disabled(id), "default is false");
+        assert!(!wm.direct_mode(id), "default is false");
 
-        wm.set_keyboard_capture_disabled(id, true);
-        assert!(wm.keyboard_capture_disabled(id));
+        wm.set_direct_mode(id, true);
+        assert!(wm.direct_mode(id));
 
-        wm.set_keyboard_capture_disabled(id, false);
-        assert!(!wm.keyboard_capture_disabled(id));
+        wm.set_direct_mode(id, false);
+        assert!(!wm.direct_mode(id));
     }
 
     #[test]
-    fn keyboard_capture_is_per_window() {
+    fn direct_mode_is_per_window() {
         let mut wm = WindowManager::<usize>::new_standalone(0);
         let id_a = WindowId::app(1usize);
         let id_b = WindowId::app(2usize);
 
-        wm.set_keyboard_capture_disabled(id_a, true);
-        assert!(wm.keyboard_capture_disabled(id_a));
-        assert!(!wm.keyboard_capture_disabled(id_b));
+        wm.set_direct_mode(id_a, true);
+        assert!(wm.direct_mode(id_a));
+        assert!(!wm.direct_mode(id_b));
     }
 
     #[test]
-    fn keyboard_capture_header_click_toggles_flag() {
+    fn direct_mode_header_click_toggles_flag() {
         use crate::layout::{LayoutNode, TilingLayout};
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
@@ -1791,14 +1794,14 @@ mod tests {
         let kb_y = full_rect.y.saturating_add(1); // header row
         assert_eq!(
             wm.decorator().hit_test(full_rect, kb_x, kb_y),
-            crate::window::decorator::HeaderAction::ToggleKeyboardCapture,
-            "hit_test should detect K button at ({},{}) on {:?}",
+            crate::window::decorator::HeaderAction::ToggleDirectMode,
+            "hit_test should detect D button at ({},{}) on {:?}",
             kb_x,
             kb_y,
             full_rect
         );
 
-        assert!(!wm.keyboard_capture_disabled(win_id), "starts off");
+        assert!(!wm.direct_mode(win_id), "starts off");
 
         let click = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -1808,11 +1811,11 @@ mod tests {
         });
         assert!(
             wm.handle_managed_event(&click),
-            "header K button click should be handled"
+            "header D button click should be handled"
         );
         assert!(
-            wm.keyboard_capture_disabled(win_id),
-            "clicking K toggles keyboard_capture_disabled to true"
+            wm.direct_mode(win_id),
+            "clicking D toggles direct_mode to true"
         );
 
         let click2 = Event::Mouse(MouseEvent {
@@ -1823,13 +1826,13 @@ mod tests {
         });
         assert!(wm.handle_managed_event(&click2));
         assert!(
-            !wm.keyboard_capture_disabled(win_id),
+            !wm.direct_mode(win_id),
             "second click toggles back to false"
         );
     }
 
     #[test]
-    fn keyboard_capture_header_click_on_non_button_area_does_not_toggle() {
+    fn direct_mode_header_click_on_non_button_area_does_not_toggle() {
         use crate::layout::{LayoutNode, TilingLayout};
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
@@ -1859,7 +1862,7 @@ mod tests {
         let drag_x = header.rect.x.saturating_add(header.rect.width) / 2;
         let drag_y = header.rect.y;
 
-        assert!(!wm.keyboard_capture_disabled(win_id));
+        assert!(!wm.direct_mode(win_id));
 
         let click = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -1868,9 +1871,6 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         assert!(wm.handle_managed_event(&click));
-        assert!(
-            !wm.keyboard_capture_disabled(win_id),
-            "drag area click must not toggle"
-        );
+        assert!(!wm.direct_mode(win_id), "drag area click must not toggle");
     }
 }
