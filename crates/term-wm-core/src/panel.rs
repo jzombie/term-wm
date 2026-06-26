@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, MouseEventKind};
 use ratatui::{
@@ -102,6 +102,7 @@ pub struct Panel<R: Copy + Eq + Ord> {
     hostname: Option<String>,
     keybinding_hints: Vec<(Action, Vec<String>)>,
     hint_rects: Vec<(Rect, Action)>,
+    menu_fold_timeout: Duration,
 }
 
 impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
@@ -122,7 +123,12 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             hostname: hostname.map(|h| h.to_string()),
             keybinding_hints: Vec::new(),
             hint_rects: Vec::new(),
+            menu_fold_timeout: Duration::ZERO,
         }
+    }
+
+    pub fn set_menu_fold_timeout(&mut self, timeout: Duration) {
+        self.menu_fold_timeout = timeout;
     }
 
     pub fn set_hostname(&mut self, hostname: &str) {
@@ -718,7 +724,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         }
         if self.folded
             && let Some(folded_at) = self.folded_at
-            && folded_at.elapsed() > std::time::Duration::from_secs(3)
+            && folded_at.elapsed() > self.menu_fold_timeout
         {
             self.unfold();
         }
