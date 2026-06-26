@@ -93,6 +93,7 @@ pub struct Panel<R: Copy + Eq + Ord> {
     list: WindowList<R>,
     notifications: NotificationArea,
     menu_bounds_cache: Option<Rect>,
+    folded: bool,
     app_name: String,
     app_version: String,
     hostname: Option<String>,
@@ -111,6 +112,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             list: WindowList::new(),
             notifications: NotificationArea::new(),
             menu_bounds_cache: None,
+            folded: false,
             app_name: app_name.to_string(),
             app_version: app_version.to_string(),
             hostname: hostname.map(|h| h.to_string()),
@@ -682,6 +684,41 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
             .map(|hit| hit.id)
     }
 
+    pub fn is_folded(&self) -> bool {
+        self.folded
+    }
+
+    pub fn fold(&mut self) {
+        self.folded = true;
+    }
+
+    pub fn unfold(&mut self) {
+        self.folded = false;
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_overlay(
+        &mut self,
+        frame: &mut UiFrame<'_>,
+        open: bool,
+        managed_area: Rect,
+        panel_area: Rect,
+        items: &[(Option<&str>, &str)],
+        selected: usize,
+        hover_pos: Option<(u16, u16)>,
+    ) {
+        if !open {
+            return;
+        }
+        if self.folded {
+            self.render_menu_outline(frame, open);
+        } else {
+            let bounds = frame.area();
+            self.render_menu(frame, open, bounds, items, selected, hover_pos);
+            self.render_menu_backdrop(frame, open, managed_area, panel_area);
+        }
+    }
+
     pub fn render_menu(
         &mut self,
         frame: &mut UiFrame<'_>,
@@ -825,7 +862,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
     }
 
     pub fn render_menu_outline(
-        &self,
+        &mut self,
         frame: &mut UiFrame<'_>,
         open: bool,
     ) {
@@ -835,6 +872,18 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> Panel<R> {
         let Some(menu_bounds) = self.menu_bounds_cache else {
             return;
         };
+        let buffer = frame.buffer_mut();
+        let clip = menu_bounds.intersection(buffer.area);
+        if clip.width > 0 && clip.height > 0 {
+            let dim_style = Style::default().add_modifier(Modifier::DIM);
+            for y in clip.y..clip.y.saturating_add(clip.height) {
+                for x in clip.x..clip.x.saturating_add(clip.width) {
+                    if let Some(cell) = buffer.cell_mut((x, y)) {
+                        cell.set_style(dim_style);
+                    }
+                }
+            }
+        }
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(crate::theme::menu_fg()).add_modifier(Modifier::DIM));

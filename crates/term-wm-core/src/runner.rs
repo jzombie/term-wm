@@ -371,7 +371,7 @@ where
                         .windows()
                         .handle_focus_event(&evt, focus_regions, &map_region)
                     {
-                        app.windows().fold_wm_menu();
+                        app.windows().fold_menu();
                         update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue);
                     }
