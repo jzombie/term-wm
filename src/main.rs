@@ -12,6 +12,7 @@ use ratatui::prelude::Rect;
 
 use term_wm::app_context::AppContext;
 use term_wm::components::{Component, ComponentContext};
+use term_wm::menu_trait::MenuOverlay;
 use term_wm::io::{
     RenderTarget,
     console::{ConsoleEventSource, ConsoleRenderTarget},
@@ -103,12 +104,15 @@ impl App {
                 &app_ctx.app_version,
                 hostname,
             ));
+        let config = WmConfig::standalone();
+        let mut raw_menu = term_wm_ui_components::WmMenuOverlay::new();
+        raw_menu.set_outline_timeout(config.menu_outline_timeout);
         let menu_overlay: Box<dyn term_wm_core::menu_trait::MenuOverlay<term_wm_core::window::WmMenuAction>> =
-            Box::new(term_wm_ui_components::WmMenuOverlay::new());
+            Box::new(raw_menu);
         let mut app = Self {
             windows: WindowManager::with_config(
                 0,
-                WmConfig::standalone(),
+                config,
                 Arc::clone(&app_ctx),
                 panel,
                 menu_overlay,
