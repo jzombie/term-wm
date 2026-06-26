@@ -13,6 +13,15 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.wm_menu_selected = 0;
     }
 
+    /// Opens the WM overlay without starting the Esc-passthrough timer.
+    /// Used when the overlay was triggered by a K-mode double-Esc (both
+    /// presses consumed) — no Esc key remains to pass through.
+    pub fn open_wm_overlay_no_passthrough(&mut self) {
+        self.overlay_visible = true;
+        self.wm_overlay_opened_at = None;
+        self.wm_menu_selected = 0;
+    }
+
     pub fn close_wm_overlay(&mut self) {
         self.overlay_visible = false;
         self.wm_overlay_opened_at = None;

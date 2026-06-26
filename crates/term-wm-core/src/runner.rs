@@ -219,7 +219,7 @@ where
                             .matches(crate::keybindings::Action::WmToggleOverlay, key);
                         match app.windows().handle_esc_press(key, is_wm_key) {
                             crate::window::EscPressResult::DoubleEsc => {
-                                app.windows().open_wm_overlay();
+                                app.windows().open_wm_overlay_no_passthrough();
                                 update_selection_snapshot(app);
                                 return flush_state_changes(app, ControlFlow::Continue);
                             }
