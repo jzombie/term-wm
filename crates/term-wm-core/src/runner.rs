@@ -176,8 +176,10 @@ where
                 let evt = app.windows().take_synthetic_event().unwrap_or(evt);
                 // Pre-compute the keybinding action using the configured
                 // KeyBindings from WindowManager (not hardcoded defaults).
+                // Only Global-layer actions are proactively dispatched;
+                // WmMode actions are handled when the WM overlay is open.
                 let mapped_action = match &evt {
-                    Event::Key(key) => app.windows().keybindings().action_for_key(key),
+                    Event::Key(key) => app.windows().keybindings().action_for_key_in_layer(key, crate::keybindings::ActionLayer::Global),
                     _ => None,
                 };
 
@@ -216,7 +218,9 @@ where
                     return flush_state_changes(app, ControlFlow::Continue);
                 }
 
-                // Layer 2b: WM global actions
+                // Layer 2b: WM global actions (Global layer only — currently just Esc)
+                // All other actions (FocusNext, scrolling, etc.) are WmMode and only
+                // dispatched when the WM overlay is visible (see below).
                 if let Some(action) = mapped_action {
                     match action {
                         Action::Quit => {
@@ -234,53 +238,6 @@ where
                             update_selection_snapshot(app);
                             return flush_state_changes(app, ControlFlow::Continue);
                         }
-                        Action::CycleNextWindow => {
-                            app.windows().advance_focus(true);
-                            update_selection_snapshot(app);
-                            return flush_state_changes(app, ControlFlow::Continue);
-                        }
-                        Action::CyclePrevWindow => {
-                            app.windows().advance_focus(false);
-                            update_selection_snapshot(app);
-                            return flush_state_changes(app, ControlFlow::Continue);
-                        }
-                        Action::HintToggle => {
-                            let current = app.windows().hint_visibility();
-                            let next = match current {
-                                crate::wm_config::HintVisibility::Always => {
-                                    crate::wm_config::HintVisibility::Never
-                                }
-                                crate::wm_config::HintVisibility::OnDemand => {
-                                    crate::wm_config::HintVisibility::Always
-                                }
-                                crate::wm_config::HintVisibility::Never => {
-                                    crate::wm_config::HintVisibility::Always
-                                }
-                            };
-                            app.windows().set_hint_visibility(next);
-                            update_selection_snapshot(app);
-                            return flush_state_changes(app, ControlFlow::Continue);
-                        }
-                        Action::CopySelection => {
-                            app.windows().copy_selection_to_clipboard();
-                            update_selection_snapshot(app);
-                            return flush_state_changes(app, ControlFlow::Continue);
-                        }
-                        Action::PasteClipboard => {
-                            let text = app.windows().clipboard_mut().and_then(|cb| cb.get().ok());
-                            if let Some(text) = text
-                                && !text.is_empty()
-                            {
-                                let focus_id = app.windows().focus();
-                                if let Some(comp) = app.window_component(focus_id) {
-                                    comp.paste(&text);
-                                }
-                            }
-                            update_selection_snapshot(app);
-                            return flush_state_changes(app, ControlFlow::Continue);
-                        }
-                        // FocusNext, FocusPrev — handled by handle_focus_event below
-                        // Scrolling, selection, menu, confirm — pass through to Layer 3
                         _ => {}
                     }
                 }
@@ -368,6 +325,11 @@ where
                         update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue);
                     }
+                    // Focus routing in WM mode (Tab/Shift+Tab)
+                    if app.windows().handle_focus_event(&evt, focus_regions, &map_region) {
+                        update_selection_snapshot(app);
+                        return flush_state_changes(app, ControlFlow::Continue);
+                    }
                     if let Event::Key(_) = &evt {
                         update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue);
@@ -402,8 +364,10 @@ where
                         }
                     }
                 }
-                // Route Tab/Shift+Tab through focus routing for non-overlay mode.
-                if matches!(evt, Event::Key(_))
+                // Route Tab/Shift+Tab through focus routing for embedded mode only.
+                // In standalone mode without the open overlay, Tab passes through.
+                if !wm_mode
+                    && matches!(evt, Event::Key(_))
                     && app
                         .windows()
                         .handle_focus_event(&evt, focus_regions, &map_region)

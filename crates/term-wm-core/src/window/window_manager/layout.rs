@@ -5,6 +5,7 @@ use ratatui::prelude::Rect;
 use ratatui::widgets::Clear;
 
 use super::{SystemWindowId, WindowId, WindowManager};
+use crate::keybindings::ActionLayer;
 use crate::layout::floating::*;
 use crate::layout::{LayoutNode, LayoutPlan, RegionMap, SplitHandle, TilingLayout};
 use crate::window::FloatRectSpec;
@@ -174,10 +175,16 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
 
     pub fn register_managed_layout(&mut self, area: Rect) {
         self.last_frame_area = area;
-        // Compute hints before layout so split_area can reserve space for them
+        // Compute hints before layout so split_area can reserve space for them.
+        // Show Global-layer hints normally (just Esc), WmMode hints when overlay is open.
+        let active_layer = if self.config.wm_overlay_enabled && self.wm_overlay_visible() {
+            ActionLayer::WmMode
+        } else {
+            ActionLayer::Global
+        };
         match self.hint_visibility {
             crate::wm_config::HintVisibility::Always => {
-                let hints = self.keybindings.bottom_hints(6);
+                let hints = self.keybindings.bottom_hints_for_layer(6, active_layer);
                 self.panel.set_keybinding_hints(hints);
             }
             _ => {
