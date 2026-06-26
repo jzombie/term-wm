@@ -4,12 +4,15 @@
 // TODO: Add mode to auto-open debug window
 
 use std::io;
+use std::sync::Arc;
 
 use clap::Parser;
 use line_ending::LineEnding;
 use ratatui::prelude::Rect;
 
-use term_wm::components::Component;
+use term_wm::app_context::AppContext;
+use term_wm::components::{Component, ComponentContext};
+use term_wm::wm_config::WmConfig;
 use term_wm::io::{
     RenderTarget,
     console::{ConsoleEventSource, ConsoleRenderTarget},
@@ -85,8 +88,16 @@ struct App {
 
 impl App {
     fn new_with(commands: Vec<String>, num_windows: usize) -> io::Result<Self> {
+        let app_ctx = Arc::new(
+            AppContext::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")).with_hostname(
+                &hostname::get()
+                    .ok()
+                    .and_then(|s| s.into_string().ok())
+                    .unwrap_or_else(|| "unknown-host".to_string()),
+            ),
+        );
         let mut app = Self {
-            windows: WindowManager::new_standalone(0),
+            windows: WindowManager::with_config(0, WmConfig::standalone(), Arc::clone(&app_ctx)),
             terminals: Vec::new(),
         };
 
@@ -246,7 +257,8 @@ impl WindowProvider<PaneId> for App {
     }
 
     fn render_window(&mut self, frame: &mut UiFrame<'_>, window: WindowDrawContext<PaneId>) {
-        render_pane(frame, self, window.id, window.surface.inner, window.focused);
+        let ctx = self.windows.component_context(window.focused);
+        render_pane(frame, self, window.id, window.surface.inner, ctx);
     }
 
     fn empty_window_message(&self) -> &str {
@@ -266,17 +278,18 @@ impl WindowProvider<PaneId> for App {
     }
 }
 
-fn render_pane(frame: &mut UiFrame<'_>, app: &mut App, id: PaneId, area: Rect, focused: bool) {
+fn render_pane(
+    frame: &mut UiFrame<'_>,
+    app: &mut App,
+    id: PaneId,
+    area: Rect,
+    ctx: ComponentContext,
+) {
     if area.width == 0 || area.height == 0 {
         return;
     }
     if let Some(sv) = app.terminals.get_mut(id) {
-        // We pass resize to the wrapper Viewport which passes it to content with updated context
-        sv.resize(area, &term_wm::components::ComponentContext::new(focused));
-        sv.render(
-            frame,
-            area,
-            &term_wm::components::ComponentContext::new(focused),
-        );
+        sv.resize(area, &ctx);
+        sv.render(frame, area, &ctx);
     }
 }

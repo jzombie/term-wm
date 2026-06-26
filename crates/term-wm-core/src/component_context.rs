@@ -1,5 +1,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
+
+use crate::app_context::AppContext;
 
 // Shared component rendering context
 //
@@ -14,12 +17,15 @@ use std::rc::Rc;
 /// - `overlay`: whether the component is being rendered as an overlay (e.g. dialog).
 /// - `viewport`: logical offset describing which portion of the component's
 ///   content is currently visible inside a scrolling container.
+/// - `app_ctx`: shared reference to application identity information
+///   (name, version, optional hostname). Set via [`with_app_context`](Self::with_app_context).
 #[derive(Debug, Clone)]
 pub struct ComponentContext {
     focused: bool,
     overlay: bool,
     viewport: ViewportContext,
     viewport_handle: Option<ViewportHandle>,
+    app_ctx: Option<Arc<AppContext>>,
 }
 
 /// Viewport metadata describing how the component is projected into a
@@ -157,7 +163,12 @@ impl ViewportHandle {
 
 impl ComponentContext {
     /// Create a new `ComponentContext` with the given focus state.
-    pub const fn new(focused: bool) -> Self {
+    ///
+    /// Application identity info is empty by default. Use
+    /// [`with_app_context`](Self::with_app_context) to attach an
+    /// [`AppContext`] when it is available (typically from the
+    /// `WindowManager`).
+    pub fn new(focused: bool) -> Self {
         Self {
             focused,
             overlay: false,
@@ -168,6 +179,7 @@ impl ComponentContext {
                 height: 0,
             },
             viewport_handle: None,
+            app_ctx: None,
         }
     }
 
@@ -189,6 +201,40 @@ impl ComponentContext {
     /// Returns a handle that allows requesting viewport adjustments, if available.
     pub fn viewport_handle(&self) -> Option<ViewportHandle> {
         self.viewport_handle.clone()
+    }
+
+    /// Returns the application name carried by this context, or `""` if none
+    /// has been configured.
+    pub fn app_name(&self) -> &str {
+        self.app_ctx
+            .as_ref()
+            .map(|ctx| ctx.app_name.as_str())
+            .unwrap_or("")
+    }
+
+    /// Returns the application version carried by this context, or `""` if none
+    /// has been configured.
+    pub fn app_version(&self) -> &str {
+        self.app_ctx
+            .as_ref()
+            .map(|ctx| ctx.app_version.as_str())
+            .unwrap_or("")
+    }
+
+    /// Returns the optional hostname carried by this context.
+    pub fn app_hostname(&self) -> Option<&str> {
+        self.app_ctx
+            .as_ref()
+            .and_then(|ctx| ctx.hostname.as_deref())
+    }
+
+    /// Return a new `ComponentContext` with an attached [`AppContext`].
+    ///
+    /// Uses [`Arc::clone`], which is a cheap reference-count bump — the
+    /// underlying strings are not copied.
+    pub fn with_app_context(mut self, app_ctx: Arc<AppContext>) -> Self {
+        self.app_ctx = Some(app_ctx);
+        self
     }
 
     /// Return a new `ComponentContext` with a modified `focused` flag.

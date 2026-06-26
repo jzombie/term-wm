@@ -2219,6 +2219,7 @@ name = "term-wm"
 version = "0.5.1-alpha"
 dependencies = [
  "clap",
+ "hostname",
  "indoc",
  "line-ending",
  "portable-pty",

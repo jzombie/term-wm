@@ -102,6 +102,8 @@ where
     A: WindowProvider<Id>,
     Id: Copy + Eq + Ord + std::fmt::Debug + 'static,
 {
+    let ctx = app.windows().component_context(true);
+
     let mut pending_focus: Option<Id> = None;
     let mut pending_event: Option<Event> = None;
     let consumed = {
@@ -115,7 +117,6 @@ where
 
     if let (Some(focus_id), Some(localized)) = (pending_focus, pending_event) {
         if let Some(component) = app.window_component(focus_id) {
-            let ctx = ComponentContext::new(true);
             component.handle_event(&localized, &ctx)
         } else {
             false
@@ -775,7 +776,7 @@ mod tests {
         use crate::window::WindowManager;
 
         // Create an empty WindowManager (no active regions/z-order).
-        let wm: WindowManager<usize> = WindowManager::new_standalone(0);
+        let wm: WindowManager<usize> = WindowManager::new_standalone(0, std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")));
         assert!(!wm.has_any_active_windows());
 
         // Create a fake app that enumerates windows (i.e., app-level windows still exist)
@@ -868,7 +869,7 @@ mod tests {
         }
 
         let mut app = FakeApp {
-            wm: WindowManager::<usize>::new_standalone(0),
+            wm: WindowManager::<usize>::new_standalone(0, std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0"))),
             recorder: KeyRecorder {
                 received_key: false,
             },
@@ -960,7 +961,7 @@ mod tests {
         }
 
         let mut app = FakeApp {
-            wm: WindowManager::<usize>::new_standalone(0),
+            wm: WindowManager::<usize>::new_standalone(0, std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0"))),
             recorder: KeyRecorder {
                 received_key: false,
             },

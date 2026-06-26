@@ -54,6 +54,7 @@ webbrowser = "1.2.1"
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
+hostname = { workspace = true }
 line-ending = { workspace = true }
 portable-pty = { workspace = true }
 ratatui = { workspace = true }
