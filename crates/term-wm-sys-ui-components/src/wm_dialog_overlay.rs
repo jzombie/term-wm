@@ -50,6 +50,7 @@ impl<C: Component> WmDialogOverlayComponent<C> {
     }
 
     pub fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, title: &str) {
+        self.area = area;
         if !self.visible() || area.width == 0 || area.height == 0 {
             return;
         }

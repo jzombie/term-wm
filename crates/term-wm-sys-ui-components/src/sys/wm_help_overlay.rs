@@ -216,12 +216,18 @@ mod tests {
         overlay.dialog.dialog_mut().set_auto_close_on_outside_click(true);
         overlay.show();
 
-        let _area = Rect {
+        let area = Rect {
             x: 0,
             y: 0,
             width: 80,
             height: 24,
         };
+        // Render once to set the area on the internal dialog so event handling
+        // has the correct click-outside bounds.
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        let mut frame = term_wm_core::ui::UiFrame::from_parts(area, &mut buf);
+        let title = format!("{} — About / Help", env!("CARGO_PKG_NAME"));
+        overlay.dialog.render(&mut frame, area, &title);
 
         let ev = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
