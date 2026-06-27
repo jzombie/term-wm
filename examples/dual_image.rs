@@ -59,7 +59,7 @@ impl App {
             Box::new(term_wm_ui_components::PanelComponent::new(
                 "example", "0.0.0", hostname,
             ));
-        let menu_overlay: Box<dyn term_wm_core::menu_trait::MenuOverlay<term_wm_core::window::WmMenuAction>> =
+        let menu_overlay: Box<dyn term_wm_core::components::MenuOverlay<term_wm_core::window::WmMenuAction>> =
             Box::new(term_wm_ui_components::WmMenuOverlay::new());
         let mut windows = WindowManager::with_config(
             PaneId::Left,

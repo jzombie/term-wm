@@ -16,11 +16,10 @@ use super::FocusRing;
 use super::decorator::WindowDecorator;
 use super::entry::Window;
 use crate::app_context::AppContext;
-use crate::components::{ComponentContext, Overlay};
+use crate::components::{ComponentContext, MenuItem, MenuOverlay, Overlay};
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
-use crate::menu_trait::{MenuItem, MenuOverlay};
 use crate::panel_trait::Panel;
 use crate::ui::UiFrame;
 use crate::wm_config::{HintVisibility, WmConfig};
@@ -386,8 +385,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
 
     #[cfg(test)]
     pub fn new_standalone(current: Id, app_ctx: AppContext) -> Self {
-        use crate::menu_trait::MenuItem;
-
         #[derive(Debug)]
         struct TestPanel<I>(std::marker::PhantomData<I>);
         impl<I: Copy + Eq + Ord + std::fmt::Debug> Panel<WindowId<I>> for TestPanel<I> {
@@ -417,14 +414,21 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
 
         #[derive(Debug)]
         struct TestMenu;
-        impl crate::menu_trait::MenuOverlay<WmMenuAction> for TestMenu {
-            fn handle_event(&mut self, _e: &Event) -> Option<WmMenuAction> { None }
-            fn consumes_event(&self, _e: &Event) -> bool { false }
+        impl crate::components::Component for TestMenu {
+            fn render(&mut self, _frame: &mut crate::ui::UiFrame<'_>, _area: ratatui::prelude::Rect, _ctx: &crate::components::ComponentContext) {}
+        }
+        impl crate::components::Overlay for TestMenu {
+            fn as_any(&self) -> &dyn std::any::Any { self }
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+        }
+        impl crate::components::MenuOverlay<WmMenuAction> for TestMenu {
             fn outline(&mut self) {}
             fn restore(&mut self) {}
-            fn set_items(&mut self, _items: Vec<MenuItem<WmMenuAction>>) {}
-            fn set_outline_timeout(&mut self, _timeout: Duration) {}
-            fn render(&mut self, _frame: &mut crate::ui::UiFrame<'_>, _anchor: Option<(u16, u16)>, _managed: Rect, _ctx: &crate::component_context::ComponentContext) {}
+            fn set_items(&mut self, _items: Vec<crate::components::MenuItem<WmMenuAction>>) {}
+            fn set_timeout(&mut self, _timeout: Duration) {}
+            fn selected_action(&self) -> Option<&WmMenuAction> { None }
+            fn set_anchor(&mut self, _pos: Option<(u16, u16)>) {}
+            fn set_managed_area(&mut self, _area: ratatui::prelude::Rect) {}
         }
 
         let p: Box<TestPanel<Id>> = Box::new(TestPanel(std::marker::PhantomData));

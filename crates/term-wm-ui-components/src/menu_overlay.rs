@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use crossterm::event::{Event, MouseEventKind};
+use crossterm::event::{Event, KeyEventKind, MouseEventKind};
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
@@ -8,9 +8,9 @@ use ratatui::{
 };
 
 use term_wm_core::{
-    component_context::ComponentContext,
+    components::{Component, ComponentContext, MenuItem, MenuOverlay, Overlay},
+    keybindings::{Action, KeyBindings},
     layout::rect_contains,
-    menu_trait::{MenuItem, MenuOverlay},
     theme,
     ui::UiFrame,
 };
@@ -25,9 +25,13 @@ pub struct WmMenuOverlay<R> {
     outline_timeout: Duration,
     menu_bounds_cache: Option<Rect>,
     item_hits: Vec<(usize, Rect)>,
+    anchor: Option<(u16, u16)>,
+    managed_area: Rect,
+    last_action: Option<R>,
+    nav_keys: KeyBindings,
 }
 
-impl<R: std::fmt::Debug + Clone> WmMenuOverlay<R> {
+impl<R: Clone + std::fmt::Debug + 'static> WmMenuOverlay<R> {
     pub fn new() -> Self {
         Self {
             menu: MenuComponent::new(),
@@ -36,6 +40,10 @@ impl<R: std::fmt::Debug + Clone> WmMenuOverlay<R> {
             outline_timeout: Duration::ZERO,
             menu_bounds_cache: None,
             item_hits: Vec::new(),
+            anchor: None,
+            managed_area: Rect::default(),
+            last_action: None,
+            nav_keys: KeyBindings::default(),
         }
     }
 
@@ -48,11 +56,14 @@ impl<R: std::fmt::Debug + Clone> WmMenuOverlay<R> {
         }
     }
 
-    fn render_menu(&mut self, frame: &mut UiFrame<'_>, anchor: (u16, u16), managed_area: Rect, ctx: &ComponentContext) {
+    fn render_dropdown(&mut self, frame: &mut UiFrame<'_>) {
         let item_count = self.menu.items().len();
         if item_count == 0 {
             return;
         }
+        let Some(anchor) = self.anchor else {
+            return;
+        };
         let bounds = frame.area();
         let start_x = anchor.0;
         let start_y = anchor.1;
@@ -93,7 +104,7 @@ impl<R: std::fmt::Debug + Clone> WmMenuOverlay<R> {
 
         self.menu_bounds_cache = Some(drop_rect);
 
-        self.render_backdrop(frame, managed_area, drop_rect);
+        self.render_backdrop(frame, self.managed_area, drop_rect);
 
         let buffer = frame.buffer_mut();
         let clip = drop_rect.intersection(buffer.area);
@@ -101,11 +112,7 @@ impl<R: std::fmt::Debug + Clone> WmMenuOverlay<R> {
             return;
         }
 
-        let hovered_idx = ctx.hover_pos().and_then(|(_mx, my)| {
-            (my >= drop_rect.y.saturating_add(1) && my < drop_rect.y.saturating_add(item_count as u16 + 1))
-                .then(|| (my - drop_rect.y - 1) as usize)
-                .filter(|&idx| idx < item_count)
-        });
+        let hovered_idx = None;
         self.menu.render_items(frame, drop_rect, hovered_idx);
 
         self.item_hits.clear();
@@ -123,7 +130,7 @@ impl<R: std::fmt::Debug + Clone> WmMenuOverlay<R> {
         }
     }
 
-    fn render_outline(&mut self, frame: &mut UiFrame<'_>) {
+    fn render_outline(&self, frame: &mut UiFrame<'_>) {
         let Some(menu_bounds) = self.menu_bounds_cache else {
             return;
         };
@@ -172,9 +179,19 @@ impl<R: std::fmt::Debug + Clone> WmMenuOverlay<R> {
     }
 }
 
-impl<R: std::fmt::Debug + Clone> MenuOverlay<R> for WmMenuOverlay<R> {
-    fn handle_event(&mut self, event: &Event) -> Option<R> {
+impl<R: Clone + std::fmt::Debug + 'static> Component for WmMenuOverlay<R> {
+    fn render(&mut self, frame: &mut UiFrame<'_>, _area: Rect, _ctx: &ComponentContext) {
         self.auto_restore();
+        if self.outlined {
+            self.render_outline(frame);
+        } else {
+            self.render_dropdown(frame);
+        }
+    }
+
+    fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
+        self.auto_restore();
+        self.last_action = None;
 
         if let Event::Mouse(mouse) = event
             && matches!(mouse.kind, MouseEventKind::Down(_))
@@ -182,27 +199,53 @@ impl<R: std::fmt::Debug + Clone> MenuOverlay<R> for WmMenuOverlay<R> {
             if let Some(idx) = self.hit_test_item(mouse.column, mouse.row) {
                 self.menu.set_selected(idx);
                 self.restore();
-                return self.menu.selected_action().cloned();
+                self.last_action = self.menu.selected_action().cloned();
+                return true;
             }
-            return None;
+            return false;
         }
 
-        if self.menu.handle_key_event(event) {
+        let Event::Key(key) = event else {
+            return false;
+        };
+        if key.kind != KeyEventKind::Press {
+            return false;
+        }
+
+        let total = self.menu.items().len();
+        if total == 0 {
+            return false;
+        }
+
+        if self.nav_keys.matches(Action::MenuUp, key)
+            || self.nav_keys.matches(Action::MenuPrev, key)
+        {
+            let current = self.menu.selected();
+            self.menu.set_selected(if current == 0 { total - 1 } else { current - 1 });
             self.restore();
-            return None;
+            true
+        } else if self.nav_keys.matches(Action::MenuDown, key)
+            || self.nav_keys.matches(Action::MenuNext, key)
+        {
+            let current = self.menu.selected();
+            self.menu.set_selected((current + 1) % total);
+            self.restore();
+            true
+        } else if self.nav_keys.matches(Action::MenuSelect, key) {
+            self.last_action = self.menu.selected_action().cloned();
+            true
+        } else {
+            false
         }
-
-        if self.menu.handles_key_event(event) {
-            return self.menu.selected_action().cloned();
-        }
-
-        None
     }
+}
 
-    fn consumes_event(&self, event: &Event) -> bool {
-        self.menu.handles_key_event(event)
-    }
+impl<R: Clone + std::fmt::Debug + 'static> Overlay for WmMenuOverlay<R> {
+    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+}
 
+impl<R: Clone + std::fmt::Debug + 'static> MenuOverlay<R> for WmMenuOverlay<R> {
     fn outline(&mut self) {
         self.outlined = true;
         self.outlined_at = Some(Instant::now());
@@ -217,27 +260,24 @@ impl<R: std::fmt::Debug + Clone> MenuOverlay<R> for WmMenuOverlay<R> {
         self.menu.set_items(items);
     }
 
-    fn set_outline_timeout(&mut self, timeout: Duration) {
+    fn set_timeout(&mut self, timeout: Duration) {
         self.outline_timeout = timeout;
     }
 
-    fn render(
-        &mut self,
-        frame: &mut UiFrame<'_>,
-        anchor: Option<(u16, u16)>,
-        managed_area: Rect,
-        ctx: &ComponentContext,
-    ) {
-        self.auto_restore();
-        if self.outlined {
-            self.render_outline(frame);
-        } else if let Some(anchor) = anchor {
-            self.render_menu(frame, anchor, managed_area, ctx);
-        }
+    fn selected_action(&self) -> Option<&R> {
+        self.last_action.as_ref()
+    }
+
+    fn set_anchor(&mut self, pos: Option<(u16, u16)>) {
+        self.anchor = pos;
+    }
+
+    fn set_managed_area(&mut self, area: Rect) {
+        self.managed_area = area;
     }
 }
 
-impl<R: std::fmt::Debug + Clone> Default for WmMenuOverlay<R> {
+impl<R: Clone + std::fmt::Debug + 'static> Default for WmMenuOverlay<R> {
     fn default() -> Self {
         Self::new()
     }

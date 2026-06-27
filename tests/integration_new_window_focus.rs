@@ -9,7 +9,7 @@ fn new_window_is_focused() {
         Box::new(term_wm_ui_components::PanelComponent::new(
             &ctx.app_name, &ctx.app_version, None,
         ));
-    let menu: Box<dyn term_wm_core::menu_trait::MenuOverlay<term_wm_core::window::WmMenuAction>> =
+    let menu: Box<dyn term_wm_core::components::MenuOverlay<term_wm_core::window::WmMenuAction>> =
         Box::new(term_wm_ui_components::WmMenuOverlay::new());
     let mut wm = WindowManager::<usize>::with_config(
         0,

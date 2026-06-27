@@ -1,7 +1,8 @@
 use crossterm::event::{Event, MouseEventKind};
 
 use super::{WmMenuAction, WindowId, WindowManager};
-use crate::components::{ConfirmAction, Overlay};
+use crate::components::{Component, ConfirmAction, Overlay};
+use crate::keybindings::Action;
 use crate::layout::{FloatingPane, rect_contains, render_handles_masked};
 use crate::window::FloatRectSpec;
 
@@ -65,19 +66,29 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         if !self.wm_overlay_visible() {
             return None;
         }
+
+        if let Event::Mouse(mouse) = event
+            && matches!(mouse.kind, MouseEventKind::Down(_))
+            && self.panel.menu_icon_contains_point(mouse.column, mouse.row)
+        {
+            return Some(WmMenuAction::CloseMenu);
+        }
+
+        let ctx = self.component_context(false).with_overlay(true);
+        let comp: &mut dyn Component = &mut *self.menu_overlay;
+        comp.handle_event(event, &ctx);
+
+        if let Some(action) = self.menu_overlay.selected_action() {
+            return Some(*action);
+        }
+
         if let Event::Mouse(mouse) = event
             && matches!(mouse.kind, MouseEventKind::Down(_))
         {
-            if self.panel.menu_icon_contains_point(mouse.column, mouse.row) {
-                return Some(WmMenuAction::CloseMenu);
-            }
-            let result = self.menu_overlay.handle_event(event);
-            if result.is_none() {
-                return Some(WmMenuAction::CloseMenu);
-            }
-            return result;
+            return Some(WmMenuAction::CloseMenu);
         }
-        self.menu_overlay.handle_event(event)
+
+        None
     }
 
     pub fn handle_exit_confirm_event(&mut self, event: &Event) -> Option<ConfirmAction> {
@@ -90,7 +101,15 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         if !self.wm_overlay_visible() {
             return false;
         }
-        self.menu_overlay.consumes_event(event)
+        let Event::Key(key) = event else {
+            return false;
+        };
+        let kb = &self.keybindings;
+        kb.matches(Action::MenuUp, key)
+            || kb.matches(Action::MenuDown, key)
+            || kb.matches(Action::MenuSelect, key)
+            || kb.matches(Action::MenuNext, key)
+            || kb.matches(Action::MenuPrev, key)
     }
 
     pub fn render_overlays(&mut self, frame: &mut crate::ui::UiFrame<'_>) {
@@ -175,10 +194,13 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             );
             self.menu_overlay.set_items(menu_items);
             let anchor = self.panel.menu_icon_rect().map(|r| (r.x, r.y.saturating_add(r.height)));
+            self.menu_overlay.set_anchor(anchor);
+            self.menu_overlay.set_managed_area(self.managed_area);
             let menu_ctx = self.component_context(false)
                 .with_overlay(true)
                 .with_hover_pos(self.hover);
-            self.menu_overlay.render(frame, anchor, self.managed_area, &menu_ctx);
+            let comp: &mut dyn Component = &mut *self.menu_overlay;
+            comp.render(frame, frame.area(), &menu_ctx);
         }
 
         let confirm_ctx = self.component_context(false).with_overlay(true);

@@ -5,9 +5,8 @@ use ratatui::{
 };
 
 use term_wm_core::{
-    components::{Component, ComponentContext},
+    components::{Component, ComponentContext, MenuItem},
     keybindings::{Action, KeyBindings},
-    menu_trait::MenuItem,
     theme,
     ui::{safe_set_string, UiFrame},
 };
