@@ -256,15 +256,21 @@ impl crate::components::Component for NoopMenu {
     }
 }
 impl crate::components::Overlay for NoopMenu {
-    fn as_any(&self) -> &dyn std::any::Any { self }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 impl crate::components::MenuOverlay<WmMenuAction> for NoopMenu {
     fn outline(&mut self) {}
     fn restore(&mut self) {}
     fn set_items(&mut self, _items: Vec<crate::components::MenuItem<WmMenuAction>>) {}
     fn set_timeout(&mut self, _timeout: Duration) {}
-    fn selected_action(&self) -> Option<&WmMenuAction> { None }
+    fn selected_action(&self) -> Option<&WmMenuAction> {
+        None
+    }
     fn set_anchor(&mut self, _pos: Option<(u16, u16)>) {}
     fn set_managed_area(&mut self, _area: ratatui::prelude::Rect) {}
 }
@@ -991,14 +997,24 @@ struct NoPanel<I>(std::marker::PhantomData<I>);
 #[cfg(test)]
 impl<I: Copy + Eq + Ord + std::fmt::Debug> Panel<WindowId<I>> for NoPanel<I> {
     fn begin_frame(&mut self) {}
-    fn visible(&self) -> bool { false }
-    fn height(&self) -> u16 { 0 }
-    fn area(&self) -> Rect { Rect::default() }
-    fn bottom_area(&self) -> Rect { Rect::default() }
+    fn visible(&self) -> bool {
+        false
+    }
+    fn height(&self) -> u16 {
+        0
+    }
+    fn area(&self) -> Rect {
+        Rect::default()
+    }
+    fn bottom_area(&self) -> Rect {
+        Rect::default()
+    }
     fn set_visible(&mut self, _v: bool) {}
     fn set_height(&mut self, _h: u16) {}
     fn set_keybinding_hints(&mut self, _h: Vec<(crate::keybindings::Action, Vec<String>)>) {}
-    fn keybinding_hints(&self) -> &[(crate::keybindings::Action, Vec<String>)] { &[] }
+    fn keybinding_hints(&self) -> &[(crate::keybindings::Action, Vec<String>)] {
+        &[]
+    }
     fn set_hostname(&mut self, _hostname: &str) {}
     fn split_area(&mut self, _active: bool, area: Rect) -> (Rect, Rect, Rect) {
         (Rect::default(), Rect::default(), area)
@@ -1021,14 +1037,30 @@ impl<I: Copy + Eq + Ord + std::fmt::Debug> Panel<WindowId<I>> for NoPanel<I> {
         _label_for: &dyn Fn(WindowId<I>) -> String,
     ) {
     }
-    fn menu_icon_rect(&self) -> Option<Rect> { None }
-    fn menu_icon_contains_point(&self, _col: u16, _row: u16) -> bool { false }
-    fn hit_test_mouse_capture(&self, _e: &Event) -> bool { false }
-    fn hit_test_selection(&self, _e: &Event) -> bool { false }
-    fn hit_test_clipboard(&self, _e: &Event) -> bool { false }
-    fn hit_test_copy(&self, _e: &Event) -> bool { false }
-    fn hit_test_window(&self, _e: &Event) -> Option<WindowId<I>> { None }
-    fn hit_test_hint(&self, _e: &Event) -> Option<crate::keybindings::Action> { None }
+    fn menu_icon_rect(&self) -> Option<Rect> {
+        None
+    }
+    fn menu_icon_contains_point(&self, _col: u16, _row: u16) -> bool {
+        false
+    }
+    fn hit_test_mouse_capture(&self, _e: &Event) -> bool {
+        false
+    }
+    fn hit_test_selection(&self, _e: &Event) -> bool {
+        false
+    }
+    fn hit_test_clipboard(&self, _e: &Event) -> bool {
+        false
+    }
+    fn hit_test_copy(&self, _e: &Event) -> bool {
+        false
+    }
+    fn hit_test_window(&self, _e: &Event) -> Option<WindowId<I>> {
+        None
+    }
+    fn hit_test_hint(&self, _e: &Event) -> Option<crate::keybindings::Action> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -1150,7 +1182,13 @@ mod tests {
     #[test]
     fn click_focusing_topmost_window() {
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::with_config(0, WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")), Box::new(NoPanel(std::marker::PhantomData)), Box::new(NoopMenu));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoopMenu),
+        );
 
         let r1 = Rect {
             x: 0,
@@ -1188,7 +1226,13 @@ mod tests {
     #[test]
     fn enforce_min_visible_margin_horizontal() {
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::<usize>::with_config(0, WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")), Box::new(NoPanel(std::marker::PhantomData)), Box::new(NoopMenu));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoopMenu),
+        );
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
             WindowId::app(1usize),
@@ -1222,7 +1266,13 @@ mod tests {
     #[test]
     fn enforce_min_visible_margin_vertical() {
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::<usize>::with_config(0, WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")), Box::new(NoPanel(std::marker::PhantomData)), Box::new(NoopMenu));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoopMenu),
+        );
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
             WindowId::app(2usize),
@@ -1253,7 +1303,13 @@ mod tests {
     #[test]
     fn maximize_persists_across_resize() {
         use crate::window::FloatRectSpec;
-        let mut wm = WindowManager::<usize>::with_config(0, WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")), Box::new(NoPanel(std::marker::PhantomData)), Box::new(NoopMenu));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoopMenu),
+        );
         wm.register_managed_layout(ratatui::layout::Rect {
             x: 0,
             y: 0,
@@ -1282,7 +1338,13 @@ mod tests {
     #[test]
     fn localize_event_converts_to_local_coords() {
         use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::with_config(0, WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")), Box::new(NoPanel(std::marker::PhantomData)), Box::new(NoopMenu));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoopMenu),
+        );
         let target_rect = ratatui::layout::Rect {
             x: 10,
             y: 5,
@@ -1322,7 +1384,13 @@ mod tests {
     fn localize_event_handles_negative_origin() {
         use crate::window::{FloatRect, FloatRectSpec};
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::with_config(0, WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")), Box::new(NoPanel(std::marker::PhantomData)), Box::new(NoopMenu));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoopMenu),
+        );
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
             WindowId::app(1usize),
@@ -1371,7 +1439,13 @@ mod tests {
     #[test]
     fn hit_test_uses_visible_bounds_for_floating_windows() {
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::<usize>::with_config(0, WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")), Box::new(NoPanel(std::marker::PhantomData)), Box::new(NoopMenu));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoopMenu),
+        );
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
             WindowId::app(1usize),
@@ -1407,7 +1481,13 @@ mod tests {
     fn hover_targets_respects_occlusion() {
         use crate::layout::floating::{ResizeEdge, ResizeHandle};
         use crate::layout::tiling::SplitHandle;
-        let mut wm = WindowManager::<usize>::with_config(0, WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")), Box::new(NoPanel(std::marker::PhantomData)), Box::new(NoopMenu));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoopMenu),
+        );
         wm.regions.set(
             WindowId::app(1usize),
             Rect {
@@ -1513,7 +1593,13 @@ mod tests {
             }
         }
 
-        let mut wm = WindowManager::<usize>::with_config(0, WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")), Box::new(NoPanel(std::marker::PhantomData)), Box::new(NoopMenu));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoopMenu),
+        );
         wm.set_system_window(SystemWindowId::DebugLog, Box::new(DummyDebugComponent));
         wm.set_panel_visible(false);
         wm.show_system_window(SystemWindowId::DebugLog);
@@ -1576,7 +1662,13 @@ mod tests {
     #[test]
     fn adjust_event_rebases_app_mouse_coordinates() {
         use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::with_config(0, WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")), Box::new(NoPanel(std::marker::PhantomData)), Box::new(NoopMenu));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoopMenu),
+        );
         let full = Rect {
             x: 10,
             y: 3,
@@ -1610,7 +1702,13 @@ mod tests {
     #[test]
     fn adjust_event_rebases_system_mouse_coordinates() {
         use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::with_config(0, WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")), Box::new(NoPanel(std::marker::PhantomData)), Box::new(NoopMenu));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoopMenu),
+        );
         let full = Rect {
             x: 2,
             y: 4,
@@ -1646,7 +1744,13 @@ mod tests {
     #[test]
     fn hover_scroll_routes_to_non_focused_window() {
         use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::with_config(0, WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")), Box::new(NoPanel(std::marker::PhantomData)), Box::new(NoopMenu));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoopMenu),
+        );
 
         let r1 = Rect {
             x: 0,
@@ -1705,7 +1809,13 @@ mod tests {
     #[test]
     fn hover_scroll_over_focused_window_routes_normally() {
         use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::with_config(0, WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")), Box::new(NoPanel(std::marker::PhantomData)), Box::new(NoopMenu));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoopMenu),
+        );
 
         let r1 = Rect {
             x: 0,
@@ -1746,7 +1856,13 @@ mod tests {
     #[test]
     fn hover_scroll_outside_all_windows_routes_to_focused() {
         use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::with_config(0, WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")), Box::new(NoPanel(std::marker::PhantomData)), Box::new(NoopMenu));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoopMenu),
+        );
 
         let r1 = Rect {
             x: 0,
@@ -1786,7 +1902,13 @@ mod tests {
 
     #[test]
     fn direct_mode_defaults_to_false() {
-        let mut wm = WindowManager::<usize>::with_config(0, WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")), Box::new(NoPanel(std::marker::PhantomData)), Box::new(NoopMenu));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoopMenu),
+        );
         wm.focus_app_window(0);
         let focus = wm.wm_focus();
         assert!(!wm.direct_mode(focus));
@@ -1794,7 +1916,13 @@ mod tests {
 
     #[test]
     fn direct_mode_toggle_cycles_state() {
-        let mut wm = WindowManager::<usize>::with_config(0, WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")), Box::new(NoPanel(std::marker::PhantomData)), Box::new(NoopMenu));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoopMenu),
+        );
         wm.focus_app_window(0);
         let focus = wm.wm_focus();
 
@@ -1807,7 +1935,13 @@ mod tests {
 
     #[test]
     fn direct_mode_set_get_roundtrip() {
-        let mut wm = WindowManager::<usize>::with_config(0, WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")), Box::new(NoPanel(std::marker::PhantomData)), Box::new(NoopMenu));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoopMenu),
+        );
         let id = WindowId::app(42usize);
         assert!(!wm.direct_mode(id), "default is false");
 
@@ -1820,7 +1954,13 @@ mod tests {
 
     #[test]
     fn direct_mode_is_per_window() {
-        let mut wm = WindowManager::<usize>::with_config(0, WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")), Box::new(NoPanel(std::marker::PhantomData)), Box::new(NoopMenu));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoopMenu),
+        );
         let id_a = WindowId::app(1usize);
         let id_b = WindowId::app(2usize);
 
@@ -1834,7 +1974,13 @@ mod tests {
         use crate::layout::{LayoutNode, TilingLayout};
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-        let mut wm = WindowManager::<usize>::with_config(0, WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")), Box::new(NoPanel(std::marker::PhantomData)), Box::new(NoopMenu));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoopMenu),
+        );
         wm.set_panel_visible(false);
 
         // Create a proper managed layout with window 1
@@ -1908,7 +2054,13 @@ mod tests {
         use crate::layout::{LayoutNode, TilingLayout};
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-        let mut wm = WindowManager::<usize>::with_config(0, WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")), Box::new(NoPanel(std::marker::PhantomData)), Box::new(NoopMenu));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoopMenu),
+        );
         wm.set_panel_visible(false);
 
         // Create a proper managed layout with window 1
