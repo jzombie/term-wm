@@ -2240,7 +2240,6 @@ dependencies = [
  "arboard",
  "base64",
  "crossterm",
- "hostname",
  "libc",
  "linkify",
  "portable-pty",
