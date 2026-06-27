@@ -1,6 +1,6 @@
 [package]
 name = "term-wm-ui-components"
-description = "Ratatui UI components for term-wm (terminal, scroll view, markdown, image viewer, etc.)"
+description = "Ratatui UI components for term-wm (terminal, scroll view, markdown, image viewer, etc.)."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
