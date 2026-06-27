@@ -1,3 +1,5 @@
+// TODO: Extract to term-wm-ui-components (this is not a WM sys component)
+
 use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders, Clear};
