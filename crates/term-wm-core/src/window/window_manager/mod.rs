@@ -904,7 +904,7 @@ pub fn wm_menu_items(
     vec![
         MenuItem {
             label: "Resume",
-            icon: None,
+            icon: Some("▶"),
             action: WmMenuAction::CloseMenu,
         },
         MenuItem {
