@@ -909,17 +909,17 @@ pub fn wm_menu_items(
         },
         MenuItem {
             label: mouse_label,
-            icon: Some("🖱"),
+            icon: Some("◆"),
             action: WmMenuAction::ToggleMouseCapture,
         },
         MenuItem {
             label: clipboard_label,
-            icon: Some("📋"),
+            icon: Some("■"),
             action: WmMenuAction::ToggleClipboardMode,
         },
         MenuItem {
             label: selection_label,
-            icon: Some("✎"),
+            icon: Some("●"),
             action: WmMenuAction::ToggleWindowSelection,
         },
         MenuItem {
