@@ -11,6 +11,8 @@ pub fn extract_osc_title(data: &[u8]) -> Option<String> {
             i += 1;
             continue;
         }
+
+        // Check for "0;" or "2;" after the ESC ] introducer
         let ps = data[i + 2];
         if (ps != b'0' && ps != b'2') || i + 4 > data.len() || data[i + 3] != b';' {
             i += 1;
