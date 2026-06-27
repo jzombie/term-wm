@@ -8,14 +8,10 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-arboard = { workspace = true }
-base64 = { workspace = true }
 crossterm = { workspace = true }
-libc = { workspace = true }
 linkify = { workspace = true }
 portable-pty = { workspace = true }
 ratatui = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
-thiserror = { workspace = true }
+term-wm-pty-engine = { workspace = true }
 tracing = { workspace = true }
-vt100 = { workspace = true }

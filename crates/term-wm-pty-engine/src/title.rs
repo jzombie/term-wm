@@ -1,9 +1,3 @@
-/// Scan `data` for a complete OSC 0 or OSC 2 window-title sequence
-/// (`OSC 0 ; <title> ST` or `OSC 2 ; <title> ST`) and return the title.
-///
-/// Only the **first** complete sequence is extracted.  Terminators:
-/// - `BEL` (`\x07`)
-/// - `ST`  (`\x1b\\`)
 pub fn extract_osc_title(data: &[u8]) -> Option<String> {
     let mut i = 0;
     while i < data.len() {
@@ -11,7 +5,6 @@ pub fn extract_osc_title(data: &[u8]) -> Option<String> {
             i += 1;
             continue;
         }
-        // Check for "0;" or "2;" after the ESC ] introducer
         let ps = data[i + 2];
         if (ps != b'0' && ps != b'2') || i + 4 > data.len() || data[i + 3] != b';' {
             i += 1;

@@ -17,6 +17,7 @@ ratatui = { workspace = true }
 resvg = { workspace = true }
 shell-words = { workspace = true }
 term-wm-core = { workspace = true }
+term-wm-pty-engine = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 vt100 = { workspace = true }

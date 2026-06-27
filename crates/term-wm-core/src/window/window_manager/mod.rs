@@ -227,7 +227,7 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     next_window_seq: usize,
     next_title_seq: usize,
     synthetic_event: Option<Event>,
-    clipboard: Option<crate::io::clipboard::Clipboard>,
+    clipboard: Option<crate::clipboard::Clipboard>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -425,7 +425,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         menu_overlay: Box<dyn MenuOverlay<WmMenuAction>>,
     ) -> Self {
         let mouse_capture_enabled = config.mouse_capture_enabled;
-        let clipboard = Some(crate::io::clipboard::Clipboard::new());
+        let clipboard = Some(crate::clipboard::Clipboard::new());
         let decorator = config.decorator();
         let floating_resize_offscreen = config.floating_resize_offscreen;
         Self {
@@ -641,7 +641,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.clipboard_enabled
     }
 
-    pub fn clipboard_mut(&mut self) -> Option<&mut crate::io::clipboard::Clipboard> {
+    pub fn clipboard_mut(&mut self) -> Option<&mut crate::clipboard::Clipboard> {
         self.clipboard.as_mut()
     }
 

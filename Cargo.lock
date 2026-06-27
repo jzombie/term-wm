@@ -2237,14 +2237,23 @@ dependencies = [
 name = "term-wm-core"
 version = "0.6.0-alpha"
 dependencies = [
- "arboard",
- "base64",
  "crossterm",
- "libc",
  "linkify",
  "portable-pty",
  "ratatui",
  "strum 0.28.0",
+ "term-wm-pty-engine",
+ "tracing",
+]
+
+[[package]]
+name = "term-wm-pty-engine"
+version = "0.6.0-alpha"
+dependencies = [
+ "arboard",
+ "base64",
+ "libc",
+ "portable-pty",
  "thiserror 2.0.18",
  "tracing",
  "vt100",
@@ -2275,6 +2284,7 @@ dependencies = [
  "shell-words",
  "tempfile",
  "term-wm-core",
+ "term-wm-pty-engine",
  "thiserror 2.0.18",
  "tracing",
  "vt100",
