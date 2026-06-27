@@ -2219,6 +2219,7 @@ name = "term-wm"
 version = "0.6.0-alpha"
 dependencies = [
  "clap",
+ "crossterm",
  "hostname",
  "indoc",
  "line-ending",
