@@ -22,7 +22,7 @@ use term_wm::ui::UiFrame;
 use term_wm::window::{OverlayId, SystemWindowId, WindowDrawContext, WindowManager};
 use term_wm::wm_config::WmConfig;
 use term_wm::{ScrollViewComponent, TerminalComponent, default_shell_command};
-use term_wm_sys_ui_components::sys::wm_debug_log::{
+use term_wm_sys_ui_components::wm_debug_log::{
     WmDebugLogComponent, install_panic_hook, set_global_debug_log,
 };
 
@@ -201,7 +201,7 @@ impl WindowManagerHost<PaneId> for App {
     }
 
     fn open_help_overlay(&mut self) {
-        use term_wm_sys_ui_components::sys::wm_help_overlay::WmHelpOverlayComponent;
+        use term_wm_sys_ui_components::wm_help_overlay::WmHelpOverlayComponent;
         let kb = self.windows.keybindings().clone();
         let mut h = WmHelpOverlayComponent::new(kb);
         h.show();
@@ -210,7 +210,7 @@ impl WindowManagerHost<PaneId> for App {
     }
 
     fn open_keybindings_overlay(&mut self) {
-        use term_wm_sys_ui_components::sys::wm_keybinding_overlay::WmKeybindingOverlayComponent;
+        use term_wm_sys_ui_components::wm_keybinding_overlay::WmKeybindingOverlayComponent;
         let kb = self.windows.keybindings().clone();
         let mut o = WmKeybindingOverlayComponent::new(kb);
         o.show();
