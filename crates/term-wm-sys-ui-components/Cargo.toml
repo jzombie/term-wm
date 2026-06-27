@@ -1,0 +1,15 @@
+[package]
+name = "term-wm-sys-ui-components"
+description = "Window-manager-specific UI components for term-wm (debug log, help, keybindings, menu overlay)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+crossterm = { workspace = true }
+ratatui = { workspace = true }
+term-wm-core = { workspace = true }
+term-wm-ui-components = { workspace = true }
+webbrowser = { workspace = true }

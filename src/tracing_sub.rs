@@ -5,7 +5,7 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::{Layer, layer::Context};
 
 use term_wm_core::debug_event_flags::trigger_error_pending;
-use term_wm_ui_components::sys::debug_log::{DebugLogWriter, global_debug_log};
+use term_wm_sys_ui_components::sys::wm_debug_log::{DebugLogWriter, global_debug_log};
 
 struct ErrorNotifyLayer;
 

@@ -13,6 +13,7 @@ members = [
     "crates/term-bench",
     "crates/term-wm-core",
     "crates/term-wm-ui-components",
+    "crates/term-wm-sys-ui-components",
 ]
 resolver = "2"
 
@@ -46,6 +47,7 @@ strum = { version = "0.28", features = ["derive"] }
 tempfile = "3.24.0"
 term-wm-core = { path = "crates/term-wm-core", version = "0.6.0-alpha" }
 term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.6.0-alpha" }
+term-wm-sys-ui-components = { path = "crates/term-wm-sys-ui-components", version = "0.6.0-alpha" }
 thiserror = "2.0.18"
 tracing = "0.1.44"
 tracing-subscriber = "0.3.22"
@@ -60,6 +62,7 @@ portable-pty = { workspace = true }
 ratatui = { workspace = true }
 term-wm-core = { workspace = true }
 term-wm-ui-components = { workspace = true }
+term-wm-sys-ui-components = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 webbrowser = { workspace = true }

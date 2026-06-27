@@ -22,6 +22,7 @@ tracing = { workspace = true }
 vt100 = { workspace = true }
 webbrowser = { workspace = true }
 
+
 [dev-dependencies]
 # proptest was previously used for property-based scroll-sync tests.
 # If re-adding property tests, uncomment and ensure proptest-regressions/

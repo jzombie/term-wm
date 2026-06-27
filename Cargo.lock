@@ -2225,6 +2225,7 @@ dependencies = [
  "portable-pty",
  "ratatui",
  "term-wm-core",
+ "term-wm-sys-ui-components",
  "term-wm-ui-components",
  "tracing",
  "tracing-subscriber",
@@ -2247,6 +2248,17 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "vt100",
+]
+
+[[package]]
+name = "term-wm-sys-ui-components"
+version = "0.6.0-alpha"
+dependencies = [
+ "crossterm",
+ "ratatui",
+ "term-wm-core",
+ "term-wm-ui-components",
+ "webbrowser",
 ]
 
 [[package]]

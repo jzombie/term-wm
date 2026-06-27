@@ -15,7 +15,8 @@ use term_wm_core::{
     ui::UiFrame,
 };
 
-use crate::menu::MenuComponent;
+use term_wm_ui_components::menu::MenuComponent;
+use term_wm_ui_components::DialogOverlayComponent;
 
 #[derive(Debug)]
 pub struct WmMenuOverlay<R> {
@@ -155,22 +156,9 @@ impl<R: Clone + std::fmt::Debug + 'static> WmMenuOverlay<R> {
     }
 
     fn render_backdrop(&self, frame: &mut UiFrame<'_>, bounds: Rect, exclude: Rect) {
-        let buffer = frame.buffer_mut();
-        let style = Style::default().add_modifier(Modifier::DIM);
-        let clip = bounds.intersection(buffer.area);
-        if clip.width == 0 || clip.height == 0 {
-            return;
-        }
-        for y in clip.y..clip.y.saturating_add(clip.height) {
-            for x in clip.x..clip.x.saturating_add(clip.width) {
-                if rect_contains(exclude, x, y) {
-                    continue;
-                }
-                if let Some(cell) = buffer.cell_mut((x, y)) {
-                    cell.set_style(style);
-                }
-            }
-        }
+        // Delegate to DialogOverlayComponent's render_backdrop with exclude rect
+        let dialog = DialogOverlayComponent::default();
+        dialog.render_backdrop(frame, bounds, Some(exclude));
     }
 
     fn hit_test_item(&self, column: u16, row: u16) -> Option<usize> {
@@ -351,7 +339,6 @@ mod tests {
         let ctx = ctx_with_kb();
         overlay.render(&mut frame, area, &ctx);
 
-        // No items → nothing drawn in the menu area
         let cell = buf.cell((0, 1)).expect("cell below anchor");
         assert_eq!(cell.symbol(), " ", "should be empty when no items");
     }
@@ -369,11 +356,9 @@ mod tests {
         let mut frame = UiFrame::from_parts(area, &mut buf);
         let ctx = ctx_with_kb();
 
-        // First render — dropdown visible
         overlay.render(&mut frame, area, &ctx);
         let normal = buf.cell((1, 2)).map(|c| c.symbol().to_string());
 
-        // Outline mode
         overlay.outline();
         let mut buf2 = Buffer::empty(area);
         let mut frame2 = UiFrame::from_parts(area, &mut buf2);
@@ -382,7 +367,6 @@ mod tests {
         let outlined = buf2.cell((1, 2)).map(|c| c.symbol().to_string());
         assert_ne!(normal, outlined, "outline mode should change rendering");
 
-        // Restore
         overlay.restore();
         let mut buf3 = Buffer::empty(area);
         let mut frame3 = UiFrame::from_parts(area, &mut buf3);
@@ -398,7 +382,6 @@ mod tests {
         overlay.set_items(items());
         let ctx = ctx_with_kb();
 
-        // Initially selected is 0
         let handled = overlay.handle_event(&key_event(KeyCode::Down), &ctx);
         assert!(handled, "Down should be handled");
         assert_eq!(overlay.menu.selected(), 1);
@@ -407,7 +390,6 @@ mod tests {
         assert!(handled);
         assert_eq!(overlay.menu.selected(), 2);
 
-        // Wraps around
         let handled = overlay.handle_event(&key_event(KeyCode::Down), &ctx);
         assert!(handled);
         assert_eq!(overlay.menu.selected(), 0);
@@ -429,10 +411,8 @@ mod tests {
         let mut frame = UiFrame::from_parts(area, &mut buf);
         let ctx = ctx_with_kb();
 
-        // Render first to populate item_hits
         overlay.render(&mut frame, area, &ctx);
 
-        // Click on first item (y=2 = anchor.y + 1)
         let handled = overlay.handle_event(&mouse_click(1, 2), &ctx);
         assert!(handled, "click on item should be handled");
         assert_eq!(overlay.selected_action(), Some(&"first"));
@@ -452,7 +432,6 @@ mod tests {
 
         overlay.render(&mut frame, area, &ctx);
 
-        // Click far outside the menu
         let handled = overlay.handle_event(&mouse_click(50, 50), &ctx);
         assert!(!handled, "click outside should not be handled by overlay");
         assert!(overlay.selected_action().is_none(), "no action should be stored");
