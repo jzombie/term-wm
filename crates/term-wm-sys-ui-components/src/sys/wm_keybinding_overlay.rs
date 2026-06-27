@@ -18,9 +18,13 @@ pub struct WmKeybindingOverlayComponent {
 impl WmKeybindingOverlayComponent {
     pub fn new(keybindings: KeyBindings) -> Self {
         let list = ScrollViewComponent::new(ListComponent::new(String::new()));
-        let mut dialog = WmDialogOverlayComponent::new(list, keybindings.clone(), Action::CloseHelp);
+        let mut dialog =
+            WmDialogOverlayComponent::new(list, keybindings.clone(), Action::CloseHelp);
         dialog.dialog_mut().set_size(60, 80);
-        let mut overlay = Self { dialog, keybindings };
+        let mut overlay = Self {
+            dialog,
+            keybindings,
+        };
         overlay.build_entries();
         overlay
     }

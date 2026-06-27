@@ -8,7 +8,7 @@ use term_wm_core::{
     components::{Component, ComponentContext, MenuItem},
     keybindings::{Action, KeyBindings},
     theme,
-    ui::{safe_set_string, UiFrame},
+    ui::{UiFrame, safe_set_string},
 };
 
 #[derive(Debug)]
@@ -102,9 +102,7 @@ impl<R> MenuComponent<R> {
             return;
         }
 
-        let menu_style = Style::default()
-            .bg(theme::menu_bg())
-            .fg(theme::menu_fg());
+        let menu_style = Style::default().bg(theme::menu_bg()).fg(theme::menu_fg());
         let selected_style = Style::default()
             .bg(theme::menu_selected_bg())
             .fg(theme::menu_selected_fg())
@@ -161,7 +159,13 @@ impl<R> MenuComponent<R> {
                 }
             }
             let item = &self.items[idx];
-            let marker = if is_selected { ">" } else if is_hovered { "▸" } else { " " };
+            let marker = if is_selected {
+                ">"
+            } else if is_hovered {
+                "▸"
+            } else {
+                " "
+            };
             let line = if let Some(icon) = item.icon {
                 format!("{marker} {icon} {label}", label = item.label)
             } else {

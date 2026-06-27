@@ -7,7 +7,9 @@ fn new_window_is_focused() {
     let ctx = Arc::new(term_wm::AppContext::new("test", "0.0.0"));
     let panel: Box<dyn term_wm_core::panel_trait::Panel<term_wm_core::window::WindowId<usize>>> =
         Box::new(term_wm_ui_components::PanelComponent::new(
-            &ctx.app_name, &ctx.app_version, None,
+            &ctx.app_name,
+            &ctx.app_version,
+            None,
         ));
     let menu: Box<dyn term_wm_core::components::MenuOverlay<term_wm_core::window::WmMenuAction>> =
         Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());

@@ -10,7 +10,7 @@ use term_wm_core::{
     layout::rect_contains,
     panel_trait::Panel as PanelTrait,
     theme,
-    ui::{safe_set_string, truncate_to_width, UiFrame},
+    ui::{UiFrame, safe_set_string, truncate_to_width},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -238,9 +238,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> PanelComponent<R> {
         let menu_width = menu_icon.chars().count() as u16;
         if x.saturating_add(menu_width) <= max_x {
             let menu_style = if menu_open {
-                Style::default()
-                    .bg(theme::menu_bg())
-                    .fg(theme::menu_fg())
+                Style::default().bg(theme::menu_bg()).fg(theme::menu_fg())
             } else {
                 Style::default()
             };
@@ -439,7 +437,10 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> PanelComponent<R> {
         let info_opt = if show_info {
             let platform = std::env::consts::OS;
             let pkg_label = format!("{} {}", self.app_name, self.app_version);
-            let hostname = self.hostname.clone().unwrap_or_else(|| "unknown-host".to_string());
+            let hostname = self
+                .hostname
+                .clone()
+                .unwrap_or_else(|| "unknown-host".to_string());
             Some(format!("{pkg_label} · {platform} · {hostname}"))
         } else {
             None
@@ -741,8 +742,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> PanelTrait<R> for PanelComponent<R> {
 }
 
 impl<R: Copy + Eq + Ord + std::fmt::Debug + 'static> Component for PanelComponent<R> {
-    fn render(&mut self, _frame: &mut UiFrame<'_>, _area: Rect, _ctx: &ComponentContext) {
-    }
+    fn render(&mut self, _frame: &mut UiFrame<'_>, _area: Rect, _ctx: &ComponentContext) {}
 
     fn handle_event(&mut self, _event: &Event, _ctx: &ComponentContext) -> bool {
         false
@@ -763,7 +763,8 @@ mod tests {
 
     #[test]
     fn panel_basic_methods_and_split_area() {
-        let mut p: PanelComponent<usize> = PanelComponent::new("test-app", "1.0.0", Some("test-host"));
+        let mut p: PanelComponent<usize> =
+            PanelComponent::new("test-app", "1.0.0", Some("test-host"));
         assert!(p.visible());
         p.set_visible(false);
         assert!(!p.visible());

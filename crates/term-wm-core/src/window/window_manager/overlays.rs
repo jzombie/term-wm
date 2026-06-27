@@ -1,6 +1,6 @@
 use crossterm::event::{Event, MouseEventKind};
 
-use super::{WmMenuAction, WindowId, WindowManager};
+use super::{WindowId, WindowManager, WmMenuAction};
 use crate::components::{Component, ConfirmAction, Overlay};
 use crate::keybindings::Action;
 use crate::layout::{FloatingPane, rect_contains, render_handles_masked};
@@ -193,10 +193,14 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 self.window_selection_enabled(),
             );
             self.menu_overlay.set_items(menu_items);
-            let anchor = self.panel.menu_icon_rect().map(|r| (r.x, r.y.saturating_add(r.height)));
+            let anchor = self
+                .panel
+                .menu_icon_rect()
+                .map(|r| (r.x, r.y.saturating_add(r.height)));
             self.menu_overlay.set_anchor(anchor);
             self.menu_overlay.set_managed_area(self.managed_area);
-            let menu_ctx = self.component_context(false)
+            let menu_ctx = self
+                .component_context(false)
                 .with_overlay(true)
                 .with_hover_pos(self.hover)
                 .with_keybindings(std::sync::Arc::new(self.keybindings.clone()));

@@ -11,8 +11,8 @@ use line_ending::LineEnding;
 use ratatui::prelude::Rect;
 
 use term_wm::app_context::AppContext;
-use term_wm::components::{Component, ComponentContext};
 use term_wm::components::MenuOverlay;
+use term_wm::components::{Component, ComponentContext};
 use term_wm::io::{
     RenderTarget,
     console::{ConsoleEventSource, ConsoleRenderTarget},
@@ -98,12 +98,13 @@ impl App {
             ),
         );
         let hostname = app_ctx.hostname.as_deref();
-        let panel: Box<dyn term_wm_core::panel_trait::Panel<term_wm_core::window::WindowId<usize>>> =
-            Box::new(term_wm_ui_components::PanelComponent::new(
-                &app_ctx.app_name,
-                &app_ctx.app_version,
-                hostname,
-            ));
+        let panel: Box<
+            dyn term_wm_core::panel_trait::Panel<term_wm_core::window::WindowId<usize>>,
+        > = Box::new(term_wm_ui_components::PanelComponent::new(
+            &app_ctx.app_name,
+            &app_ctx.app_version,
+            hostname,
+        ));
         let config = WmConfig::standalone();
         let mut raw_menu = term_wm_sys_ui_components::WmMenuOverlay::new();
         raw_menu.set_timeout(config.menu_outline_timeout);

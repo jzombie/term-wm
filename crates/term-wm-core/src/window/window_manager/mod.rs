@@ -203,7 +203,7 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     clipboard_enabled: bool,
     clipboard_dirty: bool,
     overlay_visible: bool,
-    
+
     selection_active: bool,
     selection_dragging: bool,
     selection_text: Option<String>,
@@ -389,44 +389,100 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         struct TestPanel<I>(std::marker::PhantomData<I>);
         impl<I: Copy + Eq + Ord + std::fmt::Debug> Panel<WindowId<I>> for TestPanel<I> {
             fn begin_frame(&mut self) {}
-            fn visible(&self) -> bool { false }
-            fn height(&self) -> u16 { 0 }
-            fn area(&self) -> Rect { Rect::default() }
-            fn bottom_area(&self) -> Rect { Rect::default() }
+            fn visible(&self) -> bool {
+                false
+            }
+            fn height(&self) -> u16 {
+                0
+            }
+            fn area(&self) -> Rect {
+                Rect::default()
+            }
+            fn bottom_area(&self) -> Rect {
+                Rect::default()
+            }
             fn set_visible(&mut self, _v: bool) {}
             fn set_height(&mut self, _h: u16) {}
-            fn set_keybinding_hints(&mut self, _h: Vec<(crate::keybindings::Action, Vec<String>)>) {}
-            fn keybinding_hints(&self) -> &[(crate::keybindings::Action, Vec<String>)] { &[] }
+            fn set_keybinding_hints(&mut self, _h: Vec<(crate::keybindings::Action, Vec<String>)>) {
+            }
+            fn keybinding_hints(&self) -> &[(crate::keybindings::Action, Vec<String>)] {
+                &[]
+            }
             fn set_hostname(&mut self, _hostname: &str) {}
             fn split_area(&mut self, _active: bool, area: Rect) -> (Rect, Rect, Rect) {
                 (Rect::default(), Rect::default(), area)
             }
-            fn render(&mut self, _frame: &mut crate::ui::UiFrame<'_>, _active: bool, _focus_current: WindowId<I>, _display_order: &[WindowId<I>], _status_line: Option<&str>, _mouse_capture_enabled: bool, _clipboard_enabled: bool, _window_selection_enabled: bool, _selection_active: bool, _selection_dragging: bool, _selection_copy_available: bool, _selection_copied: bool, _menu_open: bool, _label_for: &dyn Fn(WindowId<I>) -> String) {}
-            fn menu_icon_rect(&self) -> Option<Rect> { None }
-            fn menu_icon_contains_point(&self, _col: u16, _row: u16) -> bool { false }
-            fn hit_test_mouse_capture(&self, _e: &Event) -> bool { false }
-            fn hit_test_selection(&self, _e: &Event) -> bool { false }
-            fn hit_test_clipboard(&self, _e: &Event) -> bool { false }
-            fn hit_test_copy(&self, _e: &Event) -> bool { false }
-            fn hit_test_window(&self, _e: &Event) -> Option<WindowId<I>> { None }
-            fn hit_test_hint(&self, _e: &Event) -> Option<crate::keybindings::Action> { None }
+            fn render(
+                &mut self,
+                _frame: &mut crate::ui::UiFrame<'_>,
+                _active: bool,
+                _focus_current: WindowId<I>,
+                _display_order: &[WindowId<I>],
+                _status_line: Option<&str>,
+                _mouse_capture_enabled: bool,
+                _clipboard_enabled: bool,
+                _window_selection_enabled: bool,
+                _selection_active: bool,
+                _selection_dragging: bool,
+                _selection_copy_available: bool,
+                _selection_copied: bool,
+                _menu_open: bool,
+                _label_for: &dyn Fn(WindowId<I>) -> String,
+            ) {
+            }
+            fn menu_icon_rect(&self) -> Option<Rect> {
+                None
+            }
+            fn menu_icon_contains_point(&self, _col: u16, _row: u16) -> bool {
+                false
+            }
+            fn hit_test_mouse_capture(&self, _e: &Event) -> bool {
+                false
+            }
+            fn hit_test_selection(&self, _e: &Event) -> bool {
+                false
+            }
+            fn hit_test_clipboard(&self, _e: &Event) -> bool {
+                false
+            }
+            fn hit_test_copy(&self, _e: &Event) -> bool {
+                false
+            }
+            fn hit_test_window(&self, _e: &Event) -> Option<WindowId<I>> {
+                None
+            }
+            fn hit_test_hint(&self, _e: &Event) -> Option<crate::keybindings::Action> {
+                None
+            }
         }
 
         #[derive(Debug)]
         struct TestMenu;
         impl crate::components::Component for TestMenu {
-            fn render(&mut self, _frame: &mut crate::ui::UiFrame<'_>, _area: ratatui::prelude::Rect, _ctx: &crate::components::ComponentContext) {}
+            fn render(
+                &mut self,
+                _frame: &mut crate::ui::UiFrame<'_>,
+                _area: ratatui::prelude::Rect,
+                _ctx: &crate::components::ComponentContext,
+            ) {
+            }
         }
         impl crate::components::Overlay for TestMenu {
-            fn as_any(&self) -> &dyn std::any::Any { self }
-            fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
         }
         impl crate::components::MenuOverlay<WmMenuAction> for TestMenu {
             fn outline(&mut self) {}
             fn restore(&mut self) {}
             fn set_items(&mut self, _items: Vec<crate::components::MenuItem<WmMenuAction>>) {}
             fn set_timeout(&mut self, _timeout: Duration) {}
-            fn selected_action(&self) -> Option<&WmMenuAction> { None }
+            fn selected_action(&self) -> Option<&WmMenuAction> {
+                None
+            }
             fn set_anchor(&mut self, _pos: Option<(u16, u16)>) {}
             fn set_managed_area(&mut self, _area: ratatui::prelude::Rect) {}
         }
@@ -435,7 +491,13 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let m: Box<TestMenu> = Box::new(TestMenu);
         let panel: Box<dyn Panel<WindowId<Id>>> = p;
         let menu: Box<dyn MenuOverlay<WmMenuAction>> = m;
-        Self::with_config(current, WmConfig::standalone(), Arc::new(app_ctx), panel, menu)
+        Self::with_config(
+            current,
+            WmConfig::standalone(),
+            Arc::new(app_ctx),
+            panel,
+            menu,
+        )
     }
 
     pub fn with_config(

@@ -48,7 +48,8 @@ impl Overlay for WmHelpOverlayComponent {
 impl WmHelpOverlayComponent {
     pub fn new(keybindings: KeyBindings) -> Self {
         let viewer = ScrollViewComponent::new(MarkdownViewerComponent::new());
-        let mut dialog = WmDialogOverlayComponent::new(viewer, keybindings.clone(), Action::CloseHelp);
+        let mut dialog =
+            WmDialogOverlayComponent::new(viewer, keybindings.clone(), Action::CloseHelp);
         dialog.dialog_mut().set_size(70, 20);
         if let Ok(raw) = str::from_utf8(HELP_CONTENT_BYTES) {
             let platform = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
@@ -158,7 +159,11 @@ mod tests {
         let mut buffer = Buffer::empty(area);
         {
             let mut frame = term_wm_core::ui::UiFrame::from_parts(area, &mut buffer);
-            overlay.dialog.content_mut().render(&mut frame, area, &ComponentContext::new(true).with_overlay(true));
+            overlay.dialog.content_mut().render(
+                &mut frame,
+                area,
+                &ComponentContext::new(true).with_overlay(true),
+            );
         }
 
         let mut joined = String::new();
@@ -193,11 +198,17 @@ mod tests {
 
         overlay.show();
         assert!(overlay.visible(), "visible after show");
-        assert!(overlay.dialog.dialog_mut().visible(), "dialog visible after show");
+        assert!(
+            overlay.dialog.dialog_mut().visible(),
+            "dialog visible after show"
+        );
 
         overlay.close();
         assert!(!overlay.visible(), "hidden after close");
-        assert!(!overlay.dialog.dialog_mut().visible(), "dialog hidden after close");
+        assert!(
+            !overlay.dialog.dialog_mut().visible(),
+            "dialog hidden after close"
+        );
     }
 
     #[test]
@@ -213,7 +224,10 @@ mod tests {
     #[test]
     fn clicking_outside_auto_closes_when_enabled() {
         let mut overlay = WmHelpOverlayComponent::new(KeyBindings::default());
-        overlay.dialog.dialog_mut().set_auto_close_on_outside_click(true);
+        overlay
+            .dialog
+            .dialog_mut()
+            .set_auto_close_on_outside_click(true);
         overlay.show();
 
         let area = Rect {
@@ -236,7 +250,9 @@ mod tests {
             modifiers: crossterm::event::KeyModifiers::NONE,
         });
 
-        let handled = overlay.dialog.handle_event(&ev, &ComponentContext::new(true));
+        let handled = overlay
+            .dialog
+            .handle_event(&ev, &ComponentContext::new(true));
         assert!(
             handled,
             "outside click should be handled when auto-close enabled"

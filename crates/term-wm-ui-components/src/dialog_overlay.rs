@@ -145,8 +145,10 @@ impl DialogOverlayComponent {
         for y in area.y..area.y.saturating_add(area.height) {
             for x in area.x..area.x.saturating_add(area.width) {
                 if let Some(ex) = exclude
-                    && x >= ex.x && x < ex.x.saturating_add(ex.width)
-                    && y >= ex.y && y < ex.y.saturating_add(ex.height)
+                    && x >= ex.x
+                    && x < ex.x.saturating_add(ex.width)
+                    && y >= ex.y
+                    && y < ex.y.saturating_add(ex.height)
                 {
                     continue;
                 }

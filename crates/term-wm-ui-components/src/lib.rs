@@ -2,9 +2,9 @@ pub mod ascii_image;
 pub mod confirm_overlay;
 pub mod dialog_overlay;
 pub mod list;
+pub mod markdown_viewer;
 pub mod menu;
 pub mod panel;
-pub mod markdown_viewer;
 pub mod scroll_view;
 pub mod svg_image;
 pub mod terminal;
@@ -15,9 +15,9 @@ pub use ascii_image::AsciiImageComponent;
 pub use confirm_overlay::ConfirmOverlayComponent;
 pub use dialog_overlay::DialogOverlayComponent;
 pub use list::ListComponent;
+pub use markdown_viewer::MarkdownViewerComponent;
 pub use menu::MenuComponent;
 pub use panel::PanelComponent;
-pub use markdown_viewer::MarkdownViewerComponent;
 pub use scroll_view::{
     ScrollViewComponent, ScrollbarAxis, ScrollbarDrag, render_scrollbar, render_scrollbar_oriented,
 };

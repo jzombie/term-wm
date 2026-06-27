@@ -15,8 +15,8 @@ use term_wm_core::{
     ui::UiFrame,
 };
 
-use term_wm_ui_components::menu::MenuComponent;
 use term_wm_ui_components::DialogOverlayComponent;
+use term_wm_ui_components::menu::MenuComponent;
 
 #[derive(Debug)]
 pub struct WmMenuOverlay<R> {
@@ -112,9 +112,10 @@ impl<R: Clone + std::fmt::Debug + 'static> WmMenuOverlay<R> {
         }
 
         let hovered_idx = ctx.hover_pos().and_then(|(_mx, my)| {
-            (my >= drop_rect.y.saturating_add(1) && my < drop_rect.y.saturating_add(item_count as u16 + 1))
-                .then(|| (my - drop_rect.y - 1) as usize)
-                .filter(|&idx| idx < item_count)
+            (my >= drop_rect.y.saturating_add(1)
+                && my < drop_rect.y.saturating_add(item_count as u16 + 1))
+            .then(|| (my - drop_rect.y - 1) as usize)
+            .filter(|&idx| idx < item_count)
         });
         self.menu.render_items(frame, drop_rect, hovered_idx);
 
@@ -124,12 +125,15 @@ impl<R: Clone + std::fmt::Debug + 'static> WmMenuOverlay<R> {
             if y < clip.y || y >= clip.y.saturating_add(clip.height) {
                 break;
             }
-            self.item_hits.push((idx, Rect {
-                x: drop_rect.x,
-                y,
-                width: drop_rect.width,
-                height: 1,
-            }));
+            self.item_hits.push((
+                idx,
+                Rect {
+                    x: drop_rect.x,
+                    y,
+                    width: drop_rect.width,
+                    height: 1,
+                },
+            ));
         }
     }
 
@@ -149,9 +153,11 @@ impl<R: Clone + std::fmt::Debug + 'static> WmMenuOverlay<R> {
                 }
             }
         }
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::menu_fg()).add_modifier(Modifier::DIM));
+        let block = Block::default().borders(Borders::ALL).border_style(
+            Style::default()
+                .fg(theme::menu_fg())
+                .add_modifier(Modifier::DIM),
+        );
         frame.render_widget(block, menu_bounds);
     }
 
@@ -208,16 +214,13 @@ impl<R: Clone + std::fmt::Debug + 'static> Component for WmMenuOverlay<R> {
         }
 
         let kb = ctx.keybindings().unwrap_or_default();
-        if kb.matches(Action::MenuUp, key)
-            || kb.matches(Action::MenuPrev, key)
-        {
+        if kb.matches(Action::MenuUp, key) || kb.matches(Action::MenuPrev, key) {
             let current = self.menu.selected();
-            self.menu.set_selected(if current == 0 { total - 1 } else { current - 1 });
+            self.menu
+                .set_selected(if current == 0 { total - 1 } else { current - 1 });
             self.restore();
             true
-        } else if kb.matches(Action::MenuDown, key)
-            || kb.matches(Action::MenuNext, key)
-        {
+        } else if kb.matches(Action::MenuDown, key) || kb.matches(Action::MenuNext, key) {
             let current = self.menu.selected();
             self.menu.set_selected((current + 1) % total);
             self.restore();
@@ -232,8 +235,12 @@ impl<R: Clone + std::fmt::Debug + 'static> Component for WmMenuOverlay<R> {
 }
 
 impl<R: Clone + std::fmt::Debug + 'static> Overlay for WmMenuOverlay<R> {
-    fn as_any(&self) -> &dyn std::any::Any { self }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 
 impl<R: Clone + std::fmt::Debug + 'static> MenuOverlay<R> for WmMenuOverlay<R> {
@@ -266,7 +273,6 @@ impl<R: Clone + std::fmt::Debug + 'static> MenuOverlay<R> for WmMenuOverlay<R> {
     fn set_managed_area(&mut self, area: Rect) {
         self.managed_area = area;
     }
-
 }
 
 impl<R: Clone + std::fmt::Debug + 'static> Default for WmMenuOverlay<R> {
@@ -278,16 +284,30 @@ impl<R: Clone + std::fmt::Debug + 'static> Default for WmMenuOverlay<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
+    use crossterm::event::{
+        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+    };
     use ratatui::buffer::Buffer;
     use std::sync::Arc;
     use term_wm_core::keybindings::KeyBindings;
 
     fn items() -> Vec<MenuItem<&'static str>> {
         vec![
-            MenuItem { icon: None, label: "First", action: "first" },
-            MenuItem { icon: Some("→"), label: "Second", action: "second" },
-            MenuItem { icon: Some("●"), label: "Third", action: "third" },
+            MenuItem {
+                icon: None,
+                label: "First",
+                action: "first",
+            },
+            MenuItem {
+                icon: Some("→"),
+                label: "Second",
+                action: "second",
+            },
+            MenuItem {
+                icon: Some("●"),
+                label: "Third",
+                action: "third",
+            },
         ]
     }
 
@@ -307,8 +327,7 @@ mod tests {
     }
 
     fn ctx_with_kb() -> ComponentContext {
-        ComponentContext::new(false)
-            .with_keybindings(Arc::new(KeyBindings::default()))
+        ComponentContext::new(false).with_keybindings(Arc::new(KeyBindings::default()))
     }
 
     #[test]
@@ -316,9 +335,19 @@ mod tests {
         let mut overlay: WmMenuOverlay<&str> = WmMenuOverlay::new();
         overlay.set_items(items());
         overlay.set_anchor(Some((0, 1)));
-        overlay.set_managed_area(Rect { x: 0, y: 1, width: 80, height: 24 });
+        overlay.set_managed_area(Rect {
+            x: 0,
+            y: 1,
+            width: 80,
+            height: 24,
+        });
 
-        let area = Rect { x: 0, y: 0, width: 80, height: 25 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 25,
+        };
         let mut buf = Buffer::empty(area);
         let mut frame = UiFrame::from_parts(area, &mut buf);
         let ctx = ctx_with_kb();
@@ -333,7 +362,12 @@ mod tests {
         let mut overlay: WmMenuOverlay<&str> = WmMenuOverlay::new();
         overlay.set_anchor(Some((0, 1)));
 
-        let area = Rect { x: 0, y: 0, width: 80, height: 25 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 25,
+        };
         let mut buf = Buffer::empty(area);
         let mut frame = UiFrame::from_parts(area, &mut buf);
         let ctx = ctx_with_kb();
@@ -348,10 +382,20 @@ mod tests {
         let mut overlay: WmMenuOverlay<&str> = WmMenuOverlay::new();
         overlay.set_items(items());
         overlay.set_anchor(Some((0, 1)));
-        overlay.set_managed_area(Rect { x: 0, y: 1, width: 80, height: 24 });
+        overlay.set_managed_area(Rect {
+            x: 0,
+            y: 1,
+            width: 80,
+            height: 24,
+        });
         overlay.set_timeout(Duration::from_secs(60));
 
-        let area = Rect { x: 0, y: 0, width: 80, height: 25 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 25,
+        };
         let mut buf = Buffer::empty(area);
         let mut frame = UiFrame::from_parts(area, &mut buf);
         let ctx = ctx_with_kb();
@@ -404,9 +448,19 @@ mod tests {
         let mut overlay: WmMenuOverlay<&str> = WmMenuOverlay::new();
         overlay.set_items(items());
         overlay.set_anchor(Some((0, 1)));
-        overlay.set_managed_area(Rect { x: 0, y: 1, width: 80, height: 24 });
+        overlay.set_managed_area(Rect {
+            x: 0,
+            y: 1,
+            width: 80,
+            height: 24,
+        });
 
-        let area = Rect { x: 0, y: 0, width: 80, height: 25 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 25,
+        };
         let mut buf = Buffer::empty(area);
         let mut frame = UiFrame::from_parts(area, &mut buf);
         let ctx = ctx_with_kb();
@@ -423,9 +477,19 @@ mod tests {
         let mut overlay: WmMenuOverlay<&str> = WmMenuOverlay::new();
         overlay.set_items(items());
         overlay.set_anchor(Some((0, 1)));
-        overlay.set_managed_area(Rect { x: 0, y: 1, width: 80, height: 24 });
+        overlay.set_managed_area(Rect {
+            x: 0,
+            y: 1,
+            width: 80,
+            height: 24,
+        });
 
-        let area = Rect { x: 0, y: 0, width: 80, height: 25 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 25,
+        };
         let mut buf = Buffer::empty(area);
         let mut frame = UiFrame::from_parts(area, &mut buf);
         let ctx = ctx_with_kb();
@@ -434,6 +498,9 @@ mod tests {
 
         let handled = overlay.handle_event(&mouse_click(50, 50), &ctx);
         assert!(!handled, "click outside should not be handled by overlay");
-        assert!(overlay.selected_action().is_none(), "no action should be stored");
+        assert!(
+            overlay.selected_action().is_none(),
+            "no action should be stored"
+        );
     }
 }
