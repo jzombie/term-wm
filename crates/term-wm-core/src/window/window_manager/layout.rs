@@ -166,11 +166,15 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub fn set_panel_visible(&mut self, visible: bool) {
-        self.top_panel.set_visible(visible);
+        if let Some(p) = &mut self.top_panel {
+            p.set_visible(visible);
+        }
     }
 
     pub fn set_panel_height(&mut self, height: u16) {
-        self.top_panel.set_height(height);
+        if let Some(p) = &mut self.top_panel {
+            p.set_height(height);
+        }
     }
 
     pub fn register_managed_layout(&mut self, area: Rect) {
@@ -191,28 +195,43 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                     let hints = self
                         .keybindings
                         .bottom_hints_for_layer(crate::constants::MAX_BOTTOM_HINTS, active_layer);
-                    self.bottom_panel.set_keybinding_hints(hints);
+                    if let Some(p) = &mut self.bottom_panel {
+                        p.set_keybinding_hints(hints);
+                    }
                 } else {
                     // Embedded mode: no overlay, all actions are always dispatchable.
                     let hints = self
                         .keybindings
                         .bottom_hints(crate::constants::MAX_BOTTOM_HINTS);
-                    self.bottom_panel.set_keybinding_hints(hints);
+                    if let Some(p) = &mut self.bottom_panel {
+                        p.set_keybinding_hints(hints);
+                    }
                 }
             }
             _ => {
-                self.bottom_panel.set_keybinding_hints(Vec::new());
+                if let Some(p) = &mut self.bottom_panel {
+                    p.set_keybinding_hints(Vec::new());
+                }
             }
         }
         let active = self.panel_active();
-        let has_hints = !self.bottom_panel.keybinding_hints().is_empty();
-        let bottom_h = if has_hints || active {
-            1u16
+        let has_hints = self
+            .bottom_panel
+            .as_ref()
+            .is_some_and(|p| !p.keybinding_hints().is_empty());
+        let bottom_h = if has_hints || active { 1u16 } else { 0 };
+        let after_top = if let Some(p) = &mut self.top_panel {
+            let (_, after) = p.split_area(active, area);
+            after
         } else {
-            0
+            area
         };
-        let (_, after_top) = self.top_panel.split_area(active, area);
-        let (_, managed_area) = self.bottom_panel.split_bottom_area(after_top, bottom_h);
+        let managed_area = if let Some(p) = &mut self.bottom_panel {
+            let (_, managed) = p.split_bottom_area(after_top, bottom_h);
+            managed
+        } else {
+            after_top
+        };
         let prev_managed = self.managed_area;
         self.managed_area = managed_area;
         if prev_managed.width > 0 && prev_managed.height > 0 {

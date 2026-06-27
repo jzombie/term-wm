@@ -1,15 +1,12 @@
 use crossterm::event::{Event, MouseEventKind};
-use ratatui::{
-    layout::Rect,
-    style::Style,
-};
+use ratatui::{layout::Rect, style::Style};
 
 use term_wm_core::{
+    bottom_panel_trait::BottomPanel as BottomPanelTrait,
     components::{Component, ComponentContext},
     keybindings::Action,
     layout::rect_contains,
     theme,
-    bottom_panel_trait::BottomPanel as BottomPanelTrait,
     ui::{UiFrame, safe_set_string, truncate_to_width},
 };
 

@@ -11,15 +11,12 @@ pub trait WindowManagerExt<Id> {
     fn new_embedded(current: Id, app_ctx: term_wm_core::app_context::AppContext) -> Self;
 }
 
-impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManagerExt<Id>
-    for WindowManager<Id>
-{
+impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManagerExt<Id> for WindowManager<Id> {
     fn new_standalone(current: Id, app_ctx: term_wm_core::app_context::AppContext) -> Self {
         let hostname = app_ctx.hostname.as_deref();
-        let top_panel: Box<dyn term_wm_core::top_panel_trait::TopPanel<WindowId<Id>>> =
-            Box::new(term_wm_sys_ui_components::WmTopPanelComponent::new(
-                &app_ctx.app_name,
-            ));
+        let top_panel: Box<dyn term_wm_core::top_panel_trait::TopPanel<WindowId<Id>>> = Box::new(
+            term_wm_sys_ui_components::WmTopPanelComponent::new(&app_ctx.app_name),
+        );
         let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> =
             Box::new(term_wm_sys_ui_components::WmBottomPanelComponent::new(
                 &app_ctx.app_name,
@@ -32,18 +29,17 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManagerExt<Id>
             current,
             term_wm_core::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(app_ctx),
-            top_panel,
-            bottom_panel,
+            Some(top_panel),
+            Some(bottom_panel),
             menu,
         )
     }
 
     fn new_embedded(current: Id, app_ctx: term_wm_core::app_context::AppContext) -> Self {
         let hostname = app_ctx.hostname.as_deref();
-        let top_panel: Box<dyn term_wm_core::top_panel_trait::TopPanel<WindowId<Id>>> =
-            Box::new(term_wm_sys_ui_components::WmTopPanelComponent::new(
-                &app_ctx.app_name,
-            ));
+        let top_panel: Box<dyn term_wm_core::top_panel_trait::TopPanel<WindowId<Id>>> = Box::new(
+            term_wm_sys_ui_components::WmTopPanelComponent::new(&app_ctx.app_name),
+        );
         let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> =
             Box::new(term_wm_sys_ui_components::WmBottomPanelComponent::new(
                 &app_ctx.app_name,
@@ -54,8 +50,8 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManagerExt<Id>
             current,
             term_wm_core::wm_config::WmConfig::embedded(),
             std::sync::Arc::new(app_ctx),
-            top_panel,
-            bottom_panel,
+            Some(top_panel),
+            Some(bottom_panel),
             Box::new(NoopMenu),
         )
     }

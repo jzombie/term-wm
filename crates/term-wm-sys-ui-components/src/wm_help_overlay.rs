@@ -176,7 +176,10 @@ impl WmHelpOverlayComponent {
 
 impl Default for WmHelpOverlayComponent {
     fn default() -> Self {
-        Self::new(&Arc::new(AppContext::new("unknown", "0.0.0")), KeyBindings::default())
+        Self::new(
+            &Arc::new(AppContext::new("unknown", "0.0.0")),
+            KeyBindings::default(),
+        )
     }
 }
 
@@ -189,13 +192,22 @@ mod tests {
 
     #[test]
     fn help_constructs() {
-        let h = WmHelpOverlayComponent::new(&Arc::new(AppContext::new("test", "0.0.0")), KeyBindings::default());
+        let h = WmHelpOverlayComponent::new(
+            &Arc::new(AppContext::new("test", "0.0.0")),
+            KeyBindings::default(),
+        );
         let _ = h;
     }
 
     #[test]
     fn placeholders_are_replaced_in_markdown() {
-        let mut overlay = WmHelpOverlayComponent::new(&Arc::new(AppContext::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))), KeyBindings::default());
+        let mut overlay = WmHelpOverlayComponent::new(
+            &Arc::new(AppContext::new(
+                env!("CARGO_PKG_NAME"),
+                env!("CARGO_PKG_VERSION"),
+            )),
+            KeyBindings::default(),
+        );
         use ratatui::buffer::Buffer;
 
         let area = Rect {
@@ -241,7 +253,10 @@ mod tests {
 
     #[test]
     fn show_and_close_toggle_visibility() {
-        let mut overlay = WmHelpOverlayComponent::new(&Arc::new(AppContext::new("test", "0.0.0")), KeyBindings::default());
+        let mut overlay = WmHelpOverlayComponent::new(
+            &Arc::new(AppContext::new("test", "0.0.0")),
+            KeyBindings::default(),
+        );
         assert!(!overlay.visible(), "initially hidden");
 
         overlay.show();
@@ -253,7 +268,10 @@ mod tests {
 
     #[test]
     fn handle_help_event_closes_on_close_key() {
-        let mut overlay = WmHelpOverlayComponent::new(&Arc::new(AppContext::new("test", "0.0.0")), KeyBindings::default());
+        let mut overlay = WmHelpOverlayComponent::new(
+            &Arc::new(AppContext::new("test", "0.0.0")),
+            KeyBindings::default(),
+        );
         overlay.show();
         let ev = Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         let handled = overlay.handle_event(&ev, &ComponentContext::new(true));
@@ -263,7 +281,10 @@ mod tests {
 
     #[test]
     fn clicking_outside_auto_closes_when_enabled() {
-        let mut overlay = WmHelpOverlayComponent::new(&Arc::new(AppContext::new("test", "0.0.0")), KeyBindings::default());
+        let mut overlay = WmHelpOverlayComponent::new(
+            &Arc::new(AppContext::new("test", "0.0.0")),
+            KeyBindings::default(),
+        );
         overlay.dialog.set_auto_close_on_outside_click(true);
         overlay.show();
 
@@ -282,8 +303,7 @@ mod tests {
             modifiers: crossterm::event::KeyModifiers::NONE,
         });
 
-        let handled = overlay
-            .handle_event(&ev, &ComponentContext::new(true));
+        let handled = overlay.handle_event(&ev, &ComponentContext::new(true));
         assert!(
             handled,
             "outside click should be handled when auto-close enabled"

@@ -763,105 +763,6 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
     #[derive(Debug)]
-    struct TestTopPanel<I>(std::marker::PhantomData<I>);
-    impl<I: Copy + Eq + Ord + std::fmt::Debug>
-        crate::top_panel_trait::TopPanel<crate::window::WindowId<I>> for TestTopPanel<I>
-    {
-        fn begin_frame(&mut self) {}
-        fn visible(&self) -> bool {
-            false
-        }
-        fn height(&self) -> u16 {
-            0
-        }
-        fn area(&self) -> ratatui::prelude::Rect {
-            ratatui::prelude::Rect::default()
-        }
-        fn set_visible(&mut self, _v: bool) {}
-        fn set_height(&mut self, _h: u16) {}
-        fn split_area(
-            &mut self,
-            _active: bool,
-            area: ratatui::prelude::Rect,
-        ) -> (ratatui::prelude::Rect, ratatui::prelude::Rect) {
-            (ratatui::prelude::Rect::default(), area)
-        }
-        fn render(
-            &mut self,
-            _frame: &mut crate::ui::UiFrame<'_>,
-            _active: bool,
-            _focus_current: crate::window::WindowId<I>,
-            _display_order: &[crate::window::WindowId<I>],
-            _status_line: Option<&str>,
-            _mouse_capture_enabled: bool,
-            _clipboard_enabled: bool,
-            _window_selection_enabled: bool,
-            _selection_active: bool,
-            _selection_dragging: bool,
-            _selection_copy_available: bool,
-            _selection_copied: bool,
-            _menu_open: bool,
-            _label_for: &dyn Fn(crate::window::WindowId<I>) -> String,
-        ) {
-        }
-        fn menu_icon_rect(&self) -> Option<ratatui::prelude::Rect> {
-            None
-        }
-        fn menu_icon_contains_point(&self, _col: u16, _row: u16) -> bool {
-            false
-        }
-        fn hit_test_mouse_capture(&self, _e: &crossterm::event::Event) -> bool {
-            false
-        }
-        fn hit_test_selection(&self, _e: &crossterm::event::Event) -> bool {
-            false
-        }
-        fn hit_test_clipboard(&self, _e: &crossterm::event::Event) -> bool {
-            false
-        }
-        fn hit_test_copy(&self, _e: &crossterm::event::Event) -> bool {
-            false
-        }
-        fn hit_test_window(
-            &self,
-            _e: &crossterm::event::Event,
-        ) -> Option<crate::window::WindowId<I>> {
-            None
-        }
-        fn hit_test_menu(&self, _e: &crossterm::event::Event) -> bool {
-            false
-        }
-    }
-
-    #[derive(Debug)]
-    struct TestBottomPanel;
-    impl crate::bottom_panel_trait::BottomPanel for TestBottomPanel {
-        fn begin_frame(&mut self) {}
-        fn area(&self) -> ratatui::prelude::Rect {
-            ratatui::prelude::Rect::default()
-        }
-        fn set_keybinding_hints(
-            &mut self,
-            _h: Vec<(crate::keybindings::Action, Vec<String>)>,
-        ) {
-        }
-        fn keybinding_hints(&self) -> &[(crate::keybindings::Action, Vec<String>)] {
-            &[]
-        }
-        fn split_bottom_area(
-            &mut self,
-            area: ratatui::prelude::Rect,
-            _height: u16,
-        ) -> (ratatui::prelude::Rect, ratatui::prelude::Rect) {
-            (ratatui::prelude::Rect::default(), area)
-        }
-        fn render(&mut self, _frame: &mut crate::ui::UiFrame<'_>, _active: bool) {}
-        fn hit_test_hint(&self, _e: &crossterm::event::Event) -> Option<crate::keybindings::Action> {
-            None
-        }
-    }
-
-    #[derive(Debug)]
     struct TestMenu;
     impl crate::components::Component for TestMenu {
         fn render(
@@ -916,8 +817,8 @@ mod tests {
             0,
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
-            Box::new(TestTopPanel(std::marker::PhantomData)),
-            Box::new(TestBottomPanel),
+            None,
+            None,
             Box::new(TestMenu),
         );
         assert!(!wm.has_any_active_windows());
@@ -1016,8 +917,8 @@ mod tests {
                 0,
                 crate::wm_config::WmConfig::standalone(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
-                Box::new(TestTopPanel(std::marker::PhantomData)),
-                Box::new(TestBottomPanel),
+                None,
+                None,
                 Box::new(TestMenu),
             ),
             recorder: KeyRecorder {
@@ -1115,8 +1016,8 @@ mod tests {
                 0,
                 crate::wm_config::WmConfig::standalone(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
-                Box::new(TestTopPanel(std::marker::PhantomData)),
-                Box::new(TestBottomPanel),
+                None,
+                None,
                 Box::new(TestMenu),
             ),
             recorder: KeyRecorder {
