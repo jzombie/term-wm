@@ -2,30 +2,36 @@ use std::collections::BTreeMap;
 
 use crossterm::event::Event;
 use ratatui::layout::Rect;
+use ratatui::widgets::{Block, Borders, Clear};
 
 use term_wm_core::components::{Component, ComponentContext, Overlay};
 use term_wm_core::keybindings::{Action, Category, KeyBindings};
 use term_wm_core::ui::UiFrame;
-use term_wm_ui_components::{ListComponent, ScrollViewComponent};
-
-use crate::WmDialogOverlayComponent;
+use term_wm_ui_components::{DialogOverlayComponent, ListComponent, ScrollViewComponent};
 
 pub struct WmKeybindingOverlayComponent {
-    dialog: WmDialogOverlayComponent<ListComponent>,
+    dialog: DialogOverlayComponent,
+    content: ScrollViewComponent<ListComponent>,
+    area: Rect,
     keybindings: KeyBindings,
 }
 
 impl WmKeybindingOverlayComponent {
     pub fn new(keybindings: KeyBindings) -> Self {
+        let mut dialog = DialogOverlayComponent::new();
+        dialog.set_dim_backdrop(true);
+        dialog.set_auto_close_on_outside_click(true);
+        dialog.set_bg(term_wm_core::theme::dialog_bg());
+        dialog.set_size(60, 80);
         let list = ScrollViewComponent::new(ListComponent::new(String::new()));
-        let mut dialog =
-            WmDialogOverlayComponent::new(list, keybindings.clone(), Action::CloseHelp);
-        dialog.dialog_mut().set_size(60, 80);
         let mut overlay = Self {
             dialog,
+            content: list,
+            area: Rect::default(),
             keybindings,
         };
         overlay.build_entries();
+        overlay.content.set_keyboard_enabled(true);
         overlay
     }
 
@@ -62,16 +68,16 @@ impl WmKeybindingOverlayComponent {
             }
             lines.push("".to_string());
         }
-        self.dialog.content_mut().content.set_items(lines);
+        self.content.content.set_items(lines);
     }
 
     pub fn show(&mut self) {
-        self.dialog.show();
+        self.dialog.set_visible(true);
         self.build_entries();
     }
 
     pub fn close(&mut self) {
-        self.dialog.close();
+        self.dialog.set_visible(false);
     }
 
     pub fn visible(&self) -> bool {
@@ -89,16 +95,52 @@ impl std::fmt::Debug for WmKeybindingOverlayComponent {
 
 impl Component for WmKeybindingOverlayComponent {
     fn resize(&mut self, area: Rect, _ctx: &ComponentContext) {
-        self.dialog.dialog_mut().resize(area, _ctx);
+        self.area = area;
     }
 
     fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _ctx: &ComponentContext) {
+        if !self.dialog.visible() || area.width == 0 || area.height == 0 {
+            return;
+        }
         let title = format!("{} — Keybindings", env!("CARGO_PKG_NAME"));
-        self.dialog.render(frame, area, &title);
+        self.dialog.render_backdrop(frame, area, None);
+        let rect = self.dialog.rect_for(area);
+        frame.render_widget(Clear, rect);
+        let block = Block::default().title(title.as_str()).borders(Borders::ALL);
+        let inner = Rect {
+            x: rect.x.saturating_add(1),
+            y: rect.y.saturating_add(1),
+            width: rect.width.saturating_sub(2),
+            height: rect.height.saturating_sub(2),
+        };
+        frame.render_widget(block, rect);
+        let ctx = ComponentContext::new(true).with_overlay(true);
+        self.content.resize(inner, &ctx);
+        self.content.render(frame, inner, &ctx);
     }
 
     fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
-        self.dialog.handle_event(event, ctx)
+        if !self.dialog.visible() {
+            return false;
+        }
+        match event {
+            Event::Key(key) => {
+                if self.keybindings.matches(Action::CloseHelp, key) {
+                    self.close();
+                    true
+                } else {
+                    self.content.handle_event(event, ctx)
+                }
+            }
+            Event::Mouse(_) => {
+                if self.dialog.handle_click_outside(event, self.area) {
+                    self.close();
+                    return true;
+                }
+                self.content.handle_event(event, ctx)
+            }
+            _ => false,
+        }
     }
 }
 

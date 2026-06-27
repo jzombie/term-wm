@@ -2,34 +2,72 @@ use std::str;
 
 use crossterm::event::Event;
 use ratatui::layout::Rect;
+use ratatui::widgets::{Block, Borders, Clear};
 
 use term_wm_core::components::{Component, ComponentContext, Overlay};
 use term_wm_core::keybindings::{Action, KeyBindings};
 use term_wm_core::ui::UiFrame;
-use term_wm_ui_components::{MarkdownViewerComponent, ScrollViewComponent};
-
-use crate::WmDialogOverlayComponent;
+use term_wm_ui_components::{DialogOverlayComponent, MarkdownViewerComponent, ScrollViewComponent};
 
 const HELP_CONTENT_BYTES: &[u8] =
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/help.md"));
 
 #[derive(Debug)]
 pub struct WmHelpOverlayComponent {
-    dialog: WmDialogOverlayComponent<MarkdownViewerComponent>,
+    dialog: DialogOverlayComponent,
+    content: ScrollViewComponent<MarkdownViewerComponent>,
+    area: Rect,
+    keybindings: KeyBindings,
 }
 
 impl Component for WmHelpOverlayComponent {
     fn resize(&mut self, area: Rect, _ctx: &ComponentContext) {
-        self.dialog.dialog_mut().resize(area, _ctx);
+        self.area = area;
     }
 
     fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _ctx: &ComponentContext) {
+        if !self.dialog.visible() || area.width == 0 || area.height == 0 {
+            return;
+        }
         let title = format!("{} — About / Help", env!("CARGO_PKG_NAME"));
-        self.dialog.render(frame, area, &title);
+        self.dialog.render_backdrop(frame, area, None);
+        let rect = self.dialog.rect_for(area);
+        frame.render_widget(Clear, rect);
+        let block = Block::default().title(title.as_str()).borders(Borders::ALL);
+        let inner = Rect {
+            x: rect.x.saturating_add(1),
+            y: rect.y.saturating_add(1),
+            width: rect.width.saturating_sub(2),
+            height: rect.height.saturating_sub(2),
+        };
+        frame.render_widget(block, rect);
+        let ctx = ComponentContext::new(true).with_overlay(true);
+        self.content.resize(inner, &ctx);
+        self.content.render(frame, inner, &ctx);
     }
 
     fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
-        self.dialog.handle_event(event, ctx)
+        if !self.dialog.visible() {
+            return false;
+        }
+        match event {
+            Event::Key(key) => {
+                if self.keybindings.matches(Action::CloseHelp, key) {
+                    self.close();
+                    true
+                } else {
+                    self.content.handle_event(event, ctx)
+                }
+            }
+            Event::Mouse(_) => {
+                if self.dialog.handle_click_outside(event, self.area) {
+                    self.close();
+                    return true;
+                }
+                self.content.handle_event(event, ctx)
+            }
+            _ => false,
+        }
     }
 }
 
@@ -47,19 +85,27 @@ impl Overlay for WmHelpOverlayComponent {
 
 impl WmHelpOverlayComponent {
     pub fn new(keybindings: KeyBindings) -> Self {
+        let mut dialog = DialogOverlayComponent::new();
+        dialog.set_dim_backdrop(true);
+        dialog.set_auto_close_on_outside_click(true);
+        dialog.set_bg(term_wm_core::theme::dialog_bg());
+        dialog.set_size(70, 20);
         let viewer = ScrollViewComponent::new(MarkdownViewerComponent::new());
-        let mut dialog =
-            WmDialogOverlayComponent::new(viewer, keybindings.clone(), Action::CloseHelp);
-        dialog.dialog_mut().set_size(70, 20);
+        let mut overlay = Self {
+            dialog,
+            content: viewer,
+            area: Rect::default(),
+            keybindings,
+        };
         if let Ok(raw) = str::from_utf8(HELP_CONTENT_BYTES) {
             let platform = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+            let kb = &overlay.keybindings;
             let mut s = raw
                 .replace("%PACKAGE%", env!("CARGO_PKG_NAME"))
                 .replace("%VERSION%", env!("CARGO_PKG_VERSION"))
                 .replace("%PLATFORM%", &platform)
                 .replace("%REPOSITORY%", env!("CARGO_PKG_REPOSITORY"));
 
-            let kb = &keybindings;
             let focus_next = kb.combos_for(Action::FocusNext).join(" / ");
             let focus_prev = kb.combos_for(Action::FocusPrev).join(" / ");
             let new_win = kb.combos_for(Action::NewWindow).join(" / ");
@@ -91,38 +137,35 @@ impl WmHelpOverlayComponent {
                 .replace("%MENU_SELECT%", &select)
                 .replace("%SUPER%", &super_key)
                 .replace("%HELP_MENU%", &help_label);
-            dialog.content_mut().content.set_markdown(&s);
+            overlay.content.content.set_markdown(&s);
         }
-        dialog.content_mut().content.set_link_handler_fn(|url| {
+        overlay.content.content.set_link_handler_fn(|url| {
             let _ = webbrowser::open(url);
             true
         });
-        Self { dialog }
+        overlay.content.set_keyboard_enabled(true);
+        overlay
     }
 
     pub fn show(&mut self) {
-        self.dialog.show();
+        self.dialog.set_visible(true);
     }
 
     pub fn close(&mut self) {
-        self.dialog.close();
-        self.dialog.content_mut().content.reset();
+        self.dialog.set_visible(false);
+        self.content.content.reset();
     }
 
     pub fn visible(&self) -> bool {
         self.dialog.visible()
     }
 
-    pub fn handle_help_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
-        self.dialog.handle_event(event, ctx)
-    }
-
     pub fn set_keyboard_enabled(&mut self, enabled: bool) {
-        self.dialog.content_mut().set_keyboard_enabled(enabled);
+        self.content.set_keyboard_enabled(enabled);
     }
 
     pub fn set_selection_enabled(&mut self, enabled: bool) {
-        self.dialog.set_selection_enabled(enabled);
+        self.content.content.set_selection_enabled(enabled);
     }
 }
 
@@ -136,7 +179,7 @@ impl Default for WmHelpOverlayComponent {
 mod tests {
     use super::*;
 
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
     use ratatui::layout::Rect;
 
     #[test]
@@ -159,7 +202,7 @@ mod tests {
         let mut buffer = Buffer::empty(area);
         {
             let mut frame = term_wm_core::ui::UiFrame::from_parts(area, &mut buffer);
-            overlay.dialog.content_mut().render(
+            overlay.content.render(
                 &mut frame,
                 area,
                 &ComponentContext::new(true).with_overlay(true),
@@ -198,17 +241,9 @@ mod tests {
 
         overlay.show();
         assert!(overlay.visible(), "visible after show");
-        assert!(
-            overlay.dialog.dialog_mut().visible(),
-            "dialog visible after show"
-        );
 
         overlay.close();
         assert!(!overlay.visible(), "hidden after close");
-        assert!(
-            !overlay.dialog.dialog_mut().visible(),
-            "dialog hidden after close"
-        );
     }
 
     #[test]
@@ -216,7 +251,7 @@ mod tests {
         let mut overlay = WmHelpOverlayComponent::new(KeyBindings::default());
         overlay.show();
         let ev = Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        let handled = overlay.handle_help_event(&ev, &ComponentContext::new(true));
+        let handled = overlay.handle_event(&ev, &ComponentContext::new(true));
         assert!(handled, "close key should be handled");
         assert!(!overlay.visible(), "overlay should be closed by key");
     }
@@ -224,10 +259,7 @@ mod tests {
     #[test]
     fn clicking_outside_auto_closes_when_enabled() {
         let mut overlay = WmHelpOverlayComponent::new(KeyBindings::default());
-        overlay
-            .dialog
-            .dialog_mut()
-            .set_auto_close_on_outside_click(true);
+        overlay.dialog.set_auto_close_on_outside_click(true);
         overlay.show();
 
         let area = Rect {
@@ -236,12 +268,7 @@ mod tests {
             width: 80,
             height: 24,
         };
-        // Render once to set the area on the internal dialog so event handling
-        // has the correct click-outside bounds.
-        let mut buf = ratatui::buffer::Buffer::empty(area);
-        let mut frame = term_wm_core::ui::UiFrame::from_parts(area, &mut buf);
-        let title = format!("{} — About / Help", env!("CARGO_PKG_NAME"));
-        overlay.dialog.render(&mut frame, area, &title);
+        overlay.area = area;
 
         let ev = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
@@ -251,7 +278,6 @@ mod tests {
         });
 
         let handled = overlay
-            .dialog
             .handle_event(&ev, &ComponentContext::new(true));
         assert!(
             handled,
