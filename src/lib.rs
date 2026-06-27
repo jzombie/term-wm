@@ -17,11 +17,11 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManagerExt<Id>
     fn new_standalone(current: Id, app_ctx: term_wm_core::app_context::AppContext) -> Self {
         let hostname = app_ctx.hostname.as_deref();
         let top_panel: Box<dyn term_wm_core::top_panel_trait::TopPanel<WindowId<Id>>> =
-            Box::new(term_wm_ui_components::TopPanelComponent::new(
+            Box::new(term_wm_sys_ui_components::WmTopPanelComponent::new(
                 &app_ctx.app_name,
             ));
         let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> =
-            Box::new(term_wm_ui_components::BottomPanelComponent::new(
+            Box::new(term_wm_sys_ui_components::WmBottomPanelComponent::new(
                 &app_ctx.app_name,
                 &app_ctx.app_version,
                 hostname,
@@ -41,11 +41,11 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManagerExt<Id>
     fn new_embedded(current: Id, app_ctx: term_wm_core::app_context::AppContext) -> Self {
         let hostname = app_ctx.hostname.as_deref();
         let top_panel: Box<dyn term_wm_core::top_panel_trait::TopPanel<WindowId<Id>>> =
-            Box::new(term_wm_ui_components::TopPanelComponent::new(
+            Box::new(term_wm_sys_ui_components::WmTopPanelComponent::new(
                 &app_ctx.app_name,
             ));
         let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> =
-            Box::new(term_wm_ui_components::BottomPanelComponent::new(
+            Box::new(term_wm_sys_ui_components::WmBottomPanelComponent::new(
                 &app_ctx.app_name,
                 &app_ctx.app_version,
                 hostname,

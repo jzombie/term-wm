@@ -62,7 +62,7 @@ impl NotificationArea {
 }
 
 #[derive(Debug)]
-pub struct TopPanelComponent<R: Copy + Eq + Ord> {
+pub struct WmTopPanelComponent<R: Copy + Eq + Ord> {
     visible: bool,
     height: u16,
     area: Rect,
@@ -72,7 +72,7 @@ pub struct TopPanelComponent<R: Copy + Eq + Ord> {
     app_name: String,
 }
 
-impl<R: Copy + Eq + Ord + std::fmt::Debug> TopPanelComponent<R> {
+impl<R: Copy + Eq + Ord + std::fmt::Debug> WmTopPanelComponent<R> {
     pub fn new(app_name: &str) -> Self {
         Self {
             visible: true,
@@ -435,7 +435,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> TopPanelComponent<R> {
     }
 }
 
-impl<R: Copy + Eq + Ord + std::fmt::Debug> TopPanelTrait<R> for TopPanelComponent<R> {
+impl<R: Copy + Eq + Ord + std::fmt::Debug> TopPanelTrait<R> for WmTopPanelComponent<R> {
     fn begin_frame(&mut self) {
         self.begin_frame()
     }
@@ -533,7 +533,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> TopPanelTrait<R> for TopPanelComponen
     }
 }
 
-impl<R: Copy + Eq + Ord + std::fmt::Debug + 'static> Component for TopPanelComponent<R> {
+impl<R: Copy + Eq + Ord + std::fmt::Debug + 'static> Component for WmTopPanelComponent<R> {
     fn render(&mut self, _frame: &mut UiFrame<'_>, _area: Rect, _ctx: &ComponentContext) {}
 
     fn handle_event(&mut self, _event: &Event, _ctx: &ComponentContext) -> bool {
@@ -541,7 +541,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug + 'static> Component for TopPanelCompo
     }
 }
 
-impl<R: Copy + Eq + Ord + std::fmt::Debug> Default for TopPanelComponent<R> {
+impl<R: Copy + Eq + Ord + std::fmt::Debug> Default for WmTopPanelComponent<R> {
     fn default() -> Self {
         Self::new("unknown")
     }
@@ -554,7 +554,7 @@ mod tests {
 
     #[test]
     fn top_panel_basic_methods_and_split_area() {
-        let mut p: TopPanelComponent<usize> = TopPanelComponent::new("test-app");
+        let mut p: WmTopPanelComponent<usize> = WmTopPanelComponent::new("test-app");
         assert!(p.visible());
         p.set_visible(false);
         assert!(!p.visible());
@@ -582,7 +582,7 @@ mod tests {
 
     #[test]
     fn top_panel_split_area_inactive() {
-        let mut p: TopPanelComponent<usize> = TopPanelComponent::new("test");
+        let mut p: WmTopPanelComponent<usize> = WmTopPanelComponent::new("test");
         let area = Rect {
             x: 0,
             y: 0,

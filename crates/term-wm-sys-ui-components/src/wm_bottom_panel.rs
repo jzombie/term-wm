@@ -14,7 +14,7 @@ use term_wm_core::{
 };
 
 #[derive(Debug)]
-pub struct BottomPanelComponent {
+pub struct WmBottomPanelComponent {
     area: Rect,
     app_name: String,
     app_version: String,
@@ -23,7 +23,7 @@ pub struct BottomPanelComponent {
     hint_rects: Vec<(Rect, Action)>,
 }
 
-impl BottomPanelComponent {
+impl WmBottomPanelComponent {
     pub fn new(app_name: &str, app_version: &str, hostname: Option<&str>) -> Self {
         Self {
             area: Rect::default(),
@@ -219,7 +219,7 @@ impl BottomPanelComponent {
     }
 }
 
-impl BottomPanelTrait for BottomPanelComponent {
+impl BottomPanelTrait for WmBottomPanelComponent {
     fn begin_frame(&mut self) {
         self.begin_frame()
     }
@@ -249,7 +249,7 @@ impl BottomPanelTrait for BottomPanelComponent {
     }
 }
 
-impl Component for BottomPanelComponent {
+impl Component for WmBottomPanelComponent {
     fn render(&mut self, _frame: &mut UiFrame<'_>, _area: Rect, _ctx: &ComponentContext) {}
 
     fn handle_event(&mut self, _event: &Event, _ctx: &ComponentContext) -> bool {
@@ -257,7 +257,7 @@ impl Component for BottomPanelComponent {
     }
 }
 
-impl Default for BottomPanelComponent {
+impl Default for WmBottomPanelComponent {
     fn default() -> Self {
         Self::new("unknown", "0.0.0", None)
     }
@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn bottom_panel_renders_provided_hostname() {
-        let mut p = BottomPanelComponent::new("app", "1.0", Some("my-machine"));
+        let mut p = WmBottomPanelComponent::new("app", "1.0", Some("my-machine"));
         assert_eq!(p.hostname, Some("my-machine".to_string()));
 
         let area = Rect {
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn bottom_panel_fills_background_and_right_aligns_text() {
-        let mut p = BottomPanelComponent::new("test", "0.0.1", Some("h"));
+        let mut p = WmBottomPanelComponent::new("test", "0.0.1", Some("h"));
         let area = Rect {
             x: 0,
             y: 0,
@@ -330,7 +330,7 @@ mod tests {
 
     #[test]
     fn bottom_panel_includes_app_name_and_version() {
-        let mut p = BottomPanelComponent::new("my-app", "2.0.0", Some("my-host"));
+        let mut p = WmBottomPanelComponent::new("my-app", "2.0.0", Some("my-host"));
         let area = Rect {
             x: 0,
             y: 0,

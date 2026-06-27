@@ -100,11 +100,11 @@ impl App {
         let hostname = app_ctx.hostname.as_deref();
         let top_panel: Box<
             dyn term_wm_core::top_panel_trait::TopPanel<term_wm_core::window::WindowId<usize>>,
-        > = Box::new(term_wm_ui_components::TopPanelComponent::new(
+        > = Box::new(term_wm_sys_ui_components::WmTopPanelComponent::new(
             &app_ctx.app_name,
         ));
         let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> =
-            Box::new(term_wm_ui_components::BottomPanelComponent::new(
+            Box::new(term_wm_sys_ui_components::WmBottomPanelComponent::new(
                 &app_ctx.app_name,
                 &app_ctx.app_version,
                 hostname,

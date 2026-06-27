@@ -7,9 +7,9 @@ fn new_window_is_focused() {
     let ctx = Arc::new(term_wm::AppContext::new("test", "0.0.0"));
     let top_panel: Box<
         dyn term_wm_core::top_panel_trait::TopPanel<term_wm_core::window::WindowId<usize>>,
-    > = Box::new(term_wm_ui_components::TopPanelComponent::new(&ctx.app_name));
+    > = Box::new(term_wm_sys_ui_components::WmTopPanelComponent::new(&ctx.app_name));
     let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> =
-        Box::new(term_wm_ui_components::BottomPanelComponent::new(
+        Box::new(term_wm_sys_ui_components::WmBottomPanelComponent::new(
             &ctx.app_name,
             &ctx.app_version,
             None,

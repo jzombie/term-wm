@@ -57,9 +57,9 @@ impl App {
         let hostname = None;
         let top_panel: Box<
             dyn term_wm_core::top_panel_trait::TopPanel<term_wm_core::window::WindowId<PaneId>>,
-        > = Box::new(term_wm_ui_components::TopPanelComponent::new("example"));
+        > = Box::new(term_wm_sys_ui_components::WmTopPanelComponent::new("example"));
         let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> =
-            Box::new(term_wm_ui_components::BottomPanelComponent::new(
+            Box::new(term_wm_sys_ui_components::WmBottomPanelComponent::new(
                 "example", "0.0.0", hostname,
             ));
         let menu_overlay: Box<
