@@ -208,7 +208,7 @@ impl WindowManagerHost<PaneId> for App {
     fn open_help_overlay(&mut self) {
         use term_wm_sys_ui_components::wm_help_overlay::WmHelpOverlayComponent;
         let kb = self.windows.keybindings().clone();
-        let mut h = WmHelpOverlayComponent::new(kb);
+        let mut h = WmHelpOverlayComponent::new(self.windows.app_ctx(), kb);
         h.show();
         h.set_selection_enabled(self.windows.clipboard_enabled());
         self.windows.open_overlay(OverlayId::Help, Box::new(h));
@@ -217,7 +217,7 @@ impl WindowManagerHost<PaneId> for App {
     fn open_keybindings_overlay(&mut self) {
         use term_wm_sys_ui_components::wm_keybinding_overlay::WmKeybindingOverlayComponent;
         let kb = self.windows.keybindings().clone();
-        let mut o = WmKeybindingOverlayComponent::new(kb);
+        let mut o = WmKeybindingOverlayComponent::new(self.windows.app_ctx(), kb);
         o.show();
         self.windows
             .open_overlay(OverlayId::Keybindings, Box::new(o));

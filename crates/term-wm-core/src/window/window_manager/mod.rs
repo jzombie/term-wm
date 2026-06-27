@@ -518,6 +518,10 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.floating_resize_offscreen
     }
 
+    pub fn app_ctx(&self) -> &Arc<AppContext> {
+        &self.app_ctx
+    }
+
     /// Create a [`ComponentContext`] pre-populated with the application
     /// identity from this window manager's [`AppContext`].
     pub fn component_context(&self, focused: bool) -> ComponentContext {

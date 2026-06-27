@@ -4,6 +4,9 @@ use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders, Clear};
 
+use std::sync::Arc;
+
+use term_wm_core::app_context::AppContext;
 use term_wm_core::components::{Component, ComponentContext, Overlay};
 use term_wm_core::keybindings::{Action, Category, KeyBindings};
 use term_wm_core::ui::UiFrame;
@@ -14,10 +17,11 @@ pub struct WmKeybindingOverlayComponent {
     content: ScrollViewComponent<ListComponent>,
     area: Rect,
     keybindings: KeyBindings,
+    app_ctx: Arc<AppContext>,
 }
 
 impl WmKeybindingOverlayComponent {
-    pub fn new(keybindings: KeyBindings) -> Self {
+    pub fn new(app_ctx: &Arc<AppContext>, keybindings: KeyBindings) -> Self {
         let mut dialog = DialogOverlayComponent::new();
         dialog.set_dim_backdrop(true);
         dialog.set_auto_close_on_outside_click(true);
@@ -29,6 +33,7 @@ impl WmKeybindingOverlayComponent {
             content: list,
             area: Rect::default(),
             keybindings,
+            app_ctx: Arc::clone(app_ctx),
         };
         overlay.build_entries();
         overlay.content.set_keyboard_enabled(true);
@@ -102,7 +107,7 @@ impl Component for WmKeybindingOverlayComponent {
         if !self.dialog.visible() || area.width == 0 || area.height == 0 {
             return;
         }
-        let title = format!("{} — Keybindings", env!("CARGO_PKG_NAME"));
+        let title = format!("{} — Keybindings", self.app_ctx.app_name);
         self.dialog.render_backdrop(frame, area, None);
         let rect = self.dialog.rect_for(area);
         frame.render_widget(Clear, rect);
