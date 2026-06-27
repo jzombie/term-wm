@@ -127,12 +127,13 @@ impl WmConfig {
         }
     }
 
-    /// Embedded mode preset: no chrome, no panel, no floating windows, no overlay.
+    /// Embedded mode preset: no chrome, no floating windows, no overlay,
+    /// but with the bottom status panel enabled for navigation.
     pub fn embedded() -> Self {
         Self {
             chrome_enabled: false,
             floating_windows_enabled: false,
-            panel_enabled: false,
+            panel_enabled: true,
             wm_overlay_enabled: false,
             super_passthrough_window: super_passthrough_window_default(),
             floating_resize_offscreen: false,

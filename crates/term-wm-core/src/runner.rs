@@ -762,6 +762,52 @@ mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
+    #[derive(Debug)]
+    struct TestPanel<I>(std::marker::PhantomData<I>);
+    impl<I: Copy + Eq + Ord + std::fmt::Debug> crate::panel_trait::Panel<crate::window::WindowId<I>> for TestPanel<I> {
+        fn begin_frame(&mut self) {}
+        fn visible(&self) -> bool { false }
+        fn height(&self) -> u16 { 0 }
+        fn area(&self) -> ratatui::prelude::Rect { ratatui::prelude::Rect::default() }
+        fn bottom_area(&self) -> ratatui::prelude::Rect { ratatui::prelude::Rect::default() }
+        fn set_visible(&mut self, _v: bool) {}
+        fn set_height(&mut self, _h: u16) {}
+        fn set_keybinding_hints(&mut self, _h: Vec<(crate::keybindings::Action, Vec<String>)>) {}
+        fn keybinding_hints(&self) -> &[(crate::keybindings::Action, Vec<String>)] { &[] }
+        fn set_hostname(&mut self, _hostname: &str) {}
+        fn split_area(&mut self, _active: bool, area: ratatui::prelude::Rect) -> (ratatui::prelude::Rect, ratatui::prelude::Rect, ratatui::prelude::Rect) {
+            (ratatui::prelude::Rect::default(), ratatui::prelude::Rect::default(), area)
+        }
+        fn render(&mut self, _frame: &mut crate::ui::UiFrame<'_>, _active: bool, _focus_current: crate::window::WindowId<I>, _display_order: &[crate::window::WindowId<I>], _status_line: Option<&str>, _mouse_capture_enabled: bool, _clipboard_enabled: bool, _window_selection_enabled: bool, _selection_active: bool, _selection_dragging: bool, _selection_copy_available: bool, _selection_copied: bool, _menu_open: bool, _label_for: &dyn Fn(crate::window::WindowId<I>) -> String) {}
+        fn menu_icon_rect(&self) -> Option<ratatui::prelude::Rect> { None }
+        fn menu_icon_contains_point(&self, _col: u16, _row: u16) -> bool { false }
+        fn hit_test_mouse_capture(&self, _e: &crossterm::event::Event) -> bool { false }
+        fn hit_test_selection(&self, _e: &crossterm::event::Event) -> bool { false }
+        fn hit_test_clipboard(&self, _e: &crossterm::event::Event) -> bool { false }
+        fn hit_test_copy(&self, _e: &crossterm::event::Event) -> bool { false }
+        fn hit_test_window(&self, _e: &crossterm::event::Event) -> Option<crate::window::WindowId<I>> { None }
+        fn hit_test_hint(&self, _e: &crossterm::event::Event) -> Option<crate::keybindings::Action> { None }
+    }
+
+    #[derive(Debug)]
+    struct TestMenu;
+    impl crate::components::Component for TestMenu {
+        fn render(&mut self, _frame: &mut crate::ui::UiFrame<'_>, _area: ratatui::prelude::Rect, _ctx: &crate::components::ComponentContext) {}
+    }
+    impl crate::components::Overlay for TestMenu {
+        fn as_any(&self) -> &dyn std::any::Any { self }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    }
+    impl crate::components::MenuOverlay<crate::window::WmMenuAction> for TestMenu {
+        fn outline(&mut self) {}
+        fn restore(&mut self) {}
+        fn set_items(&mut self, _items: Vec<crate::components::MenuItem<crate::window::WmMenuAction>>) {}
+        fn set_timeout(&mut self, _timeout: std::time::Duration) {}
+        fn selected_action(&self) -> Option<&crate::window::WmMenuAction> { None }
+        fn set_anchor(&mut self, _pos: Option<(u16, u16)>) {}
+        fn set_managed_area(&mut self, _area: ratatui::prelude::Rect) {}
+    }
+
     #[test]
     fn auto_layout_empty_and_multiple() {
         let empty: Vec<u8> = vec![];
@@ -779,7 +825,7 @@ mod tests {
 
         // Create an empty WindowManager (no active regions/z-order).
         let wm: WindowManager<usize> =
-            WindowManager::new_standalone(0, crate::AppContext::new("test", "0.0.0"));
+            WindowManager::with_config(0, crate::wm_config::WmConfig::standalone(), std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")), Box::new(TestPanel(std::marker::PhantomData)), Box::new(TestMenu));
         assert!(!wm.has_any_active_windows());
 
         // Create a fake app that enumerates windows (i.e., app-level windows still exist)
@@ -872,7 +918,7 @@ mod tests {
         }
 
         let mut app = FakeApp {
-            wm: WindowManager::<usize>::new_standalone(0, crate::AppContext::new("test", "0.0.0")),
+            wm: WindowManager::<usize>::with_config(0, crate::wm_config::WmConfig::standalone(), std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")), Box::new(TestPanel(std::marker::PhantomData)), Box::new(TestMenu)),
             recorder: KeyRecorder {
                 received_key: false,
             },
@@ -964,7 +1010,7 @@ mod tests {
         }
 
         let mut app = FakeApp {
-            wm: WindowManager::<usize>::new_standalone(0, crate::AppContext::new("test", "0.0.0")),
+            wm: WindowManager::<usize>::with_config(0, crate::wm_config::WmConfig::standalone(), std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")), Box::new(TestPanel(std::marker::PhantomData)), Box::new(TestMenu)),
             recorder: KeyRecorder {
                 received_key: false,
             },
