@@ -9,7 +9,7 @@ use ratatui::{
 
 use term_wm_core::{
     components::{Component, ComponentContext, MenuItem, MenuOverlay, Overlay},
-    keybindings::{Action, KeyBindings},
+    keybindings::Action,
     layout::rect_contains,
     theme,
     ui::UiFrame,
@@ -28,7 +28,6 @@ pub struct WmMenuOverlay<R> {
     anchor: Option<(u16, u16)>,
     managed_area: Rect,
     last_action: Option<R>,
-    nav_keys: KeyBindings,
 }
 
 impl<R: Clone + std::fmt::Debug + 'static> WmMenuOverlay<R> {
@@ -43,7 +42,6 @@ impl<R: Clone + std::fmt::Debug + 'static> WmMenuOverlay<R> {
             anchor: None,
             managed_area: Rect::default(),
             last_action: None,
-            nav_keys: KeyBindings::default(),
         }
     }
 
@@ -193,7 +191,7 @@ impl<R: Clone + std::fmt::Debug + 'static> Component for WmMenuOverlay<R> {
         }
     }
 
-    fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
+    fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
         self.auto_restore();
         self.last_action = None;
 
@@ -221,21 +219,22 @@ impl<R: Clone + std::fmt::Debug + 'static> Component for WmMenuOverlay<R> {
             return false;
         }
 
-        if self.nav_keys.matches(Action::MenuUp, key)
-            || self.nav_keys.matches(Action::MenuPrev, key)
+        let kb = ctx.keybindings().unwrap_or_default();
+        if kb.matches(Action::MenuUp, key)
+            || kb.matches(Action::MenuPrev, key)
         {
             let current = self.menu.selected();
             self.menu.set_selected(if current == 0 { total - 1 } else { current - 1 });
             self.restore();
             true
-        } else if self.nav_keys.matches(Action::MenuDown, key)
-            || self.nav_keys.matches(Action::MenuNext, key)
+        } else if kb.matches(Action::MenuDown, key)
+            || kb.matches(Action::MenuNext, key)
         {
             let current = self.menu.selected();
             self.menu.set_selected((current + 1) % total);
             self.restore();
             true
-        } else if self.nav_keys.matches(Action::MenuSelect, key) {
+        } else if kb.matches(Action::MenuSelect, key) {
             self.last_action = self.menu.selected_action().cloned();
             true
         } else {
@@ -279,6 +278,7 @@ impl<R: Clone + std::fmt::Debug + 'static> MenuOverlay<R> for WmMenuOverlay<R> {
     fn set_managed_area(&mut self, area: Rect) {
         self.managed_area = area;
     }
+
 }
 
 impl<R: Clone + std::fmt::Debug + 'static> Default for WmMenuOverlay<R> {

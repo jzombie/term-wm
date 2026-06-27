@@ -198,7 +198,8 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             self.menu_overlay.set_managed_area(self.managed_area);
             let menu_ctx = self.component_context(false)
                 .with_overlay(true)
-                .with_hover_pos(self.hover);
+                .with_hover_pos(self.hover)
+                .with_keybindings(std::sync::Arc::new(self.keybindings.clone()));
             let comp: &mut dyn Component = &mut *self.menu_overlay;
             comp.render(frame, frame.area(), &menu_ctx);
         }

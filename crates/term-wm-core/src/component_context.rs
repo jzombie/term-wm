@@ -3,6 +3,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::app_context::AppContext;
+use crate::keybindings::KeyBindings;
 
 // Shared component rendering context
 //
@@ -27,6 +28,7 @@ pub struct ComponentContext {
     viewport_handle: Option<ViewportHandle>,
     app_ctx: Arc<AppContext>,
     hover_pos: Option<(u16, u16)>,
+    keybindings: Option<Arc<KeyBindings>>,
 }
 
 /// Viewport metadata describing how the component is projected into a
@@ -182,6 +184,7 @@ impl ComponentContext {
             viewport_handle: None,
             app_ctx: Arc::new(AppContext::new("", "")),
             hover_pos: None,
+            keybindings: None,
         }
     }
 
@@ -224,6 +227,10 @@ impl ComponentContext {
         self.hover_pos
     }
 
+    pub fn keybindings(&self) -> Option<Arc<KeyBindings>> {
+        self.keybindings.clone()
+    }
+
     /// Return a new `ComponentContext` with an attached [`AppContext`].
     ///
     /// Uses [`Arc::clone`], which is a cheap reference-count bump — the
@@ -259,6 +266,12 @@ impl ComponentContext {
     pub fn with_hover_pos(&self, pos: Option<(u16, u16)>) -> Self {
         let mut ctx = self.clone();
         ctx.hover_pos = pos;
+        ctx
+    }
+
+    pub fn with_keybindings(&self, kb: Arc<KeyBindings>) -> Self {
+        let mut ctx = self.clone();
+        ctx.keybindings = Some(kb);
         ctx
     }
 }
