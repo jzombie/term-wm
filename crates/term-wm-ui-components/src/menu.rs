@@ -117,6 +117,24 @@ impl<R> MenuComponent<R> {
         let inner_width = area.width.saturating_sub(2).max(1);
         let visible_items = (area.height.saturating_sub(1)).min(self.items.len() as u16) as usize;
 
+        for row in 0..area.height {
+            let y = area.y.saturating_add(row);
+            if y < bounds.y || y >= bounds.y.saturating_add(bounds.height) {
+                continue;
+            }
+            for col in 0..area.width {
+                let x = area.x.saturating_add(col);
+                if x >= bounds.x.saturating_add(bounds.width) {
+                    break;
+                }
+                if let Some(cell) = buffer.cell_mut((x, y)) {
+                    cell.reset();
+                    cell.set_symbol(" ");
+                    cell.set_style(menu_style);
+                }
+            }
+        }
+
         for idx in 0..visible_items {
             let y = area.y.saturating_add(idx as u16 + 1);
             if y < bounds.y || y >= bounds.y.saturating_add(bounds.height) {

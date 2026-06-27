@@ -56,7 +56,7 @@ impl<R: Clone + std::fmt::Debug + 'static> WmMenuOverlay<R> {
         }
     }
 
-    fn render_dropdown(&mut self, frame: &mut UiFrame<'_>) {
+    fn render_dropdown(&mut self, frame: &mut UiFrame<'_>, ctx: &ComponentContext) {
         let item_count = self.menu.items().len();
         if item_count == 0 {
             return;
@@ -112,7 +112,11 @@ impl<R: Clone + std::fmt::Debug + 'static> WmMenuOverlay<R> {
             return;
         }
 
-        let hovered_idx = None;
+        let hovered_idx = ctx.hover_pos().and_then(|(_mx, my)| {
+            (my >= drop_rect.y.saturating_add(1) && my < drop_rect.y.saturating_add(item_count as u16 + 1))
+                .then(|| (my - drop_rect.y - 1) as usize)
+                .filter(|&idx| idx < item_count)
+        });
         self.menu.render_items(frame, drop_rect, hovered_idx);
 
         self.item_hits.clear();
@@ -180,12 +184,12 @@ impl<R: Clone + std::fmt::Debug + 'static> WmMenuOverlay<R> {
 }
 
 impl<R: Clone + std::fmt::Debug + 'static> Component for WmMenuOverlay<R> {
-    fn render(&mut self, frame: &mut UiFrame<'_>, _area: Rect, _ctx: &ComponentContext) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, _area: Rect, ctx: &ComponentContext) {
         self.auto_restore();
         if self.outlined {
             self.render_outline(frame);
         } else {
-            self.render_dropdown(frame);
+            self.render_dropdown(frame, ctx);
         }
     }
 
