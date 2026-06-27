@@ -763,9 +763,9 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
     #[derive(Debug)]
-    struct TestPanel<I>(std::marker::PhantomData<I>);
-    impl<I: Copy + Eq + Ord + std::fmt::Debug> crate::panel_trait::Panel<crate::window::WindowId<I>>
-        for TestPanel<I>
+    struct TestTopPanel<I>(std::marker::PhantomData<I>);
+    impl<I: Copy + Eq + Ord + std::fmt::Debug>
+        crate::top_panel_trait::TopPanel<crate::window::WindowId<I>> for TestTopPanel<I>
     {
         fn begin_frame(&mut self) {}
         fn visible(&self) -> bool {
@@ -777,30 +777,14 @@ mod tests {
         fn area(&self) -> ratatui::prelude::Rect {
             ratatui::prelude::Rect::default()
         }
-        fn bottom_area(&self) -> ratatui::prelude::Rect {
-            ratatui::prelude::Rect::default()
-        }
         fn set_visible(&mut self, _v: bool) {}
         fn set_height(&mut self, _h: u16) {}
-        fn set_keybinding_hints(&mut self, _h: Vec<(crate::keybindings::Action, Vec<String>)>) {}
-        fn keybinding_hints(&self) -> &[(crate::keybindings::Action, Vec<String>)] {
-            &[]
-        }
-        fn set_hostname(&mut self, _hostname: &str) {}
         fn split_area(
             &mut self,
             _active: bool,
             area: ratatui::prelude::Rect,
-        ) -> (
-            ratatui::prelude::Rect,
-            ratatui::prelude::Rect,
-            ratatui::prelude::Rect,
-        ) {
-            (
-                ratatui::prelude::Rect::default(),
-                ratatui::prelude::Rect::default(),
-                area,
-            )
+        ) -> (ratatui::prelude::Rect, ratatui::prelude::Rect) {
+            (ratatui::prelude::Rect::default(), area)
         }
         fn render(
             &mut self,
@@ -844,10 +828,35 @@ mod tests {
         ) -> Option<crate::window::WindowId<I>> {
             None
         }
-        fn hit_test_hint(
-            &self,
-            _e: &crossterm::event::Event,
-        ) -> Option<crate::keybindings::Action> {
+        fn hit_test_menu(&self, _e: &crossterm::event::Event) -> bool {
+            false
+        }
+    }
+
+    #[derive(Debug)]
+    struct TestBottomPanel;
+    impl crate::bottom_panel_trait::BottomPanel for TestBottomPanel {
+        fn begin_frame(&mut self) {}
+        fn area(&self) -> ratatui::prelude::Rect {
+            ratatui::prelude::Rect::default()
+        }
+        fn set_keybinding_hints(
+            &mut self,
+            _h: Vec<(crate::keybindings::Action, Vec<String>)>,
+        ) {
+        }
+        fn keybinding_hints(&self) -> &[(crate::keybindings::Action, Vec<String>)] {
+            &[]
+        }
+        fn split_bottom_area(
+            &mut self,
+            area: ratatui::prelude::Rect,
+            _height: u16,
+        ) -> (ratatui::prelude::Rect, ratatui::prelude::Rect) {
+            (ratatui::prelude::Rect::default(), area)
+        }
+        fn render(&mut self, _frame: &mut crate::ui::UiFrame<'_>, _active: bool) {}
+        fn hit_test_hint(&self, _e: &crossterm::event::Event) -> Option<crate::keybindings::Action> {
             None
         }
     }
@@ -907,7 +916,8 @@ mod tests {
             0,
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
-            Box::new(TestPanel(std::marker::PhantomData)),
+            Box::new(TestTopPanel(std::marker::PhantomData)),
+            Box::new(TestBottomPanel),
             Box::new(TestMenu),
         );
         assert!(!wm.has_any_active_windows());
@@ -1006,7 +1016,8 @@ mod tests {
                 0,
                 crate::wm_config::WmConfig::standalone(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
-                Box::new(TestPanel(std::marker::PhantomData)),
+                Box::new(TestTopPanel(std::marker::PhantomData)),
+                Box::new(TestBottomPanel),
                 Box::new(TestMenu),
             ),
             recorder: KeyRecorder {
@@ -1104,7 +1115,8 @@ mod tests {
                 0,
                 crate::wm_config::WmConfig::standalone(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
-                Box::new(TestPanel(std::marker::PhantomData)),
+                Box::new(TestTopPanel(std::marker::PhantomData)),
+                Box::new(TestBottomPanel),
                 Box::new(TestMenu),
             ),
             recorder: KeyRecorder {

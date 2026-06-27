@@ -13,8 +13,11 @@ fn default_shell_nonempty() {
 #[test]
 fn mouse_capture_flow_through_window_manager() {
     let ctx = Arc::new(term_wm::AppContext::new("test", "0.0.0"));
-    let panel: Box<dyn term_wm_core::panel_trait::Panel<term_wm_core::window::WindowId<usize>>> =
-        Box::new(term_wm_ui_components::PanelComponent::new(
+    let top_panel: Box<
+        dyn term_wm_core::top_panel_trait::TopPanel<term_wm_core::window::WindowId<usize>>,
+    > = Box::new(term_wm_ui_components::TopPanelComponent::new(&ctx.app_name));
+    let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> =
+        Box::new(term_wm_ui_components::BottomPanelComponent::new(
             &ctx.app_name,
             &ctx.app_version,
             None,
@@ -25,7 +28,8 @@ fn mouse_capture_flow_through_window_manager() {
         0,
         term_wm::wm_config::WmConfig::standalone(),
         ctx,
-        panel,
+        top_panel,
+        bottom_panel,
         menu,
     );
     // default starts enabled (from config)
@@ -41,16 +45,30 @@ fn mouse_capture_flow_through_window_manager() {
 }
 
 #[test]
-fn panel_split_area_basic() {
-    let mut p = term_wm_ui_components::PanelComponent::<u8>::new("test", "0.0.0", Some("host"));
+fn top_panel_split_area_basic() {
+    let mut p = term_wm_ui_components::TopPanelComponent::<u8>::new("test");
     let area = Rect {
         x: 0,
         y: 0,
         width: 12,
         height: 6,
     };
-    let (panel_rect, _bottom, managed) = p.split_area(true, area);
+    let (panel_rect, managed) = p.split_area(true, area);
     assert_eq!(panel_rect.width, area.width);
+    assert_eq!(managed.width, area.width);
+}
+
+#[test]
+fn bottom_panel_split_area_basic() {
+    let mut p = term_wm_ui_components::BottomPanelComponent::new("test", "0.0.0", Some("host"));
+    let area = Rect {
+        x: 0,
+        y: 0,
+        width: 12,
+        height: 6,
+    };
+    let (bottom_rect, managed) = p.split_bottom_area(area, 1);
+    assert_eq!(bottom_rect.width, area.width);
     assert_eq!(managed.width, area.width);
 }
 

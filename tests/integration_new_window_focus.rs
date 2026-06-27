@@ -5,8 +5,11 @@ use term_wm::window::WindowManager;
 #[test]
 fn new_window_is_focused() {
     let ctx = Arc::new(term_wm::AppContext::new("test", "0.0.0"));
-    let panel: Box<dyn term_wm_core::panel_trait::Panel<term_wm_core::window::WindowId<usize>>> =
-        Box::new(term_wm_ui_components::PanelComponent::new(
+    let top_panel: Box<
+        dyn term_wm_core::top_panel_trait::TopPanel<term_wm_core::window::WindowId<usize>>,
+    > = Box::new(term_wm_ui_components::TopPanelComponent::new(&ctx.app_name));
+    let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> =
+        Box::new(term_wm_ui_components::BottomPanelComponent::new(
             &ctx.app_name,
             &ctx.app_version,
             None,
@@ -17,7 +20,8 @@ fn new_window_is_focused() {
         0,
         term_wm::wm_config::WmConfig::standalone(),
         ctx,
-        panel,
+        top_panel,
+        bottom_panel,
         menu,
     );
 

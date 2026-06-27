@@ -16,8 +16,12 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManagerExt<Id>
 {
     fn new_standalone(current: Id, app_ctx: term_wm_core::app_context::AppContext) -> Self {
         let hostname = app_ctx.hostname.as_deref();
-        let panel: Box<dyn term_wm_core::panel_trait::Panel<WindowId<Id>>> =
-            Box::new(term_wm_ui_components::PanelComponent::new(
+        let top_panel: Box<dyn term_wm_core::top_panel_trait::TopPanel<WindowId<Id>>> =
+            Box::new(term_wm_ui_components::TopPanelComponent::new(
+                &app_ctx.app_name,
+            ));
+        let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> =
+            Box::new(term_wm_ui_components::BottomPanelComponent::new(
                 &app_ctx.app_name,
                 &app_ctx.app_version,
                 hostname,
@@ -28,15 +32,20 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManagerExt<Id>
             current,
             term_wm_core::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(app_ctx),
-            panel,
+            top_panel,
+            bottom_panel,
             menu,
         )
     }
 
     fn new_embedded(current: Id, app_ctx: term_wm_core::app_context::AppContext) -> Self {
         let hostname = app_ctx.hostname.as_deref();
-        let panel: Box<dyn term_wm_core::panel_trait::Panel<WindowId<Id>>> =
-            Box::new(term_wm_ui_components::PanelComponent::new(
+        let top_panel: Box<dyn term_wm_core::top_panel_trait::TopPanel<WindowId<Id>>> =
+            Box::new(term_wm_ui_components::TopPanelComponent::new(
+                &app_ctx.app_name,
+            ));
+        let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> =
+            Box::new(term_wm_ui_components::BottomPanelComponent::new(
                 &app_ctx.app_name,
                 &app_ctx.app_version,
                 hostname,
@@ -45,7 +54,8 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManagerExt<Id>
             current,
             term_wm_core::wm_config::WmConfig::embedded(),
             std::sync::Arc::new(app_ctx),
-            panel,
+            top_panel,
+            bottom_panel,
             Box::new(NoopMenu),
         )
     }

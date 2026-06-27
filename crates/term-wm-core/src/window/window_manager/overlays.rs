@@ -69,7 +69,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
 
         if let Event::Mouse(mouse) = event
             && matches!(mouse.kind, MouseEventKind::Down(_))
-            && self.panel.menu_icon_contains_point(mouse.column, mouse.row)
+            && self.top_panel.menu_icon_contains_point(mouse.column, mouse.row)
         {
             return Some(WmMenuAction::CloseMenu);
         }
@@ -194,7 +194,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             );
             self.menu_overlay.set_items(menu_items);
             let anchor = self
-                .panel
+                .top_panel
                 .menu_icon_rect()
                 .map(|r| (r.x, r.y.saturating_add(r.height)));
             self.menu_overlay.set_anchor(anchor);

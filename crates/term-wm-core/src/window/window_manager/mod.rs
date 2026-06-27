@@ -20,7 +20,8 @@ use crate::components::{ComponentContext, MenuItem, MenuOverlay, Overlay};
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
-use crate::panel_trait::Panel;
+use crate::bottom_panel_trait::BottomPanel;
+use crate::top_panel_trait::TopPanel;
 use crate::ui::UiFrame;
 use crate::wm_config::{HintVisibility, WmConfig};
 
@@ -186,7 +187,8 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     closed_app_windows: Vec<Id>,
     pub(crate) managed_area: Rect,
     app_ctx: Arc<AppContext>,
-    panel: Box<dyn Panel<WindowId<Id>>>,
+    top_panel: Box<dyn TopPanel<WindowId<Id>>>,
+    bottom_panel: Box<dyn BottomPanel>,
     menu_overlay: Box<dyn MenuOverlay<WmMenuAction>>,
     pub(crate) drag_header: Option<HeaderDrag<WindowId<Id>>>,
     pub(crate) last_header_click: Option<(WindowId<Id>, Instant)>,
@@ -418,7 +420,8 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         current: Id,
         config: WmConfig,
         app_ctx: Arc<AppContext>,
-        panel: Box<dyn Panel<WindowId<Id>>>,
+        top_panel: Box<dyn TopPanel<WindowId<Id>>>,
+        bottom_panel: Box<dyn BottomPanel>,
         menu_overlay: Box<dyn MenuOverlay<WmMenuAction>>,
     ) -> Self {
         let mouse_capture_enabled = config.mouse_capture_enabled;
@@ -440,7 +443,8 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             closed_app_windows: Vec::new(),
             managed_area: Rect::default(),
             app_ctx,
-            panel,
+            top_panel,
+            bottom_panel,
             menu_overlay,
             drag_header: None,
             last_header_click: None,
@@ -527,7 +531,8 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.floating_headers.clear();
         self.managed_draw_order.clear();
         self.managed_draw_order_app.clear();
-        self.panel.begin_frame();
+        self.top_panel.begin_frame();
+        self.bottom_panel.begin_frame();
         if crate::debug_event_flags::take_panic_pending() {
             self.show_system_window(SystemWindowId::DebugLog);
         }
@@ -741,7 +746,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     fn panel_active(&self) -> bool {
-        self.config.panel_enabled && self.panel.visible() && self.panel.height() > 0
+        self.config.panel_enabled && self.top_panel.visible() && self.top_panel.height() > 0
     }
 
     /// Unified double-Esc press handler.
@@ -833,7 +838,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             self.window_titles().into_iter().collect();
         let selection_copy_available = self.selection_text.is_some();
         let panel_active = self.panel_active();
-        self.panel.render(
+        self.top_panel.render(
             frame,
             panel_active,
             self.wm_focus.current(),
@@ -854,6 +859,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 })
             },
         );
+        self.bottom_panel.render(frame, panel_active);
     }
 }
 
@@ -993,9 +999,11 @@ fn map_layout_node<Id: Copy + Eq + Ord>(node: &LayoutNode<Id>) -> LayoutNode<Win
 
 #[cfg(test)]
 #[derive(Debug)]
-struct NoPanel<I>(std::marker::PhantomData<I>);
+struct NoTopPanel<I>(std::marker::PhantomData<I>);
 #[cfg(test)]
-impl<I: Copy + Eq + Ord + std::fmt::Debug> Panel<WindowId<I>> for NoPanel<I> {
+impl<I: Copy + Eq + Ord + std::fmt::Debug> crate::top_panel_trait::TopPanel<WindowId<I>>
+    for NoTopPanel<I>
+{
     fn begin_frame(&mut self) {}
     fn visible(&self) -> bool {
         false
@@ -1006,18 +1014,10 @@ impl<I: Copy + Eq + Ord + std::fmt::Debug> Panel<WindowId<I>> for NoPanel<I> {
     fn area(&self) -> Rect {
         Rect::default()
     }
-    fn bottom_area(&self) -> Rect {
-        Rect::default()
-    }
     fn set_visible(&mut self, _v: bool) {}
     fn set_height(&mut self, _h: u16) {}
-    fn set_keybinding_hints(&mut self, _h: Vec<(crate::keybindings::Action, Vec<String>)>) {}
-    fn keybinding_hints(&self) -> &[(crate::keybindings::Action, Vec<String>)] {
-        &[]
-    }
-    fn set_hostname(&mut self, _hostname: &str) {}
-    fn split_area(&mut self, _active: bool, area: Rect) -> (Rect, Rect, Rect) {
-        (Rect::default(), Rect::default(), area)
+    fn split_area(&mut self, _active: bool, area: Rect) -> (Rect, Rect) {
+        (Rect::default(), area)
     }
     fn render(
         &mut self,
@@ -1058,6 +1058,32 @@ impl<I: Copy + Eq + Ord + std::fmt::Debug> Panel<WindowId<I>> for NoPanel<I> {
     fn hit_test_window(&self, _e: &Event) -> Option<WindowId<I>> {
         None
     }
+    fn hit_test_menu(&self, _e: &Event) -> bool {
+        false
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct NoBottomPanel;
+#[cfg(test)]
+impl crate::bottom_panel_trait::BottomPanel for NoBottomPanel {
+    fn begin_frame(&mut self) {}
+    fn area(&self) -> Rect {
+        Rect::default()
+    }
+    fn set_keybinding_hints(
+        &mut self,
+        _h: Vec<(crate::keybindings::Action, Vec<String>)>,
+    ) {
+    }
+    fn keybinding_hints(&self) -> &[(crate::keybindings::Action, Vec<String>)] {
+        &[]
+    }
+    fn split_bottom_area(&mut self, area: Rect, _height: u16) -> (Rect, Rect) {
+        (Rect::default(), area)
+    }
+    fn render(&mut self, _frame: &mut crate::ui::UiFrame<'_>, _active: bool) {}
     fn hit_test_hint(&self, _e: &Event) -> Option<crate::keybindings::Action> {
         None
     }
@@ -1186,7 +1212,8 @@ mod tests {
             0,
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
-            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoTopPanel(std::marker::PhantomData)),
+            Box::new(NoBottomPanel),
             Box::new(NoopMenu),
         );
 
@@ -1230,7 +1257,8 @@ mod tests {
             0,
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
-            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoTopPanel(std::marker::PhantomData)),
+            Box::new(NoBottomPanel),
             Box::new(NoopMenu),
         );
         wm.set_floating_resize_offscreen(true);
@@ -1270,7 +1298,8 @@ mod tests {
             0,
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
-            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoTopPanel(std::marker::PhantomData)),
+            Box::new(NoBottomPanel),
             Box::new(NoopMenu),
         );
         wm.set_floating_resize_offscreen(true);
@@ -1307,7 +1336,8 @@ mod tests {
             0,
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
-            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoTopPanel(std::marker::PhantomData)),
+            Box::new(NoBottomPanel),
             Box::new(NoopMenu),
         );
         wm.register_managed_layout(ratatui::layout::Rect {
@@ -1342,7 +1372,8 @@ mod tests {
             0,
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
-            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoTopPanel(std::marker::PhantomData)),
+            Box::new(NoBottomPanel),
             Box::new(NoopMenu),
         );
         let target_rect = ratatui::layout::Rect {
@@ -1388,7 +1419,8 @@ mod tests {
             0,
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
-            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoTopPanel(std::marker::PhantomData)),
+            Box::new(NoBottomPanel),
             Box::new(NoopMenu),
         );
         wm.set_floating_resize_offscreen(true);
@@ -1443,7 +1475,8 @@ mod tests {
             0,
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
-            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoTopPanel(std::marker::PhantomData)),
+            Box::new(NoBottomPanel),
             Box::new(NoopMenu),
         );
         wm.set_floating_resize_offscreen(true);
@@ -1485,7 +1518,8 @@ mod tests {
             0,
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
-            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoTopPanel(std::marker::PhantomData)),
+            Box::new(NoBottomPanel),
             Box::new(NoopMenu),
         );
         wm.regions.set(
@@ -1597,7 +1631,8 @@ mod tests {
             0,
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
-            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoTopPanel(std::marker::PhantomData)),
+            Box::new(NoBottomPanel),
             Box::new(NoopMenu),
         );
         wm.set_system_window(SystemWindowId::DebugLog, Box::new(DummyDebugComponent));
@@ -1666,7 +1701,8 @@ mod tests {
             0,
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
-            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoTopPanel(std::marker::PhantomData)),
+            Box::new(NoBottomPanel),
             Box::new(NoopMenu),
         );
         let full = Rect {
@@ -1706,7 +1742,8 @@ mod tests {
             0,
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
-            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoTopPanel(std::marker::PhantomData)),
+            Box::new(NoBottomPanel),
             Box::new(NoopMenu),
         );
         let full = Rect {
@@ -1748,7 +1785,8 @@ mod tests {
             0,
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
-            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoTopPanel(std::marker::PhantomData)),
+            Box::new(NoBottomPanel),
             Box::new(NoopMenu),
         );
 
@@ -1813,7 +1851,8 @@ mod tests {
             0,
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
-            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoTopPanel(std::marker::PhantomData)),
+            Box::new(NoBottomPanel),
             Box::new(NoopMenu),
         );
 
@@ -1860,7 +1899,8 @@ mod tests {
             0,
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
-            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoTopPanel(std::marker::PhantomData)),
+            Box::new(NoBottomPanel),
             Box::new(NoopMenu),
         );
 
@@ -1906,7 +1946,8 @@ mod tests {
             0,
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
-            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoTopPanel(std::marker::PhantomData)),
+            Box::new(NoBottomPanel),
             Box::new(NoopMenu),
         );
         wm.focus_app_window(0);
@@ -1920,7 +1961,8 @@ mod tests {
             0,
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
-            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoTopPanel(std::marker::PhantomData)),
+            Box::new(NoBottomPanel),
             Box::new(NoopMenu),
         );
         wm.focus_app_window(0);
@@ -1939,7 +1981,8 @@ mod tests {
             0,
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
-            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoTopPanel(std::marker::PhantomData)),
+            Box::new(NoBottomPanel),
             Box::new(NoopMenu),
         );
         let id = WindowId::app(42usize);
@@ -1958,7 +2001,8 @@ mod tests {
             0,
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
-            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoTopPanel(std::marker::PhantomData)),
+            Box::new(NoBottomPanel),
             Box::new(NoopMenu),
         );
         let id_a = WindowId::app(1usize);
@@ -1978,7 +2022,8 @@ mod tests {
             0,
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
-            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoTopPanel(std::marker::PhantomData)),
+            Box::new(NoBottomPanel),
             Box::new(NoopMenu),
         );
         wm.set_panel_visible(false);
@@ -2058,7 +2103,8 @@ mod tests {
             0,
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
-            Box::new(NoPanel(std::marker::PhantomData)),
+            Box::new(NoTopPanel(std::marker::PhantomData)),
+            Box::new(NoBottomPanel),
             Box::new(NoopMenu),
         );
         wm.set_panel_visible(false);

@@ -20,25 +20,25 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         if self.config.wm_overlay_enabled {
             if let Event::Mouse(mouse) = event
                 && self.panel_active()
-                && crate::layout::rect_contains(self.panel.area(), mouse.column, mouse.row)
+                && crate::layout::rect_contains(self.top_panel.area(), mouse.column, mouse.row)
             {
                 if matches!(mouse.kind, MouseEventKind::Down(_))
-                    && self.panel.menu_icon_contains_point(mouse.column, mouse.row)
+                    && self.top_panel.menu_icon_contains_point(mouse.column, mouse.row)
                 {
                     if self.wm_overlay_visible() {
                         self.close_wm_overlay();
                     } else {
                         self.open_wm_overlay();
                     }
-                } else if self.panel.hit_test_mouse_capture(event) {
+                } else if self.top_panel.hit_test_mouse_capture(event) {
                     self.toggle_mouse_capture();
-                } else if self.panel.hit_test_selection(event) {
+                } else if self.top_panel.hit_test_selection(event) {
                     self.toggle_window_selection();
-                } else if self.panel.hit_test_clipboard(event) {
+                } else if self.top_panel.hit_test_clipboard(event) {
                     self.toggle_clipboard_enabled();
-                } else if self.panel.hit_test_copy(event) {
+                } else if self.top_panel.hit_test_copy(event) {
                     self.copy_selection_to_clipboard();
-                } else if let Some(id) = self.panel.hit_test_window(event) {
+                } else if let Some(id) = self.top_panel.hit_test_window(event) {
                     if self.is_minimized(id) {
                         self.restore_minimized(id);
                     }
@@ -64,8 +64,8 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         // Hint click in bottom bar — works in both standalone and embedded modes
         if let Event::Mouse(mouse) = event
             && matches!(mouse.kind, MouseEventKind::Down(_))
-            && crate::layout::rect_contains(self.panel.bottom_area(), mouse.column, mouse.row)
-            && let Some(action) = self.panel.hit_test_hint(event)
+            && crate::layout::rect_contains(self.bottom_panel.area(), mouse.column, mouse.row)
+            && let Some(action) = self.bottom_panel.hit_test_hint(event)
         {
             if let Some(combo) = self.keybindings.first_combo(action) {
                 self.synthetic_event = Some(Event::Key(KeyEvent {

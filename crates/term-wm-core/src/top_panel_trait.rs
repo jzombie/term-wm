@@ -1,23 +1,18 @@
 use crossterm::event::Event;
 use ratatui::prelude::Rect;
 
-use crate::keybindings::Action;
 use crate::ui::UiFrame;
 
-pub trait Panel<Id: Copy + Eq + Ord>: std::fmt::Debug {
+pub trait TopPanel<Id: Copy + Eq + Ord>: std::fmt::Debug {
     fn begin_frame(&mut self);
 
     fn visible(&self) -> bool;
     fn height(&self) -> u16;
     fn area(&self) -> Rect;
-    fn bottom_area(&self) -> Rect;
     fn set_visible(&mut self, visible: bool);
     fn set_height(&mut self, height: u16);
-    fn set_keybinding_hints(&mut self, hints: Vec<(Action, Vec<String>)>);
-    fn keybinding_hints(&self) -> &[(Action, Vec<String>)];
-    fn set_hostname(&mut self, hostname: &str);
 
-    fn split_area(&mut self, active: bool, area: Rect) -> (Rect, Rect, Rect);
+    fn split_area(&mut self, active: bool, area: Rect) -> (Rect, Rect);
 
     #[allow(clippy::too_many_arguments)]
     fn render(
@@ -47,5 +42,5 @@ pub trait Panel<Id: Copy + Eq + Ord>: std::fmt::Debug {
     fn hit_test_clipboard(&self, event: &Event) -> bool;
     fn hit_test_copy(&self, event: &Event) -> bool;
     fn hit_test_window(&self, event: &Event) -> Option<Id>;
-    fn hit_test_hint(&self, event: &Event) -> Option<Action>;
+    fn hit_test_menu(&self, event: &Event) -> bool;
 }

@@ -4,7 +4,8 @@ pub mod dialog_overlay;
 pub mod list;
 pub mod markdown_viewer;
 pub mod menu;
-pub mod panel;
+pub mod panel_bar;
+pub mod status_bar;
 pub mod scroll_view;
 pub mod svg_image;
 pub mod terminal;
@@ -17,7 +18,8 @@ pub use dialog_overlay::DialogOverlayComponent;
 pub use list::ListComponent;
 pub use markdown_viewer::MarkdownViewerComponent;
 pub use menu::MenuComponent;
-pub use panel::PanelComponent;
+pub use panel_bar::TopPanelComponent;
+pub use status_bar::BottomPanelComponent;
 pub use scroll_view::{
     ScrollViewComponent, ScrollbarAxis, ScrollbarDrag, render_scrollbar, render_scrollbar_oriented,
 };

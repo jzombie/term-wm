@@ -98,13 +98,17 @@ impl App {
             ),
         );
         let hostname = app_ctx.hostname.as_deref();
-        let panel: Box<
-            dyn term_wm_core::panel_trait::Panel<term_wm_core::window::WindowId<usize>>,
-        > = Box::new(term_wm_ui_components::PanelComponent::new(
+        let top_panel: Box<
+            dyn term_wm_core::top_panel_trait::TopPanel<term_wm_core::window::WindowId<usize>>,
+        > = Box::new(term_wm_ui_components::TopPanelComponent::new(
             &app_ctx.app_name,
-            &app_ctx.app_version,
-            hostname,
         ));
+        let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> =
+            Box::new(term_wm_ui_components::BottomPanelComponent::new(
+                &app_ctx.app_name,
+                &app_ctx.app_version,
+                hostname,
+            ));
         let config = WmConfig::standalone();
         let mut raw_menu = term_wm_sys_ui_components::WmMenuOverlay::new();
         raw_menu.set_timeout(config.menu_outline_timeout);
@@ -115,7 +119,8 @@ impl App {
                 0,
                 config,
                 Arc::clone(&app_ctx),
-                panel,
+                top_panel,
+                bottom_panel,
                 menu_overlay,
             ),
             terminals: Vec::new(),

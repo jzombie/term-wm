@@ -55,11 +55,13 @@ impl App {
             paths.push(paths[0].clone());
         }
         let hostname = None;
-        let panel: Box<
-            dyn term_wm_core::panel_trait::Panel<term_wm_core::window::WindowId<PaneId>>,
-        > = Box::new(term_wm_ui_components::PanelComponent::new(
-            "example", "0.0.0", hostname,
-        ));
+        let top_panel: Box<
+            dyn term_wm_core::top_panel_trait::TopPanel<term_wm_core::window::WindowId<PaneId>>,
+        > = Box::new(term_wm_ui_components::TopPanelComponent::new("example"));
+        let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> =
+            Box::new(term_wm_ui_components::BottomPanelComponent::new(
+                "example", "0.0.0", hostname,
+            ));
         let menu_overlay: Box<
             dyn term_wm_core::components::MenuOverlay<term_wm_core::window::WmMenuAction>,
         > = Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
@@ -67,7 +69,8 @@ impl App {
             PaneId::Left,
             WmConfig::standalone(),
             Arc::new(term_wm::AppContext::new("example", "0.0.0")),
-            panel,
+            top_panel,
+            bottom_panel,
             menu_overlay,
         );
         windows.set_focus_order(vec![PaneId::Left, PaneId::Right]);
