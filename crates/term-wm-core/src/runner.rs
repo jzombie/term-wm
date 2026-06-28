@@ -366,10 +366,12 @@ where
                         return flush_state_changes(app, ControlFlow::Continue);
                     }
                     // Focus routing in WM mode (Tab/Shift+Tab)
+                    // Fold menu to outline so user can see the window they focused.
                     if app
                         .windows()
                         .handle_focus_event(&evt, focus_regions, &map_region)
                     {
+                        app.windows().fold_menu();
                         update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue);
                     }
@@ -760,6 +762,41 @@ mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
+    #[derive(Debug)]
+    struct TestMenu;
+    impl crate::components::Component for TestMenu {
+        fn render(
+            &mut self,
+            _frame: &mut crate::ui::UiFrame<'_>,
+            _area: ratatui::prelude::Rect,
+            _ctx: &crate::components::ComponentContext,
+        ) {
+        }
+    }
+    impl crate::components::Overlay for TestMenu {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+    impl crate::components::MenuOverlay<crate::window::WmMenuAction> for TestMenu {
+        fn outline(&mut self) {}
+        fn restore(&mut self) {}
+        fn set_items(
+            &mut self,
+            _items: Vec<crate::components::MenuItem<crate::window::WmMenuAction>>,
+        ) {
+        }
+        fn set_timeout(&mut self, _timeout: std::time::Duration) {}
+        fn selected_action(&self) -> Option<&crate::window::WmMenuAction> {
+            None
+        }
+        fn set_anchor(&mut self, _pos: Option<(u16, u16)>) {}
+        fn set_managed_area(&mut self, _area: ratatui::prelude::Rect) {}
+    }
+
     #[test]
     fn auto_layout_empty_and_multiple() {
         let empty: Vec<u8> = vec![];
@@ -776,8 +813,14 @@ mod tests {
         use crate::window::WindowManager;
 
         // Create an empty WindowManager (no active regions/z-order).
-        let wm: WindowManager<usize> =
-            WindowManager::new_standalone(0, crate::AppContext::new("test", "0.0.0"));
+        let wm: WindowManager<usize> = WindowManager::with_config(
+            0,
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(TestMenu),
+        );
         assert!(!wm.has_any_active_windows());
 
         // Create a fake app that enumerates windows (i.e., app-level windows still exist)
@@ -870,7 +913,14 @@ mod tests {
         }
 
         let mut app = FakeApp {
-            wm: WindowManager::<usize>::new_standalone(0, crate::AppContext::new("test", "0.0.0")),
+            wm: WindowManager::<usize>::with_config(
+                0,
+                crate::wm_config::WmConfig::standalone(),
+                std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+                None,
+                None,
+                Box::new(TestMenu),
+            ),
             recorder: KeyRecorder {
                 received_key: false,
             },
@@ -962,7 +1012,14 @@ mod tests {
         }
 
         let mut app = FakeApp {
-            wm: WindowManager::<usize>::new_standalone(0, crate::AppContext::new("test", "0.0.0")),
+            wm: WindowManager::<usize>::with_config(
+                0,
+                crate::wm_config::WmConfig::standalone(),
+                std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+                None,
+                None,
+                Box::new(TestMenu),
+            ),
             recorder: KeyRecorder {
                 received_key: false,
             },

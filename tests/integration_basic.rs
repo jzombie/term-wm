@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use ratatui::layout::Rect;
 
 #[test]
@@ -10,11 +12,28 @@ fn default_shell_nonempty() {
 
 #[test]
 fn mouse_capture_flow_through_window_manager() {
-    let mut wm: term_wm::window::WindowManager<usize> =
-        term_wm::window::WindowManager::new_standalone(
-            0,
-            term_wm::AppContext::new("test", "0.0.0"),
-        );
+    let ctx = Arc::new(term_wm::AppContext::new("test", "0.0.0"));
+    let top_panel: Box<
+        dyn term_wm_core::top_panel_trait::TopPanel<term_wm_core::window::WindowId<usize>>,
+    > = Box::new(term_wm_sys_ui_components::WmTopPanelComponent::new(
+        &ctx.app_name,
+    ));
+    let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> =
+        Box::new(term_wm_sys_ui_components::WmBottomPanelComponent::new(
+            &ctx.app_name,
+            &ctx.app_version,
+            None,
+        ));
+    let menu: Box<dyn term_wm_core::components::MenuOverlay<term_wm_core::window::WmMenuAction>> =
+        Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
+    let mut wm: term_wm::window::WindowManager<usize> = term_wm::window::WindowManager::with_config(
+        0,
+        term_wm::wm_config::WmConfig::standalone(),
+        ctx,
+        Some(top_panel),
+        Some(bottom_panel),
+        menu,
+    );
     // default starts enabled (from config)
     assert!(wm.mouse_capture_enabled());
     // setting the same value shouldn't mark change
@@ -28,17 +47,31 @@ fn mouse_capture_flow_through_window_manager() {
 }
 
 #[test]
-fn panel_split_area_basic() {
-    let mut p: term_wm::panel::Panel<u8> =
-        term_wm::panel::Panel::new("test", "0.0.0", Some("host"));
+fn top_panel_split_area_basic() {
+    let mut p = term_wm_sys_ui_components::WmTopPanelComponent::<u8>::new("test");
     let area = Rect {
         x: 0,
         y: 0,
         width: 12,
         height: 6,
     };
-    let (panel_rect, _bottom, managed) = p.split_area(true, area);
+    let (panel_rect, managed) = p.split_area(true, area);
     assert_eq!(panel_rect.width, area.width);
+    assert_eq!(managed.width, area.width);
+}
+
+#[test]
+fn bottom_panel_split_area_basic() {
+    let mut p =
+        term_wm_sys_ui_components::WmBottomPanelComponent::new("test", "0.0.0", Some("host"));
+    let area = Rect {
+        x: 0,
+        y: 0,
+        width: 12,
+        height: 6,
+    };
+    let (bottom_rect, managed) = p.split_bottom_area(area, 1);
+    assert_eq!(bottom_rect.width, area.width);
     assert_eq!(managed.width, area.width);
 }
 

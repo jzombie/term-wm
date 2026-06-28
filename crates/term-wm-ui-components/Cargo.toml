@@ -1,6 +1,6 @@
 [package]
 name = "term-wm-ui-components"
-description = "Ratatui UI components for term-wm (terminal, scroll view, markdown, image viewer, etc.)"
+description = "Ratatui UI components for term-wm (terminal, scroll view, markdown, image viewer, etc.)."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -17,6 +17,7 @@ ratatui = { workspace = true }
 resvg = { workspace = true }
 shell-words = { workspace = true }
 term-wm-core = { workspace = true }
+term-wm-pty-engine = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 vt100 = { workspace = true }

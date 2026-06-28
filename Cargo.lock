@@ -1669,9 +1669,9 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
 name = "rand"
-version = "0.8.5"
+version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
+checksum = "5ca0ecfa931c29007047d1bc58e623ab12e5590e8c7cc53200d5202b69266d8a"
 dependencies = [
  "rand_core",
 ]
@@ -2206,7 +2206,7 @@ dependencies = [
 
 [[package]]
 name = "term-bench"
-version = "0.6.0-alpha"
+version = "0.6.1-alpha"
 dependencies = [
  "clap",
  "crossterm",
@@ -2216,15 +2216,17 @@ dependencies = [
 
 [[package]]
 name = "term-wm"
-version = "0.6.0-alpha"
+version = "0.6.1-alpha"
 dependencies = [
  "clap",
+ "crossterm",
  "hostname",
  "indoc",
  "line-ending",
  "portable-pty",
  "ratatui",
  "term-wm-core",
+ "term-wm-sys-ui-components",
  "term-wm-ui-components",
  "tracing",
  "tracing-subscriber",
@@ -2233,25 +2235,43 @@ dependencies = [
 
 [[package]]
 name = "term-wm-core"
-version = "0.6.0-alpha"
+version = "0.6.1-alpha"
 dependencies = [
- "arboard",
- "base64",
  "crossterm",
- "hostname",
- "libc",
  "linkify",
  "portable-pty",
  "ratatui",
  "strum 0.28.0",
- "thiserror 2.0.18",
+ "term-wm-pty-engine",
  "tracing",
+]
+
+[[package]]
+name = "term-wm-pty-engine"
+version = "0.6.1-alpha"
+dependencies = [
+ "arboard",
+ "base64",
+ "libc",
+ "portable-pty",
+ "thiserror 2.0.18",
  "vt100",
 ]
 
 [[package]]
+name = "term-wm-sys-ui-components"
+version = "0.6.1-alpha"
+dependencies = [
+ "crossterm",
+ "ratatui",
+ "term-wm-core",
+ "term-wm-ui-components",
+ "webbrowser",
+]
+
+[[package]]
 name = "term-wm-ui-components"
-version = "0.6.0-alpha"
+version = "0.6.1-alpha"
 dependencies = [
  "crossterm",
  "indoc",
@@ -2263,6 +2283,7 @@ dependencies = [
  "shell-words",
  "tempfile",
  "term-wm-core",
+ "term-wm-pty-engine",
  "thiserror 2.0.18",
  "tracing",
  "vt100",

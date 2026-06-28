@@ -11,6 +11,7 @@ use line_ending::LineEnding;
 use ratatui::prelude::Rect;
 
 use term_wm::app_context::AppContext;
+use term_wm::components::MenuOverlay;
 use term_wm::components::{Component, ComponentContext};
 use term_wm::io::{
     RenderTarget,
@@ -21,8 +22,8 @@ use term_wm::ui::UiFrame;
 use term_wm::window::{OverlayId, SystemWindowId, WindowDrawContext, WindowManager};
 use term_wm::wm_config::WmConfig;
 use term_wm::{ScrollViewComponent, TerminalComponent, default_shell_command};
-use term_wm_ui_components::sys::debug_log::{
-    DebugLogComponent, install_panic_hook, set_global_debug_log,
+use term_wm_sys_ui_components::wm_debug_log::{
+    WmDebugLogComponent, install_panic_hook, set_global_debug_log,
 };
 
 type PaneId = usize;
@@ -96,14 +97,38 @@ impl App {
                     .unwrap_or_else(|| "unknown-host".to_string()),
             ),
         );
+        let hostname = app_ctx.hostname.as_deref();
+        let top_panel: Box<
+            dyn term_wm_core::top_panel_trait::TopPanel<term_wm_core::window::WindowId<usize>>,
+        > = Box::new(term_wm_sys_ui_components::WmTopPanelComponent::new(
+            &app_ctx.app_name,
+        ));
+        let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> =
+            Box::new(term_wm_sys_ui_components::WmBottomPanelComponent::new(
+                &app_ctx.app_name,
+                &app_ctx.app_version,
+                hostname,
+            ));
+        let config = WmConfig::standalone();
+        let mut raw_menu = term_wm_sys_ui_components::WmMenuOverlay::new();
+        raw_menu.set_timeout(config.menu_outline_timeout);
+        let menu_overlay: Box<dyn MenuOverlay<term_wm_core::window::WmMenuAction>> =
+            Box::new(raw_menu);
         let mut app = Self {
-            windows: WindowManager::with_config(0, WmConfig::standalone(), Arc::clone(&app_ctx)),
+            windows: WindowManager::with_config(
+                0,
+                config,
+                Arc::clone(&app_ctx),
+                Some(top_panel),
+                Some(bottom_panel),
+                menu_overlay,
+            ),
             terminals: Vec::new(),
         };
 
         // Initialize debug log system window
         {
-            let (mut component, handle) = DebugLogComponent::new_default();
+            let (mut component, handle) = WmDebugLogComponent::new_default();
             component.set_selection_enabled(app.windows.clipboard_enabled());
             set_global_debug_log(handle);
             app.windows
@@ -181,18 +206,18 @@ impl WindowManagerHost<PaneId> for App {
     }
 
     fn open_help_overlay(&mut self) {
-        use term_wm_ui_components::sys::help_overlay::HelpOverlayComponent;
+        use term_wm_sys_ui_components::wm_help_overlay::WmHelpOverlayComponent;
         let kb = self.windows.keybindings().clone();
-        let mut h = HelpOverlayComponent::new(kb);
+        let mut h = WmHelpOverlayComponent::new(self.windows.app_ctx(), kb);
         h.show();
         h.set_selection_enabled(self.windows.clipboard_enabled());
         self.windows.open_overlay(OverlayId::Help, Box::new(h));
     }
 
     fn open_keybindings_overlay(&mut self) {
-        use term_wm_ui_components::sys::keybinding_overlay::KeybindingOverlayComponent;
+        use term_wm_sys_ui_components::wm_keybinding_overlay::WmKeybindingOverlayComponent;
         let kb = self.windows.keybindings().clone();
-        let mut o = KeybindingOverlayComponent::new(kb);
+        let mut o = WmKeybindingOverlayComponent::new(self.windows.app_ctx(), kb);
         o.show();
         self.windows
             .open_overlay(OverlayId::Keybindings, Box::new(o));

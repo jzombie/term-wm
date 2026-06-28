@@ -2,7 +2,7 @@ use std::io;
 
 use portable_pty::{ExitStatus, PtySize};
 
-use crate::pty::PtyResult;
+use crate::PtyResult;
 
 pub trait Pane {
     fn resize(&mut self, size: PtySize) -> PtyResult<()>;
@@ -24,7 +24,7 @@ pub trait Pane {
     }
 }
 
-impl Pane for crate::pty::Pty {
+impl Pane for crate::Pty {
     fn resize(&mut self, size: PtySize) -> PtyResult<()> {
         self.resize(size)
     }
@@ -82,6 +82,6 @@ impl Pane for crate::pty::Pty {
     }
 
     fn take_pending_title(&mut self) -> Option<String> {
-        crate::pty::Pty::take_pending_title(self)
+        crate::Pty::take_pending_title(self)
     }
 }

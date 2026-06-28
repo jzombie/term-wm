@@ -4,36 +4,39 @@ use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders, Clear};
 
-use crate::{DialogOverlayComponent, ListComponent, ScrollViewComponent};
+use std::sync::Arc;
+
+use term_wm_core::app_context::AppContext;
 use term_wm_core::components::{Component, ComponentContext, Overlay};
 use term_wm_core::keybindings::{Action, Category, KeyBindings};
 use term_wm_core::ui::UiFrame;
+use term_wm_ui_components::{DialogOverlayComponent, ListComponent, ScrollViewComponent};
 
-pub struct KeybindingOverlayComponent {
+pub struct WmKeybindingOverlayComponent {
     dialog: DialogOverlayComponent,
-    visible: bool,
-    list: ScrollViewComponent<ListComponent>,
+    content: ScrollViewComponent<ListComponent>,
     area: Rect,
     keybindings: KeyBindings,
+    app_ctx: Arc<AppContext>,
 }
 
-impl KeybindingOverlayComponent {
-    pub fn new(keybindings: KeyBindings) -> Self {
-        let mut list = ScrollViewComponent::new(ListComponent::new(String::new()));
-        list.set_keyboard_enabled(true);
+impl WmKeybindingOverlayComponent {
+    pub fn new(app_ctx: &Arc<AppContext>, keybindings: KeyBindings) -> Self {
         let mut dialog = DialogOverlayComponent::new();
-        dialog.set_size(60, 80);
         dialog.set_dim_backdrop(true);
         dialog.set_auto_close_on_outside_click(true);
         dialog.set_bg(term_wm_core::theme::dialog_bg());
+        dialog.set_size(60, 80);
+        let list = ScrollViewComponent::new(ListComponent::new(String::new()));
         let mut overlay = Self {
             dialog,
-            visible: false,
-            list,
+            content: list,
             area: Rect::default(),
             keybindings,
+            app_ctx: Arc::clone(app_ctx),
         };
         overlay.build_entries();
+        overlay.content.set_keyboard_enabled(true);
         overlay
     }
 
@@ -70,59 +73,45 @@ impl KeybindingOverlayComponent {
             }
             lines.push("".to_string());
         }
-        self.list.content.set_items(lines);
+        self.content.content.set_items(lines);
     }
 
     pub fn show(&mut self) {
-        self.visible = true;
-        self.list.set_keyboard_enabled(true);
         self.dialog.set_visible(true);
-        // Rebuild entries to reflect any configuration changes
         self.build_entries();
     }
 
     pub fn close(&mut self) {
-        self.visible = false;
-        self.list.set_keyboard_enabled(false);
         self.dialog.set_visible(false);
     }
 
     pub fn visible(&self) -> bool {
-        self.visible
-    }
-
-    fn render_content(&mut self, frame: &mut UiFrame<'_>, rect: Rect) {
-        self.list
-            .resize(rect, &ComponentContext::new(true).with_overlay(true));
-        self.list
-            .render(frame, rect, &ComponentContext::new(true).with_overlay(true));
+        self.dialog.visible()
     }
 }
 
-impl std::fmt::Debug for KeybindingOverlayComponent {
+impl std::fmt::Debug for WmKeybindingOverlayComponent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("KeybindingOverlayComponent")
-            .field("visible", &self.visible)
-            .field("area", &self.area)
+        f.debug_struct("WmKeybindingOverlayComponent")
+            .field("visible", &self.visible())
             .finish()
     }
 }
 
-impl Component for KeybindingOverlayComponent {
+impl Component for WmKeybindingOverlayComponent {
     fn resize(&mut self, area: Rect, _ctx: &ComponentContext) {
         self.area = area;
     }
 
     fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _ctx: &ComponentContext) {
-        self.area = area;
-        if !self.visible || area.width == 0 || area.height == 0 {
+        if !self.dialog.visible() || area.width == 0 || area.height == 0 {
             return;
         }
-        self.dialog.render_backdrop(frame, area);
+        let title = format!("{} — Keybindings", self.app_ctx.app_name);
+        self.dialog.render_backdrop(frame, area, None);
         let rect = self.dialog.rect_for(area);
         frame.render_widget(Clear, rect);
-        let title = format!("{} — Keybindings", env!("CARGO_PKG_NAME"));
-        let block = Block::default().title(title).borders(Borders::ALL);
+        let block = Block::default().title(title.as_str()).borders(Borders::ALL);
         let inner = Rect {
             x: rect.x.saturating_add(1),
             y: rect.y.saturating_add(1),
@@ -130,11 +119,13 @@ impl Component for KeybindingOverlayComponent {
             height: rect.height.saturating_sub(2),
         };
         frame.render_widget(block, rect);
-        self.render_content(frame, inner);
+        let ctx = ComponentContext::new(true).with_overlay(true);
+        self.content.resize(inner, &ctx);
+        self.content.render(frame, inner, &ctx);
     }
 
     fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
-        if !self.visible {
+        if !self.dialog.visible() {
             return false;
         }
         match event {
@@ -143,7 +134,7 @@ impl Component for KeybindingOverlayComponent {
                     self.close();
                     true
                 } else {
-                    self.list.handle_event(event, ctx)
+                    self.content.handle_event(event, ctx)
                 }
             }
             Event::Mouse(_) => {
@@ -151,14 +142,14 @@ impl Component for KeybindingOverlayComponent {
                     self.close();
                     return true;
                 }
-                self.list.handle_event(event, ctx)
+                self.content.handle_event(event, ctx)
             }
             _ => false,
         }
     }
 }
 
-impl Overlay for KeybindingOverlayComponent {
+impl Overlay for WmKeybindingOverlayComponent {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -166,6 +157,6 @@ impl Overlay for KeybindingOverlayComponent {
         self
     }
     fn visible(&self) -> bool {
-        self.visible
+        self.dialog.visible()
     }
 }

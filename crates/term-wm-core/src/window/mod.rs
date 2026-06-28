@@ -7,7 +7,7 @@ use ratatui::prelude::Rect;
 
 pub use focus_ring::FocusRing;
 pub use window_manager::{
-    DrawTask, OverlayId, ScrollState, SuperPressResult, SystemWindowDraw, SystemWindowId,
+    DrawTask, NoopMenu, OverlayId, ScrollState, SuperPressResult, SystemWindowDraw, SystemWindowId,
     SystemWindowView, WindowDrawContext, WindowId, WindowManager, WindowSurface, WmMenuAction,
 };
 

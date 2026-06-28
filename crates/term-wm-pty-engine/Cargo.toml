@@ -1,0 +1,16 @@
+[package]
+name = "term-wm-pty-engine"
+description = "PTY pane engine for term-wm — the Pane trait and Pty implementation."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+arboard = { workspace = true }
+base64 = { workspace = true }
+libc = { workspace = true }
+portable-pty = { workspace = true }
+thiserror = { workspace = true }
+vt100 = { workspace = true }

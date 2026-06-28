@@ -16,11 +16,12 @@ use super::FocusRing;
 use super::decorator::WindowDecorator;
 use super::entry::Window;
 use crate::app_context::AppContext;
-use crate::components::{ComponentContext, Overlay};
+use crate::bottom_panel_trait::BottomPanel;
+use crate::components::{ComponentContext, MenuItem, MenuOverlay, Overlay};
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
-use crate::panel::Panel;
+use crate::top_panel_trait::TopPanel;
 use crate::ui::UiFrame;
 use crate::wm_config::{HintVisibility, WmConfig};
 
@@ -186,7 +187,9 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     closed_app_windows: Vec<Id>,
     pub(crate) managed_area: Rect,
     app_ctx: Arc<AppContext>,
-    panel: Panel<WindowId<Id>>,
+    top_panel: Option<Box<dyn TopPanel<WindowId<Id>>>>,
+    bottom_panel: Option<Box<dyn BottomPanel>>,
+    menu_overlay: Box<dyn MenuOverlay<WmMenuAction>>,
     pub(crate) drag_header: Option<HeaderDrag<WindowId<Id>>>,
     pub(crate) last_header_click: Option<(WindowId<Id>, Instant)>,
     pub(crate) drag_resize: Option<ResizeDrag<WindowId<Id>>>,
@@ -202,7 +205,7 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     clipboard_enabled: bool,
     clipboard_dirty: bool,
     overlay_visible: bool,
-    wm_menu_selected: usize,
+
     selection_active: bool,
     selection_dragging: bool,
     selection_text: Option<String>,
@@ -224,7 +227,7 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     next_window_seq: usize,
     next_title_seq: usize,
     synthetic_event: Option<Event>,
-    clipboard: Option<crate::io::clipboard::Clipboard>,
+    clipboard: Option<crate::clipboard::Clipboard>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,6 +244,37 @@ pub enum WmMenuAction {
     ToggleMouseCapture,
     ToggleClipboardMode,
     ToggleWindowSelection,
+}
+
+#[derive(Debug)]
+pub struct NoopMenu;
+impl crate::components::Component for NoopMenu {
+    fn render(
+        &mut self,
+        _frame: &mut crate::ui::UiFrame<'_>,
+        _area: ratatui::prelude::Rect,
+        _ctx: &crate::components::ComponentContext,
+    ) {
+    }
+}
+impl crate::components::Overlay for NoopMenu {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+impl crate::components::MenuOverlay<WmMenuAction> for NoopMenu {
+    fn outline(&mut self) {}
+    fn restore(&mut self) {}
+    fn set_items(&mut self, _items: Vec<crate::components::MenuItem<WmMenuAction>>) {}
+    fn set_timeout(&mut self, _timeout: Duration) {}
+    fn selected_action(&self) -> Option<&WmMenuAction> {
+        None
+    }
+    fn set_anchor(&mut self, _pos: Option<(u16, u16)>) {}
+    fn set_managed_area(&mut self, _area: ratatui::prelude::Rect) {}
 }
 
 impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
@@ -382,21 +416,18 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         }
     }
 
-    pub fn new_embedded(current: Id, app_ctx: AppContext) -> Self {
-        Self::with_config(current, WmConfig::embedded(), Arc::new(app_ctx))
-    }
-
-    pub fn new_standalone(current: Id, app_ctx: AppContext) -> Self {
-        Self::with_config(current, WmConfig::standalone(), Arc::new(app_ctx))
-    }
-
-    pub fn with_config(current: Id, config: WmConfig, app_ctx: Arc<AppContext>) -> Self {
+    pub fn with_config(
+        current: Id,
+        config: WmConfig,
+        app_ctx: Arc<AppContext>,
+        top_panel: Option<Box<dyn TopPanel<WindowId<Id>>>>,
+        bottom_panel: Option<Box<dyn BottomPanel>>,
+        menu_overlay: Box<dyn MenuOverlay<WmMenuAction>>,
+    ) -> Self {
         let mouse_capture_enabled = config.mouse_capture_enabled;
-        let clipboard = Some(crate::io::clipboard::Clipboard::new());
+        let clipboard = Some(crate::clipboard::Clipboard::new());
         let decorator = config.decorator();
         let floating_resize_offscreen = config.floating_resize_offscreen;
-        let hostname = app_ctx.hostname.as_deref();
-        let panel = Panel::new(&app_ctx.app_name, &app_ctx.app_version, hostname);
         Self {
             app_focus: FocusRing::new(current),
             wm_focus: FocusRing::new(WindowId::system(SystemWindowId::DebugLog)),
@@ -412,7 +443,9 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             closed_app_windows: Vec::new(),
             managed_area: Rect::default(),
             app_ctx,
-            panel,
+            top_panel,
+            bottom_panel,
+            menu_overlay,
             drag_header: None,
             last_header_click: None,
             drag_resize: None,
@@ -426,7 +459,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             clipboard_enabled: config.clipboard_enabled,
             clipboard_dirty: false,
             overlay_visible: false,
-            wm_menu_selected: 0,
             selection_active: false,
             selection_dragging: false,
             selection_text: None,
@@ -486,6 +518,10 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.floating_resize_offscreen
     }
 
+    pub fn app_ctx(&self) -> &Arc<AppContext> {
+        &self.app_ctx
+    }
+
     /// Create a [`ComponentContext`] pre-populated with the application
     /// identity from this window manager's [`AppContext`].
     pub fn component_context(&self, focused: bool) -> ComponentContext {
@@ -499,7 +535,12 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.floating_headers.clear();
         self.managed_draw_order.clear();
         self.managed_draw_order_app.clear();
-        self.panel.begin_frame();
+        if let Some(p) = &mut self.top_panel {
+            p.begin_frame();
+        }
+        if let Some(p) = &mut self.bottom_panel {
+            p.begin_frame();
+        }
         if crate::debug_event_flags::take_panic_pending() {
             self.show_system_window(SystemWindowId::DebugLog);
         }
@@ -525,7 +566,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.overlay_visible = false;
         self.overlay_opened_at = None;
         self.super_pending = None;
-        self.wm_menu_selected = 0;
+        self.menu_overlay.restore();
     }
 
     pub fn capture_active(&mut self) -> bool {
@@ -600,7 +641,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.clipboard_enabled
     }
 
-    pub fn clipboard_mut(&mut self) -> Option<&mut crate::io::clipboard::Clipboard> {
+    pub fn clipboard_mut(&mut self) -> Option<&mut crate::clipboard::Clipboard> {
         self.clipboard.as_mut()
     }
 
@@ -713,7 +754,9 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     fn panel_active(&self) -> bool {
-        self.config.panel_enabled && self.panel.visible() && self.panel.height() > 0
+        self.config.panel_enabled
+            && self.top_panel.as_ref().is_some_and(|p| p.visible())
+            && self.top_panel.as_ref().map_or(0, |p| p.height()) > 0
     }
 
     /// Unified double-Esc press handler.
@@ -805,42 +848,49 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             self.window_titles().into_iter().collect();
         let selection_copy_available = self.selection_text.is_some();
         let panel_active = self.panel_active();
-        self.panel.render(
-            frame,
-            panel_active,
-            self.wm_focus.current(),
-            &display,
-            status_line.as_deref(),
-            self.mouse_capture_enabled(),
-            self.clipboard_enabled(),
-            self.window_selection_enabled(),
-            self.selection_active(),
-            self.selection_dragging(),
-            selection_copy_available,
-            self.selection_copied(),
-            self.wm_overlay_visible(),
-            move |id| {
-                titles_map.get(&id).cloned().unwrap_or_else(|| match id {
-                    WindowId::App(app_id) => format!("{:?}", app_id),
-                    WindowId::System(SystemWindowId::DebugLog) => "Debug Log".to_string(),
-                })
-            },
-        );
+        let focus_current = self.wm_focus.current();
+        let mouse_capture_enabled = self.mouse_capture_enabled();
+        let clipboard_enabled = self.clipboard_enabled();
+        let window_selection_enabled = self.window_selection_enabled();
+        let selection_active = self.selection_active();
+        let selection_dragging = self.selection_dragging();
+        let selection_copied = self.selection_copied();
+        let wm_overlay_visible = self.wm_overlay_visible();
+        let label_for = &move |id| {
+            titles_map.get(&id).cloned().unwrap_or_else(|| match id {
+                WindowId::App(app_id) => format!("{:?}", app_id),
+                WindowId::System(SystemWindowId::DebugLog) => "Debug Log".to_string(),
+            })
+        };
+        if let Some(p) = &mut self.top_panel {
+            p.render(
+                frame,
+                panel_active,
+                focus_current,
+                &display,
+                status_line.as_deref(),
+                mouse_capture_enabled,
+                clipboard_enabled,
+                window_selection_enabled,
+                selection_active,
+                selection_dragging,
+                selection_copy_available,
+                selection_copied,
+                wm_overlay_visible,
+                label_for,
+            );
+        }
+        if let Some(p) = &mut self.bottom_panel {
+            p.render(frame, panel_active);
+        }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct WmMenuItem {
-    label: &'static str,
-    icon: Option<&'static str>,
-    action: WmMenuAction,
-}
-
-fn wm_menu_items(
+pub fn wm_menu_items(
     mouse_capture_enabled: bool,
     clipboard_enabled: bool,
     window_selection_enabled: bool,
-) -> [WmMenuItem; 9] {
+) -> Vec<MenuItem<WmMenuAction>> {
     let mouse_label = if mouse_capture_enabled {
         "Mouse Capture: On"
     } else {
@@ -856,48 +906,48 @@ fn wm_menu_items(
     } else {
         "Window Selection: Off"
     };
-    [
-        WmMenuItem {
+    vec![
+        MenuItem {
             label: "Resume",
-            icon: None,
+            icon: Some("▶"),
             action: WmMenuAction::CloseMenu,
         },
-        WmMenuItem {
+        MenuItem {
             label: mouse_label,
-            icon: Some("🖱"),
+            icon: Some("◆"),
             action: WmMenuAction::ToggleMouseCapture,
         },
-        WmMenuItem {
+        MenuItem {
             label: clipboard_label,
-            icon: Some("📋"),
+            icon: Some("■"),
             action: WmMenuAction::ToggleClipboardMode,
         },
-        WmMenuItem {
+        MenuItem {
             label: selection_label,
-            icon: Some("✎"),
+            icon: Some("●"),
             action: WmMenuAction::ToggleWindowSelection,
         },
-        WmMenuItem {
+        MenuItem {
             label: "Floating Front",
             icon: Some("↑"),
             action: WmMenuAction::BringFloatingFront,
         },
-        WmMenuItem {
+        MenuItem {
             label: "New Window",
             icon: Some("+"),
             action: WmMenuAction::NewWindow,
         },
-        WmMenuItem {
+        MenuItem {
             label: "Debug Log",
             icon: Some("≣"),
             action: WmMenuAction::ToggleDebugWindow,
         },
-        WmMenuItem {
+        MenuItem {
             label: "Help",
             icon: Some("?"),
             action: WmMenuAction::Help,
         },
-        WmMenuItem {
+        MenuItem {
             label: "Exit UI",
             icon: Some("⏻"),
             action: WmMenuAction::ExitUi,
@@ -1089,7 +1139,14 @@ mod tests {
     #[test]
     fn click_focusing_topmost_window() {
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
 
         let r1 = Rect {
             x: 0,
@@ -1127,7 +1184,14 @@ mod tests {
     #[test]
     fn enforce_min_visible_margin_horizontal() {
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
             WindowId::app(1usize),
@@ -1161,7 +1225,14 @@ mod tests {
     #[test]
     fn enforce_min_visible_margin_vertical() {
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
             WindowId::app(2usize),
@@ -1192,7 +1263,14 @@ mod tests {
     #[test]
     fn maximize_persists_across_resize() {
         use crate::window::FloatRectSpec;
-        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
         wm.register_managed_layout(ratatui::layout::Rect {
             x: 0,
             y: 0,
@@ -1221,7 +1299,14 @@ mod tests {
     #[test]
     fn localize_event_converts_to_local_coords() {
         use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
         let target_rect = ratatui::layout::Rect {
             x: 10,
             y: 5,
@@ -1261,7 +1346,14 @@ mod tests {
     fn localize_event_handles_negative_origin() {
         use crate::window::{FloatRect, FloatRectSpec};
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
             WindowId::app(1usize),
@@ -1310,7 +1402,14 @@ mod tests {
     #[test]
     fn hit_test_uses_visible_bounds_for_floating_windows() {
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
             WindowId::app(1usize),
@@ -1346,7 +1445,14 @@ mod tests {
     fn hover_targets_respects_occlusion() {
         use crate::layout::floating::{ResizeEdge, ResizeHandle};
         use crate::layout::tiling::SplitHandle;
-        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
         wm.regions.set(
             WindowId::app(1usize),
             Rect {
@@ -1452,7 +1558,14 @@ mod tests {
             }
         }
 
-        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
         wm.set_system_window(SystemWindowId::DebugLog, Box::new(DummyDebugComponent));
         wm.set_panel_visible(false);
         wm.show_system_window(SystemWindowId::DebugLog);
@@ -1515,7 +1628,14 @@ mod tests {
     #[test]
     fn adjust_event_rebases_app_mouse_coordinates() {
         use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
         let full = Rect {
             x: 10,
             y: 3,
@@ -1549,7 +1669,14 @@ mod tests {
     #[test]
     fn adjust_event_rebases_system_mouse_coordinates() {
         use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
         let full = Rect {
             x: 2,
             y: 4,
@@ -1585,7 +1712,14 @@ mod tests {
     #[test]
     fn hover_scroll_routes_to_non_focused_window() {
         use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
 
         let r1 = Rect {
             x: 0,
@@ -1644,7 +1778,14 @@ mod tests {
     #[test]
     fn hover_scroll_over_focused_window_routes_normally() {
         use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
 
         let r1 = Rect {
             x: 0,
@@ -1685,7 +1826,14 @@ mod tests {
     #[test]
     fn hover_scroll_outside_all_windows_routes_to_focused() {
         use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
 
         let r1 = Rect {
             x: 0,
@@ -1725,7 +1873,14 @@ mod tests {
 
     #[test]
     fn direct_mode_defaults_to_false() {
-        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
         wm.focus_app_window(0);
         let focus = wm.wm_focus();
         assert!(!wm.direct_mode(focus));
@@ -1733,7 +1888,14 @@ mod tests {
 
     #[test]
     fn direct_mode_toggle_cycles_state() {
-        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
         wm.focus_app_window(0);
         let focus = wm.wm_focus();
 
@@ -1746,7 +1908,14 @@ mod tests {
 
     #[test]
     fn direct_mode_set_get_roundtrip() {
-        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
         let id = WindowId::app(42usize);
         assert!(!wm.direct_mode(id), "default is false");
 
@@ -1759,7 +1928,14 @@ mod tests {
 
     #[test]
     fn direct_mode_is_per_window() {
-        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
         let id_a = WindowId::app(1usize);
         let id_b = WindowId::app(2usize);
 
@@ -1773,7 +1949,14 @@ mod tests {
         use crate::layout::{LayoutNode, TilingLayout};
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
         wm.set_panel_visible(false);
 
         // Create a proper managed layout with window 1
@@ -1847,7 +2030,14 @@ mod tests {
         use crate::layout::{LayoutNode, TilingLayout};
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-        let mut wm = WindowManager::<usize>::new_standalone(0, AppContext::new("test", "0.0.0"));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
         wm.set_panel_visible(false);
 
         // Create a proper managed layout with window 1

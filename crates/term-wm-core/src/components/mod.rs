@@ -1,6 +1,8 @@
+use std::any::Any;
+use std::time::Duration;
+
 use crossterm::event::Event;
 use ratatui::layout::Rect;
-use std::any::Any;
 
 pub use crate::component_context::ComponentContext;
 use crate::ui::UiFrame;
@@ -51,6 +53,23 @@ pub trait Overlay: Component + std::fmt::Debug + Any {
     fn handle_confirm_event(&mut self, _event: &Event) -> Option<ConfirmAction> {
         None
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct MenuItem<R> {
+    pub icon: Option<&'static str>,
+    pub label: &'static str,
+    pub action: R,
+}
+
+pub trait MenuOverlay<R>: Overlay {
+    fn outline(&mut self);
+    fn restore(&mut self);
+    fn set_items(&mut self, items: Vec<MenuItem<R>>);
+    fn set_timeout(&mut self, timeout: Duration);
+    fn selected_action(&self) -> Option<&R>;
+    fn set_anchor(&mut self, pos: Option<(u16, u16)>);
+    fn set_managed_area(&mut self, area: Rect);
 }
 
 #[cfg(test)]
