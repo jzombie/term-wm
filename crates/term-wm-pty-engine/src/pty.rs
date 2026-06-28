@@ -8,8 +8,8 @@ use std::time::Instant;
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
-use crate::io::clipboard::{extract_osc52_text, try_set};
-use crate::io::title::extract_osc_title;
+use crate::clipboard::{extract_osc52_text, try_set};
+use crate::title::extract_osc_title;
 
 pub type PtyResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 

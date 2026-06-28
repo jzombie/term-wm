@@ -12,7 +12,6 @@ use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::layout::rect_contains;
-use term_wm_core::pane::Pane;
 use term_wm_core::ui::UiFrame;
 use term_wm_core::utils::linkifier::{
     LinkHandler, LinkOverlay, Linkifier, OverlaySignature, decorate_link_style,
@@ -21,6 +20,7 @@ use term_wm_core::utils::selectable_text::{
     LogicalPosition, SelectionController, SelectionHost, SelectionRange, SelectionViewport,
     handle_selection_mouse, maintain_selection_drag,
 };
+use term_wm_pty_engine::Pane;
 
 // This controls the scrollback buffer size in the vt100 parser.
 // It determines how many lines you can scroll up to see.
@@ -191,7 +191,7 @@ impl TerminalComponent {
     }
 
     /// Convenience spawn that uses `default_pty_size()`.
-    pub fn spawn_default(command: CommandBuilder) -> term_wm_core::pty::PtyResult<Self> {
+    pub fn spawn_default(command: CommandBuilder) -> term_wm_pty_engine::PtyResult<Self> {
         Self::spawn(command, Self::default_pty_size())
     }
 
@@ -212,9 +212,9 @@ impl TerminalComponent {
         }
     }
 
-    pub fn spawn(command: CommandBuilder, size: PtySize) -> term_wm_core::pty::PtyResult<Self> {
+    pub fn spawn(command: CommandBuilder, size: PtySize) -> term_wm_pty_engine::PtyResult<Self> {
         let command_description = format!("{:?}", command);
-        let pane: Box<dyn Pane> = Box::new(term_wm_core::pty::Pty::spawn_with_scrollback(
+        let pane: Box<dyn Pane> = Box::new(term_wm_pty_engine::Pty::spawn_with_scrollback(
             command,
             size,
             DEFAULT_SCROLLBACK_LEN,
@@ -862,7 +862,7 @@ impl TestPane {
 
 #[cfg(test)]
 impl Pane for TestPane {
-    fn resize(&mut self, _size: PtySize) -> term_wm_core::pty::PtyResult<()> {
+    fn resize(&mut self, _size: PtySize) -> term_wm_pty_engine::PtyResult<()> {
         Ok(())
     }
 
@@ -914,7 +914,7 @@ impl Pane for TestPane {
         String::new()
     }
 
-    fn kill_child(&mut self) -> term_wm_core::pty::PtyResult<()> {
+    fn kill_child(&mut self) -> term_wm_pty_engine::PtyResult<()> {
         Ok(())
     }
 
