@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
-use crate::clipboard::{extract_osc52_text, try_set};
+use crate::clipboard::{Clipboard, extract_osc52_text};
 use crate::title::extract_osc_title;
 
 pub type PtyResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -180,6 +180,15 @@ impl Pty {
         None
     }
 
+    /// Read pending bytes from the PTY reader thread (non-blocking).
+    /// Returns bytes that have NOT been fed to the internal vt100 parser.
+    /// The server uses this to forward raw bytes to clients while handling
+    /// terminal emulation itself.
+    pub fn drain_pending(&mut self) -> Vec<u8> {
+        let mut pending = self.pending.lock().unwrap_or_else(|err| err.into_inner());
+        pending.split_off(0)
+    }
+
     pub fn update(&mut self) {
         self.poll_foreground();
 
@@ -220,11 +229,12 @@ impl Pty {
             let response = format!("\x1b[{};{}R", row.saturating_add(1), col.saturating_add(1));
             let _ = self.write_bytes(response.as_bytes());
         }
-        // Intercept OSC 52 clipboard sequences from the child process and
-        // forward them via the shared helper (tries arboard first, falls
-        // back to OSC 52 passthrough to stdout for SSH/tmux/Zed remote).
+        // Intercept OSC 52 clipboard sequences from the child process.
+        // Clipboard::set() does both OSC 52 passthrough (for remote
+        // terminals like SSH/tmux/Zed) and arboard (for local access).
         if let Some(text) = extract_osc52_text(&bytes) {
-            try_set(&text);
+            let mut cb = Clipboard::new();
+            let _ = cb.set(&text);
         }
 
         if let Some(title) = extract_osc_title(&bytes) {

@@ -257,7 +257,6 @@ impl WindowManagerHost<PaneId> for App {
 
     fn wm_close_window(&mut self, id: PaneId) -> io::Result<()> {
         if let Some(sv) = self.terminals.get_mut(id) {
-            // TODO: Show confirmation before abrupt termination
             sv.content.terminate();
         }
         Ok(())

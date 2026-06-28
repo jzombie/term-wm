@@ -143,19 +143,6 @@ impl Clipboard {
     }
 }
 
-/// Stateless one-shot: try arboard, fall back to OSC 52 passthrough to stdout.
-///
-/// Used by `Pty::update()` when intercepting child OSC 52 sequences —
-/// no persistent handle needed since this runs in the PTY read path
-/// which doesn't have access to the shared `Clipboard` instance.
-pub fn try_set(text: &str) {
-    if let Ok(mut cb) = arboard::Clipboard::new() {
-        let _ = cb.set_text(text.to_owned());
-    } else {
-        let _ = set_via_osc52_with_writer(text, &mut std::io::stdout().lock());
-    }
-}
-
 /// Scan `data` for a complete OSC 52 clipboard sequence
 /// (`OSC 52 ; c ; BASE64 ST`) and return the decoded text.
 ///
