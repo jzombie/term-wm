@@ -2206,7 +2206,7 @@ dependencies = [
 
 [[package]]
 name = "term-bench"
-version = "0.6.0-alpha"
+version = "0.6.1-alpha"
 dependencies = [
  "clap",
  "crossterm",
@@ -2216,7 +2216,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm"
-version = "0.6.0-alpha"
+version = "0.6.1-alpha"
 dependencies = [
  "clap",
  "crossterm",
@@ -2235,7 +2235,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-core"
-version = "0.6.0-alpha"
+version = "0.6.1-alpha"
 dependencies = [
  "crossterm",
  "linkify",
@@ -2248,7 +2248,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-pty-engine"
-version = "0.6.0-alpha"
+version = "0.6.1-alpha"
 dependencies = [
  "arboard",
  "base64",
@@ -2260,7 +2260,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-sys-ui-components"
-version = "0.6.0-alpha"
+version = "0.6.1-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -2271,7 +2271,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-components"
-version = "0.6.0-alpha"
+version = "0.6.1-alpha"
 dependencies = [
  "crossterm",
  "indoc",
