@@ -31,6 +31,7 @@ arboard = "3.6.1"
 base64 = "0.22.1"
 clap = { version = "4.6.1", features = ["derive"] }
 crossterm = "0.29.0"
+ctrlc = "3.5.2"
 hostname = "0.4.2"
 indoc = "2.0.7"
 libc = "0.2.186"
