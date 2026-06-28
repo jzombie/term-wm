@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use crossterm::event::{
-    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use portable_pty::{CommandBuilder, PtySize};
 use ratatui::{
     layout::Rect,
     style::{Color as TColor, Modifier, Style},
 };
-use vt100::{MouseProtocolEncoding, MouseProtocolMode};
+use vt100::MouseProtocolEncoding;
 
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::layout::rect_contains;
@@ -21,6 +21,7 @@ use term_wm_core::utils::selectable_text::{
     handle_selection_mouse, maintain_selection_drag,
 };
 use term_wm_pty_engine::Pane;
+use term_wm_pty_engine::input_encoding::{key_to_bytes, mouse_event_allowed, mouse_event_to_bytes};
 
 // This controls the scrollback buffer size in the vt100 parser.
 // It determines how many lines you can scroll up to see.
@@ -89,7 +90,7 @@ impl Component for TerminalComponent {
                     self.scroll_scrollback(delta);
                     return true;
                 }
-                let bytes = key_to_bytes(*key);
+                let bytes = key_to_bytes(key);
                 if bytes.is_empty() {
                     return false;
                 }
@@ -135,7 +136,7 @@ impl Component for TerminalComponent {
                     kind: mouse.kind,
                     modifiers: mouse.modifiers,
                 };
-                let bytes = mouse_event_to_bytes(local, encoding);
+                let bytes = mouse_event_to_bytes(&local, encoding);
                 if bytes.is_empty() {
                     return false;
                 }
@@ -662,133 +663,6 @@ impl TerminalComponent {
     }
 }
 
-fn key_to_bytes(key: KeyEvent) -> Vec<u8> {
-    match key.code {
-        KeyCode::Char(c) => {
-            if key.modifiers.contains(KeyModifiers::CONTROL)
-                && let Some(byte) = ctrl_char(c)
-            {
-                return vec![byte];
-            }
-            c.to_string().into_bytes()
-        }
-        KeyCode::Enter => vec![b'\r'],
-        KeyCode::Backspace => vec![0x7f],
-        KeyCode::Esc => vec![0x1b],
-        KeyCode::Tab => vec![b'\t'],
-        KeyCode::BackTab => b"\x1b[Z".to_vec(),
-        KeyCode::Up => b"\x1b[A".to_vec(),
-        KeyCode::Down => b"\x1b[B".to_vec(),
-        KeyCode::Right => b"\x1b[C".to_vec(),
-        KeyCode::Left => b"\x1b[D".to_vec(),
-        KeyCode::Home => b"\x1b[H".to_vec(),
-        KeyCode::End => b"\x1b[F".to_vec(),
-        KeyCode::PageUp => b"\x1b[5~".to_vec(),
-        KeyCode::PageDown => b"\x1b[6~".to_vec(),
-        _ => Vec::new(),
-    }
-}
-
-fn ctrl_char(c: char) -> Option<u8> {
-    let c = c.to_ascii_lowercase();
-    if c.is_ascii_lowercase() {
-        Some((c as u8) - b'a' + 1)
-    } else {
-        None
-    }
-}
-
-// Only forward events that match the active mouse reporting mode.
-fn mouse_event_allowed(mode: MouseProtocolMode, kind: MouseEventKind) -> bool {
-    use MouseEventKind::*;
-    match mode {
-        MouseProtocolMode::None => false,
-        MouseProtocolMode::Press => matches!(kind, Down(_)),
-        MouseProtocolMode::PressRelease => matches!(kind, Down(_) | Up(_)),
-        MouseProtocolMode::ButtonMotion => matches!(kind, Down(_) | Up(_) | Drag(_)),
-        MouseProtocolMode::AnyMotion => true,
-    }
-}
-
-fn mouse_event_to_bytes(mouse: MouseEvent, encoding: MouseProtocolEncoding) -> Vec<u8> {
-    let (mut code, release): (u8, bool) = match mouse.kind {
-        MouseEventKind::Down(button) => (
-            match button {
-                MouseButton::Left => 0,
-                MouseButton::Middle => 1,
-                MouseButton::Right => 2,
-            },
-            false,
-        ),
-        MouseEventKind::Up(button) => (
-            match button {
-                MouseButton::Left => 0,
-                MouseButton::Middle => 1,
-                MouseButton::Right => 2,
-            },
-            true,
-        ),
-        MouseEventKind::Drag(button) => (
-            32 + match button {
-                MouseButton::Left => 0,
-                MouseButton::Middle => 1,
-                MouseButton::Right => 2,
-            },
-            false,
-        ),
-        MouseEventKind::Moved => (35, false),
-        MouseEventKind::ScrollUp => (64, false),
-        MouseEventKind::ScrollDown => (65, false),
-        MouseEventKind::ScrollLeft => (66, false),
-        MouseEventKind::ScrollRight => (67, false),
-    };
-    if mouse.modifiers.contains(KeyModifiers::SHIFT) {
-        code |= 4;
-    }
-    if mouse.modifiers.contains(KeyModifiers::ALT) {
-        code |= 8;
-    }
-    if mouse.modifiers.contains(KeyModifiers::CONTROL) {
-        code |= 16;
-    }
-    let col = mouse.column.saturating_add(1);
-    let row = mouse.row.saturating_add(1);
-
-    // Two encodings are supported:
-    // - SGR (`CSI < Cb ; Cx ; Cy M/m`) which conveys presses/releases
-    //   with explicit button numbers and is preferred by many modern apps.
-    // - Legacy/X11 (`CSI M Cb Cx Cy`) used by older apps; for releases the
-    //   canonical base button code is 3. Modifier bits are preserved when
-    //   constructing the Cb byte for legacy encoding.
-    match encoding {
-        MouseProtocolEncoding::Sgr => {
-            let action = if release { 'm' } else { 'M' };
-            format!("\x1b[<{};{};{}{}", code, col, row, action).into_bytes()
-        }
-        MouseProtocolEncoding::Default => {
-            // X11 (CSI M) encoding: Cb Cx Cy. For button releases the base
-            // button code is 3; preserve modifier bits when constructing Cb.
-            let x11_code = if release {
-                let mods = code & (4 | 8 | 16);
-                3 | mods
-            } else {
-                code
-            };
-
-            let cb = x11_code.saturating_add(32);
-            let cx = mouse.column.saturating_add(33);
-            let cy = mouse.row.saturating_add(33);
-
-            if cx > 255 || cy > 255 {
-                return Vec::new();
-            }
-
-            vec![0x1b, b'[', b'M', cb, cx as u8, cy as u8]
-        }
-        _ => Vec::new(),
-    }
-}
-
 fn resolve_colors(cell: &vt100::Cell, screen: &vt100::Screen) -> (Option<TColor>, Option<TColor>) {
     let mut fg = resolve_color(cell.fgcolor(), screen.fgcolor());
     let bg = resolve_color(cell.bgcolor(), screen.bgcolor());
@@ -926,21 +800,11 @@ impl Pane for TestPane {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{
-        KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
-    };
     use ratatui::buffer::Buffer;
     use std::cell::RefCell;
     use std::rc::Rc;
     use term_wm_core::component_context::ViewportHandle;
     use term_wm_core::ui::UiFrame;
-    use vt100::MouseProtocolMode;
-
-    fn key(k: KeyCode, mods: KeyModifiers) -> KeyEvent {
-        let mut ev = KeyEvent::new(k, mods);
-        ev.kind = KeyEventKind::Press;
-        ev
-    }
 
     fn make_ctx(view_offset: usize, handle: ViewportHandle) -> ComponentContext {
         ComponentContext::default().with_viewport(
@@ -1260,129 +1124,6 @@ mod tests {
             Some(200),
             "viewport should follow to new max"
         );
-    }
-
-    // --- Original utility tests ---
-
-    #[test]
-    fn key_to_bytes_char_and_controls() {
-        let b = key_to_bytes(key(KeyCode::Char('x'), KeyModifiers::NONE));
-        assert_eq!(b, b"x".to_vec());
-
-        let enter = key_to_bytes(key(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(enter, vec![b'\r']);
-
-        let back = key_to_bytes(key(KeyCode::Backspace, KeyModifiers::NONE));
-        assert_eq!(back, vec![0x7f]);
-
-        let ctrl_a = key_to_bytes(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
-        assert_eq!(ctrl_a, vec![1u8]);
-    }
-
-    #[test]
-    fn ctrl_char_edges() {
-        assert_eq!(ctrl_char('a'), Some(1));
-        assert_eq!(ctrl_char('z'), Some(26));
-        assert_eq!(ctrl_char('A'), Some(1));
-        assert_eq!(ctrl_char('1'), None);
-    }
-
-    #[test]
-    fn mouse_event_allowed_modes() {
-        use MouseEventKind::*;
-        assert!(!mouse_event_allowed(
-            MouseProtocolMode::None,
-            Down(MouseButton::Left)
-        ));
-        assert!(mouse_event_allowed(
-            MouseProtocolMode::Press,
-            Down(MouseButton::Left)
-        ));
-        assert!(!mouse_event_allowed(
-            MouseProtocolMode::Press,
-            Up(MouseButton::Left)
-        ));
-        assert!(mouse_event_allowed(
-            MouseProtocolMode::PressRelease,
-            Up(MouseButton::Left)
-        ));
-        assert!(mouse_event_allowed(
-            MouseProtocolMode::ButtonMotion,
-            MouseEventKind::Drag(MouseButton::Left)
-        ));
-        assert!(mouse_event_allowed(
-            MouseProtocolMode::AnyMotion,
-            MouseEventKind::Moved
-        ));
-    }
-
-    #[test]
-    fn mouse_event_to_bytes_format_and_mods() {
-        let m = MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 2,
-            row: 3,
-            modifiers: KeyModifiers::NONE,
-        };
-        // Test SGR
-        let bytes = mouse_event_to_bytes(m, MouseProtocolEncoding::Sgr);
-        let s = String::from_utf8(bytes).unwrap();
-        assert!(s.starts_with("\x1b[<0;3;4M"));
-
-        // Test Default encoding
-        let bytes_def = mouse_event_to_bytes(m, MouseProtocolEncoding::Default);
-        // CSI M Cb Cx Cy
-        // Cb = 0 + 32 = 32 (' ')
-        // Cx = 2 + 33 = 35 ('#')
-        // Cy = 3 + 33 = 36 ('$')
-        assert_eq!(bytes_def, vec![0x1b, b'[', b'M', 32, 35, 36]);
-
-        let m2 = MouseEvent {
-            kind: MouseEventKind::Up(MouseButton::Right),
-            column: 0,
-            row: 0,
-            modifiers: KeyModifiers::SHIFT | KeyModifiers::ALT,
-        };
-        let s2 = String::from_utf8(mouse_event_to_bytes(m2, MouseProtocolEncoding::Sgr)).unwrap();
-        // code should include modifier bits
-        assert!(s2.contains(';'));
-        assert!(s2.ends_with('m'));
-    }
-
-    #[test]
-    fn mouse_event_x11_release_and_modifiers() {
-        // 1. Simple Release (Left Up) -> Code 3
-        let m_up = MouseEvent {
-            kind: MouseEventKind::Up(MouseButton::Left),
-            column: 0,
-            row: 0,
-            modifiers: KeyModifiers::NONE,
-        };
-        // Cb = 3 + 32 = 35 ('#'). Cx, Cy = 0 + 33 = 33 ('!')
-        let bytes = mouse_event_to_bytes(m_up, MouseProtocolEncoding::Default);
-        assert_eq!(bytes, vec![0x1b, b'[', b'M', 35, 33, 33]);
-
-        // 2. Release with Shift -> Code 3 + 4 = 7
-        let m_up_shift = MouseEvent {
-            kind: MouseEventKind::Up(MouseButton::Left),
-            column: 0,
-            row: 0,
-            modifiers: KeyModifiers::SHIFT,
-        };
-        // Cb = 7 + 32 = 39 ('\'')
-        let bytes = mouse_event_to_bytes(m_up_shift, MouseProtocolEncoding::Default);
-        assert_eq!(bytes, vec![0x1b, b'[', b'M', 39, 33, 33]);
-
-        // 3. Press Right with Control -> Code 2 + 16 = 18
-        let m_down_ctrl = MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Right),
-            column: 0,
-            row: 0,
-            modifiers: KeyModifiers::CONTROL,
-        };
-        // Cb = 18 + 32 = 50 ('2')
-        let bytes = mouse_event_to_bytes(m_down_ctrl, MouseProtocolEncoding::Default);
-        assert_eq!(bytes, vec![0x1b, b'[', b'M', 50, 33, 33]);
     }
 
     #[test]
