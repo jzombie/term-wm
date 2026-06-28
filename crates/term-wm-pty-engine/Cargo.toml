@@ -13,5 +13,4 @@ base64 = { workspace = true }
 libc = { workspace = true }
 portable-pty = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
 vt100 = { workspace = true }
