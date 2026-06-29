@@ -476,16 +476,16 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             if inner.width == 0 || inner.height == 0 {
                 continue;
             }
+            let depth = if total > 1.0 {
+                i as f32 / (total - 1.0)
+            } else {
+                1.0
+            };
             match id {
                 WindowId::System(system_id) => {
                     if !self.system_window_visible(system_id) {
                         continue;
                     }
-                    let depth = if total > 1.0 {
-                        i as f32 / (total - 1.0)
-                    } else {
-                        1.0
-                    };
                     plan.push(super::DrawTask::System(super::SystemWindowDraw {
                         id: system_id,
                         surface: super::WindowSurface {
@@ -499,11 +499,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                     }));
                 }
                 WindowId::App(app_id) => {
-                    let depth = if total > 1.0 {
-                        i as f32 / (total - 1.0)
-                    } else {
-                        1.0
-                    };
                     plan.push(super::DrawTask::App(super::WindowDrawContext {
                         id: app_id,
                         surface: super::WindowSurface {
