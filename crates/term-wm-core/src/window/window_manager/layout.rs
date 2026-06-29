@@ -344,7 +344,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             .filter_map(|id| id.as_app())
             .collect();
         self.rebuild_wm_focus_ring(&active_ids);
-        let focused = self.wm_focus.current();
+        let focused = *self.wm_focus.current();
         if self.z_order.last().copied() != Some(focused) {
             self.focus_window_id(focused);
         }
@@ -456,7 +456,8 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let mut plan = Vec::new();
         let focused_window = self.wm_focus.current();
         let decorator = Arc::clone(&self.decorator);
-        for &id in &self.managed_draw_order {
+        let total = self.managed_draw_order.len() as f32;
+        for (i, &id) in self.managed_draw_order.iter().enumerate() {
             let full = self.full_region_for_id(id);
             if full.width == 0 || full.height == 0 {
                 continue;
@@ -475,6 +476,11 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             if inner.width == 0 || inner.height == 0 {
                 continue;
             }
+            let depth = if total > 1.0 {
+                i as f32 / (total - 1.0)
+            } else {
+                1.0
+            };
             match id {
                 WindowId::System(system_id) => {
                     if !self.system_window_visible(system_id) {
@@ -482,15 +488,27 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                     }
                     plan.push(super::DrawTask::System(super::SystemWindowDraw {
                         id: system_id,
-                        surface: super::WindowSurface { full, inner, dest },
-                        focused: focused_window == id,
+                        surface: super::WindowSurface {
+                            full,
+                            inner,
+                            dest,
+                            draw_shadow: self.is_window_floating(id) && self.config.shadow_enabled,
+                            z_depth: depth,
+                        },
+                        focused: *focused_window == id,
                     }));
                 }
                 WindowId::App(app_id) => {
                     plan.push(super::DrawTask::App(super::WindowDrawContext {
                         id: app_id,
-                        surface: super::WindowSurface { full, inner, dest },
-                        focused: focused_window == WindowId::app(app_id),
+                        surface: super::WindowSurface {
+                            full,
+                            inner,
+                            dest,
+                            draw_shadow: self.is_window_floating(id) && self.config.shadow_enabled,
+                            z_depth: depth,
+                        },
+                        focused: *focused_window == WindowId::app(app_id),
                     }));
                 }
             }

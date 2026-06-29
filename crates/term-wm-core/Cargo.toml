@@ -13,5 +13,6 @@ linkify = { workspace = true }
 portable-pty = { workspace = true }
 ratatui = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
+term-wm-layout-engine = { workspace = true }
 term-wm-pty-engine = { workspace = true }
 tracing = { workspace = true }

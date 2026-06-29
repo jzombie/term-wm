@@ -92,6 +92,13 @@ pub struct WmConfig {
     pub drag_snap_timeout: Duration,
     /// Enable mouse click focus switching between windows.
     pub mouse_focus_click_enabled: bool,
+    /// Render a drop-shadow behind floating windows to indicate stacking depth.
+    ///
+    /// The shadow is a translucent block offset (2 columns right, 1 row down)
+    /// using `Modifier::DIM` over a z-depth-interpolated background color.
+    /// Shadow color fades from `theme.shadow_tint` (bottom stack) to
+    /// `theme.shadow_bg` (top stack) to reinforce the depth illusion.
+    pub shadow_enabled: bool,
     /// Custom window decorator (title bar + border renderer).
     pub decorator: Option<Arc<dyn WindowDecorator>>,
     /// Configurable keybindings (defaults to `KeyBindings::default()`).
@@ -118,6 +125,7 @@ impl WmConfig {
             wm_overlay_enabled: true,
             super_passthrough_window: super_passthrough_window_default(),
             floating_resize_offscreen: true,
+            shadow_enabled: true,
             clipboard_enabled: true,
             window_selection_enabled: true,
             mouse_capture_enabled: true,
@@ -141,6 +149,7 @@ impl WmConfig {
             wm_overlay_enabled: false,
             super_passthrough_window: super_passthrough_window_default(),
             floating_resize_offscreen: false,
+            shadow_enabled: false,
             clipboard_enabled: true,
             window_selection_enabled: true,
             mouse_capture_enabled: true,

@@ -40,6 +40,9 @@ pub enum BgColor {
     DialogBg,
     DecoratorHeaderBg,
     BottomPanelBg,
+    Surface,
+    ShadowBg,
+    ShadowTint,
 }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +82,13 @@ pub struct Theme {
     pub dialog_separator: Color,
     pub selection_bg: Color,
     pub selection_fg: Color,
+    /// Dark end of the drop-shadow interpolation — used for the topmost
+    /// (highest z-depth) floating window.
+    pub shadow_bg: Color,
+    /// Light end of the drop-shadow interpolation — used for the bottommost
+    /// floating window.  The actual shadow color is lerped between `shadow_tint`
+    /// and `shadow_bg` based on the window's z-order position.
+    pub shadow_tint: Color,
     pub link_color: Color,
     pub link_underline: bool,
     pub debug_highlight: Color,
@@ -118,6 +128,9 @@ impl Theme {
             BgColor::DialogBg => self.dialog_bg,
             BgColor::DecoratorHeaderBg => self.decorator_header_bg,
             BgColor::BottomPanelBg => self.bottom_panel_bg,
+            BgColor::Surface => self.surface,
+            BgColor::ShadowBg => self.shadow_bg,
+            BgColor::ShadowTint => self.shadow_tint,
         }
     }
 }
@@ -169,6 +182,9 @@ pub const NOIR: Theme = Theme {
     // Link
     link_color: Color::Rgb(100, 180, 255),
     link_underline: true,
+    // Shadow
+    shadow_bg: Color::Rgb(35, 38, 50),
+    shadow_tint: Color::Rgb(16, 17, 22),
     // Debug
     debug_highlight: Color::Rgb(255, 168, 0),
 };
@@ -189,7 +205,7 @@ pub fn current() -> &'static Theme {
 // ---------------------------------------------------------------------------
 
 pub fn rgb_to_color(rgb: (u8, u8, u8)) -> Color {
-    crate::io::utils::term_color::map_rgb_to_color(rgb.0, rgb.1, rgb.2)
+    crate::term_color::map_rgb_to_color(rgb.0, rgb.1, rgb.2)
 }
 
 pub fn accent() -> Color {
@@ -263,6 +279,15 @@ pub fn decorator_border() -> Color {
 }
 pub fn decorator_border_active() -> Color {
     current().fg(FgColor::DecoratorBorderActive)
+}
+pub fn surface() -> Color {
+    current().bg(BgColor::Surface)
+}
+pub fn shadow_bg() -> Color {
+    current().bg(BgColor::ShadowBg)
+}
+pub fn shadow_tint() -> Color {
+    current().bg(BgColor::ShadowTint)
 }
 pub fn debug_highlight() -> Color {
     current().fg(FgColor::DebugHighlight)
@@ -343,6 +368,11 @@ mod tests {
         (FgColor::MenuSelectedFg, BgColor::DecoratorHeaderBg, "same"),
         (FgColor::MenuSelectedFg, BgColor::BottomPanelBg, "same"),
         (
+            FgColor::MenuSelectedFg,
+            BgColor::Surface,
+            "same luminance conflict — shadow is visual effect, not text surface",
+        ),
+        (
             FgColor::SelectionFg,
             BgColor::PanelBg,
             "same — near-black only on green",
@@ -352,6 +382,30 @@ mod tests {
         (FgColor::SelectionFg, BgColor::DialogBg, "same"),
         (FgColor::SelectionFg, BgColor::DecoratorHeaderBg, "same"),
         (FgColor::SelectionFg, BgColor::BottomPanelBg, "same"),
+        (FgColor::SelectionFg, BgColor::Surface, "same"),
+        (
+            FgColor::MenuSelectedFg,
+            BgColor::ShadowBg,
+            "same — shadow bg never carries text",
+        ),
+        (FgColor::SelectionFg, BgColor::ShadowBg, "same"),
+        (
+            FgColor::MenuSelectedFg,
+            BgColor::ShadowTint,
+            "same — shadow tint never carries text",
+        ),
+        (FgColor::SelectionFg, BgColor::ShadowTint, "same"),
+        // Shadow bg never carries text — always a visual effect block
+        (
+            FgColor::DialogSeparator,
+            BgColor::ShadowBg,
+            "shadow bg never carries text",
+        ),
+        (
+            FgColor::DecoratorBorder,
+            BgColor::ShadowBg,
+            "shadow bg never carries text",
+        ),
         // Green accent colors on green — same hue, never co-occur.
         (FgColor::Success, BgColor::MenuSelectedBg, "green on green"),
         (FgColor::Success, BgColor::SelectionBg, "green on green"),

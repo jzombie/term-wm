@@ -114,13 +114,14 @@ impl Component for ListComponent {
             && self.last_area.width > 0
             && self.last_area.height > 0
             && mouse.column >= self.last_area.x
-            && mouse.column < self.last_area.x + self.last_area.width
+            && mouse.column < self.last_area.x.saturating_add(self.last_area.width)
             && mouse.row > self.last_area.y
-            && mouse.row < self.last_area.y + self.last_area.height
+            && mouse.row < self.last_area.y.saturating_add(self.last_area.height)
         {
             let vp = ctx.viewport();
             let skip_n = vp.offset_y.saturating_sub(1);
-            let visible_row = (mouse.row - (self.last_area.y + 1)) as usize;
+            let visible_row =
+                (mouse.row.saturating_sub(self.last_area.y.saturating_add(1))) as usize;
             let index = skip_n + visible_row;
             if index < self.items.len() {
                 self.selected = index;

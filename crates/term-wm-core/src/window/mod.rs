@@ -1,28 +1,22 @@
 pub mod decorator;
 mod entry;
-pub mod focus_ring;
 mod window_manager;
 
 use ratatui::prelude::Rect;
+use term_wm_layout_engine::{LayoutRect, RectSpec};
 
-pub use focus_ring::FocusRing;
 pub use window_manager::{
     DrawTask, NoopMenu, OverlayId, ScrollState, SuperPressResult, SystemWindowDraw, SystemWindowId,
     SystemWindowView, WindowDrawContext, WindowId, WindowManager, WindowSurface, WmMenuAction,
 };
 
-/// Signed floating rectangle origin with unsigned size.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FloatRect {
-    pub x: i32,
-    pub y: i32,
-    pub width: u16,
-    pub height: u16,
-}
+/// Signed floating rectangle (alias for engine `LayoutRect`).
+pub type FloatRect = LayoutRect;
 
+/// Floating rectangle spec — delegates to engine `RectSpec`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FloatRectSpec {
-    Absolute(FloatRect),
+    Absolute(LayoutRect),
     Percent {
         x: u16,
         y: u16,
@@ -42,30 +36,27 @@ impl FloatRectSpec {
         }
     }
 
-    pub fn resolve_signed(&self, bounds: Rect) -> FloatRect {
-        match *self {
-            FloatRectSpec::Absolute(fr) => fr,
+    pub fn resolve_signed(&self, bounds: Rect) -> LayoutRect {
+        let lb = LayoutRect {
+            x: bounds.x as i32,
+            y: bounds.y as i32,
+            width: bounds.width,
+            height: bounds.height,
+        };
+        let engine_spec = match *self {
+            FloatRectSpec::Absolute(fr) => RectSpec::Absolute(fr),
             FloatRectSpec::Percent {
                 x,
                 y,
                 width,
                 height,
-            } => {
-                let bx = bounds.x as i32;
-                let by = bounds.y as i32;
-                let bw = bounds.width as i32;
-                let bh = bounds.height as i32;
-                let rx = bx + (bw.saturating_mul(x as i32) / 100);
-                let ry = by + (bh.saturating_mul(y as i32) / 100);
-                let rw = bw.saturating_mul(width as i32) / 100;
-                let rh = bh.saturating_mul(height as i32) / 100;
-                FloatRect {
-                    x: rx,
-                    y: ry,
-                    width: rw as u16,
-                    height: rh as u16,
-                }
-            }
-        }
+            } => RectSpec::Percent {
+                x,
+                y,
+                width,
+                height,
+            },
+        };
+        engine_spec.resolve(lb)
     }
 }

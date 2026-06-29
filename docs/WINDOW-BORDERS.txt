@@ -1,0 +1,254 @@
+=== WINDOW BORDER AESTHETICS =================================================
+
+Both tiled and floating windows share the same visual border treatment, drawn by
+the DefaultDecorator using Unicode box-drawing characters.  The only visual
+difference between the two modes is how their resize and drag handles appear.
+
+===============================================================================
+1. THE WINDOW BORDER (SAME FOR TILED AND FLOATING)
+===============================================================================
+
+Every window gets a 1-cell-thick border drawn around it with:
+
+  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+  │   terminal window title   D _▢✖│   <- header row (1 cell tall)
+  ├ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┤   <- separator
+  │                               │
+  │       content area            │
+  │                               │
+  └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+
+  - Top edge:      ┌ ─ ─ ─ ─ ─ ┐    (1 cell tall, spans full width)
+  - Header row:    │  title  D_▢✖│   (1 cell tall, includes buttons)
+  - Separator:     ├ ─ ─ ─ ─ ─ ┤    (1 cell tall)
+  - Side edges:    │             │   (1 cell wide, left and right)
+  - Bottom edge:   └ ─ ─ ─ ─ ─ ┘    (1 cell tall)
+
+Total chrome overhead PER WINDOW:
+  - Top + header + separator:  3 rows
+  - Bottom:                    1 row
+  - Left:                      1 column
+  - Right:                     1 column
+  Total: 2 columns × 4 rows occupied by chrome per window
+
+Content area = window_rect - (2 columns, 4 rows)
+
+1a. Focused vs. Unfocused Colors
+---------------------------------
+
+  BORDER CORNERS & EDGES (┌ ┐ └ ┘ ─ │ ├ ┤):
+    Focused:   decorator_border_active  (RGB 110, 118, 140)  -- brighter gray
+    Unfocused: decorator_border         (RGB 105, 110, 125)  -- muted gray
+
+  HEADER BACKGROUND:
+    Focused:   decorator_header_bg   (RGB 38, 42, 58)  -- dark blue-gray
+    Unfocused: panel_bg              (RGB 30, 32, 42)  -- slightly darker
+
+  HEADER TEXT & BUTTONS:
+    Focused:   BOLD + decorator_header_fg (RGB 225, 225, 235)  -- bright white
+    Unfocused: plain  + decorator_header_fg (same color, no BOLD)
+
+  Unfocused windows also get Modifier::DIM applied to ALL their cells
+  (content + chrome), making the entire window appear faded.
+
+1b. Title Buttons (right-aligned on the header row)
+---------------------------------------------------
+
+  D   _   ▢   ✖
+  │   │   │   └── Close
+  │   │   └────── Maximize
+  │   └────────── Minimize
+  └────────────── Toggle direct mode
+
+  4 cells reserved at the right edge of the header for these buttons.
+  In direct mode the "D" cell inverts fg/bg to indicate active passthrough.
+
+===============================================================================
+2. FLOATING WINDOW DRAG & RESIZE HANDLES
+===============================================================================
+
+2a. Header Drag Handle
+-----------------------
+
+  The entire header row (between the left and right borders) acts as a drag
+  handle for floating windows.
+
+    rect.x + 1            rect.x + rect.width - 1
+         │                       │
+         ▼                       ▼
+  ┌─────┬───────────────────────┬─────┐
+  │     │   ← drag handle →    │D_▢✖│
+  ├─────┴───────────────────────┴─────┤
+  │                                   │
+  │                                   │
+
+  Dimensions: (window_width - 2) cells wide × 1 cell tall
+  Occupies:   1 row (the header row), spanning the full width between borders
+
+  A header drag on a TILED window detaches it to floating first.
+  A header drag on a FLOATING window moves it in place.
+
+2b. Resize Handles (8 per floating window)
+------------------------------------------
+
+  Every floating window gets a perimeter of 8 invisible hit-test zones,
+  each 1 cell wide/tall, positioned at the edges and corners:
+
+  ┌─────┬─────────────────────────┬─────┐
+  │ TL  │        Top              │ TR  │     TL = TopLeft  (1×1 corner)
+  ├─────┴─────────────────────────┴─────┤
+  │                                     │     L   = Left     (1 × height-2)
+  │ L                                   │
+  │                                     │     R   = Right    (1 × height-2)
+  │                                     │
+  ├─────┬─────────────────────────┬─────┤
+  │ BL  │       Bottom            │ BR  │     BL = BottomLeft  (1×1 corner)
+  └─────┴─────────────────────────┴─────┘     BR = BottomRight (1×1 corner)
+
+  Each handle occupies exactly 1 cell.
+  Edge handles (Top/Bottom/Left/Right) are sized (width-2)×1 or 1×(height-2).
+  Corner handles (TL/TR/BL/BR) are 1×1.
+
+2c. Resize Outline (drawn when hovered or dragged)
+---------------------------------------------------
+
+  When the cursor is over a resize handle, the corresponding edge is highlighted
+  with double-line box-drawing characters in ACCENT_ALT (amber, RGB 255,168,0)
+  with BOLD modifier:
+
+    Top:        ═══════════════════
+    Bottom:     ═══════════════════
+    Left:       ║
+    Right:                         ║
+    TopLeft:    ╔══════════
+                ║
+    TopRight:                    ╗
+                                 ║
+    BottomLeft: ║
+                ╚══════════
+    BottomRight:                ╝
+                                 ║
+
+  Characters used: ═ ║ ╔ ╗ ╚ ╝
+  These are double-line variants of the single-line border characters.
+
+===============================================================================
+3. TILED WINDOW SPLIT HANDLES
+===============================================================================
+
+3a. Split Handle Gap (between adjacent tiled windows)
+------------------------------------------------------
+
+  Two tiled windows are always separated by a 1-cell gap:
+
+  ┌──────────────┐ │ ┌──────────────┐
+  │  window A    │·│ │  window B    │
+  │              │o│ │              │
+  │              │o│ │              │
+  │              │o│ │              │
+  │              │·│ │              │
+  └──────────────┘ │ └──────────────┘
+
+  The gap itself is a 1-cell-wide/tall column/row filled with:
+
+    Background:  '·' (middle dot) in decorator_border_active color
+                 (RGB 110, 118, 140)
+
+    Drag indicators:  three 'o' characters centered along the gap
+      Normal:   lowercase 'o'
+      Hovered:  uppercase 'O'  (switches to menu_selected_bg green,
+                                 RGB 0, 230, 118 + BOLD)
+
+  Horizontal split (side-by-side): gap is 1 column wide, full height
+  Vertical split (stacked):        gap is 1 row tall, full width
+
+3b. Hover Effect on Split Handle
+---------------------------------
+
+  When hovered, the gap perimeter gets a highlight border in ACCENT_ALT (amber):
+
+    + - - - - - - - +     Corners: '+'
+    │  · o O o ·    │     Top/bottom: '-'
+    + - - - - - - - +     Left/right: '|'
+
+  The '·' background stays but gets an amber border frame around it, and
+  the 'o' indicators become 'O' in green.
+
+===============================================================================
+4. SNAP PREVIEW (when dragging a floating window over tiled space)
+==================================================================
+
+  A translucent green (accent, RGB 0,230,118) background fills a preview
+  rectangle showing where the window will land if dropped:
+
+    ┌─────────────────────────────┐
+    │          ░░░░░              │
+    │  window   ░░░░░  preview    │
+    │  being    ░░░░░  rect       │
+    │  dragged  ░░░░░  (50% of   │
+    │           ░░░░░  target)    │
+    └─────────────────────────────┘
+
+  The preview is always exactly half the target's width or height (depending
+  on which edge/quadrant the cursor is closest to), drawn as a background tint
+  with the accent green color.
+
+===============================================================================
+5. VISUAL SUMMARY BY MODE
+===============================================================================
+
+                        TILED                       FLOATING
+  ────────────────────  ────────────────────────  ──────────────────────────
+  Border style          ┌┐└┘─│ (single-line)      Same box-drawing
+  Chrome overhead       2 cols × 4 rows            2 cols × 4 rows
+  Per-window chrome     All have it                All have it
+  Drag handle           Header (detaches to        Header (moves in place)
+                          floating on drag)
+  Resize handles        None (split handles        Yes (8 handles per
+                          between windows)           window perimeter)
+  Split handle gap      1 cell '·' fill + 'o'     N/A (no gaps)
+                          drag indicators
+  Unfocused dim         Yes (Modifier::DIM)        Yes (Modifier::DIM)
+  Resize outline        N/A                       Amber double-line
+                                                    (═║╔╗╚╝) when hovered
+  Split handle hover    Amber border frame +      N/A
+                          green 'O' indicators
+  Snap preview          N/A (already tiled)       Green tint rect (50%)
+
+===============================================================================
+6. FULL CHARACTER SET USED
+===============================================================================
+
+  ┌ ┐ └ ┘   Border corners          (single-line)
+  ─         Horizontal border edge
+  │         Vertical border edge
+  ├ ┤       Header separator
+  ·         Split handle background  (middle dot)
+  o         Split handle indicator   (normal)
+  O         Split handle indicator   (hovered)
+  + - |     Split handle hover frame
+  ═ ║      Resize outline edge      (double-line)
+  ╔ ╗ ╚ ╝  Resize outline corners   (double-line)
+  D _ ▢ ✖  Title buttons
+  (space)   Header fill
+
+===============================================================================
+7. CELL COUNT SUMMARY PER WINDOW
+===============================================================================
+
+  Element             Cells
+  ------------------- -----
+  Top border          1 row × (width) cols
+  Header row          1 row × (width) cols
+  Separator           1 row × (width) cols
+  Bottom border       1 row × (width) cols
+  Left border         (height - 4) rows × 1 col
+  Right border        (height - 4) rows × 1 col
+                      ──────────
+  Total chrome:       2 columns + 4 rows per window
+
+  For a standard 80×24 terminal with 2 side-by-side tiled windows:
+    Each window:     (40-2) × (24-4) = 38 × 20 = 760 cells of content
+    Chrome total:    2 × (2×40 + 4×24 - 2×4) = 256 cells of chrome
+    Split handle:    1 × 24 = 24 cells
+    Total:           760 + 760 + 256 + 24 = 1800 cells used out of 1920

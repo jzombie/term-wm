@@ -120,7 +120,12 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             || kb.matches(Action::MenuPrev, key)
     }
 
-    pub fn render_overlays(&mut self, frame: &mut crate::ui::UiFrame<'_>) {
+    pub fn render_overlays(
+        &mut self,
+        frame: &mut crate::ui::UiFrame<'_>,
+        z_base: usize,
+        z_total: usize,
+    ) {
         let (hovered, hovered_resize) = self.hover_targets();
         let obscuring: Vec<ratatui::prelude::Rect> = self
             .managed_draw_order
@@ -217,6 +222,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             }
         }
 
+        let mut oi = z_base;
         if self.wm_overlay_visible() {
             let menu_items = super::wm_menu_items(
                 self.mouse_capture_enabled(),
@@ -238,15 +244,30 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 .with_keybindings(std::sync::Arc::new(self.keybindings.clone()));
             let comp: &mut dyn Component = &mut *self.menu_overlay;
             comp.render(frame, frame.area(), &menu_ctx);
+            oi += 1;
         }
-
-        let confirm_ctx = self.component_context(false).with_overlay(true);
-        let help_ctx = self.component_context(false).with_overlay(true);
-        if let Some(confirm) = self.overlays.get_mut(&super::OverlayId::ExitConfirm) {
-            confirm.render(frame, frame.area(), &confirm_ctx);
-        }
-        if let Some(help) = self.overlays.get_mut(&super::OverlayId::Help) {
-            help.render(frame, frame.area(), &help_ctx);
+        for overlay_id in [super::OverlayId::ExitConfirm, super::OverlayId::Help] {
+            if self.overlays.contains_key(&overlay_id) {
+                let z = super::WindowManager::<Id>::compute_z_depth(oi, z_total);
+                oi += 1;
+                let ctx = self.component_context(false).with_overlay(true);
+                if let Some(r) = self
+                    .overlays
+                    .get(&overlay_id)
+                    .and_then(|o| o.shadow_rect(frame.area()))
+                {
+                    let shadow_dest = crate::window::FloatRect {
+                        x: r.x as i32,
+                        y: r.y as i32,
+                        width: r.width,
+                        height: r.height,
+                    };
+                    crate::ui::render_drop_shadow(frame, shadow_dest, z);
+                }
+                if let Some(overlay) = self.overlays.get_mut(&overlay_id) {
+                    overlay.render(frame, frame.area(), &ctx);
+                }
+            }
         }
     }
 }
