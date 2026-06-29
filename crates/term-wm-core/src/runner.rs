@@ -494,6 +494,8 @@ where
                 if let Some(super_event) = app.windows().take_expired_super_event() {
                     let _ = handle_focused_app_event(&super_event, app);
                 }
+                // Cancel drag snap if mouse left the viewport during a header drag.
+                app.windows().take_expired_drag_snap();
                 update_selection_snapshot(app);
                 app.windows().begin_frame();
                 output.draw(|frame| draw(frame, app))?;

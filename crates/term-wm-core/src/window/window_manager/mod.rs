@@ -223,6 +223,7 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     floating_resize_offscreen: bool,
     pub(crate) z_order: Vec<WindowId<Id>>,
     pub(crate) drag_snap: Option<(Option<WindowId<Id>>, InsertPosition, Rect)>,
+    drag_last_event: Option<Instant>,
     system_windows: BTreeMap<SystemWindowId, SystemWindowEntry>,
     next_window_seq: usize,
     next_title_seq: usize,
@@ -478,6 +479,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             floating_resize_offscreen,
             z_order: Vec::new(),
             drag_snap: None,
+            drag_last_event: None,
             system_windows: BTreeMap::new(),
             next_window_seq: 0,
             next_title_seq: 0,
@@ -798,6 +800,37 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         } else {
             None
         }
+    }
+
+    /// Time remaining before the drag snap preview is auto-cancelled.
+    /// Returns `None` when no header drag is active.
+    pub fn drag_snap_remaining(&self) -> Option<Duration> {
+        self.drag_header.as_ref()?;
+        let last = self.drag_last_event?;
+        let elapsed = last.elapsed();
+        if elapsed >= self.config.drag_snap_timeout {
+            return Some(Duration::ZERO);
+        }
+        Some(self.config.drag_snap_timeout.saturating_sub(elapsed))
+    }
+
+    /// If the mouse has left the terminal during a header drag (no events received
+    /// within `drag_snap_timeout`), clear the drag state so the snap preview
+    /// disappears on the next frame.  Returns `true` when state was cleared.
+    pub fn take_expired_drag_snap(&mut self) -> bool {
+        if self.drag_header.is_none() {
+            return false;
+        }
+        let Some(last) = self.drag_last_event else {
+            return false;
+        };
+        if last.elapsed() < self.config.drag_snap_timeout {
+            return false;
+        }
+        self.drag_header = None;
+        self.drag_snap = None;
+        self.drag_last_event = None;
+        true
     }
 
     /// Time remaining before a deferred first-Esc is forwarded to the terminal.

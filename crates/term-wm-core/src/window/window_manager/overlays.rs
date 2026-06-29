@@ -1,4 +1,9 @@
+use std::time::Duration;
+
 use crossterm::event::{Event, MouseEventKind};
+use ratatui::layout::Alignment;
+use ratatui::style::Style;
+use ratatui::widgets::Paragraph;
 
 use super::{WindowId, WindowManager, WmMenuAction};
 use crate::components::{Component, ConfirmAction, Overlay};
@@ -185,6 +190,29 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                             cell.set_style(style);
                         }
                     }
+                }
+            }
+
+            if let Some(remaining) = self.drag_snap_remaining() {
+                let text = if remaining == Duration::ZERO {
+                    "Cancelling...".to_string()
+                } else {
+                    format!("Cancelling in {}s", remaining.as_secs())
+                };
+                let text_len = text.len() as u16;
+                let text_x = rect.x + (rect.width.saturating_sub(text_len)) / 2;
+                let text_y = rect.y + rect.height / 2;
+                if text_x >= rect.x && text_y >= rect.y {
+                    let text_area = ratatui::prelude::Rect {
+                        x: text_x,
+                        y: text_y,
+                        width: text_len,
+                        height: 1,
+                    };
+                    let paragraph = Paragraph::new(text)
+                        .style(Style::default().fg(crate::theme::accent_alt()))
+                        .alignment(Alignment::Center);
+                    frame.render_widget(paragraph, text_area);
                 }
             }
         }
