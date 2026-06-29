@@ -85,6 +85,13 @@ impl Overlay for WmHelpOverlayComponent {
     fn visible(&self) -> bool {
         self.dialog.visible()
     }
+
+    fn shadow_rect(&self, area: Rect) -> Option<Rect> {
+        if !self.dialog.visible() {
+            return None;
+        }
+        Some(self.dialog.rect_for(area))
+    }
 }
 
 impl WmHelpOverlayComponent {

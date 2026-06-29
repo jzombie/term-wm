@@ -110,6 +110,13 @@ pub struct WindowSurface {
     pub full: Rect,
     pub inner: Rect,
     pub dest: crate::window::FloatRect,
+    /// Whether a drop-shadow should be rendered behind this window
+    /// (derived from `WmConfig.shadow_enabled` + floating status).
+    pub draw_shadow: bool,
+    /// Normalized z-order depth [0.0–1.0] used to interpolate the shadow
+    /// background color — bottommost windows get the lighter `shadow_tint`
+    /// while topmost windows get the darker `shadow_bg`.
+    pub z_depth: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -540,6 +547,31 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     /// identity from this window manager's [`AppContext`].
     pub fn component_context(&self, focused: bool) -> ComponentContext {
         ComponentContext::new(focused).with_app_context(Arc::clone(&self.app_ctx))
+    }
+
+    /// Number of overlays that will be rendered this frame.
+    pub fn visible_overlay_count(&self) -> usize {
+        let mut n = 0usize;
+        if self.wm_overlay_visible() {
+            n += 1;
+        }
+        if self.overlays.contains_key(&OverlayId::ExitConfirm) {
+            n += 1;
+        }
+        if self.overlays.contains_key(&OverlayId::Help) {
+            n += 1;
+        }
+        n
+    }
+
+    /// Normalised z-depth [0.0–1.0] for a drawable at `position` in a
+    /// stack of `total` items (windows + overlays).  The topmost item
+    /// always maps to 1.0 (darkest shadow).
+    pub fn compute_z_depth(position: usize, total: usize) -> f32 {
+        if total <= 1 {
+            return 1.0;
+        }
+        position as f32 / (total - 1) as f32
     }
 
     pub fn begin_frame(&mut self) {
