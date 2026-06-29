@@ -26,7 +26,7 @@ use crate::window::FloatRect;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{StatefulWidget, Widget};
 
 /// Wrapper around `ratatui::Frame` that clamps drawing to the visible area.
@@ -132,23 +132,6 @@ impl<'a> UiFrame<'a> {
     }
 }
 
-/// Linear RGB interpolation between two colors.
-/// `t = 0.0` returns `a`, `t = 1.0` returns `b`.
-/// Non-RGB color variants return `b` unchanged.
-pub fn lerp_color(a: Color, b: Color, t: f32) -> Color {
-    match (a, b) {
-        (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) => {
-            let t = t.clamp(0.0, 1.0);
-            Color::Rgb(
-                (r1 as f32 + (r2 as f32 - r1 as f32) * t) as u8,
-                (g1 as f32 + (g2 as f32 - g1 as f32) * t) as u8,
-                (b1 as f32 + (b2 as f32 - b1 as f32) * t) as u8,
-            )
-        }
-        _ => b,
-    }
-}
-
 /// Render a drop-shadow behind a rectangular area.
 ///
 /// The shadow is offset by (`SHADOW_OFFSET_X`, `SHADOW_OFFSET_Y`) from
@@ -167,7 +150,7 @@ pub fn render_drop_shadow(frame: &mut UiFrame<'_>, dest: FloatRect, z_depth: f32
     let fx1 = fx0 + fa.width as i32;
     let fy1 = fy0 + fa.height as i32;
 
-    let shadow_color = lerp_color(
+    let shadow_color = crate::term_color::lerp_color(
         crate::theme::shadow_tint(),
         crate::theme::shadow_bg(),
         z_depth,

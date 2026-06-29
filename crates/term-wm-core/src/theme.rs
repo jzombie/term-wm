@@ -205,7 +205,7 @@ pub fn current() -> &'static Theme {
 // ---------------------------------------------------------------------------
 
 pub fn rgb_to_color(rgb: (u8, u8, u8)) -> Color {
-    crate::io::utils::term_color::map_rgb_to_color(rgb.0, rgb.1, rgb.2)
+    crate::term_color::map_rgb_to_color(rgb.0, rgb.1, rgb.2)
 }
 
 pub fn accent() -> Color {
@@ -396,8 +396,16 @@ mod tests {
         ),
         (FgColor::SelectionFg, BgColor::ShadowTint, "same"),
         // Shadow bg never carries text — always a visual effect block
-        (FgColor::DialogSeparator, BgColor::ShadowBg, "shadow bg never carries text"),
-        (FgColor::DecoratorBorder, BgColor::ShadowBg, "shadow bg never carries text"),
+        (
+            FgColor::DialogSeparator,
+            BgColor::ShadowBg,
+            "shadow bg never carries text",
+        ),
+        (
+            FgColor::DecoratorBorder,
+            BgColor::ShadowBg,
+            "shadow bg never carries text",
+        ),
         // Green accent colors on green — same hue, never co-occur.
         (FgColor::Success, BgColor::MenuSelectedBg, "green on green"),
         (FgColor::Success, BgColor::SelectionBg, "green on green"),
