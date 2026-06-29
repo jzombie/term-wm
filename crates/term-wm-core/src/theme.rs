@@ -42,6 +42,7 @@ pub enum BgColor {
     BottomPanelBg,
     Surface,
     ShadowBg,
+    ShadowTint,
 }
 
 // ---------------------------------------------------------------------------
@@ -82,6 +83,7 @@ pub struct Theme {
     pub selection_bg: Color,
     pub selection_fg: Color,
     pub shadow_bg: Color,
+    pub shadow_tint: Color,
     pub link_color: Color,
     pub link_underline: bool,
     pub debug_highlight: Color,
@@ -123,6 +125,7 @@ impl Theme {
             BgColor::BottomPanelBg => self.bottom_panel_bg,
             BgColor::Surface => self.surface,
             BgColor::ShadowBg => self.shadow_bg,
+            BgColor::ShadowTint => self.shadow_tint,
         }
     }
 }
@@ -176,6 +179,7 @@ pub const NOIR: Theme = Theme {
     link_underline: true,
     // Shadow
     shadow_bg: Color::Rgb(35, 38, 50),
+    shadow_tint: Color::Rgb(16, 17, 22),
     // Debug
     debug_highlight: Color::Rgb(255, 168, 0),
 };
@@ -277,6 +281,9 @@ pub fn surface() -> Color {
 pub fn shadow_bg() -> Color {
     current().bg(BgColor::ShadowBg)
 }
+pub fn shadow_tint() -> Color {
+    current().bg(BgColor::ShadowTint)
+}
 pub fn debug_highlight() -> Color {
     current().fg(FgColor::DebugHighlight)
 }
@@ -373,6 +380,8 @@ mod tests {
         (FgColor::SelectionFg, BgColor::Surface, "same"),
         (FgColor::MenuSelectedFg, BgColor::ShadowBg, "same — shadow bg never carries text"),
         (FgColor::SelectionFg, BgColor::ShadowBg, "same"),
+        (FgColor::MenuSelectedFg, BgColor::ShadowTint, "same — shadow tint never carries text"),
+        (FgColor::SelectionFg, BgColor::ShadowTint, "same"),
         // Green accent colors on green — same hue, never co-occur.
         (FgColor::Success, BgColor::MenuSelectedBg, "green on green"),
         (FgColor::Success, BgColor::SelectionBg, "green on green"),

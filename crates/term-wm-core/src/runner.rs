@@ -3,7 +3,7 @@ use std::io;
 use crossterm::event::{Event, KeyEventKind, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::prelude::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 
 use crate::components::{Component, ComponentContext, ConfirmAction, Overlay, SelectionStatus};
 use crate::constants::{SHADOW_OFFSET_X, SHADOW_OFFSET_Y};
@@ -708,6 +708,20 @@ where
     app.windows().render_overlays(frame);
 }
 
+fn lerp_color(a: Color, b: Color, t: f32) -> Color {
+    match (a, b) {
+        (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) => {
+            let t = t.clamp(0.0, 1.0);
+            Color::Rgb(
+                (r1 as f32 + (r2 as f32 - r1 as f32) * t) as u8,
+                (g1 as f32 + (g2 as f32 - g1 as f32) * t) as u8,
+                (b1 as f32 + (b2 as f32 - b1 as f32) * t) as u8,
+            )
+        }
+        _ => b,
+    }
+}
+
 fn composite_window<F>(
     frame: &mut UiFrame<'_>,
     surface: &WindowSurface,
@@ -746,6 +760,11 @@ fn composite_window<F>(
         let ex = sx.saturating_add(surface.dest.width as i32);
         let ey = sy.saturating_add(surface.dest.height as i32);
         let buf = frame.buffer_mut();
+        let shadow_color = lerp_color(
+            crate::theme::shadow_tint(),
+            crate::theme::shadow_bg(),
+            surface.z_depth,
+        );
         for y in sy..ey {
             if y < frame_area.y as i32 || y >= (frame_area.y + frame_area.height) as i32 {
                 continue;
@@ -758,7 +777,7 @@ fn composite_window<F>(
                     if !cell.symbol().starts_with(' ') {
                         cell.modifier.insert(Modifier::DIM);
                     }
-                    cell.set_bg(crate::theme::shadow_bg());
+                    cell.set_bg(shadow_color);
                 }
             }
         }
