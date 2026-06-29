@@ -3,10 +3,9 @@ use std::io;
 use crossterm::event::{Event, KeyEventKind, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::prelude::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 
 use crate::components::{Component, ComponentContext, ConfirmAction, Overlay, SelectionStatus};
-use crate::constants::{SHADOW_OFFSET_X, SHADOW_OFFSET_Y};
 use crate::debug_event_flags;
 use crate::event_loop::{ControlFlow, EventLoop};
 use crate::io::{EventSource, RenderTarget};
@@ -708,23 +707,6 @@ where
     app.windows().render_overlays(frame);
 }
 
-/// Linear RGB interpolation between two colors.
-/// `t = 0.0` returns `a`, `t = 1.0` returns `b`.
-/// Non-RGB color variants return `b` unchanged.
-fn lerp_color(a: Color, b: Color, t: f32) -> Color {
-    match (a, b) {
-        (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) => {
-            let t = t.clamp(0.0, 1.0);
-            Color::Rgb(
-                (r1 as f32 + (r2 as f32 - r1 as f32) * t) as u8,
-                (g1 as f32 + (g2 as f32 - g1 as f32) * t) as u8,
-                (b1 as f32 + (b2 as f32 - b1 as f32) * t) as u8,
-            )
-        }
-        _ => b,
-    }
-}
-
 fn composite_window<F>(
     frame: &mut UiFrame<'_>,
     surface: &WindowSurface,
@@ -756,38 +738,8 @@ fn composite_window<F>(
             cell.modifier.insert(Modifier::DIM);
         }
     }
-    // Drop-shadow: a translucent block drawn at (SHADOW_OFFSET_X, SHADOW_OFFSET_Y)
-    // from the window origin.  The background colour interpolates between
-    // `shadow_tint` (bottom of the z-stack) and `shadow_bg` (top) using
-    // the window's normalised z-depth to reinforce the depth illusion.
     if surface.draw_shadow {
-        let frame_area = frame.area();
-        let sx = surface.dest.x.saturating_add(SHADOW_OFFSET_X);
-        let sy = surface.dest.y.saturating_add(SHADOW_OFFSET_Y);
-        let ex = sx.saturating_add(surface.dest.width as i32);
-        let ey = sy.saturating_add(surface.dest.height as i32);
-        let buf = frame.buffer_mut();
-        let shadow_color = lerp_color(
-            crate::theme::shadow_tint(),
-            crate::theme::shadow_bg(),
-            surface.z_depth,
-        );
-        for y in sy..ey {
-            if y < frame_area.y as i32 || y >= (frame_area.y + frame_area.height) as i32 {
-                continue;
-            }
-            for x in sx..ex {
-                if x < frame_area.x as i32 || x >= (frame_area.x + frame_area.width) as i32 {
-                    continue;
-                }
-                if let Some(cell) = buf.cell_mut((x as u16, y as u16)) {
-                    if !cell.symbol().starts_with(' ') {
-                        cell.modifier.insert(Modifier::DIM);
-                    }
-                    cell.set_bg(shadow_color);
-                }
-            }
-        }
+        crate::ui::render_drop_shadow(frame, surface.dest, surface.z_depth);
     }
     frame.blit_from_signed(&buffer, surface.dest);
 }

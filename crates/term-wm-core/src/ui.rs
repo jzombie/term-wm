@@ -21,11 +21,12 @@
 //!   `UiFrame::new(&mut frame)`. Use `frame.render_widget(...)` and
 //!   `frame.render_stateful_widget(...)` as before. To clear an area, render the
 //!   `Clear` widget through the `UiFrame`.
+use crate::constants::{SHADOW_OFFSET_X, SHADOW_OFFSET_Y};
 use crate::window::FloatRect;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{StatefulWidget, Widget};
 
 /// Wrapper around `ratatui::Frame` that clamps drawing to the visible area.
@@ -126,6 +127,71 @@ impl<'a> UiFrame<'a> {
                 ) {
                     *dst_cell = src_cell.clone();
                 }
+            }
+        }
+    }
+}
+
+/// Linear RGB interpolation between two colors.
+/// `t = 0.0` returns `a`, `t = 1.0` returns `b`.
+/// Non-RGB color variants return `b` unchanged.
+pub fn lerp_color(a: Color, b: Color, t: f32) -> Color {
+    match (a, b) {
+        (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) => {
+            let t = t.clamp(0.0, 1.0);
+            Color::Rgb(
+                (r1 as f32 + (r2 as f32 - r1 as f32) * t) as u8,
+                (g1 as f32 + (g2 as f32 - g1 as f32) * t) as u8,
+                (b1 as f32 + (b2 as f32 - b1 as f32) * t) as u8,
+            )
+        }
+        _ => b,
+    }
+}
+
+/// Render a drop-shadow behind a rectangular area.
+///
+/// The shadow is offset by (`SHADOW_OFFSET_X`, `SHADOW_OFFSET_Y`) from
+/// the given `dest` rectangle and fills a block of the same size.  Its
+/// background colour is interpolated between `theme::shadow_tint` (light)
+/// and `theme::shadow_bg` (dark) according to `z_depth`; existing
+/// foreground text receives `Modifier::DIM`.
+///
+/// This is a pure render-time effect — it mutates only the terminal
+/// framebuffer and does not affect layout, hit-testing, or any other
+/// data structure.
+pub fn render_drop_shadow(frame: &mut UiFrame<'_>, dest: FloatRect, z_depth: f32) {
+    let fa = frame.area();
+    let fx0 = fa.x as i32;
+    let fy0 = fa.y as i32;
+    let fx1 = fx0 + fa.width as i32;
+    let fy1 = fy0 + fa.height as i32;
+
+    let shadow_color = lerp_color(
+        crate::theme::shadow_tint(),
+        crate::theme::shadow_bg(),
+        z_depth,
+    );
+
+    let sx = dest.x.saturating_add(SHADOW_OFFSET_X);
+    let sy = dest.y.saturating_add(SHADOW_OFFSET_Y);
+    let ex = sx.saturating_add(dest.width as i32);
+    let ey = sy.saturating_add(dest.height as i32);
+
+    let buf = frame.buffer_mut();
+    for y in sy..ey {
+        if y < fy0 || y >= fy1 {
+            continue;
+        }
+        for x in sx..ex {
+            if x < fx0 || x >= fx1 {
+                continue;
+            }
+            if let Some(cell) = buf.cell_mut((x as u16, y as u16)) {
+                if !cell.symbol().starts_with(' ') {
+                    cell.modifier.insert(Modifier::DIM);
+                }
+                cell.set_bg(shadow_color);
             }
         }
     }
