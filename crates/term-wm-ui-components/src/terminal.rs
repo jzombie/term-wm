@@ -425,8 +425,8 @@ impl TerminalComponent {
         let focused = ctx.focused();
         for row in start_row..start_row + visible.height {
             for col in start_col..start_col + visible.width {
-                let cell_x = area.x + col;
-                let cell_y = area.y + row;
+                let cell_x = area.x.saturating_add(col);
+                let cell_y = area.y.saturating_add(row);
                 let viewport_row = row.saturating_sub(start_row) as usize;
                 let viewport_col = col.saturating_sub(start_col) as usize;
 
