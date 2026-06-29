@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::collections::VecDeque;
 use std::io::{self, Stdout};
 use std::time::{Duration, Instant};
@@ -11,30 +10,32 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use super::utils::KeyboardNormalizer;
-use super::{EventSource, RenderTarget};
+use super::{EventSource, PowerProfile, RenderTarget};
 use crate::ui::UiFrame;
 
 pub struct ConsoleEventSource {
     normalizer: KeyboardNormalizer,
     event_queue: VecDeque<Event>,
     last_event_at: Option<Instant>,
-    was_idle: Cell<bool>,
+    power_profile: PowerProfile,
 }
 
 impl Default for ConsoleEventSource {
     fn default() -> Self {
-        Self::new()
+        Self::new(PowerProfile::Balanced)
     }
 }
 
 impl ConsoleEventSource {
-    pub fn new() -> Self {
-        Self {
+    pub fn new(profile: PowerProfile) -> Self {
+        let s = Self {
             normalizer: KeyboardNormalizer::new(),
             event_queue: VecDeque::new(),
             last_event_at: None,
-            was_idle: Cell::new(true),
-        }
+            power_profile: profile,
+        };
+        s.power_profile.report_change();
+        s
     }
 
     fn read_internal(&mut self) -> io::Result<Event> {
@@ -119,32 +120,15 @@ impl EventSource for ConsoleEventSource {
     }
 
     fn poll_interval(&self) -> Duration {
-        const ACTIVE_MS: u64 = 16;
-        const IDLE_MS: u64 = 200;
-        const IDLE_THRESHOLD_MS: u64 = 500;
+        self.power_profile.poll_interval(self.last_event_at)
+    }
 
-        let is_idle = match self.last_event_at {
-            Some(t) => t.elapsed().as_millis() as u64 >= IDLE_THRESHOLD_MS,
-            None => true,
-        };
-
-        if is_idle != self.was_idle.get() {
-            self.was_idle.set(is_idle);
-            let elapsed = self
-                .last_event_at
-                .map_or(0, |t| t.elapsed().as_millis() as u64);
-            let interval = if is_idle { IDLE_MS } else { ACTIVE_MS };
-            tracing::debug!(
-                target: "driver",
-                "poll interval switched to {interval}ms (last event: {elapsed}ms ago)",
-            );
+    fn set_power_profile(&mut self, profile: PowerProfile) {
+        if self.power_profile == profile {
+            return;
         }
-
-        if is_idle {
-            Duration::from_millis(IDLE_MS)
-        } else {
-            Duration::from_millis(ACTIVE_MS)
-        }
+        self.power_profile = profile;
+        profile.report_change();
     }
 }
 
@@ -221,7 +205,7 @@ mod tests {
 
     #[test]
     fn next_key_from_queue() {
-        let mut d = ConsoleEventSource::new();
+        let mut d = ConsoleEventSource::new(PowerProfile::Balanced);
         d.event_queue.push_back(Event::Key(KeyEvent::new(
             KeyCode::Char('a'),
             KeyModifiers::NONE,
@@ -240,7 +224,7 @@ mod tests {
 
     #[test]
     fn next_mouse_from_queue() {
-        let mut d = ConsoleEventSource::new();
+        let mut d = ConsoleEventSource::new(PowerProfile::Balanced);
         d.event_queue.push_back(Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
             column: 2,
@@ -254,7 +238,7 @@ mod tests {
 
     #[test]
     fn poll_and_read_from_queue() {
-        let mut d = ConsoleEventSource::new();
+        let mut d = ConsoleEventSource::new(PowerProfile::Balanced);
         d.event_queue.push_back(Event::Key(KeyEvent::new(
             KeyCode::Char('z'),
             KeyModifiers::NONE,

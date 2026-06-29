@@ -1,6 +1,7 @@
 use crossterm::event::Event;
 use ratatui::prelude::Rect;
 
+use crate::io::PowerProfile;
 use crate::keybindings::Action;
 use crate::ui::UiFrame;
 
@@ -17,4 +18,8 @@ pub trait BottomPanel: std::fmt::Debug {
     fn render(&mut self, frame: &mut UiFrame<'_>, active: bool);
 
     fn hit_test_hint(&self, event: &Event) -> Option<Action>;
+
+    fn set_power_profile(&mut self, _profile: PowerProfile) {}
+
+    fn set_show_profile_indicator(&mut self, _show: bool) {}
 }

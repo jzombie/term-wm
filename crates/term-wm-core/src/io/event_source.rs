@@ -2,6 +2,8 @@ use ::crossterm::event::{Event, KeyEvent, MouseEvent};
 use std::io;
 use std::time::Duration;
 
+use crate::io::PowerProfile;
+
 pub trait EventSource {
     fn poll(&mut self, timeout: Duration) -> io::Result<bool>;
     fn read(&mut self) -> io::Result<Event>;
@@ -19,6 +21,10 @@ pub trait EventSource {
     fn poll_interval(&self) -> Duration {
         Duration::from_millis(16)
     }
+
+    /// Update the power profile used for poll-interval computation.
+    /// Default no-op; event sources that care override this.
+    fn set_power_profile(&mut self, _profile: PowerProfile) {}
 }
 
 impl<T: EventSource + ?Sized> EventSource for &mut T {
@@ -44,6 +50,10 @@ impl<T: EventSource + ?Sized> EventSource for &mut T {
 
     fn poll_interval(&self) -> Duration {
         (**self).poll_interval()
+    }
+
+    fn set_power_profile(&mut self, profile: PowerProfile) {
+        (**self).set_power_profile(profile);
     }
 }
 

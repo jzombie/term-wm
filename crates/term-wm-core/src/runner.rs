@@ -148,6 +148,8 @@ where
         .driver()
         .set_mouse_capture(app.windows().mouse_capture_enabled())?;
 
+    let initial_profile = app.windows().power_profile();
+    let mut last_sent_profile = initial_profile;
     event_loop.run(|driver, event| {
         let handler = || -> io::Result<ControlFlow> {
             if debug_event_flags::take_panic_pending() {
@@ -170,9 +172,15 @@ where
                 if let Some(sel_enabled) = app.windows().take_window_selection_change() {
                     app.set_window_selection_enabled(sel_enabled);
                 }
+                let current = app.windows().power_profile();
+                if current != last_sent_profile {
+                    driver.set_power_profile(current);
+                    last_sent_profile = current;
+                }
                 Ok(flow)
             };
             if let Some(evt) = event {
+                app.windows().invalidate_frame();
                 // Synthesized key event from bottom-panel hint click takes priority
                 let evt = app.windows().take_synthetic_event().unwrap_or(evt);
                 // Pre-compute the keybinding action using the configured
@@ -498,21 +506,30 @@ where
                 app.windows().take_expired_drag_snap();
                 update_selection_snapshot(app);
                 app.windows().begin_frame();
-                // Catch render panics (e.g. u16 subtraction overflow with a
-                // tiny viewport) so they don't take down the event loop.
-                // The panic hook records details in the debug log.
-                // I/O errors from the draw are still propagated.
-                let io_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    output.draw(|frame| {
-                        let area = frame.area();
-                        if area.width < 2 || area.height < 2 {
-                            return;
-                        }
-                        draw(frame, app)
-                    })
-                }))
-                .unwrap_or(Ok(()));
-                io_result?;
+                // Skip the full render on idle when nothing has changed
+                // and the power profile allows it (Balanced, PowerSaver).
+                if !app.windows().frame_dirty()
+                    && app.windows().power_profile().skip_idle_render()
+                {
+                    // still mark clean so the next explicit invalidation triggers a draw
+                } else {
+                    // Catch render panics (e.g. u16 subtraction overflow with a
+                    // tiny viewport) so they don't take down the event loop.
+                    // The panic hook records details in the debug log.
+                    // I/O errors from the draw are still propagated.
+                    let io_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        output.draw(|frame| {
+                            let area = frame.area();
+                            if area.width < 2 || area.height < 2 {
+                                return;
+                            }
+                            draw(frame, app)
+                        })
+                    }))
+                    .unwrap_or(Ok(()));
+                    io_result?;
+                    app.windows().mark_frame_clean();
+                }
             }
             flush_state_changes(app, ControlFlow::Continue)
         };

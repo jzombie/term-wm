@@ -17,6 +17,7 @@ use super::entry::Window;
 use crate::app_context::AppContext;
 use crate::bottom_panel_trait::BottomPanel;
 use crate::components::{ComponentContext, MenuItem, MenuOverlay, Overlay, SelectionStatus};
+use crate::io::PowerProfile;
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
@@ -250,6 +251,8 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     next_title_seq: usize,
     synthetic_event: Option<Event>,
     clipboard: Option<crate::clipboard::Clipboard>,
+    power_profile: PowerProfile,
+    frame_dirty: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -450,6 +453,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let clipboard = Some(crate::clipboard::Clipboard::new());
         let decorator = config.decorator();
         let floating_resize_offscreen = config.floating_resize_offscreen;
+        let power_profile = config.power_profile;
         Self {
             app_focus: FocusRing::new(current),
             wm_focus: FocusRing::new(WindowId::system(SystemWindowId::DebugLog)),
@@ -506,6 +510,8 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             next_title_seq: 0,
             synthetic_event: None,
             clipboard,
+            power_profile,
+            frame_dirty: true,
         }
     }
 
@@ -588,6 +594,8 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         }
         if let Some(p) = &mut self.bottom_panel {
             p.begin_frame();
+            p.set_power_profile(self.power_profile);
+            p.set_show_profile_indicator(self.config.show_profile_indicator);
         }
         if crate::debug_event_flags::take_panic_pending() {
             self.show_system_window(SystemWindowId::DebugLog);
@@ -691,6 +699,30 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
 
     pub fn clipboard_mut(&mut self) -> Option<&mut crate::clipboard::Clipboard> {
         self.clipboard.as_mut()
+    }
+
+    pub fn power_profile(&self) -> PowerProfile {
+        self.power_profile
+    }
+
+    pub fn set_power_profile(&mut self, profile: PowerProfile) {
+        if self.power_profile == profile {
+            return;
+        }
+        self.power_profile = profile;
+        profile.report_change();
+    }
+
+    pub fn frame_dirty(&self) -> bool {
+        self.frame_dirty
+    }
+
+    pub fn mark_frame_clean(&mut self) {
+        self.frame_dirty = false;
+    }
+
+    pub fn invalidate_frame(&mut self) {
+        self.frame_dirty = true;
     }
 
     pub fn set_selection_snapshot(&mut self, active: bool, dragging: bool, text: Option<String>) {

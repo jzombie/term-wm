@@ -45,6 +45,9 @@ pub enum BgColor {
     ShadowTint,
     Error,
     Warning,
+    ProfileHigh,
+    ProfileMid,
+    ProfileLow,
 }
 
 // ---------------------------------------------------------------------------
@@ -94,6 +97,9 @@ pub struct Theme {
     pub link_color: Color,
     pub link_underline: bool,
     pub debug_highlight: Color,
+    pub profile_high: Color,
+    pub profile_mid: Color,
+    pub profile_low: Color,
 }
 
 impl Theme {
@@ -135,6 +141,9 @@ impl Theme {
             BgColor::ShadowTint => self.shadow_tint,
             BgColor::Error => self.error,
             BgColor::Warning => self.warning,
+            BgColor::ProfileHigh => self.profile_high,
+            BgColor::ProfileMid => self.profile_mid,
+            BgColor::ProfileLow => self.profile_low,
         }
     }
 }
@@ -191,6 +200,10 @@ pub const NOIR: Theme = Theme {
     shadow_tint: Color::Rgb(16, 17, 22),
     // Debug
     debug_highlight: Color::Rgb(255, 168, 0),
+    // Power profile indicators
+    profile_high: Color::Rgb(255, 61, 61),
+    profile_mid: Color::Rgb(255, 193, 7),
+    profile_low: Color::Rgb(0, 200, 83),
 };
 
 // ---------------------------------------------------------------------------
@@ -307,6 +320,15 @@ pub fn warning_bg() -> Color {
 }
 pub fn bottom_panel_fg() -> Color {
     current().fg(FgColor::BottomPanelFg)
+}
+pub fn profile_high_bg() -> Color {
+    current().bg(BgColor::ProfileHigh)
+}
+pub fn profile_mid_bg() -> Color {
+    current().bg(BgColor::ProfileMid)
+}
+pub fn profile_low_bg() -> Color {
+    current().bg(BgColor::ProfileLow)
 }
 
 // ---------------------------------------------------------------------------
@@ -607,6 +629,14 @@ mod tests {
 
         for fg in FgColor::iter() {
             for bg in BgColor::iter() {
+                // Profile indicator backgrounds never carry text — skip contrast check.
+                if matches!(
+                    bg,
+                    BgColor::ProfileHigh | BgColor::ProfileMid | BgColor::ProfileLow
+                ) {
+                    excluded += 1;
+                    continue;
+                }
                 if PHYSICALLY_IMPOSSIBLE
                     .iter()
                     .any(|(f, b, _)| *f == fg && *b == bg)

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::io::PowerProfile;
 use crate::keybindings::{Action, KeyBindings};
 use crate::window::decorator::{DefaultDecorator, WindowDecorator};
 
@@ -106,6 +107,10 @@ pub struct WmConfig {
     pub keybindings: KeyBindings,
     /// Visibility mode for keybinding hints.
     pub hint_visibility: HintVisibility,
+    /// Power profile controlling polling frequency and idle-render behavior.
+    pub power_profile: PowerProfile,
+    /// Show a color-coded power-profile indicator in the bottom panel.
+    pub show_profile_indicator: bool,
 }
 
 impl Default for WmConfig {
@@ -137,6 +142,8 @@ impl WmConfig {
             hint_visibility: HintVisibility::Always,
             menu_outline_timeout: Duration::from_millis(500),
             drag_snap_timeout: Some(Duration::from_millis(2000)),
+            power_profile: PowerProfile::Balanced,
+            show_profile_indicator: true,
         }
     }
 
@@ -161,6 +168,8 @@ impl WmConfig {
             hint_visibility: HintVisibility::Always,
             menu_outline_timeout: Duration::ZERO,
             drag_snap_timeout: None,
+            power_profile: PowerProfile::Balanced,
+            show_profile_indicator: false,
         }
     }
 

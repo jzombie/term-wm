@@ -23,7 +23,8 @@ fn main() -> io::Result<()> {
     let mut app = App::new(std::env::args().skip(1).collect())?;
     let mut output = ConsoleRenderTarget::new()?;
     output.enter()?;
-    let mut input = ConsoleEventSource::new();
+    let profile = app.windows.power_profile();
+    let mut input = ConsoleEventSource::new(profile);
 
     let result = run_window_app(&mut output, &mut input, &mut app);
 

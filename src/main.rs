@@ -73,7 +73,8 @@ fn main() -> io::Result<()> {
     let mut app = App::new_with(cli.cmds, total)?;
     let mut output = ConsoleRenderTarget::new()?;
     output.enter()?;
-    let mut input = ConsoleEventSource::new();
+    let profile = app.windows.power_profile();
+    let mut input = ConsoleEventSource::new(profile);
 
     let result = run_window_app(&mut output, &mut input, &mut app);
 
