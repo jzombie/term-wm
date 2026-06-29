@@ -583,12 +583,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub fn begin_frame(&mut self) {
-        self.regions = RegionMap::default();
-        self.handles.clear();
-        self.resize_handles.clear();
-        self.floating_headers.clear();
-        self.managed_draw_order.clear();
-        self.managed_draw_order_app.clear();
         if let Some(p) = &mut self.top_panel {
             p.begin_frame();
         }
@@ -605,6 +599,18 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         } else {
             self.refresh_capture();
         }
+    }
+
+    /// Clear draw-time state that gets repopulated during `output.draw()`.
+    /// Must be called immediately before each draw (not in `begin_frame()`)
+    /// so that skipped idle renders don't destroy data needed by mouse events.
+    pub fn prepare_draw(&mut self) {
+        self.regions = RegionMap::default();
+        self.handles.clear();
+        self.resize_handles.clear();
+        self.floating_headers.clear();
+        self.managed_draw_order.clear();
+        self.managed_draw_order_app.clear();
     }
 
     pub fn arm_capture(&mut self, timeout: Duration) {

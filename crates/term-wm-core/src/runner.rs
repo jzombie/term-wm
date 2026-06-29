@@ -513,6 +513,7 @@ where
                 {
                     // still mark clean so the next explicit invalidation triggers a draw
                 } else {
+                    app.windows().prepare_draw();
                     // Catch render panics (e.g. u16 subtraction overflow with a
                     // tiny viewport) so they don't take down the event loop.
                     // The panic hook records details in the debug log.
