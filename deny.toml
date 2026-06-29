@@ -1,3 +1,9 @@
+[advisories]
+# RUSTSEC-2026-0192: ttf-parser is unmaintained but still a transitive dep of
+# resvg/usvg (used for SVG rasterization in term-wm-ui-components).
+# No safe upgrade available until resvg updates its font crate dependency.
+ignore = ["RUSTSEC-2026-0192"]
+
 [licenses]
 allow = [
   "Apache-2.0",

@@ -1,4 +1,5 @@
 pub mod ascii_image;
+pub mod center;
 pub mod confirm_overlay;
 pub mod dialog_overlay;
 pub mod list;
@@ -12,6 +13,7 @@ pub mod text_renderer;
 pub mod toggle_list;
 
 pub use ascii_image::AsciiImageComponent;
+pub use center::CenterComponent;
 pub use confirm_overlay::ConfirmOverlayComponent;
 pub use dialog_overlay::DialogOverlayComponent;
 pub use list::ListComponent;

@@ -99,10 +99,12 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                         start_x: mouse.column,
                         start_y: mouse.row,
                     });
+                    self.drag_last_event = Some(Instant::now());
                     return true;
                 }
             }
             MouseEventKind::Drag(_) => {
+                self.drag_last_event = Some(Instant::now());
                 if let Some(drag) = self.drag_header {
                     if self.is_window_floating(drag.id) {
                         self.move_floating(
