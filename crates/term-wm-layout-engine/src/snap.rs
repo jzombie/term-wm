@@ -40,34 +40,98 @@ pub struct SnapPreview<Id: Copy + Eq + Ord> {
 }
 
 #[derive(Debug, Clone)]
-pub struct EdgeResistance {
+pub struct EdgeResistanceConfig {
     pub magnetic_zone: u16,
     pub spatial_threshold: u16,
+    // temporal_threshold and velocity tracking planned but not yet wired;
+    // requires frame timestamp plumbing from the runtime.
+    pub _temporal_threshold_ns: Option<u64>,
 }
 
-impl EdgeResistance {
+impl EdgeResistanceConfig {
     pub fn default_tui() -> Self {
         Self {
             magnetic_zone: 3,
             spatial_threshold: 8,
+            _temporal_threshold_ns: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EdgeResistance {
+    pub config: EdgeResistanceConfig,
+    pub prev_x: Option<i32>,
+    pub prev_y: Option<i32>,
+}
+
+impl EdgeResistance {
+    pub fn new(config: EdgeResistanceConfig) -> Self {
+        Self {
+            config,
+            prev_x: None,
+            prev_y: None,
         }
     }
 
-    pub fn apply(&self, new_x: i32, bounds: LayoutRect) -> i32 {
-        let left_edge = bounds.x;
-        let right_edge = bounds
-            .x
-            .saturating_add(i32::from(bounds.width.saturating_sub(1)));
+    pub fn default_tui() -> Self {
+        Self::new(EdgeResistanceConfig::default_tui())
+    }
 
-        let zone = i32::from(self.magnetic_zone);
+    pub fn apply_x(&mut self, new_x: i32, bounds: LayoutRect) -> i32 {
+        let low = bounds.x;
+        let high = bounds.x.saturating_add(i32::from(bounds.width.saturating_sub(1)));
+        let result = snap_axis(new_x, low, high, self.config.magnetic_zone, self.config.spatial_threshold, &self.prev_x);
+        self.prev_x = Some(new_x);
+        result
+    }
 
-        if new_x >= left_edge && new_x <= left_edge.saturating_add(zone) {
-            left_edge
-        } else if new_x <= right_edge && new_x >= right_edge.saturating_sub(zone) {
-            right_edge
-        } else {
-            new_x
-        }
+    pub fn apply_y(&mut self, new_y: i32, bounds: LayoutRect) -> i32 {
+        let low = bounds.y;
+        let high = bounds.y.saturating_add(i32::from(bounds.height.saturating_sub(1)));
+        let result = snap_axis(new_y, low, high, self.config.magnetic_zone, self.config.spatial_threshold, &self.prev_y);
+        self.prev_y = Some(new_y);
+        result
+    }
+
+    pub fn apply(&mut self, new_x: i32, bounds: LayoutRect) -> i32 {
+        self.apply_x(new_x, bounds)
+    }
+}
+
+fn snap_axis(
+    new_val: i32,
+    low: i32,
+    high: i32,
+    magnetic_zone: u16,
+    spatial_threshold: u16,
+    prev: &Option<i32>,
+) -> i32 {
+    let zone = i32::from(magnetic_zone);
+    let hysteresis = i32::from(spatial_threshold);
+
+    let d_low = new_val.saturating_sub(low).unsigned_abs();
+    let d_high = high.saturating_sub(new_val).unsigned_abs();
+
+    let already_snapped = prev
+        .map(|p| {
+            let pd_low = p.saturating_sub(low).unsigned_abs();
+            let pd_high = high.saturating_sub(p).unsigned_abs();
+            pd_low <= zone as u32 || pd_high <= zone as u32
+        })
+        .unwrap_or(false);
+
+    let threshold = if already_snapped { hysteresis } else { zone };
+
+    let snap_low = d_low <= threshold as u32;
+    let snap_high = d_high <= threshold as u32;
+
+    if snap_low && d_low <= d_high {
+        low
+    } else if snap_high {
+        high
+    } else {
+        new_val
     }
 }
 
@@ -213,38 +277,62 @@ mod tests {
 
     #[test]
     fn edge_resistance_snaps_to_left_edge() {
-        let er = EdgeResistance::default_tui();
+        let mut er = EdgeResistance::default_tui();
         let bounds = LayoutRect {
             x: 0,
             y: 0,
             width: 80,
             height: 24,
         };
-        assert_eq!(er.apply(2, bounds), 0);
+        assert_eq!(er.apply_x(2, bounds), 0);
     }
 
     #[test]
     fn edge_resistance_snaps_to_right_edge() {
-        let er = EdgeResistance::default_tui();
+        let mut er = EdgeResistance::default_tui();
         let bounds = LayoutRect {
             x: 0,
             y: 0,
             width: 80,
             height: 24,
         };
-        assert_eq!(er.apply(78, bounds), 79);
+        assert_eq!(er.apply_x(78, bounds), 79);
     }
 
     #[test]
     fn edge_resistance_passes_through_middle() {
-        let er = EdgeResistance::default_tui();
+        let mut er = EdgeResistance::default_tui();
         let bounds = LayoutRect {
             x: 0,
             y: 0,
             width: 80,
             height: 24,
         };
-        assert_eq!(er.apply(40, bounds), 40);
+        assert_eq!(er.apply_x(40, bounds), 40);
+    }
+
+    #[test]
+    fn edge_resistance_snaps_y_to_top() {
+        let mut er = EdgeResistance::default_tui();
+        let bounds = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        assert_eq!(er.apply_y(2, bounds), 0);
+    }
+
+    #[test]
+    fn edge_resistance_snaps_y_to_bottom() {
+        let mut er = EdgeResistance::default_tui();
+        let bounds = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        assert_eq!(er.apply_y(22, bounds), 23);
     }
 
     #[test]

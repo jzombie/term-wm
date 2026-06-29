@@ -496,7 +496,21 @@ where
                 }
                 update_selection_snapshot(app);
                 app.windows().begin_frame();
-                output.draw(|frame| draw(frame, app))?;
+                // Catch render panics (e.g. u16 subtraction overflow with a
+                // tiny viewport) so they don't take down the event loop.
+                // The panic hook records details in the debug log.
+                // I/O errors from the draw are still propagated.
+                let io_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    output.draw(|frame| {
+                        let area = frame.area();
+                        if area.width < 2 || area.height < 2 {
+                            return;
+                        }
+                        draw(frame, app)
+                    })
+                }))
+                .unwrap_or(Ok(()));
+                io_result?;
             }
             flush_state_changes(app, ControlFlow::Continue)
         };
@@ -504,23 +518,9 @@ where
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(handler)) {
             Ok(result) => result,
             Err(_) => {
-                // TODO: This needs to be improved; currently requires resizing the terminal window to
-                // "stabilize" the messages, to produce them in a debug log window. Also, directly setting
-                // the mouse capture here bypasses the state, and the UI is not reflected. It might be better
-                // to just turn off mouse capturing and crash the app naturally if this cannot be improved.
-
-                // A panic occurred; stop mouse capture to avoid terminal spam
-                let _ = driver.set_mouse_capture(false);
-                // Attempt to immediately redraw the UI so the debug log (populated by the panic hook)
-                // is visible to the user without waiting for another input event like a resize.
-                let mut redraw = || -> io::Result<()> {
-                    app.windows().begin_frame();
-                    output.draw(|frame| draw(frame, app))
-                };
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let _ = redraw();
-                }));
-                // Let the panic hook have recorded details into the debug log; continue event loop.
+                // A panic occurred outside the render path (e.g. in event
+                // processing).  Keep mouse capture ON and don't attempt to
+                // redraw — the next event will render normally.
                 Ok(ControlFlow::Continue)
             }
         }
@@ -558,23 +558,40 @@ where
     Id: Copy + Eq + Ord + std::fmt::Debug + 'static,
 {
     let was_dragging = app.windows().selection_dragging();
-    let focus_id = app.windows().wm_focus_app();
-    if let Some(id) = focus_id
-        && let Some(component) = app.window_component(id)
-    {
-        let status = component.selection_status();
-        let text = if status.active || status.dragging {
-            component.selection_text()
-        } else {
-            None
-        };
-        app.windows()
-            .set_selection_snapshot(status.active, status.dragging, text);
-        if was_dragging && !status.dragging && status.active {
-            app.windows().copy_selection_to_clipboard();
-        }
-    } else {
-        app.windows().set_selection_snapshot(false, false, None);
+    let focus = app.windows().wm_focus();
+    let (status, text) = match focus {
+        WindowId::App(id) => app
+            .window_component(id)
+            .map(|c| {
+                // TODO: Extract to a helper
+                let s = c.selection_status();
+                let t = if s.active || s.dragging {
+                    c.selection_text()
+                } else {
+                    None
+                };
+                (s, t)
+            })
+            .unwrap_or_default(),
+        WindowId::System(sys_id) => app
+            .windows()
+            .system_window_entry_mut(sys_id)
+            .map(|entry| {
+                // TODO: Extract to a helper
+                let s = entry.selection_status();
+                let t = if s.active || s.dragging {
+                    entry.selection_text()
+                } else {
+                    None
+                };
+                (s, t)
+            })
+            .unwrap_or_default(),
+    };
+    app.windows()
+        .set_selection_snapshot(status.active, status.dragging, text);
+    if was_dragging && !status.dragging && status.active {
+        app.windows().copy_selection_to_clipboard();
     }
 }
 

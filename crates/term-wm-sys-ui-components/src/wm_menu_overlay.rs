@@ -113,8 +113,8 @@ impl<R: Clone + std::fmt::Debug + 'static> WmMenuOverlay<R> {
 
         let hovered_idx = ctx.hover_pos().and_then(|(_mx, my)| {
             (my >= drop_rect.y.saturating_add(1)
-                && my < drop_rect.y.saturating_add(item_count as u16 + 1))
-            .then(|| (my - drop_rect.y - 1) as usize)
+                && my < drop_rect.y.saturating_add((item_count as u16).saturating_add(1)))
+            .then(|| (my.saturating_sub(drop_rect.y).saturating_sub(1)) as usize)
             .filter(|&idx| idx < item_count)
         });
         self.menu.render_items(frame, drop_rect, hovered_idx);

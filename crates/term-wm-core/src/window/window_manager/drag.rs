@@ -6,7 +6,7 @@ use ratatui::prelude::Rect;
 use super::{WindowId, WindowManager};
 use crate::layout::InsertPosition;
 use crate::layout::floating::*;
-use term_wm_layout_engine::{EdgeResistance, LayoutRect, detect_quadrant};
+use term_wm_layout_engine::{EdgeResistance, LayoutRect, apply_resize_drag_signed, detect_quadrant};
 
 impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     pub(super) fn handle_header_drag_event(&mut self, event: &Event) -> bool {
@@ -123,6 +123,16 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                     return true;
                 }
             }
+            MouseEventKind::Moved => {
+                // Mouse re-entered the terminal after being released outside
+                // during a header drag (no Up event was delivered).
+                if let Some(drag) = self.drag_header.take()
+                    && self.drag_snap.is_some()
+                {
+                    self.apply_snap(drag.id);
+                    return true;
+                }
+            }
             MouseEventKind::Up(_) => {
                 if let Some(drag) = self.drag_header.take() {
                     if self.drag_snap.is_some() {
@@ -210,6 +220,12 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 if let Some(drag) = self.drag_resize.as_ref()
                     && self.is_window_floating(drag.id)
                 {
+                    let bounds = LayoutRect {
+                        x: self.managed_area.x as i32,
+                        y: self.managed_area.y as i32,
+                        width: self.managed_area.width,
+                        height: self.managed_area.height,
+                    };
                     let resized = apply_resize_drag_signed(
                         drag.start_x,
                         drag.start_y,
@@ -220,7 +236,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                         mouse.row,
                         drag.start_col,
                         drag.start_row,
-                        self.managed_area,
+                        bounds,
                         self.floating_resize_offscreen,
                     );
                     self.set_floating_rect(
@@ -298,14 +314,14 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             y = bounds_y;
         }
 
-        let resistance = EdgeResistance::default_tui();
+        let mut resistance = EdgeResistance::default_tui();
         let bounds_layout = LayoutRect {
             x: bounds.x as i32,
             y: bounds.y as i32,
             width: bounds.width,
             height: bounds.height,
         };
-        let x = resistance.apply(x, bounds_layout);
+        let x = resistance.apply_x(x, bounds_layout);
 
         self.set_floating_rect(
             id,
@@ -531,21 +547,15 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             return true;
         }
 
-        let current_focus = self.wm_focus.current();
-
-        let mut target_r = None;
-        for r_id in self.regions.ids() {
-            if r_id == current_focus {
-                target_r = Some(r_id);
-                break;
-            }
-        }
+        let current_focus = *self.wm_focus.current();
 
         let Some(layout) = self.managed_layout.as_mut() else {
             return false;
         };
 
-        if let Some(target) = target_r
+        let target = self.regions.ids().iter().find(|r_id| **r_id == current_focus).copied();
+
+        if let Some(target) = target
             && layout
                 .root_mut()
                 .insert_leaf(target, id, InsertPosition::Right)

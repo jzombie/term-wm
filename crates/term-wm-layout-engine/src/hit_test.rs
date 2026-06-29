@@ -23,16 +23,16 @@ pub fn detect_quadrant(cursor_col: u16, cursor_row: u16, target: &LayoutRect) ->
         return Quadrant::East;
     }
 
-    let angle = (dy as f64).atan2(dx as f64);
+    let adx = dx.unsigned_abs();
+    let ady = dy.unsigned_abs();
 
-    if (-0.785..0.785).contains(&angle) {
-        Quadrant::East
-    } else if (0.785..2.356).contains(&angle) {
-        Quadrant::South
-    } else if (-2.356..-0.785).contains(&angle) {
-        Quadrant::North
+    if adx > ady {
+        if dx > 0 { Quadrant::East } else { Quadrant::West }
+    } else if ady > adx {
+        if dy > 0 { Quadrant::South } else { Quadrant::North }
     } else {
-        Quadrant::West
+        // |dx| == |dy| or both zero — East if dx >= 0, West otherwise
+        if dx >= 0 { Quadrant::East } else { Quadrant::West }
     }
 }
 

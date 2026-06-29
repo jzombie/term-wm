@@ -344,7 +344,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             .filter_map(|id| id.as_app())
             .collect();
         self.rebuild_wm_focus_ring(&active_ids);
-        let focused = self.wm_focus.current();
+        let focused = *self.wm_focus.current();
         if self.z_order.last().copied() != Some(focused) {
             self.focus_window_id(focused);
         }
@@ -483,14 +483,14 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                     plan.push(super::DrawTask::System(super::SystemWindowDraw {
                         id: system_id,
                         surface: super::WindowSurface { full, inner, dest },
-                        focused: focused_window == id,
+                        focused: *focused_window == id,
                     }));
                 }
                 WindowId::App(app_id) => {
                     plan.push(super::DrawTask::App(super::WindowDrawContext {
                         id: app_id,
                         surface: super::WindowSurface { full, inner, dest },
-                        focused: focused_window == WindowId::app(app_id),
+                        focused: *focused_window == WindowId::app(app_id),
                     }));
                 }
             }
