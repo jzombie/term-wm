@@ -714,6 +714,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             return;
         }
         self.power_profile = profile;
+        self.invalidate_frame();
         profile.report_change();
     }
 
