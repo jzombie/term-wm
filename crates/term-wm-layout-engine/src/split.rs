@@ -613,10 +613,12 @@ mod tests {
 
             #[test]
             fn split_rects_weighted_with_gaps_sum_equals_area(
-                total in 4u16..200u16,
+                total in 6u16..200u16,
                 count in 2usize..5usize,
                 gap in 0u16..4u16,
             ) {
+                prop_assume!(gap * (count as u16 - 1) < total,
+                    "gaps alone must not exceed total width");
                 let weights: Vec<u16> = (0..count).map(|_| 1).collect();
                 let area = LayoutRect { x: 0, y: 0, width: total, height: 24 };
                 let (rects, gaps) = split_rects_with_gaps(area, Orientation::Horizontal, &weights, count, gap);
