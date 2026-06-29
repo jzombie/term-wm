@@ -1381,6 +1381,61 @@ mod tests {
     }
 
     #[test]
+    fn minimize_and_restore_preserves_floating_rect() {
+        use crate::window::{FloatRect, FloatRectSpec};
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        let original = FloatRect {
+            x: 5,
+            y: 3,
+            width: 10,
+            height: 8,
+        };
+        wm.set_floating_rect(
+            WindowId::app(1usize),
+            Some(FloatRectSpec::Absolute(original)),
+        );
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 15,
+        });
+        wm.minimize_window(WindowId::app(1usize));
+        assert!(
+            wm.is_minimized(WindowId::app(1usize)),
+            "window should be minimized"
+        );
+        let after_minimize = wm.floating_rect(WindowId::app(1usize));
+        assert!(
+            after_minimize.is_some(),
+            "floating rect should survive minimize"
+        );
+        assert_eq!(
+            after_minimize,
+            Some(FloatRectSpec::Absolute(original)),
+            "floating rect should be unchanged after minimize"
+        );
+        wm.restore_minimized(WindowId::app(1usize));
+        assert!(
+            !wm.is_minimized(WindowId::app(1usize)),
+            "window should be restored"
+        );
+        let after_restore = wm.floating_rect(WindowId::app(1usize));
+        assert_eq!(
+            after_restore,
+            Some(FloatRectSpec::Absolute(original)),
+            "floating rect should be preserved across restore"
+        );
+    }
+
+    #[test]
     fn localize_event_converts_to_local_coords() {
         use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
         let mut wm = WindowManager::<usize>::with_config(
