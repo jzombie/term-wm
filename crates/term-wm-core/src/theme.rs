@@ -82,7 +82,12 @@ pub struct Theme {
     pub dialog_separator: Color,
     pub selection_bg: Color,
     pub selection_fg: Color,
+    /// Dark end of the drop-shadow interpolation — used for the topmost
+    /// (highest z-depth) floating window.
     pub shadow_bg: Color,
+    /// Light end of the drop-shadow interpolation — used for the bottommost
+    /// floating window.  The actual shadow color is lerped between `shadow_tint`
+    /// and `shadow_bg` based on the window's z-order position.
     pub shadow_tint: Color,
     pub link_color: Color,
     pub link_underline: bool,

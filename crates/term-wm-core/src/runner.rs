@@ -708,6 +708,9 @@ where
     app.windows().render_overlays(frame);
 }
 
+/// Linear RGB interpolation between two colors.
+/// `t = 0.0` returns `a`, `t = 1.0` returns `b`.
+/// Non-RGB color variants return `b` unchanged.
 fn lerp_color(a: Color, b: Color, t: f32) -> Color {
     match (a, b) {
         (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) => {
@@ -753,6 +756,10 @@ fn composite_window<F>(
             cell.modifier.insert(Modifier::DIM);
         }
     }
+    // Drop-shadow: a translucent block drawn at (SHADOW_OFFSET_X, SHADOW_OFFSET_Y)
+    // from the window origin.  The background colour interpolates between
+    // `shadow_tint` (bottom of the z-stack) and `shadow_bg` (top) using
+    // the window's normalised z-depth to reinforce the depth illusion.
     if surface.draw_shadow {
         let frame_area = frame.area();
         let sx = surface.dest.x.saturating_add(SHADOW_OFFSET_X);

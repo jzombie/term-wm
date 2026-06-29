@@ -110,7 +110,12 @@ pub struct WindowSurface {
     pub full: Rect,
     pub inner: Rect,
     pub dest: crate::window::FloatRect,
+    /// Whether a drop-shadow should be rendered behind this window
+    /// (derived from `WmConfig.shadow_enabled` + floating status).
     pub draw_shadow: bool,
+    /// Normalized z-order depth [0.0–1.0] used to interpolate the shadow
+    /// background color — bottommost windows get the lighter `shadow_tint`
+    /// while topmost windows get the darker `shadow_bg`.
     pub z_depth: f32,
 }
 
