@@ -110,6 +110,7 @@ pub struct WindowSurface {
     pub full: Rect,
     pub inner: Rect,
     pub dest: crate::window::FloatRect,
+    pub draw_shadow: bool,
 }
 
 #[derive(Debug, Clone, Copy)]

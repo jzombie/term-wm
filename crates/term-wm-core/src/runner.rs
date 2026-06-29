@@ -6,6 +6,7 @@ use ratatui::prelude::Rect;
 use ratatui::style::{Modifier, Style};
 
 use crate::components::{Component, ComponentContext, ConfirmAction, Overlay, SelectionStatus};
+use crate::constants::{SHADOW_OFFSET_X, SHADOW_OFFSET_Y};
 use crate::debug_event_flags;
 use crate::event_loop::{ControlFlow, EventLoop};
 use crate::io::{EventSource, RenderTarget};
@@ -736,6 +737,30 @@ fn composite_window<F>(
     if !focused {
         for cell in buffer.content.iter_mut() {
             cell.modifier.insert(Modifier::DIM);
+        }
+    }
+    if surface.draw_shadow {
+        let frame_area = frame.area();
+        let sx = surface.dest.x.saturating_add(SHADOW_OFFSET_X);
+        let sy = surface.dest.y.saturating_add(SHADOW_OFFSET_Y);
+        let ex = sx.saturating_add(surface.dest.width as i32);
+        let ey = sy.saturating_add(surface.dest.height as i32);
+        let buf = frame.buffer_mut();
+        for y in sy..ey {
+            if y < frame_area.y as i32 || y >= (frame_area.y + frame_area.height) as i32 {
+                continue;
+            }
+            for x in sx..ex {
+                if x < frame_area.x as i32 || x >= (frame_area.x + frame_area.width) as i32 {
+                    continue;
+                }
+                if let Some(cell) = buf.cell_mut((x as u16, y as u16)) {
+                    if !cell.symbol().starts_with(' ') {
+                        cell.modifier.insert(Modifier::DIM);
+                    }
+                    cell.set_bg(crate::theme::surface());
+                }
+            }
         }
     }
     frame.blit_from_signed(&buffer, surface.dest);

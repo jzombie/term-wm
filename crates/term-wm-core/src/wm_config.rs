@@ -89,6 +89,8 @@ pub struct WmConfig {
     pub menu_outline_timeout: Duration,
     /// Enable mouse click focus switching between windows.
     pub mouse_focus_click_enabled: bool,
+    /// Enable drop-shadow rendering behind floating windows.
+    pub shadow_enabled: bool,
     /// Custom window decorator (title bar + border renderer).
     pub decorator: Option<Arc<dyn WindowDecorator>>,
     /// Configurable keybindings (defaults to `KeyBindings::default()`).
@@ -115,6 +117,7 @@ impl WmConfig {
             wm_overlay_enabled: true,
             super_passthrough_window: super_passthrough_window_default(),
             floating_resize_offscreen: true,
+            shadow_enabled: true,
             clipboard_enabled: true,
             window_selection_enabled: true,
             mouse_capture_enabled: true,
@@ -137,6 +140,7 @@ impl WmConfig {
             wm_overlay_enabled: false,
             super_passthrough_window: super_passthrough_window_default(),
             floating_resize_offscreen: false,
+            shadow_enabled: false,
             clipboard_enabled: true,
             window_selection_enabled: true,
             mouse_capture_enabled: true,

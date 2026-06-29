@@ -482,14 +482,24 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                     }
                     plan.push(super::DrawTask::System(super::SystemWindowDraw {
                         id: system_id,
-                        surface: super::WindowSurface { full, inner, dest },
+                        surface: super::WindowSurface {
+                            full,
+                            inner,
+                            dest,
+                            draw_shadow: self.is_window_floating(id) && self.config.shadow_enabled,
+                        },
                         focused: *focused_window == id,
                     }));
                 }
                 WindowId::App(app_id) => {
                     plan.push(super::DrawTask::App(super::WindowDrawContext {
                         id: app_id,
-                        surface: super::WindowSurface { full, inner, dest },
+                        surface: super::WindowSurface {
+                            full,
+                            inner,
+                            dest,
+                            draw_shadow: self.is_window_floating(id) && self.config.shadow_enabled,
+                        },
                         focused: *focused_window == WindowId::app(app_id),
                     }));
                 }

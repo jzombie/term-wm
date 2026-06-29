@@ -40,6 +40,7 @@ pub enum BgColor {
     DialogBg,
     DecoratorHeaderBg,
     BottomPanelBg,
+    Surface,
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +119,7 @@ impl Theme {
             BgColor::DialogBg => self.dialog_bg,
             BgColor::DecoratorHeaderBg => self.decorator_header_bg,
             BgColor::BottomPanelBg => self.bottom_panel_bg,
+            BgColor::Surface => self.surface,
         }
     }
 }
@@ -264,6 +266,9 @@ pub fn decorator_border() -> Color {
 pub fn decorator_border_active() -> Color {
     current().fg(FgColor::DecoratorBorderActive)
 }
+pub fn surface() -> Color {
+    current().bg(BgColor::Surface)
+}
 pub fn debug_highlight() -> Color {
     current().fg(FgColor::DebugHighlight)
 }
@@ -343,6 +348,11 @@ mod tests {
         (FgColor::MenuSelectedFg, BgColor::DecoratorHeaderBg, "same"),
         (FgColor::MenuSelectedFg, BgColor::BottomPanelBg, "same"),
         (
+            FgColor::MenuSelectedFg,
+            BgColor::Surface,
+            "same luminance conflict — shadow is visual effect, not text surface",
+        ),
+        (
             FgColor::SelectionFg,
             BgColor::PanelBg,
             "same — near-black only on green",
@@ -352,6 +362,7 @@ mod tests {
         (FgColor::SelectionFg, BgColor::DialogBg, "same"),
         (FgColor::SelectionFg, BgColor::DecoratorHeaderBg, "same"),
         (FgColor::SelectionFg, BgColor::BottomPanelBg, "same"),
+        (FgColor::SelectionFg, BgColor::Surface, "same"),
         // Green accent colors on green — same hue, never co-occur.
         (FgColor::Success, BgColor::MenuSelectedBg, "green on green"),
         (FgColor::Success, BgColor::SelectionBg, "green on green"),
