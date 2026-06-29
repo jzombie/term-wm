@@ -27,12 +27,24 @@ pub fn detect_quadrant(cursor_col: u16, cursor_row: u16, target: &LayoutRect) ->
     let ady = dy.unsigned_abs();
 
     if adx > ady {
-        if dx > 0 { Quadrant::East } else { Quadrant::West }
+        if dx > 0 {
+            Quadrant::East
+        } else {
+            Quadrant::West
+        }
     } else if ady > adx {
-        if dy > 0 { Quadrant::South } else { Quadrant::North }
+        if dy > 0 {
+            Quadrant::South
+        } else {
+            Quadrant::North
+        }
     } else {
         // |dx| == |dy| or both zero — East if dx >= 0, West otherwise
-        if dx >= 0 { Quadrant::East } else { Quadrant::West }
+        if dx >= 0 {
+            Quadrant::East
+        } else {
+            Quadrant::West
+        }
     }
 }
 

@@ -10,7 +10,10 @@ pub struct LayoutRect {
 
 impl LayoutRect {
     pub fn center(&self) -> (i32, i32) {
-        (self.x + i32::from(self.width) / 2, self.y + i32::from(self.height) / 2)
+        (
+            self.x + i32::from(self.width) / 2,
+            self.y + i32::from(self.height) / 2,
+        )
     }
 
     pub fn contains(&self, col: u16, row: u16) -> bool {
@@ -35,7 +38,12 @@ impl LayoutRect {
         let x2 = self_right.min(bounds_right);
         let y2 = self_bottom.min(bounds_bottom);
         if x2 <= x1 || y2 <= y1 {
-            return LayoutRect { x: 0, y: 0, width: 0, height: 0 };
+            return LayoutRect {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            };
         }
         LayoutRect {
             x: x1,
@@ -71,7 +79,12 @@ pub fn inset(rect: LayoutRect, left: u16, right: u16, top: u16, bottom: u16) -> 
     }
 }
 
-pub fn gap_insert(rect: LayoutRect, gap: u16, index: usize, orientation: Orientation) -> LayoutRect {
+pub fn gap_insert(
+    rect: LayoutRect,
+    gap: u16,
+    index: usize,
+    orientation: Orientation,
+) -> LayoutRect {
     let offset = gap.saturating_mul(index as u16);
     match orientation {
         Orientation::Horizontal => LayoutRect {
@@ -136,7 +149,11 @@ impl fmt::Display for LayoutError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LayoutError::ConstraintViolated(c) => {
-                write!(f, "minimum dimension violated (min {}x{})", c.min_width, c.min_height)
+                write!(
+                    f,
+                    "minimum dimension violated (min {}x{})",
+                    c.min_width, c.min_height
+                )
             }
             LayoutError::NotFound => write!(f, "target node not found"),
         }
@@ -146,14 +163,24 @@ impl fmt::Display for LayoutError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RectSpec {
     Absolute(LayoutRect),
-    Percent { x: u16, y: u16, width: u16, height: u16 },
+    Percent {
+        x: u16,
+        y: u16,
+        width: u16,
+        height: u16,
+    },
 }
 
 impl RectSpec {
     pub fn resolve(&self, bounds: LayoutRect) -> LayoutRect {
         match *self {
             RectSpec::Absolute(r) => r,
-            RectSpec::Percent { x, y, width, height } => {
+            RectSpec::Percent {
+                x,
+                y,
+                width,
+                height,
+            } => {
                 let bw = i32::from(bounds.width);
                 let bh = i32::from(bounds.height);
                 LayoutRect {
@@ -172,7 +199,12 @@ mod tests {
     use super::*;
 
     fn r(x: i32, y: i32, w: u16, h: u16) -> LayoutRect {
-        LayoutRect { x, y, width: w, height: h }
+        LayoutRect {
+            x,
+            y,
+            width: w,
+            height: h,
+        }
     }
 
     #[test]
@@ -268,7 +300,12 @@ mod tests {
 
     #[test]
     fn rect_spec_percent() {
-        let spec = RectSpec::Percent { x: 50, y: 50, width: 50, height: 50 };
+        let spec = RectSpec::Percent {
+            x: 50,
+            y: 50,
+            width: 50,
+            height: 50,
+        };
         let resolved = spec.resolve(r(0, 0, 100, 100));
         assert_eq!(resolved, r(50, 50, 50, 50));
     }

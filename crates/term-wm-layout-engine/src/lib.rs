@@ -9,8 +9,8 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
-mod hit_test;
 mod floating;
+mod hit_test;
 mod layout;
 mod node;
 mod ordering;

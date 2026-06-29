@@ -79,7 +79,9 @@ impl<T: Copy + Eq> FocusRing<T> {
 
     pub fn set_order(&mut self, order: Vec<T>) {
         self.order = order;
-        if !self.order.contains(&self.current) && let Some(first) = self.order.first().copied() {
+        if !self.order.contains(&self.current)
+            && let Some(first) = self.order.first().copied()
+        {
             self.current = first;
         }
     }
@@ -110,7 +112,11 @@ impl<T: Copy + Eq> FocusRing<T> {
 
 impl<T: fmt::Debug + Copy + Eq> fmt::Display for FocusRing<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "FocusRing {{ current: {:?}, order: {:?} }}", self.current, self.order)
+        write!(
+            f,
+            "FocusRing {{ current: {:?}, order: {:?} }}",
+            self.current, self.order
+        )
     }
 }
 

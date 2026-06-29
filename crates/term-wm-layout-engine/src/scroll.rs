@@ -27,9 +27,7 @@ impl ScrollState {
 
     pub fn apply(&mut self, total: usize, view: usize) {
         let max_offset = total.saturating_sub(view);
-        let new_offset = (self.offset as isize)
-            .saturating_add(self.pending)
-            .max(0) as usize;
+        let new_offset = (self.offset as isize).saturating_add(self.pending).max(0) as usize;
         self.offset = new_offset.min(max_offset);
         self.pending = 0;
     }

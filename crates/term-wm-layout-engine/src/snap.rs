@@ -80,16 +80,34 @@ impl EdgeResistance {
 
     pub fn apply_x(&mut self, new_x: i32, bounds: LayoutRect) -> i32 {
         let low = bounds.x;
-        let high = bounds.x.saturating_add(i32::from(bounds.width.saturating_sub(1)));
-        let result = snap_axis(new_x, low, high, self.config.magnetic_zone, self.config.spatial_threshold, &self.prev_x);
+        let high = bounds
+            .x
+            .saturating_add(i32::from(bounds.width.saturating_sub(1)));
+        let result = snap_axis(
+            new_x,
+            low,
+            high,
+            self.config.magnetic_zone,
+            self.config.spatial_threshold,
+            &self.prev_x,
+        );
         self.prev_x = Some(new_x);
         result
     }
 
     pub fn apply_y(&mut self, new_y: i32, bounds: LayoutRect) -> i32 {
         let low = bounds.y;
-        let high = bounds.y.saturating_add(i32::from(bounds.height.saturating_sub(1)));
-        let result = snap_axis(new_y, low, high, self.config.magnetic_zone, self.config.spatial_threshold, &self.prev_y);
+        let high = bounds
+            .y
+            .saturating_add(i32::from(bounds.height.saturating_sub(1)));
+        let result = snap_axis(
+            new_y,
+            low,
+            high,
+            self.config.magnetic_zone,
+            self.config.spatial_threshold,
+            &self.prev_y,
+        );
         self.prev_y = Some(new_y);
         result
     }

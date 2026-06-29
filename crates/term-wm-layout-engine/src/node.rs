@@ -148,7 +148,9 @@ impl<Id: Copy + Eq + Ord> BspNode<Id> {
             } => {
                 let (left_area, right_area) = split::split_rect_bsp(area, *orientation, *ratio);
                 left.insert_leaf(target, insert, position, left_area, constraints)
-                    .or_else(|_| right.insert_leaf(target, insert, position, right_area, constraints))
+                    .or_else(|_| {
+                        right.insert_leaf(target, insert, position, right_area, constraints)
+                    })
             }
         }
     }
@@ -187,7 +189,8 @@ impl<Id: Copy + Eq + Ord> BspNode<Id> {
                         Orientation::Vertical => u32::from(constraints.min_height),
                     };
                     let min_second = min_first;
-                    let current = u32::from(ratio.left_part()) * total / u32::from(ratio.total()).max(1);
+                    let current =
+                        u32::from(ratio.left_part()) * total / u32::from(ratio.total()).max(1);
                     let new_pos = (current as i32).saturating_add(i32::from(delta));
                     let new_pos = new_pos.max(i32::from(min_first as u16));
                     let bound = (total as i32).saturating_sub(i32::from(min_second as u16));
@@ -198,7 +201,8 @@ impl<Id: Copy + Eq + Ord> BspNode<Id> {
                     *ratio = Ratio(new_ratio_left, new_ratio_total);
                     true
                 } else {
-                    let (left_area, right_area) = split::split_rect_bsp(area, *split_orient, *ratio);
+                    let (left_area, right_area) =
+                        split::split_rect_bsp(area, *split_orient, *ratio);
                     let rest = &path[1..];
                     if !path[0] {
                         left.apply_drag(left_area, rest, orientation, delta, constraints)
@@ -410,13 +414,8 @@ impl<Id: Copy + Eq + Ord> NaryNode<Id> {
                 children,
                 weights,
             } => {
-                let (sub_rects, _gap_rects) = split::split_rects_with_gaps(
-                    area,
-                    *orientation,
-                    weights,
-                    children.len(),
-                    gap,
-                );
+                let (sub_rects, _gap_rects) =
+                    split::split_rects_with_gaps(area, *orientation, weights, children.len(), gap);
                 for (child, sub) in children.iter().zip(sub_rects) {
                     child.layout_with_gaps_recursive(sub, gap, regions);
                 }
@@ -424,11 +423,7 @@ impl<Id: Copy + Eq + Ord> NaryNode<Id> {
         }
     }
 
-    pub fn split_area_for_path(
-        &self,
-        area: LayoutRect,
-        path: &[usize],
-    ) -> Option<LayoutRect> {
+    pub fn split_area_for_path(&self, area: LayoutRect, path: &[usize]) -> Option<LayoutRect> {
         let mut current_area = area;
         let mut node = self;
         for &idx in path {
@@ -438,7 +433,12 @@ impl<Id: Copy + Eq + Ord> NaryNode<Id> {
                     children,
                     weights,
                 } => {
-                    let rects = split::split_rects_nary(current_area, *orientation, weights, children.len());
+                    let rects = split::split_rects_nary(
+                        current_area,
+                        *orientation,
+                        weights,
+                        children.len(),
+                    );
                     let sub_area = rects.get(idx).copied()?;
                     current_area = sub_area;
                     node = children.get(idx)?;
@@ -515,14 +515,13 @@ impl<Id: Copy + Eq + Ord> NaryNode<Id> {
                 children,
                 weights,
             } => {
-                let sub_rects = split::split_rects_nary(
-                    area,
-                    *node_orient,
-                    weights,
-                    children.len(),
-                );
+                let sub_rects =
+                    split::split_rects_nary(area, *node_orient, weights, children.len());
                 for (child, sub) in children.iter_mut().zip(sub_rects) {
-                    if child.insert_leaf(target, insert, position, sub, constraints).is_ok() {
+                    if child
+                        .insert_leaf(target, insert, position, sub, constraints)
+                        .is_ok()
+                    {
                         return Ok(());
                     }
                 }
@@ -560,12 +559,17 @@ impl<Id: Copy + Eq + Ord> NaryNode<Id> {
                     if total == 0 {
                         return false;
                     }
-                    let total_weight: u32 = weights.iter().map(|w| u32::from(*w)).sum::<u32>().max(1);
+                    let total_weight: u32 =
+                        weights.iter().map(|w| u32::from(*w)).sum::<u32>().max(1);
                     let current0 = u32::from(weights[index]);
                     let current1 = u32::from(weights[index + 1]);
                     let min_weight = 1u16;
-                    let new0 = (current0 as i32).saturating_add(i32::from(delta)).max(i32::from(min_weight));
-                    let new1 = (current1 as i32).saturating_sub(i32::from(delta)).max(i32::from(min_weight));
+                    let new0 = (current0 as i32)
+                        .saturating_add(i32::from(delta))
+                        .max(i32::from(min_weight));
+                    let new1 = (current1 as i32)
+                        .saturating_sub(i32::from(delta))
+                        .max(i32::from(min_weight));
                     let sum_before = current0.saturating_add(current1);
                     let sum_after = (new0 as u32).saturating_add(new1 as u32);
                     if sum_before != sum_after {
@@ -584,7 +588,9 @@ impl<Id: Copy + Eq + Ord> NaryNode<Id> {
                     if child_frac < min_first {
                         let correction = min_first.saturating_sub(child_frac) as u16;
                         weights[index] = weights[index].saturating_add(correction);
-                        weights[index + 1] = weights[index + 1].saturating_sub(correction).max(min_weight);
+                        weights[index + 1] = weights[index + 1]
+                            .saturating_sub(correction)
+                            .max(min_weight);
                     }
                     return true;
                 }
@@ -592,14 +598,17 @@ impl<Id: Copy + Eq + Ord> NaryNode<Id> {
                 if idx >= children.len() {
                     return false;
                 }
-                let sub_rects = split::split_rects_nary(
-                    area,
-                    *cont_orient,
-                    weights,
-                    children.len(),
-                );
+                let sub_rects =
+                    split::split_rects_nary(area, *cont_orient, weights, children.len());
                 if let Some(sub) = sub_rects.get(idx) {
-                    children[idx].apply_drag(*sub, &path[1..], index, orientation, delta, constraints)
+                    children[idx].apply_drag(
+                        *sub,
+                        &path[1..],
+                        index,
+                        orientation,
+                        delta,
+                        constraints,
+                    )
                 } else {
                     false
                 }
@@ -659,17 +668,28 @@ mod tests {
     use crate::InsertPosition;
 
     fn default_area() -> LayoutRect {
-        LayoutRect { x: 0, y: 0, width: 80, height: 24 }
+        LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        }
     }
 
     fn constraints() -> SizeConstraints {
-        SizeConstraints { min_width: 2, min_height: 2 }
+        SizeConstraints {
+            min_width: 2,
+            min_height: 2,
+        }
     }
 
     #[test]
     fn bsp_insert_and_remove() {
         let mut node: BspNode<usize> = BspNode::leaf(1);
-        assert!(node.insert_leaf(1, 2, InsertPosition::Right, default_area(), &constraints()).is_ok());
+        assert!(
+            node.insert_leaf(1, 2, InsertPosition::Right, default_area(), &constraints())
+                .is_ok()
+        );
         assert_eq!(node.all_leaf_ids(), vec![1, 2]);
         assert!(node.remove_leaf(2).is_ok());
         assert_eq!(node.unwrap_leaf(), Some(1));
@@ -678,8 +698,14 @@ mod tests {
     #[test]
     fn nary_insert_and_remove() {
         let mut node: NaryNode<usize> = NaryNode::leaf(1);
-        assert!(node.insert_leaf(1, 2, InsertPosition::Right, default_area(), &constraints()).is_ok());
-        assert!(node.insert_leaf(1, 3, InsertPosition::Left, default_area(), &constraints()).is_ok());
+        assert!(
+            node.insert_leaf(1, 2, InsertPosition::Right, default_area(), &constraints())
+                .is_ok()
+        );
+        assert!(
+            node.insert_leaf(1, 3, InsertPosition::Left, default_area(), &constraints())
+                .is_ok()
+        );
         assert!(node.remove_leaf(2).is_ok());
         assert!(node.remove_leaf(3).is_ok());
         assert_eq!(node.unwrap_leaf(), Some(1));
@@ -697,8 +723,16 @@ mod tests {
     #[test]
     fn bsp_insert_constraints_too_small() {
         let mut node: BspNode<usize> = BspNode::leaf(1);
-        let small_area = LayoutRect { x: 0, y: 0, width: 1, height: 1 };
-        let tight = SizeConstraints { min_width: 10, min_height: 10 };
+        let small_area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        };
+        let tight = SizeConstraints {
+            min_width: 10,
+            min_height: 10,
+        };
         assert_eq!(
             node.insert_leaf(1, 2, InsertPosition::Right, small_area, &tight),
             Err(LayoutError::ConstraintViolated(tight))
@@ -708,8 +742,22 @@ mod tests {
     #[test]
     fn bsp_layout_returns_all_ids() {
         let mut node: BspNode<&str> = BspNode::leaf("a");
-        node.insert_leaf("a", "b", InsertPosition::Right, default_area(), &constraints()).unwrap();
-        node.insert_leaf("b", "c", InsertPosition::Top, default_area(), &constraints()).unwrap();
+        node.insert_leaf(
+            "a",
+            "b",
+            InsertPosition::Right,
+            default_area(),
+            &constraints(),
+        )
+        .unwrap();
+        node.insert_leaf(
+            "b",
+            "c",
+            InsertPosition::Top,
+            default_area(),
+            &constraints(),
+        )
+        .unwrap();
 
         let area = default_area();
         let regions = node.layout(area);
@@ -720,7 +768,8 @@ mod tests {
     #[test]
     fn bsp_find_path_returns_correct_route() {
         let mut node: BspNode<usize> = BspNode::leaf(1);
-        node.insert_leaf(1, 2, InsertPosition::Right, default_area(), &constraints()).unwrap();
+        node.insert_leaf(1, 2, InsertPosition::Right, default_area(), &constraints())
+            .unwrap();
 
         assert_eq!(node.find_path(1), Some(vec![false]));
         assert_eq!(node.find_path(2), Some(vec![true]));
@@ -729,7 +778,8 @@ mod tests {
     #[test]
     fn bsp_apply_drag_adjusts_ratio() {
         let mut node: BspNode<usize> = BspNode::leaf(1);
-        node.insert_leaf(1, 2, InsertPosition::Right, default_area(), &constraints()).unwrap();
+        node.insert_leaf(1, 2, InsertPosition::Right, default_area(), &constraints())
+            .unwrap();
         let path = vec![false];
         let result = node.apply_drag(
             default_area(),
@@ -749,7 +799,8 @@ mod tests {
     #[test]
     fn bsp_apply_drag_wrong_orientation_returns_false() {
         let mut node: BspNode<usize> = BspNode::leaf(1);
-        node.insert_leaf(1, 2, InsertPosition::Right, default_area(), &constraints()).unwrap();
+        node.insert_leaf(1, 2, InsertPosition::Right, default_area(), &constraints())
+            .unwrap();
         let result = node.apply_drag(
             default_area(),
             &[false],
@@ -763,7 +814,8 @@ mod tests {
     #[test]
     fn nary_subtree_any() {
         let mut node: NaryNode<usize> = NaryNode::leaf(1);
-        node.insert_leaf(1, 2, InsertPosition::Right, default_area(), &constraints()).unwrap();
+        node.insert_leaf(1, 2, InsertPosition::Right, default_area(), &constraints())
+            .unwrap();
         assert!(node.subtree_any(&mut |id| id == 2));
         assert!(!node.subtree_any(&mut |id| id == 99));
     }
@@ -771,8 +823,10 @@ mod tests {
     #[test]
     fn nary_find_path_and_node_at_path() {
         let mut node: NaryNode<usize> = NaryNode::leaf(1);
-        node.insert_leaf(1, 2, InsertPosition::Right, default_area(), &constraints()).unwrap();
-        node.insert_leaf(2, 3, InsertPosition::Bottom, default_area(), &constraints()).unwrap();
+        node.insert_leaf(1, 2, InsertPosition::Right, default_area(), &constraints())
+            .unwrap();
+        node.insert_leaf(2, 3, InsertPosition::Bottom, default_area(), &constraints())
+            .unwrap();
 
         let path = node.find_path(3);
         assert!(path.is_some());
@@ -785,8 +839,16 @@ mod tests {
     #[test]
     fn nary_insert_constraints_too_small() {
         let mut node: NaryNode<usize> = NaryNode::leaf(1);
-        let small_area = LayoutRect { x: 0, y: 0, width: 1, height: 1 };
-        let tight = SizeConstraints { min_width: 10, min_height: 10 };
+        let small_area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        };
+        let tight = SizeConstraints {
+            min_width: 10,
+            min_height: 10,
+        };
         assert_eq!(
             node.insert_leaf(1, 2, InsertPosition::Right, small_area, &tight),
             Err(LayoutError::ConstraintViolated(tight))
@@ -796,7 +858,8 @@ mod tests {
     #[test]
     fn nary_apply_drag_adjusts_weights() {
         let mut node: NaryNode<usize> = NaryNode::leaf(1);
-        node.insert_leaf(1, 2, InsertPosition::Right, default_area(), &constraints()).unwrap();
+        node.insert_leaf(1, 2, InsertPosition::Right, default_area(), &constraints())
+            .unwrap();
         let path: Vec<usize> = Vec::new();
         let result = node.apply_drag(
             default_area(),
@@ -818,7 +881,8 @@ mod tests {
     #[test]
     fn nary_layout_with_gaps_includes_gap() {
         let mut node: NaryNode<usize> = NaryNode::leaf(1);
-        node.insert_leaf(1, 2, InsertPosition::Right, default_area(), &constraints()).unwrap();
+        node.insert_leaf(1, 2, InsertPosition::Right, default_area(), &constraints())
+            .unwrap();
         let regions = node.layout_with_gaps(default_area(), 2);
         assert_eq!(regions.len(), 2);
         let total_w: u16 = regions.iter().map(|(_, r)| r.width).sum();
@@ -828,7 +892,8 @@ mod tests {
     #[test]
     fn nary_split_area_for_path() {
         let mut node: NaryNode<usize> = NaryNode::leaf(1);
-        node.insert_leaf(1, 2, InsertPosition::Right, default_area(), &constraints()).unwrap();
+        node.insert_leaf(1, 2, InsertPosition::Right, default_area(), &constraints())
+            .unwrap();
         let sub = node.split_area_for_path(default_area(), &[0]);
         assert!(sub.is_some());
         assert_eq!(sub.unwrap().width, 40);

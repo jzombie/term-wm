@@ -6,7 +6,9 @@ use ratatui::prelude::Rect;
 use super::{WindowId, WindowManager};
 use crate::layout::InsertPosition;
 use crate::layout::floating::*;
-use term_wm_layout_engine::{EdgeResistance, LayoutRect, apply_resize_drag_signed, detect_quadrant};
+use term_wm_layout_engine::{
+    EdgeResistance, LayoutRect, apply_resize_drag_signed, detect_quadrant,
+};
 
 impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     pub(super) fn handle_header_drag_event(&mut self, event: &Event) -> bool {
@@ -553,7 +555,12 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             return false;
         };
 
-        let target = self.regions.ids().iter().find(|r_id| **r_id == current_focus).copied();
+        let target = self
+            .regions
+            .ids()
+            .iter()
+            .find(|r_id| **r_id == current_focus)
+            .copied();
 
         if let Some(target) = target
             && layout

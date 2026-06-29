@@ -184,7 +184,12 @@ pub fn handle_thickness(orientation: Orientation, _total_dim: u16) -> u16 {
 }
 
 /// Compute the per-gap size between children in a split.
-pub fn gap_size(orientation: Orientation, total_dim: u16, child_count: usize, resizable: bool) -> u16 {
+pub fn gap_size(
+    orientation: Orientation,
+    total_dim: u16,
+    child_count: usize,
+    resizable: bool,
+) -> u16 {
     if !resizable || child_count < 2 {
         return 0;
     }
@@ -243,7 +248,10 @@ pub fn split_rects_with_gaps(
     gap: u16,
 ) -> (Vec<LayoutRect>, Vec<LayoutRect>) {
     if gap == 0 || child_count < 2 {
-        return (split_rects_weighted(area, orientation, weights, child_count), Vec::new());
+        return (
+            split_rects_weighted(area, orientation, weights, child_count),
+            Vec::new(),
+        );
     }
     let gap_total = gap.saturating_mul((child_count.saturating_sub(1)) as u16);
     let mut shrunk = area;
@@ -500,7 +508,8 @@ mod tests {
 
     #[test]
     fn split_rects_with_gaps_horizontal() {
-        let (rects, gaps) = split_rects_with_gaps(area(80, 24), Orientation::Horizontal, &[1, 1], 2, 2);
+        let (rects, gaps) =
+            split_rects_with_gaps(area(80, 24), Orientation::Horizontal, &[1, 1], 2, 2);
         assert_eq!(rects.len(), 2);
         assert_eq!(gaps.len(), 1);
         assert_eq!(rects[0].width + rects[1].width + gaps[0].width, 80);
@@ -509,7 +518,8 @@ mod tests {
 
     #[test]
     fn split_rects_with_gaps_vertical() {
-        let (rects, gaps) = split_rects_with_gaps(area(80, 24), Orientation::Vertical, &[1, 1], 2, 2);
+        let (rects, gaps) =
+            split_rects_with_gaps(area(80, 24), Orientation::Vertical, &[1, 1], 2, 2);
         assert_eq!(rects.len(), 2);
         assert_eq!(gaps.len(), 1);
         assert_eq!(rects[0].height + rects[1].height + gaps[0].height, 24);
@@ -518,14 +528,16 @@ mod tests {
 
     #[test]
     fn split_rects_with_gaps_zero_gap() {
-        let (rects, gaps) = split_rects_with_gaps(area(80, 24), Orientation::Horizontal, &[1, 1], 2, 0);
+        let (rects, gaps) =
+            split_rects_with_gaps(area(80, 24), Orientation::Horizontal, &[1, 1], 2, 0);
         assert_eq!(rects.len(), 2);
         assert!(gaps.is_empty());
     }
 
     #[test]
     fn split_rects_with_gaps_single_child() {
-        let (rects, gaps) = split_rects_with_gaps(area(80, 24), Orientation::Horizontal, &[1], 1, 2);
+        let (rects, gaps) =
+            split_rects_with_gaps(area(80, 24), Orientation::Horizontal, &[1], 1, 2);
         assert_eq!(rects.len(), 1);
         assert!(gaps.is_empty());
     }

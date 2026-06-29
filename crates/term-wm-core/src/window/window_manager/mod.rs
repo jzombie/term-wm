@@ -12,7 +12,6 @@ use std::time::{Duration, Instant};
 use crossterm::event::{Event, KeyEvent};
 use ratatui::prelude::Rect;
 
-use term_wm_layout_engine::FocusRing;
 use super::decorator::WindowDecorator;
 use super::entry::Window;
 use crate::app_context::AppContext;
@@ -24,6 +23,7 @@ use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLa
 use crate::top_panel_trait::TopPanel;
 use crate::ui::UiFrame;
 use crate::wm_config::{HintVisibility, WmConfig};
+use term_wm_layout_engine::FocusRing;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SystemWindowId {
@@ -1701,7 +1701,10 @@ mod tests {
         });
         assert!(wm.handle_managed_event(&moved));
         assert!(wm.drag_header.is_none(), "drag_header should be taken");
-        assert!(wm.drag_snap.is_none(), "drag_snap should be consumed by apply_snap");
+        assert!(
+            wm.drag_snap.is_none(),
+            "drag_snap should be consumed by apply_snap"
+        );
     }
 
     #[test]

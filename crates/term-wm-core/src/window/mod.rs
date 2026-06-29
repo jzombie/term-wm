@@ -17,7 +17,12 @@ pub type FloatRect = LayoutRect;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FloatRectSpec {
     Absolute(LayoutRect),
-    Percent { x: u16, y: u16, width: u16, height: u16 },
+    Percent {
+        x: u16,
+        y: u16,
+        width: u16,
+        height: u16,
+    },
 }
 
 impl FloatRectSpec {
@@ -40,7 +45,17 @@ impl FloatRectSpec {
         };
         let engine_spec = match *self {
             FloatRectSpec::Absolute(fr) => RectSpec::Absolute(fr),
-            FloatRectSpec::Percent { x, y, width, height } => RectSpec::Percent { x, y, width, height },
+            FloatRectSpec::Percent {
+                x,
+                y,
+                width,
+                height,
+            } => RectSpec::Percent {
+                x,
+                y,
+                width,
+                height,
+            },
         };
         engine_spec.resolve(lb)
     }

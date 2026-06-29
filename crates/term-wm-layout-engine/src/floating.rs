@@ -69,30 +69,54 @@ pub fn resize_handles_for_region<R: Copy + Eq + Ord>(
 
     let x1 = rect.x;
     let y1 = rect.y;
-    let x2 = rect.x.saturating_add(i32::from(rect.width.saturating_sub(1)));
-    let y2 = rect.y.saturating_add(i32::from(rect.height.saturating_sub(1)));
+    let x2 = rect
+        .x
+        .saturating_add(i32::from(rect.width.saturating_sub(1)));
+    let y2 = rect
+        .y
+        .saturating_add(i32::from(rect.height.saturating_sub(1)));
 
     let mut handles = Vec::with_capacity(8);
 
     // Corners (1×1)
     handles.push(ResizeHandle {
         id,
-        rect: LayoutRect { x: x1, y: y1, width: 1, height: 1 },
+        rect: LayoutRect {
+            x: x1,
+            y: y1,
+            width: 1,
+            height: 1,
+        },
         edge: ResizeEdge::TopLeft,
     });
     handles.push(ResizeHandle {
         id,
-        rect: LayoutRect { x: x2, y: y1, width: 1, height: 1 },
+        rect: LayoutRect {
+            x: x2,
+            y: y1,
+            width: 1,
+            height: 1,
+        },
         edge: ResizeEdge::TopRight,
     });
     handles.push(ResizeHandle {
         id,
-        rect: LayoutRect { x: x1, y: y2, width: 1, height: 1 },
+        rect: LayoutRect {
+            x: x1,
+            y: y2,
+            width: 1,
+            height: 1,
+        },
         edge: ResizeEdge::BottomLeft,
     });
     handles.push(ResizeHandle {
         id,
-        rect: LayoutRect { x: x2, y: y2, width: 1, height: 1 },
+        rect: LayoutRect {
+            x: x2,
+            y: y2,
+            width: 1,
+            height: 1,
+        },
         edge: ResizeEdge::BottomRight,
     });
 
@@ -101,12 +125,22 @@ pub fn resize_handles_for_region<R: Copy + Eq + Ord>(
         let inner_h = rect.height.saturating_sub(2);
         handles.push(ResizeHandle {
             id,
-            rect: LayoutRect { x: x1, y: y1.saturating_add(1), width: 1, height: inner_h },
+            rect: LayoutRect {
+                x: x1,
+                y: y1.saturating_add(1),
+                width: 1,
+                height: inner_h,
+            },
             edge: ResizeEdge::Left,
         });
         handles.push(ResizeHandle {
             id,
-            rect: LayoutRect { x: x2, y: y1.saturating_add(1), width: 1, height: inner_h },
+            rect: LayoutRect {
+                x: x2,
+                y: y1.saturating_add(1),
+                width: 1,
+                height: inner_h,
+            },
             edge: ResizeEdge::Right,
         });
     }
@@ -114,12 +148,22 @@ pub fn resize_handles_for_region<R: Copy + Eq + Ord>(
         let inner_w = rect.width.saturating_sub(2);
         handles.push(ResizeHandle {
             id,
-            rect: LayoutRect { x: x1.saturating_add(1), y: y1, width: inner_w, height: 1 },
+            rect: LayoutRect {
+                x: x1.saturating_add(1),
+                y: y1,
+                width: inner_w,
+                height: 1,
+            },
             edge: ResizeEdge::Top,
         });
         handles.push(ResizeHandle {
             id,
-            rect: LayoutRect { x: x1.saturating_add(1), y: y2, width: inner_w, height: 1 },
+            rect: LayoutRect {
+                x: x1.saturating_add(1),
+                y: y2,
+                width: inner_w,
+                height: 1,
+            },
             edge: ResizeEdge::Bottom,
         });
     }
@@ -240,7 +284,12 @@ pub fn apply_resize_drag_signed(
         y = y.max(bounds.y).min(max_y);
     }
 
-    LayoutRect { x, y, width, height }
+    LayoutRect {
+        x,
+        y,
+        width,
+        height,
+    }
 }
 
 #[cfg(test)]
@@ -248,19 +297,34 @@ mod tests {
     use super::*;
 
     fn area() -> LayoutRect {
-        LayoutRect { x: 0, y: 0, width: 80, height: 24 }
+        LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        }
     }
 
     #[test]
     fn resize_handles_count() {
-        let rect = LayoutRect { x: 10, y: 10, width: 20, height: 15 };
+        let rect = LayoutRect {
+            x: 10,
+            y: 10,
+            width: 20,
+            height: 15,
+        };
         let handles = resize_handles_for_region(1u8, rect, area());
         assert_eq!(handles.len(), 8);
     }
 
     #[test]
     fn resize_handles_small_rect() {
-        let rect = LayoutRect { x: 10, y: 10, width: 1, height: 1 };
+        let rect = LayoutRect {
+            x: 10,
+            y: 10,
+            width: 1,
+            height: 1,
+        };
         let handles = resize_handles_for_region(1u8, rect, area());
         // Only corners (4), no edge handles since dims <= 2
         assert_eq!(handles.len(), 4);
@@ -268,7 +332,12 @@ mod tests {
 
     #[test]
     fn floating_header_normal() {
-        let rect = LayoutRect { x: 10, y: 10, width: 20, height: 20 };
+        let rect = LayoutRect {
+            x: 10,
+            y: 10,
+            width: 20,
+            height: 20,
+        };
         let header = floating_header_for_region(1u8, rect, area());
         assert!(header.is_some());
         let h = header.unwrap();
@@ -279,17 +348,29 @@ mod tests {
 
     #[test]
     fn floating_header_too_small() {
-        let rect = LayoutRect { x: 10, y: 10, width: 2, height: 2 };
+        let rect = LayoutRect {
+            x: 10,
+            y: 10,
+            width: 2,
+            height: 2,
+        };
         assert!(floating_header_for_region(1u8, rect, area()).is_none());
     }
 
     #[test]
     fn apply_resize_drag_right_edge() {
         let result = apply_resize_drag_signed(
-            10, 10, 20, 15,
+            10,
+            10,
+            20,
+            15,
             ResizeEdge::Right,
-            50, 10, 30, 10,
-            area(), false,
+            50,
+            10,
+            30,
+            10,
+            area(),
+            false,
         );
         assert_eq!(result.width, 40); // 20 + (50-30)
         assert_eq!(result.x, 10);
@@ -298,12 +379,19 @@ mod tests {
     #[test]
     fn apply_resize_drag_left_edge() {
         let result = apply_resize_drag_signed(
-            20, 10, 20, 15,
+            20,
+            10,
+            20,
+            15,
             ResizeEdge::Left,
-            10, 10, 30, 10,
-            area(), false,
+            10,
+            10,
+            30,
+            10,
+            area(),
+            false,
         );
-        assert_eq!(result.x, 0);   // 20 + (10-30) = 0
+        assert_eq!(result.x, 0); // 20 + (10-30) = 0
         assert_eq!(result.width, 40); // 20 - (10-30) = 40
     }
 
@@ -311,22 +399,25 @@ mod tests {
     fn apply_resize_drag_enforces_min_size() {
         // Drag left edge rightward to shrink width below minimum
         let result = apply_resize_drag_signed(
-            10, 10, 10, 10,
+            10,
+            10,
+            10,
+            10,
             ResizeEdge::Left,
-            20, 10, 5, 10,
-            area(), false,
+            20,
+            10,
+            5,
+            10,
+            area(),
+            false,
         );
         assert_eq!(result.width, FLOATING_MIN_WIDTH);
     }
 
     #[test]
     fn apply_resize_drag_offscreen_allowed() {
-        let result = apply_resize_drag_signed(
-            0, 0, 80, 24,
-            ResizeEdge::Left,
-            40, 0, 0, 0,
-            area(), true,
-        );
+        let result =
+            apply_resize_drag_signed(0, 0, 80, 24, ResizeEdge::Left, 40, 0, 0, 0, area(), true);
         assert_eq!(result.x, 40);
         assert_eq!(result.width, 40);
     }

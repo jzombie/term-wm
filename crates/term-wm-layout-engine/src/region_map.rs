@@ -1,9 +1,9 @@
 use crate::rect::{LayoutRect, rect_contains};
 
-#[cfg(feature = "std")]
-use std::collections::BTreeMap;
 #[cfg(not(feature = "std"))]
 use alloc::collections::BTreeMap;
+#[cfg(feature = "std")]
+use std::collections::BTreeMap;
 
 /// A map from ID to rectangle, with hit-testing support.
 ///
@@ -55,7 +55,9 @@ impl<T: Ord> RegionMap<T> {
         T: Copy,
     {
         for id in ids {
-            if let Some(rect) = self.regions.get(id) && rect_contains(rect, col, row) {
+            if let Some(rect) = self.regions.get(id)
+                && rect_contains(rect, col, row)
+            {
                 return Some(*id);
             }
         }
@@ -74,7 +76,12 @@ mod tests {
     use super::*;
 
     fn rect(x: i32, y: i32, w: u16, h: u16) -> LayoutRect {
-        LayoutRect { x, y, width: w, height: h }
+        LayoutRect {
+            x,
+            y,
+            width: w,
+            height: h,
+        }
     }
 
     #[test]

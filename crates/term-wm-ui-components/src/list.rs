@@ -120,7 +120,8 @@ impl Component for ListComponent {
         {
             let vp = ctx.viewport();
             let skip_n = vp.offset_y.saturating_sub(1);
-            let visible_row = (mouse.row.saturating_sub(self.last_area.y.saturating_add(1))) as usize;
+            let visible_row =
+                (mouse.row.saturating_sub(self.last_area.y.saturating_add(1))) as usize;
             let index = skip_n + visible_row;
             if index < self.items.len() {
                 self.selected = index;

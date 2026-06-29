@@ -131,7 +131,8 @@ mod tests {
         };
 
         assert!(
-            LayoutEngine::insert_leaf(&mut node, 1, 2, InsertPosition::Right, area, &constraints).is_ok()
+            LayoutEngine::insert_leaf(&mut node, 1, 2, InsertPosition::Right, area, &constraints)
+                .is_ok()
         );
 
         let regions = LayoutEngine::layout(&node, area);
@@ -153,7 +154,8 @@ mod tests {
         };
 
         assert!(
-            LayoutEngine::insert_leaf(&mut node, 1, 2, InsertPosition::Right, area, &constraints).is_ok()
+            LayoutEngine::insert_leaf(&mut node, 1, 2, InsertPosition::Right, area, &constraints)
+                .is_ok()
         );
 
         let regions = LayoutEngine::layout(&node, area);
