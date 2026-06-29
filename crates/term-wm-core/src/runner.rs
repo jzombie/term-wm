@@ -12,7 +12,7 @@ use crate::io::{EventSource, RenderTarget};
 use crate::keybindings::Action;
 use crate::layout::{LayoutNode, TilingLayout};
 use crate::ui::UiFrame;
-use crate::window::decorator::WindowDecorator;
+use crate::window::decorator::{WindowDecorator, WindowRenderCtx};
 use crate::window::{
     DrawTask, WindowDrawContext, WindowId, WindowManager, WindowSurface, WmMenuAction,
 };
@@ -662,24 +662,26 @@ where
         match task {
             DrawTask::App(mut window) => {
                 window.surface.z_depth = z;
-                let (title, decorator, kb_disabled, hover) = {
+                let (ctx, decorator) = {
                     let wm = app.windows();
                     let title = all_titles
                         .get(&WindowId::App(window.id))
                         .map(String::as_str)
                         .unwrap_or("");
+                    let ctx = WindowRenderCtx {
+                        title,
+                        focused: window.focused,
+                        direct_mode: wm.direct_mode(WindowId::App(window.id)),
+                        hover_pos: wm.hover,
+                    };
                     let decorator = wm.decorator();
-                    let kb_disabled = wm.direct_mode(WindowId::App(window.id));
-                    (title, decorator, kb_disabled, wm.hover)
+                    (ctx, decorator)
                 };
                 composite_window(
                     frame,
                     &window.surface,
-                    window.focused,
-                    title,
                     decorator.as_ref(),
-                    kb_disabled,
-                    hover,
+                    ctx,
                     |subframe| {
                         app.render_window(subframe, window);
                     },
@@ -687,24 +689,26 @@ where
             }
             DrawTask::System(mut window) => {
                 window.surface.z_depth = z;
-                let (title, decorator, kb_disabled, hover) = {
+                let (ctx, decorator) = {
                     let wm = app.windows();
                     let title = all_titles
                         .get(&WindowId::System(window.id))
                         .map(String::as_str)
                         .unwrap_or("");
+                    let ctx = WindowRenderCtx {
+                        title,
+                        focused: window.focused,
+                        direct_mode: wm.direct_mode(WindowId::System(window.id)),
+                        hover_pos: wm.hover,
+                    };
                     let decorator = wm.decorator();
-                    let kb_disabled = wm.direct_mode(WindowId::System(window.id));
-                    (title, decorator, kb_disabled, wm.hover)
+                    (ctx, decorator)
                 };
                 composite_window(
                     frame,
                     &window.surface,
-                    window.focused,
-                    title,
                     decorator.as_ref(),
-                    kb_disabled,
-                    hover,
+                    ctx,
                     |subframe| {
                         app.windows().render_system_window(subframe, window);
                     },
@@ -716,15 +720,11 @@ where
     app.windows().render_overlays(frame, num_windows, total);
 }
 
-#[allow(clippy::too_many_arguments)]
 fn composite_window<F>(
     frame: &mut UiFrame<'_>,
     surface: &WindowSurface,
-    focused: bool,
-    title: &str,
     decorator: &dyn WindowDecorator,
-    direct_mode: bool,
-    hover_pos: Option<(u16, u16)>,
+    mut ctx: WindowRenderCtx<'_>,
     mut render_content: F,
 ) where
     F: FnMut(&mut UiFrame<'_>),
@@ -738,16 +738,17 @@ fn composite_window<F>(
         width: surface.dest.width,
         height: surface.dest.height,
     };
-    let local_hover = hover_pos.map(|(cx, cy)| {
+    ctx.hover_pos = ctx.hover_pos.map(|(cx, cy)| {
         (
             cx.saturating_sub(surface.dest.x.max(0) as u16),
             cy.saturating_sub(surface.dest.y.max(0) as u16),
         )
     });
+    let focused = ctx.focused;
     let mut buffer = Buffer::empty(local_area);
     {
         let mut offscreen = UiFrame::from_parts(local_area, &mut buffer);
-        decorator.render_window(&mut offscreen, local_area, title, focused, direct_mode, local_hover);
+        decorator.render_window(&mut offscreen, local_area, ctx);
         render_content(&mut offscreen);
     }
     if !focused {

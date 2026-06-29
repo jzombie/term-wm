@@ -43,6 +43,8 @@ pub enum BgColor {
     Surface,
     ShadowBg,
     ShadowTint,
+    Error,
+    Warning,
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +133,8 @@ impl Theme {
             BgColor::Surface => self.surface,
             BgColor::ShadowBg => self.shadow_bg,
             BgColor::ShadowTint => self.shadow_tint,
+            BgColor::Error => self.error,
+            BgColor::Warning => self.warning,
         }
     }
 }
@@ -294,6 +298,12 @@ pub fn debug_highlight() -> Color {
 }
 pub fn bottom_panel_bg() -> Color {
     current().bg(BgColor::BottomPanelBg)
+}
+pub fn error_bg() -> Color {
+    current().bg(BgColor::Error)
+}
+pub fn warning_bg() -> Color {
+    current().bg(BgColor::Warning)
 }
 pub fn bottom_panel_fg() -> Color {
     current().fg(FgColor::BottomPanelFg)
@@ -539,6 +549,39 @@ mod tests {
             BgColor::MenuSelectedBg,
             "already excluded above",
         ),
+        // Error/Warning backgrounds — only used behind decorator button symbols.
+        // The only FG that appears on them at runtime is menu_selected_fg (dark
+        // contrast text on hover).  Everything else is never combined.
+        (FgColor::Accent, BgColor::Error, "never combined"),
+        (FgColor::Accent, BgColor::Warning, "never combined"),
+        (FgColor::AccentAlt, BgColor::Error, "never combined"),
+        (FgColor::AccentAlt, BgColor::Warning, "never combined"),
+        (FgColor::PanelFg, BgColor::Error, "never combined"),
+        (FgColor::PanelFg, BgColor::Warning, "never combined"),
+        (FgColor::PanelInactiveFg, BgColor::Error, "never combined"),
+        (FgColor::PanelInactiveFg, BgColor::Warning, "never combined"),
+        (FgColor::PanelActiveFg, BgColor::Error, "never combined"),
+        (FgColor::PanelActiveFg, BgColor::Warning, "never combined"),
+        (FgColor::MenuFg, BgColor::Error, "never combined"),
+        (FgColor::MenuFg, BgColor::Warning, "never combined"),
+        (FgColor::MenuSelectedBg, BgColor::Error, "never combined"),
+        (FgColor::MenuSelectedBg, BgColor::Warning, "never combined"),
+        (FgColor::Success, BgColor::Error, "never combined"),
+        (FgColor::Success, BgColor::Warning, "never combined"),
+        (FgColor::DialogFg, BgColor::Error, "never combined"),
+        (FgColor::DialogFg, BgColor::Warning, "never combined"),
+        (FgColor::DialogSeparator, BgColor::Error, "never combined"),
+        (FgColor::LinkColor, BgColor::Error, "never combined"),
+        (FgColor::LinkColor, BgColor::Warning, "never combined"),
+        (FgColor::DecoratorHeaderFg, BgColor::Error, "never combined"),
+        (FgColor::DecoratorHeaderFg, BgColor::Warning, "never combined"),
+        (FgColor::DecoratorBorder, BgColor::Error, "never combined"),
+        (FgColor::DecoratorBorderActive, BgColor::Error, "never combined"),
+        (FgColor::DecoratorBorderActive, BgColor::Warning, "never combined"),
+        (FgColor::DebugHighlight, BgColor::Error, "never combined"),
+        (FgColor::DebugHighlight, BgColor::Warning, "never combined"),
+        (FgColor::BottomPanelFg, BgColor::Error, "never combined"),
+        (FgColor::BottomPanelFg, BgColor::Warning, "never combined"),
     ];
 
     /// Every FgColor × BgColor pair at 3.0:1 (WCAG AA UI/large).

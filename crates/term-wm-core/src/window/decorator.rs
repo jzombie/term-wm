@@ -13,16 +13,15 @@ pub enum HeaderAction {
     None,
 }
 
+pub struct WindowRenderCtx<'a> {
+    pub title: &'a str,
+    pub focused: bool,
+    pub direct_mode: bool,
+    pub hover_pos: Option<(u16, u16)>,
+}
+
 pub trait WindowDecorator: std::fmt::Debug {
-    fn render_window(
-        &self,
-        frame: &mut UiFrame<'_>,
-        rect: Rect,
-        title: &str,
-        focused: bool,
-        direct_mode: bool,
-        hover_pos: Option<(u16, u16)>,
-    );
+    fn render_window(&self, frame: &mut UiFrame<'_>, rect: Rect, ctx: WindowRenderCtx<'_>);
 
     fn hit_test(&self, window_rect: Rect, x: u16, y: u16) -> HeaderAction;
 
@@ -88,15 +87,13 @@ impl WindowDecorator for DefaultDecorator {
         }
     }
 
-    fn render_window(
-        &self,
-        frame: &mut UiFrame<'_>,
-        rect: Rect,
-        title: &str,
-        focused: bool,
-        direct_mode: bool,
-        hover_pos: Option<(u16, u16)>,
-    ) {
+    fn render_window(&self, frame: &mut UiFrame<'_>, rect: Rect, ctx: WindowRenderCtx<'_>) {
+        let WindowRenderCtx {
+            title,
+            focused,
+            direct_mode,
+            hover_pos,
+        } = ctx;
         let buffer = frame.buffer_mut();
 
         let focused_header_style = Style::default()
@@ -120,6 +117,11 @@ impl WindowDecorator for DefaultDecorator {
             focused_header_style
         } else {
             normal_header_style
+        };
+        let header_bg = if focused {
+            crate::theme::decorator_header_bg()
+        } else {
+            crate::theme::panel_bg()
         };
 
         let outer_left = rect.x;
@@ -148,24 +150,34 @@ impl WindowDecorator for DefaultDecorator {
             }
         }
         if self.show_buttons {
+            // Right-to-left order: close (red), minimize (amber), maximize (green), direct (D)
             let close_x = outer_right.saturating_sub(1);
-            let max_x = close_x.saturating_sub(2);
-            let min_x = max_x.saturating_sub(2);
-            let kb_x = min_x.saturating_sub(2);
-            for (bx, sym) in [(kb_x, "D"), (min_x, "_"), (max_x, "▢"), (close_x, "✖")] {
+            let min_x = close_x.saturating_sub(2);
+            let max_x = min_x.saturating_sub(2);
+            let kb_x = max_x.saturating_sub(2);
+            let contrast_fg = crate::theme::menu_selected_fg();
+            for (bx, sym) in [(kb_x, "D"), (max_x, "▢"), (min_x, "_"), (close_x, "✖")] {
                 if let Some(cell) = buffer.cell_mut((bx, header_y)) {
                     cell.set_symbol(sym);
+                    let stoplight_fg = if bx == close_x {
+                        crate::theme::error_bg()
+                    } else if bx == min_x {
+                        crate::theme::warning_bg()
+                    } else if bx == max_x {
+                        crate::theme::accent()
+                    } else {
+                        crate::theme::decorator_header_fg()
+                    };
                     let is_hovered = hover_pos == Some((bx, header_y));
                     let style = if is_hovered {
                         let (hover_bg, hover_fg) = if bx == close_x {
-                            (crate::theme::current().error, crate::theme::decorator_header_fg())
+                            (crate::theme::error_bg(), contrast_fg)
                         } else if bx == min_x {
-                            (crate::theme::current().warning, Color::Rgb(10, 10, 15))
+                            (crate::theme::warning_bg(), contrast_fg)
                         } else if bx == max_x {
-                            (crate::theme::accent(), Color::Rgb(10, 10, 15))
+                            (crate::theme::accent(), contrast_fg)
                         } else {
-                            // "D" button — keep existing active indicator
-                            (crate::theme::decorator_header_bg(), crate::theme::decorator_header_fg())
+                            (crate::theme::accent_alt(), contrast_fg)
                         };
                         Style::default()
                             .bg(hover_bg)
@@ -176,7 +188,9 @@ impl WindowDecorator for DefaultDecorator {
                             .bg(crate::theme::decorator_header_fg())
                             .fg(crate::theme::decorator_header_bg())
                     } else {
-                        header_style
+                        Style::default()
+                            .bg(header_bg)
+                            .fg(stoplight_fg)
                     };
                     cell.set_style(style);
                 }
@@ -290,15 +304,7 @@ mod tests {
 pub struct NoopDecorator;
 
 impl WindowDecorator for NoopDecorator {
-    fn render_window(
-        &self,
-        _frame: &mut UiFrame<'_>,
-        _rect: Rect,
-        _title: &str,
-        _focused: bool,
-        _direct_mode: bool,
-        _hover_pos: Option<(u16, u16)>,
-    ) {
+    fn render_window(&self, _frame: &mut UiFrame<'_>, _rect: Rect, _ctx: WindowRenderCtx<'_>) {
     }
     fn hit_test(&self, _window_rect: Rect, _x: u16, _y: u16) -> HeaderAction {
         HeaderAction::None
