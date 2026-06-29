@@ -21,7 +21,12 @@ impl<C: Component> CenterComponent<C> {
         let height = self.content_size.1.min(area.height);
         let x = area.x + (area.width.saturating_sub(width)) / 2;
         let y = area.y + (area.height.saturating_sub(height)) / 2;
-        Rect { x, y, width, height }
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 }
 
