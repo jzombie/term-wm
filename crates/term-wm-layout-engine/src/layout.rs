@@ -3,6 +3,10 @@ use crate::node::NaryNode;
 use crate::rect::{LayoutError, LayoutRect, Orientation, SizeConstraints};
 use crate::snap::InsertPosition;
 
+/// Common interface for tree-based layout engines (BSP and N-ary).
+///
+/// All mutation methods accept `SizeConstraints` to enforce minimum
+/// dimensions and return `Result<(), LayoutError>` on violation.
 pub trait LayoutEngine<Id: Copy + Eq + Ord> {
     fn layout(&self, area: LayoutRect) -> Vec<(Id, LayoutRect)>;
     fn insert_leaf(

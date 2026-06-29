@@ -378,25 +378,12 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 term_wm_layout_engine::Quadrant::South => InsertPosition::Bottom,
             };
 
-            let preview = match pos {
-                InsertPosition::Left => Rect {
-                    width: rect.width / 2,
-                    ..rect
-                },
-                InsertPosition::Right => Rect {
-                    x: rect.x + rect.width / 2,
-                    width: rect.width / 2,
-                    ..rect
-                },
-                InsertPosition::Top => Rect {
-                    height: rect.height / 2,
-                    ..rect
-                },
-                InsertPosition::Bottom => Rect {
-                    y: rect.y + rect.height / 2,
-                    height: rect.height / 2,
-                    ..rect
-                },
+            let engine_preview = term_wm_layout_engine::tiled_preview_rect(target_layout, pos);
+            let preview = Rect {
+                x: engine_preview.x as u16,
+                y: engine_preview.y as u16,
+                width: engine_preview.width,
+                height: engine_preview.height,
             };
 
             self.drag_snap = Some((Some(target_id), pos, preview));
@@ -413,25 +400,12 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let position = term_wm_layout_engine::detect_edge_snap(mouse_x, mouse_y, managed_layout, 2);
 
         if let Some(pos) = position {
-            let mut preview = match pos {
-                InsertPosition::Left => Rect {
-                    width: area.width / 2,
-                    ..area
-                },
-                InsertPosition::Right => Rect {
-                    x: area.x + area.width / 2,
-                    width: area.width / 2,
-                    ..area
-                },
-                InsertPosition::Top => Rect {
-                    height: area.height / 2,
-                    ..area
-                },
-                InsertPosition::Bottom => Rect {
-                    y: area.y + area.height / 2,
-                    height: area.height / 2,
-                    ..area
-                },
+            let engine_preview = term_wm_layout_engine::edge_preview_rect(managed_layout, pos);
+            let mut preview = Rect {
+                x: engine_preview.x as u16,
+                y: engine_preview.y as u16,
+                width: engine_preview.width,
+                height: engine_preview.height,
             };
 
             if self.managed_layout.is_none() {

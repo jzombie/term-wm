@@ -39,9 +39,7 @@ libc = "0.2.186"
 line-ending = "1.5.1"
 linkify = "0.10.0"
 portable-pty = "0.9.0"
-# proptest was previously used for property-based scroll-sync tests.
-# If re-adding, uncomment here and in the crate Cargo.toml.
-# proptest = "1.11.0"
+proptest = "1.11.0"
 pulldown-cmark = "0.13.0"
 ratatui = "0.30.0"
 resvg = "0.47.0"

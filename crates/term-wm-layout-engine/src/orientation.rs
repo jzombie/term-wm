@@ -1,9 +1,11 @@
 use crate::rect::{LayoutRect, Orientation};
 
+/// Decides which orientation to use when splitting an area.
 pub trait OrientationHeuristic {
     fn choose(&mut self, area: LayoutRect, depth: usize) -> Orientation;
 }
 
+/// Splits along the longer side of the area (width ≥ height → Horizontal).
 #[derive(Debug, Clone)]
 pub struct LongestSide;
 
@@ -17,6 +19,7 @@ impl OrientationHeuristic for LongestSide {
     }
 }
 
+/// Cycles `Horizontal, Vertical, Horizontal, Vertical, …` based on depth.
 #[derive(Debug, Clone)]
 pub struct Spiral;
 

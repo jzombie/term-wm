@@ -1,5 +1,6 @@
 use crate::rect::{LayoutRect, Orientation, Ratio};
 
+/// Split a rectangle into two along the given orientation using a ratio.
 pub fn split_rect_bsp(
     area: LayoutRect,
     orientation: Orientation,
@@ -576,5 +577,54 @@ mod tests {
     fn split_sizes_with_gap() {
         let sizes = split_sizes(area(80, 24), Orientation::Horizontal, &[1, 1], 2, 2);
         assert_eq!(sizes, vec![39, 39]);
+    }
+
+    #[cfg(feature = "std")]
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn split_rects_weighted_sum_equals_area(
+                total in 2u16..200u16,
+                count in 2usize..8usize,
+            ) {
+                let weights: Vec<u16> = (0..count).map(|_| 1).collect();
+                let area = LayoutRect { x: 0, y: 0, width: total, height: 24 };
+                let rects = split_rects_weighted(area, Orientation::Horizontal, &weights, count);
+                let sum: u16 = rects.iter().map(|r| r.width).sum();
+                prop_assert_eq!(sum, total, "sum of child widths must equal parent width");
+            }
+
+            #[test]
+            fn split_rects_weighted_no_overlap(
+                total in 2u16..200u16,
+                count in 2usize..8usize,
+            ) {
+                let weights: Vec<u16> = (0..count).map(|_| 1).collect();
+                let area = LayoutRect { x: 0, y: 0, width: total, height: 24 };
+                let rects = split_rects_weighted(area, Orientation::Horizontal, &weights, count);
+                for i in 1..rects.len() {
+                    let prev_end = rects[i-1].x + rects[i-1].width as i32;
+                    prop_assert_eq!(rects[i].x, prev_end, "child {} must start where child {} ends", i, i-1);
+                }
+            }
+
+            #[test]
+            fn split_rects_weighted_with_gaps_sum_equals_area(
+                total in 4u16..200u16,
+                count in 2usize..5usize,
+                gap in 0u16..4u16,
+            ) {
+                let weights: Vec<u16> = (0..count).map(|_| 1).collect();
+                let area = LayoutRect { x: 0, y: 0, width: total, height: 24 };
+                let (rects, gaps) = split_rects_with_gaps(area, Orientation::Horizontal, &weights, count, gap);
+                let rect_sum: u16 = rects.iter().map(|r| r.width).sum();
+                let gap_sum: u16 = gaps.iter().map(|r| r.width).sum();
+                prop_assert_eq!(rect_sum + gap_sum, total,
+                    "rects + gaps must fill parent exactly");
+            }
+        }
     }
 }

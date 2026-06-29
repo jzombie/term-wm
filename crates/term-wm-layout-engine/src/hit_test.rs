@@ -1,5 +1,6 @@
 use crate::rect::{LayoutRect, Quadrant};
 
+/// Find the top-most (last-in-slice) region that contains `(col, row)`.
 pub fn hit_test_leaf<Id: Copy + Eq + Ord>(
     regions: &[(Id, LayoutRect)],
     col: u16,
@@ -13,6 +14,11 @@ pub fn hit_test_leaf<Id: Copy + Eq + Ord>(
     None
 }
 
+/// Determine which cardinal quadrant of `target` the cursor falls in.
+///
+/// Uses integer cross-product logic (no floating-point) to classify:
+/// East/West when `|dx| > |dy|`, North/South when `|dy| > |dx|`,
+/// with a tie-breaker of East for `dx >= 0`.
 pub fn detect_quadrant(cursor_col: u16, cursor_row: u16, target: &LayoutRect) -> Quadrant {
     let (cx, cy) = target.center();
 

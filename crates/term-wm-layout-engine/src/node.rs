@@ -2,6 +2,11 @@ use crate::rect::{LayoutError, LayoutRect, Orientation, Ratio, SizeConstraints};
 use crate::snap::InsertPosition;
 use crate::split;
 
+/// A strict binary (BSP) split tree.
+///
+/// Each `Split` node divides its area into two children using an integer
+/// ratio.  Remainder isolation guarantees no dead zones:
+/// `sum(child widths) == parent width`.
 #[derive(Debug, Clone)]
 pub enum BspNode<Id: Copy + Eq + Ord> {
     Leaf(Id),
@@ -897,5 +902,35 @@ mod tests {
         let sub = node.split_area_for_path(default_area(), &[0]);
         assert!(sub.is_some());
         assert_eq!(sub.unwrap().width, 40);
+    }
+
+    #[cfg(feature = "std")]
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn bsp_layout_sum_equals_area(
+                id1 in 0u8..10u8,
+                id2 in 10u8..20u8,
+                w in 4u16..200u16,
+                h in 4u16..200u16,
+            ) {
+                prop_assume!(id1 != id2);
+                let constraints = SizeConstraints { min_width: 2, min_height: 2 };
+                let area = LayoutRect { x: 0, y: 0, width: w, height: h };
+                let mut node: BspNode<u8> = BspNode::leaf(id1);
+                let _ = node.insert_leaf(id1, id2, InsertPosition::Right, area, &constraints);
+                let regions = node.layout(area);
+                let mut sum_w = 0u16;
+                for (_, r) in &regions {
+                    sum_w = sum_w.saturating_add(r.width);
+                    // In a horizontal split all children share the parent height.
+                    prop_assert_eq!(r.height, h);
+                }
+                prop_assert_eq!(sum_w, w, "sum of child widths must equal parent width");
+            }
+        }
     }
 }

@@ -1,5 +1,9 @@
 use core::fmt;
 
+/// A rectangle with signed origin and unsigned dimensions.
+///
+/// Used throughout the engine to represent both screen-space regions and
+/// floating-window geometry where off-screen coordinates are valid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LayoutRect {
     pub x: i32,
@@ -9,6 +13,7 @@ pub struct LayoutRect {
 }
 
 impl LayoutRect {
+    /// Centre point of the rectangle, rounding down on odd dimensions.
     pub fn center(&self) -> (i32, i32) {
         (
             self.x + i32::from(self.width) / 2,
@@ -66,10 +71,13 @@ impl LayoutRect {
     }
 }
 
+/// Convenience wrapper around [`LayoutRect::contains`].
 pub fn rect_contains(rect: &LayoutRect, col: u16, row: u16) -> bool {
     rect.contains(col, row)
 }
 
+/// Shrink a rectangle by the given margins on each side.
+/// The resulting width/height saturate at zero.
 pub fn inset(rect: LayoutRect, left: u16, right: u16, top: u16, bottom: u16) -> LayoutRect {
     LayoutRect {
         x: rect.x.saturating_add(i32::from(left)),
@@ -79,6 +87,8 @@ pub fn inset(rect: LayoutRect, left: u16, right: u16, top: u16, bottom: u16) -> 
     }
 }
 
+/// Offset a rectangle by `gap * index` along the given orientation.
+/// Used when placing children in a split with inter-child gaps.
 pub fn gap_insert(
     rect: LayoutRect,
     gap: u16,
@@ -98,12 +108,16 @@ pub fn gap_insert(
     }
 }
 
+/// The direction children are stacked in a split container.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {
+    /// Children are placed left-to-right, sharing the available height.
     Horizontal,
+    /// Children are placed top-to-bottom, sharing the available width.
     Vertical,
 }
 
+/// One of the four cardinal directions, used for drag-and-drop insertion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Quadrant {
     North,
@@ -112,36 +126,48 @@ pub enum Quadrant {
     West,
 }
 
+/// An integer ratio `(p, q)` meaning `p/(p+q)` of the parent's size.
+///
+/// Remainder isolation guarantees `sum(child sizes) == parent size` —
+/// the last child receives any leftover pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ratio(pub u16, pub u16);
 
 impl Ratio {
+    /// Equal split: `(1, 1)` = 50/50.
     pub fn half() -> Self {
         Ratio(1, 1)
     }
 
+    /// Numerator of the ratio.
     pub fn left_part(&self) -> u16 {
         self.0
     }
 
+    /// Denominator contribution of the ratio.
     pub fn right_part(&self) -> u16 {
         self.1
     }
 
+    /// Sum of both parts.
     pub fn total(&self) -> u16 {
         self.0 + self.1
     }
 }
 
+/// Minimum dimensions enforced by tree mutation functions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SizeConstraints {
     pub min_width: u16,
     pub min_height: u16,
 }
 
+/// Errors returned by tree mutation operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayoutError {
+    /// The operation would produce a child smaller than the allowed minimum.
     ConstraintViolated(SizeConstraints),
+    /// The target node was not found in the tree.
     NotFound,
 }
 
@@ -160,9 +186,14 @@ impl fmt::Display for LayoutError {
     }
 }
 
+/// A rectangle specification that can be either absolute or percentage-based.
+///
+/// Percentage values are relative to `bounds` at resolution time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RectSpec {
+    /// Fixed pixel/cell position and size.
     Absolute(LayoutRect),
+    /// Percentage of the bounding rectangle.
     Percent {
         x: u16,
         y: u16,
@@ -172,6 +203,7 @@ pub enum RectSpec {
 }
 
 impl RectSpec {
+    /// Resolve this spec against `bounds` to produce a concrete [`LayoutRect`].
     pub fn resolve(&self, bounds: LayoutRect) -> LayoutRect {
         match *self {
             RectSpec::Absolute(r) => r,
