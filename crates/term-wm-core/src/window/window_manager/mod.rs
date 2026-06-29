@@ -709,6 +709,20 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.power_profile
     }
 
+    /// Update the current power profile and force a redraw so the bottom-panel
+    /// indicator updates on screen.
+    ///
+    /// ## Why `invalidate_frame()` is needed
+    ///
+    /// The runner's `flush_state_changes()` runs *after* `begin_frame()` in the
+    /// same tick, so the bottom panel's `power_profile` field is set by
+    /// `begin_frame()` before the change is detected.  Without an explicit
+    /// invalidation, `frame_dirty` stays `false` and the next idle tick skips
+    /// the render entirely — the indicator cell in the framebuffer keeps its
+    /// old colour (e.g. stays red after switching to PowerSaver).
+    ///
+    /// `invalidate_frame()` forces the next idle tick to call `output.draw()`,
+    /// which re-renders the bottom panel with the new profile colour.
     pub fn set_power_profile(&mut self, profile: PowerProfile) {
         if self.power_profile == profile {
             return;
@@ -2591,5 +2605,35 @@ mod tests {
         } else {
             panic!("drag_last_event should be set after drag");
         }
+    }
+
+    #[test]
+    fn power_profile_change_invalidates_frame() {
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        // Starts with PowerSaver from constructor
+        assert_eq!(wm.power_profile, PowerProfile::PowerSaver);
+        // profile is PowerSaver, set to PowerSaver again → no change → frame stays clean
+        wm.mark_frame_clean();
+        wm.set_power_profile(PowerProfile::PowerSaver);
+        assert!(!wm.frame_dirty(), "same profile should not invalidate frame");
+
+        // Switch to HighPerformance → must dirty the frame
+        wm.set_power_profile(PowerProfile::HighPerformance);
+        assert!(wm.frame_dirty(), "switching profile must invalidate frame");
+
+        // Back to PowerSaver → dirty again
+        wm.mark_frame_clean();
+        wm.set_power_profile(PowerProfile::PowerSaver);
+        assert!(
+            wm.frame_dirty(),
+            "switching back to PowerSaver must invalidate frame so indicator re-renders"
+        );
     }
 }
