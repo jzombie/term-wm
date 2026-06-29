@@ -20,8 +20,6 @@ use crate::keybindings::KeyBindings;
 ///   content is currently visible inside a scrolling container.
 /// - `app_ctx`: shared reference to application identity information
 ///   (name, version, optional hostname). Set via [`with_app_context`](Self::with_app_context).
-/// - `z_depth`: normalised position [0.0–1.0] in the global draw stack,
-///   used to interpolate drop-shadow colour.
 #[derive(Debug, Clone)]
 pub struct ComponentContext {
     focused: bool,
@@ -31,7 +29,6 @@ pub struct ComponentContext {
     app_ctx: Arc<AppContext>,
     hover_pos: Option<(u16, u16)>,
     keybindings: Option<Arc<KeyBindings>>,
-    z_depth: f32,
 }
 
 /// Viewport metadata describing how the component is projected into a
@@ -188,7 +185,6 @@ impl ComponentContext {
             app_ctx: Arc::new(AppContext::new("", "")),
             hover_pos: None,
             keybindings: None,
-            z_depth: 1.0,
         }
     }
 
@@ -210,11 +206,6 @@ impl ComponentContext {
     /// Returns a handle that allows requesting viewport adjustments, if available.
     pub fn viewport_handle(&self) -> Option<ViewportHandle> {
         self.viewport_handle.clone()
-    }
-
-    /// Returns the normalised z-depth [0.0–1.0] in the global draw stack.
-    pub const fn z_depth(&self) -> f32 {
-        self.z_depth
     }
 
     /// Returns the application name carried by this context.
@@ -281,13 +272,6 @@ impl ComponentContext {
     pub fn with_keybindings(&self, kb: Arc<KeyBindings>) -> Self {
         let mut ctx = self.clone();
         ctx.keybindings = Some(kb);
-        ctx
-    }
-
-    /// Return a new `ComponentContext` with a modified z-depth.
-    pub fn with_z_depth(&self, z_depth: f32) -> Self {
-        let mut ctx = self.clone();
-        ctx.z_depth = z_depth;
         ctx
     }
 }

@@ -10,7 +10,6 @@ use term_wm_core::app_context::AppContext;
 use term_wm_core::components::{Component, ComponentContext, Overlay};
 use term_wm_core::keybindings::{Action, KeyBindings};
 use term_wm_core::ui::UiFrame;
-use term_wm_core::window::FloatRect;
 use term_wm_ui_components::{DialogOverlayComponent, MarkdownViewerComponent, ScrollViewComponent};
 
 const HELP_CONTENT_BYTES: &[u8] =
@@ -30,20 +29,13 @@ impl Component for WmHelpOverlayComponent {
         self.area = area;
     }
 
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _ctx: &ComponentContext) {
         if !self.dialog.visible() || area.width == 0 || area.height == 0 {
             return;
         }
         let title = format!("{} — About / Help", self.app_ctx.app_name);
         self.dialog.render_backdrop(frame, area, None);
         let rect = self.dialog.rect_for(area);
-        let shadow_dest = FloatRect {
-            x: rect.x as i32,
-            y: rect.y as i32,
-            width: rect.width,
-            height: rect.height,
-        };
-        term_wm_core::ui::render_drop_shadow(frame, shadow_dest, ctx.z_depth());
         frame.render_widget(Clear, rect);
         let block = Block::default().title(title.as_str()).borders(Borders::ALL);
         let inner = Rect {
@@ -92,6 +84,13 @@ impl Overlay for WmHelpOverlayComponent {
     }
     fn visible(&self) -> bool {
         self.dialog.visible()
+    }
+
+    fn shadow_rect(&self, area: Rect) -> Option<Rect> {
+        if !self.dialog.visible() {
+            return None;
+        }
+        Some(self.dialog.rect_for(area))
     }
 }
 
