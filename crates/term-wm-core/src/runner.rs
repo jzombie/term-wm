@@ -768,6 +768,7 @@ fn auto_layout_for_windows<Id: Copy + Eq + Ord + std::fmt::Debug>(
                 last,
                 id,
                 position,
+                default_area,
                 &term_wm_layout_engine::SizeConstraints {
                     min_width: 4,
                     min_height: 2,
