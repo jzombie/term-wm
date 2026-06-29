@@ -41,6 +41,7 @@ pub enum BgColor {
     DecoratorHeaderBg,
     BottomPanelBg,
     Surface,
+    ShadowBg,
 }
 
 // ---------------------------------------------------------------------------
@@ -80,6 +81,7 @@ pub struct Theme {
     pub dialog_separator: Color,
     pub selection_bg: Color,
     pub selection_fg: Color,
+    pub shadow_bg: Color,
     pub link_color: Color,
     pub link_underline: bool,
     pub debug_highlight: Color,
@@ -120,6 +122,7 @@ impl Theme {
             BgColor::DecoratorHeaderBg => self.decorator_header_bg,
             BgColor::BottomPanelBg => self.bottom_panel_bg,
             BgColor::Surface => self.surface,
+            BgColor::ShadowBg => self.shadow_bg,
         }
     }
 }
@@ -171,6 +174,8 @@ pub const NOIR: Theme = Theme {
     // Link
     link_color: Color::Rgb(100, 180, 255),
     link_underline: true,
+    // Shadow
+    shadow_bg: Color::Rgb(35, 38, 50),
     // Debug
     debug_highlight: Color::Rgb(255, 168, 0),
 };
@@ -269,6 +274,9 @@ pub fn decorator_border_active() -> Color {
 pub fn surface() -> Color {
     current().bg(BgColor::Surface)
 }
+pub fn shadow_bg() -> Color {
+    current().bg(BgColor::ShadowBg)
+}
 pub fn debug_highlight() -> Color {
     current().fg(FgColor::DebugHighlight)
 }
@@ -363,6 +371,8 @@ mod tests {
         (FgColor::SelectionFg, BgColor::DecoratorHeaderBg, "same"),
         (FgColor::SelectionFg, BgColor::BottomPanelBg, "same"),
         (FgColor::SelectionFg, BgColor::Surface, "same"),
+        (FgColor::MenuSelectedFg, BgColor::ShadowBg, "same — shadow bg never carries text"),
+        (FgColor::SelectionFg, BgColor::ShadowBg, "same"),
         // Green accent colors on green — same hue, never co-occur.
         (FgColor::Success, BgColor::MenuSelectedBg, "green on green"),
         (FgColor::Success, BgColor::SelectionBg, "green on green"),

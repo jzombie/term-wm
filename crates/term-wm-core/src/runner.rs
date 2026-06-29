@@ -758,7 +758,7 @@ fn composite_window<F>(
                     if !cell.symbol().starts_with(' ') {
                         cell.modifier.insert(Modifier::DIM);
                     }
-                    cell.set_bg(crate::theme::surface());
+                    cell.set_bg(crate::theme::shadow_bg());
                 }
             }
         }
