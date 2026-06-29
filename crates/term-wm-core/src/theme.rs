@@ -383,9 +383,17 @@ mod tests {
         (FgColor::SelectionFg, BgColor::DecoratorHeaderBg, "same"),
         (FgColor::SelectionFg, BgColor::BottomPanelBg, "same"),
         (FgColor::SelectionFg, BgColor::Surface, "same"),
-        (FgColor::MenuSelectedFg, BgColor::ShadowBg, "same — shadow bg never carries text"),
+        (
+            FgColor::MenuSelectedFg,
+            BgColor::ShadowBg,
+            "same — shadow bg never carries text",
+        ),
         (FgColor::SelectionFg, BgColor::ShadowBg, "same"),
-        (FgColor::MenuSelectedFg, BgColor::ShadowTint, "same — shadow tint never carries text"),
+        (
+            FgColor::MenuSelectedFg,
+            BgColor::ShadowTint,
+            "same — shadow tint never carries text",
+        ),
         (FgColor::SelectionFg, BgColor::ShadowTint, "same"),
         // Green accent colors on green — same hue, never co-occur.
         (FgColor::Success, BgColor::MenuSelectedBg, "green on green"),
