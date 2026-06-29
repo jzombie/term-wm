@@ -549,6 +549,31 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         ComponentContext::new(focused).with_app_context(Arc::clone(&self.app_ctx))
     }
 
+    /// Number of overlays that will be rendered this frame.
+    pub fn visible_overlay_count(&self) -> usize {
+        let mut n = 0usize;
+        if self.wm_overlay_visible() {
+            n += 1;
+        }
+        if self.overlays.contains_key(&OverlayId::ExitConfirm) {
+            n += 1;
+        }
+        if self.overlays.contains_key(&OverlayId::Help) {
+            n += 1;
+        }
+        n
+    }
+
+    /// Normalised z-depth [0.0–1.0] for a drawable at `position` in a
+    /// stack of `total` items (windows + overlays).  The topmost item
+    /// always maps to 1.0 (darkest shadow).
+    pub fn compute_z_depth(position: usize, total: usize) -> f32 {
+        if total <= 1 {
+            return 1.0;
+        }
+        position as f32 / (total - 1) as f32
+    }
+
     pub fn begin_frame(&mut self) {
         self.regions = RegionMap::default();
         self.handles.clear();

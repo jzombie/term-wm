@@ -30,7 +30,7 @@ impl Component for WmHelpOverlayComponent {
         self.area = area;
     }
 
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _ctx: &ComponentContext) {
+    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
         if !self.dialog.visible() || area.width == 0 || area.height == 0 {
             return;
         }
@@ -43,7 +43,7 @@ impl Component for WmHelpOverlayComponent {
             width: rect.width,
             height: rect.height,
         };
-        term_wm_core::ui::render_drop_shadow(frame, shadow_dest, 1.0);
+        term_wm_core::ui::render_drop_shadow(frame, shadow_dest, ctx.z_depth());
         frame.render_widget(Clear, rect);
         let block = Block::default().title(title.as_str()).borders(Borders::ALL);
         let inner = Rect {

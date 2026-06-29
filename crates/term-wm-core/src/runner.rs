@@ -653,9 +653,13 @@ where
     let all_titles: std::collections::BTreeMap<WindowId<Id>, String> =
         app.windows().window_titles().into_iter().collect();
     let plan = app.windows().window_draw_plan(frame);
-    for task in plan {
+    let num_windows = plan.len();
+    let total = num_windows + app.windows().visible_overlay_count();
+    for (i, task) in plan.into_iter().enumerate() {
+        let z = crate::window::WindowManager::<Id>::compute_z_depth(i, total);
         match task {
-            DrawTask::App(window) => {
+            DrawTask::App(mut window) => {
+                window.surface.z_depth = z;
                 let (title, decorator, kb_disabled) = {
                     let wm = app.windows();
                     let title = all_titles
@@ -678,7 +682,8 @@ where
                     },
                 );
             }
-            DrawTask::System(window) => {
+            DrawTask::System(mut window) => {
+                window.surface.z_depth = z;
                 let (title, decorator, kb_disabled) = {
                     let wm = app.windows();
                     let title = all_titles
@@ -704,7 +709,7 @@ where
         }
     }
     app.windows().render_panel(frame);
-    app.windows().render_overlays(frame);
+    app.windows().render_overlays(frame, num_windows, total);
 }
 
 fn composite_window<F>(
