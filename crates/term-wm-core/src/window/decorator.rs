@@ -52,6 +52,19 @@ impl Default for DefaultDecorator {
     }
 }
 
+fn header_buttons(outer_right: u16) -> [(u16, HeaderAction, &'static str); 4] {
+    let close_x = outer_right.saturating_sub(1);
+    let min_x = close_x.saturating_sub(2);
+    let max_x = min_x.saturating_sub(2);
+    let kb_x = max_x.saturating_sub(2);
+    [
+        (close_x, HeaderAction::Close, "✖"),
+        (min_x, HeaderAction::Minimize, "_"),
+        (max_x, HeaderAction::Maximize, "▢"),
+        (kb_x, HeaderAction::ToggleDirectMode, "D"),
+    ]
+}
+
 impl WindowDecorator for DefaultDecorator {
     fn hit_test(&self, rect: Rect, x: u16, y: u16) -> HeaderAction {
         if !self.show_buttons {
@@ -69,22 +82,12 @@ impl WindowDecorator for DefaultDecorator {
             return HeaderAction::None;
         }
 
-        let close_x = outer_right.saturating_sub(1);
-        let max_x = close_x.saturating_sub(2);
-        let min_x = max_x.saturating_sub(2);
-        let kb_x = min_x.saturating_sub(2);
-
-        if x == close_x {
-            HeaderAction::Close
-        } else if x == max_x {
-            HeaderAction::Maximize
-        } else if x == min_x {
-            HeaderAction::Minimize
-        } else if x == kb_x {
-            HeaderAction::ToggleDirectMode
-        } else {
-            HeaderAction::Drag
+        for (bx, action, _) in header_buttons(outer_right) {
+            if x == bx {
+                return action;
+            }
         }
+        HeaderAction::Drag
     }
 
     fn render_window(&self, frame: &mut UiFrame<'_>, rect: Rect, ctx: WindowRenderCtx<'_>) {
@@ -150,40 +153,29 @@ impl WindowDecorator for DefaultDecorator {
             }
         }
         if self.show_buttons {
-            // Right-to-left order: close (red), minimize (amber), maximize (green), direct (D)
-            let close_x = outer_right.saturating_sub(1);
-            let min_x = close_x.saturating_sub(2);
-            let max_x = min_x.saturating_sub(2);
-            let kb_x = max_x.saturating_sub(2);
             let contrast_fg = crate::theme::menu_selected_fg();
-            for (bx, sym) in [(kb_x, "D"), (max_x, "▢"), (min_x, "_"), (close_x, "✖")] {
+            for (bx, action, sym) in header_buttons(outer_right) {
                 if let Some(cell) = buffer.cell_mut((bx, header_y)) {
                     cell.set_symbol(sym);
-                    let stoplight_fg = if bx == close_x {
-                        crate::theme::error_bg()
-                    } else if bx == min_x {
-                        crate::theme::warning_bg()
-                    } else if bx == max_x {
-                        crate::theme::accent()
-                    } else {
-                        crate::theme::decorator_header_fg()
+                    let stoplight_fg = match action {
+                        HeaderAction::Close => crate::theme::error_bg(),
+                        HeaderAction::Minimize => crate::theme::warning_bg(),
+                        HeaderAction::Maximize => crate::theme::accent(),
+                        _ => crate::theme::decorator_header_fg(),
                     };
                     let is_hovered = hover_pos == Some((bx, header_y));
                     let style = if is_hovered {
-                        let (hover_bg, hover_fg) = if bx == close_x {
-                            (crate::theme::error_bg(), contrast_fg)
-                        } else if bx == min_x {
-                            (crate::theme::warning_bg(), contrast_fg)
-                        } else if bx == max_x {
-                            (crate::theme::accent(), contrast_fg)
-                        } else {
-                            (crate::theme::accent_alt(), contrast_fg)
+                        let (hover_bg, hover_fg) = match action {
+                            HeaderAction::Close => (crate::theme::error_bg(), contrast_fg),
+                            HeaderAction::Minimize => (crate::theme::warning_bg(), contrast_fg),
+                            HeaderAction::Maximize => (crate::theme::accent(), contrast_fg),
+                            _ => (crate::theme::accent_alt(), contrast_fg),
                         };
                         Style::default()
                             .bg(hover_bg)
                             .fg(hover_fg)
                             .add_modifier(Modifier::BOLD)
-                    } else if bx == kb_x && direct_mode && focused {
+                    } else if action == HeaderAction::ToggleDirectMode && direct_mode && focused {
                         Style::default()
                             .bg(crate::theme::decorator_header_fg())
                             .fg(crate::theme::decorator_header_bg())
@@ -276,16 +268,16 @@ mod tests {
         assert_eq!(dec.hit_test(rect, 10, header_y), HeaderAction::None);
         assert_eq!(dec.hit_test(rect, 19, header_y), HeaderAction::None);
 
-        // buttons: compute positions
+        // buttons: compute positions (stoplight order: close, minimize, maximize, direct)
         let outer_right = rect.x + rect.width - 1;
         let close_x = outer_right.saturating_sub(1);
-        let max_x = close_x.saturating_sub(2);
-        let min_x = max_x.saturating_sub(2);
-        let kb_x = min_x.saturating_sub(2);
+        let min_x = close_x.saturating_sub(2);
+        let max_x = min_x.saturating_sub(2);
+        let kb_x = max_x.saturating_sub(2);
 
         assert_eq!(dec.hit_test(rect, close_x, header_y), HeaderAction::Close);
-        assert_eq!(dec.hit_test(rect, max_x, header_y), HeaderAction::Maximize);
         assert_eq!(dec.hit_test(rect, min_x, header_y), HeaderAction::Minimize);
+        assert_eq!(dec.hit_test(rect, max_x, header_y), HeaderAction::Maximize);
         assert_eq!(
             dec.hit_test(rect, kb_x, header_y),
             HeaderAction::ToggleDirectMode
