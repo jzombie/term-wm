@@ -1,6 +1,6 @@
 [package]
 name = "term-wm-pty-engine"
-description = "PTY pane engine for term-wm — the Pane trait and Pty implementation."
+description = "PTY engine for term-wm."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

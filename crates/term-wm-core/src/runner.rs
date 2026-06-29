@@ -2,10 +2,10 @@ use std::io;
 
 use crossterm::event::{Event, KeyEventKind, MouseEventKind};
 use ratatui::buffer::Buffer;
-use ratatui::prelude::{Constraint, Direction, Rect};
+use ratatui::prelude::Rect;
 use ratatui::style::{Modifier, Style};
 
-use crate::components::{Component, ComponentContext, ConfirmAction, Overlay};
+use crate::components::{Component, ComponentContext, ConfirmAction, Overlay, SelectionStatus};
 use crate::debug_event_flags;
 use crate::event_loop::{ControlFlow, EventLoop};
 use crate::io::{EventSource, RenderTarget};
@@ -496,7 +496,21 @@ where
                 }
                 update_selection_snapshot(app);
                 app.windows().begin_frame();
-                output.draw(|frame| draw(frame, app))?;
+                // Catch render panics (e.g. u16 subtraction overflow with a
+                // tiny viewport) so they don't take down the event loop.
+                // The panic hook records details in the debug log.
+                // I/O errors from the draw are still propagated.
+                let io_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    output.draw(|frame| {
+                        let area = frame.area();
+                        if area.width < 2 || area.height < 2 {
+                            return;
+                        }
+                        draw(frame, app)
+                    })
+                }))
+                .unwrap_or(Ok(()));
+                io_result?;
             }
             flush_state_changes(app, ControlFlow::Continue)
         };
@@ -504,23 +518,9 @@ where
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(handler)) {
             Ok(result) => result,
             Err(_) => {
-                // TODO: This needs to be improved; currently requires resizing the terminal window to
-                // "stabilize" the messages, to produce them in a debug log window. Also, directly setting
-                // the mouse capture here bypasses the state, and the UI is not reflected. It might be better
-                // to just turn off mouse capturing and crash the app naturally if this cannot be improved.
-
-                // A panic occurred; stop mouse capture to avoid terminal spam
-                let _ = driver.set_mouse_capture(false);
-                // Attempt to immediately redraw the UI so the debug log (populated by the panic hook)
-                // is visible to the user without waiting for another input event like a resize.
-                let mut redraw = || -> io::Result<()> {
-                    app.windows().begin_frame();
-                    output.draw(|frame| draw(frame, app))
-                };
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let _ = redraw();
-                }));
-                // Let the panic hook have recorded details into the debug log; continue event loop.
+                // A panic occurred outside the render path (e.g. in event
+                // processing).  Keep mouse capture ON and don't attempt to
+                // redraw — the next event will render normally.
                 Ok(ControlFlow::Continue)
             }
         }
@@ -552,29 +552,40 @@ where
     )
 }
 
+/// Helper: given a provider of selection status/text, return the tuple.
+fn selection_snapshot_from(
+    s: SelectionStatus,
+    text: Option<String>,
+) -> (SelectionStatus, Option<String>) {
+    if s.active || s.dragging {
+        (s, text)
+    } else {
+        (s, None)
+    }
+}
+
 fn update_selection_snapshot<A, Id>(app: &mut A)
 where
     A: WindowProvider<Id>,
     Id: Copy + Eq + Ord + std::fmt::Debug + 'static,
 {
     let was_dragging = app.windows().selection_dragging();
-    let focus_id = app.windows().wm_focus_app();
-    if let Some(id) = focus_id
-        && let Some(component) = app.window_component(id)
-    {
-        let status = component.selection_status();
-        let text = if status.active || status.dragging {
-            component.selection_text()
-        } else {
-            None
-        };
-        app.windows()
-            .set_selection_snapshot(status.active, status.dragging, text);
-        if was_dragging && !status.dragging && status.active {
-            app.windows().copy_selection_to_clipboard();
-        }
-    } else {
-        app.windows().set_selection_snapshot(false, false, None);
+    let focus = app.windows().wm_focus();
+    let (status, text) = match focus {
+        WindowId::App(id) => app
+            .window_component(id)
+            .map(|c| selection_snapshot_from(c.selection_status(), c.selection_text()))
+            .unwrap_or_default(),
+        WindowId::System(sys_id) => app
+            .windows()
+            .system_window_entry_mut(sys_id)
+            .map(|entry| selection_snapshot_from(entry.selection_status(), entry.selection_text()))
+            .unwrap_or_default(),
+    };
+    app.windows()
+        .set_selection_snapshot(status.active, status.dragging, text);
+    if was_dragging && !status.dragging && status.active {
+        app.windows().copy_selection_to_clipboard();
     }
 }
 
@@ -730,31 +741,55 @@ fn composite_window<F>(
     frame.blit_from_signed(&buffer, surface.dest);
 }
 
-fn auto_layout_for_windows<Id: Copy + Eq + Ord>(windows: &[Id]) -> Option<TilingLayout<Id>> {
-    let node = match windows.len() {
-        0 => return None,
-        1 => LayoutNode::leaf(windows[0]),
-        2 => LayoutNode::split(
-            Direction::Horizontal,
-            vec![Constraint::Percentage(50), Constraint::Percentage(50)],
-            vec![LayoutNode::leaf(windows[0]), LayoutNode::leaf(windows[1])],
-        ),
-        len => {
-            let mut constraints = Vec::with_capacity(len);
-            let base = (100 / len as u16).max(1);
-            for idx in 0..len {
-                if idx == len - 1 {
-                    let used = base.saturating_mul((len - 1) as u16);
-                    constraints.push(Constraint::Percentage(100u16.saturating_sub(used)));
-                } else {
-                    constraints.push(Constraint::Percentage(base));
-                }
-            }
-            let children = windows.iter().map(|&id| LayoutNode::leaf(id)).collect();
-            LayoutNode::split(Direction::Vertical, constraints, children)
-        }
+fn auto_layout_for_windows<Id: Copy + Eq + Ord + std::fmt::Debug>(
+    windows: &[Id],
+) -> Option<TilingLayout<Id>> {
+    use term_wm_layout_engine::{BspNode, LayoutRect, LongestSide, OrientationHeuristic};
+
+    if windows.is_empty() {
+        return None;
+    }
+
+    let default_area = LayoutRect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
     };
-    Some(TilingLayout::new(node))
+
+    let mut heuristic = LongestSide;
+    let mut windows_iter = windows.iter();
+    let first = *windows_iter.next().unwrap();
+    let mut root: BspNode<Id> = BspNode::leaf(first);
+
+    for (depth, &id) in windows_iter.enumerate() {
+        let orientation = heuristic.choose(default_area, depth);
+        let position = match orientation {
+            term_wm_layout_engine::Orientation::Horizontal => {
+                term_wm_layout_engine::InsertPosition::Right
+            }
+            term_wm_layout_engine::Orientation::Vertical => {
+                term_wm_layout_engine::InsertPosition::Bottom
+            }
+        };
+
+        let all_ids = root.all_leaf_ids();
+        if let Some(&last) = all_ids.last() {
+            let _ = root.insert_leaf(
+                last,
+                id,
+                position,
+                default_area,
+                &term_wm_layout_engine::SizeConstraints {
+                    min_width: 4,
+                    min_height: 2,
+                },
+            );
+        }
+    }
+
+    let layout_node: LayoutNode<Id> = LayoutNode::from(root);
+    Some(TilingLayout::new(layout_node))
 }
 
 #[cfg(test)]

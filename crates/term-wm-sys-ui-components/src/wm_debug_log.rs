@@ -35,30 +35,36 @@ pub fn install_panic_hook() {
     let _ = PANIC_HOOK_INSTALLED.set(());
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        let mut lines: Vec<String> = Vec::new();
+        lines.push("=== PANIC ===".to_string());
+        if let Some(location) = info.location() {
+            lines.push(format!(
+                "{}:{}:{}",
+                location.file(),
+                location.line(),
+                location.column()
+            ));
+        }
+        if let Some(msg) = info.payload().downcast_ref::<&str>() {
+            lines.push(format!("message: {msg}"));
+        } else if let Some(msg) = info.payload().downcast_ref::<String>() {
+            lines.push(format!("message: {msg}"));
+        } else {
+            lines.push("message: <non-string panic>".to_string());
+        }
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        for line in backtrace.to_string().lines() {
+            lines.push(line.to_string());
+        }
+        lines.push("============".to_string());
+
+        // Write to debug log buffer (for in-app viewing).
         if let Some(handle) = GLOBAL_LOG.get() {
-            handle.push("".to_string());
-            handle.push("=== PANIC ===".to_string());
-            if let Some(location) = info.location() {
-                handle.push(format!(
-                    "{}:{}:{}",
-                    location.file(),
-                    location.line(),
-                    location.column()
-                ));
-            }
-            if let Some(msg) = info.payload().downcast_ref::<&str>() {
-                handle.push(format!("message: {msg}"));
-            } else if let Some(msg) = info.payload().downcast_ref::<String>() {
-                handle.push(format!("message: {msg}"));
-            } else {
-                handle.push("message: <non-string panic>".to_string());
-            }
-            let backtrace = std::backtrace::Backtrace::force_capture();
-            for line in backtrace.to_string().lines() {
+            for line in &lines {
                 handle.push(line.to_string());
             }
-            handle.push("============".to_string());
         }
+
         debug_event_flags::trigger_panic_pending();
         prev(info);
     }));
@@ -260,6 +266,14 @@ impl SystemWindowView for WmDebugLogComponent {
 
     fn set_selection_enabled(&mut self, enabled: bool) {
         WmDebugLogComponent::set_selection_enabled(self, enabled);
+    }
+
+    fn selection_status(&self) -> term_wm_core::components::SelectionStatus {
+        self.scroll_view.selection_status()
+    }
+
+    fn selection_text(&mut self) -> Option<String> {
+        self.scroll_view.selection_text()
     }
 }
 

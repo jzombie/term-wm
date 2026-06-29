@@ -12,18 +12,18 @@ use std::time::{Duration, Instant};
 use crossterm::event::{Event, KeyEvent};
 use ratatui::prelude::Rect;
 
-use super::FocusRing;
 use super::decorator::WindowDecorator;
 use super::entry::Window;
 use crate::app_context::AppContext;
 use crate::bottom_panel_trait::BottomPanel;
-use crate::components::{ComponentContext, MenuItem, MenuOverlay, Overlay};
+use crate::components::{ComponentContext, MenuItem, MenuOverlay, Overlay, SelectionStatus};
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
 use crate::top_panel_trait::TopPanel;
 use crate::ui::UiFrame;
 use crate::wm_config::{HintVisibility, WmConfig};
+use term_wm_layout_engine::FocusRing;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SystemWindowId {
@@ -136,9 +136,15 @@ pub trait SystemWindowView {
     fn render(&mut self, frame: &mut UiFrame<'_>, surface: WindowSurface, focused: bool);
     fn handle_event(&mut self, event: &Event) -> bool;
     fn set_selection_enabled(&mut self, _enabled: bool) {}
+    fn selection_status(&self) -> SelectionStatus {
+        SelectionStatus::default()
+    }
+    fn selection_text(&mut self) -> Option<String> {
+        None
+    }
 }
 
-struct SystemWindowEntry {
+pub(crate) struct SystemWindowEntry {
     component: Box<dyn SystemWindowView>,
     visible: bool,
 }
@@ -161,6 +167,14 @@ impl SystemWindowEntry {
 
     fn render(&mut self, frame: &mut UiFrame<'_>, surface: WindowSurface, focused: bool) {
         self.component.render(frame, surface, focused);
+    }
+
+    pub(crate) fn selection_status(&self) -> SelectionStatus {
+        self.component.selection_status()
+    }
+
+    pub(crate) fn selection_text(&mut self) -> Option<String> {
+        self.component.selection_text()
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
@@ -848,7 +862,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             self.window_titles().into_iter().collect();
         let selection_copy_available = self.selection_text.is_some();
         let panel_active = self.panel_active();
-        let focus_current = self.wm_focus.current();
+        let focus_current = *self.wm_focus.current();
         let mouse_capture_enabled = self.mouse_capture_enabled();
         let clipboard_enabled = self.clipboard_enabled();
         let window_selection_enabled = self.window_selection_enabled();
@@ -972,8 +986,8 @@ fn clamp_rect(area: Rect, bounds: Rect) -> Rect {
     Rect {
         x: x0,
         y: y0,
-        width: x1 - x0,
-        height: y1 - y0,
+        width: x1.saturating_sub(x0),
+        height: y1.saturating_sub(y0),
     }
 }
 
@@ -1178,7 +1192,7 @@ mod tests {
         };
         let evt = Event::Mouse(mouse);
         let _handled = wm.handle_managed_event(&evt);
-        assert_eq!(wm.wm_focus.current(), WindowId::app(2usize));
+        assert_eq!(*wm.wm_focus.current(), WindowId::app(2usize));
     }
 
     #[test]
@@ -1598,7 +1612,7 @@ mod tests {
             _ => panic!("expected absolute rect"),
         };
 
-        let drag_col = header_rect.x.saturating_add(2);
+        let drag_col = header_rect.x.saturating_add(5);
         let drag_row = header_rect.y.saturating_add(1);
         let drag = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
@@ -1612,7 +1626,7 @@ mod tests {
             crate::window::FloatRectSpec::Absolute(fr) => fr,
             _ => panic!("expected absolute rect"),
         };
-        assert_eq!(moved.x, start_rect.x + 2);
+        assert_eq!(moved.x, start_rect.x + 5);
         assert_eq!(moved.y, start_rect.y + 1);
 
         let up = Event::Mouse(MouseEvent {
@@ -1623,6 +1637,74 @@ mod tests {
         });
         assert!(wm.handle_managed_event(&up));
         assert!(wm.drag_header.is_none());
+    }
+
+    #[test]
+    fn moved_event_commits_stale_drag_snap() {
+        use crate::layout::InsertPosition;
+        use crate::layout::floating::HeaderDrag;
+        use crate::window::{FloatRect, FloatRectSpec};
+        use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        wm.set_panel_visible(false);
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        let id = WindowId::App(1usize);
+        // Set up a floating window so apply_snap has a valid target.
+        wm.set_floating_rect(
+            id,
+            Some(FloatRectSpec::Absolute(FloatRect {
+                x: 10,
+                y: 5,
+                width: 20,
+                height: 10,
+            })),
+        );
+
+        // Simulate abandoned drag (mouse released outside terminal).
+        wm.drag_header = Some(HeaderDrag {
+            id,
+            initial_x: 10,
+            initial_y: 5,
+            start_x: 15,
+            start_y: 10,
+        });
+        wm.drag_snap = Some((
+            None,
+            InsertPosition::Left,
+            Rect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 24,
+            },
+        ));
+
+        let moved = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(wm.handle_managed_event(&moved));
+        assert!(wm.drag_header.is_none(), "drag_header should be taken");
+        assert!(
+            wm.drag_snap.is_none(),
+            "drag_snap should be consumed by apply_snap"
+        );
     }
 
     #[test]

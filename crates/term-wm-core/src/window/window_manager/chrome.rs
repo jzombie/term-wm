@@ -122,7 +122,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.z_order.retain(|x| *x != id);
         self.managed_draw_order.retain(|x| *x != id);
         self.set_minimized(id, true);
-        if self.wm_focus.current() == id {
+        if *self.wm_focus.current() == id {
             self.select_fallback_focus();
         }
     }
@@ -192,7 +192,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.managed_draw_order.retain(|x| *x != id);
         self.set_minimized(id, false);
         self.regions.remove(id);
-        if self.wm_focus.current() == id {
+        if *self.wm_focus.current() == id {
             self.select_fallback_focus();
         }
         if let Some(app_id) = id.as_app() {
