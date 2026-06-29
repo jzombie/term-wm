@@ -2281,6 +2281,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "term-wm-layout-engine"
+version = "0.6.1-alpha"
+
+[[package]]
 name = "term-wm-pty-engine"
 version = "0.6.1-alpha"
 dependencies = [

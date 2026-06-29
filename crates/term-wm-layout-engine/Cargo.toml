@@ -1,0 +1,10 @@
+[package]
+name = "term-wm-layout-engine"
+description = "Pure-math tiling window layout engine with BSP/N-ary tree support."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]

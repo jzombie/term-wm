@@ -12,6 +12,7 @@ publish.workspace = true
 members = [
     "crates/term-bench",
     "crates/term-wm-core",
+    "crates/term-wm-layout-engine",
     "crates/term-wm-pty-engine",
     "crates/term-wm-sys-ui-components",
     "crates/term-wm-ui-components",
@@ -48,6 +49,7 @@ shell-words = "1.1.1"
 strum = { version = "0.28", features = ["derive"] }
 tempfile = "3.24.0"
 term-wm-core = { path = "crates/term-wm-core", version = "0.6.1-alpha" }
+term-wm-layout-engine = { path = "crates/term-wm-layout-engine", version = "0.6.1-alpha" }
 term-wm-pty-engine = { path = "crates/term-wm-pty-engine", version = "0.6.1-alpha" }
 term-wm-sys-ui-components = { path = "crates/term-wm-sys-ui-components", version = "0.6.1-alpha" }
 term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.6.1-alpha" }
