@@ -662,7 +662,7 @@ where
         match task {
             DrawTask::App(mut window) => {
                 window.surface.z_depth = z;
-                let (title, decorator, kb_disabled) = {
+                let (title, decorator, kb_disabled, hover) = {
                     let wm = app.windows();
                     let title = all_titles
                         .get(&WindowId::App(window.id))
@@ -670,7 +670,7 @@ where
                         .unwrap_or("");
                     let decorator = wm.decorator();
                     let kb_disabled = wm.direct_mode(WindowId::App(window.id));
-                    (title, decorator, kb_disabled)
+                    (title, decorator, kb_disabled, wm.hover)
                 };
                 composite_window(
                     frame,
@@ -679,6 +679,7 @@ where
                     title,
                     decorator.as_ref(),
                     kb_disabled,
+                    hover,
                     |subframe| {
                         app.render_window(subframe, window);
                     },
@@ -686,7 +687,7 @@ where
             }
             DrawTask::System(mut window) => {
                 window.surface.z_depth = z;
-                let (title, decorator, kb_disabled) = {
+                let (title, decorator, kb_disabled, hover) = {
                     let wm = app.windows();
                     let title = all_titles
                         .get(&WindowId::System(window.id))
@@ -694,7 +695,7 @@ where
                         .unwrap_or("");
                     let decorator = wm.decorator();
                     let kb_disabled = wm.direct_mode(WindowId::System(window.id));
-                    (title, decorator, kb_disabled)
+                    (title, decorator, kb_disabled, wm.hover)
                 };
                 composite_window(
                     frame,
@@ -703,6 +704,7 @@ where
                     title,
                     decorator.as_ref(),
                     kb_disabled,
+                    hover,
                     |subframe| {
                         app.windows().render_system_window(subframe, window);
                     },
@@ -714,6 +716,7 @@ where
     app.windows().render_overlays(frame, num_windows, total);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn composite_window<F>(
     frame: &mut UiFrame<'_>,
     surface: &WindowSurface,
@@ -721,6 +724,7 @@ fn composite_window<F>(
     title: &str,
     decorator: &dyn WindowDecorator,
     direct_mode: bool,
+    hover_pos: Option<(u16, u16)>,
     mut render_content: F,
 ) where
     F: FnMut(&mut UiFrame<'_>),
@@ -734,10 +738,16 @@ fn composite_window<F>(
         width: surface.dest.width,
         height: surface.dest.height,
     };
+    let local_hover = hover_pos.map(|(cx, cy)| {
+        (
+            cx.saturating_sub(surface.dest.x.max(0) as u16),
+            cy.saturating_sub(surface.dest.y.max(0) as u16),
+        )
+    });
     let mut buffer = Buffer::empty(local_area);
     {
         let mut offscreen = UiFrame::from_parts(local_area, &mut buffer);
-        decorator.render_window(&mut offscreen, local_area, title, focused, direct_mode);
+        decorator.render_window(&mut offscreen, local_area, title, focused, direct_mode, local_hover);
         render_content(&mut offscreen);
     }
     if !focused {

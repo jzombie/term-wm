@@ -21,6 +21,7 @@ pub trait WindowDecorator: std::fmt::Debug {
         title: &str,
         focused: bool,
         direct_mode: bool,
+        hover_pos: Option<(u16, u16)>,
     );
 
     fn hit_test(&self, window_rect: Rect, x: u16, y: u16) -> HeaderAction;
@@ -94,6 +95,7 @@ impl WindowDecorator for DefaultDecorator {
         title: &str,
         focused: bool,
         direct_mode: bool,
+        hover_pos: Option<(u16, u16)>,
     ) {
         let buffer = frame.buffer_mut();
 
@@ -153,7 +155,23 @@ impl WindowDecorator for DefaultDecorator {
             for (bx, sym) in [(kb_x, "D"), (min_x, "_"), (max_x, "▢"), (close_x, "✖")] {
                 if let Some(cell) = buffer.cell_mut((bx, header_y)) {
                     cell.set_symbol(sym);
-                    let style = if bx == kb_x && direct_mode && focused {
+                    let is_hovered = hover_pos == Some((bx, header_y));
+                    let style = if is_hovered {
+                        let (hover_bg, hover_fg) = if bx == close_x {
+                            (crate::theme::current().error, crate::theme::decorator_header_fg())
+                        } else if bx == min_x {
+                            (crate::theme::current().warning, Color::Rgb(10, 10, 15))
+                        } else if bx == max_x {
+                            (crate::theme::accent(), Color::Rgb(10, 10, 15))
+                        } else {
+                            // "D" button — keep existing active indicator
+                            (crate::theme::decorator_header_bg(), crate::theme::decorator_header_fg())
+                        };
+                        Style::default()
+                            .bg(hover_bg)
+                            .fg(hover_fg)
+                            .add_modifier(Modifier::BOLD)
+                    } else if bx == kb_x && direct_mode && focused {
                         Style::default()
                             .bg(crate::theme::decorator_header_fg())
                             .fg(crate::theme::decorator_header_bg())
@@ -279,6 +297,7 @@ impl WindowDecorator for NoopDecorator {
         _title: &str,
         _focused: bool,
         _direct_mode: bool,
+        _hover_pos: Option<(u16, u16)>,
     ) {
     }
     fn hit_test(&self, _window_rect: Rect, _x: u16, _y: u16) -> HeaderAction {
