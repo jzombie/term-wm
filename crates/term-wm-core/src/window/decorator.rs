@@ -53,14 +53,14 @@ impl Default for DefaultDecorator {
 }
 
 fn header_buttons(outer_right: u16) -> [(u16, HeaderAction, &'static str); 4] {
-    let close_x = outer_right.saturating_sub(1);
-    let min_x = close_x.saturating_sub(2);
-    let max_x = min_x.saturating_sub(2);
-    let kb_x = max_x.saturating_sub(2);
+    let close_x = outer_right.saturating_sub(2);
+    let max_x = close_x.saturating_sub(2);
+    let min_x = max_x.saturating_sub(2);
+    let kb_x = min_x.saturating_sub(2);
     [
         (close_x, HeaderAction::Close, "✖"),
-        (min_x, HeaderAction::Minimize, "_"),
         (max_x, HeaderAction::Maximize, "▢"),
+        (min_x, HeaderAction::Minimize, "_"),
         (kb_x, HeaderAction::ToggleDirectMode, "D"),
     ]
 }
@@ -268,24 +268,23 @@ mod tests {
         assert_eq!(dec.hit_test(rect, 10, header_y), HeaderAction::None);
         assert_eq!(dec.hit_test(rect, 19, header_y), HeaderAction::None);
 
-        // buttons: compute positions (stoplight order: close, minimize, maximize, direct)
+        // buttons: compute positions (right-to-left: close, maximize, minimize, direct)
         let outer_right = rect.x + rect.width - 1;
-        let close_x = outer_right.saturating_sub(1);
-        let min_x = close_x.saturating_sub(2);
-        let max_x = min_x.saturating_sub(2);
-        let kb_x = max_x.saturating_sub(2);
+        let close_x = outer_right.saturating_sub(2);
+        let max_x = close_x.saturating_sub(2);
+        let min_x = max_x.saturating_sub(2);
+        let kb_x = min_x.saturating_sub(2);
 
         assert_eq!(dec.hit_test(rect, close_x, header_y), HeaderAction::Close);
-        assert_eq!(dec.hit_test(rect, min_x, header_y), HeaderAction::Minimize);
         assert_eq!(dec.hit_test(rect, max_x, header_y), HeaderAction::Maximize);
+        assert_eq!(dec.hit_test(rect, min_x, header_y), HeaderAction::Minimize);
         assert_eq!(
             dec.hit_test(rect, kb_x, header_y),
             HeaderAction::ToggleDirectMode
         );
 
-        // middle area -> drag
-        let mid = rect.x + rect.width / 2;
-        assert_eq!(dec.hit_test(rect, mid, header_y), HeaderAction::Drag);
+        // area between buttons -> drag
+        assert_eq!(dec.hit_test(rect, rect.x + 2, header_y), HeaderAction::Drag);
     }
 }
 

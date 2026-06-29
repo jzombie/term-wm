@@ -2188,7 +2188,7 @@ mod tests {
             .x
             .saturating_add(full_rect.width)
             .saturating_sub(1);
-        let close_x = outer_right.saturating_sub(1);
+        let close_x = outer_right.saturating_sub(2);
         let max_x = close_x.saturating_sub(2);
         let min_x = max_x.saturating_sub(2);
         let kb_x = min_x.saturating_sub(2);
