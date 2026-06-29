@@ -2226,4 +2226,278 @@ mod tests {
         assert!(wm.handle_managed_event(&click));
         assert!(!wm.direct_mode(win_id), "drag area click must not toggle");
     }
+
+    #[test]
+    fn drag_snap_timeout_none_disables_remaining() {
+        let mut config = WmConfig::standalone();
+        config.drag_snap_timeout = None;
+        let wm = WindowManager::<usize>::with_config(
+            0,
+            config,
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        assert!(wm.drag_snap_remaining().is_none());
+    }
+
+    #[test]
+    fn drag_snap_remaining_none_when_no_drag() {
+        let wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        assert!(wm.drag_snap_remaining().is_none());
+    }
+
+    #[test]
+    fn drag_snap_remaining_returns_some_when_dragging() {
+        use crate::layout::floating::HeaderDrag;
+
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        wm.drag_header = Some(HeaderDrag {
+            id: WindowId::App(1usize),
+            initial_x: 0,
+            initial_y: 0,
+            start_x: 0,
+            start_y: 0,
+        });
+        wm.drag_last_event = Some(Instant::now());
+        let remaining = wm.drag_snap_remaining();
+        assert!(remaining.is_some());
+        assert!(remaining.unwrap() > Duration::from_millis(1000));
+    }
+
+    #[test]
+    fn drag_snap_remaining_zero_when_expired() {
+        use crate::layout::floating::HeaderDrag;
+
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        wm.drag_header = Some(HeaderDrag {
+            id: WindowId::App(1usize),
+            initial_x: 0,
+            initial_y: 0,
+            start_x: 0,
+            start_y: 0,
+        });
+        wm.drag_last_event = Some(Instant::now() - Duration::from_secs(10));
+        assert_eq!(wm.drag_snap_remaining(), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn take_expired_drag_snap_returns_false_when_timeout_none() {
+        use crate::layout::floating::HeaderDrag;
+
+        let mut config = WmConfig::standalone();
+        config.drag_snap_timeout = None;
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            config,
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        wm.drag_header = Some(HeaderDrag {
+            id: WindowId::App(1usize),
+            initial_x: 0,
+            initial_y: 0,
+            start_x: 0,
+            start_y: 0,
+        });
+        wm.drag_last_event = Some(Instant::now() - Duration::from_secs(10));
+        assert!(!wm.take_expired_drag_snap());
+    }
+
+    #[test]
+    fn take_expired_drag_snap_returns_false_before_timeout() {
+        use crate::layout::floating::HeaderDrag;
+
+        let mut config = WmConfig::standalone();
+        config.drag_snap_timeout = Some(Duration::from_secs(10));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            config,
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        wm.drag_header = Some(HeaderDrag {
+            id: WindowId::App(1usize),
+            initial_x: 0,
+            initial_y: 0,
+            start_x: 0,
+            start_y: 0,
+        });
+        wm.drag_last_event = Some(Instant::now());
+        assert!(!wm.take_expired_drag_snap());
+    }
+
+    #[test]
+    fn take_expired_drag_snap_applies_snap_on_timeout() {
+        use crate::layout::InsertPosition;
+        use crate::layout::floating::HeaderDrag;
+        use crate::window::{FloatRect, FloatRectSpec};
+
+        let mut config = WmConfig::standalone();
+        config.drag_snap_timeout = Some(Duration::from_secs(1));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            config,
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        wm.set_panel_visible(false);
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        let id = WindowId::App(1usize);
+        wm.set_floating_rect(
+            id,
+            Some(FloatRectSpec::Absolute(FloatRect {
+                x: 10,
+                y: 5,
+                width: 20,
+                height: 10,
+            })),
+        );
+
+        let window_id = WindowId::app(2usize);
+        wm.regions.set(
+            window_id,
+            Rect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 24,
+            },
+        );
+        wm.managed_layout = Some(crate::layout::TilingLayout::new(
+            crate::layout::LayoutNode::leaf(window_id),
+        ));
+
+        wm.drag_header = Some(HeaderDrag {
+            id,
+            initial_x: 10,
+            initial_y: 5,
+            start_x: 15,
+            start_y: 10,
+        });
+        wm.drag_snap = Some((
+            Some(window_id),
+            InsertPosition::Right,
+            Rect {
+                x: 40,
+                y: 0,
+                width: 40,
+                height: 24,
+            },
+        ));
+        wm.drag_last_event = Some(Instant::now() - Duration::from_secs(10));
+
+        assert!(wm.take_expired_drag_snap());
+        assert!(wm.drag_header.is_none());
+        assert!(wm.drag_snap.is_none());
+        assert!(wm.layout_contains(id), "snapped window should be in layout");
+    }
+
+    #[test]
+    fn drag_last_event_updated_on_drag_events() {
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+
+        let id = WindowId::system(SystemWindowId::DebugLog);
+        struct DummyDebug;
+        impl SystemWindowView for DummyDebug {
+            fn render(
+                &mut self,
+                _frame: &mut UiFrame<'_>,
+                _surface: WindowSurface,
+                _focused: bool,
+            ) {
+            }
+            fn handle_event(&mut self, _event: &Event) -> bool {
+                false
+            }
+        }
+        wm.set_system_window(SystemWindowId::DebugLog, Box::new(DummyDebug));
+        wm.set_panel_visible(false);
+        wm.show_system_window(SystemWindowId::DebugLog);
+        // register_managed_layout builds display order (populates floating_headers)
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        // Down on system window header should start drag and set drag_last_event
+        let header_rect = wm
+            .floating_headers
+            .iter()
+            .find(|h| h.id == id)
+            .expect("header should exist")
+            .rect;
+        let down = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: header_rect.x,
+            row: header_rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(wm.handle_managed_event(&down));
+        assert!(wm.drag_last_event.is_some());
+
+        // Drag should refresh drag_last_event (reset old value)
+        wm.drag_last_event = Some(Instant::now() - Duration::from_secs(10));
+        let drag = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: header_rect.x + 5,
+            row: header_rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(wm.handle_managed_event(&drag));
+        // drag_last_event should now be recent (not the old 10s ago value)
+        if let Some(last) = wm.drag_last_event {
+            assert!(
+                last.elapsed() < Duration::from_secs(1),
+                "drag should refresh drag_last_event"
+            );
+        } else {
+            panic!("drag_last_event should be set after drag");
+        }
+    }
 }
