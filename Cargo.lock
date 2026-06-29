@@ -2276,6 +2276,7 @@ dependencies = [
  "portable-pty",
  "ratatui",
  "strum 0.28.0",
+ "term-wm-layout-engine",
  "term-wm-pty-engine",
  "tracing",
 ]

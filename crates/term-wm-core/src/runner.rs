@@ -2,7 +2,7 @@ use std::io;
 
 use crossterm::event::{Event, KeyEventKind, MouseEventKind};
 use ratatui::buffer::Buffer;
-use ratatui::prelude::{Constraint, Direction, Rect};
+use ratatui::prelude::Rect;
 use ratatui::style::{Modifier, Style};
 
 use crate::components::{Component, ComponentContext, ConfirmAction, Overlay};
@@ -730,31 +730,49 @@ fn composite_window<F>(
     frame.blit_from_signed(&buffer, surface.dest);
 }
 
-fn auto_layout_for_windows<Id: Copy + Eq + Ord>(windows: &[Id]) -> Option<TilingLayout<Id>> {
-    let node = match windows.len() {
-        0 => return None,
-        1 => LayoutNode::leaf(windows[0]),
-        2 => LayoutNode::split(
-            Direction::Horizontal,
-            vec![Constraint::Percentage(50), Constraint::Percentage(50)],
-            vec![LayoutNode::leaf(windows[0]), LayoutNode::leaf(windows[1])],
-        ),
-        len => {
-            let mut constraints = Vec::with_capacity(len);
-            let base = (100 / len as u16).max(1);
-            for idx in 0..len {
-                if idx == len - 1 {
-                    let used = base.saturating_mul((len - 1) as u16);
-                    constraints.push(Constraint::Percentage(100u16.saturating_sub(used)));
-                } else {
-                    constraints.push(Constraint::Percentage(base));
-                }
+fn auto_layout_for_windows<Id: Copy + Eq + Ord + std::fmt::Debug>(
+    windows: &[Id],
+) -> Option<TilingLayout<Id>> {
+    use term_wm_layout_engine::{BspNode, LayoutRect, LongestSide, OrientationHeuristic};
+
+    if windows.is_empty() {
+        return None;
+    }
+
+    let default_area = LayoutRect { x: 0, y: 0, width: 80, height: 24 };
+
+    let mut heuristic = LongestSide;
+    let mut windows_iter = windows.iter();
+    let first = *windows_iter.next().unwrap();
+    let mut root: BspNode<Id> = BspNode::leaf(first);
+
+    for (depth, &id) in windows_iter.enumerate() {
+        let orientation = heuristic.choose(default_area, depth);
+        let position = match orientation {
+            term_wm_layout_engine::Orientation::Horizontal => {
+                term_wm_layout_engine::InsertPosition::Right
             }
-            let children = windows.iter().map(|&id| LayoutNode::leaf(id)).collect();
-            LayoutNode::split(Direction::Vertical, constraints, children)
+            term_wm_layout_engine::Orientation::Vertical => {
+                term_wm_layout_engine::InsertPosition::Bottom
+            }
+        };
+
+        let all_ids = root.all_leaf_ids();
+        if let Some(&last) = all_ids.last() {
+            let _ = root.insert_leaf(
+                last,
+                id,
+                position,
+                &term_wm_layout_engine::SizeConstraints {
+                    min_width: 4,
+                    min_height: 2,
+                },
+            );
         }
-    };
-    Some(TilingLayout::new(node))
+    }
+
+    let layout_node: LayoutNode<Id> = LayoutNode::from(root);
+    Some(TilingLayout::new(layout_node))
 }
 
 #[cfg(test)]

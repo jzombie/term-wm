@@ -1598,7 +1598,7 @@ mod tests {
             _ => panic!("expected absolute rect"),
         };
 
-        let drag_col = header_rect.x.saturating_add(2);
+        let drag_col = header_rect.x.saturating_add(5);
         let drag_row = header_rect.y.saturating_add(1);
         let drag = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
@@ -1612,7 +1612,7 @@ mod tests {
             crate::window::FloatRectSpec::Absolute(fr) => fr,
             _ => panic!("expected absolute rect"),
         };
-        assert_eq!(moved.x, start_rect.x + 2);
+        assert_eq!(moved.x, start_rect.x + 5);
         assert_eq!(moved.y, start_rect.y + 1);
 
         let up = Event::Mouse(MouseEvent {

@@ -16,12 +16,38 @@ pub enum LayoutNode<Id: Copy + Eq + Ord> {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InsertPosition {
-    Left,
-    Right,
-    Top,
-    Bottom,
+pub use term_wm_layout_engine::InsertPosition;
+
+impl<Id: Copy + Eq + Ord> From<term_wm_layout_engine::BspNode<Id>> for LayoutNode<Id> {
+    fn from(bsp: term_wm_layout_engine::BspNode<Id>) -> Self {
+        match bsp {
+            term_wm_layout_engine::BspNode::Leaf(id) => LayoutNode::leaf(id),
+            term_wm_layout_engine::BspNode::Split { orientation, left, right, ratio } => {
+                let direction = match orientation {
+                    term_wm_layout_engine::Orientation::Horizontal => Direction::Horizontal,
+                    term_wm_layout_engine::Orientation::Vertical => Direction::Vertical,
+                };
+                let left_node: LayoutNode<Id> = LayoutNode::from(*left);
+                let right_node: LayoutNode<Id> = LayoutNode::from(*right);
+                let total = u32::from(ratio.total());
+                let weights = if total == 0 {
+                    vec![1.0, 1.0]
+                } else {
+                    vec![
+                        f32::from(ratio.left_part()) / total as f32,
+                        f32::from(ratio.right_part()) / total as f32,
+                    ]
+                };
+                LayoutNode::Split {
+                    direction,
+                    children: vec![left_node, right_node],
+                    weights,
+                    constraints: Vec::new(),
+                    resizable: true,
+                }
+            }
+        }
+    }
 }
 
 impl<Id: Copy + Eq + Ord> LayoutNode<Id> {

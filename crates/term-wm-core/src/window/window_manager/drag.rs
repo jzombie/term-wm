@@ -6,6 +6,7 @@ use ratatui::prelude::Rect;
 use super::{WindowId, WindowManager};
 use crate::layout::InsertPosition;
 use crate::layout::floating::*;
+use term_wm_layout_engine::{EdgeResistance, LayoutRect, detect_quadrant};
 
 impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     pub(super) fn handle_header_drag_event(&mut self, event: &Event) -> bool {
@@ -296,6 +297,16 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         if panel_active && y < bounds_y {
             y = bounds_y;
         }
+
+        let resistance = EdgeResistance::default_tui();
+        let bounds_layout = LayoutRect {
+            x: bounds.x as i32,
+            y: bounds.y as i32,
+            width: bounds.width,
+            height: bounds.height,
+        };
+        let x = resistance.apply(x, bounds_layout);
+
         self.set_floating_rect(
             id,
             Some(crate::window::FloatRectSpec::Absolute(
@@ -334,68 +345,54 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         });
 
         if let Some((target_id, rect)) = target {
-            let h = rect.height;
-
-            let d_top = mouse_y.saturating_sub(rect.y);
-            let d_bottom = (rect.y + h).saturating_sub(1).saturating_sub(mouse_y);
-
-            let sens_y = (h / 10).clamp(1, 4);
-
-            let snap = if d_top < sens_y && d_top <= d_bottom {
-                Some((
-                    InsertPosition::Top,
-                    Rect {
-                        height: h / 2,
-                        ..rect
-                    },
-                ))
-            } else if d_bottom < sens_y {
-                Some((
-                    InsertPosition::Bottom,
-                    Rect {
-                        y: rect.y + h / 2,
-                        height: h / 2,
-                        ..rect
-                    },
-                ))
-            } else {
-                None
+            let target_layout = LayoutRect {
+                x: rect.x as i32,
+                y: rect.y as i32,
+                width: rect.width,
+                height: rect.height,
             };
 
-            if let Some((pos, preview)) = snap {
-                self.drag_snap = Some((Some(target_id), pos, preview));
-                return;
-            }
+            let quadrant = detect_quadrant(mouse_x, mouse_y, &target_layout);
+            let pos = match quadrant {
+                term_wm_layout_engine::Quadrant::East => InsertPosition::Right,
+                term_wm_layout_engine::Quadrant::West => InsertPosition::Left,
+                term_wm_layout_engine::Quadrant::North => InsertPosition::Top,
+                term_wm_layout_engine::Quadrant::South => InsertPosition::Bottom,
+            };
+
+            let preview = match pos {
+                InsertPosition::Left => Rect {
+                    width: rect.width / 2,
+                    ..rect
+                },
+                InsertPosition::Right => Rect {
+                    x: rect.x + rect.width / 2,
+                    width: rect.width / 2,
+                    ..rect
+                },
+                InsertPosition::Top => Rect {
+                    height: rect.height / 2,
+                    ..rect
+                },
+                InsertPosition::Bottom => Rect {
+                    y: rect.y + rect.height / 2,
+                    height: rect.height / 2,
+                    ..rect
+                },
+            };
+
+            self.drag_snap = Some((Some(target_id), pos, preview));
+            return;
         }
 
-        let sensitivity = 2;
-
-        let d_left = mouse_x.saturating_sub(area.x);
-        let d_right = (area.x + area.width)
-            .saturating_sub(1)
-            .saturating_sub(mouse_x);
-        let d_top = mouse_y.saturating_sub(area.y);
-        let d_bottom = (area.y + area.height)
-            .saturating_sub(1)
-            .saturating_sub(mouse_y);
-
-        let min_screen_dist = d_left.min(d_right).min(d_top).min(d_bottom);
-
-        let position = if min_screen_dist < sensitivity {
-            if d_left == min_screen_dist {
-                Some(InsertPosition::Left)
-            } else if d_right == min_screen_dist {
-                Some(InsertPosition::Right)
-            } else if d_top == min_screen_dist {
-                Some(InsertPosition::Top)
-            } else if d_bottom == min_screen_dist {
-                Some(InsertPosition::Bottom)
-            } else {
-                None
-            }
-        } else {
-            None
+        let managed_layout = LayoutRect {
+            x: area.x as i32,
+            y: area.y as i32,
+            width: area.width,
+            height: area.height,
         };
+
+        let position = term_wm_layout_engine::detect_edge_snap(mouse_x, mouse_y, managed_layout, 2);
 
         if let Some(pos) = position {
             let mut preview = match pos {
