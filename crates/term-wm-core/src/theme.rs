@@ -395,6 +395,9 @@ mod tests {
             "same — shadow tint never carries text",
         ),
         (FgColor::SelectionFg, BgColor::ShadowTint, "same"),
+        // Shadow bg never carries text — always a visual effect block
+        (FgColor::DialogSeparator, BgColor::ShadowBg, "shadow bg never carries text"),
+        (FgColor::DecoratorBorder, BgColor::ShadowBg, "shadow bg never carries text"),
         // Green accent colors on green — same hue, never co-occur.
         (FgColor::Success, BgColor::MenuSelectedBg, "green on green"),
         (FgColor::Success, BgColor::SelectionBg, "green on green"),
