@@ -13,29 +13,27 @@ use super::utils::KeyboardNormalizer;
 use super::{EventSource, PowerProfile, RenderTarget};
 use crate::ui::UiFrame;
 
+const ACTIVE_THRESHOLD_MS: u64 = 500;
+
 pub struct ConsoleEventSource {
     normalizer: KeyboardNormalizer,
     event_queue: VecDeque<Event>,
     last_event_at: Option<Instant>,
-    power_profile: PowerProfile,
 }
 
 impl Default for ConsoleEventSource {
     fn default() -> Self {
-        Self::new(PowerProfile::Balanced)
+        Self::new()
     }
 }
 
 impl ConsoleEventSource {
-    pub fn new(profile: PowerProfile) -> Self {
-        let s = Self {
+    pub fn new() -> Self {
+        Self {
             normalizer: KeyboardNormalizer::new(),
             event_queue: VecDeque::new(),
             last_event_at: None,
-            power_profile: profile,
-        };
-        s.power_profile.report_change();
-        s
+        }
     }
 
     fn read_internal(&mut self) -> io::Result<Event> {
@@ -120,15 +118,16 @@ impl EventSource for ConsoleEventSource {
     }
 
     fn poll_interval(&self) -> Duration {
-        self.power_profile.poll_interval(self.last_event_at)
+        self.current_profile().poll_interval()
     }
 
-    fn set_power_profile(&mut self, profile: PowerProfile) {
-        if self.power_profile == profile {
-            return;
+    fn current_profile(&self) -> PowerProfile {
+        match self.last_event_at {
+            Some(t) if (t.elapsed().as_millis() as u64) < ACTIVE_THRESHOLD_MS => {
+                PowerProfile::HighPerformance
+            }
+            _ => PowerProfile::PowerSaver,
         }
-        self.power_profile = profile;
-        profile.report_change();
     }
 }
 
@@ -205,7 +204,7 @@ mod tests {
 
     #[test]
     fn next_key_from_queue() {
-        let mut d = ConsoleEventSource::new(PowerProfile::Balanced);
+        let mut d = ConsoleEventSource::new();
         d.event_queue.push_back(Event::Key(KeyEvent::new(
             KeyCode::Char('a'),
             KeyModifiers::NONE,
@@ -224,7 +223,7 @@ mod tests {
 
     #[test]
     fn next_mouse_from_queue() {
-        let mut d = ConsoleEventSource::new(PowerProfile::Balanced);
+        let mut d = ConsoleEventSource::new();
         d.event_queue.push_back(Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
             column: 2,
@@ -238,7 +237,7 @@ mod tests {
 
     #[test]
     fn poll_and_read_from_queue() {
-        let mut d = ConsoleEventSource::new(PowerProfile::Balanced);
+        let mut d = ConsoleEventSource::new();
         d.event_queue.push_back(Event::Key(KeyEvent::new(
             KeyCode::Char('z'),
             KeyModifiers::NONE,

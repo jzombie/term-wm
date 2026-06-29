@@ -20,6 +20,4 @@ pub trait BottomPanel: std::fmt::Debug {
     fn hit_test_hint(&self, event: &Event) -> Option<Action>;
 
     fn set_power_profile(&mut self, _profile: PowerProfile) {}
-
-    fn set_show_profile_indicator(&mut self, _show: bool) {}
 }

@@ -453,7 +453,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let clipboard = Some(crate::clipboard::Clipboard::new());
         let decorator = config.decorator();
         let floating_resize_offscreen = config.floating_resize_offscreen;
-        let power_profile = config.power_profile;
         Self {
             app_focus: FocusRing::new(current),
             wm_focus: FocusRing::new(WindowId::system(SystemWindowId::DebugLog)),
@@ -510,7 +509,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             next_title_seq: 0,
             synthetic_event: None,
             clipboard,
-            power_profile,
+            power_profile: PowerProfile::PowerSaver,
             frame_dirty: true,
         }
     }
@@ -589,7 +588,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         if let Some(p) = &mut self.bottom_panel {
             p.begin_frame();
             p.set_power_profile(self.power_profile);
-            p.set_show_profile_indicator(self.config.show_profile_indicator);
         }
         if crate::debug_event_flags::take_panic_pending() {
             self.show_system_window(SystemWindowId::DebugLog);

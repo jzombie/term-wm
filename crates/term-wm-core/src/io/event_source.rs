@@ -22,9 +22,11 @@ pub trait EventSource {
         Duration::from_millis(16)
     }
 
-    /// Update the power profile used for poll-interval computation.
-    /// Default no-op; event sources that care override this.
-    fn set_power_profile(&mut self, _profile: PowerProfile) {}
+    /// Returns the current power profile based on recent activity.
+    /// Default returns PowerSaver; event sources that track activity override this.
+    fn current_profile(&self) -> PowerProfile {
+        PowerProfile::PowerSaver
+    }
 }
 
 impl<T: EventSource + ?Sized> EventSource for &mut T {
@@ -52,8 +54,8 @@ impl<T: EventSource + ?Sized> EventSource for &mut T {
         (**self).poll_interval()
     }
 
-    fn set_power_profile(&mut self, profile: PowerProfile) {
-        (**self).set_power_profile(profile);
+    fn current_profile(&self) -> PowerProfile {
+        (**self).current_profile()
     }
 }
 
@@ -88,7 +90,6 @@ mod tests {
     #[test]
     fn blanket_impl_for_mut_ref_works() {
         let mut d = Dummy;
-        // call methods on &mut Dummy which should use the blanket impl
         let r = d.poll(Duration::from_millis(0)).unwrap();
         assert!(r);
         let ev = d.read().unwrap();

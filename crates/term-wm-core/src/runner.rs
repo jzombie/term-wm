@@ -143,13 +143,12 @@ where
     FDraw: for<'frame> FnMut(UiFrame<'frame>, &mut A),
     FMap: Fn(Id) -> Id + Copy,
 {
+    let initial_profile = driver.current_profile();
+    let mut last_seen_profile = initial_profile;
     let mut event_loop = EventLoop::new(driver);
     event_loop
         .driver()
         .set_mouse_capture(app.windows().mouse_capture_enabled())?;
-
-    let initial_profile = app.windows().power_profile();
-    let mut last_sent_profile = initial_profile;
     event_loop.run(|driver, event| {
         let handler = || -> io::Result<ControlFlow> {
             if debug_event_flags::take_panic_pending() {
@@ -172,10 +171,10 @@ where
                 if let Some(sel_enabled) = app.windows().take_window_selection_change() {
                     app.set_window_selection_enabled(sel_enabled);
                 }
-                let current = app.windows().power_profile();
-                if current != last_sent_profile {
-                    driver.set_power_profile(current);
-                    last_sent_profile = current;
+                let current = driver.current_profile();
+                if current != last_seen_profile {
+                    app.windows().set_power_profile(current);
+                    last_seen_profile = current;
                 }
                 Ok(flow)
             };

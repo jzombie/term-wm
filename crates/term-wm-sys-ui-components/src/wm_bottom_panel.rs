@@ -20,7 +20,6 @@ pub struct WmBottomPanelComponent {
     keybinding_hints: Vec<(Action, Vec<String>)>,
     hint_rects: Vec<(Rect, Action)>,
     power_profile: PowerProfile,
-    show_profile_indicator: bool,
 }
 
 impl WmBottomPanelComponent {
@@ -32,8 +31,7 @@ impl WmBottomPanelComponent {
             hostname: hostname.map(|h| h.to_string()),
             keybinding_hints: Vec::new(),
             hint_rects: Vec::new(),
-            power_profile: PowerProfile::Balanced,
-            show_profile_indicator: false,
+            power_profile: PowerProfile::PowerSaver,
         }
     }
 
@@ -59,10 +57,6 @@ impl WmBottomPanelComponent {
 
     pub fn set_power_profile(&mut self, profile: PowerProfile) {
         self.power_profile = profile;
-    }
-
-    pub fn set_show_profile_indicator(&mut self, show: bool) {
-        self.show_profile_indicator = show;
     }
 
     pub fn split_bottom_area(&mut self, area: Rect, height: u16) -> (Rect, Rect) {
@@ -115,8 +109,8 @@ impl WmBottomPanelComponent {
             .fg(theme::bottom_panel_fg())
             .bg(theme::bottom_panel_bg());
 
-        // Reserve rightmost cell for the profile indicator when applicable
-        let indicator_reserved = if self.show_profile_indicator { 1u16 } else { 0 };
+        // Reserve rightmost cell for the profile indicator
+        let indicator_reserved = 1u16;
 
         let info_opt = if show_info {
             let platform = std::env::consts::OS;
@@ -219,16 +213,14 @@ impl WmBottomPanelComponent {
         }
 
         // Draw profile indicator in the reserved rightmost cell
-        if self.show_profile_indicator {
-            let ind_x = bounds.x.saturating_add(bounds.width).saturating_sub(1);
-            if ind_x >= bounds.x
-                && let Some(cell) = buffer.cell_mut((ind_x, area.y))
-            {
-                let mut st = cell.style();
-                st.bg = Some(self.power_profile.indicator_color());
-                cell.set_style(st);
-                cell.set_symbol(" ");
-            }
+        let ind_x = bounds.x.saturating_add(bounds.width).saturating_sub(1);
+        if ind_x >= bounds.x
+            && let Some(cell) = buffer.cell_mut((ind_x, area.y))
+        {
+            let mut st = cell.style();
+            st.bg = Some(self.power_profile.indicator_color());
+            cell.set_style(st);
+            cell.set_symbol(" ");
         }
     }
 
@@ -279,10 +271,6 @@ impl BottomPanelTrait for WmBottomPanelComponent {
 
     fn set_power_profile(&mut self, profile: PowerProfile) {
         self.set_power_profile(profile);
-    }
-
-    fn set_show_profile_indicator(&mut self, show: bool) {
-        self.set_show_profile_indicator(show);
     }
 }
 
@@ -348,7 +336,9 @@ mod tests {
 
         p.render_bottom_impl(&mut ui, true);
 
-        for xx in area.x..area.x.saturating_add(area.width) {
+        // All cells except the rightmost indicator cell have panel bg
+        let last_x = area.x.saturating_add(area.width).saturating_sub(1);
+        for xx in area.x..last_x {
             let cell = buf.cell_mut((xx, area.y)).expect("cell present");
             assert_eq!(cell.style().bg, Some(theme::bottom_panel_bg()));
             assert_eq!(cell.style().fg, Some(theme::bottom_panel_fg()));
