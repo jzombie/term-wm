@@ -3,7 +3,7 @@
 //! Pure-math window layout engine for term-wm.
 //!
 //! Provides tiling (BSP/N-ary tree) and floating window layout math with
-//! zero runtime dependencies. Supports [`no_std`] via the `std` feature
+//! zero runtime dependencies. Supports `no_std` via the `std` feature
 //! (enabled by default).
 
 #[cfg(not(feature = "std"))]
