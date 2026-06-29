@@ -87,9 +87,10 @@ pub struct WmConfig {
     pub keyboard_focus_enabled: bool,
     /// How long the menu outline stays visible before restoring the full menu.
     pub menu_outline_timeout: Duration,
-    /// How long to wait for mouse events during a header drag before cancelling
-    /// the snap preview (mouse likely left the terminal viewport).
-    pub drag_snap_timeout: Duration,
+    /// If set, auto-applies a tile snap when no mouse events arrive for this
+    /// duration during a header drag (mouse likely left the terminal viewport).
+    /// `None` disables the feature.
+    pub drag_snap_timeout: Option<Duration>,
     /// Enable mouse click focus switching between windows.
     pub mouse_focus_click_enabled: bool,
     /// Render a drop-shadow behind floating windows to indicate stacking depth.
@@ -135,7 +136,7 @@ impl WmConfig {
             keybindings: validate_keybindings(&KeyBindings::standalone()),
             hint_visibility: HintVisibility::Always,
             menu_outline_timeout: Duration::from_millis(500),
-            drag_snap_timeout: Duration::from_millis(2000),
+            drag_snap_timeout: Some(Duration::from_millis(2000)),
         }
     }
 
@@ -159,8 +160,7 @@ impl WmConfig {
             keybindings: validate_keybindings(&KeyBindings::embedded()),
             hint_visibility: HintVisibility::Always,
             menu_outline_timeout: Duration::ZERO,
-            // TODO: This should be optional and set to None
-            drag_snap_timeout: Duration::from_millis(2000),
+            drag_snap_timeout: None,
         }
     }
 

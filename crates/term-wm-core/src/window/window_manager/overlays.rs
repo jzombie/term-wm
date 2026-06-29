@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crossterm::event::{Event, MouseEventKind};
 use ratatui::layout::Alignment;
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::widgets::Paragraph;
 
 use super::{WindowId, WindowManager, WmMenuAction};
@@ -199,25 +199,35 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             }
 
             if let Some(remaining) = self.drag_snap_remaining() {
-                let text = if remaining == Duration::ZERO {
-                    "Cancelling...".to_string()
+                const GRACE: Duration = Duration::from_millis(500);
+                let timeout = self.config.drag_snap_timeout.unwrap();
+                if timeout.saturating_sub(remaining) < GRACE {
+                    // Still within grace period — don't show countdown yet
                 } else {
-                    format!("Cancelling in {}s", remaining.as_secs())
-                };
-                let text_len = text.len() as u16;
-                let text_x = rect.x + (rect.width.saturating_sub(text_len)) / 2;
-                let text_y = rect.y + rect.height / 2;
-                if text_x >= rect.x && text_y >= rect.y {
-                    let text_area = ratatui::prelude::Rect {
-                        x: text_x,
-                        y: text_y,
-                        width: text_len,
-                        height: 1,
+                    let text = if remaining == Duration::ZERO {
+                        "Mouse left — snapping...".to_string()
+                    } else {
+                        format!("Mouse left — snapping in {}s", remaining.as_secs().max(1))
                     };
-                    let paragraph = Paragraph::new(text)
-                        .style(Style::default().fg(crate::theme::accent_alt()))
-                        .alignment(Alignment::Center);
-                    frame.render_widget(paragraph, text_area);
+                    let text_len = text.len() as u16;
+                    let text_x = rect.x + (rect.width.saturating_sub(text_len)) / 2;
+                    let text_y = rect.y + rect.height / 2;
+                    if text_x >= rect.x && text_y >= rect.y {
+                        let text_area = ratatui::prelude::Rect {
+                            x: text_x,
+                            y: text_y,
+                            width: text_len,
+                            height: 1,
+                        };
+                        let paragraph = Paragraph::new(text)
+                            .style(
+                                Style::default()
+                                    .fg(crate::theme::accent_alt())
+                                    .bg(Color::Black),
+                            )
+                            .alignment(Alignment::Center);
+                        frame.render_widget(paragraph, text_area);
+                    }
                 }
             }
         }
