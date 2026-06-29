@@ -28,6 +28,9 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             return true;
         }
 
+        // Hover-to-scroll: route scroll events to the window under the cursor
+        // without changing keyboard focus. This lets you scroll any visible
+        // window while keeping keyboard input directed at the active window.
         if let Event::Mouse(mouse) = event
             && matches!(
                 mouse.kind,
