@@ -180,9 +180,7 @@ impl WindowDecorator for DefaultDecorator {
                             .bg(crate::theme::decorator_header_fg())
                             .fg(crate::theme::decorator_header_bg())
                     } else {
-                        Style::default()
-                            .bg(header_bg)
-                            .fg(stoplight_fg)
+                        Style::default().bg(header_bg).fg(stoplight_fg)
                     };
                     cell.set_style(style);
                 }
@@ -295,8 +293,7 @@ mod tests {
 pub struct NoopDecorator;
 
 impl WindowDecorator for NoopDecorator {
-    fn render_window(&self, _frame: &mut UiFrame<'_>, _rect: Rect, _ctx: WindowRenderCtx<'_>) {
-    }
+    fn render_window(&self, _frame: &mut UiFrame<'_>, _rect: Rect, _ctx: WindowRenderCtx<'_>) {}
     fn hit_test(&self, _window_rect: Rect, _x: u16, _y: u16) -> HeaderAction {
         HeaderAction::None
     }
