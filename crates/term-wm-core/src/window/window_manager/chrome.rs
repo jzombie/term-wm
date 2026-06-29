@@ -118,7 +118,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         if self.is_minimized(id) {
             return;
         }
-        self.clear_floating_rect(id);
         self.z_order.retain(|x| *x != id);
         self.managed_draw_order.retain(|x| *x != id);
         self.set_minimized(id, true);
