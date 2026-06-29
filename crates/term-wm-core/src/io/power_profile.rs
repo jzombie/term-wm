@@ -33,11 +33,6 @@ impl PowerProfile {
         }
     }
 
-    /// Whether idle ticks should skip the full render pass when nothing changed.
-    pub fn skip_idle_render(&self) -> bool {
-        matches!(self, Self::PowerSaver)
-    }
-
     pub fn indicator_color(&self) -> Color {
         match self {
             Self::HighPerformance => theme::profile_high_bg(),

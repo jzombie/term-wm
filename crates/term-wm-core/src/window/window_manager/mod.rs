@@ -252,7 +252,6 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     synthetic_event: Option<Event>,
     clipboard: Option<crate::clipboard::Clipboard>,
     power_profile: PowerProfile,
-    frame_dirty: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -510,7 +509,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             synthetic_event: None,
             clipboard,
             power_profile: PowerProfile::PowerSaver,
-            frame_dirty: true,
         }
     }
 
@@ -709,39 +707,12 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.power_profile
     }
 
-    /// Update the current power profile and force a redraw so the bottom-panel
-    /// indicator updates on screen.
-    ///
-    /// ## Why `invalidate_frame()` is needed
-    ///
-    /// The runner's `flush_state_changes()` runs *after* `begin_frame()` in the
-    /// same tick, so the bottom panel's `power_profile` field is set by
-    /// `begin_frame()` before the change is detected.  Without an explicit
-    /// invalidation, `frame_dirty` stays `false` and the next idle tick skips
-    /// the render entirely — the indicator cell in the framebuffer keeps its
-    /// old colour (e.g. stays red after switching to PowerSaver).
-    ///
-    /// `invalidate_frame()` forces the next idle tick to call `output.draw()`,
-    /// which re-renders the bottom panel with the new profile colour.
     pub fn set_power_profile(&mut self, profile: PowerProfile) {
         if self.power_profile == profile {
             return;
         }
         self.power_profile = profile;
-        self.invalidate_frame();
         profile.report_change();
-    }
-
-    pub fn frame_dirty(&self) -> bool {
-        self.frame_dirty
-    }
-
-    pub fn mark_frame_clean(&mut self) {
-        self.frame_dirty = false;
-    }
-
-    pub fn invalidate_frame(&mut self) {
-        self.frame_dirty = true;
     }
 
     pub fn set_selection_snapshot(&mut self, active: bool, dragging: bool, text: Option<String>) {
@@ -2608,7 +2579,7 @@ mod tests {
     }
 
     #[test]
-    fn power_profile_change_invalidates_frame() {
+    fn power_profile_change_updates_value() {
         let mut wm = WindowManager::<usize>::with_config(
             0,
             WmConfig::standalone(),
@@ -2617,23 +2588,10 @@ mod tests {
             None,
             Box::new(NoopMenu),
         );
-        // Starts with PowerSaver from constructor
         assert_eq!(wm.power_profile, PowerProfile::PowerSaver);
-        // profile is PowerSaver, set to PowerSaver again → no change → frame stays clean
-        wm.mark_frame_clean();
-        wm.set_power_profile(PowerProfile::PowerSaver);
-        assert!(!wm.frame_dirty(), "same profile should not invalidate frame");
-
-        // Switch to HighPerformance → must dirty the frame
         wm.set_power_profile(PowerProfile::HighPerformance);
-        assert!(wm.frame_dirty(), "switching profile must invalidate frame");
-
-        // Back to PowerSaver → dirty again
-        wm.mark_frame_clean();
+        assert_eq!(wm.power_profile, PowerProfile::HighPerformance);
         wm.set_power_profile(PowerProfile::PowerSaver);
-        assert!(
-            wm.frame_dirty(),
-            "switching back to PowerSaver must invalidate frame so indicator re-renders"
-        );
+        assert_eq!(wm.power_profile, PowerProfile::PowerSaver);
     }
 }
