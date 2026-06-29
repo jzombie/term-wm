@@ -27,7 +27,10 @@ impl InsertPosition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SnapTarget<Id: Copy + Eq + Ord> {
     Edge(InsertPosition),
-    TiledInsert { target: Id, position: InsertPosition },
+    TiledInsert {
+        target: Id,
+        position: InsertPosition,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -52,7 +55,9 @@ impl EdgeResistance {
 
     pub fn apply(&self, new_x: i32, bounds: LayoutRect) -> i32 {
         let left_edge = bounds.x;
-        let right_edge = bounds.x.saturating_add(i32::from(bounds.width.saturating_sub(1)));
+        let right_edge = bounds
+            .x
+            .saturating_add(i32::from(bounds.width.saturating_sub(1)));
 
         let zone = i32::from(self.magnetic_zone);
 
@@ -73,10 +78,16 @@ pub fn detect_edge_snap(
     sensitivity: u16,
 ) -> Option<InsertPosition> {
     let d_left = col.saturating_sub(managed_area.x as u16);
-    let d_right = (managed_area.x.saturating_add(i32::from(managed_area.width)).saturating_sub(1) as u16)
+    let d_right = (managed_area
+        .x
+        .saturating_add(i32::from(managed_area.width))
+        .saturating_sub(1) as u16)
         .saturating_sub(col);
     let d_top = row.saturating_sub(managed_area.y as u16);
-    let d_bottom = (managed_area.y.saturating_add(i32::from(managed_area.height)).saturating_sub(1) as u16)
+    let d_bottom = (managed_area
+        .y
+        .saturating_add(i32::from(managed_area.height))
+        .saturating_sub(1) as u16)
         .saturating_sub(row);
 
     let min_dist = d_left.min(d_right).min(d_top).min(d_bottom);
@@ -103,7 +114,9 @@ pub fn edge_preview_rect(managed_area: LayoutRect, pos: InsertPosition) -> Layou
             ..managed_area
         },
         InsertPosition::Right => LayoutRect {
-            x: managed_area.x.saturating_add(i32::from(managed_area.width / 2)),
+            x: managed_area
+                .x
+                .saturating_add(i32::from(managed_area.width / 2)),
             width: managed_area.width / 2,
             ..managed_area
         },
@@ -112,7 +125,9 @@ pub fn edge_preview_rect(managed_area: LayoutRect, pos: InsertPosition) -> Layou
             ..managed_area
         },
         InsertPosition::Bottom => LayoutRect {
-            y: managed_area.y.saturating_add(i32::from(managed_area.height / 2)),
+            y: managed_area
+                .y
+                .saturating_add(i32::from(managed_area.height / 2)),
             height: managed_area.height / 2,
             ..managed_area
         },
@@ -126,7 +141,9 @@ pub fn tiled_preview_rect(target_rect: LayoutRect, position: InsertPosition) -> 
             ..target_rect
         },
         InsertPosition::Right => LayoutRect {
-            x: target_rect.x.saturating_add(i32::from(target_rect.width / 2)),
+            x: target_rect
+                .x
+                .saturating_add(i32::from(target_rect.width / 2)),
             width: target_rect.width / 2,
             ..target_rect
         },
@@ -135,7 +152,9 @@ pub fn tiled_preview_rect(target_rect: LayoutRect, position: InsertPosition) -> 
             ..target_rect
         },
         InsertPosition::Bottom => LayoutRect {
-            y: target_rect.y.saturating_add(i32::from(target_rect.height / 2)),
+            y: target_rect
+                .y
+                .saturating_add(i32::from(target_rect.height / 2)),
             height: target_rect.height / 2,
             ..target_rect
         },
@@ -147,27 +166,44 @@ mod tests {
     use super::*;
 
     fn area() -> LayoutRect {
-        LayoutRect { x: 0, y: 0, width: 80, height: 24 }
+        LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        }
     }
 
     #[test]
     fn edge_snap_left() {
-        assert_eq!(detect_edge_snap(1, 12, area(), 2), Some(InsertPosition::Left));
+        assert_eq!(
+            detect_edge_snap(1, 12, area(), 2),
+            Some(InsertPosition::Left)
+        );
     }
 
     #[test]
     fn edge_snap_right() {
-        assert_eq!(detect_edge_snap(79, 12, area(), 2), Some(InsertPosition::Right));
+        assert_eq!(
+            detect_edge_snap(79, 12, area(), 2),
+            Some(InsertPosition::Right)
+        );
     }
 
     #[test]
     fn edge_snap_top() {
-        assert_eq!(detect_edge_snap(40, 0, area(), 2), Some(InsertPosition::Top));
+        assert_eq!(
+            detect_edge_snap(40, 0, area(), 2),
+            Some(InsertPosition::Top)
+        );
     }
 
     #[test]
     fn edge_snap_bottom() {
-        assert_eq!(detect_edge_snap(40, 23, area(), 2), Some(InsertPosition::Bottom));
+        assert_eq!(
+            detect_edge_snap(40, 23, area(), 2),
+            Some(InsertPosition::Bottom)
+        );
     }
 
     #[test]
@@ -178,21 +214,36 @@ mod tests {
     #[test]
     fn edge_resistance_snaps_to_left_edge() {
         let er = EdgeResistance::default_tui();
-        let bounds = LayoutRect { x: 0, y: 0, width: 80, height: 24 };
+        let bounds = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         assert_eq!(er.apply(2, bounds), 0);
     }
 
     #[test]
     fn edge_resistance_snaps_to_right_edge() {
         let er = EdgeResistance::default_tui();
-        let bounds = LayoutRect { x: 0, y: 0, width: 80, height: 24 };
+        let bounds = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         assert_eq!(er.apply(78, bounds), 79);
     }
 
     #[test]
     fn edge_resistance_passes_through_middle() {
         let er = EdgeResistance::default_tui();
-        let bounds = LayoutRect { x: 0, y: 0, width: 80, height: 24 };
+        let bounds = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         assert_eq!(er.apply(40, bounds), 40);
     }
 
@@ -226,7 +277,12 @@ mod tests {
 
     #[test]
     fn tiled_preview_rect_left() {
-        let target = LayoutRect { x: 10, y: 10, width: 60, height: 20 };
+        let target = LayoutRect {
+            x: 10,
+            y: 10,
+            width: 60,
+            height: 20,
+        };
         let p = tiled_preview_rect(target, InsertPosition::Left);
         assert_eq!(p.width, 30);
         assert_eq!(p.x, 10);
@@ -234,7 +290,10 @@ mod tests {
 
     #[test]
     fn inserting_position_to_orientation() {
-        assert_eq!(InsertPosition::Left.to_orientation(), Orientation::Horizontal);
+        assert_eq!(
+            InsertPosition::Left.to_orientation(),
+            Orientation::Horizontal
+        );
         assert_eq!(InsertPosition::Top.to_orientation(), Orientation::Vertical);
     }
 }

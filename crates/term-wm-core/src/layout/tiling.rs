@@ -22,7 +22,12 @@ impl<Id: Copy + Eq + Ord> From<term_wm_layout_engine::BspNode<Id>> for LayoutNod
     fn from(bsp: term_wm_layout_engine::BspNode<Id>) -> Self {
         match bsp {
             term_wm_layout_engine::BspNode::Leaf(id) => LayoutNode::leaf(id),
-            term_wm_layout_engine::BspNode::Split { orientation, left, right, ratio } => {
+            term_wm_layout_engine::BspNode::Split {
+                orientation,
+                left,
+                right,
+                ratio,
+            } => {
                 let direction = match orientation {
                     term_wm_layout_engine::Orientation::Horizontal => Direction::Horizontal,
                     term_wm_layout_engine::Orientation::Vertical => Direction::Vertical,

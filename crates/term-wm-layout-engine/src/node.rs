@@ -1,4 +1,4 @@
-use crate::rect::{LayoutRect, Orientation, Ratio, SizeConstraints, LayoutError};
+use crate::rect::{LayoutError, LayoutRect, Orientation, Ratio, SizeConstraints};
 use crate::snap::InsertPosition;
 use crate::split;
 
@@ -65,7 +65,12 @@ impl<Id: Copy + Eq + Ord> BspNode<Id> {
             Self::Leaf(id) => {
                 regions.push((*id, area));
             }
-            Self::Split { orientation, left, right, ratio } => {
+            Self::Split {
+                orientation,
+                left,
+                right,
+                ratio,
+            } => {
                 let (left_area, right_area) = split::split_rect_bsp(area, *orientation, *ratio);
                 left.layout_recursive(left_area, regions);
                 right.layout_recursive(right_area, regions);
@@ -86,18 +91,26 @@ impl<Id: Copy + Eq + Ord> BspNode<Id> {
                     return Err(LayoutError::NotFound);
                 }
                 let (orientation, left_child, right_child) = match position {
-                    InsertPosition::Left => {
-                        (Orientation::Horizontal, Self::leaf(insert), Self::leaf(*current))
-                    }
-                    InsertPosition::Right => {
-                        (Orientation::Horizontal, Self::leaf(*current), Self::leaf(insert))
-                    }
-                    InsertPosition::Top => {
-                        (Orientation::Vertical, Self::leaf(insert), Self::leaf(*current))
-                    }
-                    InsertPosition::Bottom => {
-                        (Orientation::Vertical, Self::leaf(*current), Self::leaf(insert))
-                    }
+                    InsertPosition::Left => (
+                        Orientation::Horizontal,
+                        Self::leaf(insert),
+                        Self::leaf(*current),
+                    ),
+                    InsertPosition::Right => (
+                        Orientation::Horizontal,
+                        Self::leaf(*current),
+                        Self::leaf(insert),
+                    ),
+                    InsertPosition::Top => (
+                        Orientation::Vertical,
+                        Self::leaf(insert),
+                        Self::leaf(*current),
+                    ),
+                    InsertPosition::Bottom => (
+                        Orientation::Vertical,
+                        Self::leaf(*current),
+                        Self::leaf(insert),
+                    ),
                 };
                 *self = Self::Split {
                     orientation,
@@ -107,10 +120,9 @@ impl<Id: Copy + Eq + Ord> BspNode<Id> {
                 };
                 Ok(())
             }
-            Self::Split { left, right, .. } => {
-                left.insert_leaf(target, insert, position, _constraints)
-                    .or_else(|_| right.insert_leaf(target, insert, position, _constraints))
-            }
+            Self::Split { left, right, .. } => left
+                .insert_leaf(target, insert, position, _constraints)
+                .or_else(|_| right.insert_leaf(target, insert, position, _constraints)),
         }
     }
 
@@ -149,7 +161,11 @@ impl<Id: Copy + Eq + Ord> BspNode<Id> {
     pub fn find_path(&self, target: Id) -> Option<Vec<bool>> {
         match self {
             Self::Leaf(id) => {
-                if *id == target { Some(Vec::new()) } else { None }
+                if *id == target {
+                    Some(Vec::new())
+                } else {
+                    None
+                }
             }
             Self::Split { left, right, .. } => {
                 if let Some(mut path) = left.find_path(target) {
@@ -195,9 +211,7 @@ impl<Id: Copy + Eq + Ord> NaryNode<Id> {
     pub fn subtree_any(&self, predicate: &mut impl FnMut(Id) -> bool) -> bool {
         match self {
             Self::Leaf(id) => predicate(*id),
-            Self::Container { children, .. } => {
-                children.iter().any(|c| c.subtree_any(predicate))
-            }
+            Self::Container { children, .. } => children.iter().any(|c| c.subtree_any(predicate)),
         }
     }
 
@@ -212,8 +226,13 @@ impl<Id: Copy + Eq + Ord> NaryNode<Id> {
             Self::Leaf(id) => {
                 regions.push((*id, area));
             }
-            Self::Container { orientation, children, weights } => {
-                let sub_rects = split::split_rects_nary(area, *orientation, weights, children.len());
+            Self::Container {
+                orientation,
+                children,
+                weights,
+            } => {
+                let sub_rects =
+                    split::split_rects_nary(area, *orientation, weights, children.len());
                 for (child, sub) in children.iter().zip(sub_rects) {
                     child.layout_recursive(sub, regions);
                 }
@@ -234,18 +253,26 @@ impl<Id: Copy + Eq + Ord> NaryNode<Id> {
                     return Err(LayoutError::NotFound);
                 }
                 let (orientation, left_child, right_child) = match position {
-                    InsertPosition::Left => {
-                        (Orientation::Horizontal, Self::leaf(insert), Self::leaf(*current))
-                    }
-                    InsertPosition::Right => {
-                        (Orientation::Horizontal, Self::leaf(*current), Self::leaf(insert))
-                    }
-                    InsertPosition::Top => {
-                        (Orientation::Vertical, Self::leaf(insert), Self::leaf(*current))
-                    }
-                    InsertPosition::Bottom => {
-                        (Orientation::Vertical, Self::leaf(*current), Self::leaf(insert))
-                    }
+                    InsertPosition::Left => (
+                        Orientation::Horizontal,
+                        Self::leaf(insert),
+                        Self::leaf(*current),
+                    ),
+                    InsertPosition::Right => (
+                        Orientation::Horizontal,
+                        Self::leaf(*current),
+                        Self::leaf(insert),
+                    ),
+                    InsertPosition::Top => (
+                        Orientation::Vertical,
+                        Self::leaf(insert),
+                        Self::leaf(*current),
+                    ),
+                    InsertPosition::Bottom => (
+                        Orientation::Vertical,
+                        Self::leaf(*current),
+                        Self::leaf(insert),
+                    ),
                 };
                 *self = Self::Container {
                     orientation,
@@ -256,7 +283,10 @@ impl<Id: Copy + Eq + Ord> NaryNode<Id> {
             }
             Self::Container { children, .. } => {
                 for child in children.iter_mut() {
-                    if child.insert_leaf(target, insert, position, _constraints).is_ok() {
+                    if child
+                        .insert_leaf(target, insert, position, _constraints)
+                        .is_ok()
+                    {
                         return Ok(());
                     }
                 }
@@ -268,7 +298,9 @@ impl<Id: Copy + Eq + Ord> NaryNode<Id> {
     pub fn remove_leaf(&mut self, id: Id) -> Result<(), LayoutError> {
         match self {
             Self::Leaf(_) => Err(LayoutError::NotFound),
-            Self::Container { children, weights, .. } => {
+            Self::Container {
+                children, weights, ..
+            } => {
                 let pos = children.iter().position(|c| c.unwrap_leaf() == Some(id));
                 if let Some(idx) = pos {
                     children.remove(idx);
@@ -284,7 +316,8 @@ impl<Id: Copy + Eq + Ord> NaryNode<Id> {
 
                 for child in children.iter_mut() {
                     if child.remove_leaf(id).is_ok() {
-                        let empty_container = matches!(child, Self::Container { children: c, .. } if c.is_empty());
+                        let empty_container =
+                            matches!(child, Self::Container { children: c, .. } if c.is_empty());
                         if empty_container {
                             let idx = children.iter().position(|c| c.unwrap_leaf().is_none() && matches!(c, Self::Container { children: cc, .. } if cc.is_empty()));
                             if let Some(idx) = idx {
@@ -315,9 +348,15 @@ mod tests {
     #[test]
     fn bsp_insert_and_remove() {
         let mut node: BspNode<usize> = BspNode::leaf(1);
-        let constraints = SizeConstraints { min_width: 2, min_height: 2 };
+        let constraints = SizeConstraints {
+            min_width: 2,
+            min_height: 2,
+        };
 
-        assert!(node.insert_leaf(1, 2, InsertPosition::Right, &constraints).is_ok());
+        assert!(
+            node.insert_leaf(1, 2, InsertPosition::Right, &constraints)
+                .is_ok()
+        );
         assert_eq!(node.all_leaf_ids(), vec![1, 2]);
 
         assert!(node.remove_leaf(2).is_ok());
@@ -327,10 +366,19 @@ mod tests {
     #[test]
     fn nary_insert_and_remove() {
         let mut node: NaryNode<usize> = NaryNode::leaf(1);
-        let constraints = SizeConstraints { min_width: 2, min_height: 2 };
+        let constraints = SizeConstraints {
+            min_width: 2,
+            min_height: 2,
+        };
 
-        assert!(node.insert_leaf(1, 2, InsertPosition::Right, &constraints).is_ok());
-        assert!(node.insert_leaf(1, 3, InsertPosition::Left, &constraints).is_ok());
+        assert!(
+            node.insert_leaf(1, 2, InsertPosition::Right, &constraints)
+                .is_ok()
+        );
+        assert!(
+            node.insert_leaf(1, 3, InsertPosition::Left, &constraints)
+                .is_ok()
+        );
 
         assert!(node.remove_leaf(2).is_ok());
         assert!(node.remove_leaf(3).is_ok());
@@ -340,7 +388,10 @@ mod tests {
     #[test]
     fn bsp_insert_nonexistent_target_returns_not_found() {
         let mut node: BspNode<usize> = BspNode::leaf(1);
-        let constraints = SizeConstraints { min_width: 2, min_height: 2 };
+        let constraints = SizeConstraints {
+            min_width: 2,
+            min_height: 2,
+        };
         assert_eq!(
             node.insert_leaf(99, 2, InsertPosition::Right, &constraints),
             Err(LayoutError::NotFound)
@@ -350,11 +401,21 @@ mod tests {
     #[test]
     fn bsp_layout_returns_all_ids() {
         let mut node: BspNode<&str> = BspNode::leaf("a");
-        let constraints = SizeConstraints { min_width: 2, min_height: 2 };
-        node.insert_leaf("a", "b", InsertPosition::Right, &constraints).unwrap();
-        node.insert_leaf("b", "c", InsertPosition::Top, &constraints).unwrap();
+        let constraints = SizeConstraints {
+            min_width: 2,
+            min_height: 2,
+        };
+        node.insert_leaf("a", "b", InsertPosition::Right, &constraints)
+            .unwrap();
+        node.insert_leaf("b", "c", InsertPosition::Top, &constraints)
+            .unwrap();
 
-        let area = LayoutRect { x: 0, y: 0, width: 80, height: 24 };
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         let regions = node.layout(area);
         let ids: Vec<&&str> = regions.iter().map(|(id, _)| id).collect();
         assert_eq!(ids, vec![&"a", &"c", &"b"]);
@@ -363,8 +424,12 @@ mod tests {
     #[test]
     fn bsp_find_path_returns_correct_route() {
         let mut node: BspNode<usize> = BspNode::leaf(1);
-        let constraints = SizeConstraints { min_width: 2, min_height: 2 };
-        node.insert_leaf(1, 2, InsertPosition::Right, &constraints).unwrap();
+        let constraints = SizeConstraints {
+            min_width: 2,
+            min_height: 2,
+        };
+        node.insert_leaf(1, 2, InsertPosition::Right, &constraints)
+            .unwrap();
 
         assert_eq!(node.find_path(1), Some(vec![false]));
         assert_eq!(node.find_path(2), Some(vec![true]));
@@ -373,8 +438,12 @@ mod tests {
     #[test]
     fn nary_subtree_any() {
         let mut node: NaryNode<usize> = NaryNode::leaf(1);
-        let constraints = SizeConstraints { min_width: 2, min_height: 2 };
-        node.insert_leaf(1, 2, InsertPosition::Right, &constraints).unwrap();
+        let constraints = SizeConstraints {
+            min_width: 2,
+            min_height: 2,
+        };
+        node.insert_leaf(1, 2, InsertPosition::Right, &constraints)
+            .unwrap();
 
         assert!(node.subtree_any(&mut |id| id == 2));
         assert!(!node.subtree_any(&mut |id| id == 99));

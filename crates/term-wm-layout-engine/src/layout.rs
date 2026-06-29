@@ -1,5 +1,5 @@
 use crate::node::BspNode;
-use crate::rect::{LayoutRect, SizeConstraints, LayoutError};
+use crate::rect::{LayoutError, LayoutRect, SizeConstraints};
 use crate::snap::InsertPosition;
 
 pub trait LayoutEngine<Id: Copy + Eq + Ord> {
@@ -52,11 +52,21 @@ mod tests {
     #[test]
     fn layout_engine_trait_works_with_bsp_node() {
         let mut node: BspNode<u8> = BspNode::leaf(1);
-        let constraints = SizeConstraints { min_width: 2, min_height: 2 };
+        let constraints = SizeConstraints {
+            min_width: 2,
+            min_height: 2,
+        };
 
-        assert!(LayoutEngine::insert_leaf(&mut node, 1, 2, InsertPosition::Right, &constraints).is_ok());
+        assert!(
+            LayoutEngine::insert_leaf(&mut node, 1, 2, InsertPosition::Right, &constraints).is_ok()
+        );
 
-        let area = LayoutRect { x: 0, y: 0, width: 80, height: 24 };
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         let regions = LayoutEngine::layout(&node, area);
         assert_eq!(regions.len(), 2);
     }

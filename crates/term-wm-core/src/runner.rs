@@ -739,7 +739,12 @@ fn auto_layout_for_windows<Id: Copy + Eq + Ord + std::fmt::Debug>(
         return None;
     }
 
-    let default_area = LayoutRect { x: 0, y: 0, width: 80, height: 24 };
+    let default_area = LayoutRect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
 
     let mut heuristic = LongestSide;
     let mut windows_iter = windows.iter();

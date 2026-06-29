@@ -37,28 +37,48 @@ mod tests {
     #[test]
     fn longest_side_wide_space() {
         let mut h = LongestSide;
-        let area = LayoutRect { x: 0, y: 0, width: 100, height: 50 };
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 50,
+        };
         assert_eq!(h.choose(area, 0), Orientation::Horizontal);
     }
 
     #[test]
     fn longest_side_tall_space() {
         let mut h = LongestSide;
-        let area = LayoutRect { x: 0, y: 0, width: 50, height: 100 };
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 50,
+            height: 100,
+        };
         assert_eq!(h.choose(area, 0), Orientation::Vertical);
     }
 
     #[test]
     fn longest_side_square() {
         let mut h = LongestSide;
-        let area = LayoutRect { x: 0, y: 0, width: 80, height: 80 };
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 80,
+        };
         assert_eq!(h.choose(area, 0), Orientation::Horizontal);
     }
 
     #[test]
     fn spiral_alternates() {
         let mut h = Spiral;
-        let area = LayoutRect { x: 0, y: 0, width: 80, height: 24 };
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         assert_eq!(h.choose(area, 0), Orientation::Horizontal);
         assert_eq!(h.choose(area, 1), Orientation::Vertical);
         assert_eq!(h.choose(area, 2), Orientation::Horizontal);

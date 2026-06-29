@@ -21,8 +21,10 @@ impl LayoutRect {
         }
         let max_x = self.x.saturating_add(i32::from(self.width));
         let max_y = self.y.saturating_add(i32::from(self.height));
-        i32::from(col) >= self.x && i32::from(col) < max_x
-            && i32::from(row) >= self.y && i32::from(row) < max_y
+        i32::from(col) >= self.x
+            && i32::from(col) < max_x
+            && i32::from(row) >= self.y
+            && i32::from(row) < max_y
     }
 }
 
@@ -77,7 +79,11 @@ impl fmt::Display for LayoutError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LayoutError::ConstraintViolated(c) => {
-                write!(f, "minimum dimension violated (min {}x{})", c.min_width, c.min_height)
+                write!(
+                    f,
+                    "minimum dimension violated (min {}x{})",
+                    c.min_width, c.min_height
+                )
             }
             LayoutError::NotFound => write!(f, "target node not found"),
         }
@@ -90,25 +96,45 @@ mod tests {
 
     #[test]
     fn center_of_rect() {
-        let r = LayoutRect { x: 10, y: 20, width: 100, height: 60 };
+        let r = LayoutRect {
+            x: 10,
+            y: 20,
+            width: 100,
+            height: 60,
+        };
         assert_eq!(r.center(), (60, 50));
     }
 
     #[test]
     fn contains_inside() {
-        let r = LayoutRect { x: 0, y: 0, width: 10, height: 10 };
+        let r = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
         assert!(r.contains(5, 5));
     }
 
     #[test]
     fn contains_outside() {
-        let r = LayoutRect { x: 0, y: 0, width: 10, height: 10 };
+        let r = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
         assert!(!r.contains(10, 10));
     }
 
     #[test]
     fn contains_zero_dim() {
-        let r = LayoutRect { x: 0, y: 0, width: 0, height: 10 };
+        let r = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 10,
+        };
         assert!(!r.contains(0, 0));
     }
 

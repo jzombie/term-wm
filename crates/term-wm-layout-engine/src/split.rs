@@ -1,6 +1,10 @@
 use crate::rect::{LayoutRect, Orientation, Ratio};
 
-pub fn split_rect_bsp(area: LayoutRect, orientation: Orientation, ratio: Ratio) -> (LayoutRect, LayoutRect) {
+pub fn split_rect_bsp(
+    area: LayoutRect,
+    orientation: Orientation,
+    ratio: Ratio,
+) -> (LayoutRect, LayoutRect) {
     match orientation {
         Orientation::Horizontal => split_horizontal(area, ratio),
         Orientation::Vertical => split_vertical(area, ratio),
@@ -176,7 +180,12 @@ mod tests {
     use super::*;
 
     fn area(w: u16, h: u16) -> LayoutRect {
-        LayoutRect { x: 0, y: 0, width: w, height: h }
+        LayoutRect {
+            x: 0,
+            y: 0,
+            width: w,
+            height: h,
+        }
     }
 
     #[test]
