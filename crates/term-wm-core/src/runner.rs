@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::prelude::Rect;
 use ratatui::style::{Modifier, Style};
 
-use crate::components::{Component, ComponentContext, ConfirmAction, Overlay};
+use crate::components::{Component, ComponentContext, ConfirmAction, Overlay, SelectionStatus};
 use crate::debug_event_flags;
 use crate::event_loop::{ControlFlow, EventLoop};
 use crate::io::{EventSource, RenderTarget};
@@ -552,6 +552,18 @@ where
     )
 }
 
+/// Helper: given a provider of selection status/text, return the tuple.
+fn selection_snapshot_from(
+    s: SelectionStatus,
+    text: Option<String>,
+) -> (SelectionStatus, Option<String>) {
+    if s.active || s.dragging {
+        (s, text)
+    } else {
+        (s, None)
+    }
+}
+
 fn update_selection_snapshot<A, Id>(app: &mut A)
 where
     A: WindowProvider<Id>,
@@ -562,30 +574,12 @@ where
     let (status, text) = match focus {
         WindowId::App(id) => app
             .window_component(id)
-            .map(|c| {
-                // TODO: Extract to a helper
-                let s = c.selection_status();
-                let t = if s.active || s.dragging {
-                    c.selection_text()
-                } else {
-                    None
-                };
-                (s, t)
-            })
+            .map(|c| selection_snapshot_from(c.selection_status(), c.selection_text()))
             .unwrap_or_default(),
         WindowId::System(sys_id) => app
             .windows()
             .system_window_entry_mut(sys_id)
-            .map(|entry| {
-                // TODO: Extract to a helper
-                let s = entry.selection_status();
-                let t = if s.active || s.dragging {
-                    entry.selection_text()
-                } else {
-                    None
-                };
-                (s, t)
-            })
+            .map(|entry| selection_snapshot_from(entry.selection_status(), entry.selection_text()))
             .unwrap_or_default(),
     };
     app.windows()
