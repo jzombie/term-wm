@@ -16,7 +16,8 @@ use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;
 use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient, RpcServiceCallerInterface};
 use portable_pty::PtySize;
-use term_session_muxio_service_definitions::{PushOutput, SessionPushFrame, Spawn, WriteInput};
+use term_session_muxio_service_definitions::{PushOutput, SessionPushFrame, Spawn};
+use term_session_muxio_service_definitions::WriteInput;
 use term_wm_pty_engine::Pane;
 use term_wm_pty_engine::clipboard::{Clipboard, extract_osc52_text};
 use term_wm_pty_engine::input_encoding::{key_to_bytes, mouse_event_to_bytes};
@@ -36,24 +37,25 @@ impl Drop for TerminalGuard {
     }
 }
 
-fn to_io(e: impl std::fmt::Debug) -> io::Error {
-    io::Error::other(format!("{e:?}"))
-}
-
 /// Connect to a term-session-server and run the TUI viewer.
-pub async fn run_session(socket_path: &str) -> io::Result<()> {
-    let sigint = install_sigint_handler()?;
+///
+/// This function is synchronous. It creates a background tokio runtime
+/// for muxio IPC, then runs the synchronous crossterm event loop on the
+/// calling thread.
+pub fn run_session(socket_path: &str) -> io::Result<()> {
+    let rt = tokio::runtime::Runtime::new().map_err(|e| io::Error::other(format!("runtime: {e}")))?;
 
     // Connect via muxio IPC
-    let client: Arc<RpcIpcClient> = RpcIpcClient::new(socket_path)
-        .await
+    let client: Arc<RpcIpcClient> = rt
+        .block_on(RpcIpcClient::new(socket_path))
         .map_err(|e| io::Error::new(io::ErrorKind::ConnectionRefused, format!("{e:?}")))?;
 
-    // Channel for push frames from the muxio read loop to the TUI loop
+    // Channels for communication between the sync loop and async tasks
     let (push_tx, push_rx) = mpsc::unbounded_channel::<SessionPushFrame>();
+    let (write_tx, mut write_rx) = mpsc::unbounded_channel::<(u64, Vec<u8>)>();
 
     // Register PushOutput handler on the client endpoint
-    {
+    rt.block_on(async {
         let endpoint = client.get_endpoint();
         let tx = push_tx.clone();
         endpoint
@@ -67,19 +69,39 @@ pub async fn run_session(socket_path: &str) -> io::Result<()> {
                 }
             })
             .await
-            .map_err(to_io)?;
-    }
+            .map_err(|e| io::Error::other(format!("register push handler: {e:?}")))
+    })?;
+
+    // Spawn the write processor task on the tokio runtime
+    let write_client = client.clone();
+    rt.spawn(async move {
+        while let Some((id, data)) = write_rx.recv().await {
+            if let Err(e) = WriteInput::call(&*write_client, (id, data)).await {
+                tracing::warn!("WriteInput call failed: {e:?}");
+            }
+        }
+    });
 
     // Get terminal size
     let (term_cols, term_rows) = crossterm::terminal::size()?;
     let session_id = 1u64;
 
-    // Spawn session
-    Spawn::call(&*client, (None, term_cols, term_rows))
-        .await
-        .map_err(|e| io::Error::other(format!("spawn: {e:?}")))?;
+    // Spawn session on the server
+    rt.block_on(async {
+        Spawn::call(&*client, (None, term_cols, term_rows))
+            .await
+            .map_err(|e| io::Error::other(format!("spawn: {e:?}")))
+    })?;
 
-    let mut pane = RemotePane::new(session_id, client.clone(), term_cols, term_rows, push_rx);
+    let mut pane = RemotePane::new(
+        session_id,
+        client.clone(),
+        rt.handle().clone(),
+        term_cols,
+        term_rows,
+        push_rx,
+        write_tx,
+    );
 
     // Wait for initial output
     for _ in 0..20 {
@@ -87,7 +109,7 @@ pub async fn run_session(socket_path: &str) -> io::Result<()> {
         if !pane.screen().contents_formatted().is_empty() {
             break;
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        std::thread::sleep(Duration::from_millis(50));
     }
 
     enable_raw_mode()?;
@@ -99,6 +121,7 @@ pub async fn run_session(socket_path: &str) -> io::Result<()> {
     let _guard = TerminalGuard;
 
     let mut clipboard = Clipboard::new();
+    let sigint = install_sigint_handler()?;
 
     // Initial full screen render
     {
@@ -113,17 +136,16 @@ pub async fn run_session(socket_path: &str) -> io::Result<()> {
     loop {
         let frame_start = std::time::Instant::now();
 
-        // Drain pushes from the server
-        let prev_content_bytes = prev_content.clone();
+        // Drain pushes from the server (this updates the parser)
         pane.drain_pushes();
-        let has_new_data = match &prev_content_bytes {
-            Some(prev) => pane.screen().contents_formatted() != *prev,
-            None => true,
-        };
 
-        // Check for OSC 52 clipboard data
+        // Detect screen changes
+        let current_content = pane.screen().contents_formatted();
+        let has_new_data = prev_content.as_deref() != Some(&current_content);
+
+        // Process OSC 52 clipboard data
         if has_new_data
-            && let Some(text) = extract_osc52_text(&pane.screen().contents_formatted())
+            && let Some(text) = extract_osc52_text(&current_content)
         {
             let _ = clipboard.set(&text);
         }
@@ -133,13 +155,13 @@ pub async fn run_session(socket_path: &str) -> io::Result<()> {
             return Err(io::Error::other("connection to session server lost"));
         }
 
-        // Drain SIGINT
+        // Drain SIGINT (Ctrl-C) — send 0x03 through the write channel
         if sigint.received() {
             sigint.ack();
-            let _ = WriteInput::call(&*client, (session_id, vec![0x03])).await;
+            let _ = pane.write_bytes(&[0x03]);
         }
 
-        // Poll input
+        // Poll input with a short timeout
         let had_input = if event::poll(Duration::from_millis(4))? {
             let evt = event::read()?;
             match evt {

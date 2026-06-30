@@ -13,8 +13,7 @@ struct Cli {
     session_server_socket: String,
 }
 
-#[tokio::main]
-async fn main() -> io::Result<()> {
+fn main() -> io::Result<()> {
     let cli = Cli::parse();
-    run_session(&cli.session_server_socket).await
+    run_session(&cli.session_server_socket)
 }

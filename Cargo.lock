@@ -2750,6 +2750,7 @@ dependencies = [
  "term-session-muxio-service-definitions",
  "term-wm-pty-engine",
  "tokio",
+ "tracing",
  "vt100",
 ]
 

@@ -2,36 +2,43 @@ use std::cell::Cell;
 use std::io;
 
 use muxio_rpc_service::error::RpcServiceError;
-use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient};
+use muxio_tokio_rpc_ipc_client::RpcIpcClient;
 use portable_pty::{ExitStatus, PtySize};
-use term_session_muxio_service_definitions::{CloseSession, ResizePty, SessionPushFrame, WriteInput};
+use term_session_muxio_service_definitions::{CloseSession, ResizePty, SessionPushFrame};
 use term_wm_pty_engine::{Pane, PtyResult};
+use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
 pub struct RemotePane {
     pub id: u64,
     client: std::sync::Arc<RpcIpcClient>,
+    rt: Handle,
     parser: vt100::Parser,
     exited: Cell<bool>,
     title: Cell<Option<String>>,
     push_rx: mpsc::UnboundedReceiver<SessionPushFrame>,
+    write_tx: mpsc::UnboundedSender<(u64, Vec<u8>)>,
 }
 
 impl RemotePane {
     pub fn new(
         id: u64,
         client: std::sync::Arc<RpcIpcClient>,
+        rt: Handle,
         cols: u16,
         rows: u16,
         push_rx: mpsc::UnboundedReceiver<SessionPushFrame>,
+        write_tx: mpsc::UnboundedSender<(u64, Vec<u8>)>,
     ) -> Self {
         Self {
             id,
             client,
+            rt,
             parser: vt100::Parser::new(rows, cols, 0),
             exited: Cell::new(false),
             title: Cell::new(None),
             push_rx,
+            write_tx,
         }
     }
 
@@ -52,8 +59,8 @@ impl RemotePane {
         }
     }
 
-    fn map_err<E: std::fmt::Display>(e: E) -> io::Error {
-        io::Error::other(format!("{e}"))
+    fn rpc_to_pty<E: std::fmt::Display>(e: E) -> Box<dyn std::error::Error + Send + Sync> {
+        Box::new(io::Error::other(format!("{e}")))
     }
 }
 
@@ -63,12 +70,12 @@ impl Pane for RemotePane {
     }
 
     fn resize(&mut self, size: PtySize) -> PtyResult<()> {
-        let rt = tokio::runtime::Handle::current();
-        let result: Result<(), RpcServiceError> = rt.block_on(async {
+        let result: Result<(), RpcServiceError> = self.rt.block_on(async {
+            use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
             ResizePty::call(&*self.client, (self.id, size.cols, size.rows)).await
         });
         self.parser.screen_mut().set_size(size.rows, size.cols);
-        result.map_err(|e| Box::new(Self::map_err(e)) as Box<dyn std::error::Error + Send + Sync>)
+        result.map_err(Self::rpc_to_pty)
     }
 
     fn has_exited(&mut self) -> bool {
@@ -94,15 +101,8 @@ impl Pane for RemotePane {
     }
 
     fn write_bytes(&mut self, input: &[u8]) -> io::Result<()> {
-        let rt = tokio::runtime::Handle::current();
-        let bytes = input.to_vec();
-        let id = self.id;
-        let client = self.client.clone();
-        rt.block_on(async {
-            WriteInput::call(&*client, (id, bytes))
-                .await
-                .map_err(Self::map_err)
-        })
+        let _ = self.write_tx.send((self.id, input.to_vec()));
+        Ok(())
     }
 
     fn max_scrollback(&mut self) -> usize {
@@ -122,12 +122,12 @@ impl Pane for RemotePane {
     }
 
     fn kill_child(&mut self) -> PtyResult<()> {
-        let rt = tokio::runtime::Handle::current();
-        let id = self.id;
-        let client = self.client.clone();
-        rt.block_on(async {
-            CloseSession::call(&*client, id).await.map_err(|e| Box::new(Self::map_err(e)) as Box<dyn std::error::Error + Send + Sync>)
-        })?;
+        self.rt
+            .block_on(async {
+                use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
+                CloseSession::call(&*self.client, self.id).await
+            })
+            .map_err(Self::rpc_to_pty)?;
         self.exited.set(true);
         Ok(())
     }
