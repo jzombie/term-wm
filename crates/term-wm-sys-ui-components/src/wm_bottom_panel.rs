@@ -197,7 +197,10 @@ impl WmBottomPanelComponent {
         }
 
         if let Some(ref info) = info_opt {
-            let text = truncate_to_width(info, (bounds.width.saturating_sub(indicator_reserved)) as usize);
+            let text = truncate_to_width(
+                info,
+                (bounds.width.saturating_sub(indicator_reserved)) as usize,
+            );
             let text_width = text.chars().count() as u16;
             let available = bounds.width.saturating_sub(indicator_reserved);
             let start_x = if text_width >= available {
