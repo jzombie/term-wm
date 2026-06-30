@@ -1,50 +1,65 @@
 use std::cell::Cell;
 use std::io;
 
+use muxio_rpc_service::error::RpcServiceError;
+use muxio_tokio_rpc_ipc_client::RpcIpcClient;
 use portable_pty::{ExitStatus, PtySize};
-use term_session_server::protocol::{SessionServerPush, SessionServerRequest};
+use term_session_muxio_service_definitions::{CloseSession, ResizePty};
 use term_wm_pty_engine::{Pane, PtyResult};
+use tokio::runtime::Handle;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TryRecvError;
 
-use crate::connection::SessionServerConnection;
+type InputWriter = Box<dyn FnMut(&[u8]) -> io::Result<()> + Send>;
 
 pub struct RemotePane {
     pub id: u64,
-    conn: SessionServerConnection,
+    client: std::sync::Arc<RpcIpcClient>,
+    rt: Handle,
     parser: vt100::Parser,
     exited: Cell<bool>,
-    title: Cell<Option<String>>,
+    push_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    input_writer: InputWriter,
 }
 
 impl RemotePane {
-    pub fn new(id: u64, conn: SessionServerConnection, cols: u16, rows: u16) -> Self {
+    pub fn new(
+        id: u64,
+        client: std::sync::Arc<RpcIpcClient>,
+        rt: Handle,
+        cols: u16,
+        rows: u16,
+        push_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+        input_writer: InputWriter,
+    ) -> Self {
         Self {
             id,
-            conn,
+            client,
+            rt,
             parser: vt100::Parser::new(rows, cols, 0),
             exited: Cell::new(false),
-            title: Cell::new(None),
+            push_rx,
+            input_writer,
         }
     }
 
-    pub fn feed_bytes(&mut self, data: &[u8]) {
-        self.parser.process(data);
+    pub fn drain_pushes(&mut self) {
+        loop {
+            match self.push_rx.try_recv() {
+                Ok(data) => {
+                    self.parser.process(&data);
+                }
+                Err(TryRecvError::Disconnected) => {
+                    self.exited.set(true);
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+            }
+        }
     }
 
-    pub fn feed_push(&mut self, push: SessionServerPush) {
-        match push {
-            SessionServerPush::RawOutput { data, .. }
-            | SessionServerPush::Snapshot { data, .. } => {
-                self.parser.process(&data);
-            }
-            SessionServerPush::SessionExited { .. } => {
-                self.exited.set(true);
-            }
-            SessionServerPush::TitleChanged { title, .. } if !title.is_empty() => {
-                self.title.set(Some(title));
-            }
-            SessionServerPush::TitleChanged { .. } => {}
-            _ => {}
-        }
+    fn rpc_to_pty<E: std::fmt::Display>(e: E) -> Box<dyn std::error::Error + Send + Sync> {
+        Box::new(io::Error::other(format!("{e}")))
     }
 }
 
@@ -54,14 +69,12 @@ impl Pane for RemotePane {
     }
 
     fn resize(&mut self, size: PtySize) -> PtyResult<()> {
-        let req = SessionServerRequest::Resize {
-            id: self.id,
-            cols: size.cols,
-            rows: size.rows,
-        };
-        let _ = self.conn.send_request(&req);
+        let result: Result<(), RpcServiceError> = self.rt.block_on(async {
+            use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
+            ResizePty::call(&*self.client, (self.id, size.cols, size.rows)).await
+        });
         self.parser.screen_mut().set_size(size.rows, size.cols);
-        Ok(())
+        result.map_err(Self::rpc_to_pty)
     }
 
     fn has_exited(&mut self) -> bool {
@@ -87,7 +100,7 @@ impl Pane for RemotePane {
     }
 
     fn write_bytes(&mut self, input: &[u8]) -> io::Result<()> {
-        self.conn.send_write(self.id, input)
+        (self.input_writer)(input)
     }
 
     fn max_scrollback(&mut self) -> usize {
@@ -107,12 +120,17 @@ impl Pane for RemotePane {
     }
 
     fn kill_child(&mut self) -> PtyResult<()> {
-        let req = SessionServerRequest::Close { id: self.id };
-        let _ = self.conn.send_request(&req);
+        self.rt
+            .block_on(async {
+                use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
+                CloseSession::call(&*self.client, self.id).await
+            })
+            .map_err(Self::rpc_to_pty)?;
+        self.exited.set(true);
         Ok(())
     }
 
     fn take_pending_title(&mut self) -> Option<String> {
-        self.title.take()
+        None
     }
 }

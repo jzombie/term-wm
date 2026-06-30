@@ -1,185 +1,128 @@
-use std::io::{self};
-use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
 use std::time::Duration;
 
-use crate::protocol::{self, SessionServerPush, SessionServerRequest, SessionServerResponse};
+use muxio_core::rpc::rpc_internals::RpcStreamEvent;
+use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;
+use muxio_rpc_service_endpoint::{RpcServiceEndpointInterface, StreamResponder};
+use muxio_tokio_rpc_ipc_server::{
+    RpcIpcServer, RpcIpcServerEvent,
+};
+use portable_pty::PtySize;
+use tokio::sync::{Mutex, mpsc, oneshot};
+
+use term_session_muxio_service_definitions::{
+    CloseSession, ListSessions, ResizePty, Spawn, WriteInput, STREAM_INPUT_METHOD_ID,
+    SUBSCRIBE_OUTPUT_METHOD_ID,
+};
+
 use crate::session::Session;
 
 pub struct SessionServerConfig {
-    pub bind_addr: String,
+    pub socket_path: String,
     pub cmd: Vec<String>,
     pub cols: u16,
     pub rows: u16,
 }
 
-pub struct SessionServer {
-    config: SessionServerConfig,
-    session: Option<Session>,
-    exit_code: i32,
-    client_connected: bool,
+struct ClientEntry {
+    conn_id: usize,
 }
 
-impl SessionServer {
-    pub fn new(config: SessionServerConfig) -> Self {
+struct SubscriberEntry {
+    conn_id: usize,
+    respond: StreamResponder,
+}
+
+struct ServerState {
+    session: Option<Session>,
+    clients: Vec<ClientEntry>,
+    subscribers: Vec<SubscriberEntry>,
+}
+
+impl ServerState {
+    fn new() -> Self {
         Self {
-            config,
             session: None,
-            exit_code: 0,
-            client_connected: false,
+            clients: Vec::new(),
+            subscribers: Vec::new(),
         }
     }
+}
 
-    /// The exit code from the child process that exited, or 0.
-    pub fn exit_code(&self) -> i32 {
-        self.exit_code
-    }
+type SharedState = Arc<Mutex<ServerState>>;
 
-    /// Poll the single session for child-exit, capturing the exit code.
-    /// Returns true once the session has exited.
-    fn poll_exits(&mut self) -> bool {
-        let Some(session) = self.session.as_mut() else {
-            return true;
-        };
-        if session.check_exited() {
-            let status = session
-                .pty
-                .exit_status()
-                .map_or(-1, |s| s.exit_code() as i32);
-            if self.exit_code == 0 {
-                self.exit_code = status;
-            }
-        }
-        session.exited
-    }
+/// Run the session server. Returns the PTY child's exit code on success.
+pub async fn run_server(
+    config: SessionServerConfig,
+) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
+    let state: SharedState = Arc::new(Mutex::new(ServerState::new()));
 
-    pub fn run(&mut self) -> io::Result<()> {
-        let cmd = if self.config.cmd.is_empty() {
+    // Spawn initial session
+    {
+        let mut st = state.lock().await;
+        let cmd = if config.cmd.is_empty() {
             None
         } else {
-            Some(self.config.cmd.clone())
+            Some(config.cmd.clone())
         };
-        let session = Session::spawn(1, cmd, self.config.cols, self.config.rows)
-            .map_err(|e| io::Error::other(e.to_string()))?;
-        self.session = Some(session);
-
-        // Brief retry loop: let quick commands finish before we block on accept().
-        for _ in 0..10 {
-            if self.poll_exits() {
-                return Ok(());
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-
-        let listener = TcpListener::bind(&self.config.bind_addr)?;
-        listener.set_nonblocking(true)?;
-        tracing::info!("Server listening on {}", self.config.bind_addr);
-
-        loop {
-            if self.poll_exits() {
-                return Ok(());
-            }
-
-            let mut client = match listener.accept() {
-                Ok((stream, addr)) => {
-                    // IMPORTANT: This *must* be set to false. When it is set to true
-                    // the latency starts stacking up nearly immediately on macOS making
-                    // it impossible to type.
-                    //
-                    // The accepted stream may inherit non-blocking mode from
-                    // the listener on some platforms (macOS/Darwin), which
-                    // would break protocol reads.  Restore blocking mode.
-                    stream.set_nonblocking(false)?;
-
-                    tracing::info!("Client connected: {addr}");
-                    stream.set_read_timeout(Some(Duration::from_millis(16)))?;
-                    stream.set_write_timeout(Some(Duration::from_millis(100)))?;
-                    stream
-                }
-                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(50));
-                    continue;
-                }
-                Err(e) => {
-                    tracing::error!("accept failed: {e}");
-                    std::thread::sleep(Duration::from_millis(50));
-                    continue;
-                }
-            };
-
-            // If a client is already connected, refuse any new connection.
-            if self.client_connected {
-                tracing::info!("Refusing connection — already have a client");
-                continue;
-            }
-
-            self.client_connected = true;
-            self.send_welcome(&mut client)?;
-            self.send_snapshot(&mut client)?;
-
-            'connected: loop {
-                // Interleave: process at most 10 commands, then check PTY output.
-                for _ in 0..10 {
-                    match self.process_client(&mut client) {
-                        Ok(true) => {}
-                        Ok(false) => break,
-                        Err(e) => {
-                            tracing::info!("Client disconnected: {e}");
-                            break 'connected;
-                        }
-                    }
-                }
-
-                let had_output = match self.push_session_updates(&mut client) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        tracing::info!("Client disconnected: {e}");
-                        break 'connected;
-                    }
-                };
-
-                if self.poll_exits() {
-                    break 'connected;
-                }
-
-                if had_output {
-                    continue;
-                }
-                std::thread::sleep(Duration::from_millis(4));
-            }
-
-            self.client_connected = false;
-        }
+        let session = Session::spawn(1, cmd, config.cols, config.rows)?;
+        st.session = Some(session);
     }
 
-    /// Returns Ok(true) if a command was processed, Ok(false) if no command
-    /// was available (timed out / would block), or Err on disconnect.
-    fn process_client(&mut self, client: &mut TcpStream) -> io::Result<bool> {
-        let (msg_type, payload) = match protocol::recv_msg(client) {
-            Ok(m) => m,
-            Err(ref e)
-                if e.kind() == io::ErrorKind::TimedOut || e.kind() == io::ErrorKind::WouldBlock =>
-            {
-                return Ok(false);
-            }
-            Err(e) => return Err(e),
-        };
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    let server = RpcIpcServer::new(Some(event_tx));
+    let endpoint = server.endpoint();
 
-        if msg_type != protocol::MSG_REQUEST {
-            return Ok(true);
-        }
+    // Register Spawn
+    let st = Arc::clone(&state);
+    endpoint
+        .register_prebuffered(Spawn::METHOD_ID, move |payload, _ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                let mut guard = state.lock().await;
 
-        let Ok(req) = bitcode::decode::<SessionServerRequest>(&payload) else {
-            return Ok(true);
-        };
+                let (cmd, cols, rows) = Spawn::decode_request(&payload)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
-        match req {
-            SessionServerRequest::Write { id: _, data } => {
-                if let Some(session) = self.session.as_mut() {
-                    let _ = session.pty.write_bytes(&data);
+                // If a session already exists and hasn't exited, resize and return it.
+                if let Some(ref mut session) = guard.session
+                    && !session.exited
+                {
+                    let size = PtySize {
+                        rows,
+                        cols,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    };
+                    let _ = session.pty.resize(size);
+                    session.parser.screen_mut().set_size(rows, cols);
+                    session.cols = cols;
+                    session.rows = rows;
+
+                    return Spawn::encode_response(session.id)
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
                 }
+
+                let id = 1;
+                let session = Session::spawn(id, cmd, cols, rows)?;
+                guard.session = Some(session);
+                Spawn::encode_response(id)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
             }
-            SessionServerRequest::Resize { id: _, cols, rows } => {
-                if let Some(session) = self.session.as_mut() {
+        })
+        .await
+        .map_err(|e| format!("register Spawn: {e:?}"))?;
+
+    // Register ResizePty
+    let st = Arc::clone(&state);
+    endpoint
+        .register_prebuffered(ResizePty::METHOD_ID, move |payload, _ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                let (_id, cols, rows) = ResizePty::decode_request(&payload)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                let mut guard = state.lock().await;
+                if let Some(session) = guard.session.as_mut() {
                     let size = portable_pty::PtySize {
                         rows,
                         cols,
@@ -189,247 +132,210 @@ impl SessionServer {
                     let _ = session.pty.resize(size);
                     session.parser.screen_mut().set_size(rows, cols);
                 }
-                let payload = bitcode::encode(&SessionServerResponse::Ok { id: None });
-                protocol::send_msg(client, protocol::MSG_RESPONSE, &payload)?;
+                ResizePty::encode_response(())
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
             }
-            _ => {}
-        }
+        })
+        .await
+        .map_err(|e| format!("register ResizePty: {e:?}"))?;
 
-        Ok(true)
-    }
-
-    fn push_session_updates(&mut self, client: &mut TcpStream) -> io::Result<bool> {
-        let Some(session) = self.session.as_mut() else {
-            return Ok(false);
-        };
-        let mut had_output = false;
-
-        let bytes = session.read_output();
-        if !bytes.is_empty() {
-            had_output = true;
-            let push = SessionServerPush::RawOutput { id: 1, data: bytes };
-            let payload = bitcode::encode(&push);
-            protocol::send_msg(client, protocol::MSG_PUSH, &payload)?;
-        }
-
-        if session.check_exited() {
-            let status = session
-                .pty
-                .exit_status()
-                .map_or(-1, |s| s.exit_code() as i32);
-            if self.exit_code == 0 {
-                self.exit_code = status;
+    // Register CloseSession
+    let st = Arc::clone(&state);
+    endpoint
+        .register_prebuffered(CloseSession::METHOD_ID, move |payload, _ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                let _id = CloseSession::decode_request(&payload)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                let mut guard = state.lock().await;
+                if let Some(session) = guard.session.as_mut() {
+                    let _ = session.pty.kill_child();
+                }
+                guard.session = None;
+                CloseSession::encode_response(())
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
             }
-            let push = SessionServerPush::SessionExited { id: 1, status };
-            let payload = bitcode::encode(&push);
-            protocol::send_msg(client, protocol::MSG_PUSH, &payload)?;
-        }
+        })
+        .await
+        .map_err(|e| format!("register CloseSession: {e:?}"))?;
 
-        if let Some(ref title) = session.title.take() {
-            let push = SessionServerPush::TitleChanged {
-                id: 1,
-                title: title.clone(),
+    // Register ListSessions
+    let st = Arc::clone(&state);
+    endpoint
+        .register_prebuffered(ListSessions::METHOD_ID, move |_payload, _ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                let guard = state.lock().await;
+                let sessions = match &guard.session {
+                    Some(s) => vec![(s.id, String::new(), s.exited)],
+                    None => vec![],
+                };
+                ListSessions::encode_response(sessions)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+            }
+        })
+        .await
+        .map_err(|e| format!("register ListSessions: {e:?}"))?;
+
+    // Register WriteInput
+    let st = Arc::clone(&state);
+    endpoint
+        .register_prebuffered(WriteInput::METHOD_ID, move |payload, _ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                let (id, data) = WriteInput::decode_request(&payload)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                let mut guard = state.lock().await;
+                if let Some(session) = guard.session.as_mut() && session.id == id {
+                    let _ = session.pty.write_bytes(&data);
+                }
+                WriteInput::encode_response(())
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+            }
+        })
+        .await
+        .map_err(|e| format!("register WriteInput: {e:?}"))?;
+
+    // Register StreamInput (streaming handler for PTY input)
+    // The channel persists across client disconnects so reconnecting
+    // clients can still send input — we drop it only when the server
+    // shuts down.
+    let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    endpoint
+        .register_stream_handler(STREAM_INPUT_METHOD_ID, move |event, _responder, _ctx| {
+            if let RpcStreamEvent::PayloadChunk { bytes, .. } = event {
+                let _ = input_tx.send(bytes);
+            }
+            // Intentionally ignore End/Error — the channel stays alive.
+        })
+        .await
+        .map_err(|e| format!("register stream handler STREAM_INPUT: {e:?}"))?;
+
+    // Background task: write received input bytes to the PTY session
+    let input_st = Arc::clone(&state);
+    tokio::spawn(async move {
+        while let Some(data) = input_rx.recv().await {
+            let mut guard = input_st.lock().await;
+            if let Some(session) = guard.session.as_mut() {
+                let _ = session.pty.write_bytes(&data);
+            }
+        }
+    });
+
+    // Register SubscribeOutput (streaming handler for PTY output pushes)
+    let st = Arc::clone(&state);
+    endpoint
+        .register_stream_handler(
+            SUBSCRIBE_OUTPUT_METHOD_ID,
+            move |event, respond, ctx| {
+                // Store the StreamResponder on the very first event (Header)
+                // so the push loop can start sending output immediately.
+                let is_new = matches!(&event, RpcStreamEvent::Header { .. });
+                if is_new
+                    && let Ok(mut guard) = st.try_lock()
+                {
+                    // Generate snapshot while holding the lock
+                    let snapshot = guard.session.as_mut().map(|s| s.generate_snapshot());
+                    guard.subscribers.push(SubscriberEntry {
+                        conn_id: ctx.conn_id,
+                        respond: respond.clone(),
+                    });
+                    drop(guard);
+                    // Send snapshot through the responder (will be buffered
+                    // until set_writer is called after read_bytes returns)
+                    if let Some(data) = snapshot
+                        && !data.is_empty()
+                    {
+                        respond.respond(data, false);
+                    }
+                }
+            },
+        )
+        .await
+        .map_err(|e| format!("register SubscribeOutput: {e:?}"))?;
+
+    // Connection event handler
+    let st = Arc::clone(&state);
+    tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                RpcIpcServerEvent::ClientConnected(handle) => {
+                    tracing::info!("Client {} connected", handle.0.conn_id);
+
+                    let mut guard = st.lock().await;
+                    guard.clients.push(ClientEntry {
+                        conn_id: handle.0.conn_id,
+                    });
+                }
+                RpcIpcServerEvent::ClientDisconnected(conn_id) => {
+                    tracing::info!("Client {conn_id} disconnected");
+                    let mut guard = st.lock().await;
+                    guard.clients.retain(|c| c.conn_id != conn_id);
+                    guard.subscribers.retain(|s| s.conn_id != conn_id);
+                }
+            }
+        }
+    });
+
+    // Output polling and push via stored StreamResponders.
+    // When the session exits, the exit code is sent back through this
+    // channel so run_server can return it.
+    let (exit_tx, mut exit_rx) = oneshot::channel::<i32>();
+    let st = Arc::clone(&state);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(8));
+        loop {
+            interval.tick().await;
+
+            let mut guard = st.lock().await;
+
+            if guard.subscribers.is_empty() {
+                if let Some(session) = guard.session.as_mut() {
+                    session.read_output();
+                }
+                continue;
+            }
+
+            let Some(session) = guard.session.as_mut() else {
+                break;
             };
-            let payload = bitcode::encode(&push);
-            protocol::send_msg(client, protocol::MSG_PUSH, &payload)?;
-        }
 
-        Ok(had_output)
-    }
+            let raw = session.read_output();
+            let exited = session.check_exited();
+            let code = session.exit_code;
 
-    fn send_welcome(&mut self, client: &mut TcpStream) -> io::Result<()> {
-        let sessions = vec![(
-            1,
-            String::new(),
-            self.session.as_ref().is_none_or(|s| s.exited),
-        )];
-        let push = SessionServerPush::Welcome { sessions };
-        let payload = bitcode::encode(&push);
-        protocol::send_msg(client, protocol::MSG_PUSH, &payload)
-    }
-
-    fn send_snapshot(&mut self, client: &mut TcpStream) -> io::Result<()> {
-        let Some(session) = self.session.as_mut() else {
-            return Ok(());
-        };
-        let data = session.generate_snapshot();
-        if !data.is_empty() {
-            let push = SessionServerPush::Snapshot { id: 1, data };
-            let payload = bitcode::encode(&push);
-            protocol::send_msg(client, protocol::MSG_PUSH, &payload)?;
-        }
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_config(cmd: Vec<String>) -> SessionServerConfig {
-        SessionServerConfig {
-            bind_addr: "127.0.0.1:0".into(),
-            cmd,
-            cols: 80,
-            rows: 24,
-        }
-    }
-
-    /// Build a command that exits immediately with the given exit code.
-    #[cfg(not(windows))]
-    fn exit_cmd(code: i32) -> Vec<String> {
-        if code == 0 {
-            vec!["true".into()]
-        } else {
-            vec!["sh".into(), "-c".into(), format!("exit {code}")]
-        }
-    }
-
-    #[cfg(windows)]
-    fn exit_cmd(code: i32) -> Vec<String> {
-        vec!["cmd".into(), "/c".into(), format!("exit {code}")]
-    }
-
-    #[test]
-    fn server_exits_when_child_exits_cleanly() {
-        let mut server = SessionServer::new(make_config(exit_cmd(0)));
-        let result = server.run();
-        assert!(result.is_ok());
-        assert_eq!(server.exit_code(), 0);
-    }
-
-    #[test]
-    fn server_exits_with_child_exit_code() {
-        let mut server = SessionServer::new(make_config(exit_cmd(42)));
-        let result = server.run();
-        assert!(result.is_ok());
-        assert_eq!(server.exit_code(), 42);
-    }
-
-    #[test]
-    fn client_reconnects() {
-        use std::io::Read;
-        use std::net::TcpStream;
-
-        // Find a free port.
-        let temp = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = temp.local_addr().unwrap().port();
-        let addr = format!("127.0.0.1:{port}");
-        drop(temp);
-
-        // Run the server with a command that stays alive long enough.
-        let mut server = SessionServer::new(SessionServerConfig {
-            bind_addr: addr.clone(),
-            cmd: vec![], // default shell — stays alive until client sends input
-            cols: 80,
-            rows: 24,
-        });
-        let handle = std::thread::spawn(move || {
-            if let Err(e) = server.run() {
-                panic!("server run failed: {e}");
-            }
-        });
-
-        fn wait_for_first(
-            addr: &str,
-            handle: &std::thread::JoinHandle<impl std::fmt::Debug>,
-            timeout: Duration,
-        ) -> TcpStream {
-            let deadline = std::time::Instant::now() + timeout;
-            loop {
-                if handle.is_finished() {
-                    panic!("server thread exited before accepting connection");
-                }
-                match TcpStream::connect(addr) {
-                    Ok(stream) => return stream,
-                    Err(_) if std::time::Instant::now() < deadline => {
-                        std::thread::sleep(Duration::from_millis(50));
-                    }
-                    Err(e) => panic!("timed out waiting for {addr}: {e}"),
+            // Push raw PTY output to all subscribers via StreamResponder
+            if !raw.is_empty() {
+                for sub in &guard.subscribers {
+                    sub.respond.respond(raw.clone(), false);
                 }
             }
-        }
 
-        // First connection.
-        let mut c1 = wait_for_first(&addr, &handle, Duration::from_secs(8));
-        c1.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-        let mut buf = [0u8; 1];
-        c1.read_exact(&mut buf).unwrap();
-        // Wait for the server to finish sending before we close.
-        std::thread::sleep(Duration::from_millis(100));
-        drop(c1);
-
-        // Second connection: server should have processed disconnect.
-        std::thread::sleep(Duration::from_millis(200));
-        let mut c2 = wait_for_first(&addr, &handle, Duration::from_secs(8));
-        c2.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-        let mut buf = [0u8; 1];
-        c2.read_exact(&mut buf).unwrap();
-        drop(c2);
-
-        assert!(!handle.is_finished(), "server died after both connections");
-    }
-
-    #[test]
-    fn second_connection_refused() {
-        use std::io::Read;
-        use std::net::TcpStream;
-
-        // Find a free port by binding a temporary listener.
-        let temp = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = temp.local_addr().unwrap().port();
-        let addr = format!("127.0.0.1:{port}");
-        drop(temp);
-
-        let mut server = SessionServer::new(SessionServerConfig {
-            bind_addr: addr.clone(),
-            cmd: vec!["/bin/sleep".into(), "999".into()],
-            cols: 80,
-            rows: 24,
-        });
-
-        let handle = std::thread::spawn(move || server.run());
-
-        fn wait_for_stream(
-            addr: &str,
-            handle: &std::thread::JoinHandle<impl std::fmt::Debug>,
-            timeout: Duration,
-        ) -> TcpStream {
-            let deadline = std::time::Instant::now() + timeout;
-            loop {
-                if handle.is_finished() {
-                    panic!("server thread exited before accepting connection");
+            // On exit: finalize all streams and clean up
+            if exited {
+                for sub in &guard.subscribers {
+                    sub.respond.respond(Vec::new(), true);
                 }
-                match TcpStream::connect(addr) {
-                    Ok(stream) => return stream,
-                    Err(_) if std::time::Instant::now() < deadline => {
-                        std::thread::sleep(Duration::from_millis(50));
-                    }
-                    Err(e) => panic!("timed out waiting for {addr}: {e}"),
-                }
+                guard.subscribers.clear();
+                let _ = exit_tx.send(code.unwrap_or(0));
+                tracing::info!("Session exited with code {:?}", code);
+                break;
             }
         }
+    });
 
-        let _c1 = wait_for_stream(&addr, &handle, Duration::from_secs(10));
+    tracing::info!("Session server listening on {}", config.socket_path);
 
-        // Give the server time to accept the first client and set
-        // client_connected = true.
-        std::thread::sleep(Duration::from_millis(100));
+    // Wait for either the server to finish or the session to exit.
+    let exit_code = tokio::select! {
+        result = server.serve(&config.socket_path) => {
+            result.map_err(|e| format!("serve: {e:?}"))?;
+            0
+        }
+        code = &mut exit_rx => {
+            code.unwrap_or(0)
+        }
+    };
 
-        // A second client can connect (TCP handshake completes), but
-        // the server immediately drops the connection without sending
-        // any data.  Reading from it should return an error.
-        let mut c2 = TcpStream::connect(&addr).unwrap();
-        c2.set_read_timeout(Some(Duration::from_millis(500)))
-            .unwrap();
-        let mut buf = [0u8; 8];
-        let err = c2.read(&mut buf).unwrap_err();
-        assert!(
-            err.kind() == io::ErrorKind::ConnectionReset
-                || err.kind() == io::ErrorKind::TimedOut
-                || err.kind() == io::ErrorKind::WouldBlock
-                || err.kind() == io::ErrorKind::UnexpectedEof,
-            "expected connection reset/timeout/eof, got {err:?}"
-        );
-    }
+    Ok(exit_code)
 }

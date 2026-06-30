@@ -1,3 +1,26 @@
+┌─────────────────────────────────────────────┐
+│  term-wm (GUI)                              │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐   │
+│  │Terminal① │ │Terminal② │ │Terminal③ │   │
+│  │  Pane    │ │  Pane    │ │  Pane    │   │
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘   │
+│       │            │            │          │
+│       └──────┬─────┴─────┬──────┘          │
+│              │ muxio IPC │                 │
+├──────────────┼───────────┼─────────────────┤
+│              │           │                 │
+│   daemon controller (muxio IPC server)      │
+│   ┌──────────┬──────────┬──────────┐       │
+│   │Session ① │Session ② │Session ③ │       │
+│   │  PTY     │  PTY     │  PTY     │       │
+│   └──────────┴──────────┴──────────┘       │
+│                                            │
+│   Sessions outlive the GUI — reattach on    │
+│   restart, manage via WM controls           │
+└─────────────────────────────────────────────┘
+
+---
+
 Contigent upon https://github.com/jzombie/rust-muxio/issues/64
 
 It could replace the current code — and it's a surprisingly natural fit

@@ -7,6 +7,7 @@ pub struct Session {
     pub parser: vt100::Parser,
     pub title: Option<String>,
     pub exited: bool,
+    pub exit_code: Option<i32>,
     pub cols: u16,
     pub rows: u16,
 }
@@ -50,6 +51,7 @@ impl Session {
             parser,
             title: None,
             exited: false,
+            exit_code: None,
             cols,
             rows,
         })
@@ -73,10 +75,15 @@ impl Session {
     pub fn check_exited(&mut self) -> bool {
         if !self.exited && self.pty.has_exited() {
             self.exited = true;
+            self.exit_code = self.pty.exit_status().map(|s| s.exit_code() as i32);
             true
         } else {
             false
         }
+    }
+
+    pub fn take_exit_code(&mut self) -> Option<i32> {
+        self.exit_code.take()
     }
 
     pub fn generate_snapshot(&mut self) -> Vec<u8> {
