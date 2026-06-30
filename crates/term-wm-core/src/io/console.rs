@@ -14,8 +14,6 @@ use super::{EventSource, RenderTarget};
 use crate::power_profile::PowerProfile;
 use crate::ui::UiFrame;
 
-const ACTIVE_THRESHOLD_MS: u64 = 500;
-
 pub struct ConsoleEventSource {
     normalizer: KeyboardNormalizer,
     event_queue: VecDeque<Event>,
@@ -123,12 +121,7 @@ impl EventSource for ConsoleEventSource {
     }
 
     fn current_profile(&self) -> PowerProfile {
-        match self.last_event_at {
-            Some(t) if (t.elapsed().as_millis() as u64) < ACTIVE_THRESHOLD_MS => {
-                PowerProfile::HighPerformance
-            }
-            _ => PowerProfile::PowerSaver,
-        }
+        crate::power_profile::profile_from_activity(self.last_event_at)
     }
 }
 
