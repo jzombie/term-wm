@@ -1,0 +1,18 @@
+[package]
+name = "term-session-client"
+description = "Client library for connecting to term-session-server."
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bitcode = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+crossterm = { workspace = true, features = ["bracketed-paste"] }
+portable-pty = { workspace = true }
+term-session-server = { workspace = true }
+term-wm-pty-engine = { workspace = true }
+vt100 = { workspace = true }
