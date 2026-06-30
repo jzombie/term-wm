@@ -4,9 +4,9 @@ use ratatui::{layout::Rect, style::Style};
 use term_wm_core::{
     bottom_panel_trait::BottomPanel as BottomPanelTrait,
     components::{Component, ComponentContext},
-    power_profile::PowerProfile,
     keybindings::Action,
     layout::rect_contains,
+    power_profile::PowerProfile,
     theme,
     ui::{UiFrame, safe_set_string, truncate_to_width},
 };

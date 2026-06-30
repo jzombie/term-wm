@@ -171,8 +171,7 @@ where
                 if let Some(sel_enabled) = app.windows().take_window_selection_change() {
                     app.set_window_selection_enabled(sel_enabled);
                 }
-                if let Some(profile) = profile_tracker.poll(driver.current_profile())
-                {
+                if let Some(profile) = profile_tracker.poll(driver.current_profile()) {
                     app.windows().set_power_profile(profile);
                 }
                 Ok(flow)

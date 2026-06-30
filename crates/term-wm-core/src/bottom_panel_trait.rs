@@ -1,8 +1,8 @@
 use crossterm::event::Event;
 use ratatui::prelude::Rect;
 
-use crate::power_profile::PowerProfile;
 use crate::keybindings::Action;
+use crate::power_profile::PowerProfile;
 use crate::ui::UiFrame;
 
 pub trait BottomPanel: std::fmt::Debug {
