@@ -71,9 +71,18 @@ pub async fn run_server(
         .register_prebuffered(Spawn::METHOD_ID, move |payload, _ctx| {
             let state = Arc::clone(&st);
             async move {
+                let mut guard = state.lock().await;
+
+                // If a session already exists and hasn't exited, return it.
+                if let Some(ref session) = guard.session
+                    && !session.exited
+                {
+                    return Spawn::encode_response(session.id)
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
+                }
+
                 let (cmd, cols, rows) = Spawn::decode_request(&payload)
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-                let mut guard = state.lock().await;
                 let id = 1;
                 let session = Session::spawn(id, cmd, cols, rows)?;
                 guard.session = Some(session);
@@ -174,6 +183,34 @@ pub async fn run_server(
             match event {
                 RpcIpcServerEvent::ClientConnected(handle) => {
                     tracing::info!("Client {} connected", handle.0.conn_id);
+
+                    // Send session snapshot to the newly connected client
+                    {
+                        let mut guard = st.lock().await;
+                        if let Some(session) = guard.session.as_mut() {
+                            let snapshot = session.generate_snapshot();
+                            if !snapshot.is_empty() {
+                                let frame = SessionPushFrame::RawOutput {
+                                    id: session.id,
+                                    data: snapshot,
+                                }
+                                .encode();
+                                let request = RpcRequest {
+                                    rpc_method_id: PushOutput::METHOD_ID,
+                                    rpc_param_bytes: None,
+                                    rpc_prebuffered_payload_bytes: Some(frame),
+                                    is_finalized: true,
+                                };
+                                let h = handle.clone();
+                                tokio::spawn(async move {
+                                    let _ = h
+                                        .call_rpc_buffered::<(), _>(request, |_bytes| ())
+                                        .await;
+                                });
+                            }
+                        }
+                    }
+
                     let mut guard = st.lock().await;
                     guard.clients.push(ClientEntry {
                         conn_id: handle.0.conn_id,
