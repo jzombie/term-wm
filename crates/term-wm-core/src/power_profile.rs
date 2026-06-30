@@ -99,3 +99,79 @@ impl PowerProfile {
         tracing::info!(target: "power", "profile: {}", self.name());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn profile_from_activity_none_is_powersaver() {
+        assert_eq!(profile_from_activity(None), PowerProfile::PowerSaver);
+    }
+
+    #[test]
+    fn profile_from_activity_recent_is_high_performance() {
+        assert_eq!(
+            profile_from_activity(Some(Instant::now())),
+            PowerProfile::HighPerformance
+        );
+    }
+
+    #[test]
+    fn profile_from_activity_stale_is_powersaver() {
+        let stale = Some(Instant::now() - Duration::from_millis(ACTIVE_THRESHOLD_MS + 100));
+        assert_eq!(profile_from_activity(stale), PowerProfile::PowerSaver);
+    }
+
+    #[test]
+    fn tracker_returns_none_on_no_change() {
+        let mut tracker = PowerProfileTracker::new(PowerProfile::PowerSaver);
+        assert!(tracker.poll(PowerProfile::PowerSaver).is_none());
+    }
+
+    #[test]
+    fn tracker_returns_some_on_change() {
+        let mut tracker = PowerProfileTracker::new(PowerProfile::PowerSaver);
+        assert_eq!(
+            tracker.poll(PowerProfile::HighPerformance),
+            Some(PowerProfile::HighPerformance)
+        );
+    }
+
+    #[test]
+    fn tracker_stays_changed() {
+        let mut tracker = PowerProfileTracker::new(PowerProfile::PowerSaver);
+        tracker.poll(PowerProfile::HighPerformance);
+        assert!(tracker.poll(PowerProfile::HighPerformance).is_none());
+    }
+
+    #[test]
+    fn tracker_current_returns_last_seen() {
+        let mut tracker = PowerProfileTracker::new(PowerProfile::PowerSaver);
+        assert_eq!(tracker.current(), PowerProfile::PowerSaver);
+        tracker.poll(PowerProfile::HighPerformance);
+        assert_eq!(tracker.current(), PowerProfile::HighPerformance);
+    }
+
+    #[test]
+    fn power_profile_default_is_powersaver() {
+        assert_eq!(PowerProfile::default(), PowerProfile::PowerSaver);
+    }
+
+    #[test]
+    fn high_performance_poll_interval_is_16ms() {
+        assert_eq!(
+            PowerProfile::HighPerformance.poll_interval(),
+            Duration::from_millis(16)
+        );
+    }
+
+    #[test]
+    fn power_saver_poll_interval_is_500ms() {
+        assert_eq!(
+            PowerProfile::PowerSaver.poll_interval(),
+            Duration::from_millis(500)
+        );
+    }
+}
