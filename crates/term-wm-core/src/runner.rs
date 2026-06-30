@@ -143,11 +143,12 @@ where
     FDraw: for<'frame> FnMut(UiFrame<'frame>, &mut A),
     FMap: Fn(Id) -> Id + Copy,
 {
+    let mut profile_tracker =
+        crate::power_profile::PowerProfileTracker::new(driver.current_profile());
     let mut event_loop = EventLoop::new(driver);
     event_loop
         .driver()
         .set_mouse_capture(app.windows().mouse_capture_enabled())?;
-
     event_loop.run(|driver, event| {
         let handler = || -> io::Result<ControlFlow> {
             if debug_event_flags::take_panic_pending() {
@@ -169,6 +170,9 @@ where
                 }
                 if let Some(sel_enabled) = app.windows().take_window_selection_change() {
                     app.set_window_selection_enabled(sel_enabled);
+                }
+                if let Some(profile) = profile_tracker.poll(driver.current_profile()) {
+                    app.windows().set_power_profile(profile);
                 }
                 Ok(flow)
             };
@@ -498,6 +502,7 @@ where
                 app.windows().take_expired_drag_snap();
                 update_selection_snapshot(app);
                 app.windows().begin_frame();
+                app.windows().prepare_draw();
                 // Catch render panics (e.g. u16 subtraction overflow with a
                 // tiny viewport) so they don't take down the event loop.
                 // The panic hook records details in the debug log.

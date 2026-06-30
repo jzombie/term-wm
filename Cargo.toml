@@ -1,6 +1,6 @@
 [package]
 name = "term-wm"
-description = "A cross-platform window manager for terminal shells."
+description = "A cross-platform terminal multiplexer, window manager, Ratatui component library, and runtime."
 authors.workspace = true
 version.workspace = true
 edition.workspace = true

@@ -20,6 +20,7 @@ use crate::components::{ComponentContext, MenuItem, MenuOverlay, Overlay, Select
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
+use crate::power_profile::PowerProfile;
 use crate::top_panel_trait::TopPanel;
 use crate::ui::UiFrame;
 use crate::wm_config::{HintVisibility, WmConfig};
@@ -250,6 +251,7 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     next_title_seq: usize,
     synthetic_event: Option<Event>,
     clipboard: Option<crate::clipboard::Clipboard>,
+    power_profile: PowerProfile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -506,6 +508,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             next_title_seq: 0,
             synthetic_event: None,
             clipboard,
+            power_profile: PowerProfile::PowerSaver,
         }
     }
 
@@ -577,17 +580,12 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub fn begin_frame(&mut self) {
-        self.regions = RegionMap::default();
-        self.handles.clear();
-        self.resize_handles.clear();
-        self.floating_headers.clear();
-        self.managed_draw_order.clear();
-        self.managed_draw_order_app.clear();
         if let Some(p) = &mut self.top_panel {
             p.begin_frame();
         }
         if let Some(p) = &mut self.bottom_panel {
             p.begin_frame();
+            p.set_power_profile(self.power_profile);
         }
         if crate::debug_event_flags::take_panic_pending() {
             self.show_system_window(SystemWindowId::DebugLog);
@@ -597,6 +595,18 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         } else {
             self.refresh_capture();
         }
+    }
+
+    /// Clear draw-time state that gets repopulated during `output.draw()`.
+    /// Must be called immediately before each draw (not in `begin_frame()`)
+    /// so that skipped idle renders don't destroy data needed by mouse events.
+    pub fn prepare_draw(&mut self) {
+        self.regions = RegionMap::default();
+        self.handles.clear();
+        self.resize_handles.clear();
+        self.floating_headers.clear();
+        self.managed_draw_order.clear();
+        self.managed_draw_order_app.clear();
     }
 
     pub fn arm_capture(&mut self, timeout: Duration) {
@@ -691,6 +701,18 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
 
     pub fn clipboard_mut(&mut self) -> Option<&mut crate::clipboard::Clipboard> {
         self.clipboard.as_mut()
+    }
+
+    pub fn power_profile(&self) -> PowerProfile {
+        self.power_profile
+    }
+
+    pub fn set_power_profile(&mut self, profile: PowerProfile) {
+        if self.power_profile == profile {
+            return;
+        }
+        self.power_profile = profile;
+        profile.report_change();
     }
 
     pub fn set_selection_snapshot(&mut self, active: bool, dragging: bool, text: Option<String>) {
@@ -2554,5 +2576,22 @@ mod tests {
         } else {
             panic!("drag_last_event should be set after drag");
         }
+    }
+
+    #[test]
+    fn power_profile_change_updates_value() {
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        assert_eq!(wm.power_profile, PowerProfile::PowerSaver);
+        wm.set_power_profile(PowerProfile::HighPerformance);
+        assert_eq!(wm.power_profile, PowerProfile::HighPerformance);
+        wm.set_power_profile(PowerProfile::PowerSaver);
+        assert_eq!(wm.power_profile, PowerProfile::PowerSaver);
     }
 }

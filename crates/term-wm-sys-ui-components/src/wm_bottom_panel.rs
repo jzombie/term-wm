@@ -6,6 +6,7 @@ use term_wm_core::{
     components::{Component, ComponentContext},
     keybindings::Action,
     layout::rect_contains,
+    power_profile::PowerProfile,
     theme,
     ui::{UiFrame, safe_set_string, truncate_to_width},
 };
@@ -18,6 +19,7 @@ pub struct WmBottomPanelComponent {
     hostname: Option<String>,
     keybinding_hints: Vec<(Action, Vec<String>)>,
     hint_rects: Vec<(Rect, Action)>,
+    power_profile: PowerProfile,
 }
 
 impl WmBottomPanelComponent {
@@ -29,6 +31,7 @@ impl WmBottomPanelComponent {
             hostname: hostname.map(|h| h.to_string()),
             keybinding_hints: Vec::new(),
             hint_rects: Vec::new(),
+            power_profile: PowerProfile::PowerSaver,
         }
     }
 
@@ -50,6 +53,10 @@ impl WmBottomPanelComponent {
 
     pub fn keybinding_hints(&self) -> &[(Action, Vec<String>)] {
         &self.keybinding_hints
+    }
+
+    pub fn set_power_profile(&mut self, profile: PowerProfile) {
+        self.power_profile = profile;
     }
 
     pub fn split_bottom_area(&mut self, area: Rect, height: u16) -> (Rect, Rect) {
@@ -102,6 +109,9 @@ impl WmBottomPanelComponent {
             .fg(theme::bottom_panel_fg())
             .bg(theme::bottom_panel_bg());
 
+        // Reserve rightmost cell for the profile indicator
+        let indicator_reserved = 1u16;
+
         let info_opt = if show_info {
             let platform = std::env::consts::OS;
             let pkg_label = format!("{} {}", self.app_name, self.app_version);
@@ -118,11 +128,12 @@ impl WmBottomPanelComponent {
             .as_ref()
             .map(|s| s.chars().count() as u16)
             .unwrap_or(0);
+        let right_margin = info_width + 2 + indicator_reserved;
         let max_hint_x = if info_width > 0 {
             bounds
                 .x
                 .saturating_add(bounds.width)
-                .saturating_sub(info_width + 2)
+                .saturating_sub(right_margin)
         } else {
             bounds.x.saturating_add(bounds.width)
         };
@@ -186,17 +197,33 @@ impl WmBottomPanelComponent {
         }
 
         if let Some(ref info) = info_opt {
-            let text = truncate_to_width(info, bounds.width as usize);
+            let text = truncate_to_width(
+                info,
+                (bounds.width.saturating_sub(indicator_reserved)) as usize,
+            );
             let text_width = text.chars().count() as u16;
-            let start_x = if text_width >= bounds.width {
+            let available = bounds.width.saturating_sub(indicator_reserved);
+            let start_x = if text_width >= available {
                 bounds.x
             } else {
                 bounds
                     .x
                     .saturating_add(bounds.width)
+                    .saturating_sub(indicator_reserved)
                     .saturating_sub(text_width)
             };
             safe_set_string(buffer, bounds, start_x.max(bounds.x), area.y, &text, style);
+        }
+
+        // Draw profile indicator in the reserved rightmost cell
+        let ind_x = bounds.x.saturating_add(bounds.width).saturating_sub(1);
+        if ind_x >= bounds.x
+            && let Some(cell) = buffer.cell_mut((ind_x, area.y))
+        {
+            let mut st = cell.style();
+            st.bg = Some(self.power_profile.indicator_color());
+            cell.set_style(st);
+            cell.set_symbol(" ");
         }
     }
 
@@ -243,6 +270,10 @@ impl BottomPanelTrait for WmBottomPanelComponent {
 
     fn hit_test_hint(&self, event: &Event) -> Option<Action> {
         self.hit_test_hint(event)
+    }
+
+    fn set_power_profile(&mut self, profile: PowerProfile) {
+        self.set_power_profile(profile);
     }
 }
 
@@ -308,7 +339,9 @@ mod tests {
 
         p.render_bottom_impl(&mut ui, true);
 
-        for xx in area.x..area.x.saturating_add(area.width) {
+        // All cells except the rightmost indicator cell have panel bg
+        let last_x = area.x.saturating_add(area.width).saturating_sub(1);
+        for xx in area.x..last_x {
             let cell = buf.cell_mut((xx, area.y)).expect("cell present");
             assert_eq!(cell.style().bg, Some(theme::bottom_panel_bg()));
             assert_eq!(cell.style().fg, Some(theme::bottom_panel_fg()));

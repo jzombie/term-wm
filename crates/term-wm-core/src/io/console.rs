@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::collections::VecDeque;
 use std::io::{self, Stdout};
 use std::time::{Duration, Instant};
@@ -12,13 +11,13 @@ use ratatui::backend::CrosstermBackend;
 
 use super::utils::KeyboardNormalizer;
 use super::{EventSource, RenderTarget};
+use crate::power_profile::PowerProfile;
 use crate::ui::UiFrame;
 
 pub struct ConsoleEventSource {
     normalizer: KeyboardNormalizer,
     event_queue: VecDeque<Event>,
     last_event_at: Option<Instant>,
-    was_idle: Cell<bool>,
 }
 
 impl Default for ConsoleEventSource {
@@ -33,7 +32,6 @@ impl ConsoleEventSource {
             normalizer: KeyboardNormalizer::new(),
             event_queue: VecDeque::new(),
             last_event_at: None,
-            was_idle: Cell::new(true),
         }
     }
 
@@ -119,32 +117,11 @@ impl EventSource for ConsoleEventSource {
     }
 
     fn poll_interval(&self) -> Duration {
-        const ACTIVE_MS: u64 = 16;
-        const IDLE_MS: u64 = 200;
-        const IDLE_THRESHOLD_MS: u64 = 500;
+        self.current_profile().poll_interval()
+    }
 
-        let is_idle = match self.last_event_at {
-            Some(t) => t.elapsed().as_millis() as u64 >= IDLE_THRESHOLD_MS,
-            None => true,
-        };
-
-        if is_idle != self.was_idle.get() {
-            self.was_idle.set(is_idle);
-            let elapsed = self
-                .last_event_at
-                .map_or(0, |t| t.elapsed().as_millis() as u64);
-            let interval = if is_idle { IDLE_MS } else { ACTIVE_MS };
-            tracing::debug!(
-                target: "driver",
-                "poll interval switched to {interval}ms (last event: {elapsed}ms ago)",
-            );
-        }
-
-        if is_idle {
-            Duration::from_millis(IDLE_MS)
-        } else {
-            Duration::from_millis(ACTIVE_MS)
-        }
+    fn current_profile(&self) -> PowerProfile {
+        crate::power_profile::profile_from_activity(self.last_event_at)
     }
 }
 
