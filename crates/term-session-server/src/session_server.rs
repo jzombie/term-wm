@@ -196,18 +196,30 @@ pub async fn run_server(
         .map_err(|e| format!("register WriteInput: {e:?}"))?;
 
     // Register StreamInput (streaming handler for PTY input)
-    let st = Arc::clone(&state);
+    // The channel persists across client disconnects so reconnecting
+    // clients can still send input — we drop it only when the server
+    // shuts down.
+    let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     endpoint
-        .register_stream_handler(STREAM_INPUT_METHOD_ID, move |event, _emit, _ctx| {
-            if let RpcStreamEvent::PayloadChunk { bytes, .. } = event
-                && let Ok(mut guard) = st.try_lock()
-                && let Some(session) = guard.session.as_mut()
-            {
-                let _ = session.pty.write_bytes(&bytes);
+        .register_stream_handler(STREAM_INPUT_METHOD_ID, move |event, _responder, _ctx| {
+            if let RpcStreamEvent::PayloadChunk { bytes, .. } = event {
+                let _ = input_tx.send(bytes);
             }
+            // Intentionally ignore End/Error — the channel stays alive.
         })
         .await
         .map_err(|e| format!("register stream handler STREAM_INPUT: {e:?}"))?;
+
+    // Background task: write received input bytes to the PTY session
+    let input_st = Arc::clone(&state);
+    tokio::spawn(async move {
+        while let Some(data) = input_rx.recv().await {
+            let mut guard = input_st.lock().await;
+            if let Some(session) = guard.session.as_mut() {
+                let _ = session.pty.write_bytes(&data);
+            }
+        }
+    });
 
     // Register SubscribeOutput (streaming handler for PTY output pushes)
     let st = Arc::clone(&state);

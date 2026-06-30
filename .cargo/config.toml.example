@@ -5,3 +5,4 @@ muxio-rpc-service-caller = { path = "../rust-muxio/extensions/muxio-rpc-service-
 muxio-rpc-service-endpoint = { path = "../rust-muxio/extensions/muxio-rpc-service-endpoint" }
 muxio-tokio-rpc-ipc-client = { path = "../rust-muxio/extensions/muxio-tokio-rpc-ipc-client" }
 muxio-tokio-rpc-ipc-server = { path = "../rust-muxio/extensions/muxio-tokio-rpc-ipc-server" }
+muxio-mpsc-adapter = { path = "../rust-muxio/extensions/muxio-mpsc-adapter" }

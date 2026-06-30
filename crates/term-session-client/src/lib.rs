@@ -12,12 +12,12 @@ use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use futures::StreamExt;
-use muxio_core::rpc::RpcRequest;
-use muxio_rpc_service_caller::DynamicChannelType;
+use muxio_mpsc_adapter::ChannelCallerExt;
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient, RpcServiceCallerInterface};
 use portable_pty::PtySize;
-use term_session_muxio_service_definitions::{Spawn, SUBSCRIBE_OUTPUT_METHOD_ID};
+use term_session_muxio_service_definitions::{
+    Spawn, SUBSCRIBE_OUTPUT_METHOD_ID, STREAM_INPUT_METHOD_ID,
+};
 use term_wm_pty_engine::Pane;
 use term_wm_pty_engine::clipboard::{Clipboard, extract_osc52_text};
 use term_wm_pty_engine::input_encoding::{key_to_bytes, mouse_event_to_bytes};
@@ -50,12 +50,11 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         .block_on(RpcIpcClient::new(socket_path))
         .map_err(|e| io::Error::new(io::ErrorKind::ConnectionRefused, format!("{e:?}")))?;
 
-    // Channel for raw PTY output bytes from background stream task
+    // Channel for raw PTY output bytes from the subscription stream
     let (push_tx, push_rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
     // Get terminal size
     let (term_cols, term_rows) = crossterm::terminal::size()?;
-    let session_id = 1u64;
 
     // Spawn session on the server
     rt.block_on(async {
@@ -64,62 +63,44 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             .map_err(|e| io::Error::other(format!("spawn: {e:?}")))
     })?;
 
-    // Subscribe to PTY output via streaming call
-    rt.block_on(async {
-        let request = RpcRequest {
-            rpc_method_id: SUBSCRIBE_OUTPUT_METHOD_ID,
-            rpc_param_bytes: None,
-            rpc_prebuffered_payload_bytes: None,
-            is_finalized: false,
-        };
-
-        let (mut encoder, receiver) = client
-            .call_rpc_streaming(request, DynamicChannelType::Unbounded)
+    // Open streaming channels for output subscription and input
+    let writer = rt.block_on(async {
+        // Subscribe to PTY output via the mpsc adapter.
+        // `reader` yields response chunks (raw PTY output bytes).
+        let (_, mut reader) = client
+            .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
             .await
-            .map_err(|e| io::Error::other(format!("subscribe output: {e:?}")))?;
+            .map_err(|e| io::Error::other(format!("subscribe: {e:?}")))?;
 
-        // Flush the header so the server knows about our subscription.
-        // Without this the header sits in the encoder's internal buffer
-        // and never reaches the server's streaming handler.
-        encoder.flush().map_err(|e| io::Error::other(format!("subscribe flush: {e:?}")))?;
-
-        // Spawn background task: forward response chunks to push_tx
-        let tx = push_tx.clone();
+        // Forward response chunks to push_tx.  When the stream ends
+        // (session exits), push_tx is dropped, and `drain_pushes`
+        // detects the disconnect.
         rt.spawn(async move {
-            let mut receiver = receiver;
-            while let Some(Ok(data)) = receiver.next().await {
-                let _ = tx.send(data);
+            while let Some(chunk) = reader.recv().await {
+                match chunk {
+                    Ok(data) => { let _ = push_tx.send(data); }
+                    Err(_) => break,
+                }
             }
         });
 
-        Ok::<_, io::Error>(())
-    })?;
-
-    // Create a streaming call for PTY input
-    let input_writer = rt.block_on(async {
-        let request = RpcRequest {
-            rpc_method_id: term_session_muxio_service_definitions::STREAM_INPUT_METHOD_ID,
-            rpc_param_bytes: None,
-            rpc_prebuffered_payload_bytes: None,
-            is_finalized: false,
-        };
-
-        let (mut encoder, _receiver) = client
-            .call_rpc_streaming(request, DynamicChannelType::Unbounded)
+        // Open streaming channel for PTY input.
+        // `writer` accepts keystroke bytes.
+        let (writer, _) = client
+            .open_channel(STREAM_INPUT_METHOD_ID, 0)
             .await
             .map_err(|e| io::Error::other(format!("stream input: {e:?}")))?;
-
-        let writer = Box::new(move |data: &[u8]| -> io::Result<()> {
-            encoder.write_bytes(data).map_err(io::Error::other)?;
-            encoder.flush().map_err(io::Error::other)?;
-            Ok(())
-        });
 
         Ok::<_, io::Error>(writer)
     })?;
 
+    let input_writer = Box::new(move |data: &[u8]| -> io::Result<()> {
+        writer.send(data.to_vec()).map_err(|e| io::Error::other(e.to_string()))?;
+        Ok(())
+    });
+
     let mut pane = RemotePane::new(
-        session_id,
+        1u64,
         client.clone(),
         rt.handle().clone(),
         term_cols,
