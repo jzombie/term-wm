@@ -189,8 +189,11 @@ impl RpcMethodPrebuffered for PushOutput {
     }
 }
 
-// ── StreamInput (streaming handler) ─────────────────────────────────
+// ── StreamInput (streaming handler for PTY input) ──────────────────
 pub const STREAM_INPUT_METHOD_ID: u64 = rpc_method_id!("session.stream_input");
+
+// ── SubscribeOutput (streaming handler for PTY output pushes) ──────
+pub const SUBSCRIBE_OUTPUT_METHOD_ID: u64 = rpc_method_id!("session.subscribe_output");
 
 // ── ListSessions ─────────────────────────────────────────────────────
 

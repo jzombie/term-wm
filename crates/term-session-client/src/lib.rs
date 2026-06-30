@@ -12,15 +12,12 @@ use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
+use futures::StreamExt;
 use muxio_core::rpc::RpcRequest;
-use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;
 use muxio_rpc_service_caller::DynamicChannelType;
-use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient, RpcServiceCallerInterface};
 use portable_pty::PtySize;
-use term_session_muxio_service_definitions::{
-    PushOutput, SessionPushFrame, Spawn, STREAM_INPUT_METHOD_ID,
-};
+use term_session_muxio_service_definitions::{Spawn, SUBSCRIBE_OUTPUT_METHOD_ID};
 use term_wm_pty_engine::Pane;
 use term_wm_pty_engine::clipboard::{Clipboard, extract_osc52_text};
 use term_wm_pty_engine::input_encoding::{key_to_bytes, mouse_event_to_bytes};
@@ -53,26 +50,8 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         .block_on(RpcIpcClient::new(socket_path))
         .map_err(|e| io::Error::new(io::ErrorKind::ConnectionRefused, format!("{e:?}")))?;
 
-    // Channel for push output frames
-    let (push_tx, push_rx) = mpsc::unbounded_channel::<SessionPushFrame>();
-
-    // Register PushOutput handler on the client endpoint
-    rt.block_on(async {
-        let endpoint = client.get_endpoint();
-        let tx = push_tx.clone();
-        endpoint
-            .register_prebuffered(PushOutput::METHOD_ID, move |payload, _ctx| {
-                let tx = tx.clone();
-                async move {
-                    let (frame, _consumed) = SessionPushFrame::decode(&payload)
-                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-                    let _ = tx.send(frame);
-                    Ok(Vec::new())
-                }
-            })
-            .await
-            .map_err(|e| io::Error::other(format!("register push handler: {e:?}")))
-    })?;
+    // Channel for raw PTY output bytes from background stream task
+    let (push_tx, push_rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
     // Get terminal size
     let (term_cols, term_rows) = crossterm::terminal::size()?;
@@ -85,10 +64,41 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             .map_err(|e| io::Error::other(format!("spawn: {e:?}")))
     })?;
 
+    // Subscribe to PTY output via streaming call
+    rt.block_on(async {
+        let request = RpcRequest {
+            rpc_method_id: SUBSCRIBE_OUTPUT_METHOD_ID,
+            rpc_param_bytes: None,
+            rpc_prebuffered_payload_bytes: None,
+            is_finalized: false,
+        };
+
+        let (mut encoder, receiver) = client
+            .call_rpc_streaming(request, DynamicChannelType::Unbounded)
+            .await
+            .map_err(|e| io::Error::other(format!("subscribe output: {e:?}")))?;
+
+        // Flush the header so the server knows about our subscription.
+        // Without this the header sits in the encoder's internal buffer
+        // and never reaches the server's streaming handler.
+        encoder.flush().map_err(|e| io::Error::other(format!("subscribe flush: {e:?}")))?;
+
+        // Spawn background task: forward response chunks to push_tx
+        let tx = push_tx.clone();
+        rt.spawn(async move {
+            let mut receiver = receiver;
+            while let Some(Ok(data)) = receiver.next().await {
+                let _ = tx.send(data);
+            }
+        });
+
+        Ok::<_, io::Error>(())
+    })?;
+
     // Create a streaming call for PTY input
     let input_writer = rt.block_on(async {
         let request = RpcRequest {
-            rpc_method_id: STREAM_INPUT_METHOD_ID,
+            rpc_method_id: term_session_muxio_service_definitions::STREAM_INPUT_METHOD_ID,
             rpc_param_bytes: None,
             rpc_prebuffered_payload_bytes: None,
             is_finalized: false,

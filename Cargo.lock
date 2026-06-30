@@ -2773,6 +2773,7 @@ version = "0.7.0-alpha"
 dependencies = [
  "clap",
  "crossterm",
+ "futures",
  "muxio-core",
  "muxio-rpc-service",
  "muxio-rpc-service-caller",

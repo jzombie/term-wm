@@ -4,10 +4,11 @@ use std::io;
 use muxio_rpc_service::error::RpcServiceError;
 use muxio_tokio_rpc_ipc_client::RpcIpcClient;
 use portable_pty::{ExitStatus, PtySize};
-use term_session_muxio_service_definitions::{CloseSession, ResizePty, SessionPushFrame};
+use term_session_muxio_service_definitions::{CloseSession, ResizePty};
 use term_wm_pty_engine::{Pane, PtyResult};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TryRecvError;
 
 type InputWriter = Box<dyn FnMut(&[u8]) -> io::Result<()> + Send>;
 
@@ -17,8 +18,7 @@ pub struct RemotePane {
     rt: Handle,
     parser: vt100::Parser,
     exited: Cell<bool>,
-    title: Cell<Option<String>>,
-    push_rx: mpsc::UnboundedReceiver<SessionPushFrame>,
+    push_rx: mpsc::UnboundedReceiver<Vec<u8>>,
     input_writer: InputWriter,
 }
 
@@ -29,7 +29,7 @@ impl RemotePane {
         rt: Handle,
         cols: u16,
         rows: u16,
-        push_rx: mpsc::UnboundedReceiver<SessionPushFrame>,
+        push_rx: mpsc::UnboundedReceiver<Vec<u8>>,
         input_writer: InputWriter,
     ) -> Self {
         Self {
@@ -38,25 +38,22 @@ impl RemotePane {
             rt,
             parser: vt100::Parser::new(rows, cols, 0),
             exited: Cell::new(false),
-            title: Cell::new(None),
             push_rx,
             input_writer,
         }
     }
 
     pub fn drain_pushes(&mut self) {
-        while let Ok(push) = self.push_rx.try_recv() {
-            match push {
-                SessionPushFrame::RawOutput { data, .. } => {
+        loop {
+            match self.push_rx.try_recv() {
+                Ok(data) => {
                     self.parser.process(&data);
                 }
-                SessionPushFrame::SessionExited { .. } => {
+                Err(TryRecvError::Disconnected) => {
                     self.exited.set(true);
+                    break;
                 }
-                SessionPushFrame::TitleChanged { title, .. } if !title.is_empty() => {
-                    self.title.set(Some(title));
-                }
-                _ => {}
+                Err(TryRecvError::Empty) => break,
             }
         }
     }
@@ -134,6 +131,6 @@ impl Pane for RemotePane {
     }
 
     fn take_pending_title(&mut self) -> Option<String> {
-        self.title.take()
+        None
     }
 }

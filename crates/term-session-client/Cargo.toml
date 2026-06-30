@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
 crossterm = { workspace = true, features = ["bracketed-paste"] }
+futures = { workspace = true }
 muxio-core = { workspace = true }
 muxio-rpc-service = { workspace = true }
 muxio-rpc-service-caller = { workspace = true }

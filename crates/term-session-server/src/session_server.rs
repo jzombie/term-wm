@@ -1,20 +1,18 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use muxio_core::rpc::RpcRequest;
 use muxio_core::rpc::rpc_internals::RpcStreamEvent;
 use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;
-use muxio_rpc_service_caller::RpcServiceCallerInterface;
-use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
+use muxio_rpc_service_endpoint::{RpcServiceEndpointInterface, StreamResponder};
 use muxio_tokio_rpc_ipc_server::{
-    RpcIpcConnectionContextHandle, RpcIpcServer, RpcIpcServerEvent,
+    RpcIpcServer, RpcIpcServerEvent,
 };
 use portable_pty::PtySize;
 use tokio::sync::{Mutex, mpsc};
 
 use term_session_muxio_service_definitions::{
-    CloseSession, ListSessions, PushOutput, ResizePty, SessionPushFrame, Spawn, WriteInput,
-    STREAM_INPUT_METHOD_ID,
+    CloseSession, ListSessions, ResizePty, Spawn, WriteInput, STREAM_INPUT_METHOD_ID,
+    SUBSCRIBE_OUTPUT_METHOD_ID,
 };
 
 use crate::session::Session;
@@ -28,12 +26,17 @@ pub struct SessionServerConfig {
 
 struct ClientEntry {
     conn_id: usize,
-    handle: RpcIpcConnectionContextHandle,
+}
+
+struct SubscriberEntry {
+    conn_id: usize,
+    respond: StreamResponder,
 }
 
 struct ServerState {
     session: Option<Session>,
     clients: Vec<ClientEntry>,
+    subscribers: Vec<SubscriberEntry>,
 }
 
 impl ServerState {
@@ -41,6 +44,7 @@ impl ServerState {
         Self {
             session: None,
             clients: Vec::new(),
+            subscribers: Vec::new(),
         }
     }
 }
@@ -71,7 +75,7 @@ pub async fn run_server(
     // Register Spawn
     let st = Arc::clone(&state);
     endpoint
-        .register_prebuffered(Spawn::METHOD_ID, move |payload, ctx| {
+        .register_prebuffered(Spawn::METHOD_ID, move |payload, _ctx| {
             let state = Arc::clone(&st);
             async move {
                 let mut guard = state.lock().await;
@@ -93,29 +97,6 @@ pub async fn run_server(
                     session.parser.screen_mut().set_size(rows, cols);
                     session.cols = cols;
                     session.rows = rows;
-
-                    // Push a screen snapshot to the calling client so its parser
-                    // gets the current state at the correct terminal size.
-                    let snapshot = session.generate_snapshot();
-                    if !snapshot.is_empty() {
-                        let frame = SessionPushFrame::RawOutput {
-                            id: session.id,
-                            data: snapshot,
-                        }
-                        .encode();
-                        let request = RpcRequest {
-                            rpc_method_id: PushOutput::METHOD_ID,
-                            rpc_param_bytes: None,
-                            rpc_prebuffered_payload_bytes: Some(frame),
-                            is_finalized: true,
-                        };
-                        let handle = RpcIpcConnectionContextHandle(ctx);
-                        tokio::spawn(async move {
-                            let _ = handle
-                                .call_rpc_buffered::<(), _>(request, |_bytes| ())
-                                .await;
-                        });
-                    }
 
                     return Spawn::encode_response(session.id)
                         .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
@@ -228,6 +209,38 @@ pub async fn run_server(
         .await
         .map_err(|e| format!("register stream handler STREAM_INPUT: {e:?}"))?;
 
+    // Register SubscribeOutput (streaming handler for PTY output pushes)
+    let st = Arc::clone(&state);
+    endpoint
+        .register_stream_handler(
+            SUBSCRIBE_OUTPUT_METHOD_ID,
+            move |event, respond, ctx| {
+                // Store the StreamResponder on the very first event (Header)
+                // so the push loop can start sending output immediately.
+                let is_new = matches!(&event, RpcStreamEvent::Header { .. });
+                if is_new
+                    && let Ok(mut guard) = st.try_lock()
+                {
+                    // Generate snapshot while holding the lock
+                    let snapshot = guard.session.as_mut().map(|s| s.generate_snapshot());
+                    guard.subscribers.push(SubscriberEntry {
+                        conn_id: ctx.conn_id,
+                        respond: respond.clone(),
+                    });
+                    drop(guard);
+                    // Send snapshot through the responder (will be buffered
+                    // until set_writer is called after read_bytes returns)
+                    if let Some(data) = snapshot
+                        && !data.is_empty()
+                    {
+                        respond.respond(data, false);
+                    }
+                }
+            },
+        )
+        .await
+        .map_err(|e| format!("register SubscribeOutput: {e:?}"))?;
+
     // Connection event handler
     let st = Arc::clone(&state);
     tokio::spawn(async move {
@@ -239,107 +252,54 @@ pub async fn run_server(
                     let mut guard = st.lock().await;
                     guard.clients.push(ClientEntry {
                         conn_id: handle.0.conn_id,
-                        handle,
                     });
                 }
                 RpcIpcServerEvent::ClientDisconnected(conn_id) => {
                     tracing::info!("Client {conn_id} disconnected");
                     let mut guard = st.lock().await;
                     guard.clients.retain(|c| c.conn_id != conn_id);
+                    guard.subscribers.retain(|s| s.conn_id != conn_id);
                 }
             }
         }
     });
 
-    // Output polling and push loop
+    // Output polling and push via stored StreamResponders
     let st = Arc::clone(&state);
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(8));
         loop {
             interval.tick().await;
 
-            let (frames, clients) = {
-                let mut guard = st.lock().await;
+            let mut guard = st.lock().await;
 
-                if guard.clients.is_empty() {
-                    if let Some(session) = guard.session.as_mut() {
-                        session.read_output();
-                    }
-                    continue;
+            if guard.subscribers.is_empty() {
+                if let Some(session) = guard.session.as_mut() {
+                    session.read_output();
                 }
+                continue;
+            }
 
-                let Some(session) = guard.session.as_mut() else {
-                    break;
-                };
-
-                let mut frames = Vec::new();
-
-                let raw = session.read_output();
-                if !raw.is_empty() {
-                    frames.push(
-                        SessionPushFrame::RawOutput {
-                            id: session.id,
-                            data: raw,
-                        }
-                        .encode(),
-                    );
-                }
-
-                if let Some(title) = session.title.take()
-                    && !title.is_empty()
-                {
-                    frames.push(
-                        SessionPushFrame::TitleChanged {
-                            id: session.id,
-                            title,
-                        }
-                        .encode(),
-                    );
-                }
-
-                if session.check_exited() {
-                    frames.push(
-                        SessionPushFrame::SessionExited {
-                            id: session.id,
-                            status: 0,
-                        }
-                        .encode(),
-                    );
-                }
-
-                let clients: Vec<RpcIpcConnectionContextHandle> =
-                    guard.clients.iter().map(|c| c.handle.clone()).collect();
-
-                (frames, clients)
+            let Some(session) = guard.session.as_mut() else {
+                break;
             };
 
-            // Push frames to all connected clients
-            for ctx in &clients {
-                for frame in &frames {
-                    let request = RpcRequest {
-                        rpc_method_id: PushOutput::METHOD_ID,
-                        rpc_param_bytes: None,
-                        rpc_prebuffered_payload_bytes: Some(frame.to_vec()),
-                        is_finalized: true,
-                    };
-                    match ctx.call_rpc_buffered::<(), _>(request, |_bytes| ()).await {
-                        Ok((_encoder, Ok(()))) => {}
-                        Ok((_encoder, Err(rpc_err))) => {
-                            tracing::warn!("Push response error from client {}: {rpc_err:?}", ctx.0.conn_id);
-                        }
-                        Err(rpc_err) => {
-                            tracing::warn!("Failed to push to client {}: {rpc_err:?}", ctx.0.conn_id);
-                        }
-                    }
+            let raw = session.read_output();
+            let exited = session.check_exited();
+
+            // Push raw PTY output to all subscribers via StreamResponder
+            if !raw.is_empty() {
+                for sub in &guard.subscribers {
+                    sub.respond.respond(raw.clone(), false);
                 }
             }
 
-            // Stop push loop if session exited
-            let exited = {
-                let guard = st.lock().await;
-                guard.session.as_ref().is_none_or(|s| s.exited)
-            };
+            // On exit: finalize all streams and clean up
             if exited {
+                for sub in &guard.subscribers {
+                    sub.respond.respond(Vec::new(), true);
+                }
+                guard.subscribers.clear();
                 tracing::info!("Session exited; stopping push loop");
                 break;
             }

@@ -56,6 +56,7 @@ muxio-rpc-service-caller = "0.11.1-alpha"
 muxio-rpc-service-endpoint = "0.11.1-alpha"
 muxio-tokio-rpc-ipc-client = "0.11.1-alpha"
 muxio-tokio-rpc-ipc-server = "0.11.1-alpha"
+futures = "0.3.32"
 term-session-client = { path = "crates/term-session-client", version = "0.7.0-alpha" }
 term-session-muxio-service-definitions = { path = "crates/term-session-muxio-service-definitions", version = "0.7.0-alpha" }
 term-session-server = { path = "crates/term-session-server", version = "0.7.0-alpha" }
