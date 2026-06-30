@@ -8,6 +8,7 @@ use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
 use muxio_tokio_rpc_ipc_server::{
     RpcIpcConnectionContextHandle, RpcIpcServer, RpcIpcServerEvent,
 };
+use portable_pty::PtySize;
 use tokio::sync::{Mutex, mpsc};
 
 use term_session_muxio_service_definitions::{
@@ -68,21 +69,56 @@ pub async fn run_server(
     // Register Spawn
     let st = Arc::clone(&state);
     endpoint
-        .register_prebuffered(Spawn::METHOD_ID, move |payload, _ctx| {
+        .register_prebuffered(Spawn::METHOD_ID, move |payload, ctx| {
             let state = Arc::clone(&st);
             async move {
                 let mut guard = state.lock().await;
 
-                // If a session already exists and hasn't exited, return it.
-                if let Some(ref session) = guard.session
+                let (cmd, cols, rows) = Spawn::decode_request(&payload)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+
+                // If a session already exists and hasn't exited, resize and return it.
+                if let Some(ref mut session) = guard.session
                     && !session.exited
                 {
+                    let size = PtySize {
+                        rows,
+                        cols,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    };
+                    let _ = session.pty.resize(size);
+                    session.parser.screen_mut().set_size(rows, cols);
+                    session.cols = cols;
+                    session.rows = rows;
+
+                    // Push a screen snapshot to the calling client so its parser
+                    // gets the current state at the correct terminal size.
+                    let snapshot = session.generate_snapshot();
+                    if !snapshot.is_empty() {
+                        let frame = SessionPushFrame::RawOutput {
+                            id: session.id,
+                            data: snapshot,
+                        }
+                        .encode();
+                        let request = RpcRequest {
+                            rpc_method_id: PushOutput::METHOD_ID,
+                            rpc_param_bytes: None,
+                            rpc_prebuffered_payload_bytes: Some(frame),
+                            is_finalized: true,
+                        };
+                        let handle = RpcIpcConnectionContextHandle(ctx);
+                        tokio::spawn(async move {
+                            let _ = handle
+                                .call_rpc_buffered::<(), _>(request, |_bytes| ())
+                                .await;
+                        });
+                    }
+
                     return Spawn::encode_response(session.id)
                         .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
                 }
 
-                let (cmd, cols, rows) = Spawn::decode_request(&payload)
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
                 let id = 1;
                 let session = Session::spawn(id, cmd, cols, rows)?;
                 guard.session = Some(session);
@@ -183,33 +219,6 @@ pub async fn run_server(
             match event {
                 RpcIpcServerEvent::ClientConnected(handle) => {
                     tracing::info!("Client {} connected", handle.0.conn_id);
-
-                    // Send session snapshot to the newly connected client
-                    {
-                        let mut guard = st.lock().await;
-                        if let Some(session) = guard.session.as_mut() {
-                            let snapshot = session.generate_snapshot();
-                            if !snapshot.is_empty() {
-                                let frame = SessionPushFrame::RawOutput {
-                                    id: session.id,
-                                    data: snapshot,
-                                }
-                                .encode();
-                                let request = RpcRequest {
-                                    rpc_method_id: PushOutput::METHOD_ID,
-                                    rpc_param_bytes: None,
-                                    rpc_prebuffered_payload_bytes: Some(frame),
-                                    is_finalized: true,
-                                };
-                                let h = handle.clone();
-                                tokio::spawn(async move {
-                                    let _ = h
-                                        .call_rpc_buffered::<(), _>(request, |_bytes| ())
-                                        .await;
-                                });
-                            }
-                        }
-                    }
 
                     let mut guard = st.lock().await;
                     guard.clients.push(ClientEntry {
