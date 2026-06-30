@@ -40,6 +40,14 @@ pub enum BgColor {
     DialogBg,
     DecoratorHeaderBg,
     BottomPanelBg,
+    Surface,
+    ShadowBg,
+    ShadowTint,
+    Error,
+    Warning,
+    ProfileHigh,
+    ProfileMid,
+    ProfileLow,
 }
 
 // ---------------------------------------------------------------------------
@@ -79,9 +87,19 @@ pub struct Theme {
     pub dialog_separator: Color,
     pub selection_bg: Color,
     pub selection_fg: Color,
+    /// Dark end of the drop-shadow interpolation — used for the topmost
+    /// (highest z-depth) floating window.
+    pub shadow_bg: Color,
+    /// Light end of the drop-shadow interpolation — used for the bottommost
+    /// floating window.  The actual shadow color is lerped between `shadow_tint`
+    /// and `shadow_bg` based on the window's z-order position.
+    pub shadow_tint: Color,
     pub link_color: Color,
     pub link_underline: bool,
     pub debug_highlight: Color,
+    pub profile_high: Color,
+    pub profile_mid: Color,
+    pub profile_low: Color,
 }
 
 impl Theme {
@@ -118,6 +136,14 @@ impl Theme {
             BgColor::DialogBg => self.dialog_bg,
             BgColor::DecoratorHeaderBg => self.decorator_header_bg,
             BgColor::BottomPanelBg => self.bottom_panel_bg,
+            BgColor::Surface => self.surface,
+            BgColor::ShadowBg => self.shadow_bg,
+            BgColor::ShadowTint => self.shadow_tint,
+            BgColor::Error => self.error,
+            BgColor::Warning => self.warning,
+            BgColor::ProfileHigh => self.profile_high,
+            BgColor::ProfileMid => self.profile_mid,
+            BgColor::ProfileLow => self.profile_low,
         }
     }
 }
@@ -169,8 +195,15 @@ pub const NOIR: Theme = Theme {
     // Link
     link_color: Color::Rgb(100, 180, 255),
     link_underline: true,
+    // Shadow
+    shadow_bg: Color::Rgb(35, 38, 50),
+    shadow_tint: Color::Rgb(16, 17, 22),
     // Debug
     debug_highlight: Color::Rgb(255, 168, 0),
+    // Power profile indicators
+    profile_high: Color::Rgb(255, 61, 61),
+    profile_mid: Color::Rgb(255, 193, 7),
+    profile_low: Color::Rgb(0, 200, 83),
 };
 
 // ---------------------------------------------------------------------------
@@ -189,7 +222,7 @@ pub fn current() -> &'static Theme {
 // ---------------------------------------------------------------------------
 
 pub fn rgb_to_color(rgb: (u8, u8, u8)) -> Color {
-    crate::io::utils::term_color::map_rgb_to_color(rgb.0, rgb.1, rgb.2)
+    crate::term_color::map_rgb_to_color(rgb.0, rgb.1, rgb.2)
 }
 
 pub fn accent() -> Color {
@@ -264,14 +297,38 @@ pub fn decorator_border() -> Color {
 pub fn decorator_border_active() -> Color {
     current().fg(FgColor::DecoratorBorderActive)
 }
+pub fn surface() -> Color {
+    current().bg(BgColor::Surface)
+}
+pub fn shadow_bg() -> Color {
+    current().bg(BgColor::ShadowBg)
+}
+pub fn shadow_tint() -> Color {
+    current().bg(BgColor::ShadowTint)
+}
 pub fn debug_highlight() -> Color {
     current().fg(FgColor::DebugHighlight)
 }
 pub fn bottom_panel_bg() -> Color {
     current().bg(BgColor::BottomPanelBg)
 }
+pub fn error_bg() -> Color {
+    current().bg(BgColor::Error)
+}
+pub fn warning_bg() -> Color {
+    current().bg(BgColor::Warning)
+}
 pub fn bottom_panel_fg() -> Color {
     current().fg(FgColor::BottomPanelFg)
+}
+pub fn profile_high_bg() -> Color {
+    current().bg(BgColor::ProfileHigh)
+}
+pub fn profile_mid_bg() -> Color {
+    current().bg(BgColor::ProfileMid)
+}
+pub fn profile_low_bg() -> Color {
+    current().bg(BgColor::ProfileLow)
 }
 
 // ---------------------------------------------------------------------------
@@ -343,6 +400,11 @@ mod tests {
         (FgColor::MenuSelectedFg, BgColor::DecoratorHeaderBg, "same"),
         (FgColor::MenuSelectedFg, BgColor::BottomPanelBg, "same"),
         (
+            FgColor::MenuSelectedFg,
+            BgColor::Surface,
+            "same luminance conflict — shadow is visual effect, not text surface",
+        ),
+        (
             FgColor::SelectionFg,
             BgColor::PanelBg,
             "same — near-black only on green",
@@ -352,6 +414,30 @@ mod tests {
         (FgColor::SelectionFg, BgColor::DialogBg, "same"),
         (FgColor::SelectionFg, BgColor::DecoratorHeaderBg, "same"),
         (FgColor::SelectionFg, BgColor::BottomPanelBg, "same"),
+        (FgColor::SelectionFg, BgColor::Surface, "same"),
+        (
+            FgColor::MenuSelectedFg,
+            BgColor::ShadowBg,
+            "same — shadow bg never carries text",
+        ),
+        (FgColor::SelectionFg, BgColor::ShadowBg, "same"),
+        (
+            FgColor::MenuSelectedFg,
+            BgColor::ShadowTint,
+            "same — shadow tint never carries text",
+        ),
+        (FgColor::SelectionFg, BgColor::ShadowTint, "same"),
+        // Shadow bg never carries text — always a visual effect block
+        (
+            FgColor::DialogSeparator,
+            BgColor::ShadowBg,
+            "shadow bg never carries text",
+        ),
+        (
+            FgColor::DecoratorBorder,
+            BgColor::ShadowBg,
+            "shadow bg never carries text",
+        ),
         // Green accent colors on green — same hue, never co-occur.
         (FgColor::Success, BgColor::MenuSelectedBg, "green on green"),
         (FgColor::Success, BgColor::SelectionBg, "green on green"),
@@ -485,6 +571,51 @@ mod tests {
             BgColor::MenuSelectedBg,
             "already excluded above",
         ),
+        // Error/Warning backgrounds — only used behind decorator button symbols.
+        // The only FG that appears on them at runtime is menu_selected_fg (dark
+        // contrast text on hover).  Everything else is never combined.
+        (FgColor::Accent, BgColor::Error, "never combined"),
+        (FgColor::Accent, BgColor::Warning, "never combined"),
+        (FgColor::AccentAlt, BgColor::Error, "never combined"),
+        (FgColor::AccentAlt, BgColor::Warning, "never combined"),
+        (FgColor::PanelFg, BgColor::Error, "never combined"),
+        (FgColor::PanelFg, BgColor::Warning, "never combined"),
+        (FgColor::PanelInactiveFg, BgColor::Error, "never combined"),
+        (FgColor::PanelInactiveFg, BgColor::Warning, "never combined"),
+        (FgColor::PanelActiveFg, BgColor::Error, "never combined"),
+        (FgColor::PanelActiveFg, BgColor::Warning, "never combined"),
+        (FgColor::MenuFg, BgColor::Error, "never combined"),
+        (FgColor::MenuFg, BgColor::Warning, "never combined"),
+        (FgColor::MenuSelectedBg, BgColor::Error, "never combined"),
+        (FgColor::MenuSelectedBg, BgColor::Warning, "never combined"),
+        (FgColor::Success, BgColor::Error, "never combined"),
+        (FgColor::Success, BgColor::Warning, "never combined"),
+        (FgColor::DialogFg, BgColor::Error, "never combined"),
+        (FgColor::DialogFg, BgColor::Warning, "never combined"),
+        (FgColor::DialogSeparator, BgColor::Error, "never combined"),
+        (FgColor::LinkColor, BgColor::Error, "never combined"),
+        (FgColor::LinkColor, BgColor::Warning, "never combined"),
+        (FgColor::DecoratorHeaderFg, BgColor::Error, "never combined"),
+        (
+            FgColor::DecoratorHeaderFg,
+            BgColor::Warning,
+            "never combined",
+        ),
+        (FgColor::DecoratorBorder, BgColor::Error, "never combined"),
+        (
+            FgColor::DecoratorBorderActive,
+            BgColor::Error,
+            "never combined",
+        ),
+        (
+            FgColor::DecoratorBorderActive,
+            BgColor::Warning,
+            "never combined",
+        ),
+        (FgColor::DebugHighlight, BgColor::Error, "never combined"),
+        (FgColor::DebugHighlight, BgColor::Warning, "never combined"),
+        (FgColor::BottomPanelFg, BgColor::Error, "never combined"),
+        (FgColor::BottomPanelFg, BgColor::Warning, "never combined"),
     ];
 
     /// Every FgColor × BgColor pair at 3.0:1 (WCAG AA UI/large).
@@ -498,6 +629,14 @@ mod tests {
 
         for fg in FgColor::iter() {
             for bg in BgColor::iter() {
+                // Profile indicator backgrounds never carry text — skip contrast check.
+                if matches!(
+                    bg,
+                    BgColor::ProfileHigh | BgColor::ProfileMid | BgColor::ProfileLow
+                ) {
+                    excluded += 1;
+                    continue;
+                }
                 if PHYSICALLY_IMPOSSIBLE
                     .iter()
                     .any(|(f, b, _)| *f == fg && *b == bg)

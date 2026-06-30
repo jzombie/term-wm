@@ -36,7 +36,7 @@ pub fn gap_size(direction: Direction, area: Rect, child_count: usize, resizable:
         return 0;
     }
     let max_gap = total.saturating_sub(min_content);
-    let per_gap = max_gap / (child_count as u16 - 1);
+    let per_gap = max_gap / (child_count as u16).saturating_sub(1);
     handle_thickness(direction, area).min(per_gap)
 }
 

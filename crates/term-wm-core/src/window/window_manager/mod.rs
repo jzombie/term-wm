@@ -12,18 +12,19 @@ use std::time::{Duration, Instant};
 use crossterm::event::{Event, KeyEvent};
 use ratatui::prelude::Rect;
 
-use super::FocusRing;
 use super::decorator::WindowDecorator;
 use super::entry::Window;
 use crate::app_context::AppContext;
 use crate::bottom_panel_trait::BottomPanel;
-use crate::components::{ComponentContext, MenuItem, MenuOverlay, Overlay};
+use crate::components::{ComponentContext, MenuItem, MenuOverlay, Overlay, SelectionStatus};
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
+use crate::power_profile::PowerProfile;
 use crate::top_panel_trait::TopPanel;
 use crate::ui::UiFrame;
 use crate::wm_config::{HintVisibility, WmConfig};
+use term_wm_layout_engine::FocusRing;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SystemWindowId {
@@ -110,6 +111,13 @@ pub struct WindowSurface {
     pub full: Rect,
     pub inner: Rect,
     pub dest: crate::window::FloatRect,
+    /// Whether a drop-shadow should be rendered behind this window
+    /// (derived from `WmConfig.shadow_enabled` + floating status).
+    pub draw_shadow: bool,
+    /// Normalized z-order depth [0.0–1.0] used to interpolate the shadow
+    /// background color — bottommost windows get the lighter `shadow_tint`
+    /// while topmost windows get the darker `shadow_bg`.
+    pub z_depth: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -136,9 +144,15 @@ pub trait SystemWindowView {
     fn render(&mut self, frame: &mut UiFrame<'_>, surface: WindowSurface, focused: bool);
     fn handle_event(&mut self, event: &Event) -> bool;
     fn set_selection_enabled(&mut self, _enabled: bool) {}
+    fn selection_status(&self) -> SelectionStatus {
+        SelectionStatus::default()
+    }
+    fn selection_text(&mut self) -> Option<String> {
+        None
+    }
 }
 
-struct SystemWindowEntry {
+pub(crate) struct SystemWindowEntry {
     component: Box<dyn SystemWindowView>,
     visible: bool,
 }
@@ -161,6 +175,14 @@ impl SystemWindowEntry {
 
     fn render(&mut self, frame: &mut UiFrame<'_>, surface: WindowSurface, focused: bool) {
         self.component.render(frame, surface, focused);
+    }
+
+    pub(crate) fn selection_status(&self) -> SelectionStatus {
+        self.component.selection_status()
+    }
+
+    pub(crate) fn selection_text(&mut self) -> Option<String> {
+        self.component.selection_text()
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
@@ -223,11 +245,13 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     floating_resize_offscreen: bool,
     pub(crate) z_order: Vec<WindowId<Id>>,
     pub(crate) drag_snap: Option<(Option<WindowId<Id>>, InsertPosition, Rect)>,
+    drag_last_event: Option<Instant>,
     system_windows: BTreeMap<SystemWindowId, SystemWindowEntry>,
     next_window_seq: usize,
     next_title_seq: usize,
     synthetic_event: Option<Event>,
     clipboard: Option<crate::clipboard::Clipboard>,
+    power_profile: PowerProfile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -478,11 +502,13 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             floating_resize_offscreen,
             z_order: Vec::new(),
             drag_snap: None,
+            drag_last_event: None,
             system_windows: BTreeMap::new(),
             next_window_seq: 0,
             next_title_seq: 0,
             synthetic_event: None,
             clipboard,
+            power_profile: PowerProfile::PowerSaver,
         }
     }
 
@@ -528,18 +554,38 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         ComponentContext::new(focused).with_app_context(Arc::clone(&self.app_ctx))
     }
 
+    /// Number of overlays that will be rendered this frame.
+    pub fn visible_overlay_count(&self) -> usize {
+        let mut n = 0usize;
+        if self.wm_overlay_visible() {
+            n += 1;
+        }
+        if self.overlays.contains_key(&OverlayId::ExitConfirm) {
+            n += 1;
+        }
+        if self.overlays.contains_key(&OverlayId::Help) {
+            n += 1;
+        }
+        n
+    }
+
+    /// Normalised z-depth [0.0–1.0] for a drawable at `position` in a
+    /// stack of `total` items (windows + overlays).  The topmost item
+    /// always maps to 1.0 (darkest shadow).
+    pub fn compute_z_depth(position: usize, total: usize) -> f32 {
+        if total <= 1 {
+            return 1.0;
+        }
+        position as f32 / (total - 1) as f32
+    }
+
     pub fn begin_frame(&mut self) {
-        self.regions = RegionMap::default();
-        self.handles.clear();
-        self.resize_handles.clear();
-        self.floating_headers.clear();
-        self.managed_draw_order.clear();
-        self.managed_draw_order_app.clear();
         if let Some(p) = &mut self.top_panel {
             p.begin_frame();
         }
         if let Some(p) = &mut self.bottom_panel {
             p.begin_frame();
+            p.set_power_profile(self.power_profile);
         }
         if crate::debug_event_flags::take_panic_pending() {
             self.show_system_window(SystemWindowId::DebugLog);
@@ -549,6 +595,18 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         } else {
             self.refresh_capture();
         }
+    }
+
+    /// Clear draw-time state that gets repopulated during `output.draw()`.
+    /// Must be called immediately before each draw (not in `begin_frame()`)
+    /// so that skipped idle renders don't destroy data needed by mouse events.
+    pub fn prepare_draw(&mut self) {
+        self.regions = RegionMap::default();
+        self.handles.clear();
+        self.resize_handles.clear();
+        self.floating_headers.clear();
+        self.managed_draw_order.clear();
+        self.managed_draw_order_app.clear();
     }
 
     pub fn arm_capture(&mut self, timeout: Duration) {
@@ -643,6 +701,18 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
 
     pub fn clipboard_mut(&mut self) -> Option<&mut crate::clipboard::Clipboard> {
         self.clipboard.as_mut()
+    }
+
+    pub fn power_profile(&self) -> PowerProfile {
+        self.power_profile
+    }
+
+    pub fn set_power_profile(&mut self, profile: PowerProfile) {
+        if self.power_profile == profile {
+            return;
+        }
+        self.power_profile = profile;
+        profile.report_change();
     }
 
     pub fn set_selection_snapshot(&mut self, active: bool, dragging: bool, text: Option<String>) {
@@ -800,6 +870,42 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         }
     }
 
+    /// Time remaining before the drag snap preview is auto-applied.
+    /// Returns `None` when the feature is disabled or no drag is active.
+    pub fn drag_snap_remaining(&self) -> Option<Duration> {
+        let timeout = self.config.drag_snap_timeout?;
+        self.drag_header.as_ref()?;
+        let last = self.drag_last_event?;
+        let elapsed = last.elapsed();
+        if elapsed >= timeout {
+            return Some(Duration::ZERO);
+        }
+        Some(timeout.saturating_sub(elapsed))
+    }
+
+    /// If the mouse has left the terminal during a header drag (no events received
+    /// within `drag_snap_timeout`), auto-apply the pending snap.
+    /// Returns `true` when the snap was applied.
+    pub fn take_expired_drag_snap(&mut self) -> bool {
+        let timeout = match self.config.drag_snap_timeout {
+            Some(t) => t,
+            None => return false,
+        };
+        let Some(drag) = self.drag_header else {
+            return false;
+        };
+        let Some(last) = self.drag_last_event else {
+            return false;
+        };
+        if last.elapsed() < timeout {
+            return false;
+        }
+        self.drag_header = None;
+        self.drag_last_event = None;
+        self.apply_snap(drag.id);
+        true
+    }
+
     /// Time remaining before a deferred first-Esc is forwarded to the terminal.
     /// Returns `None` when no Esc is pending.
     pub fn super_pending_remaining(&self) -> Option<Duration> {
@@ -848,7 +954,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             self.window_titles().into_iter().collect();
         let selection_copy_available = self.selection_text.is_some();
         let panel_active = self.panel_active();
-        let focus_current = self.wm_focus.current();
+        let focus_current = *self.wm_focus.current();
         let mouse_capture_enabled = self.mouse_capture_enabled();
         let clipboard_enabled = self.clipboard_enabled();
         let window_selection_enabled = self.window_selection_enabled();
@@ -972,8 +1078,8 @@ fn clamp_rect(area: Rect, bounds: Rect) -> Rect {
     Rect {
         x: x0,
         y: y0,
-        width: x1 - x0,
-        height: y1 - y0,
+        width: x1.saturating_sub(x0),
+        height: y1.saturating_sub(y0),
     }
 }
 
@@ -1178,7 +1284,7 @@ mod tests {
         };
         let evt = Event::Mouse(mouse);
         let _handled = wm.handle_managed_event(&evt);
-        assert_eq!(wm.wm_focus.current(), WindowId::app(2usize));
+        assert_eq!(*wm.wm_focus.current(), WindowId::app(2usize));
     }
 
     #[test]
@@ -1294,6 +1400,61 @@ mod tests {
             }
             _ => panic!("expected absolute rect"),
         }
+    }
+
+    #[test]
+    fn minimize_and_restore_preserves_floating_rect() {
+        use crate::window::{FloatRect, FloatRectSpec};
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        let original = FloatRect {
+            x: 5,
+            y: 3,
+            width: 10,
+            height: 8,
+        };
+        wm.set_floating_rect(
+            WindowId::app(1usize),
+            Some(FloatRectSpec::Absolute(original)),
+        );
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 15,
+        });
+        wm.minimize_window(WindowId::app(1usize));
+        assert!(
+            wm.is_minimized(WindowId::app(1usize)),
+            "window should be minimized"
+        );
+        let after_minimize = wm.floating_rect(WindowId::app(1usize));
+        assert!(
+            after_minimize.is_some(),
+            "floating rect should survive minimize"
+        );
+        assert_eq!(
+            after_minimize,
+            Some(FloatRectSpec::Absolute(original)),
+            "floating rect should be unchanged after minimize"
+        );
+        wm.restore_minimized(WindowId::app(1usize));
+        assert!(
+            !wm.is_minimized(WindowId::app(1usize)),
+            "window should be restored"
+        );
+        let after_restore = wm.floating_rect(WindowId::app(1usize));
+        assert_eq!(
+            after_restore,
+            Some(FloatRectSpec::Absolute(original)),
+            "floating rect should be preserved across restore"
+        );
     }
 
     #[test]
@@ -1598,7 +1759,7 @@ mod tests {
             _ => panic!("expected absolute rect"),
         };
 
-        let drag_col = header_rect.x.saturating_add(2);
+        let drag_col = header_rect.x.saturating_add(5);
         let drag_row = header_rect.y.saturating_add(1);
         let drag = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
@@ -1612,7 +1773,7 @@ mod tests {
             crate::window::FloatRectSpec::Absolute(fr) => fr,
             _ => panic!("expected absolute rect"),
         };
-        assert_eq!(moved.x, start_rect.x + 2);
+        assert_eq!(moved.x, start_rect.x + 5);
         assert_eq!(moved.y, start_rect.y + 1);
 
         let up = Event::Mouse(MouseEvent {
@@ -1623,6 +1784,74 @@ mod tests {
         });
         assert!(wm.handle_managed_event(&up));
         assert!(wm.drag_header.is_none());
+    }
+
+    #[test]
+    fn moved_event_commits_stale_drag_snap() {
+        use crate::layout::InsertPosition;
+        use crate::layout::floating::HeaderDrag;
+        use crate::window::{FloatRect, FloatRectSpec};
+        use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        wm.set_panel_visible(false);
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        let id = WindowId::App(1usize);
+        // Set up a floating window so apply_snap has a valid target.
+        wm.set_floating_rect(
+            id,
+            Some(FloatRectSpec::Absolute(FloatRect {
+                x: 10,
+                y: 5,
+                width: 20,
+                height: 10,
+            })),
+        );
+
+        // Simulate abandoned drag (mouse released outside terminal).
+        wm.drag_header = Some(HeaderDrag {
+            id,
+            initial_x: 10,
+            initial_y: 5,
+            start_x: 15,
+            start_y: 10,
+        });
+        wm.drag_snap = Some((
+            None,
+            InsertPosition::Left,
+            Rect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 24,
+            },
+        ));
+
+        let moved = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(wm.handle_managed_event(&moved));
+        assert!(wm.drag_header.is_none(), "drag_header should be taken");
+        assert!(
+            wm.drag_snap.is_none(),
+            "drag_snap should be consumed by apply_snap"
+        );
     }
 
     #[test]
@@ -1981,7 +2210,7 @@ mod tests {
             .x
             .saturating_add(full_rect.width)
             .saturating_sub(1);
-        let close_x = outer_right.saturating_sub(1);
+        let close_x = outer_right.saturating_sub(2);
         let max_x = close_x.saturating_sub(2);
         let min_x = max_x.saturating_sub(2);
         let kb_x = min_x.saturating_sub(2);
@@ -2073,5 +2302,296 @@ mod tests {
         });
         assert!(wm.handle_managed_event(&click));
         assert!(!wm.direct_mode(win_id), "drag area click must not toggle");
+    }
+
+    #[test]
+    fn drag_snap_timeout_none_disables_remaining() {
+        let mut config = WmConfig::standalone();
+        config.drag_snap_timeout = None;
+        let wm = WindowManager::<usize>::with_config(
+            0,
+            config,
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        assert!(wm.drag_snap_remaining().is_none());
+    }
+
+    #[test]
+    fn drag_snap_remaining_none_when_no_drag() {
+        let wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        assert!(wm.drag_snap_remaining().is_none());
+    }
+
+    #[test]
+    fn drag_snap_remaining_returns_some_when_dragging() {
+        use crate::layout::floating::HeaderDrag;
+
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        wm.drag_header = Some(HeaderDrag {
+            id: WindowId::App(1usize),
+            initial_x: 0,
+            initial_y: 0,
+            start_x: 0,
+            start_y: 0,
+        });
+        wm.drag_last_event = Some(Instant::now());
+        let remaining = wm.drag_snap_remaining();
+        assert!(remaining.is_some());
+        assert!(remaining.unwrap() > Duration::from_millis(1000));
+    }
+
+    #[test]
+    fn drag_snap_remaining_zero_when_expired() {
+        use crate::layout::floating::HeaderDrag;
+
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        wm.drag_header = Some(HeaderDrag {
+            id: WindowId::App(1usize),
+            initial_x: 0,
+            initial_y: 0,
+            start_x: 0,
+            start_y: 0,
+        });
+        wm.drag_last_event = Some(Instant::now() - Duration::from_secs(10));
+        assert_eq!(wm.drag_snap_remaining(), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn take_expired_drag_snap_returns_false_when_timeout_none() {
+        use crate::layout::floating::HeaderDrag;
+
+        let mut config = WmConfig::standalone();
+        config.drag_snap_timeout = None;
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            config,
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        wm.drag_header = Some(HeaderDrag {
+            id: WindowId::App(1usize),
+            initial_x: 0,
+            initial_y: 0,
+            start_x: 0,
+            start_y: 0,
+        });
+        wm.drag_last_event = Some(Instant::now() - Duration::from_secs(10));
+        assert!(!wm.take_expired_drag_snap());
+    }
+
+    #[test]
+    fn take_expired_drag_snap_returns_false_before_timeout() {
+        use crate::layout::floating::HeaderDrag;
+
+        let mut config = WmConfig::standalone();
+        config.drag_snap_timeout = Some(Duration::from_secs(10));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            config,
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        wm.drag_header = Some(HeaderDrag {
+            id: WindowId::App(1usize),
+            initial_x: 0,
+            initial_y: 0,
+            start_x: 0,
+            start_y: 0,
+        });
+        wm.drag_last_event = Some(Instant::now());
+        assert!(!wm.take_expired_drag_snap());
+    }
+
+    #[test]
+    fn take_expired_drag_snap_applies_snap_on_timeout() {
+        use crate::layout::InsertPosition;
+        use crate::layout::floating::HeaderDrag;
+        use crate::window::{FloatRect, FloatRectSpec};
+
+        let mut config = WmConfig::standalone();
+        config.drag_snap_timeout = Some(Duration::from_secs(1));
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            config,
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        wm.set_panel_visible(false);
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        let id = WindowId::App(1usize);
+        wm.set_floating_rect(
+            id,
+            Some(FloatRectSpec::Absolute(FloatRect {
+                x: 10,
+                y: 5,
+                width: 20,
+                height: 10,
+            })),
+        );
+
+        let window_id = WindowId::app(2usize);
+        wm.regions.set(
+            window_id,
+            Rect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 24,
+            },
+        );
+        wm.managed_layout = Some(crate::layout::TilingLayout::new(
+            crate::layout::LayoutNode::leaf(window_id),
+        ));
+
+        wm.drag_header = Some(HeaderDrag {
+            id,
+            initial_x: 10,
+            initial_y: 5,
+            start_x: 15,
+            start_y: 10,
+        });
+        wm.drag_snap = Some((
+            Some(window_id),
+            InsertPosition::Right,
+            Rect {
+                x: 40,
+                y: 0,
+                width: 40,
+                height: 24,
+            },
+        ));
+        wm.drag_last_event = Some(Instant::now() - Duration::from_secs(10));
+
+        assert!(wm.take_expired_drag_snap());
+        assert!(wm.drag_header.is_none());
+        assert!(wm.drag_snap.is_none());
+        assert!(wm.layout_contains(id), "snapped window should be in layout");
+    }
+
+    #[test]
+    fn drag_last_event_updated_on_drag_events() {
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+
+        let id = WindowId::system(SystemWindowId::DebugLog);
+        struct DummyDebug;
+        impl SystemWindowView for DummyDebug {
+            fn render(
+                &mut self,
+                _frame: &mut UiFrame<'_>,
+                _surface: WindowSurface,
+                _focused: bool,
+            ) {
+            }
+            fn handle_event(&mut self, _event: &Event) -> bool {
+                false
+            }
+        }
+        wm.set_system_window(SystemWindowId::DebugLog, Box::new(DummyDebug));
+        wm.set_panel_visible(false);
+        wm.show_system_window(SystemWindowId::DebugLog);
+        // register_managed_layout builds display order (populates floating_headers)
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        // Down on system window header should start drag and set drag_last_event
+        let header_rect = wm
+            .floating_headers
+            .iter()
+            .find(|h| h.id == id)
+            .expect("header should exist")
+            .rect;
+        let down = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: header_rect.x,
+            row: header_rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(wm.handle_managed_event(&down));
+        assert!(wm.drag_last_event.is_some());
+
+        // Drag should refresh drag_last_event (reset old value)
+        wm.drag_last_event = Some(Instant::now() - Duration::from_secs(10));
+        let drag = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: header_rect.x + 5,
+            row: header_rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(wm.handle_managed_event(&drag));
+        // drag_last_event should now be recent (not the old 10s ago value)
+        if let Some(last) = wm.drag_last_event {
+            assert!(
+                last.elapsed() < Duration::from_secs(1),
+                "drag should refresh drag_last_event"
+            );
+        } else {
+            panic!("drag_last_event should be set after drag");
+        }
+    }
+
+    #[test]
+    fn power_profile_change_updates_value() {
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        assert_eq!(wm.power_profile, PowerProfile::PowerSaver);
+        wm.set_power_profile(PowerProfile::HighPerformance);
+        assert_eq!(wm.power_profile, PowerProfile::HighPerformance);
+        wm.set_power_profile(PowerProfile::PowerSaver);
+        assert_eq!(wm.power_profile, PowerProfile::PowerSaver);
     }
 }

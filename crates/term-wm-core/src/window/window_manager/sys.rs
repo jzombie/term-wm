@@ -4,14 +4,14 @@ use super::{SystemWindowId, WindowId, WindowManager};
 use crate::components::Overlay;
 
 impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
-    pub(super) fn system_window_entry(
+    pub(crate) fn system_window_entry(
         &self,
         id: SystemWindowId,
     ) -> Option<&super::SystemWindowEntry> {
         self.system_windows.get(&id)
     }
 
-    pub(super) fn system_window_entry_mut(
+    pub(crate) fn system_window_entry_mut(
         &mut self,
         id: SystemWindowId,
     ) -> Option<&mut super::SystemWindowEntry> {
@@ -54,7 +54,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let window_id = WindowId::system(id);
         self.set_system_window_visible(id, false);
         self.remove_system_window_from_layout(window_id);
-        if self.wm_focus.current() == window_id {
+        if *self.wm_focus.current() == window_id {
             self.select_fallback_focus();
         }
     }
@@ -179,7 +179,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                     return self.dispatch_system_window_event(system_id, event);
                 }
                 if matches!(mouse.kind, MouseEventKind::Down(_))
-                    && let WindowId::System(system_id) = self.wm_focus.current()
+                    && let &WindowId::System(system_id) = self.wm_focus.current()
                     && self.system_window_visible(system_id)
                 {
                     self.select_fallback_focus();
@@ -187,7 +187,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 false
             }
             Event::Key(_) => {
-                if let WindowId::System(system_id) = self.wm_focus.current()
+                if let &WindowId::System(system_id) = self.wm_focus.current()
                     && self.system_window_visible(system_id)
                 {
                     return self.dispatch_system_window_event(system_id, event);

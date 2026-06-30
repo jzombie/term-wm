@@ -2,6 +2,8 @@ use ::crossterm::event::{Event, KeyEvent, MouseEvent};
 use std::io;
 use std::time::Duration;
 
+use crate::power_profile::PowerProfile;
+
 pub trait EventSource {
     fn poll(&mut self, timeout: Duration) -> io::Result<bool>;
     fn read(&mut self) -> io::Result<Event>;
@@ -18,6 +20,12 @@ pub trait EventSource {
     /// and a longer interval when idle to reduce CPU usage.
     fn poll_interval(&self) -> Duration {
         Duration::from_millis(16)
+    }
+
+    /// Returns the current power profile based on recent activity.
+    /// Default returns PowerSaver; event sources that track activity override this.
+    fn current_profile(&self) -> PowerProfile {
+        PowerProfile::PowerSaver
     }
 }
 
@@ -44,6 +52,10 @@ impl<T: EventSource + ?Sized> EventSource for &mut T {
 
     fn poll_interval(&self) -> Duration {
         (**self).poll_interval()
+    }
+
+    fn current_profile(&self) -> PowerProfile {
+        (**self).current_profile()
     }
 }
 
@@ -78,7 +90,6 @@ mod tests {
     #[test]
     fn blanket_impl_for_mut_ref_works() {
         let mut d = Dummy;
-        // call methods on &mut Dummy which should use the blanket impl
         let r = d.poll(Duration::from_millis(0)).unwrap();
         assert!(r);
         let ev = d.read().unwrap();

@@ -109,7 +109,11 @@ impl Pty {
     }
 
     pub fn resize(&mut self, size: PtySize) -> PtyResult<()> {
-        if size.rows == 0 || size.cols == 0 {
+        // WORKAROUND: vt100 0.16.2 Grid::col_wrap (grid.rs:683) panics with a
+        // subtraction overflow at cols=1; rows=1 causes similar issues. Clamp
+        // the minimum so the PTY emulator doesn't crash when the terminal is
+        // shrunk small.
+        if size.rows < 2 || size.cols < 2 {
             return Ok(());
         }
         if size == self.pty_size && self.pending_resize.is_none() {

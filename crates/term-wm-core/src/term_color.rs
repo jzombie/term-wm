@@ -1,5 +1,22 @@
 use ratatui::style::Color;
 
+/// Linear RGB interpolation between two colors.
+/// `t = 0.0` returns `a`, `t = 1.0` returns `b`.
+/// Non-RGB color variants return `b` unchanged.
+pub fn lerp_color(a: Color, b: Color, t: f32) -> Color {
+    match (a, b) {
+        (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) => {
+            let t = t.clamp(0.0, 1.0);
+            Color::Rgb(
+                (r1 as f32 + (r2 as f32 - r1 as f32) * t) as u8,
+                (g1 as f32 + (g2 as f32 - g1 as f32) * t) as u8,
+                (b1 as f32 + (b2 as f32 - b1 as f32) * t) as u8,
+            )
+        }
+        _ => b,
+    }
+}
+
 /// Map an RGB triple to a `ratatui::style::Color` appropriate for the
 /// current terminal. If truecolor is available (`COLORTERM` contains
 /// `truecolor` or `24bit`) we return `Color::Rgb(r,g,b)`. Otherwise
@@ -86,8 +103,6 @@ mod tests {
 
     #[test]
     fn to_6cube_and_back_roundtrip() {
-        // Ensure that converting 6-cube coordinates -> RGB -> back to 6-cube
-        // recovers the original cube coordinates for each channel.
         for r6 in 0u8..=5u8 {
             for g6 in 0u8..=5u8 {
                 for b6 in 0u8..=5u8 {
@@ -98,7 +113,6 @@ mod tests {
                     let r6i = r6 as i32;
                     let g6i = g6 as i32;
                     let b6i = b6 as i32;
-                    // allow an off-by-one due to rounding/back-and-forth approximations
                     assert!(
                         (tr - r6i).abs() <= 1,
                         "r roundtrip off: got {} expected {}",
@@ -127,7 +141,6 @@ mod tests {
         let (r, g, b) = (10u8, 50u8, 200u8);
         let gi = rgb_to_gray_index(r, g, b);
         let (gr, gg, gb) = from_gray(gi);
-        // gray components should be equal
         assert_eq!(gr, gg);
         assert_eq!(gg, gb);
     }
@@ -135,7 +148,6 @@ mod tests {
     #[test]
     fn rgb_to_xterm_index_in_valid_range() {
         let idx = rgb_to_xterm_index(10, 20, 30);
-        // xterm color indices used here should be within 16..=255
         assert!((16..=255).contains(&idx));
     }
 

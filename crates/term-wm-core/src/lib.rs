@@ -10,6 +10,8 @@ pub mod event_loop;
 pub mod io;
 pub mod keybindings;
 pub mod layout;
+pub mod power_profile;
+pub mod term_color;
 pub use term_wm_pty_engine::Pane;
 pub use term_wm_pty_engine::Pty;
 pub use term_wm_pty_engine::PtyResult;

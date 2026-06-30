@@ -425,8 +425,8 @@ impl TerminalComponent {
         let focused = ctx.focused();
         for row in start_row..start_row + visible.height {
             for col in start_col..start_col + visible.width {
-                let cell_x = area.x + col;
-                let cell_y = area.y + row;
+                let cell_x = area.x.saturating_add(col);
+                let cell_y = area.y.saturating_add(row);
                 let viewport_row = row.saturating_sub(start_row) as usize;
                 let viewport_col = col.saturating_sub(start_col) as usize;
 
@@ -673,7 +673,7 @@ fn resolve_colors(cell: &vt100::Cell, screen: &vt100::Screen) -> (Option<TColor>
 }
 
 fn vt_color_to_ratatui(color: vt100::Color) -> Option<TColor> {
-    use term_wm_core::io::utils::term_color::map_rgb_to_color;
+    use term_wm_core::term_color::map_rgb_to_color;
     match color {
         vt100::Color::Default => None,
         vt100::Color::Idx(idx) => Some(TColor::Indexed(idx)),
@@ -1135,9 +1135,7 @@ mod tests {
         );
         assert_eq!(
             vt_color_to_ratatui(vt100::Color::Rgb(1, 2, 3)),
-            Some(term_wm_core::io::utils::term_color::map_rgb_to_color(
-                1, 2, 3
-            ))
+            Some(term_wm_core::term_color::map_rgb_to_color(1, 2, 3))
         );
 
         // resolve_color: when both default -> None

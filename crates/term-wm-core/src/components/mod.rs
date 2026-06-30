@@ -53,6 +53,12 @@ pub trait Overlay: Component + std::fmt::Debug + Any {
     fn handle_confirm_event(&mut self, _event: &Event) -> Option<ConfirmAction> {
         None
     }
+
+    /// Optional terminal-area rect behind which a drop-shadow should be
+    /// rendered.  The overlay is drawn on top of the shadow.
+    fn shadow_rect(&self, _area: Rect) -> Option<Rect> {
+        None
+    }
 }
 
 #[derive(Debug, Clone)]

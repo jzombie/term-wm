@@ -84,6 +84,7 @@ impl<D: EventSource> EventLoop<D> {
 mod tests {
     use super::*;
     use crate::io::EventSource;
+    use crate::power_profile::PowerProfile;
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
     use std::time::Duration;
 
@@ -144,5 +145,76 @@ mod tests {
             };
         ev.run(handler).unwrap();
         assert!(count >= 1);
+    }
+
+    // ── Power-profile / poll_interval integration ──────────────────────
+
+    /// An event source that records every timeout passed to [`poll`] and
+    /// derives its [`poll_interval`] from an active [`PowerProfile`].
+    ///
+    /// [`poll`]: EventSource::poll
+    /// [`poll_interval`]: EventSource::poll_interval
+    struct ProfilingEventSource {
+        profile: PowerProfile,
+        intervals: Vec<Duration>,
+    }
+
+    impl EventSource for ProfilingEventSource {
+        fn poll(&mut self, timeout: Duration) -> std::io::Result<bool> {
+            self.intervals.push(timeout);
+            Ok(false)
+        }
+
+        fn read(&mut self) -> std::io::Result<Event> {
+            panic!("read should not be called when poll returns false");
+        }
+
+        fn next_key(&mut self) -> std::io::Result<KeyEvent> {
+            panic!("next_key not expected");
+        }
+
+        fn next_mouse(&mut self) -> std::io::Result<crossterm::event::MouseEvent> {
+            Err(io::Error::other("not implemented"))
+        }
+
+        fn poll_interval(&self) -> Duration {
+            self.profile.poll_interval()
+        }
+    }
+
+    #[test]
+    fn profiles_affect_event_loop_poll_interval() {
+        let driver = ProfilingEventSource {
+            profile: PowerProfile::PowerSaver,
+            intervals: Vec::new(),
+        };
+        let mut ev = EventLoop::new(driver);
+        ev.run(|driver, _evt| {
+            // First handler call: profile is still PowerSaver.
+            //   → Continue → poll() gets 500ms
+            // Second handler call: switch to HighPerformance.
+            //   → Continue → poll() gets 16ms
+            // Third handler call: Quit.
+            if driver.intervals.len() == 1 {
+                driver.profile = PowerProfile::HighPerformance;
+            }
+            if driver.intervals.len() >= 2 {
+                Ok(ControlFlow::Quit)
+            } else {
+                Ok(ControlFlow::Continue)
+            }
+        })
+        .unwrap();
+
+        assert_eq!(
+            ev.driver().intervals[0],
+            Duration::from_millis(500),
+            "PowerSaver should give 500ms poll interval"
+        );
+        assert_eq!(
+            ev.driver().intervals[1],
+            Duration::from_millis(16),
+            "HighPerformance should give 16ms poll interval"
+        );
     }
 }

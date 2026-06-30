@@ -5,11 +5,11 @@ use super::WindowManager;
 
 impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     pub fn focus(&self) -> Id {
-        self.app_focus.current()
+        *self.app_focus.current()
     }
 
     pub fn focused_window(&self) -> WindowId<Id> {
-        self.wm_focus.current()
+        *self.wm_focus.current()
     }
 
     pub fn focused_window_event(&self, event: &Event) -> Option<(WindowId<Id>, Event)> {
@@ -67,6 +67,11 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub fn focus_app_window(&mut self, id: Id) {
+        let prev = *self.wm_focus.current();
+        if prev != WindowId::app(id) {
+            self.unmaximize_window(prev);
+        }
+
         self.app_focus.set_current(id);
         self.set_wm_focus(WindowId::app(id));
         self.bring_to_front_id(WindowId::app(id));
@@ -75,11 +80,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
 
     pub fn set_focus_order(&mut self, order: Vec<Id>) {
         self.app_focus.set_order(order);
-        if !self.app_focus.order.is_empty()
-            && !self.app_focus.order.contains(&self.app_focus.current)
-        {
-            self.app_focus.current = self.app_focus.order[0];
-        }
     }
 
     pub fn advance_focus(&mut self, forward: bool) {
@@ -87,11 +87,11 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub fn wm_focus(&self) -> WindowId<Id> {
-        self.wm_focus.current()
+        *self.wm_focus.current()
     }
 
     pub fn wm_focus_app(&self) -> Option<Id> {
-        self.wm_focus.current().as_app()
+        (*self.wm_focus.current()).as_app()
     }
 
     pub(super) fn set_wm_focus(&mut self, focus: WindowId<Id>) {
@@ -104,6 +104,13 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub fn focus_window_id(&mut self, id: WindowId<Id>) {
+        // If another window was maximized (full-screen floating), restore it
+        // so the newly-focused window isn't hidden behind it.
+        let prev = *self.wm_focus.current();
+        if prev != id {
+            self.unmaximize_window(prev);
+        }
+
         self.set_wm_focus(id);
         self.bring_to_front_id(id);
         self.managed_draw_order = self.z_order.clone();
@@ -114,12 +121,27 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         }
     }
 
+    pub(super) fn unmaximize_window(&mut self, id: WindowId<Id>) {
+        use crate::window::FloatRectSpec;
+        let full = FloatRectSpec::Absolute(crate::window::FloatRect {
+            x: self.managed_area.x as i32,
+            y: self.managed_area.y as i32,
+            width: self.managed_area.width,
+            height: self.managed_area.height,
+        });
+        if let Some(current) = self.floating_rect(id)
+            && current == full
+        {
+            if let Some(prev) = self.take_prev_floating_rect(id) {
+                self.set_floating_rect(id, Some(prev));
+            } else {
+                self.clear_floating_rect(id);
+            }
+        }
+    }
+
     pub(super) fn set_wm_focus_order(&mut self, order: Vec<WindowId<Id>>) {
         self.wm_focus.set_order(order);
-        if !self.wm_focus.order.is_empty() && !self.wm_focus.order.contains(&self.wm_focus.current)
-        {
-            self.wm_focus.current = self.wm_focus.order[0];
-        }
     }
 
     pub(super) fn rebuild_wm_focus_ring(&mut self, active_ids: &[WindowId<Id>]) {
@@ -132,7 +154,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let mut next_order: Vec<WindowId<Id>> = Vec::with_capacity(active.len());
         let mut seen: BTreeSet<WindowId<Id>> = BTreeSet::new();
 
-        for &id in &self.wm_focus.order {
+        for &id in self.wm_focus.order() {
             if active.contains(&id) && seen.insert(id) {
                 next_order.push(id);
             }
@@ -146,16 +168,16 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub(super) fn advance_wm_focus(&mut self, forward: bool) {
-        if self.wm_focus.order.is_empty() {
+        if self.wm_focus.order().is_empty() {
             return;
         }
         self.wm_focus.advance(forward);
-        let focused = self.wm_focus.current();
+        let focused = *self.wm_focus.current();
         self.focus_window_id(focused);
     }
 
     pub(super) fn select_fallback_focus(&mut self) {
-        if let Some(fallback) = self.wm_focus.order.first().copied() {
+        if let Some(fallback) = self.wm_focus.order().first().copied() {
             self.set_wm_focus(fallback);
         }
     }
@@ -175,7 +197,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                         self.advance_wm_focus(true);
                     } else {
                         self.app_focus.advance(true);
-                        let focused_app = self.app_focus.current();
+                        let focused_app = *self.app_focus.current();
                         let region = focused_app;
                         self.set_wm_focus(WindowId::app(region));
                         self.bring_to_front_id(WindowId::app(region));
@@ -187,7 +209,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                         self.advance_wm_focus(false);
                     } else {
                         self.app_focus.advance(false);
-                        let focused_app = self.app_focus.current();
+                        let focused_app = *self.app_focus.current();
                         self.set_wm_focus(WindowId::app(focused_app));
                         self.bring_to_front_id(WindowId::app(focused_app));
                         self.managed_draw_order = self.z_order.clone();
@@ -234,15 +256,15 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub(super) fn focus_for_region(&self, id: Id) -> Option<Id> {
-        if self.app_focus.order.is_empty() {
-            if id == self.app_focus.current {
-                Some(self.app_focus.current)
+        if self.app_focus.order().is_empty() {
+            if id == *self.app_focus.current() {
+                Some(*self.app_focus.current())
             } else {
                 None
             }
         } else {
             self.app_focus
-                .order
+                .order()
                 .iter()
                 .copied()
                 .find(|focus| id == *focus)

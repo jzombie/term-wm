@@ -78,6 +78,13 @@ Examples / Common Edits
 - Move `impl Component for FooComponent {}` immediately below `struct FooComponent` in `src/components/foo.rs`.
 - Rename internal `render` helpers to `render_content` in viewers to avoid colliding with the trait method.
 
+Terminal Size Constraints
+- The layout engine and core MUST NOT impose any artificial maximum terminal size (width/height) below u16::MAX (65535). The engine is designed to work at any resolution — 80×24, 4k (3840×2160), 8k (7680×4320), or larger.
+- All coordinate arithmetic MUST use saturating operations (`saturating_add`, `saturating_sub`, `saturating_mul`) — never bare `+`/`-`/`*` on `u16` or `i32` coordinates — to avoid debug-mode panics on overflow.
+- No hardcoded default dimensions (e.g., 80×24) should be used as actual size constraints; they may only appear as heuristic seeds that are overridden by the real terminal size at render time.
+- Buffer allocations scale with terminal size. Code must not assume small fixed dimensions or use stack-allocated arrays indexed by coordinates.
+- Review all PRs for new hardcoded size limits, bare u16 arithmetic on coordinates, or size assumptions.
+
 Notes for Automation/Agents
 - Automation editing component files should prefer minimal, surgical changes via `apply_patch`.
 - Where work spans multiple files, agents must create a `manage_todo_list` plan first and provide concise progress updates after batches of changes.
