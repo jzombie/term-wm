@@ -107,6 +107,14 @@ impl DebugLogHandle {
     pub fn writer(&self) -> DebugLogWriter {
         DebugLogWriter::new(self.clone())
     }
+
+    /// Read back all log lines (clones the internal buffer).
+    pub fn lines(&self) -> Vec<String> {
+        self.inner
+            .lock()
+            .map(|buf| buf.lines.iter().cloned().collect())
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Debug)]
