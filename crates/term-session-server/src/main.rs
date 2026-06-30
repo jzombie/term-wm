@@ -36,7 +36,7 @@ async fn main() -> std::process::ExitCode {
     };
 
     match term_session_server::run_server(config).await {
-        Ok(()) => std::process::ExitCode::SUCCESS,
+        Ok(code) => std::process::ExitCode::from(code as u8),
         Err(e) => {
             tracing::error!("SessionServer error: {e}");
             std::process::ExitCode::FAILURE

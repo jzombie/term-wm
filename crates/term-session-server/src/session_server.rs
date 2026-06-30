@@ -8,7 +8,7 @@ use muxio_tokio_rpc_ipc_server::{
     RpcIpcServer, RpcIpcServerEvent,
 };
 use portable_pty::PtySize;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, mpsc, oneshot};
 
 use term_session_muxio_service_definitions::{
     CloseSession, ListSessions, ResizePty, Spawn, WriteInput, STREAM_INPUT_METHOD_ID,
@@ -51,9 +51,10 @@ impl ServerState {
 
 type SharedState = Arc<Mutex<ServerState>>;
 
+/// Run the session server. Returns the PTY child's exit code on success.
 pub async fn run_server(
     config: SessionServerConfig,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
     let state: SharedState = Arc::new(Mutex::new(ServerState::new()));
 
     // Spawn initial session
@@ -276,7 +277,10 @@ pub async fn run_server(
         }
     });
 
-    // Output polling and push via stored StreamResponders
+    // Output polling and push via stored StreamResponders.
+    // When the session exits, the exit code is sent back through this
+    // channel so run_server can return it.
+    let (exit_tx, mut exit_rx) = oneshot::channel::<i32>();
     let st = Arc::clone(&state);
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(8));
@@ -298,6 +302,7 @@ pub async fn run_server(
 
             let raw = session.read_output();
             let exited = session.check_exited();
+            let code = session.exit_code;
 
             // Push raw PTY output to all subscribers via StreamResponder
             if !raw.is_empty() {
@@ -312,17 +317,25 @@ pub async fn run_server(
                     sub.respond.respond(Vec::new(), true);
                 }
                 guard.subscribers.clear();
-                tracing::info!("Session exited; stopping push loop");
+                let _ = exit_tx.send(code.unwrap_or(0));
+                tracing::info!("Session exited with code {:?}", code);
                 break;
             }
         }
     });
 
     tracing::info!("Session server listening on {}", config.socket_path);
-    server
-        .serve(&config.socket_path)
-        .await
-        .map_err(|e| format!("serve: {e:?}"))?;
 
-    Ok(())
+    // Wait for either the server to finish or the session to exit.
+    let exit_code = tokio::select! {
+        result = server.serve(&config.socket_path) => {
+            result.map_err(|e| format!("serve: {e:?}"))?;
+            0
+        }
+        code = &mut exit_rx => {
+            code.unwrap_or(0)
+        }
+    };
+
+    Ok(exit_code)
 }
