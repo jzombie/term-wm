@@ -50,12 +50,12 @@ resvg = "0.47.0"
 shell-words = "1.1.1"
 strum = { version = "0.28", features = ["derive"] }
 tempfile = "3.24.0"
-muxio-core = "0.11.1-alpha"
-muxio-rpc-service = "0.11.1-alpha"
-muxio-rpc-service-caller = "0.11.1-alpha"
-muxio-rpc-service-endpoint = "0.11.1-alpha"
-muxio-tokio-rpc-ipc-client = "0.11.1-alpha"
-muxio-tokio-rpc-ipc-server = "0.11.1-alpha"
+muxio-core = "0.12.0-alpha"
+muxio-rpc-service = "0.12.0-alpha"
+muxio-rpc-service-caller = "0.12.0-alpha"
+muxio-rpc-service-endpoint = "0.12.0-alpha"
+muxio-tokio-rpc-ipc-client = "0.12.0-alpha"
+muxio-tokio-rpc-ipc-server = "0.12.0-alpha"
 futures = "0.3.32"
 term-session-client = { path = "crates/term-session-client", version = "0.7.0-alpha" }
 term-session-muxio-service-definitions = { path = "crates/term-session-muxio-service-definitions", version = "0.7.0-alpha" }

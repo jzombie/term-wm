@@ -1528,7 +1528,7 @@ dependencies = [
 
 [[package]]
 name = "muxio-core"
-version = "0.11.1-alpha"
+version = "0.12.0-alpha"
 dependencies = [
  "chrono",
  "once_cell",
@@ -1537,19 +1537,16 @@ dependencies = [
 
 [[package]]
 name = "muxio-rpc-service"
-version = "0.11.1-alpha"
+version = "0.12.0-alpha"
 dependencies = [
- "async-trait",
  "bitcode",
- "futures",
- "muxio-core",
  "num_enum",
  "xxhash-rust",
 ]
 
 [[package]]
 name = "muxio-rpc-service-caller"
-version = "0.11.1-alpha"
+version = "0.12.0-alpha"
 dependencies = [
  "async-trait",
  "futures",
@@ -1561,7 +1558,7 @@ dependencies = [
 
 [[package]]
 name = "muxio-rpc-service-endpoint"
-version = "0.11.1-alpha"
+version = "0.12.0-alpha"
 dependencies = [
  "async-trait",
  "bitcode",
@@ -1569,14 +1566,13 @@ dependencies = [
  "futures",
  "muxio-core",
  "muxio-rpc-service",
- "muxio-rpc-service-caller",
  "tokio",
  "tracing",
 ]
 
 [[package]]
 name = "muxio-tokio-rpc-ipc-client"
-version = "0.11.1-alpha"
+version = "0.12.0-alpha"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1592,7 +1588,7 @@ dependencies = [
 
 [[package]]
 name = "muxio-tokio-rpc-ipc-server"
-version = "0.11.1-alpha"
+version = "0.12.0-alpha"
 dependencies = [
  "async-trait",
  "bytes",
