@@ -122,6 +122,15 @@ cargo run --release -- "./target/release/term-bench --duration 15 --fps 120"
 
 _The benchmark reports frame pacing, render times (avg/1% lows), and cell-update throughput._
 
+### Power-Aware Rendering
+
+`term-wm` includes an automatic power profiling system that adjusts rendering behavior based on user activity:
+
+- **HighPerformance** (~60 fps, 16ms interval) — active when keyboard input is detected.
+- **PowerSaver** (~2 fps, 500ms interval, default) — activates after a short idle period, reducing CPU usage and conserving battery on laptops.
+
+The runtime auto-detects the active profile via `ConsoleEventSource` and propagates it through `WindowManager` on each frame. Developers can hook into `BottomPanelTrait::set_power_profile` for custom indicators or override `current_profile()` on custom `EventSource` implementations.
+
 ## License
 
 `term-wm` is primarily distributed under the terms of both the MIT license and the Apache License (Version 2.0).
