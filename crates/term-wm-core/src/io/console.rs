@@ -10,7 +10,8 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use super::utils::KeyboardNormalizer;
-use super::{EventSource, PowerProfile, RenderTarget};
+use super::{EventSource, RenderTarget};
+use crate::power_profile::PowerProfile;
 use crate::ui::UiFrame;
 
 const ACTIVE_THRESHOLD_MS: u64 = 500;

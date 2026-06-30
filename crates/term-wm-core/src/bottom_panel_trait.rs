@@ -1,7 +1,7 @@
 use crossterm::event::Event;
 use ratatui::prelude::Rect;
 
-use crate::io::PowerProfile;
+use crate::power_profile::PowerProfile;
 use crate::keybindings::Action;
 use crate::ui::UiFrame;
 

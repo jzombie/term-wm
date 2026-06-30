@@ -17,7 +17,7 @@ use super::entry::Window;
 use crate::app_context::AppContext;
 use crate::bottom_panel_trait::BottomPanel;
 use crate::components::{ComponentContext, MenuItem, MenuOverlay, Overlay, SelectionStatus};
-use crate::io::PowerProfile;
+use crate::power_profile::PowerProfile;
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};

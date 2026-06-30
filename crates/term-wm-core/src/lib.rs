@@ -9,6 +9,7 @@ pub mod debug_event_flags;
 pub mod event_loop;
 pub mod io;
 pub mod keybindings;
+pub mod power_profile;
 pub mod layout;
 pub mod term_color;
 pub use term_wm_pty_engine::Pane;

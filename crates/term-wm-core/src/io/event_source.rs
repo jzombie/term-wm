@@ -2,7 +2,7 @@ use ::crossterm::event::{Event, KeyEvent, MouseEvent};
 use std::io;
 use std::time::Duration;
 
-use crate::io::PowerProfile;
+use crate::power_profile::PowerProfile;
 
 pub trait EventSource {
     fn poll(&mut self, timeout: Duration) -> io::Result<bool>;
