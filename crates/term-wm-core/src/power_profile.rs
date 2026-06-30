@@ -34,6 +34,44 @@ pub fn profile_from_activity(last_event_at: Option<Instant>) -> PowerProfile {
     }
 }
 
+/// Tracks the active power profile and detects changes over time.
+///
+/// Used by the main event loop to detect when [`PowerProfile`] changes
+/// (e.g. from `PowerSaver` → `HighPerformance` on user input) and propagate
+/// the new profile to [`WindowManager`].
+///
+/// The poll interval returned by [`PowerProfile::poll_interval`] directly
+/// controls how often the event loop calls `crossterm::event::poll`,
+/// which is the mechanism by which the active profile drives CPU usage.
+///
+/// [`WindowManager`]: crate::window::WindowManager
+pub struct PowerProfileTracker {
+    last_seen: PowerProfile,
+}
+
+impl PowerProfileTracker {
+    pub fn new(initial: PowerProfile) -> Self {
+        Self { last_seen: initial }
+    }
+
+    /// Check whether the profile changed since the last call.
+    ///
+    /// Returns `Some(profile)` with the new value on change, or `None`
+    /// if the profile is unchanged.
+    pub fn poll(&mut self, current: PowerProfile) -> Option<PowerProfile> {
+        if current != self.last_seen {
+            self.last_seen = current;
+            Some(current)
+        } else {
+            None
+        }
+    }
+
+    pub fn current(&self) -> PowerProfile {
+        self.last_seen
+    }
+}
+
 impl PowerProfile {
     /// Fixed poll interval for this profile variant.
     pub fn poll_interval(&self) -> Duration {

@@ -143,8 +143,8 @@ where
     FDraw: for<'frame> FnMut(UiFrame<'frame>, &mut A),
     FMap: Fn(Id) -> Id + Copy,
 {
-    let initial_profile = driver.current_profile();
-    let mut last_seen_profile = initial_profile;
+    let mut profile_tracker =
+        crate::power_profile::PowerProfileTracker::new(driver.current_profile());
     let mut event_loop = EventLoop::new(driver);
     event_loop
         .driver()
@@ -171,10 +171,9 @@ where
                 if let Some(sel_enabled) = app.windows().take_window_selection_change() {
                     app.set_window_selection_enabled(sel_enabled);
                 }
-                let current = driver.current_profile();
-                if current != last_seen_profile {
-                    app.windows().set_power_profile(current);
-                    last_seen_profile = current;
+                if let Some(profile) = profile_tracker.poll(driver.current_profile())
+                {
+                    app.windows().set_power_profile(profile);
                 }
                 Ok(flow)
             };
