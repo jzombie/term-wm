@@ -189,6 +189,9 @@ impl RpcMethodPrebuffered for PushOutput {
     }
 }
 
+// ── StreamInput (streaming handler) ─────────────────────────────────
+pub const STREAM_INPUT_METHOD_ID: u64 = rpc_method_id!("session.stream_input");
+
 // ── ListSessions ─────────────────────────────────────────────────────
 
 #[derive(Encode, Decode)]

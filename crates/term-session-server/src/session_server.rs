@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use muxio_core::rpc::RpcRequest;
+use muxio_core::rpc::rpc_internals::RpcStreamEvent;
 use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;
 use muxio_rpc_service_caller::RpcServiceCallerInterface;
 use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
@@ -13,6 +14,7 @@ use tokio::sync::{Mutex, mpsc};
 
 use term_session_muxio_service_definitions::{
     CloseSession, ListSessions, PushOutput, ResizePty, SessionPushFrame, Spawn, WriteInput,
+    STREAM_INPUT_METHOD_ID,
 };
 
 use crate::session::Session;
@@ -211,6 +213,20 @@ pub async fn run_server(
         })
         .await
         .map_err(|e| format!("register WriteInput: {e:?}"))?;
+
+    // Register StreamInput (streaming handler for PTY input)
+    let st = Arc::clone(&state);
+    endpoint
+        .register_stream_handler(STREAM_INPUT_METHOD_ID, move |event, _emit, _ctx| {
+            if let RpcStreamEvent::PayloadChunk { bytes, .. } = event
+                && let Ok(mut guard) = st.try_lock()
+                && let Some(session) = guard.session.as_mut()
+            {
+                let _ = session.pty.write_bytes(&bytes);
+            }
+        })
+        .await
+        .map_err(|e| format!("register stream handler STREAM_INPUT: {e:?}"))?;
 
     // Connection event handler
     let st = Arc::clone(&state);

@@ -9,6 +9,8 @@ use term_wm_pty_engine::{Pane, PtyResult};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
+type InputWriter = Box<dyn FnMut(&[u8]) -> io::Result<()> + Send>;
+
 pub struct RemotePane {
     pub id: u64,
     client: std::sync::Arc<RpcIpcClient>,
@@ -17,7 +19,7 @@ pub struct RemotePane {
     exited: Cell<bool>,
     title: Cell<Option<String>>,
     push_rx: mpsc::UnboundedReceiver<SessionPushFrame>,
-    write_tx: mpsc::UnboundedSender<(u64, Vec<u8>)>,
+    input_writer: InputWriter,
 }
 
 impl RemotePane {
@@ -28,7 +30,7 @@ impl RemotePane {
         cols: u16,
         rows: u16,
         push_rx: mpsc::UnboundedReceiver<SessionPushFrame>,
-        write_tx: mpsc::UnboundedSender<(u64, Vec<u8>)>,
+        input_writer: InputWriter,
     ) -> Self {
         Self {
             id,
@@ -38,7 +40,7 @@ impl RemotePane {
             exited: Cell::new(false),
             title: Cell::new(None),
             push_rx,
-            write_tx,
+            input_writer,
         }
     }
 
@@ -101,8 +103,7 @@ impl Pane for RemotePane {
     }
 
     fn write_bytes(&mut self, input: &[u8]) -> io::Result<()> {
-        let _ = self.write_tx.send((self.id, input.to_vec()));
-        Ok(())
+        (self.input_writer)(input)
     }
 
     fn max_scrollback(&mut self) -> usize {
