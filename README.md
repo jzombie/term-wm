@@ -5,7 +5,7 @@
 
 **WORK IN PROGRESS. API SUBJECT TO CHANGE.**
 
-A cross-platform terminal multiplexer, window manager, and [Ratatui](https://crates.io/crates/ratatui) component library.
+A cross-platform terminal multiplexer, window manager, [Ratatui](https://crates.io/crates/ratatui) component library and runtime.
 
 It is controllable via mouse and keyboard and works the same over SSH, Mac, Linux, and Windows.
 

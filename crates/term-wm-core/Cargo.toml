@@ -1,6 +1,6 @@
 [package]
 name = "term-wm-core"
-description = "Core window manager engine and layout primitives for term-wm."
+description = "Core window manager engine, runtime, and layout primitives for term-wm."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
