@@ -1,13 +1,9 @@
-mod connection;
 mod remote_pane;
 
-pub use connection::{SessionServerConnection, SessionServerReceiver};
 pub use remote_pane::RemotePane;
-pub use term_session_server::protocol::{
-    SessionServerPush, SessionServerRequest, SessionServerResponse,
-};
 
 use std::io::{self, Write, stdout};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crossterm::QueueableCommand;
@@ -16,14 +12,20 @@ use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
+use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;
+use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
+use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient, RpcServiceCallerInterface};
 use portable_pty::PtySize;
+use term_session_muxio_service_definitions::{PushOutput, SessionPushFrame, Spawn, WriteInput};
 use term_wm_pty_engine::Pane;
 use term_wm_pty_engine::clipboard::{Clipboard, extract_osc52_text};
 use term_wm_pty_engine::input_encoding::{key_to_bytes, mouse_event_to_bytes};
 use term_wm_pty_engine::signal::install_sigint_handler;
+use tokio::sync::mpsc;
 use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
 struct TerminalGuard;
+
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = stdout().queue(crossterm::event::DisableMouseCapture);
@@ -34,47 +36,58 @@ impl Drop for TerminalGuard {
     }
 }
 
+fn to_io(e: impl std::fmt::Debug) -> io::Error {
+    io::Error::other(format!("{e:?}"))
+}
+
 /// Connect to a term-session-server and run the TUI viewer.
-///
-/// Sets up raw mode, alternate screen, and mouse capture; runs the
-/// event loop (network drain + input polling + diff render + frame
-/// pacing); restores terminal state on return.
-pub fn run_session(session_server_addr: &str) -> io::Result<()> {
+pub async fn run_session(socket_path: &str) -> io::Result<()> {
     let sigint = install_sigint_handler()?;
-    let (conn, mut receiver) = SessionServerConnection::connect(session_server_addr)?;
 
-    // Get actual terminal size and resize the pane
+    // Connect via muxio IPC
+    let client: Arc<RpcIpcClient> = RpcIpcClient::new(socket_path)
+        .await
+        .map_err(|e| io::Error::new(io::ErrorKind::ConnectionRefused, format!("{e:?}")))?;
+
+    // Channel for push frames from the muxio read loop to the TUI loop
+    let (push_tx, push_rx) = mpsc::unbounded_channel::<SessionPushFrame>();
+
+    // Register PushOutput handler on the client endpoint
+    {
+        let endpoint = client.get_endpoint();
+        let tx = push_tx.clone();
+        endpoint
+            .register_prebuffered(PushOutput::METHOD_ID, move |payload, _ctx| {
+                let tx = tx.clone();
+                async move {
+                    let (frame, _consumed) = SessionPushFrame::decode(&payload)
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                    let _ = tx.send(frame);
+                    Ok(Vec::new())
+                }
+            })
+            .await
+            .map_err(to_io)?;
+    }
+
+    // Get terminal size
     let (term_cols, term_rows) = crossterm::terminal::size()?;
-    let session_id = 1;
-    let mut pane = RemotePane::new(session_id, conn.clone(), term_cols, term_rows);
-    let _ = pane.resize(PtySize {
-        rows: term_rows,
-        cols: term_cols,
-        pixel_width: 0,
-        pixel_height: 0,
-    });
+    let session_id = 1u64;
 
-    // Drain pushes until we have at least one Snapshot for our session.
-    // Retry with short sleeps so we don't miss data that arrives late.
-    let mut got_snapshot = false;
-    for _ in 0..10 {
-        for push in receiver.drain_pushes() {
-            match push {
-                SessionServerPush::Snapshot { id, data } if id == session_id => {
-                    pane.feed_bytes(&data);
-                    got_snapshot = true;
-                }
-                SessionServerPush::RawOutput { id, data } if id == session_id => {
-                    pane.feed_bytes(&data);
-                    got_snapshot = true;
-                }
-                _ => {}
-            }
-        }
-        if got_snapshot {
+    // Spawn session
+    Spawn::call(&*client, (None, term_cols, term_rows))
+        .await
+        .map_err(|e| io::Error::other(format!("spawn: {e:?}")))?;
+
+    let mut pane = RemotePane::new(session_id, client.clone(), term_cols, term_rows, push_rx);
+
+    // Wait for initial output
+    for _ in 0..20 {
+        pane.drain_pushes();
+        if !pane.screen().contents_formatted().is_empty() {
             break;
         }
-        std::thread::sleep(Duration::from_millis(50));
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
     enable_raw_mode()?;
@@ -87,7 +100,7 @@ pub fn run_session(session_server_addr: &str) -> io::Result<()> {
 
     let mut clipboard = Clipboard::new();
 
-    // Snapshot the initial full screen (content only — no terminal modes)
+    // Initial full screen render
     {
         let screen = pane.screen();
         let data = screen.contents_formatted();
@@ -95,52 +108,38 @@ pub fn run_session(session_server_addr: &str) -> io::Result<()> {
         out.flush()?;
     }
 
-    // Cache previous screen content bytes for diff computation.
     let mut prev_content: Option<Vec<u8>> = None;
 
     loop {
         let frame_start = std::time::Instant::now();
 
-        // Drain session server pushes
-        let mut has_new_data = false;
-        for push in receiver.drain_pushes() {
-            match push {
-                SessionServerPush::RawOutput { id, data }
-                | SessionServerPush::Snapshot { id, data }
-                    if id == session_id =>
-                {
-                    has_new_data = true;
-                    pane.feed_bytes(&data);
-                    if let Some(text) = extract_osc52_text(&data) {
-                        // Clipboard::set() does BOTH:
-                        // 1. arboard → sets clipboard on the local machine
-                        // 2. OSC 52 → flows through SSH/pipe to the terminal
-                        //    emulator (Zed, Terminal.app, iTerm2, etc.) which
-                        //    intercepts it and sets the LOCAL clipboard.
-                        // This covers both local and remote scenarios.
-                        let _ = clipboard.set(&text);
-                    }
-                }
-                SessionServerPush::SessionExited { .. } => return Ok(()),
-                _ => {}
-            }
+        // Drain pushes from the server
+        let prev_content_bytes = prev_content.clone();
+        pane.drain_pushes();
+        let has_new_data = match &prev_content_bytes {
+            Some(prev) => pane.screen().contents_formatted() != *prev,
+            None => true,
+        };
+
+        // Check for OSC 52 clipboard data
+        if has_new_data
+            && let Some(text) = extract_osc52_text(&pane.screen().contents_formatted())
+        {
+            let _ = clipboard.set(&text);
         }
 
-        // Exit if the net thread has died (connection lost).
-        if !conn.is_alive() {
+        // Check connection health
+        if !client.is_connected() {
             return Err(io::Error::other("connection to session server lost"));
         }
 
-        // Drain SIGINT (Ctrl-C) caught by our signal handler.
-        // This covers environments where the terminal driver delivers a
-        // real SIGINT instead of forwarding 0x03 through the input stream.
+        // Drain SIGINT
         if sigint.received() {
             sigint.ack();
-            let _ = conn.send_write(session_id, &[0x03]);
+            let _ = WriteInput::call(&*client, (session_id, vec![0x03])).await;
         }
 
-        // Poll input with a short timeout so the crossterm background
-        // thread on macOS has time to deliver events.
+        // Poll input
         let had_input = if event::poll(Duration::from_millis(4))? {
             let evt = event::read()?;
             match evt {
@@ -149,7 +148,7 @@ pub fn run_session(session_server_addr: &str) -> io::Result<()> {
                 {
                     let bytes = key_to_bytes(key);
                     if !bytes.is_empty() {
-                        let _ = conn.send_write(session_id, &bytes);
+                        let _ = pane.write_bytes(&bytes);
                     }
                     true
                 }
@@ -159,7 +158,7 @@ pub fn run_session(session_server_addr: &str) -> io::Result<()> {
                     if mouse_active {
                         let bytes = mouse_event_to_bytes(mouse, MouseProtocolEncoding::Sgr);
                         if !bytes.is_empty() {
-                            let _ = conn.send_write(session_id, &bytes);
+                            let _ = pane.write_bytes(&bytes);
                         }
                     }
                     mouse_active
@@ -181,7 +180,7 @@ pub fn run_session(session_server_addr: &str) -> io::Result<()> {
             false
         };
 
-        // Diff-based incremental render (content only — no terminal modes)
+        // Diff-based incremental render
         if has_new_data || prev_content.is_none() {
             let screen = pane.screen();
             let (rows, cols) = screen.size();
@@ -203,7 +202,12 @@ pub fn run_session(session_server_addr: &str) -> io::Result<()> {
             prev_content = Some(screen.contents_formatted());
         }
 
-        // Pace the loop: sleep for the remainder of a 8ms frame if idle
+        // Exit on session exit
+        if pane.has_exited() {
+            return Ok(());
+        }
+
+        // Pace the loop
         if !has_new_data && !had_input {
             let elapsed = frame_start.elapsed();
             if elapsed < Duration::from_millis(8) {
