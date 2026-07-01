@@ -437,13 +437,10 @@ impl WindowManager {
         let focused_window = self.focus.current();
         let decorator = self.decorator();
         let total = self.managed_draw_order.len() as f32;
+        let num_app = self.managed_draw_order.len();
         for (i, &key) in self.managed_draw_order.iter().enumerate() {
             let full = self.full_region_for_id(key);
             if full.width == 0 || full.height == 0 {
-                continue;
-            }
-            let visible_full = self.visible_region_for_id(key);
-            if visible_full.width == 0 || visible_full.height == 0 {
                 continue;
             }
             let dest = self.window_dest(key, full);
@@ -456,11 +453,7 @@ impl WindowManager {
             if inner.width == 0 || inner.height == 0 {
                 continue;
             }
-            let depth = if total > 1.0 {
-                i as f32 / (total - 1.0)
-            } else {
-                1.0
-            };
+            let z = super::WindowManager::compute_z_depth(i, num_app);
             plan.push(super::DrawTask::App(super::WindowDrawContext {
                 id: key,
                 surface: super::WindowSurface {
@@ -468,9 +461,47 @@ impl WindowManager {
                     inner,
                     dest,
                     draw_shadow: self.is_window_floating(key) && self.config.shadow_enabled,
-                    z_depth: depth,
+                    z_depth: z,
                 },
                 focused: *focused_window == key,
+            }));
+        }
+
+        // Append visible system windows to the draw plan.
+        for (sys_id, entry) in &self.system_windows {
+            if !entry.visible() {
+                continue;
+            }
+            let full = self.managed_area;
+            if full.width == 0 || full.height == 0 {
+                continue;
+            }
+            let inner = decorator.content_area(Rect {
+                x: 0,
+                y: 0,
+                width: full.width,
+                height: full.height,
+            });
+            if inner.width == 0 || inner.height == 0 {
+                continue;
+            }
+            let dest = crate::window::FloatRect {
+                x: full.x as i32,
+                y: full.y as i32,
+                width: full.width,
+                height: full.height,
+            };
+            let z = super::WindowManager::compute_z_depth(plan.len(), plan.len() + 1);
+            plan.push(super::DrawTask::System(super::SystemWindowDraw {
+                id: *sys_id,
+                surface: super::WindowSurface {
+                    full,
+                    inner,
+                    dest,
+                    draw_shadow: false,
+                    z_depth: z,
+                },
+                focused: false,
             }));
         }
         plan
