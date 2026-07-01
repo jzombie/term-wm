@@ -4,3 +4,4 @@
 2. Better application lifecycle management.
 3. Better threading model (see thread-model.md)
 4. "Dirty rectangles" damage control should be a separate workspace crate that can work outside of the window manager.  I have a prototype server/client scenario where the client is a dummy buffer render, and the server/client should also take advantage of this algorithm.
+5. Configurable scrollback buffering that can scale to millions without impacting performance or balooning memory (goal, a few hundred megabytes of RAM with several million lines of scrollback).  Research advanced memory paging.
