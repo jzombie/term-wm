@@ -219,7 +219,7 @@ impl WindowManagerHost<PaneId> for App {
         let mut h = WmHelpOverlayComponent::new(self.windows.app_ctx(), kb);
         h.show();
         h.set_selection_enabled(self.windows.clipboard_enabled());
-        self.windows.open_overlay(OverlayId::Help, Box::new(h));
+        self.windows.open_overlay(OverlayId::Help, Some(Box::new(h)));
     }
 
     fn open_keybindings_overlay(&mut self) {
@@ -228,7 +228,7 @@ impl WindowManagerHost<PaneId> for App {
         let mut o = WmKeybindingOverlayComponent::new(self.windows.app_ctx(), kb);
         o.show();
         self.windows
-            .open_overlay(OverlayId::Keybindings, Box::new(o));
+            .open_overlay(OverlayId::Keybindings, Some(Box::new(o)));
     }
 
     fn open_exit_confirm(&mut self) {
@@ -239,7 +239,7 @@ impl WindowManagerHost<PaneId> for App {
             "Exit the application?\nUnsaved changes will be lost.",
         );
         self.windows
-            .open_overlay(OverlayId::ExitConfirm, Box::new(confirm));
+            .open_overlay(OverlayId::ExitConfirm, Some(Box::new(confirm)));
     }
 
     fn wm_new_window(&mut self) -> io::Result<()> {

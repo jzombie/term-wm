@@ -787,8 +787,10 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             .insert(id, SystemWindowEntry::new(component));
     }
 
-    pub fn open_overlay(&mut self, id: OverlayId, overlay: Box<dyn Overlay>) {
-        self.overlays.insert(id, overlay);
+    pub fn open_overlay(&mut self, id: OverlayId, overlay: Option<Box<dyn Overlay>>) {
+        if let Some(o) = overlay {
+            self.overlays.insert(id, o);
+        }
     }
 
     pub fn set_scroll_keyboard_enabled(&mut self, enabled: bool) {

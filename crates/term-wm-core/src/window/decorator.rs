@@ -287,20 +287,3 @@ mod tests {
         assert_eq!(dec.hit_test(rect, rect.x + 2, header_y), HeaderAction::Drag);
     }
 }
-
-/// A decorator that renders nothing. Useful when window chrome is not desired
-/// (e.g. when the app provides its own frame) but the app may later want to
-/// inject a custom decorator with specific controls.
-#[derive(Debug)]
-pub struct NoopDecorator;
-
-impl WindowDecorator for NoopDecorator {
-    fn render_window(&self, _frame: &mut UiFrame<'_>, _rect: Rect, _ctx: WindowRenderCtx<'_>) {}
-    fn hit_test(&self, _window_rect: Rect, _x: u16, _y: u16) -> HeaderAction {
-        HeaderAction::None
-    }
-
-    fn content_area(&self, window_rect: Rect) -> Rect {
-        window_rect
-    }
-}
