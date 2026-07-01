@@ -37,10 +37,10 @@ pub trait WindowManagerHost {
         self.windows()
             .open_overlay(crate::window::OverlayId::ExitConfirm, None);
     }
-    /// Called when a panic is detected.  The default opens the debug log
-    /// if a system component has been registered via
-    /// `WindowManager::set_system_window`.
+    /// Called when a panic is detected.
     fn on_panic(&mut self) {}
+    /// Toggle the debug log window visibility.
+    fn toggle_debug_window(&mut self) {}
 }
 
 pub trait WindowProvider: WindowManagerHost {
@@ -327,7 +327,7 @@ where
                                 app.windows().close_wm_overlay();
                             }
                             WmMenuAction::ToggleDebugWindow => {
-                                // TODO: delegate to App when system window API is finalized
+                                app.toggle_debug_window();
                                 app.windows().close_wm_overlay();
                             }
                             WmMenuAction::Help => {

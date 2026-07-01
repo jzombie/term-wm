@@ -238,6 +238,10 @@ impl WindowManagerHost for App {
         self.debug_visible = true;
     }
 
+    fn toggle_debug_window(&mut self) {
+        self.debug_visible = !self.debug_visible;
+    }
+
     fn wm_new_window(&mut self) -> io::Result<()> {
         let mut pane =
             TerminalComponent::spawn_default(default_shell_command()).map_err(io::Error::other)?;
