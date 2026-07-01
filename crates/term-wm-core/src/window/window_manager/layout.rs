@@ -1,5 +1,3 @@
-
-
 use crossterm::event::{Event, MouseEvent};
 use ratatui::prelude::Rect;
 use ratatui::widgets::Clear;

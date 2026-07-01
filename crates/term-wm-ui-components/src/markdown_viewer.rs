@@ -417,7 +417,7 @@ mod markdown_tests {
 
     fn sample_viewer() -> MarkdownViewerComponent {
         let mut mv = MarkdownViewerComponent::new();
-            mv.set_markdown(SAMPLE_HELP_MD, &term_wm_core::theme::NOIR);
+        mv.set_markdown(SAMPLE_HELP_MD, &term_wm_core::theme::NOIR);
         mv
     }
 

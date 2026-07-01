@@ -44,11 +44,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManagerExt<Id> for W
             ));
         WmBuilder::embedded()
             .app_ctx(std::sync::Arc::new(app_ctx))
-            .build(
-                current,
-                Some(top_panel),
-                Some(bottom_panel),
-                None,
-            )
+            .build(current, Some(top_panel), Some(bottom_panel), None)
     }
 }

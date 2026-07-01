@@ -113,9 +113,7 @@ impl WindowDecorator for DefaultDecorator {
                 .fg(theme.decorator_border_active)
                 .bg(Color::Reset)
         } else {
-            Style::default()
-                .fg(theme.decorator_border)
-                .bg(Color::Reset)
+            Style::default().fg(theme.decorator_border).bg(Color::Reset)
         };
 
         let header_style = if focused {

@@ -145,7 +145,13 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             .collect();
         let is_obscured =
             |x: u16, y: u16| -> bool { obscuring.iter().any(|r| rect_contains(*r, x, y)) };
-        render_handles_masked(frame, &self.handles, hovered, is_obscured, &self.config.theme);
+        render_handles_masked(
+            frame,
+            &self.handles,
+            hovered,
+            is_obscured,
+            &self.config.theme,
+        );
         let floating_panes: Vec<FloatingPane<WindowId<Id>>> = self
             .windows
             .iter()

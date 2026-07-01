@@ -411,7 +411,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         app_ctx: Arc<AppContext>,
         top_panel: Option<Box<dyn TopPanel<WindowId<Id>>>>,
         bottom_panel: Option<Box<dyn BottomPanel>>,
-    menu_overlay: Option<Box<dyn MenuOverlay<WmMenuAction>>>,
+        menu_overlay: Option<Box<dyn MenuOverlay<WmMenuAction>>>,
     ) -> Self {
         let mouse_capture_enabled = config.mouse_capture_enabled;
         let clipboard = Some(crate::clipboard::Clipboard::new());

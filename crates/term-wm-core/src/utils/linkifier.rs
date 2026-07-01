@@ -161,7 +161,11 @@ impl Linkifier {
         Self { finder }
     }
 
-    pub fn linkify_fragments(&self, lines: Vec<Vec<LinkFragment>>, theme: &crate::theme::Theme) -> LinkifiedText {
+    pub fn linkify_fragments(
+        &self,
+        lines: Vec<Vec<LinkFragment>>,
+        theme: &crate::theme::Theme,
+    ) -> LinkifiedText {
         let mut rendered_lines = Vec::with_capacity(lines.len().max(1));
         let mut link_map = Vec::with_capacity(lines.len().max(1));
 
