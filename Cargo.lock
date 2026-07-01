@@ -2367,6 +2367,7 @@ name = "term-wm"
 version = "0.8.0-alpha"
 dependencies = [
  "clap",
+ "crossbeam-channel",
  "crossterm",
  "hostname",
  "indoc",

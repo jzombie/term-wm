@@ -1,4 +1,5 @@
 use std::io;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use portable_pty::{Child, ExitStatus, PtySize};
@@ -20,6 +21,8 @@ pub trait Pane {
     fn bytes_received(&self) -> usize;
     fn last_bytes_text(&self) -> String;
     fn kill_child(&mut self) -> PtyResult<()>;
+    /// Set a wakeup callback invoked when new PTY data is available.
+    fn set_wakeup(&mut self, _cb: Option<Arc<dyn Fn() + Send + Sync>>) {}
     fn take_pending_title(&mut self) -> Option<String> {
         None
     }
@@ -99,5 +102,9 @@ impl Pane for crate::Pty {
             (Some(child), Some(handle)) => Some((child, handle)),
             _ => None,
         }
+    }
+
+    fn set_wakeup(&mut self, cb: Option<Arc<dyn Fn() + Send + Sync>>) {
+        crate::Pty::set_wakeup(self, cb)
     }
 }

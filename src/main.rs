@@ -6,13 +6,16 @@ use clap::Parser;
 use line_ending::LineEnding;
 use ratatui::prelude::Rect;
 
+use crossbeam_channel::Sender;
+
 use term_wm::app_context::AppContext;
 use term_wm::components::MenuOverlay;
 use term_wm::components::{Component, ComponentContext};
 use term_wm::config::WmBuilder;
 use term_wm::io::{
     RenderTarget,
-    console::{ConsoleEventSource, ConsoleRenderTarget},
+    console::ConsoleRenderTarget,
+    unified_event_source::{UnifiedEvent, UnifiedEventSource},
 };
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
 use term_wm::ui::UiFrame;
@@ -49,12 +52,13 @@ fn main() -> io::Result<()> {
             cli.cmds.len().max(1)
         })
     };
-    let mut app = App::new_with(cli.cmds, total, cli.embedded)?;
+    let mut event_source = UnifiedEventSource::new()?;
+    let pty_wakeup_tx = event_source.pty_wakeup_tx();
+    let mut app = App::new_with(cli.cmds, total, cli.embedded, pty_wakeup_tx)?;
     let mut output = ConsoleRenderTarget::new()?;
     output.enter()?;
-    let mut input = ConsoleEventSource::new();
 
-    let result = run_window_app(&mut output, &mut input, &mut app);
+    let result = run_window_app(&mut output, &mut event_source, &mut app);
 
     output.exit()?;
 
@@ -64,10 +68,11 @@ fn main() -> io::Result<()> {
 struct App {
     windows: WindowManager,
     terminals: BTreeMap<WindowKey, ScrollViewComponent<TerminalComponent>>,
+    pty_wakeup_tx: Sender<UnifiedEvent>,
 }
 
 impl App {
-    fn new_with(commands: Vec<String>, num_windows: usize, embedded: bool) -> io::Result<Self> {
+    fn new_with(commands: Vec<String>, num_windows: usize, embedded: bool, pty_wakeup_tx: Sender<UnifiedEvent>) -> io::Result<Self> {
         let app_ctx = Arc::new(
             AppContext::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")).with_hostname(
                 &hostname::get()
@@ -108,6 +113,7 @@ impl App {
                 Some(menu_overlay),
             ),
             terminals: BTreeMap::new(),
+            pty_wakeup_tx,
         };
 
         // Initialize debug log system window
@@ -174,6 +180,10 @@ impl App {
         sv.content
             .set_selection_enabled(self.windows.clipboard_enabled());
         let key = self.windows.create_window();
+        let tx = self.pty_wakeup_tx.clone();
+        sv.content.set_wakeup(Some(std::sync::Arc::new(move || {
+            let _ = tx.send(UnifiedEvent::PtyWakeup(key));
+        })));
         self.terminals.insert(key, sv);
         self.windows.set_focus(key);
         self.windows.tile_window(key);
@@ -230,6 +240,10 @@ impl WindowManagerHost for App {
         sv.content
             .set_selection_enabled(self.windows.clipboard_enabled());
         let key = self.windows.create_window();
+        let tx = self.pty_wakeup_tx.clone();
+        sv.content.set_wakeup(Some(std::sync::Arc::new(move || {
+            let _ = tx.send(UnifiedEvent::PtyWakeup(key));
+        })));
         self.terminals.insert(key, sv);
         self.windows.set_focus(key);
         self.windows.tile_window(key);

@@ -630,6 +630,11 @@ impl TerminalComponent {
         self.pane.take_parts()
     }
 
+    /// Set a wakeup callback for when new PTY data arrives.
+    pub fn set_wakeup(&mut self, cb: Option<std::sync::Arc<dyn Fn() + Send + Sync>>) {
+        self.pane.set_wakeup(cb);
+    }
+
     fn link_at_position(&self, mouse: &MouseEvent) -> Option<String> {
         if self.last_area.width == 0 || self.last_area.height == 0 {
             return None;

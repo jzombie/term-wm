@@ -15,6 +15,7 @@ use crate::window::WindowKey;
 use super::utils::KeyboardNormalizer;
 
 /// Events that can flow through the unified event channel.
+#[derive(Debug, Clone)]
 pub enum UnifiedEvent {
     /// A user-input event from crossterm (key, mouse, resize).
     Input(Event),
