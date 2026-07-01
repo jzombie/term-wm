@@ -631,4 +631,102 @@ mod tests {
         assert!(rect_contains(r2, 1, 1));
         assert!(!rect_contains(r2, 3, 1));
     }
+
+    // --- Direct mode scroll tests ---
+
+    struct EventRecorder {
+        received_scroll: bool,
+    }
+    impl Component for EventRecorder {
+        fn render(&mut self, _frame: &mut UiFrame<'_>, _area: Rect, _ctx: &ComponentContext) {}
+        fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
+            if matches!(event, Event::Mouse(m)
+                if matches!(m.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown)
+            ) {
+                self.received_scroll = true;
+            }
+            false
+        }
+    }
+
+    #[test]
+    fn scroll_view_consumes_scroll_in_normal_mode() {
+        use crossterm::event::KeyModifiers;
+
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+
+        let ctx = ComponentContext::new(true);
+        let scroll_down = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        // Without direct mode, scroll event should be consumed by scroll view.
+        let consumed = sv.handle_event(&scroll_down, &ctx);
+        assert!(consumed, "scroll must be consumed in normal mode");
+    }
+
+    #[test]
+    fn scroll_view_passes_scroll_in_direct_mode() {
+        use crossterm::event::KeyModifiers;
+
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+
+        // Direct mode context
+        let ctx = ComponentContext::new(true).with_direct_mode(true);
+        let scroll_down = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let consumed = sv.handle_event(&scroll_down, &ctx);
+        // In direct mode, scroll should NOT be consumed by scroll view —
+        // it falls through to the child. Our EventRecorder returns false
+        // so consumed is false.
+        assert!(!consumed, "scroll must NOT be consumed in direct mode");
+        assert!(
+            sv.content.received_scroll,
+            "scroll must reach child component in direct mode"
+        );
+    }
+
+    #[test]
+    fn non_scroll_mouse_events_unaffected_by_direct_mode() {
+        use crossterm::event::KeyModifiers;
+
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+
+        let ctx_dm = ComponentContext::new(true).with_direct_mode(true);
+        let ctx_normal = ComponentContext::new(true);
+
+        let click = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        // Direct mode: non-scroll events pass through to child
+        let consumed_dm = sv.handle_event(&click, &ctx_dm);
+        assert!(
+            !consumed_dm,
+            "non-scroll click should not be consumed regardless"
+        );
+
+        // Normal mode: non-scroll events pass through to child (only scroll is consumed)
+        sv.content.received_scroll = false;
+        let consumed_normal = sv.handle_event(&click, &ctx_normal);
+        assert!(
+            !consumed_normal,
+            "non-scroll click should not be consumed in normal mode either"
+        );
+    }
 }

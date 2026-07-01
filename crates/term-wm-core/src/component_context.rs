@@ -296,3 +296,34 @@ impl Default for ComponentContext {
         Self::new(false)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_mode_defaults_to_false() {
+        let ctx = ComponentContext::new(true);
+        assert!(!ctx.direct_mode());
+    }
+
+    #[test]
+    fn direct_mode_get_set_roundtrip() {
+        let ctx = ComponentContext::new(false);
+        assert!(!ctx.direct_mode());
+        let ctx = ctx.with_direct_mode(true);
+        assert!(ctx.direct_mode());
+        let ctx = ctx.with_direct_mode(false);
+        assert!(!ctx.direct_mode());
+    }
+
+    #[test]
+    fn direct_mode_independent_of_focus() {
+        let ctx = ComponentContext::new(true).with_direct_mode(true);
+        assert!(ctx.focused());
+        assert!(ctx.direct_mode());
+        let ctx = ComponentContext::new(false).with_direct_mode(true);
+        assert!(!ctx.focused());
+        assert!(ctx.direct_mode());
+    }
+}
