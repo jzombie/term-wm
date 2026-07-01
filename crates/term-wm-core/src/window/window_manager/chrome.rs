@@ -183,19 +183,20 @@ impl WindowManager {
     pub fn close_window(&mut self, key: WindowKey) {
         tracing::debug!(window_key = ?key, "closing window");
 
-        // Remove from SlotMap — all downstream keys are instantly invalidated.
-        if self.windows.remove(key).is_none() {
-            return; // already closed
-        }
-
+        // Do all cleanup FIRST while the key is still valid in the SlotMap.
         self.clear_floating_rect(key);
         self.z_order.retain(|x| *x != key);
         self.managed_draw_order.retain(|x| *x != key);
         self.set_minimized(key, false);
         self.regions.remove(key);
+        self.scroll.remove(&key);
+        self.remove_from_focus_ring(key);
         if *self.focus.current() == key {
             self.select_fallback_focus();
         }
         self.closed_windows.push(key);
+
+        // Remove from SlotMap LAST — after removal the key is invalid.
+        self.windows.remove(key);
     }
 }

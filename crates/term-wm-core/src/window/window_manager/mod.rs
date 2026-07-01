@@ -455,6 +455,12 @@ impl WindowManager {
         }
     }
 
+    /// Remove a key from the focus ring's order (called after closing a window).
+    fn remove_from_focus_ring(&mut self, key: WindowKey) {
+        let order: Vec<WindowKey> = self.focus.order().iter().copied().filter(|k| *k != key).collect();
+        self.focus.set_order(order);
+    }
+
     pub fn take_closed_windows(&mut self) -> Vec<WindowKey> {
         std::mem::take(&mut self.closed_windows)
     }
