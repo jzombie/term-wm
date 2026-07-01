@@ -71,7 +71,7 @@ impl Component for TerminalComponent {
         self.render_screen(frame, area, ctx);
     }
 
-    fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
+    fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
         match event {
             Event::Key(key) => {
                 if key.kind == KeyEventKind::Release {
@@ -104,12 +104,14 @@ impl Component for TerminalComponent {
                 true
             }
             Event::Mouse(mouse) => {
-                let selection_ready = self.selection_enabled;
-                if handle_selection_mouse(self, selection_ready, mouse) {
-                    return true;
-                }
-                if self.try_handle_link_click(mouse) {
-                    return true;
+                if !ctx.direct_mode() {
+                    let selection_ready = self.selection_enabled;
+                    if handle_selection_mouse(self, selection_ready, mouse) {
+                        return true;
+                    }
+                    if self.try_handle_link_click(mouse) {
+                        return true;
+                    }
                 }
                 if !rect_contains(self.last_area, mouse.column, mouse.row) {
                     return false;

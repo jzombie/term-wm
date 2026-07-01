@@ -102,7 +102,12 @@ where
     A: WindowProvider<Id>,
     Id: Copy + Eq + Ord + std::fmt::Debug + 'static,
 {
-    let ctx = app.windows().component_context(true);
+    let focus_id = app.windows().focused_window();
+    let direct_mode = app.windows().direct_mode(focus_id);
+    let ctx = app
+        .windows()
+        .component_context(true)
+        .with_direct_mode(direct_mode);
 
     let mut pending_focus: Option<Id> = None;
     let mut pending_event: Option<Event> = None;

@@ -79,9 +79,21 @@ pub fn mouse_event_allowed(mode: MouseProtocolMode, kind: MouseEventKind) -> boo
     use MouseEventKind::*;
     match mode {
         MouseProtocolMode::None => false,
-        MouseProtocolMode::Press => matches!(kind, Down(_)),
-        MouseProtocolMode::PressRelease => matches!(kind, Down(_) | Up(_)),
-        MouseProtocolMode::ButtonMotion => matches!(kind, Down(_) | Up(_) | Drag(_)),
+        MouseProtocolMode::Press => {
+            matches!(kind, Down(_) | ScrollUp | ScrollDown | ScrollLeft | ScrollRight)
+        }
+        MouseProtocolMode::PressRelease => {
+            matches!(
+                kind,
+                Down(_) | Up(_) | ScrollUp | ScrollDown | ScrollLeft | ScrollRight
+            )
+        }
+        MouseProtocolMode::ButtonMotion => {
+            matches!(
+                kind,
+                Down(_) | Up(_) | Drag(_) | ScrollUp | ScrollDown | ScrollLeft | ScrollRight
+            )
+        }
         MouseProtocolMode::AnyMotion => true,
     }
 }

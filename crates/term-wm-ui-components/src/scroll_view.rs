@@ -409,8 +409,11 @@ impl<C: Component> Component for ScrollViewComponent<C> {
             }
         }
 
-        // Mouse Wheel (Common)
-        if let Event::Mouse(mouse) = event {
+        // Mouse Wheel (Common) — skip in direct mode so scroll passes through
+        // to the terminal component for encoding and forwarding to the PTY app.
+        if !ctx.direct_mode()
+            && let Event::Mouse(mouse) = event
+        {
             match mouse.kind {
                 MouseEventKind::ScrollUp => {
                     let mut st = self.shared_state.borrow_mut();
