@@ -554,6 +554,14 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         ComponentContext::new(focused).with_app_context(Arc::clone(&self.app_ctx))
     }
 
+    /// Create a [`ComponentContext`] for a specific window, including the
+    /// window's direct-mode state so children (scroll view, terminal) can
+    /// adapt their rendering and event handling automatically.
+    pub fn component_context_for(&self, focused: bool, id: WindowId<Id>) -> ComponentContext {
+        self.component_context(focused)
+            .with_direct_mode(self.direct_mode(id))
+    }
+
     /// Number of overlays that will be rendered this frame.
     pub fn visible_overlay_count(&self) -> usize {
         let mut n = 0usize;

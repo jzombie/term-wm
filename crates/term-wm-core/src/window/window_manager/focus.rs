@@ -29,9 +29,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             let focused = self.focused_window();
             let in_content = self.config.chrome_enabled
                 && rect_contains(self.region_for_id(focused), mouse.column, mouse.row);
-            if !(in_content && self.direct_mode(focused))
-                && self.handle_managed_event(event)
-            {
+            if !(in_content && self.direct_mode(focused)) && self.handle_managed_event(event) {
                 return true;
             }
         }

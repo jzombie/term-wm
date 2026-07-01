@@ -115,7 +115,12 @@ impl WindowProvider<PaneId> for App {
         vec![PaneId::Left, PaneId::Right]
     }
 
-    fn render_window(&mut self, frame: &mut UiFrame<'_>, window: WindowDrawContext<PaneId>) {
+    fn render_window(
+        &mut self,
+        frame: &mut UiFrame<'_>,
+        window: WindowDrawContext<PaneId>,
+        _ctx: &ComponentContext,
+    ) {
         match window.id {
             PaneId::Left => {
                 render_pane(frame, &mut self.left, window.surface.inner, window.focused)

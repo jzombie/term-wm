@@ -80,7 +80,10 @@ pub fn mouse_event_allowed(mode: MouseProtocolMode, kind: MouseEventKind) -> boo
     match mode {
         MouseProtocolMode::None => false,
         MouseProtocolMode::Press => {
-            matches!(kind, Down(_) | ScrollUp | ScrollDown | ScrollLeft | ScrollRight)
+            matches!(
+                kind,
+                Down(_) | ScrollUp | ScrollDown | ScrollLeft | ScrollRight
+            )
         }
         MouseProtocolMode::PressRelease => {
             matches!(

@@ -8,7 +8,7 @@ use ratatui::backend::TestBackend;
 
 use term_wm::app_context::AppContext;
 use term_wm::bottom_panel_trait::BottomPanel;
-use term_wm::components::MenuOverlay;
+use term_wm::components::{ComponentContext, MenuOverlay};
 use term_wm::io::{EventSource, RenderTarget};
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_app};
 use term_wm::top_panel_trait::TopPanel;
@@ -96,7 +96,13 @@ impl WindowProvider<usize> for SparseApp {
         if self.draws < 3 { vec![1] } else { vec![] }
     }
 
-    fn render_window(&mut self, _frame: &mut UiFrame<'_>, _window: WindowDrawContext<usize>) {}
+    fn render_window(
+        &mut self,
+        _frame: &mut UiFrame<'_>,
+        _window: WindowDrawContext<usize>,
+        _ctx: &ComponentContext,
+    ) {
+    }
 }
 
 #[test]
