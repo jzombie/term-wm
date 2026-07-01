@@ -2775,6 +2775,9 @@ mod tests {
             callback_invoked,
             "normal mode: click in content area must reach component"
         );
-        assert!(consumed, "normal mode: dispatch returns the callback's result");
+        assert!(
+            consumed,
+            "normal mode: dispatch returns the callback's result"
+        );
     }
 }
