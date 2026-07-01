@@ -83,9 +83,6 @@ impl WindowManager {
             if self.handle_header_drag_event(event) {
                 return true;
             }
-            if self.handle_system_window_event(event) {
-                return true;
-            }
         }
         // Hint click in bottom bar — works in both standalone and embedded modes
         if let Event::Mouse(mouse) = event
@@ -196,7 +193,12 @@ impl WindowManager {
         }
         self.closed_windows.push(key);
 
-        // Remove from SlotMap LAST — after removal the key is invalid.
-        self.windows.remove(key);
+        // Remove from SlotMap.  If the window has a WindowManager-owned
+        // component (debug log, etc.), keep the SlotMap entry so the
+        // component can be shown again later.
+        let has_component = self.windows.get(key).is_some_and(|w| w.component.is_some());
+        if !has_component {
+            self.windows.remove(key);
+        }
     }
 }

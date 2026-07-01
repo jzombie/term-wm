@@ -19,7 +19,7 @@ use term_wm::io::{
 };
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
 use term_wm::ui::UiFrame;
-use term_wm::window::{OverlayId, SystemWindowId, WindowDrawContext, WindowKey, WindowManager};
+use term_wm::window::{OverlayId, WindowDrawContext, WindowKey, WindowManager};
 use term_wm::{ScrollViewComponent, TerminalComponent, default_shell_command};
 use term_wm_sys_ui_components::wm_debug_log::{
     WmDebugLogComponent, install_panic_hook, set_global_debug_log,
@@ -69,6 +69,8 @@ struct App {
     windows: WindowManager,
     terminals: BTreeMap<WindowKey, ScrollViewComponent<TerminalComponent>>,
     pty_wakeup_tx: Sender<UnifiedEvent>,
+    debug_key: Option<WindowKey>,
+    debug_visible: bool,
 }
 
 impl App {
@@ -114,6 +116,8 @@ impl App {
             ),
             terminals: BTreeMap::new(),
             pty_wakeup_tx,
+            debug_key: None,
+            debug_visible: false,
         };
 
         // Initialize debug log system window
@@ -121,8 +125,9 @@ impl App {
             let (mut component, handle) = WmDebugLogComponent::new_default();
             component.set_selection_enabled(app.windows.clipboard_enabled());
             set_global_debug_log(handle);
-            app.windows
-                .set_system_window(SystemWindowId::DebugLog, Box::new(component));
+            let debug_key = app.windows.set_system_window(Box::new(component));
+            app.debug_key = Some(debug_key);
+            app.windows.set_window_title(debug_key, "Debug Log");
             install_panic_hook();
             term_wm::tracing_sub::init_default();
         }
@@ -162,7 +167,8 @@ impl App {
         }
 
         if error_occurred {
-            app.windows().open_debug_window();
+            // Debug window already created — include it in enumerate_windows
+            // by ensuring debug_key is set.
         }
 
         app.open_help_overlay();
@@ -228,6 +234,10 @@ impl WindowManagerHost for App {
             .open_overlay(OverlayId::ExitConfirm, Some(Box::new(confirm)));
     }
 
+    fn on_panic(&mut self) {
+        self.debug_visible = true;
+    }
+
     fn wm_new_window(&mut self) -> io::Result<()> {
         let mut pane =
             TerminalComponent::spawn_default(default_shell_command()).map_err(io::Error::other)?;
@@ -253,6 +263,10 @@ impl WindowManagerHost for App {
     }
 
     fn wm_close_window(&mut self, key: WindowKey) -> io::Result<()> {
+        if self.debug_key == Some(key) {
+            self.debug_visible = false;
+            return Ok(());
+        }
         if let Some(mut sv) = self.terminals.remove(&key) {
             sv.content.terminate();
             if let Some((child, reader_handle)) = sv.content.take_parts() {
@@ -275,7 +289,7 @@ impl WindowManagerHost for App {
 
 impl WindowProvider for App {
     fn enumerate_windows(&mut self) -> Vec<WindowKey> {
-        self.terminals
+        let mut keys: Vec<WindowKey> = self.terminals
             .iter_mut()
             .filter_map(|(key, sv)| {
                 if sv.content.has_exited() {
@@ -284,7 +298,13 @@ impl WindowProvider for App {
                     Some(*key)
                 }
             })
-            .collect()
+            .collect();
+        if self.debug_visible {
+            if let Some(debug_key) = self.debug_key {
+                keys.push(debug_key);
+            }
+        }
+        keys
     }
 
     fn render_window(
@@ -293,6 +313,9 @@ impl WindowProvider for App {
         window: WindowDrawContext,
         ctx: &ComponentContext,
     ) {
+        if Some(window.id) == self.debug_key {
+            return; // rendered by WindowManager via component_for_key
+        }
         render_pane(frame, self, window.id, window.surface.inner, ctx.clone());
     }
 
@@ -301,9 +324,10 @@ impl WindowProvider for App {
     }
 
     fn window_component(&mut self, key: WindowKey) -> Option<&mut dyn Component> {
-        self.terminals
-            .get_mut(&key)
-            .map(|sv| sv as &mut dyn Component)
+        if let Some(sv) = self.terminals.get_mut(&key) {
+            return Some(sv as &mut dyn Component);
+        }
+        self.windows.component_for_key(key)
     }
 
     fn window_pane_title(&mut self, key: WindowKey) -> Option<String> {

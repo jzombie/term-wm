@@ -467,55 +467,7 @@ impl WindowManager {
             }));
         }
 
-        // Append visible system windows to the draw plan.
-        for (sys_id, entry) in &self.system_windows {
-            if !entry.visible() {
-                continue;
-            }
-            let full = self.managed_area;
-            if full.width == 0 || full.height == 0 {
-                continue;
-            }
-            let inner = decorator.content_area(Rect {
-                x: 0,
-                y: 0,
-                width: full.width,
-                height: full.height,
-            });
-            if inner.width == 0 || inner.height == 0 {
-                continue;
-            }
-            let dest = crate::window::FloatRect {
-                x: full.x as i32,
-                y: full.y as i32,
-                width: full.width,
-                height: full.height,
-            };
-            let z = super::WindowManager::compute_z_depth(plan.len(), plan.len() + 1);
-            plan.push(super::DrawTask::System(super::SystemWindowDraw {
-                id: *sys_id,
-                surface: super::WindowSurface {
-                    full,
-                    inner,
-                    dest,
-                    draw_shadow: false,
-                    z_depth: z,
-                },
-                focused: false,
-            }));
-        }
         plan
-    }
-
-    pub fn render_system_window(
-        &mut self,
-        frame: &mut crate::ui::UiFrame<'_>,
-        window: super::SystemWindowDraw,
-    ) {
-        if window.surface.inner.width == 0 || window.surface.inner.height == 0 {
-            return;
-        }
-        self.render_system_window_entry(frame, window);
     }
 
     pub(super) fn hover_targets(

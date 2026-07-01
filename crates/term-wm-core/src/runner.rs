@@ -37,6 +37,10 @@ pub trait WindowManagerHost {
         self.windows()
             .open_overlay(crate::window::OverlayId::ExitConfirm, None);
     }
+    /// Called when a panic is detected.  The default opens the debug log
+    /// if a system component has been registered via
+    /// `WindowManager::set_system_window`.
+    fn on_panic(&mut self) {}
 }
 
 pub trait WindowProvider: WindowManagerHost {
@@ -131,10 +135,10 @@ where
     event_loop.run(|driver, event| {
         let handler = || -> io::Result<ControlFlow> {
             if debug_event_flags::take_panic_pending() {
-                app.windows().open_debug_window();
+                app.on_panic();
             }
             if debug_event_flags::take_error_pending() {
-                app.windows().open_debug_window();
+                app.on_panic();
             }
 
             for id in app.windows().take_closed_windows() {
@@ -282,8 +286,6 @@ where
                             let passthrough_event = Event::Key(*key);
                             let _ = handle_focused_app_event(&passthrough_event, app);
                         }
-                    } else if app.windows().has_active_system_windows() {
-                        app.windows().close_all_system_windows();
                     } else {
                         app.windows().open_wm_overlay();
                     }
@@ -325,7 +327,7 @@ where
                                 app.windows().close_wm_overlay();
                             }
                             WmMenuAction::ToggleDebugWindow => {
-                                app.windows().toggle_debug_window();
+                                // TODO: delegate to App when system window API is finalized
                                 app.windows().close_wm_overlay();
                             }
                             WmMenuAction::Help => {
@@ -655,34 +657,15 @@ where
                         let ctx = app
                             .windows()
                             .component_context_for(window.focused, window.id);
-                        app.render_window(subframe, window, &ctx);
-                    },
-                );
-            }
-            DrawTask::System(mut window) => {
-                window.surface.z_depth = z;
-                let (ctx, decorator) = {
-                    let wm = app.windows();
-                    let title = match window.id {
-                        crate::window::SystemWindowId::DebugLog => "Debug Log",
-                    };
-                    let ctx = WindowRenderCtx {
-                        title,
-                        focused: window.focused,
-                        direct_mode: false,
-                        hover_pos: wm.hover,
-                        theme: wm.config().theme,
-                    };
-                    let decorator = wm.decorator();
-                    (ctx, decorator)
-                };
-                composite_window(
-                    frame,
-                    &window.surface,
-                    decorator.as_ref(),
-                    ctx,
-                    |subframe| {
-                        app.windows().render_system_window(subframe, window);
+                        // Try the app's component first, then fall back to
+                        // WindowManager-owned components (debug log, etc.)
+                        if let Some(component) = app.window_component(window.id) {
+                            component.resize(window.surface.inner, &ctx);
+                            component.render(subframe, window.surface.inner, &ctx);
+                        } else if let Some(component) = app.windows().component_for_key(window.id) {
+                            component.resize(window.surface.inner, &ctx);
+                            component.render(subframe, window.surface.inner, &ctx);
+                        }
                     },
                 );
             }

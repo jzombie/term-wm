@@ -11,8 +11,8 @@ use term_wm_layout_engine::{LayoutRect, RectSpec};
 pub type WindowKey = slotmap::DefaultKey;
 
 pub use window_manager::{
-    DrawTask, OverlayId, ScrollState, SuperPressResult, SystemWindowDraw, SystemWindowId,
-    SystemWindowView, WindowDrawContext, WindowManager, WindowSurface, WmMenuAction,
+    DrawTask, OverlayId, ScrollState, SuperPressResult,
+    WindowDrawContext, WindowManager, WindowSurface, WmMenuAction,
 };
 
 /// Signed floating rectangle (alias for engine `LayoutRect`).

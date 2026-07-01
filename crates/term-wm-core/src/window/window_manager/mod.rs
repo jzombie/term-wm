@@ -3,7 +3,6 @@ mod drag;
 mod focus;
 mod layout;
 mod overlays;
-mod sys;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -28,11 +27,6 @@ use crate::top_panel_trait::TopPanel;
 use crate::ui::UiFrame;
 use crate::wm_config::{HintVisibility, WmConfig};
 use term_wm_layout_engine::FocusRing;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum SystemWindowId {
-    DebugLog,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum OverlayId {
@@ -110,68 +104,6 @@ pub struct WindowDrawContext {
 #[derive(Debug, Clone, Copy)]
 pub enum DrawTask {
     App(WindowDrawContext),
-    System(SystemWindowDraw),
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct SystemWindowDraw {
-    pub id: SystemWindowId,
-    pub surface: WindowSurface,
-    pub focused: bool,
-}
-
-pub trait SystemWindowView {
-    fn render(&mut self, frame: &mut UiFrame<'_>, surface: WindowSurface, focused: bool);
-    fn handle_event(&mut self, event: &Event) -> bool;
-    fn set_selection_enabled(&mut self, _enabled: bool) {}
-    fn selection_status(&self) -> SelectionStatus {
-        SelectionStatus::default()
-    }
-    fn selection_text(&mut self) -> Option<String> {
-        None
-    }
-}
-
-pub(crate) struct SystemWindowEntry {
-    component: Box<dyn SystemWindowView>,
-    visible: bool,
-}
-
-impl SystemWindowEntry {
-    fn new(component: Box<dyn SystemWindowView>) -> Self {
-        Self {
-            component,
-            visible: false,
-        }
-    }
-
-    fn visible(&self) -> bool {
-        self.visible
-    }
-
-    fn set_visible(&mut self, visible: bool) {
-        self.visible = visible;
-    }
-
-    fn render(&mut self, frame: &mut UiFrame<'_>, surface: WindowSurface, focused: bool) {
-        self.component.render(frame, surface, focused);
-    }
-
-    pub(crate) fn selection_status(&self) -> SelectionStatus {
-        self.component.selection_status()
-    }
-
-    pub(crate) fn selection_text(&mut self) -> Option<String> {
-        self.component.selection_text()
-    }
-
-    fn handle_event(&mut self, event: &Event) -> bool {
-        self.component.handle_event(event)
-    }
-
-    fn set_selection_enabled(&mut self, enabled: bool) {
-        self.component.set_selection_enabled(enabled);
-    }
 }
 
 pub struct WindowManager {
@@ -219,7 +151,8 @@ pub struct WindowManager {
     pub(crate) z_order: Vec<WindowKey>,
     pub(crate) drag_snap: Option<(Option<WindowKey>, InsertPosition, Rect)>,
     drag_last_event: Option<Instant>,
-    system_windows: BTreeMap<SystemWindowId, SystemWindowEntry>,
+    // No separate component map — components live on the Window struct
+    // in the SlotMap.  See `Window.component`.
     next_window_seq: usize,
     next_title_seq: usize,
     synthetic_event: Option<Event>,
@@ -445,7 +378,6 @@ impl WindowManager {
             z_order: Vec::new(),
             drag_snap: None,
             drag_last_event: None,
-            system_windows: BTreeMap::new(),
             next_window_seq: 0,
             next_title_seq: 0,
             synthetic_event: None,
@@ -545,9 +477,6 @@ impl WindowManager {
         if let Some(p) = &mut self.bottom_panel {
             p.begin_frame();
             p.set_power_profile(self.power_profile);
-        }
-        if crate::debug_event_flags::take_panic_pending() {
-            self.show_system_window(SystemWindowId::DebugLog);
         }
         if !self.config.wm_overlay_enabled {
             self.clear_capture();
@@ -749,7 +678,9 @@ impl WindowManager {
         }
         self.clipboard_enabled = enabled;
         self.clipboard_dirty = true;
-        self.apply_clipboard_selection_state(enabled);
+        for overlay in self.overlays.values_mut() {
+            crate::components::Overlay::set_selection_enabled(&mut **overlay, enabled);
+        }
     }
 
     pub fn toggle_clipboard_enabled(&mut self) {
@@ -770,9 +701,24 @@ impl WindowManager {
         }
     }
 
-    pub fn set_system_window(&mut self, id: SystemWindowId, component: Box<dyn SystemWindowView>) {
-        self.system_windows
-            .insert(id, SystemWindowEntry::new(component));
+    /// Register a component directly on a window in the SlotMap.
+    /// Creates the SlotMap entry, stores the component, and returns the
+    /// WindowKey.  The App or runner retrieves the component via
+    /// `WindowProvider::window_component` → `component_for_key`.
+    pub fn set_system_window(&mut self, component: Box<dyn crate::components::Component>) -> WindowKey {
+        let key = self.create_window();
+        if let Some(w) = self.windows.get_mut(key) {
+            w.component = Some(component);
+        }
+        key
+    }
+
+    /// Retrieve the component stored on a window in the SlotMap, if any.
+    /// Used by `WindowProvider::window_component` implementations.
+    pub fn component_for_key(&mut self, key: WindowKey) -> Option<&mut dyn crate::components::Component> {
+        let w = self.windows.get_mut(key)?;
+        let c = w.component.as_mut()?;
+        Some(c.as_mut())
     }
 
     pub fn open_overlay(&mut self, id: OverlayId, overlay: Option<Box<dyn Overlay>>) {
