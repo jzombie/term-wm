@@ -19,7 +19,7 @@ use term_wm::io::{
 };
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
 use term_wm::ui::UiFrame;
-use term_wm::window::{OverlayId, SystemWindowId, WindowDrawContext, WindowManager};
+use term_wm::window::{OverlayId, SystemWindowId, WindowDrawContext, WindowId, WindowManager};
 use term_wm::wm_config::WmConfig;
 use term_wm::{ScrollViewComponent, TerminalComponent, default_shell_command};
 use term_wm_sys_ui_components::wm_debug_log::{
@@ -281,7 +281,10 @@ impl WindowProvider<PaneId> for App {
     }
 
     fn render_window(&mut self, frame: &mut UiFrame<'_>, window: WindowDrawContext<PaneId>) {
-        let ctx = self.windows.component_context(window.focused);
+        let direct_mode = self.windows.direct_mode(WindowId::App(window.id));
+        let ctx = self.windows
+            .component_context(window.focused)
+            .with_direct_mode(direct_mode);
         render_pane(frame, self, window.id, window.surface.inner, ctx);
     }
 

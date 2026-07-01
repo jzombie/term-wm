@@ -308,39 +308,41 @@ impl<C: Component> Component for ScrollViewComponent<C> {
                 continue;
             }
 
-            // 5. Render Scrollbars with finalized layout
-            if needs_vertical {
-                let sb_area = Rect {
-                    x: area.x + area.width.saturating_sub(1),
-                    y: area.y,
-                    width: 1,
-                    height: inner_area.height,
-                };
-                render_scrollbar_oriented(
-                    frame,
-                    sb_area,
-                    content_h,
-                    inner_area.height as usize,
-                    off_y,
-                    ScrollbarOrientation::VerticalRight,
-                );
-            }
+            // 5. Render Scrollbars with finalized layout (skip in direct mode)
+            if !ctx.direct_mode() {
+                if needs_vertical {
+                    let sb_area = Rect {
+                        x: area.x + area.width.saturating_sub(1),
+                        y: area.y,
+                        width: 1,
+                        height: inner_area.height,
+                    };
+                    render_scrollbar_oriented(
+                        frame,
+                        sb_area,
+                        content_h,
+                        inner_area.height as usize,
+                        off_y,
+                        ScrollbarOrientation::VerticalRight,
+                    );
+                }
 
-            if needs_horizontal {
-                let sb_area = Rect {
-                    x: area.x,
-                    y: area.y + area.height.saturating_sub(1),
-                    width: inner_area.width,
-                    height: 1,
-                };
-                render_scrollbar_oriented(
-                    frame,
-                    sb_area,
-                    content_w,
-                    inner_area.width as usize,
-                    off_x,
-                    ScrollbarOrientation::HorizontalBottom,
-                );
+                if needs_horizontal {
+                    let sb_area = Rect {
+                        x: area.x,
+                        y: area.y + area.height.saturating_sub(1),
+                        width: inner_area.width,
+                        height: 1,
+                    };
+                    render_scrollbar_oriented(
+                        frame,
+                        sb_area,
+                        content_w,
+                        inner_area.width as usize,
+                        off_x,
+                        ScrollbarOrientation::HorizontalBottom,
+                    );
+                }
             }
 
             break;
