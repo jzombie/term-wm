@@ -1,0 +1,25 @@
+[package]
+name = "term-session-client"
+description = "Client library for connecting to term-session-server."
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+crossterm = { workspace = true, features = ["bracketed-paste"] }
+muxio-core = { workspace = true }
+muxio-tokio-mpsc-adapter = { workspace = true }
+muxio-rpc-service = { workspace = true }
+muxio-rpc-service-caller = { workspace = true }
+muxio-rpc-service-endpoint = { workspace = true }
+muxio-tokio-rpc-ipc-client = { workspace = true }
+portable-pty = { workspace = true }
+term-session-muxio-service-definitions = { workspace = true }
+term-wm-pty-engine = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+vt100 = { workspace = true }

@@ -1,0 +1,24 @@
+[package]
+name = "term-session-server"
+description = "Pure PTY session manager — no UI framework dependencies."
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+muxio-core = { workspace = true }
+muxio-rpc-service = { workspace = true }
+muxio-rpc-service-caller = { workspace = true }
+muxio-rpc-service-endpoint = { workspace = true }
+muxio-tokio-rpc-ipc-server = { workspace = true }
+portable-pty = { workspace = true }
+term-session-muxio-service-definitions = { workspace = true }
+term-wm-pty-engine = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+vt100 = { workspace = true }
