@@ -176,6 +176,7 @@ impl ComponentContext {
     /// [`AppContext`] when it is available (typically from the
     /// `WindowManager`).
     pub fn new(focused: bool) -> Self {
+        static DEFAULT_CONFIG: std::sync::OnceLock<Arc<WmConfig>> = std::sync::OnceLock::new();
         Self {
             focused,
             overlay: false,
@@ -190,7 +191,9 @@ impl ComponentContext {
             app_ctx: Arc::new(AppContext::new("", "")),
             hover_pos: None,
             keybindings: None,
-            config: Arc::new(WmConfig::standalone()),
+            config: DEFAULT_CONFIG
+                .get_or_init(|| Arc::new(WmConfig::standalone()))
+                .clone(),
         }
     }
 

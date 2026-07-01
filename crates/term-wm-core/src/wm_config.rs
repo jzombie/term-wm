@@ -52,7 +52,7 @@ pub fn validate_keybindings(kb: &KeyBindings) -> KeyBindings {
         }
     }
     for entry in &collision_log {
-        tracing::warn!("{}", entry);
+        tracing::debug!("{}", entry);
     }
 
     validated
