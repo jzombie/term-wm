@@ -761,4 +761,148 @@ fn auto_layout_for_windows(windows: &[WindowKey]) -> Option<TilingLayout<WindowK
     Some(TilingLayout::new(layout_node))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+
+    #[test]
+    fn auto_layout_empty_and_multiple() {
+        let empty: Vec<WindowKey> = vec![];
+        assert!(auto_layout_for_windows(&empty).is_none());
+
+        let mut wm = crate::window::WindowManager::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        let key = wm.create_window();
+        let one = vec![key];
+        let layout = auto_layout_for_windows(&one).unwrap();
+        assert!(matches!(layout.root(), crate::layout::LayoutNode::Leaf(_)));
+    }
+
+    #[test]
+    fn handle_focused_app_event_routes_key_to_window_component() {
+        use crate::components::Component;
+        use crate::window::WindowManager;
+
+        struct KeyRecorder {
+            received_key: bool,
+        }
+        impl Component for KeyRecorder {
+            fn render(
+                &mut self,
+                _frame: &mut crate::ui::UiFrame<'_>,
+                _area: ratatui::layout::Rect,
+                _ctx: &crate::components::ComponentContext,
+            ) {
+            }
+            fn handle_event(&mut self, event: &Event, _ctx: &crate::components::ComponentContext) -> bool {
+                if matches!(event, Event::Key(_)) {
+                    self.received_key = true;
+                }
+                true
+            }
+        }
+
+        struct FakeApp {
+            wm: WindowManager,
+            recorder: KeyRecorder,
+        }
+        impl WindowManagerHost for FakeApp {
+            fn windows(&mut self) -> &mut WindowManager {
+                &mut self.wm
+            }
+        }
+        impl WindowProvider for FakeApp {
+            fn enumerate_windows(&mut self) -> Vec<WindowKey> {
+                vec![]
+            }
+            fn render_window(
+                &mut self,
+                _frame: &mut crate::ui::UiFrame<'_>,
+                _window: WindowDrawContext,
+                _ctx: &ComponentContext,
+            ) {
+            }
+            fn window_component(&mut self, _key: WindowKey) -> Option<&mut dyn Component> {
+                Some(&mut self.recorder)
+            }
+        }
+
+        let mut app = FakeApp {
+            wm: WindowManager::with_config(
+                crate::wm_config::WmConfig::standalone(),
+                std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+                None,
+                None,
+                Some(Box::new(TestMenu)),
+            ),
+            recorder: KeyRecorder {
+                received_key: false,
+            },
+        };
+        let key = app.wm.create_window();
+        app.wm.regions.set(
+            key,
+            ratatui::layout::Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        app.wm.focus_app_window(key);
+
+        let evt = Event::Key(KeyEvent {
+            code: KeyCode::Char('x'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        });
+
+        let consumed = handle_focused_app_event(&evt, &mut app);
+        assert!(consumed, "handle_focused_app_event must route key to component");
+        assert!(app.recorder.received_key, "component must receive the key event");
+    }
+
+    #[derive(Debug)]
+    struct TestMenu;
+    impl crate::components::Component for TestMenu {
+        fn render(
+            &mut self,
+            _frame: &mut crate::ui::UiFrame<'_>,
+            _area: ratatui::prelude::Rect,
+            _ctx: &crate::components::ComponentContext,
+        ) {
+        }
+    }
+    impl crate::components::Overlay for TestMenu {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+    impl crate::components::MenuOverlay<crate::window::WmMenuAction> for TestMenu {
+        fn outline(&mut self) {}
+        fn restore(&mut self) {}
+        fn set_items(
+            &mut self,
+            _items: Vec<crate::components::MenuItem<crate::window::WmMenuAction>>,
+        ) {
+        }
+        fn set_timeout(&mut self, _timeout: std::time::Duration) {}
+        fn selected_action(&self) -> Option<&crate::window::WmMenuAction> {
+            None
+        }
+        fn set_anchor(&mut self, _pos: Option<(u16, u16)>) {}
+        fn set_managed_area(&mut self, _area: ratatui::prelude::Rect) {}
+    }
+}
+
 // TODO: Rewrite tests for WindowKey-based API

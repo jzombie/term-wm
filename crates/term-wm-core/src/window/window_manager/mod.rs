@@ -1046,4 +1046,255 @@ fn map_layout_node(node: &LayoutNode<WindowKey>) -> LayoutNode<WindowKey> {
         },
     }
 }
-mod tests {}
+mod tests {
+    use super::*;
+    use crate::components::Component;
+    use ratatui::layout::Rect;
+
+    fn make_wm() -> WindowManager {
+        WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn create_window_returns_valid_key() {
+        let mut wm = make_wm();
+        let key = wm.create_window();
+        assert!(wm.windows.contains_key(key));
+    }
+
+    #[test]
+    fn close_window_removes_from_focus_ring() {
+        let mut wm = make_wm();
+        let key = wm.create_window();
+        wm.set_focus(key);
+        assert_eq!(wm.focused_window(), key);
+        wm.close_window(key);
+        // After close, focused_window should be the default (all zeros) since
+        // no other windows exist.
+        assert_ne!(*wm.focus.current(), key);
+    }
+
+    #[test]
+    fn close_window_removes_from_draw_order() {
+        let mut wm = make_wm();
+        let key = wm.create_window();
+        wm.z_order.push(key);
+        wm.close_window(key);
+        assert!(!wm.z_order.contains(&key));
+        assert!(!wm.managed_draw_order.contains(&key));
+    }
+
+    #[test]
+    fn close_window_with_component_preserves_slotmap_entry() {
+        let mut wm = make_wm();
+        struct DummyComponent;
+        impl Component for DummyComponent {
+            fn render(&mut self, _: &mut UiFrame<'_>, _: Rect, _: &ComponentContext) {}
+        }
+        let comp: Box<dyn Component> = Box::new(DummyComponent);
+        let key = wm.set_system_window(comp);
+        assert!(wm.windows.contains_key(key));
+        wm.close_window(key);
+        // Should still be in SlotMap (has component).
+        assert!(wm.windows.contains_key(key));
+        // But removed from draw order.
+        assert!(!wm.z_order.contains(&key));
+    }
+
+    #[test]
+    fn close_window_removes_regular_window_from_slotmap() {
+        let mut wm = make_wm();
+        let key = wm.create_window();
+        assert!(wm.windows.contains_key(key));
+        wm.close_window(key);
+        assert!(!wm.windows.contains_key(key));
+    }
+
+    #[test]
+    fn focus_ring_advances_correctly() {
+        let mut wm = make_wm();
+        let k1 = wm.create_window();
+        let k2 = wm.create_window();
+        let k3 = wm.create_window();
+        wm.set_focus_order(vec![k1, k2, k3]);
+        wm.set_focus(k1);
+        assert_eq!(wm.focused_window(), k1);
+        wm.advance_focus(true);
+        assert_eq!(wm.focused_window(), k2);
+        wm.advance_focus(true);
+        assert_eq!(wm.focused_window(), k3);
+        wm.advance_focus(true);
+        assert_eq!(wm.focused_window(), k1); // wraps around
+    }
+
+    #[test]
+    fn focus_ring_advance_backwards() {
+        let mut wm = make_wm();
+        let k1 = wm.create_window();
+        let k2 = wm.create_window();
+        wm.set_focus_order(vec![k1, k2]);
+        wm.set_focus(k1);
+        wm.advance_focus(false);
+        assert_eq!(wm.focused_window(), k2);
+    }
+
+    #[test]
+    fn select_fallback_focus_picks_first_in_order() {
+        let mut wm = make_wm();
+        let k1 = wm.create_window();
+        let k2 = wm.create_window();
+        wm.set_focus_order(vec![k1, k2]);
+        wm.set_focus(k2);
+        wm.select_fallback_focus();
+        assert_eq!(wm.focused_window(), k1);
+    }
+
+    #[test]
+    fn direct_mode_defaults_to_false() {
+        let mut wm = make_wm();
+        let key = wm.create_window();
+        assert!(!wm.direct_mode(key));
+    }
+
+    #[test]
+    fn direct_mode_toggle_cycles_state() {
+        let mut wm = make_wm();
+        let key = wm.create_window();
+        assert!(!wm.direct_mode(key));
+        wm.toggle_direct_mode(key);
+        assert!(wm.direct_mode(key));
+        wm.toggle_direct_mode(key);
+        assert!(!wm.direct_mode(key));
+    }
+
+    #[test]
+    fn direct_mode_set_get_roundtrip() {
+        let mut wm = make_wm();
+        let key = wm.create_window();
+        wm.set_direct_mode(key, true);
+        assert!(wm.direct_mode(key));
+    }
+
+    #[test]
+    fn direct_mode_is_per_window() {
+        let mut wm = make_wm();
+        let k1 = wm.create_window();
+        let k2 = wm.create_window();
+        wm.set_direct_mode(k1, true);
+        assert!(wm.direct_mode(k1));
+        assert!(!wm.direct_mode(k2));
+    }
+
+    #[test]
+    fn minimize_and_restore() {
+        let mut wm = make_wm();
+        let key = wm.create_window();
+        assert!(!wm.is_minimized(key));
+        wm.minimize_window(key);
+        assert!(wm.is_minimized(key));
+        wm.restore_minimized(key);
+        assert!(!wm.is_minimized(key));
+    }
+
+    #[test]
+    fn minimize_removes_from_z_order() {
+        let mut wm = make_wm();
+        let key = wm.create_window();
+        wm.z_order.push(key);
+        wm.minimize_window(key);
+        assert!(!wm.z_order.contains(&key));
+    }
+
+    #[test]
+    fn restore_adds_back_to_z_order() {
+        let mut wm = make_wm();
+        let key = wm.create_window();
+        wm.minimize_window(key);
+        wm.restore_minimized(key);
+        assert!(wm.z_order.contains(&key));
+    }
+
+    #[test]
+    fn floating_rect_set_and_get() {
+        let mut wm = make_wm();
+        let key = wm.create_window();
+        use crate::window::{FloatRect, FloatRectSpec};
+        let fr = FloatRectSpec::Absolute(FloatRect { x: 0, y: 0, width: 10, height: 5 });
+        wm.set_floating_rect(key, Some(fr));
+        assert_eq!(wm.floating_rect(key), Some(fr));
+        wm.clear_floating_rect(key);
+        assert_eq!(wm.floating_rect(key), None);
+    }
+
+    #[test]
+    fn is_window_floating() {
+        let mut wm = make_wm();
+        let key = wm.create_window();
+        assert!(!wm.is_window_floating(key));
+        use crate::window::{FloatRect, FloatRectSpec};
+        wm.set_floating_rect(key, Some(FloatRectSpec::Absolute(FloatRect { x: 0, y: 0, width: 5, height: 5 })));
+        assert!(wm.is_window_floating(key));
+    }
+
+    #[test]
+    fn scroll_state_reset_and_bump() {
+        let mut s = ScrollState::default();
+        s.bump(5);
+        s.apply(100, 10);
+        assert_eq!(s.offset, 5);
+        s.reset();
+        assert_eq!(s.offset, 0);
+    }
+
+    #[test]
+    fn scroll_state_clamps_to_max() {
+        let mut s = ScrollState::default();
+        s.bump(1000);
+        s.apply(20, 5);
+        assert_eq!(s.offset, 15); // max = 20 - 5
+    }
+
+    #[test]
+    fn compute_z_depth_single_item() {
+        assert_eq!(WindowManager::compute_z_depth(0, 1), 1.0);
+    }
+
+    #[test]
+    fn compute_z_depth_normalized() {
+        assert_eq!(WindowManager::compute_z_depth(0, 3), 0.0);
+        assert_eq!(WindowManager::compute_z_depth(1, 3), 0.5);
+        assert_eq!(WindowManager::compute_z_depth(2, 3), 1.0);
+    }
+
+    #[test]
+    fn close_window_pushes_to_closed() {
+        let mut wm = make_wm();
+        let key = wm.create_window();
+        wm.close_window(key);
+        let closed = wm.take_closed_windows();
+        assert!(closed.contains(&key));
+    }
+
+    #[test]
+    fn window_titles_are_unique() {
+        let mut wm = make_wm();
+        let k1 = wm.create_window();
+        let k2 = wm.create_window();
+        wm.set_window_title(k1, "Shell");
+        wm.set_window_title(k2, "Shell");
+        wm.z_order.push(k1);
+        wm.z_order.push(k2);
+        wm.managed_draw_order = wm.z_order.clone();
+        let titles = wm.window_titles();
+        assert_eq!(titles.len(), 2);
+        let names: Vec<String> = titles.iter().map(|(_, t)| t.clone()).collect();
+        assert!(names.contains(&"Shell".to_string()) || names.contains(&"Shell (1)".to_string()));
+        assert!(names.contains(&"Shell (1)".to_string()) || names.contains(&"Shell (2)".to_string()));
+    }
+}
