@@ -280,9 +280,13 @@ impl WindowProvider<PaneId> for App {
             .collect()
     }
 
-    fn render_window(&mut self, frame: &mut UiFrame<'_>, window: WindowDrawContext<PaneId>) {
-        let ctx = self.windows.component_context(window.focused);
-        render_pane(frame, self, window.id, window.surface.inner, ctx);
+    fn render_window(
+        &mut self,
+        frame: &mut UiFrame<'_>,
+        window: WindowDrawContext<PaneId>,
+        ctx: &ComponentContext,
+    ) {
+        render_pane(frame, self, window.id, window.surface.inner, ctx.clone());
     }
 
     fn empty_window_message(&self) -> &str {

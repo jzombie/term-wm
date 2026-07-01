@@ -2768,7 +2768,7 @@ dependencies = [
 
 [[package]]
 name = "term-bench"
-version = "0.7.0-alpha"
+version = "0.7.1-alpha"
 dependencies = [
  "clap",
  "crossterm",
@@ -2778,7 +2778,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-client"
-version = "0.7.0-alpha"
+version = "0.7.1-alpha"
 dependencies = [
  "clap",
  "crossterm",
@@ -2798,7 +2798,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-muxio-service-definitions"
-version = "0.7.0-alpha"
+version = "0.7.1-alpha"
 dependencies = [
  "bitcode",
  "muxio-core",
@@ -2807,7 +2807,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-server"
-version = "0.7.0-alpha"
+version = "0.7.1-alpha"
 dependencies = [
  "clap",
  "muxio-core",
@@ -2826,7 +2826,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm"
-version = "0.7.0-alpha"
+version = "0.7.1-alpha"
 dependencies = [
  "clap",
  "crossterm",
@@ -2845,7 +2845,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-core"
-version = "0.7.0-alpha"
+version = "0.7.1-alpha"
 dependencies = [
  "crossterm",
  "linkify",
@@ -2859,14 +2859,14 @@ dependencies = [
 
 [[package]]
 name = "term-wm-layout-engine"
-version = "0.7.0-alpha"
+version = "0.7.1-alpha"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "term-wm-pty-engine"
-version = "0.7.0-alpha"
+version = "0.7.1-alpha"
 dependencies = [
  "arboard",
  "base64",
@@ -2880,7 +2880,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-sys-ui-components"
-version = "0.7.0-alpha"
+version = "0.7.1-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -2891,7 +2891,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-components"
-version = "0.7.0-alpha"
+version = "0.7.1-alpha"
 dependencies = [
  "crossterm",
  "indoc",

@@ -16,6 +16,7 @@ use crate::keybindings::KeyBindings;
 ///
 /// - `focused`: whether the component is currently focused.
 /// - `overlay`: whether the component is being rendered as an overlay (e.g. dialog).
+/// - `direct_mode`: whether the component's window is in direct (passthrough) mode.
 /// - `viewport`: logical offset describing which portion of the component's
 ///   content is currently visible inside a scrolling container.
 /// - `app_ctx`: shared reference to application identity information
@@ -24,6 +25,7 @@ use crate::keybindings::KeyBindings;
 pub struct ComponentContext {
     focused: bool,
     overlay: bool,
+    direct_mode: bool,
     viewport: ViewportContext,
     viewport_handle: Option<ViewportHandle>,
     app_ctx: Arc<AppContext>,
@@ -175,6 +177,7 @@ impl ComponentContext {
         Self {
             focused,
             overlay: false,
+            direct_mode: false,
             viewport: ViewportContext {
                 offset_x: 0,
                 offset_y: 0,
@@ -196,6 +199,11 @@ impl ComponentContext {
     /// Returns whether the component is being rendered as an overlay.
     pub const fn overlay(&self) -> bool {
         self.overlay
+    }
+
+    /// Returns whether the component's window is in direct mode.
+    pub const fn direct_mode(&self) -> bool {
+        self.direct_mode
     }
 
     /// Returns the viewport offset for this component.
@@ -254,6 +262,13 @@ impl ComponentContext {
         ctx
     }
 
+    /// Return a new `ComponentContext` with a modified `direct_mode` flag.
+    pub fn with_direct_mode(&self, direct_mode: bool) -> Self {
+        let mut ctx = self.clone();
+        ctx.direct_mode = direct_mode;
+        ctx
+    }
+
     /// Return a new `ComponentContext` with updated viewport metadata.
     pub fn with_viewport(&self, viewport: ViewportContext, handle: Option<ViewportHandle>) -> Self {
         let mut ctx = self.clone();
@@ -279,5 +294,36 @@ impl ComponentContext {
 impl Default for ComponentContext {
     fn default() -> Self {
         Self::new(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_mode_defaults_to_false() {
+        let ctx = ComponentContext::new(true);
+        assert!(!ctx.direct_mode());
+    }
+
+    #[test]
+    fn direct_mode_get_set_roundtrip() {
+        let ctx = ComponentContext::new(false);
+        assert!(!ctx.direct_mode());
+        let ctx = ctx.with_direct_mode(true);
+        assert!(ctx.direct_mode());
+        let ctx = ctx.with_direct_mode(false);
+        assert!(!ctx.direct_mode());
+    }
+
+    #[test]
+    fn direct_mode_independent_of_focus() {
+        let ctx = ComponentContext::new(true).with_direct_mode(true);
+        assert!(ctx.focused());
+        assert!(ctx.direct_mode());
+        let ctx = ComponentContext::new(false).with_direct_mode(true);
+        assert!(!ctx.focused());
+        assert!(ctx.direct_mode());
     }
 }

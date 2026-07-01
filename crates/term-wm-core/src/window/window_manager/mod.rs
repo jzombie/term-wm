@@ -554,6 +554,14 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         ComponentContext::new(focused).with_app_context(Arc::clone(&self.app_ctx))
     }
 
+    /// Create a [`ComponentContext`] for a specific window, including the
+    /// window's direct-mode state so children (scroll view, terminal) can
+    /// adapt their rendering and event handling automatically.
+    pub fn component_context_for(&self, focused: bool, id: WindowId<Id>) -> ComponentContext {
+        self.component_context(focused)
+            .with_direct_mode(self.direct_mode(id))
+    }
+
     /// Number of overlays that will be rendered this frame.
     pub fn visible_overlay_count(&self) -> usize {
         let mut n = 0usize;
@@ -2593,5 +2601,183 @@ mod tests {
         assert_eq!(wm.power_profile, PowerProfile::HighPerformance);
         wm.set_power_profile(PowerProfile::PowerSaver);
         assert_eq!(wm.power_profile, PowerProfile::PowerSaver);
+    }
+
+    #[test]
+    fn dispatch_focused_event_skips_chrome_in_direct_mode_content_area() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        wm.set_panel_visible(false);
+        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(1usize)));
+        wm.managed_draw_order = vec![WindowId::App(1usize)];
+        wm.z_order = vec![WindowId::App(1usize)];
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_app_window(1usize);
+
+        let win_id = WindowId::App(1usize);
+        wm.set_direct_mode(win_id, true);
+        assert!(wm.direct_mode(win_id));
+
+        // Click within the content area — should go to focused window's
+        // callback, NOT be consumed by chrome (handle_managed_event skipped).
+        let content = wm.region_for_id(win_id);
+        let click = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: content.x + 1,
+            row: content.y + 1,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        let mut received = false;
+        let _consumed = wm.dispatch_focused_event(&click, |_, _| {
+            received = true;
+            true
+        });
+        assert!(received, "event must reach the focused-window callback");
+        // consumed may be true or false depending on what the callback returns.
+        // The key assertion is 'received' was set to true — meaning the event
+        // was routed to the window component, not consumed by chrome.
+    }
+
+    #[test]
+    fn dispatch_focused_event_still_routes_header_d_click_in_direct_mode() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        wm.set_panel_visible(false);
+        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(1usize)));
+        wm.managed_draw_order = vec![WindowId::App(1usize)];
+        wm.z_order = vec![WindowId::App(1usize)];
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_app_window(1usize);
+
+        let win_id = WindowId::App(1usize);
+        wm.set_direct_mode(win_id, true);
+
+        // Header D button click — coordinates on the header, NOT in content area.
+        let full_rect = wm.full_region_for_id(win_id);
+        let outer_right = full_rect
+            .x
+            .saturating_add(full_rect.width)
+            .saturating_sub(1);
+        let close_x = outer_right.saturating_sub(2);
+        let max_x = close_x.saturating_sub(2);
+        let min_x = max_x.saturating_sub(2);
+        let kb_x = min_x.saturating_sub(2);
+        let kb_y = full_rect.y.saturating_add(1); // header row
+        assert_eq!(
+            wm.decorator().hit_test(full_rect, kb_x, kb_y),
+            crate::window::decorator::HeaderAction::ToggleDirectMode,
+        );
+
+        assert!(wm.direct_mode(win_id), "direct mode enabled before click");
+
+        // This click is on the header (not content area) — chrome should still
+        // handle it despite direct mode being on.
+        let click = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: kb_x,
+            row: kb_y,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        let mut callback_invoked = false;
+        let consumed = wm.dispatch_focused_event(&click, |_, _| {
+            callback_invoked = true;
+            true
+        });
+
+        // The header D button click should be consumed by chrome, NOT reaching
+        // the window callback, and should toggle direct_mode off.
+        assert!(
+            !callback_invoked,
+            "header D click must not reach window callback"
+        );
+        assert!(consumed, "header D click must be consumed by chrome");
+        assert!(
+            !wm.direct_mode(win_id),
+            "header D click must toggle direct_mode off"
+        );
+    }
+
+    #[test]
+    fn dispatch_focused_event_normal_behavior_when_not_direct_mode() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let mut wm = WindowManager::<usize>::with_config(
+            0,
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Box::new(NoopMenu),
+        );
+        wm.set_panel_visible(false);
+        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(1usize)));
+        wm.managed_draw_order = vec![WindowId::App(1usize)];
+        wm.z_order = vec![WindowId::App(1usize)];
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_app_window(1usize);
+
+        let win_id = WindowId::App(1usize);
+        assert!(!wm.direct_mode(win_id), "direct mode is off");
+
+        let content = wm.region_for_id(win_id);
+        let click = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: content.x + 1,
+            row: content.y + 1,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        // In normal mode, a click in the content area is not consumed by chrome
+        // (no chrome element at that position). handle_managed_event returns
+        // false so the event flows through to the focused window callback.
+        let mut callback_invoked = false;
+        let consumed = wm.dispatch_focused_event(&click, |_, _| {
+            callback_invoked = true;
+            true
+        });
+        assert!(
+            callback_invoked,
+            "normal mode: click in content area must reach component"
+        );
+        assert!(
+            consumed,
+            "normal mode: dispatch returns the callback's result"
+        );
     }
 }
