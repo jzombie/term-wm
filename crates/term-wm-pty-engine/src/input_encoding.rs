@@ -79,9 +79,24 @@ pub fn mouse_event_allowed(mode: MouseProtocolMode, kind: MouseEventKind) -> boo
     use MouseEventKind::*;
     match mode {
         MouseProtocolMode::None => false,
-        MouseProtocolMode::Press => matches!(kind, Down(_)),
-        MouseProtocolMode::PressRelease => matches!(kind, Down(_) | Up(_)),
-        MouseProtocolMode::ButtonMotion => matches!(kind, Down(_) | Up(_) | Drag(_)),
+        MouseProtocolMode::Press => {
+            matches!(
+                kind,
+                Down(_) | ScrollUp | ScrollDown | ScrollLeft | ScrollRight
+            )
+        }
+        MouseProtocolMode::PressRelease => {
+            matches!(
+                kind,
+                Down(_) | Up(_) | ScrollUp | ScrollDown | ScrollLeft | ScrollRight
+            )
+        }
+        MouseProtocolMode::ButtonMotion => {
+            matches!(
+                kind,
+                Down(_) | Up(_) | Drag(_) | ScrollUp | ScrollDown | ScrollLeft | ScrollRight
+            )
+        }
         MouseProtocolMode::AnyMotion => true,
     }
 }
@@ -272,6 +287,23 @@ mod tests {
             MouseProtocolMode::AnyMotion,
             MouseEventKind::Moved
         ));
+        // Scroll events are press-type (codes 64/65); allowed in Press and above
+        assert!(
+            mouse_event_allowed(MouseProtocolMode::Press, ScrollDown),
+            "ScrollDown should be allowed in Press mode"
+        );
+        assert!(
+            mouse_event_allowed(MouseProtocolMode::PressRelease, ScrollUp),
+            "ScrollUp should be allowed in PressRelease mode"
+        );
+        assert!(
+            mouse_event_allowed(MouseProtocolMode::ButtonMotion, ScrollLeft),
+            "ScrollLeft should be allowed in ButtonMotion mode"
+        );
+        assert!(
+            !mouse_event_allowed(MouseProtocolMode::None, ScrollDown),
+            "ScrollDown should be denied in None mode"
+        );
     }
 
     // --- mouse_event_to_bytes ---

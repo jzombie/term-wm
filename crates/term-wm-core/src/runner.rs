@@ -70,7 +70,12 @@ pub trait WindowProvider<Id: Copy + Eq + Ord + std::fmt::Debug + 'static>:
     WindowManagerHost<Id>
 {
     fn enumerate_windows(&mut self) -> Vec<Id>;
-    fn render_window(&mut self, frame: &mut UiFrame<'_>, window: WindowDrawContext<Id>);
+    fn render_window(
+        &mut self,
+        frame: &mut UiFrame<'_>,
+        window: WindowDrawContext<Id>,
+        ctx: &ComponentContext,
+    );
 
     fn empty_window_message(&self) -> &str {
         "No windows"
@@ -102,7 +107,12 @@ where
     A: WindowProvider<Id>,
     Id: Copy + Eq + Ord + std::fmt::Debug + 'static,
 {
-    let ctx = app.windows().component_context(true);
+    let focus_id = app.windows().focused_window();
+    let direct_mode = app.windows().direct_mode(focus_id);
+    let ctx = app
+        .windows()
+        .component_context(true)
+        .with_direct_mode(direct_mode);
 
     let mut pending_focus: Option<Id> = None;
     let mut pending_event: Option<Event> = None;
@@ -688,7 +698,10 @@ where
                     decorator.as_ref(),
                     ctx,
                     |subframe| {
-                        app.render_window(subframe, window);
+                        let ctx = app
+                            .windows()
+                            .component_context_for(window.focused, WindowId::App(window.id));
+                        app.render_window(subframe, window, &ctx);
                     },
                 );
             }
@@ -902,6 +915,7 @@ mod tests {
                 &mut self,
                 _frame: &mut crate::ui::UiFrame<'_>,
                 _window: WindowDrawContext<usize>,
+                _ctx: &ComponentContext,
             ) {
             }
         }
@@ -963,6 +977,7 @@ mod tests {
                 &mut self,
                 _frame: &mut crate::ui::UiFrame<'_>,
                 _window: WindowDrawContext<usize>,
+                _ctx: &ComponentContext,
             ) {
             }
             fn window_component(&mut self, _id: usize) -> Option<&mut dyn Component> {
@@ -1062,6 +1077,7 @@ mod tests {
                 &mut self,
                 _frame: &mut crate::ui::UiFrame<'_>,
                 _window: WindowDrawContext<usize>,
+                _ctx: &ComponentContext,
             ) {
             }
             fn window_component(&mut self, _id: usize) -> Option<&mut dyn Component> {
