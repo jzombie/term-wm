@@ -1,3 +1,5 @@
+> See: https://crates.io/crates/slotmap v1.1.1
+
 The context for window "slotting" (specifically using a **Generational Arena** or **Slotmap** data structure) originates from the need to eliminate duplicated state, memory leaks, and "zombie" windows in terminal window managers like `term-wm`.
 
 In older architectures, or environments utilizing Shared Reference Graphs like WezTerm, window state was duplicated across an authoritative map, a z-order array, and a rendering region map. If a window was closed but a trailing reference (such as an `Arc` clone) was left behind in the z-order or rendering queues, the window would visually persist as a phantom "zombie" entity because the reference count remained above zero. 
