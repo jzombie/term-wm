@@ -4,6 +4,7 @@ pub use term_wm_core::*;
 pub use term_wm_ui_components::*;
 pub mod tracing_sub;
 
+use term_wm_core::config::WmBuilder;
 use term_wm_core::window::{NoopMenu, WindowId, WindowManager, WmMenuAction};
 
 pub trait WindowManagerExt<Id> {
@@ -25,14 +26,9 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManagerExt<Id> for W
             ));
         let menu: Box<dyn term_wm_core::components::MenuOverlay<WmMenuAction>> =
             Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
-        WindowManager::with_config(
-            current,
-            term_wm_core::wm_config::WmConfig::standalone(),
-            std::sync::Arc::new(app_ctx),
-            Some(top_panel),
-            Some(bottom_panel),
-            menu,
-        )
+        WmBuilder::standalone()
+            .app_ctx(std::sync::Arc::new(app_ctx))
+            .build(current, Some(top_panel), Some(bottom_panel), menu)
     }
 
     fn new_embedded(current: Id, app_ctx: term_wm_core::app_context::AppContext) -> Self {
@@ -46,13 +42,13 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManagerExt<Id> for W
                 &app_ctx.app_version,
                 hostname,
             ));
-        WindowManager::with_config(
-            current,
-            term_wm_core::wm_config::WmConfig::embedded(),
-            std::sync::Arc::new(app_ctx),
-            Some(top_panel),
-            Some(bottom_panel),
-            Box::new(NoopMenu),
-        )
+        WmBuilder::embedded()
+            .app_ctx(std::sync::Arc::new(app_ctx))
+            .build(
+                current,
+                Some(top_panel),
+                Some(bottom_panel),
+                Box::new(NoopMenu),
+            )
     }
 }

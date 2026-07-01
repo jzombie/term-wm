@@ -219,6 +219,7 @@ pub fn apply_resize_drag(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_resize_outline<R: Copy + Eq + Ord>(
     frame: &mut UiFrame<'_>,
     hovered: Option<ResizeHandle<R>>,

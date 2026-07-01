@@ -13,6 +13,7 @@ use ratatui::prelude::Rect;
 use term_wm::app_context::AppContext;
 use term_wm::components::MenuOverlay;
 use term_wm::components::{Component, ComponentContext};
+use term_wm::config::WmBuilder;
 use term_wm::io::{
     RenderTarget,
     console::{ConsoleEventSource, ConsoleRenderTarget},
@@ -20,7 +21,6 @@ use term_wm::io::{
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
 use term_wm::ui::UiFrame;
 use term_wm::window::{OverlayId, SystemWindowId, WindowDrawContext, WindowManager};
-use term_wm::wm_config::WmConfig;
 use term_wm::{ScrollViewComponent, TerminalComponent, default_shell_command};
 use term_wm_sys_ui_components::wm_debug_log::{
     WmDebugLogComponent, install_panic_hook, set_global_debug_log,
@@ -51,6 +51,10 @@ struct Cli {
     /// in its respective window via the default shell (i.e. shell -c "CMD").
     #[arg(value_name = "CMD", num_args = 0..)]
     cmds: Vec<String>,
+
+    /// Run in embedded mode (no chrome, no floating windows, no WM overlay).
+    #[arg(long)]
+    embedded: bool,
 }
 
 fn main() -> io::Result<()> {
@@ -70,7 +74,7 @@ fn main() -> io::Result<()> {
             cli.cmds.len().max(1)
         })
     };
-    let mut app = App::new_with(cli.cmds, total)?;
+    let mut app = App::new_with(cli.cmds, total, cli.embedded)?;
     let mut output = ConsoleRenderTarget::new()?;
     output.enter()?;
     let mut input = ConsoleEventSource::new();
@@ -88,7 +92,7 @@ struct App {
 }
 
 impl App {
-    fn new_with(commands: Vec<String>, num_windows: usize) -> io::Result<Self> {
+    fn new_with(commands: Vec<String>, num_windows: usize, embedded: bool) -> io::Result<Self> {
         let app_ctx = Arc::new(
             AppContext::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")).with_hostname(
                 &hostname::get()
@@ -109,20 +113,24 @@ impl App {
                 &app_ctx.app_version,
                 hostname,
             ));
-        let config = WmConfig::standalone();
+        let builder = if embedded {
+            WmBuilder::embedded()
+        } else {
+            WmBuilder::standalone()
+        };
+        let config = builder.config().clone();
         let mut raw_menu = term_wm_sys_ui_components::WmMenuOverlay::new();
         raw_menu.set_timeout(config.menu_outline_timeout);
         let menu_overlay: Box<dyn MenuOverlay<term_wm_core::window::WmMenuAction>> =
-            Box::new(raw_menu);
+            if embedded {
+                Box::new(term_wm_sys_ui_components::WmMenuOverlay::new())
+            } else {
+                Box::new(raw_menu)
+            };
         let mut app = Self {
-            windows: WindowManager::with_config(
-                0,
-                config,
-                Arc::clone(&app_ctx),
-                Some(top_panel),
-                Some(bottom_panel),
-                menu_overlay,
-            ),
+            windows: builder
+                .app_ctx(Arc::clone(&app_ctx))
+                .build(0, Some(top_panel), Some(bottom_panel), menu_overlay),
             terminals: Vec::new(),
         };
 

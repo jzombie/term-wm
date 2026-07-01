@@ -21,7 +21,7 @@ pub struct WindowRenderCtx<'a> {
     pub theme: crate::theme::Theme,
 }
 
-pub trait WindowDecorator: std::fmt::Debug {
+pub trait WindowDecorator: std::fmt::Debug + Send + Sync {
     fn render_window(&self, frame: &mut UiFrame<'_>, rect: Rect, ctx: WindowRenderCtx<'_>);
 
     fn hit_test(&self, window_rect: Rect, x: u16, y: u16) -> HeaderAction;

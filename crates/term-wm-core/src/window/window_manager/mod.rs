@@ -266,6 +266,7 @@ pub enum WmMenuAction {
     ToggleWindowSelection,
 }
 
+// TODO: Can this be removed and simply made optional?
 #[derive(Debug)]
 pub struct NoopMenu;
 impl crate::components::Component for NoopMenu {
