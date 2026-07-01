@@ -13,7 +13,9 @@ use crate::keybindings::Action;
 use crate::layout::{LayoutNode, TilingLayout};
 use crate::ui::UiFrame;
 use crate::window::decorator::{WindowDecorator, WindowRenderCtx};
-use crate::window::{DrawTask, WindowDrawContext, WindowKey, WindowManager, WindowSurface, WmMenuAction};
+use crate::window::{
+    DrawTask, WindowDrawContext, WindowKey, WindowManager, WindowSurface, WmMenuAction,
+};
 
 pub trait WindowManagerHost {
     fn windows(&mut self) -> &mut WindowManager;
@@ -354,10 +356,7 @@ where
                     }
                     // Focus routing in WM mode (Tab/Shift+Tab)
                     // Fold menu to outline so user can see the window they focused.
-                    if app
-                        .windows()
-                        .handle_focus_event(&evt, focus_regions)
-                    {
+                    if app.windows().handle_focus_event(&evt, focus_regions) {
                         app.windows().fold_menu();
                         update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue);
@@ -448,9 +447,7 @@ where
                 // In standalone mode without the open overlay, Tab passes through.
                 if !wm_mode
                     && matches!(evt, Event::Key(_))
-                    && app
-                        .windows()
-                        .handle_focus_event(&evt, focus_regions)
+                    && app.windows().handle_focus_event(&evt, focus_regions)
                 {
                     update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Continue);
@@ -634,10 +631,7 @@ where
                 window.surface.z_depth = z;
                 let (ctx, decorator) = {
                     let wm = app.windows();
-                    let title = all_titles
-                        .get(&window.id)
-                        .map(String::as_str)
-                        .unwrap_or("");
+                    let title = all_titles.get(&window.id).map(String::as_str).unwrap_or("");
                     let ctx = WindowRenderCtx {
                         title,
                         focused: window.focused,
@@ -718,9 +712,7 @@ fn composite_window<F>(
     frame.blit_from_signed(&buffer, surface.dest);
 }
 
-fn auto_layout_for_windows(
-    windows: &[WindowKey],
-) -> Option<TilingLayout<WindowKey>> {
+fn auto_layout_for_windows(windows: &[WindowKey]) -> Option<TilingLayout<WindowKey>> {
     use term_wm_layout_engine::{BspNode, LayoutRect, LongestSide, OrientationHeuristic};
 
     if windows.is_empty() {

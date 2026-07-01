@@ -142,11 +142,7 @@ impl WindowManager {
         }
     }
 
-    pub fn handle_focus_event(
-        &mut self,
-        event: &Event,
-        hit_targets: &[WindowKey],
-    ) -> bool {
+    pub fn handle_focus_event(&mut self, event: &Event, hit_targets: &[WindowKey]) -> bool {
         match event {
             Event::Key(key) => {
                 if !self.keyboard_focus_enabled() {

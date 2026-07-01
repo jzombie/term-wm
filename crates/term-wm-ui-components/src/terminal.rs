@@ -626,7 +626,12 @@ impl TerminalComponent {
     }
 
     /// Extract the child process and reader thread handle for async reaping.
-    pub fn take_parts(&mut self) -> Option<(Box<dyn portable_pty::Child + Send + Sync>, std::thread::JoinHandle<()>)> {
+    pub fn take_parts(
+        &mut self,
+    ) -> Option<(
+        Box<dyn portable_pty::Child + Send + Sync>,
+        std::thread::JoinHandle<()>,
+    )> {
         self.pane.take_parts()
     }
 

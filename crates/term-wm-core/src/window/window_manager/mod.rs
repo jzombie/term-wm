@@ -12,9 +12,9 @@ use crossterm::event::{Event, KeyEvent};
 use ratatui::prelude::Rect;
 use slotmap::SlotMap;
 
+use super::WindowKey;
 use super::decorator::WindowDecorator;
 use super::entry::Window;
-use super::WindowKey;
 use crate::app_context::AppContext;
 use crate::bottom_panel_trait::BottomPanel;
 use crate::components::{ComponentContext, MenuItem, MenuOverlay, Overlay, SelectionStatus};
@@ -193,9 +193,9 @@ impl WindowManager {
     }
 
     fn window_mut(&mut self, key: WindowKey) -> &mut Window {
-        self.windows.get_mut(key).unwrap_or_else(|| {
-            panic!("window_mut called for unknown key {:?}", key)
-        })
+        self.windows
+            .get_mut(key)
+            .unwrap_or_else(|| panic!("window_mut called for unknown key {:?}", key))
     }
 
     fn window(&self, key: WindowKey) -> Option<&Window> {
@@ -230,10 +230,7 @@ impl WindowManager {
         self.window_mut(key).prev_floating_rect = rect;
     }
 
-    fn take_prev_floating_rect(
-        &mut self,
-        key: WindowKey,
-    ) -> Option<crate::window::FloatRectSpec> {
+    fn take_prev_floating_rect(&mut self, key: WindowKey) -> Option<crate::window::FloatRectSpec> {
         self.window_mut(key).prev_floating_rect.take()
     }
 
@@ -334,7 +331,10 @@ impl WindowManager {
         let clipboard = Some(crate::clipboard::Clipboard::new());
         let floating_resize_offscreen = config.floating_resize_offscreen;
         Self {
-            focus: FocusRing::new(/* placeholder, will be set on first window */ slotmap::DefaultKey::default()),
+            focus: FocusRing::new(
+                /* placeholder, will be set on first window */
+                slotmap::DefaultKey::default(),
+            ),
             windows: SlotMap::with_capacity(32),
             regions: RegionMap::default(),
             scroll: BTreeMap::new(),
@@ -389,7 +389,13 @@ impl WindowManager {
 
     /// Remove a key from the focus ring's order (called after closing a window).
     fn remove_from_focus_ring(&mut self, key: WindowKey) {
-        let order: Vec<WindowKey> = self.focus.order().iter().copied().filter(|k| *k != key).collect();
+        let order: Vec<WindowKey> = self
+            .focus
+            .order()
+            .iter()
+            .copied()
+            .filter(|k| *k != key)
+            .collect();
         self.focus.set_order(order);
     }
 
@@ -705,7 +711,10 @@ impl WindowManager {
     /// Creates the SlotMap entry, stores the component, and returns the
     /// WindowKey.  The App or runner retrieves the component via
     /// `WindowProvider::window_component` → `component_for_key`.
-    pub fn set_system_window(&mut self, component: Box<dyn crate::components::Component>) -> WindowKey {
+    pub fn set_system_window(
+        &mut self,
+        component: Box<dyn crate::components::Component>,
+    ) -> WindowKey {
         let key = self.create_window();
         if let Some(w) = self.windows.get_mut(key) {
             w.component = Some(component);
@@ -715,7 +724,10 @@ impl WindowManager {
 
     /// Retrieve the component stored on a window in the SlotMap, if any.
     /// Used by `WindowProvider::window_component` implementations.
-    pub fn component_for_key(&mut self, key: WindowKey) -> Option<&mut dyn crate::components::Component> {
+    pub fn component_for_key(
+        &mut self,
+        key: WindowKey,
+    ) -> Option<&mut dyn crate::components::Component> {
         let w = self.windows.get_mut(key)?;
         let c = w.component.as_mut()?;
         Some(c.as_mut())
@@ -871,7 +883,10 @@ impl WindowManager {
         let selection_copied = self.selection_copied();
         let wm_overlay_visible = self.wm_overlay_visible();
         let label_for = &move |id| {
-            titles_map.get(&id).cloned().unwrap_or_else(|| format!("{:?}", id))
+            titles_map
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| format!("{:?}", id))
         };
         if let Some(p) = &mut self.top_panel {
             p.render(

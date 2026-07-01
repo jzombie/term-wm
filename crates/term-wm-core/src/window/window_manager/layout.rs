@@ -470,9 +470,7 @@ impl WindowManager {
         plan
     }
 
-    pub(super) fn hover_targets(
-        &self,
-    ) -> (Option<&SplitHandle>, Option<&ResizeHandle<WindowKey>>) {
+    pub(super) fn hover_targets(&self) -> (Option<&SplitHandle>, Option<&ResizeHandle<WindowKey>>) {
         let Some((column, row)) = self.hover else {
             return (None, None);
         };

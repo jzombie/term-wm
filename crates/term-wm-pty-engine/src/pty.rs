@@ -630,7 +630,8 @@ mod tests {
         let dsr_requested = Arc::new(AtomicBool::new(false));
 
         // run read_loop directly (it will exit on EOF)
-        let noop_wakeup: Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>> = Arc::new(Mutex::new(None));
+        let noop_wakeup: Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>> =
+            Arc::new(Mutex::new(None));
         read_loop(
             reader,
             Arc::clone(&pending),

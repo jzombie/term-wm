@@ -256,7 +256,6 @@ impl WmDebugLogComponent {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

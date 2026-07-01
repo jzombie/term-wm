@@ -8,9 +8,9 @@ use ratatui::widgets::Paragraph;
 use super::{WindowManager, WmMenuAction};
 use crate::components::{Component, ConfirmAction, Overlay};
 use crate::keybindings::Action;
-use crate::window::WindowKey;
 use crate::layout::{FloatingPane, rect_contains, render_handles_masked};
 use crate::window::FloatRectSpec;
+use crate::window::WindowKey;
 
 impl WindowManager {
     pub fn open_wm_overlay(&mut self) {

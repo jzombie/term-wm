@@ -48,9 +48,9 @@ fn main() -> io::Result<()> {
     let total = if cli.cmds.is_empty() {
         cli.count.unwrap_or(2).max(1)
     } else {
-        cli.count.map(|c| c.max(1)).unwrap_or_else(|| {
-            cli.cmds.len().max(1)
-        })
+        cli.count
+            .map(|c| c.max(1))
+            .unwrap_or_else(|| cli.cmds.len().max(1))
     };
     let mut event_source = UnifiedEventSource::new()?;
     let pty_wakeup_tx = event_source.pty_wakeup_tx();
@@ -74,7 +74,12 @@ struct App {
 }
 
 impl App {
-    fn new_with(commands: Vec<String>, num_windows: usize, embedded: bool, pty_wakeup_tx: Sender<UnifiedEvent>) -> io::Result<Self> {
+    fn new_with(
+        commands: Vec<String>,
+        num_windows: usize,
+        embedded: bool,
+        pty_wakeup_tx: Sender<UnifiedEvent>,
+    ) -> io::Result<Self> {
         let app_ctx = Arc::new(
             AppContext::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")).with_hostname(
                 &hostname::get()
@@ -84,11 +89,9 @@ impl App {
             ),
         );
         let hostname = app_ctx.hostname.as_deref();
-        let top_panel: Box<
-            dyn term_wm_core::top_panel_trait::TopPanel<WindowKey>,
-        > = Box::new(term_wm_sys_ui_components::WmTopPanelComponent::new(
-            &app_ctx.app_name,
-        ));
+        let top_panel: Box<dyn term_wm_core::top_panel_trait::TopPanel<WindowKey>> = Box::new(
+            term_wm_sys_ui_components::WmTopPanelComponent::new(&app_ctx.app_name),
+        );
         let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> =
             Box::new(term_wm_sys_ui_components::WmBottomPanelComponent::new(
                 &app_ctx.app_name,
@@ -274,9 +277,9 @@ impl WindowManagerHost for App {
         if let Some(mut sv) = self.terminals.remove(&key) {
             sv.content.terminate();
             if let Some((child, reader_handle)) = sv.content.take_parts() {
-                self.windows.reaper().reap(
-                    term_wm::reaper::ZombieChild::new(child, reader_handle),
-                );
+                self.windows
+                    .reaper()
+                    .reap(term_wm::reaper::ZombieChild::new(child, reader_handle));
             }
         }
         Ok(())
@@ -293,7 +296,8 @@ impl WindowManagerHost for App {
 
 impl WindowProvider for App {
     fn enumerate_windows(&mut self) -> Vec<WindowKey> {
-        let mut keys: Vec<WindowKey> = self.terminals
+        let mut keys: Vec<WindowKey> = self
+            .terminals
             .iter_mut()
             .filter_map(|(key, sv)| {
                 if sv.content.has_exited() {

@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 use std::io;
 use std::sync::{
-    Arc, atomic::{AtomicBool, Ordering},
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -10,9 +11,9 @@ use crossbeam_channel::{Receiver, Sender, bounded};
 use crossterm::event::{Event, KeyEvent, MouseEvent};
 
 use super::EventSource;
+use super::utils::KeyboardNormalizer;
 use crate::power_profile::PowerProfile;
 use crate::window::WindowKey;
-use super::utils::KeyboardNormalizer;
 
 /// Events that can flow through the unified event channel.
 #[derive(Debug, Clone)]
