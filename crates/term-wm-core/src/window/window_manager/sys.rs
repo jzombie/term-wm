@@ -1,9 +1,9 @@
 use crossterm::event::{Event, MouseEventKind};
 
-use super::{SystemWindowId, WindowId, WindowManager};
+use super::{SystemWindowId, WindowManager};
 use crate::components::Overlay;
 
-impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
+impl WindowManager {
     pub(crate) fn system_window_entry(
         &self,
         id: SystemWindowId,
@@ -38,55 +38,13 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             return;
         }
         self.set_system_window_visible(id, true);
-        if !self.config.wm_overlay_enabled {
-            return;
-        }
-        let window_id = WindowId::system(id);
-        let _ = self.window_mut(window_id);
-        self.ensure_system_window_in_layout(window_id);
-        self.focus_window_id(window_id);
     }
 
     pub(super) fn hide_system_window(&mut self, id: SystemWindowId) {
         if !self.system_window_visible(id) {
             return;
         }
-        let window_id = WindowId::system(id);
         self.set_system_window_visible(id, false);
-        self.remove_system_window_from_layout(window_id);
-        if *self.wm_focus.current() == window_id {
-            self.select_fallback_focus();
-        }
-    }
-
-    pub(super) fn ensure_system_window_in_layout(&mut self, id: WindowId<Id>) {
-        if !self.config.wm_overlay_enabled {
-            return;
-        }
-        if self.layout_contains(id) {
-            return;
-        }
-        let _ = self.window_mut(id);
-        if self.managed_layout.is_none() {
-            self.managed_layout = Some(crate::layout::TilingLayout::new(
-                crate::layout::LayoutNode::leaf(id),
-            ));
-            return;
-        }
-        let _ = self.tile_window_id(id);
-    }
-
-    pub(super) fn remove_system_window_from_layout(&mut self, id: WindowId<Id>) {
-        self.clear_floating_rect(id);
-        if let Some(layout) = &mut self.managed_layout {
-            if matches!(layout.root(), crate::layout::LayoutNode::Leaf(root_id) if *root_id == id) {
-                self.managed_layout = None;
-            } else {
-                layout.root_mut().remove_leaf(id);
-            }
-        }
-        self.z_order.retain(|window_id| *window_id != id);
-        self.managed_draw_order.retain(|window_id| *window_id != id);
     }
 
     pub(super) fn dispatch_system_window_event(
@@ -94,7 +52,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         id: SystemWindowId,
         event: &Event,
     ) -> bool {
-        if let Some(localized) = self.localize_event_content(WindowId::system(id), event) {
+        if let Some(localized) = self.localize_event_system(id, event) {
             return self.dispatch_system_window_event_localized(id, &localized);
         }
         self.system_window_entry_mut(id)
@@ -107,10 +65,36 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         id: SystemWindowId,
         event: &Event,
     ) -> bool {
-        let adjusted = self.adjust_event_for_window(WindowId::system(id), event);
         self.system_window_entry_mut(id)
-            .map(|entry| entry.handle_event(&adjusted))
+            .map(|entry| entry.handle_event(event))
             .unwrap_or(false)
+    }
+
+    pub(super) fn localize_event_system(
+        &self,
+        id: SystemWindowId,
+        event: &Event,
+    ) -> Option<Event> {
+        // Find the region for this system window and localize the event
+        let region = self.regions_for_system(id);
+        match event {
+            Event::Mouse(mouse) => {
+                let local_x = mouse.column.saturating_sub(region.x);
+                let local_y = mouse.row.saturating_sub(region.y);
+                Some(Event::Mouse(crossterm::event::MouseEvent {
+                    column: local_x,
+                    row: local_y,
+                    ..*mouse
+                }))
+            }
+            _ => Some(event.clone()),
+        }
+    }
+
+    fn regions_for_system(&self, id: SystemWindowId) -> ratatui::prelude::Rect {
+        // Use a rectangular region for the system window if we have one
+        // System windows use the full managed area for now
+        self.managed_area
     }
 
     pub(super) fn render_system_window_entry(
@@ -152,7 +136,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         if !self.regions.ids().is_empty() {
             return true;
         }
-        if self.z_order.iter().any(|id| id.as_app().is_some()) {
+        if !self.z_order.is_empty() {
             return true;
         }
         false
@@ -169,28 +153,10 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 }
                 let hit =
                     self.hit_test_region_topmost(mouse.column, mouse.row, &self.managed_draw_order);
-                if let Some(WindowId::System(system_id)) = hit {
-                    if !self.system_window_visible(system_id) {
-                        return false;
-                    }
+                if let Some(key) = hit {
                     if matches!(mouse.kind, MouseEventKind::Down(_)) {
-                        self.focus_window_id(WindowId::system(system_id));
+                        self.focus_window_id(key);
                     }
-                    return self.dispatch_system_window_event(system_id, event);
-                }
-                if matches!(mouse.kind, MouseEventKind::Down(_))
-                    && let &WindowId::System(system_id) = self.wm_focus.current()
-                    && self.system_window_visible(system_id)
-                {
-                    self.select_fallback_focus();
-                }
-                false
-            }
-            Event::Key(_) => {
-                if let &WindowId::System(system_id) = self.wm_focus.current()
-                    && self.system_window_visible(system_id)
-                {
-                    return self.dispatch_system_window_event(system_id, event);
                 }
                 false
             }

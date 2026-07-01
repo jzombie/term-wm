@@ -5,13 +5,14 @@ use ratatui::layout::Alignment;
 use ratatui::style::{Color, Style};
 use ratatui::widgets::Paragraph;
 
-use super::{WindowId, WindowManager, WmMenuAction};
+use super::{WindowManager, WmMenuAction};
 use crate::components::{Component, ConfirmAction, Overlay};
 use crate::keybindings::Action;
+use crate::window::WindowKey;
 use crate::layout::{FloatingPane, rect_contains, render_handles_masked};
 use crate::window::FloatRectSpec;
 
-impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
+impl WindowManager {
     pub fn open_wm_overlay(&mut self) {
         self.overlay_visible = true;
         self.overlay_opened_at = Some(std::time::Instant::now());
@@ -152,13 +153,13 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             is_obscured,
             &self.config.theme,
         );
-        let floating_panes: Vec<FloatingPane<WindowId<Id>>> = self
+        let floating_panes: Vec<FloatingPane<WindowKey>> = self
             .windows
             .iter()
-            .filter_map(|(&id, window)| {
+            .filter_map(|(key, window)| {
                 window.floating_rect.map(|rect| match rect {
                     FloatRectSpec::Absolute(fr) => FloatingPane {
-                        id,
+                        id: key,
                         rect: crate::layout::RectSpec::Absolute(ratatui::prelude::Rect {
                             x: fr.x.max(0) as u16,
                             y: fr.y.max(0) as u16,
@@ -172,7 +173,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                         width,
                         height,
                     } => FloatingPane {
-                        id,
+                        id: key,
                         rect: crate::layout::RectSpec::Percent {
                             x,
                             y,
@@ -278,7 +279,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         }
         for overlay_id in [super::OverlayId::ExitConfirm, super::OverlayId::Help] {
             if self.overlays.contains_key(&overlay_id) {
-                let z = super::WindowManager::<Id>::compute_z_depth(oi, z_total);
+                let z = super::WindowManager::compute_z_depth(oi, z_total);
                 oi += 1;
                 let ctx = self.component_context(false).with_overlay(true);
                 if let Some(r) = self

@@ -33,8 +33,14 @@ pub struct Pty {
     child: Option<Box<dyn Child + Send + Sync>>,
     exited: bool,
     exit_status: Option<portable_pty::ExitStatus>,
-    _reader: JoinHandle<()>,
+    reader: Option<JoinHandle<()>>,
     pending_resize: Option<PtySize>,
+}
+
+/// Parts of a `Pty` that can be moved into the `Reaper` for async teardown.
+pub struct PtyParts {
+    pub child: Option<Box<dyn Child + Send + Sync>>,
+    pub reader_handle: Option<JoinHandle<()>>,
 }
 
 impl Pty {
@@ -103,9 +109,25 @@ impl Pty {
             child: Some(child),
             exited: false,
             exit_status: None,
-            _reader: reader_handle,
+            reader: Some(reader_handle),
             pending_resize: None,
         })
+    }
+
+    /// Extract the child and reader handle for async reaping.
+    /// After this call, the Pty is a shell — `update()` will no longer
+    /// receive new data. Used by `Reaper::reap()`.
+    pub fn into_parts(&mut self) -> PtyParts {
+        PtyParts {
+            child: self.child.take(),
+            reader_handle: self.reader.take(),
+        }
+    }
+
+    /// Number of bytes received from the pty — always returns 0 after
+    /// `into_parts()` has been called.
+    pub fn reader_is_alive(&self) -> bool {
+        self.reader.is_some()
     }
 
     pub fn resize(&mut self, size: PtySize) -> PtyResult<()> {

@@ -2,9 +2,10 @@ use std::sync::Arc;
 
 use crossterm::event::{Event, KeyEvent, KeyEventKind, KeyEventState, MouseEventKind};
 
-use super::{WindowId, WindowManager};
+use super::WindowManager;
+use crate::window::WindowKey;
 
-impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
+impl WindowManager {
     pub fn decorator(&self) -> Arc<dyn super::WindowDecorator> {
         self.config.decorator()
     }
@@ -59,15 +60,15 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                     .is_some_and(|p| p.hit_test_copy(event))
                 {
                     self.copy_selection_to_clipboard();
-                } else if let Some(id) = self
+                } else if let Some(key) = self
                     .top_panel
                     .as_ref()
                     .and_then(|p| p.hit_test_window(event))
                 {
-                    if self.is_minimized(id) {
-                        self.restore_minimized(id);
+                    if self.is_minimized(key) {
+                        self.restore_minimized(key);
                     }
-                    self.focus_window_id(id);
+                    self.focus_window_id(key);
                 }
                 return true;
             }
@@ -114,32 +115,32 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         false
     }
 
-    pub fn minimize_window(&mut self, id: WindowId<Id>) {
-        if self.is_minimized(id) {
+    pub fn minimize_window(&mut self, key: WindowKey) {
+        if self.is_minimized(key) {
             return;
         }
-        self.z_order.retain(|x| *x != id);
-        self.managed_draw_order.retain(|x| *x != id);
-        self.set_minimized(id, true);
-        if *self.wm_focus.current() == id {
+        self.z_order.retain(|x| *x != key);
+        self.managed_draw_order.retain(|x| *x != key);
+        self.set_minimized(key, true);
+        if *self.focus.current() == key {
             self.select_fallback_focus();
         }
     }
 
-    pub fn restore_minimized(&mut self, id: WindowId<Id>) {
-        if !self.is_minimized(id) {
+    pub fn restore_minimized(&mut self, key: WindowKey) {
+        if !self.is_minimized(key) {
             return;
         }
-        self.set_minimized(id, false);
-        if !self.z_order.contains(&id) {
-            self.z_order.push(id);
+        self.set_minimized(key, false);
+        if !self.z_order.contains(&key) {
+            self.z_order.push(key);
         }
-        if !self.managed_draw_order.contains(&id) {
-            self.managed_draw_order.push(id);
+        if !self.managed_draw_order.contains(&key) {
+            self.managed_draw_order.push(key);
         }
     }
 
-    pub fn toggle_maximize(&mut self, id: WindowId<Id>) {
+    pub fn toggle_maximize(&mut self, key: WindowKey) {
         use crate::window::FloatRectSpec;
         let full = FloatRectSpec::Absolute(crate::window::FloatRect {
             x: self.managed_area.x as i32,
@@ -147,19 +148,19 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             width: self.managed_area.width,
             height: self.managed_area.height,
         });
-        if let Some(current) = self.floating_rect(id) {
+        if let Some(current) = self.floating_rect(key) {
             if current == full {
-                if let Some(prev) = self.take_prev_floating_rect(id) {
-                    self.set_floating_rect(id, Some(prev));
+                if let Some(prev) = self.take_prev_floating_rect(key) {
+                    self.set_floating_rect(key, Some(prev));
                 }
             } else {
-                self.set_prev_floating_rect(id, Some(current));
-                self.set_floating_rect(id, Some(full));
+                self.set_prev_floating_rect(key, Some(current));
+                self.set_floating_rect(key, Some(full));
             }
-            self.bring_floating_to_front_id(id);
+            self.bring_floating_to_front_id(key);
             return;
         }
-        let prev_rect = if let Some(rect) = self.regions.get(id) {
+        let prev_rect = if let Some(rect) = self.regions.get(key) {
             FloatRectSpec::Absolute(crate::window::FloatRect {
                 x: rect.x as i32,
                 y: rect.y as i32,
@@ -174,28 +175,27 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 height: 100,
             }
         };
-        self.set_prev_floating_rect(id, Some(prev_rect));
-        self.set_floating_rect(id, Some(full));
-        self.bring_floating_to_front_id(id);
+        self.set_prev_floating_rect(key, Some(prev_rect));
+        self.set_floating_rect(key, Some(full));
+        self.bring_floating_to_front_id(key);
     }
 
-    pub fn close_window(&mut self, id: WindowId<Id>) {
-        tracing::debug!(window_id = ?id, "closing window");
-        if let WindowId::System(system_id) = id {
-            self.hide_system_window(system_id);
-            return;
+    pub fn close_window(&mut self, key: WindowKey) {
+        tracing::debug!(window_key = ?key, "closing window");
+
+        // Remove from SlotMap — all downstream keys are instantly invalidated.
+        if self.windows.remove(key).is_none() {
+            return; // already closed
         }
 
-        self.clear_floating_rect(id);
-        self.z_order.retain(|x| *x != id);
-        self.managed_draw_order.retain(|x| *x != id);
-        self.set_minimized(id, false);
-        self.regions.remove(id);
-        if *self.wm_focus.current() == id {
+        self.clear_floating_rect(key);
+        self.z_order.retain(|x| *x != key);
+        self.managed_draw_order.retain(|x| *x != key);
+        self.set_minimized(key, false);
+        self.regions.remove(key);
+        if *self.focus.current() == key {
             self.select_fallback_focus();
         }
-        if let Some(app_id) = id.as_app() {
-            self.closed_app_windows.push(app_id);
-        }
+        self.closed_windows.push(key);
     }
 }

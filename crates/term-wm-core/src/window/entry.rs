@@ -1,5 +1,7 @@
-use super::{FloatRectSpec, SystemWindowId, WindowId};
+use super::FloatRectSpec;
 
+/// A window entry in the SlotMap. This is purely a data container —
+/// process teardown is handled by the `Reaper`, not by `Drop`.
 #[derive(Debug, Clone)]
 pub struct Window {
     pub title: Option<String>,
@@ -24,14 +26,8 @@ impl Window {
         }
     }
 
-    pub fn title_or_default<Id: Copy + Eq + Ord + std::fmt::Debug>(
-        &self,
-        id: WindowId<Id>,
-    ) -> String {
-        self.title.clone().unwrap_or_else(|| match id {
-            WindowId::App(app_id) => format!("{:?}", app_id),
-            WindowId::System(SystemWindowId::DebugLog) => "Debug Log".to_string(),
-        })
+    pub fn title_or_default(&self, key: super::WindowKey) -> String {
+        self.title.clone().unwrap_or_else(|| format!("{:?}", key))
     }
 
     pub fn is_floating(&self) -> bool {

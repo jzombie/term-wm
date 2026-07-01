@@ -3,14 +3,15 @@ use std::time::{Duration, Instant};
 use crossterm::event::{Event, MouseEventKind};
 use ratatui::prelude::Rect;
 
-use super::{WindowId, WindowManager};
+use super::WindowManager;
 use crate::layout::InsertPosition;
 use crate::layout::floating::*;
+use crate::window::WindowKey;
 use term_wm_layout_engine::{
     EdgeResistance, LayoutRect, apply_resize_drag_signed, detect_quadrant,
 };
 
-impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
+impl WindowManager {
     pub(super) fn handle_header_drag_event(&mut self, event: &Event) -> bool {
         use crate::window::decorator::HeaderAction;
         let Event::Mouse(mouse) = event else {
@@ -157,7 +158,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let Some(hit) = self.hit_test_region_topmost(column, row, &self.managed_draw_order) else {
             return false;
         };
-        if !matches!(hit, WindowId::App(_)) {
+        if !matches!(hit, _) {
             return false;
         }
         self.focus_window_id(hit);
@@ -258,7 +259,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         false
     }
 
-    pub(super) fn detach_to_floating(&mut self, id: WindowId<Id>, rect: Rect) -> bool {
+    pub(super) fn detach_to_floating(&mut self, id: WindowKey, rect: Rect) -> bool {
         if self.is_window_floating(id) {
             return true;
         }
@@ -285,7 +286,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         true
     }
 
-    pub(super) fn layout_contains(&self, id: WindowId<Id>) -> bool {
+    pub(super) fn layout_contains(&self, id: WindowKey) -> bool {
         self.managed_layout
             .as_ref()
             .is_some_and(|layout| layout.root().subtree_any(|node_id| node_id == id))
@@ -294,7 +295,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn move_floating(
         &mut self,
-        id: WindowId<Id>,
+        id: WindowKey,
         column: u16,
         row: u16,
         start_mouse_x: u16,
@@ -342,7 +343,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
 
     pub(super) fn update_snap_preview(
         &mut self,
-        dragging_id: WindowId<Id>,
+        dragging_id: WindowKey,
         mouse_x: u16,
         mouse_y: u16,
     ) {
@@ -418,7 +419,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         }
     }
 
-    pub(super) fn apply_snap(&mut self, id: WindowId<Id>) {
+    pub(super) fn apply_snap(&mut self, id: WindowKey) {
         use crate::layout::LayoutNode;
         if let Some((target, position, preview)) = self.drag_snap.take() {
             let other_windows_exist = if let Some(layout) = &self.managed_layout {
@@ -506,11 +507,11 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         }
     }
 
-    pub fn tile_window(&mut self, id: Id) -> bool {
-        self.tile_window_id(WindowId::app(id))
+    pub fn tile_window(&mut self, key: WindowKey) -> bool {
+        self.tile_window_id(key)
     }
 
-    pub(super) fn tile_window_id(&mut self, id: WindowId<Id>) -> bool {
+    pub(super) fn tile_window_id(&mut self, id: WindowKey) -> bool {
         use crate::layout::LayoutNode;
         if self.layout_contains(id) {
             if self.is_window_floating(id) {
@@ -525,7 +526,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             return true;
         }
 
-        let current_focus = *self.wm_focus.current();
+        let current_focus = *self.focus.current();
 
         let Some(layout) = self.managed_layout.as_mut() else {
             return false;

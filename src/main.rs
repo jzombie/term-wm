@@ -1,8 +1,4 @@
-//! This default application is a simple terminal app, which opens two sub-shells in side-by-side
-//! windows, where more windows can be added, or windows can be removed.
-
-// TODO: Add mode to auto-open debug window
-
+use std::collections::BTreeMap;
 use std::io;
 use std::sync::Arc;
 
@@ -20,13 +16,11 @@ use term_wm::io::{
 };
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
 use term_wm::ui::UiFrame;
-use term_wm::window::{OverlayId, SystemWindowId, WindowDrawContext, WindowManager};
+use term_wm::window::{OverlayId, SystemWindowId, WindowDrawContext, WindowKey, WindowManager};
 use term_wm::{ScrollViewComponent, TerminalComponent, default_shell_command};
 use term_wm_sys_ui_components::wm_debug_log::{
     WmDebugLogComponent, install_panic_hook, set_global_debug_log,
 };
-
-type PaneId = usize;
 
 /// Simple CLI for launching `term-wm` with optional commands / window count.
 #[derive(Parser, Debug)]
@@ -37,22 +31,10 @@ type PaneId = usize;
     long_about = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"), ": ", env!("CARGO_PKG_DESCRIPTION")),
 )]
 struct Cli {
-    /// Number of terminal windows to open.
-    ///
-    /// When omitted and no commands are provided this defaults to 2. When commands are provided and `--count`
-    /// is omitted, the number of windows will default to the number of
-    /// commands
     #[arg(short = 'n', long = "count")]
     count: Option<usize>,
-
-    /// Commands to run in created windows.
-    ///
-    /// If provided, the number of windows will equal the number of commands given and each command will be run
-    /// in its respective window via the default shell (i.e. shell -c "CMD").
     #[arg(value_name = "CMD", num_args = 0..)]
     cmds: Vec<String>,
-
-    /// Run in embedded mode (no chrome, no floating windows, no WM overlay).
     #[arg(long)]
     embedded: bool,
 }
@@ -60,17 +42,10 @@ struct Cli {
 fn main() -> io::Result<()> {
     let cli = Cli::parse();
 
-    // Determine total number of windows to open by default.
-    //
-    // Behavior:
-    // - If no commands provided: open `--count` shells (default 2 if not given).
-    // - If commands provided: if `--count` given use it, otherwise default to
-    //   the number of commands.
     let total = if cli.cmds.is_empty() {
         cli.count.unwrap_or(2).max(1)
     } else {
         cli.count.map(|c| c.max(1)).unwrap_or_else(|| {
-            // default to number of commands when count not given
             cli.cmds.len().max(1)
         })
     };
@@ -87,8 +62,8 @@ fn main() -> io::Result<()> {
 }
 
 struct App {
-    windows: WindowManager<PaneId>,
-    terminals: Vec<ScrollViewComponent<TerminalComponent>>,
+    windows: WindowManager,
+    terminals: BTreeMap<WindowKey, ScrollViewComponent<TerminalComponent>>,
 }
 
 impl App {
@@ -103,7 +78,7 @@ impl App {
         );
         let hostname = app_ctx.hostname.as_deref();
         let top_panel: Box<
-            dyn term_wm_core::top_panel_trait::TopPanel<term_wm_core::window::WindowId<usize>>,
+            dyn term_wm_core::top_panel_trait::TopPanel<WindowKey>,
         > = Box::new(term_wm_sys_ui_components::WmTopPanelComponent::new(
             &app_ctx.app_name,
         ));
@@ -128,12 +103,11 @@ impl App {
         };
         let mut app = Self {
             windows: builder.app_ctx(Arc::clone(&app_ctx)).build(
-                0,
                 Some(top_panel),
                 Some(bottom_panel),
                 Some(menu_overlay),
             ),
-            terminals: Vec::new(),
+            terminals: BTreeMap::new(),
         };
 
         // Initialize debug log system window
@@ -149,24 +123,23 @@ impl App {
 
         let mut error_occurred = false;
 
-        // If commands provided, open one per command; otherwise open `num_windows`
-        // shells using the default shell.
         if !commands.is_empty() {
             let mut it = commands.into_iter();
             for _ in 0..num_windows {
                 if let Some(cmd) = it.next() {
-                    // Spawn an interactive shell and send the command as input so
-                    // that when the command exits the shell remains.
                     let cb = default_shell_command();
                     if let Err(e) = app.spawn_terminal_with_command(cb) {
                         tracing::error!("Window spawn error: {}", e);
                         error_occurred = true;
                     }
-                    // If spawn succeeded, write the command into the PTY.
-                    if !error_occurred && let Some(pane) = app.terminals.last_mut() {
-                        let mut line = cmd;
-                        line.push_str(LineEnding::from_current_platform().as_str());
-                        let _ = pane.content.write_bytes(line.as_bytes());
+                    if !error_occurred {
+                        if let Some(key) = app.terminals.keys().last().copied() {
+                            if let Some(ref mut pane) = app.terminals.get_mut(&key) {
+                                let mut line = cmd;
+                                line.push_str(LineEnding::from_current_platform().as_str());
+                                let _ = pane.content.write_bytes(line.as_bytes());
+                            }
+                        }
                     }
                 } else if let Err(e) = app.wm_new_window() {
                     tracing::error!("Window spawn error: {}", e);
@@ -200,18 +173,18 @@ impl App {
         sv.set_keyboard_enabled(false);
         sv.content
             .set_selection_enabled(self.windows.clipboard_enabled());
-        let id = self.terminals.len();
-        self.terminals.push(sv);
-        self.windows.set_focus(id);
-        self.windows.tile_window(id);
+        let key = self.windows.create_window();
+        self.terminals.insert(key, sv);
+        self.windows.set_focus(key);
+        self.windows.tile_window(key);
         self.windows
-            .set_window_title(id, format!("Shell {}", id + 1));
+            .set_window_title(key, format!("Shell {}", self.terminals.len()));
         Ok(())
     }
 }
 
-impl WindowManagerHost<PaneId> for App {
-    fn windows(&mut self) -> &mut WindowManager<PaneId> {
+impl WindowManagerHost for App {
+    fn windows(&mut self) -> &mut WindowManager {
         &mut self.windows
     }
 
@@ -256,19 +229,23 @@ impl WindowManagerHost<PaneId> for App {
         sv.set_keyboard_enabled(false);
         sv.content
             .set_selection_enabled(self.windows.clipboard_enabled());
-        let id = self.terminals.len();
-        self.terminals.push(sv);
-        self.windows.set_focus(id);
-        self.windows.tile_window(id);
-        // Set a user-visible title for the newly created pane.
+        let key = self.windows.create_window();
+        self.terminals.insert(key, sv);
+        self.windows.set_focus(key);
+        self.windows.tile_window(key);
         self.windows
-            .set_window_title(id, format!("Shell {}", id + 1));
+            .set_window_title(key, format!("Shell {}", self.terminals.len()));
         Ok(())
     }
 
-    fn wm_close_window(&mut self, id: PaneId) -> io::Result<()> {
-        if let Some(sv) = self.terminals.get_mut(id) {
+    fn wm_close_window(&mut self, key: WindowKey) -> io::Result<()> {
+        if let Some(mut sv) = self.terminals.remove(&key) {
             sv.content.terminate();
+            if let Some((child, reader_handle)) = sv.content.take_parts() {
+                self.windows.reaper().reap(
+                    term_wm::reaper::ZombieChild::new(child, reader_handle),
+                );
+            }
         }
         Ok(())
     }
@@ -276,25 +253,30 @@ impl WindowManagerHost<PaneId> for App {
     fn set_clipboard_enabled(&mut self, _enabled: bool) {}
 
     fn set_window_selection_enabled(&mut self, enabled: bool) {
-        for sv in &mut self.terminals {
+        for sv in self.terminals.values_mut() {
             sv.content.set_selection_enabled(enabled);
         }
     }
 }
 
-impl WindowProvider<PaneId> for App {
-    fn enumerate_windows(&mut self) -> Vec<PaneId> {
+impl WindowProvider for App {
+    fn enumerate_windows(&mut self) -> Vec<WindowKey> {
         self.terminals
             .iter_mut()
-            .enumerate()
-            .filter_map(|(id, sv)| (!sv.content.has_exited()).then_some(id))
+            .filter_map(|(key, sv)| {
+                if sv.content.has_exited() {
+                    None
+                } else {
+                    Some(*key)
+                }
+            })
             .collect()
     }
 
     fn render_window(
         &mut self,
         frame: &mut UiFrame<'_>,
-        window: WindowDrawContext<PaneId>,
+        window: WindowDrawContext,
         ctx: &ComponentContext,
     ) {
         render_pane(frame, self, window.id, window.surface.inner, ctx.clone());
@@ -304,15 +286,15 @@ impl WindowProvider<PaneId> for App {
         "all shells exited"
     }
 
-    fn window_component(&mut self, id: PaneId) -> Option<&mut dyn Component> {
+    fn window_component(&mut self, key: WindowKey) -> Option<&mut dyn Component> {
         self.terminals
-            .get_mut(id)
+            .get_mut(&key)
             .map(|sv| sv as &mut dyn Component)
     }
 
-    fn window_pane_title(&mut self, id: PaneId) -> Option<String> {
+    fn window_pane_title(&mut self, key: WindowKey) -> Option<String> {
         self.terminals
-            .get_mut(id)
+            .get_mut(&key)
             .and_then(|sv| sv.content.take_pending_title())
     }
 }
@@ -320,14 +302,14 @@ impl WindowProvider<PaneId> for App {
 fn render_pane(
     frame: &mut UiFrame<'_>,
     app: &mut App,
-    id: PaneId,
+    key: WindowKey,
     area: Rect,
     ctx: ComponentContext,
 ) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    if let Some(sv) = app.terminals.get_mut(id) {
+    if let Some(sv) = app.terminals.get_mut(&key) {
         sv.resize(area, &ctx);
         sv.render(frame, area, &ctx);
     }

@@ -625,6 +625,11 @@ impl TerminalComponent {
         let _ = self.pane.kill_child();
     }
 
+    /// Extract the child process and reader thread handle for async reaping.
+    pub fn take_parts(&mut self) -> Option<(Box<dyn portable_pty::Child + Send + Sync>, std::thread::JoinHandle<()>)> {
+        self.pane.take_parts()
+    }
+
     fn link_at_position(&self, mouse: &MouseEvent) -> Option<String> {
         if self.last_area.width == 0 || self.last_area.height == 0 {
             return None;

@@ -7,7 +7,7 @@ use crate::keybindings::KeyBindings;
 use crate::theme::Theme;
 use crate::top_panel_trait::TopPanel;
 use crate::window::decorator::WindowDecorator;
-use crate::window::{WindowId, WindowManager, WmMenuAction};
+use crate::window::{WindowKey, WindowManager, WmMenuAction};
 use crate::wm_config::{HintVisibility, WmConfig};
 
 /// Builder for [`WmConfig`] and [`WindowManager`].
@@ -106,16 +106,14 @@ impl WmBuilder {
     }
 
     /// Build a [`WindowManager`] from the accumulated configuration.
-    pub fn build<Id: Copy + Eq + Ord + std::fmt::Debug + 'static>(
+    pub fn build(
         self,
-        current: Id,
-        top_panel: Option<Box<dyn TopPanel<WindowId<Id>>>>,
+        top_panel: Option<Box<dyn TopPanel<WindowKey>>>,
         bottom_panel: Option<Box<dyn BottomPanel>>,
         menu_overlay: Option<Box<dyn MenuOverlay<WmMenuAction>>>,
-    ) -> WindowManager<Id> {
+    ) -> WindowManager {
         let app_ctx = self.app_ctx.expect("app_ctx must be set before building");
         WindowManager::with_config(
-            current,
             self.config,
             app_ctx,
             top_panel,
