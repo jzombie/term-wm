@@ -10,14 +10,8 @@ use term_wm::io::RenderTarget;
 use term_wm::io::console::{ConsoleEventSource, ConsoleRenderTarget};
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
 use term_wm::ui::UiFrame;
-use term_wm::window::{WindowDrawContext, WindowManager};
+use term_wm::window::{WindowDrawContext, WindowKey, WindowManager};
 use term_wm::wm_config::WmConfig;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum PaneId {
-    Left,
-    Right,
-}
 
 fn main() -> io::Result<()> {
     let mut app = App::new(std::env::args().skip(1).collect())?;
@@ -33,30 +27,22 @@ fn main() -> io::Result<()> {
 }
 
 struct App {
-    windows: WindowManager<PaneId>,
+    wm: WindowManager,
     left: SvgImageComponent,
     right: SvgImageComponent,
     pending_paths: Vec<String>,
     loaded_count: usize,
+    left_key: Option<WindowKey>,
+    right_key: Option<WindowKey>,
 }
 
 impl App {
-    fn new(mut paths: Vec<String>) -> io::Result<Self> {
+    fn new(paths: Vec<String>) -> io::Result<Self> {
         let mut left = SvgImageComponent::new();
         let mut right = SvgImageComponent::new();
-        left.set_keep_aspect(true);
-        right.set_keep_aspect(true);
-        left.set_colorize(true);
-        right.set_colorize(true);
-        if paths.is_empty() {
-            paths.push("assets/zenOSmosis-logo.svg".to_string());
-        }
-        if paths.len() == 1 {
-            paths.push(paths[0].clone());
-        }
         let hostname = None;
         let top_panel: Box<
-            dyn term_wm_core::top_panel_trait::TopPanel<term_wm_core::window::WindowId<PaneId>>,
+            dyn term_wm_core::top_panel_trait::TopPanel<WindowKey>,
         > = Box::new(term_wm_sys_ui_components::WmTopPanelComponent::new(
             "example",
         ));
@@ -66,36 +52,36 @@ impl App {
         let menu_overlay: Box<
             dyn term_wm_core::components::MenuOverlay<term_wm_core::window::WmMenuAction>,
         > = Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
-        let mut windows = WindowManager::with_config(
-            PaneId::Left,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(term_wm::AppContext::new("example", "0.0.0")),
             Some(top_panel),
             Some(bottom_panel),
             Some(menu_overlay),
         );
-        windows.set_focus_order(vec![PaneId::Left, PaneId::Right]);
+        let left_key = Some(wm.create_window());
+        let right_key = Some(wm.create_window());
         let mut app = Self {
-            windows,
+            wm,
             left,
             right,
             pending_paths: paths,
             loaded_count: 0,
+            left_key,
+            right_key,
         };
-        // Initialize windows via the wm_new_window API so creation paths match runtime behavior.
         app.wm_new_window()?;
         app.wm_new_window()?;
         Ok(app)
     }
 }
 
-impl WindowManagerHost<PaneId> for App {
-    fn windows(&mut self) -> &mut WindowManager<PaneId> {
-        &mut self.windows
+impl WindowManagerHost for App {
+    fn windows(&mut self) -> &mut WindowManager {
+        &mut self.wm
     }
 
     fn wm_new_window(&mut self) -> io::Result<()> {
-        // Load next pending path into the next available pane (Left then Right).
         if self.loaded_count >= self.pending_paths.len() {
             return Ok(());
         }
@@ -110,24 +96,34 @@ impl WindowManagerHost<PaneId> for App {
     }
 }
 
-impl WindowProvider<PaneId> for App {
-    fn enumerate_windows(&mut self) -> Vec<PaneId> {
-        vec![PaneId::Left, PaneId::Right]
+impl WindowProvider for App {
+    fn enumerate_windows(&mut self) -> Vec<WindowKey> {
+        let mut keys = Vec::new();
+        if let Some(k) = self.left_key {
+            keys.push(k);
+        }
+        if let Some(k) = self.right_key {
+            keys.push(k);
+        }
+        keys
     }
 
     fn render_window(
         &mut self,
         frame: &mut UiFrame<'_>,
-        window: WindowDrawContext<PaneId>,
+        window: WindowDrawContext,
         _ctx: &ComponentContext,
     ) {
-        match window.id {
-            PaneId::Left => {
-                render_pane(frame, &mut self.left, window.surface.inner, window.focused)
-            }
-            PaneId::Right => {
-                render_pane(frame, &mut self.right, window.surface.inner, window.focused)
-            }
+        let area = window.surface.inner;
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        if Some(window.id) == self.left_key {
+            frame.render_widget(Clear, area);
+            self.left.render(frame, area, &ComponentContext::new(window.focused));
+        } else if Some(window.id) == self.right_key {
+            frame.render_widget(Clear, area);
+            self.right.render(frame, area, &ComponentContext::new(window.focused));
         }
     }
 
@@ -135,18 +131,15 @@ impl WindowProvider<PaneId> for App {
         "no images loaded"
     }
 
-    fn window_component(&mut self, id: PaneId) -> Option<&mut dyn Component> {
-        match id {
-            PaneId::Left => Some(&mut self.left as &mut dyn Component),
-            PaneId::Right => Some(&mut self.right as &mut dyn Component),
+    fn window_component(&mut self, key: WindowKey) -> Option<&mut dyn Component> {
+        if Some(key) == self.left_key {
+            return Some(&mut self.left);
         }
+        if Some(key) == self.right_key {
+            return Some(&mut self.right);
+        }
+        None
     }
-}
-
-fn render_pane(frame: &mut UiFrame<'_>, image: &mut SvgImageComponent, area: Rect, focused: bool) {
-    // Clear the area and render the image directly (no inner decorative frame).
-    frame.render_widget(Clear, area);
-    image.render(frame, area, &ComponentContext::new(focused));
 }
 
 fn load_into(component: &mut SvgImageComponent, path: &str) -> io::Result<()> {

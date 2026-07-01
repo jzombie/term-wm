@@ -43,6 +43,11 @@ pub trait WindowManagerHost {
     fn on_panic(&mut self) {}
     /// Toggle the debug log window visibility.
     fn toggle_debug_window(&mut self) {}
+    /// Called by the runner to check if the app wants to quit.
+    /// The app sets this to `true` to exit the event loop.
+    fn quit_requested(&self) -> bool {
+        false
+    }
 }
 
 pub trait WindowProvider: WindowManagerHost {
@@ -466,6 +471,10 @@ where
                     }
                 }
             } else {
+                if app.quit_requested() {
+                    update_selection_snapshot(app);
+                    return flush_state_changes(app, ControlFlow::Quit);
+                }
                 // Forward any timed-out pending Esc to the terminal.
                 if let Some(super_event) = app.windows().take_expired_super_event() {
                     let _ = handle_focused_app_event(&super_event, app);

@@ -7,14 +7,11 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
 use term_wm::app_context::AppContext;
-use term_wm::bottom_panel_trait::BottomPanel;
 use term_wm::components::{ComponentContext, MenuOverlay};
 use term_wm::io::{EventSource, RenderTarget};
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_app};
-use term_wm::top_panel_trait::TopPanel;
 use term_wm::ui::UiFrame;
-use term_wm::window::SystemWindowId;
-use term_wm::window::{WindowDrawContext, WindowId, WindowManager, WmMenuAction};
+use term_wm::window::{WindowDrawContext, WindowKey, WindowManager, WmMenuAction};
 use term_wm::wm_config::WmConfig;
 
 #[derive(Debug)]
@@ -77,29 +74,34 @@ impl EventSource for ImmediateDriver {
 }
 
 struct SparseApp {
-    wm: WindowManager<usize>,
+    wm: WindowManager,
     draws: usize,
+    window_key: Option<WindowKey>,
+    should_quit: bool,
 }
 
-impl WindowManagerHost<usize> for SparseApp {
-    fn windows(&mut self) -> &mut WindowManager<usize> {
+impl WindowManagerHost for SparseApp {
+    fn windows(&mut self) -> &mut WindowManager {
         &mut self.wm
+    }
+    fn quit_requested(&self) -> bool {
+        self.should_quit
     }
 }
 
-impl WindowProvider<usize> for SparseApp {
-    fn enumerate_windows(&mut self) -> Vec<usize> {
-        // Return a window on the first two ticks so the app doesn't
-        // hit the quit condition before the draw callback can panic.
-        // After the panic + debug-window handling, return empty to
-        // let the idle-path quit condition fire.
-        if self.draws < 3 { vec![1] } else { vec![] }
+impl WindowProvider for SparseApp {
+    fn enumerate_windows(&mut self) -> Vec<WindowKey> {
+        if self.should_quit {
+            vec![]
+        } else {
+            self.window_key.map(|k| vec![k]).unwrap_or_default()
+        }
     }
 
     fn render_window(
         &mut self,
         _frame: &mut UiFrame<'_>,
-        _window: WindowDrawContext<usize>,
+        _window: WindowDrawContext,
         _ctx: &ComponentContext,
     ) {
     }
@@ -116,19 +118,25 @@ fn render_panic_shows_in_debug_log() {
 
     let menu: Box<dyn MenuOverlay<WmMenuAction>> =
         Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
-    let wm = WindowManager::<usize>::with_config(
-        0,
+    let mut wm = WindowManager::with_config(
         WmConfig::standalone(),
         Arc::new(AppContext::new("test", "0.0.0")),
-        None::<Box<dyn TopPanel<term_wm::window::WindowId<usize>>>>,
-        None::<Box<dyn BottomPanel>>,
+        None::<Box<dyn term_wm::top_panel_trait::TopPanel<WindowKey>>>,
+        None::<Box<dyn term_wm::bottom_panel_trait::BottomPanel>>,
         Some(menu),
     );
+    let key = wm.create_window();
+    wm.set_window_title(key, "test");
 
-    let mut app = SparseApp { wm, draws: 0 };
+    let mut app = SparseApp {
+        wm,
+        draws: 0,
+        window_key: Some(key),
+        should_quit: false,
+    };
     let mut output = TestOutput::new();
     let mut driver = ImmediateDriver;
-    let focus_regions: Vec<usize> = vec![];
+    let focus_regions: Vec<WindowKey> = vec![];
 
     let panic_msg = "intentional-panic-from-draw";
 
@@ -137,15 +145,15 @@ fn render_panic_shows_in_debug_log() {
         &mut driver,
         &mut app,
         &focus_regions,
-        |id| id,
+        |k| k,
         {
             move |_frame, app| {
                 app.draws += 1;
                 if app.draws == 1 {
                     panic!("{}", panic_msg);
-                } else {
-                    app.windows()
-                        .close_window(WindowId::System(SystemWindowId::DebugLog));
+                } else if let Some(k) = app.window_key.take() {
+                    app.wm.close_window(k);
+                    app.should_quit = true;
                 }
             }
         },
