@@ -91,7 +91,13 @@ impl<R> MenuComponent<R> {
             || self.nav_keys.matches(Action::MenuPrev, key)
     }
 
-    pub fn render_items(&self, frame: &mut UiFrame<'_>, area: Rect, hovered_idx: Option<usize>, theme: &term_wm_core::theme::Theme) {
+    pub fn render_items(
+        &self,
+        frame: &mut UiFrame<'_>,
+        area: Rect,
+        hovered_idx: Option<usize>,
+        theme: &term_wm_core::theme::Theme,
+    ) {
         if self.items.is_empty() || area.width < 3 || area.height < 3 {
             return;
         }
@@ -106,9 +112,7 @@ impl<R> MenuComponent<R> {
             .bg(theme.menu_selected_bg)
             .fg(theme.menu_selected_fg)
             .add_modifier(Modifier::BOLD);
-        let hovered_style = Style::default()
-            .bg(theme.panel_active_bg)
-            .fg(theme.menu_fg);
+        let hovered_style = Style::default().bg(theme.panel_active_bg).fg(theme.menu_fg);
 
         let inner_x = area.x.saturating_add(1);
         let inner_width = area.width.saturating_sub(2).max(1);

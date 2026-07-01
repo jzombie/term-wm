@@ -121,16 +121,18 @@ impl App {
         let config = builder.config().clone();
         let mut raw_menu = term_wm_sys_ui_components::WmMenuOverlay::new();
         raw_menu.set_timeout(config.menu_outline_timeout);
-        let menu_overlay: Box<dyn MenuOverlay<term_wm_core::window::WmMenuAction>> =
-            if embedded {
-                Box::new(term_wm_sys_ui_components::WmMenuOverlay::new())
-            } else {
-                Box::new(raw_menu)
-            };
+        let menu_overlay: Box<dyn MenuOverlay<term_wm_core::window::WmMenuAction>> = if embedded {
+            Box::new(term_wm_sys_ui_components::WmMenuOverlay::new())
+        } else {
+            Box::new(raw_menu)
+        };
         let mut app = Self {
-            windows: builder
-                .app_ctx(Arc::clone(&app_ctx))
-                .build(0, Some(top_panel), Some(bottom_panel), Some(menu_overlay)),
+            windows: builder.app_ctx(Arc::clone(&app_ctx)).build(
+                0,
+                Some(top_panel),
+                Some(bottom_panel),
+                Some(menu_overlay),
+            ),
             terminals: Vec::new(),
         };
 
@@ -219,7 +221,8 @@ impl WindowManagerHost<PaneId> for App {
         let mut h = WmHelpOverlayComponent::new(self.windows.app_ctx(), kb);
         h.show();
         h.set_selection_enabled(self.windows.clipboard_enabled());
-        self.windows.open_overlay(OverlayId::Help, Some(Box::new(h)));
+        self.windows
+            .open_overlay(OverlayId::Help, Some(Box::new(h)));
     }
 
     fn open_keybindings_overlay(&mut self) {

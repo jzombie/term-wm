@@ -119,7 +119,8 @@ impl<R: Clone + std::fmt::Debug + 'static> WmMenuOverlay<R> {
             .then(|| (my.saturating_sub(drop_rect.y).saturating_sub(1)) as usize)
             .filter(|&idx| idx < item_count)
         });
-        self.menu.render_items(frame, drop_rect, hovered_idx, &ctx.config().theme);
+        self.menu
+            .render_items(frame, drop_rect, hovered_idx, &ctx.config().theme);
 
         self.item_hits.clear();
         for idx in 0..item_count.min((drop_rect.height.saturating_sub(1)) as usize) {

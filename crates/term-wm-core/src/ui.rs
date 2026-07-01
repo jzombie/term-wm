@@ -151,11 +151,7 @@ pub fn render_drop_shadow(frame: &mut UiFrame<'_>, dest: FloatRect, z_depth: f32
     let fx1 = fx0 + fa.width as i32;
     let fy1 = fy0 + fa.height as i32;
 
-    let shadow_color = crate::term_color::lerp_color(
-        theme.shadow_tint,
-        theme.shadow_bg,
-        z_depth,
-    );
+    let shadow_color = crate::term_color::lerp_color(theme.shadow_tint, theme.shadow_bg, z_depth);
 
     let sx = dest.x.saturating_add(SHADOW_OFFSET_X);
     let sy = dest.y.saturating_add(SHADOW_OFFSET_Y);

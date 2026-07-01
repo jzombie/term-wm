@@ -149,7 +149,10 @@ impl WmHelpOverlayComponent {
                 .replace("%MENU_SELECT%", &select)
                 .replace("%SUPER%", &super_key)
                 .replace("%HELP_MENU%", &help_label);
-            overlay.content.content.set_markdown(&s, &term_wm_core::theme::NOIR);
+            overlay
+                .content
+                .content
+                .set_markdown(&s, &term_wm_core::theme::NOIR);
         }
         overlay.content.content.set_link_handler_fn(|url| {
             let _ = webbrowser::open(url);

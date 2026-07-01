@@ -346,7 +346,11 @@ impl TextRendererComponent {
         ))
     }
 
-    fn render_selection_overlay(&mut self, frame: &mut UiFrame<'_>, theme: &term_wm_core::theme::Theme) {
+    fn render_selection_overlay(
+        &mut self,
+        frame: &mut UiFrame<'_>,
+        theme: &term_wm_core::theme::Theme,
+    ) {
         if !self.selection_enabled {
             return;
         }
@@ -377,10 +381,7 @@ impl TextRendererComponent {
                 if range.contains(pos)
                     && let Some(cell) = buffer.cell_mut((x, y))
                 {
-                    let style = cell
-                        .style()
-                        .bg(theme.selection_bg)
-                        .fg(theme.selection_fg);
+                    let style = cell.style().bg(theme.selection_bg).fg(theme.selection_fg);
                     cell.set_style(style);
                 }
             }

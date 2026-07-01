@@ -76,7 +76,12 @@ impl WmBottomPanelComponent {
         (bottom, managed)
     }
 
-    pub fn render(&mut self, frame: &mut UiFrame<'_>, active: bool, theme: &term_wm_core::theme::Theme) {
+    pub fn render(
+        &mut self,
+        frame: &mut UiFrame<'_>,
+        active: bool,
+        theme: &term_wm_core::theme::Theme,
+    ) {
         if active {
             self.render_bottom_impl(frame, true, theme);
         } else if !self.keybinding_hints.is_empty() {
@@ -84,7 +89,12 @@ impl WmBottomPanelComponent {
         }
     }
 
-    fn render_bottom_impl(&mut self, frame: &mut UiFrame<'_>, show_info: bool, theme: &term_wm_core::theme::Theme) {
+    fn render_bottom_impl(
+        &mut self,
+        frame: &mut UiFrame<'_>,
+        show_info: bool,
+        theme: &term_wm_core::theme::Theme,
+    ) {
         let area = self.area;
         if area.width == 0 || area.height == 0 {
             return;
@@ -263,7 +273,12 @@ impl BottomPanelTrait for WmBottomPanelComponent {
         self.split_bottom_area(area, height)
     }
 
-    fn render(&mut self, frame: &mut UiFrame<'_>, active: bool, theme: &term_wm_core::theme::Theme) {
+    fn render(
+        &mut self,
+        frame: &mut UiFrame<'_>,
+        active: bool,
+        theme: &term_wm_core::theme::Theme,
+    ) {
         self.render(frame, active, theme);
     }
 
@@ -342,8 +357,14 @@ mod tests {
         let last_x = area.x.saturating_add(area.width).saturating_sub(1);
         for xx in area.x..last_x {
             let cell = buf.cell_mut((xx, area.y)).expect("cell present");
-            assert_eq!(cell.style().bg, Some(term_wm_core::theme::NOIR.bottom_panel_bg));
-            assert_eq!(cell.style().fg, Some(term_wm_core::theme::NOIR.bottom_panel_fg));
+            assert_eq!(
+                cell.style().bg,
+                Some(term_wm_core::theme::NOIR.bottom_panel_bg)
+            );
+            assert_eq!(
+                cell.style().fg,
+                Some(term_wm_core::theme::NOIR.bottom_panel_fg)
+            );
         }
 
         let mut found = false;

@@ -471,9 +471,7 @@ impl TerminalComponent {
                         let abs_row = selection_row_base.saturating_add(row as usize);
                         let abs_col = col as usize;
                         if range.contains(LogicalPosition::new(abs_row, abs_col)) {
-                            style = style
-                                .bg(theme.selection_bg)
-                                .fg(theme.selection_fg);
+                            style = style.bg(theme.selection_bg).fg(theme.selection_fg);
                         }
                     }
 

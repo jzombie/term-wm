@@ -114,7 +114,14 @@ impl WmBuilder {
         menu_overlay: Option<Box<dyn MenuOverlay<WmMenuAction>>>,
     ) -> WindowManager<Id> {
         let app_ctx = self.app_ctx.expect("app_ctx must be set before building");
-        WindowManager::with_config(current, self.config, app_ctx, top_panel, bottom_panel, menu_overlay)
+        WindowManager::with_config(
+            current,
+            self.config,
+            app_ctx,
+            top_panel,
+            bottom_panel,
+            menu_overlay,
+        )
     }
 
     /// Access the underlying [`WmConfig`] for read or inspection.
