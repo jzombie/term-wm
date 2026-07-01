@@ -72,7 +72,7 @@ impl App {
             Arc::new(term_wm::AppContext::new("example", "0.0.0")),
             Some(top_panel),
             Some(bottom_panel),
-            menu_overlay,
+            Some(menu_overlay),
         );
         windows.set_focus_order(vec![PaneId::Left, PaneId::Right]);
         let mut app = Self {

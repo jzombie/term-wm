@@ -22,6 +22,7 @@
 //!   `frame.render_stateful_widget(...)` as before. To clear an area, render the
 //!   `Clear` widget through the `UiFrame`.
 use crate::constants::{SHADOW_OFFSET_X, SHADOW_OFFSET_Y};
+use crate::theme::Theme;
 use crate::window::FloatRect;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -143,18 +144,14 @@ impl<'a> UiFrame<'a> {
 /// This is a pure render-time effect — it mutates only the terminal
 /// framebuffer and does not affect layout, hit-testing, or any other
 /// data structure.
-pub fn render_drop_shadow(frame: &mut UiFrame<'_>, dest: FloatRect, z_depth: f32) {
+pub fn render_drop_shadow(frame: &mut UiFrame<'_>, dest: FloatRect, z_depth: f32, theme: &Theme) {
     let fa = frame.area();
     let fx0 = fa.x as i32;
     let fy0 = fa.y as i32;
     let fx1 = fx0 + fa.width as i32;
     let fy1 = fy0 + fa.height as i32;
 
-    let shadow_color = crate::term_color::lerp_color(
-        crate::theme::shadow_tint(),
-        crate::theme::shadow_bg(),
-        z_depth,
-    );
+    let shadow_color = crate::term_color::lerp_color(theme.shadow_tint, theme.shadow_bg, z_depth);
 
     let sx = dest.x.saturating_add(SHADOW_OFFSET_X);
     let sy = dest.y.saturating_add(SHADOW_OFFSET_Y);

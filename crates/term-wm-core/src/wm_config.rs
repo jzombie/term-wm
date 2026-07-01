@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::keybindings::{Action, KeyBindings};
+use crate::theme::NOIR;
 use crate::window::decorator::{DefaultDecorator, WindowDecorator};
 
 fn super_passthrough_window_default() -> Duration {
@@ -64,6 +65,7 @@ pub fn validate_keybindings(kb: &KeyBindings) -> KeyBindings {
 ///
 /// Fields marked "initial" set the starting value for a runtime-toggleable
 /// feature — changes made at runtime apply immediately.
+#[derive(Debug, Clone)]
 pub struct WmConfig {
     /// Render window title bars and borders.
     pub chrome_enabled: bool,
@@ -106,6 +108,8 @@ pub struct WmConfig {
     pub keybindings: KeyBindings,
     /// Visibility mode for keybinding hints.
     pub hint_visibility: HintVisibility,
+    /// Color theme.
+    pub theme: crate::theme::Theme,
 }
 
 impl Default for WmConfig {
@@ -137,6 +141,7 @@ impl WmConfig {
             hint_visibility: HintVisibility::Always,
             menu_outline_timeout: Duration::from_millis(500),
             drag_snap_timeout: Some(Duration::from_millis(2000)),
+            theme: NOIR,
         }
     }
 
@@ -161,6 +166,7 @@ impl WmConfig {
             hint_visibility: HintVisibility::Always,
             menu_outline_timeout: Duration::ZERO,
             drag_snap_timeout: None,
+            theme: NOIR,
         }
     }
 

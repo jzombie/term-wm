@@ -17,6 +17,7 @@ pub use term_wm_pty_engine::Pty;
 pub use term_wm_pty_engine::PtyResult;
 pub use term_wm_pty_engine::clipboard;
 pub use term_wm_pty_engine::title;
+pub mod config;
 pub mod runner;
 pub mod theme;
 pub mod top_panel_trait;

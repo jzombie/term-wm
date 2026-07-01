@@ -99,7 +99,7 @@ impl WmHelpOverlayComponent {
         let mut dialog = DialogOverlayComponent::new();
         dialog.set_dim_backdrop(true);
         dialog.set_auto_close_on_outside_click(true);
-        dialog.set_bg(term_wm_core::theme::dialog_bg());
+        dialog.set_bg(term_wm_core::theme::NOIR.dialog_bg);
         dialog.set_size(70, 20);
         let viewer = ScrollViewComponent::new(MarkdownViewerComponent::new());
         let mut overlay = Self {
@@ -149,7 +149,10 @@ impl WmHelpOverlayComponent {
                 .replace("%MENU_SELECT%", &select)
                 .replace("%SUPER%", &super_key)
                 .replace("%HELP_MENU%", &help_label);
-            overlay.content.content.set_markdown(&s);
+            overlay
+                .content
+                .content
+                .set_markdown(&s, &term_wm_core::theme::NOIR);
         }
         overlay.content.content.set_link_handler_fn(|url| {
             let _ = webbrowser::open(url);

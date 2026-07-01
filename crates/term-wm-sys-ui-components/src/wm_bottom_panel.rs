@@ -7,7 +7,6 @@ use term_wm_core::{
     keybindings::Action,
     layout::rect_contains,
     power_profile::PowerProfile,
-    theme,
     ui::{UiFrame, safe_set_string, truncate_to_width},
 };
 
@@ -77,15 +76,25 @@ impl WmBottomPanelComponent {
         (bottom, managed)
     }
 
-    pub fn render(&mut self, frame: &mut UiFrame<'_>, active: bool) {
+    pub fn render(
+        &mut self,
+        frame: &mut UiFrame<'_>,
+        active: bool,
+        theme: &term_wm_core::theme::Theme,
+    ) {
         if active {
-            self.render_bottom_impl(frame, true);
+            self.render_bottom_impl(frame, true, theme);
         } else if !self.keybinding_hints.is_empty() {
-            self.render_bottom_impl(frame, false);
+            self.render_bottom_impl(frame, false, theme);
         }
     }
 
-    fn render_bottom_impl(&mut self, frame: &mut UiFrame<'_>, show_info: bool) {
+    fn render_bottom_impl(
+        &mut self,
+        frame: &mut UiFrame<'_>,
+        show_info: bool,
+        theme: &term_wm_core::theme::Theme,
+    ) {
         let area = self.area;
         if area.width == 0 || area.height == 0 {
             return;
@@ -99,15 +108,15 @@ impl WmBottomPanelComponent {
             for xx in bounds.x..bounds.x.saturating_add(bounds.width) {
                 if let Some(cell) = buffer.cell_mut((xx, yy)) {
                     let mut st = cell.style();
-                    st.bg = Some(theme::bottom_panel_bg());
-                    st.fg = Some(theme::bottom_panel_fg());
+                    st.bg = Some(theme.bottom_panel_bg);
+                    st.fg = Some(theme.bottom_panel_fg);
                     cell.set_style(st);
                 }
             }
         }
         let style = Style::default()
-            .fg(theme::bottom_panel_fg())
-            .bg(theme::bottom_panel_bg());
+            .fg(theme.bottom_panel_fg)
+            .bg(theme.bottom_panel_bg);
 
         // Reserve rightmost cell for the profile indicator
         let indicator_reserved = 1u16;
@@ -140,8 +149,8 @@ impl WmBottomPanelComponent {
 
         if !self.keybinding_hints.is_empty() {
             let combo_style = Style::default()
-                .fg(theme::menu_selected_fg())
-                .bg(theme::menu_selected_bg())
+                .fg(theme.menu_selected_fg)
+                .bg(theme.menu_selected_bg)
                 .add_modifier(ratatui::style::Modifier::BOLD);
             let mut cursor_x = bounds.x;
             self.hint_rects.clear();
@@ -221,7 +230,7 @@ impl WmBottomPanelComponent {
             && let Some(cell) = buffer.cell_mut((ind_x, area.y))
         {
             let mut st = cell.style();
-            st.bg = Some(self.power_profile.indicator_color());
+            st.bg = Some(self.power_profile.indicator_color(theme));
             cell.set_style(st);
             cell.set_symbol(" ");
         }
@@ -264,8 +273,13 @@ impl BottomPanelTrait for WmBottomPanelComponent {
         self.split_bottom_area(area, height)
     }
 
-    fn render(&mut self, frame: &mut UiFrame<'_>, active: bool) {
-        self.render(frame, active);
+    fn render(
+        &mut self,
+        frame: &mut UiFrame<'_>,
+        active: bool,
+        theme: &term_wm_core::theme::Theme,
+    ) {
+        self.render(frame, active, theme);
     }
 
     fn hit_test_hint(&self, event: &Event) -> Option<Action> {
@@ -311,7 +325,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let mut ui = UiFrame::from_parts(area, &mut buf);
 
-        p.render_bottom_impl(&mut ui, true);
+        p.render_bottom_impl(&mut ui, true, &term_wm_core::theme::NOIR);
 
         let mut rendered = String::new();
         for xx in area.x..area.x.saturating_add(area.width) {
@@ -337,14 +351,20 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let mut ui = UiFrame::from_parts(area, &mut buf);
 
-        p.render_bottom_impl(&mut ui, true);
+        p.render_bottom_impl(&mut ui, true, &term_wm_core::theme::NOIR);
 
         // All cells except the rightmost indicator cell have panel bg
         let last_x = area.x.saturating_add(area.width).saturating_sub(1);
         for xx in area.x..last_x {
             let cell = buf.cell_mut((xx, area.y)).expect("cell present");
-            assert_eq!(cell.style().bg, Some(theme::bottom_panel_bg()));
-            assert_eq!(cell.style().fg, Some(theme::bottom_panel_fg()));
+            assert_eq!(
+                cell.style().bg,
+                Some(term_wm_core::theme::NOIR.bottom_panel_bg)
+            );
+            assert_eq!(
+                cell.style().fg,
+                Some(term_wm_core::theme::NOIR.bottom_panel_fg)
+            );
         }
 
         let mut found = false;
@@ -371,7 +391,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let mut ui = UiFrame::from_parts(area, &mut buf);
 
-        p.render_bottom_impl(&mut ui, true);
+        p.render_bottom_impl(&mut ui, true, &term_wm_core::theme::NOIR);
 
         let mut rendered = String::new();
         for xx in area.x..area.x.saturating_add(area.width) {

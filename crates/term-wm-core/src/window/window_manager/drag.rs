@@ -42,7 +42,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                     }
 
                     let rect = self.full_region_for_id(header.id);
-                    match self.decorator.hit_test(rect, mouse.column, mouse.row) {
+                    match self.decorator().hit_test(rect, mouse.column, mouse.row) {
                         HeaderAction::Minimize => {
                             self.minimize_window(header.id);
                             self.last_header_click = None;

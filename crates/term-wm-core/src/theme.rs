@@ -1,7 +1,5 @@
 use ratatui::style::Color;
 
-use std::sync::OnceLock;
-
 // ---------------------------------------------------------------------------
 // Semantic roles — the compiler-enforced exhaustive list of every color
 // concept used in the UI.  Adding a variant here forces a new match arm in
@@ -210,125 +208,8 @@ pub const NOIR: Theme = Theme {
 // Global accessor
 // ---------------------------------------------------------------------------
 
-static CURRENT_THEME: OnceLock<Theme> = OnceLock::new();
-
-pub fn current() -> &'static Theme {
-    CURRENT_THEME.get_or_init(|| NOIR)
-}
-
-// ---------------------------------------------------------------------------
-// Convenience wrappers – delegate via the enum so adding a variant forces
-// updating the match arm above, and the test picks it up automatically.
-// ---------------------------------------------------------------------------
-
 pub fn rgb_to_color(rgb: (u8, u8, u8)) -> Color {
     crate::term_color::map_rgb_to_color(rgb.0, rgb.1, rgb.2)
-}
-
-pub fn accent() -> Color {
-    current().fg(FgColor::Accent)
-}
-pub fn accent_alt() -> Color {
-    current().fg(FgColor::AccentAlt)
-}
-pub fn panel_bg() -> Color {
-    current().bg(BgColor::PanelBg)
-}
-pub fn panel_fg() -> Color {
-    current().fg(FgColor::PanelFg)
-}
-pub fn panel_inactive_fg() -> Color {
-    current().fg(FgColor::PanelInactiveFg)
-}
-pub fn panel_active_bg() -> Color {
-    current().bg(BgColor::PanelActiveBg)
-}
-pub fn panel_active_fg() -> Color {
-    current().fg(FgColor::PanelActiveFg)
-}
-pub fn menu_bg() -> Color {
-    current().bg(BgColor::MenuBg)
-}
-pub fn menu_fg() -> Color {
-    current().fg(FgColor::MenuFg)
-}
-pub fn menu_selected_bg() -> Color {
-    current().bg(BgColor::MenuSelectedBg)
-}
-pub fn menu_selected_fg() -> Color {
-    current().fg(FgColor::MenuSelectedFg)
-}
-pub fn success_bg() -> Color {
-    current().fg(FgColor::Success)
-}
-pub fn success_fg() -> Color {
-    current().fg(FgColor::Success)
-}
-pub fn selection_bg() -> Color {
-    current().bg(BgColor::SelectionBg)
-}
-pub fn selection_fg() -> Color {
-    current().fg(FgColor::SelectionFg)
-}
-pub fn dialog_bg() -> Color {
-    current().bg(BgColor::DialogBg)
-}
-pub fn dialog_fg() -> Color {
-    current().fg(FgColor::DialogFg)
-}
-pub fn dialog_separator() -> Color {
-    current().fg(FgColor::DialogSeparator)
-}
-pub fn link_color() -> Color {
-    current().fg(FgColor::LinkColor)
-}
-pub fn link_underline() -> bool {
-    current().link_underline
-}
-pub fn decorator_header_bg() -> Color {
-    current().bg(BgColor::DecoratorHeaderBg)
-}
-pub fn decorator_header_fg() -> Color {
-    current().fg(FgColor::DecoratorHeaderFg)
-}
-pub fn decorator_border() -> Color {
-    current().fg(FgColor::DecoratorBorder)
-}
-pub fn decorator_border_active() -> Color {
-    current().fg(FgColor::DecoratorBorderActive)
-}
-pub fn surface() -> Color {
-    current().bg(BgColor::Surface)
-}
-pub fn shadow_bg() -> Color {
-    current().bg(BgColor::ShadowBg)
-}
-pub fn shadow_tint() -> Color {
-    current().bg(BgColor::ShadowTint)
-}
-pub fn debug_highlight() -> Color {
-    current().fg(FgColor::DebugHighlight)
-}
-pub fn bottom_panel_bg() -> Color {
-    current().bg(BgColor::BottomPanelBg)
-}
-pub fn error_bg() -> Color {
-    current().bg(BgColor::Error)
-}
-pub fn warning_bg() -> Color {
-    current().bg(BgColor::Warning)
-}
-pub fn bottom_panel_fg() -> Color {
-    current().fg(FgColor::BottomPanelFg)
-}
-pub fn profile_high_bg() -> Color {
-    current().bg(BgColor::ProfileHigh)
-}
-pub fn profile_mid_bg() -> Color {
-    current().bg(BgColor::ProfileMid)
-}
-pub fn profile_low_bg() -> Color {
-    current().bg(BgColor::ProfileLow)
 }
 
 // ---------------------------------------------------------------------------
@@ -623,7 +504,7 @@ mod tests {
     /// pair — the exclusion list documents only physically impossible pairs.
     #[test]
     fn exhaustive_fg_times_bg() {
-        let t = super::current();
+        let t = NOIR;
         let mut failures = Vec::new();
         let mut excluded = 0u32;
 
@@ -669,7 +550,7 @@ mod tests {
 
     #[test]
     fn theme_is_initialized() {
-        let t = super::current();
+        let t = NOIR;
         assert_eq!(t.name, "noir");
     }
 }

@@ -161,7 +161,11 @@ impl Linkifier {
         Self { finder }
     }
 
-    pub fn linkify_fragments(&self, lines: Vec<Vec<LinkFragment>>) -> LinkifiedText {
+    pub fn linkify_fragments(
+        &self,
+        lines: Vec<Vec<LinkFragment>>,
+        theme: &crate::theme::Theme,
+    ) -> LinkifiedText {
         let mut rendered_lines = Vec::with_capacity(lines.len().max(1));
         let mut link_map = Vec::with_capacity(lines.len().max(1));
 
@@ -182,7 +186,7 @@ impl Linkifier {
                 links.push(None);
             } else {
                 for fragment in fragments {
-                    self.process_fragment(fragment, &mut spans, &mut links);
+                    self.process_fragment(fragment, &mut spans, &mut links, theme);
                 }
             }
             rendered_lines.push(Line::from(spans));
@@ -195,7 +199,7 @@ impl Linkifier {
         }
     }
 
-    pub fn linkify_text(&self, text: Text<'static>) -> LinkifiedText {
+    pub fn linkify_text(&self, text: Text<'static>, theme: &crate::theme::Theme) -> LinkifiedText {
         let fragments: Vec<Vec<LinkFragment>> = text
             .lines
             .into_iter()
@@ -206,7 +210,7 @@ impl Linkifier {
                     .collect()
             })
             .collect();
-        self.linkify_fragments(fragments)
+        self.linkify_fragments(fragments, theme)
     }
 
     pub fn detect_links(&self, text: &str) -> Vec<DetectedLink> {
@@ -236,11 +240,12 @@ impl Linkifier {
         fragment: LinkFragment,
         spans: &mut Vec<Span<'static>>,
         links: &mut Vec<Option<String>>,
+        theme: &crate::theme::Theme,
     ) {
         if let Some(link) = fragment.link {
             spans.push(Span::styled(
                 fragment.text,
-                decorate_link_style(fragment.style),
+                decorate_link_style(fragment.style, theme),
             ));
             links.push(Some(link));
             return;
@@ -252,7 +257,7 @@ impl Linkifier {
             }
             let mut style = fragment.style;
             if detected_link.is_some() {
-                style = decorate_link_style(style);
+                style = decorate_link_style(style, theme);
             }
             spans.push(Span::styled(segment, style));
             links.push(detected_link);
@@ -283,11 +288,11 @@ impl Linkifier {
     }
 }
 
-pub fn decorate_link_style(mut style: Style) -> Style {
-    if crate::theme::link_underline() {
+pub fn decorate_link_style(mut style: Style, theme: &crate::theme::Theme) -> Style {
+    if theme.link_underline {
         style = style.add_modifier(Modifier::UNDERLINED);
     }
-    style.fg(crate::theme::link_color())
+    style.fg(theme.link_color)
 }
 
 impl LinkOverlay {

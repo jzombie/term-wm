@@ -6,11 +6,11 @@ use super::{WindowId, WindowManager};
 
 impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     pub fn decorator(&self) -> Arc<dyn super::WindowDecorator> {
-        Arc::clone(&self.decorator)
+        self.config.decorator()
     }
 
     pub fn set_decorator(&mut self, decorator: Arc<dyn super::WindowDecorator>) {
-        self.decorator = decorator;
+        self.config.decorator = Some(decorator);
     }
 
     pub fn handle_managed_event(&mut self, event: &Event) -> bool {
@@ -98,7 +98,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 .as_ref()
                 .and_then(|p| p.hit_test_hint(event))
         {
-            if let Some(combo) = self.keybindings.first_combo(action) {
+            if let Some(combo) = self.keybindings().first_combo(action) {
                 self.synthetic_event = Some(Event::Key(KeyEvent {
                     code: combo.code,
                     modifiers: combo.mods,

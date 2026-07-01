@@ -6,7 +6,7 @@ use ratatui::prelude::Rect;
 use term_wm_layout_engine::{LayoutRect, RectSpec};
 
 pub use window_manager::{
-    DrawTask, NoopMenu, OverlayId, ScrollState, SuperPressResult, SystemWindowDraw, SystemWindowId,
+    DrawTask, OverlayId, ScrollState, SuperPressResult, SystemWindowDraw, SystemWindowId,
     SystemWindowView, WindowDrawContext, WindowId, WindowManager, WindowSurface, WmMenuAction,
 };
 

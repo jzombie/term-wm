@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::prelude::Rect;
 use ratatui::style::{Modifier, Style};
 
-use crate::components::{Component, ComponentContext, ConfirmAction, Overlay, SelectionStatus};
+use crate::components::{Component, ComponentContext, ConfirmAction, SelectionStatus};
 use crate::debug_event_flags;
 use crate::event_loop::{ControlFlow, EventLoop};
 use crate::io::{EventSource, RenderTarget};
@@ -29,40 +29,15 @@ pub trait WindowManagerHost<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> {
     fn set_window_selection_enabled(&mut self, _enabled: bool) {}
     fn open_help_overlay(&mut self) {
         self.windows()
-            .open_overlay(crate::window::OverlayId::Help, Box::new(NoopOverlay));
+            .open_overlay(crate::window::OverlayId::Help, None);
     }
     fn open_keybindings_overlay(&mut self) {
-        // Default noop; overridden in main.rs for real overlay.
         self.windows()
-            .open_overlay(crate::window::OverlayId::Keybindings, Box::new(NoopOverlay));
+            .open_overlay(crate::window::OverlayId::Keybindings, None);
     }
     fn open_exit_confirm(&mut self) {
         self.windows()
-            .open_overlay(crate::window::OverlayId::ExitConfirm, Box::new(NoopOverlay));
-    }
-}
-
-struct NoopOverlay;
-impl Component for NoopOverlay {
-    fn render(
-        &mut self,
-        _frame: &mut crate::ui::UiFrame<'_>,
-        _area: ratatui::layout::Rect,
-        _ctx: &ComponentContext,
-    ) {
-    }
-}
-impl std::fmt::Debug for NoopOverlay {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("NoopOverlay").finish()
-    }
-}
-impl Overlay for NoopOverlay {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
+            .open_overlay(crate::window::OverlayId::ExitConfirm, None);
     }
 }
 
@@ -688,6 +663,7 @@ where
                         focused: window.focused,
                         direct_mode: wm.direct_mode(WindowId::App(window.id)),
                         hover_pos: wm.hover,
+                        theme: wm.config().theme,
                     };
                     let decorator = wm.decorator();
                     (ctx, decorator)
@@ -718,6 +694,7 @@ where
                         focused: window.focused,
                         direct_mode: wm.direct_mode(WindowId::System(window.id)),
                         hover_pos: wm.hover,
+                        theme: wm.config().theme,
                     };
                     let decorator = wm.decorator();
                     (ctx, decorator)
@@ -763,6 +740,7 @@ fn composite_window<F>(
         )
     });
     let focused = ctx.focused;
+    let theme = ctx.theme;
     let mut buffer = Buffer::empty(local_area);
     {
         let mut offscreen = UiFrame::from_parts(local_area, &mut buffer);
@@ -775,7 +753,7 @@ fn composite_window<F>(
         }
     }
     if surface.draw_shadow {
-        crate::ui::render_drop_shadow(frame, surface.dest, surface.z_depth);
+        crate::ui::render_drop_shadow(frame, surface.dest, surface.z_depth, &theme);
     }
     frame.blit_from_signed(&buffer, surface.dest);
 }
@@ -893,7 +871,7 @@ mod tests {
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(TestMenu),
+            Some(Box::new(TestMenu)),
         );
         assert!(!wm.has_any_active_windows());
 
@@ -995,7 +973,7 @@ mod tests {
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
                 None,
-                Box::new(TestMenu),
+                Some(Box::new(TestMenu)),
             ),
             recorder: KeyRecorder {
                 received_key: false,
@@ -1095,7 +1073,7 @@ mod tests {
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
                 None,
-                Box::new(TestMenu),
+                Some(Box::new(TestMenu)),
             ),
             recorder: KeyRecorder {
                 received_key: false,
