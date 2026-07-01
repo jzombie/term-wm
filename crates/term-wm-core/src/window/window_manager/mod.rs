@@ -211,7 +211,7 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     app_ctx: Arc<AppContext>,
     top_panel: Option<Box<dyn TopPanel<WindowId<Id>>>>,
     bottom_panel: Option<Box<dyn BottomPanel>>,
-    menu_overlay: Box<dyn MenuOverlay<WmMenuAction>>,
+    menu_overlay: Option<Box<dyn MenuOverlay<WmMenuAction>>>,
     pub(crate) drag_header: Option<HeaderDrag<WindowId<Id>>>,
     pub(crate) last_header_click: Option<(WindowId<Id>, Instant)>,
     pub(crate) drag_resize: Option<ResizeDrag<WindowId<Id>>>,
@@ -264,38 +264,6 @@ pub enum WmMenuAction {
     ToggleMouseCapture,
     ToggleClipboardMode,
     ToggleWindowSelection,
-}
-
-// TODO: Can this be removed and simply made optional?
-#[derive(Debug)]
-pub struct NoopMenu;
-impl crate::components::Component for NoopMenu {
-    fn render(
-        &mut self,
-        _frame: &mut crate::ui::UiFrame<'_>,
-        _area: ratatui::prelude::Rect,
-        _ctx: &crate::components::ComponentContext,
-    ) {
-    }
-}
-impl crate::components::Overlay for NoopMenu {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-}
-impl crate::components::MenuOverlay<WmMenuAction> for NoopMenu {
-    fn outline(&mut self) {}
-    fn restore(&mut self) {}
-    fn set_items(&mut self, _items: Vec<crate::components::MenuItem<WmMenuAction>>) {}
-    fn set_timeout(&mut self, _timeout: Duration) {}
-    fn selected_action(&self) -> Option<&WmMenuAction> {
-        None
-    }
-    fn set_anchor(&mut self, _pos: Option<(u16, u16)>) {}
-    fn set_managed_area(&mut self, _area: ratatui::prelude::Rect) {}
 }
 
 impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
@@ -443,7 +411,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         app_ctx: Arc<AppContext>,
         top_panel: Option<Box<dyn TopPanel<WindowId<Id>>>>,
         bottom_panel: Option<Box<dyn BottomPanel>>,
-        menu_overlay: Box<dyn MenuOverlay<WmMenuAction>>,
+    menu_overlay: Option<Box<dyn MenuOverlay<WmMenuAction>>>,
     ) -> Self {
         let mouse_capture_enabled = config.mouse_capture_enabled;
         let clipboard = Some(crate::clipboard::Clipboard::new());
@@ -626,7 +594,9 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.overlay_visible = false;
         self.overlay_opened_at = None;
         self.super_pending = None;
-        self.menu_overlay.restore();
+        if let Some(menu) = &mut self.menu_overlay {
+            menu.restore();
+        }
     }
 
     pub fn capture_active(&mut self) -> bool {
@@ -1254,7 +1224,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
 
         let r1 = Rect {
@@ -1299,7 +1269,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
@@ -1340,7 +1310,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
@@ -1378,7 +1348,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         wm.register_managed_layout(ratatui::layout::Rect {
             x: 0,
@@ -1414,7 +1384,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         let original = FloatRect {
             x: 5,
@@ -1469,7 +1439,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         let target_rect = ratatui::layout::Rect {
             x: 10,
@@ -1516,7 +1486,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
@@ -1572,7 +1542,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
@@ -1615,7 +1585,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         wm.regions.set(
             WindowId::app(1usize),
@@ -1728,7 +1698,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         wm.set_system_window(SystemWindowId::DebugLog, Box::new(DummyDebugComponent));
         wm.set_panel_visible(false);
@@ -1802,7 +1772,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         wm.set_panel_visible(false);
         wm.register_managed_layout(Rect {
@@ -1866,7 +1836,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         let full = Rect {
             x: 10,
@@ -1907,7 +1877,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         let full = Rect {
             x: 2,
@@ -1950,7 +1920,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
 
         let r1 = Rect {
@@ -2016,7 +1986,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
 
         let r1 = Rect {
@@ -2064,7 +2034,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
 
         let r1 = Rect {
@@ -2111,7 +2081,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         wm.focus_app_window(0);
         let focus = wm.wm_focus();
@@ -2126,7 +2096,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         wm.focus_app_window(0);
         let focus = wm.wm_focus();
@@ -2146,7 +2116,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         let id = WindowId::app(42usize);
         assert!(!wm.direct_mode(id), "default is false");
@@ -2166,7 +2136,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         let id_a = WindowId::app(1usize);
         let id_b = WindowId::app(2usize);
@@ -2187,7 +2157,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         wm.set_panel_visible(false);
 
@@ -2268,7 +2238,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         wm.set_panel_visible(false);
 
@@ -2317,7 +2287,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         assert!(wm.drag_snap_remaining().is_none());
     }
@@ -2330,7 +2300,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         assert!(wm.drag_snap_remaining().is_none());
     }
@@ -2345,7 +2315,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         wm.drag_header = Some(HeaderDrag {
             id: WindowId::App(1usize),
@@ -2370,7 +2340,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         wm.drag_header = Some(HeaderDrag {
             id: WindowId::App(1usize),
@@ -2395,7 +2365,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         wm.drag_header = Some(HeaderDrag {
             id: WindowId::App(1usize),
@@ -2420,7 +2390,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         wm.drag_header = Some(HeaderDrag {
             id: WindowId::App(1usize),
@@ -2447,7 +2417,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         wm.set_panel_visible(false);
         wm.register_managed_layout(Rect {
@@ -2517,7 +2487,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
 
         let id = WindowId::system(SystemWindowId::DebugLog);
@@ -2589,7 +2559,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         assert_eq!(wm.power_profile, PowerProfile::PowerSaver);
         wm.set_power_profile(PowerProfile::HighPerformance);
@@ -2609,7 +2579,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         wm.set_panel_visible(false);
         wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(1usize)));
@@ -2659,7 +2629,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         wm.set_panel_visible(false);
         wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(1usize)));
@@ -2733,7 +2703,7 @@ mod tests {
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(NoopMenu),
+            None,
         );
         wm.set_panel_visible(false);
         wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(1usize)));

@@ -896,7 +896,7 @@ mod tests {
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             None,
-            Box::new(TestMenu),
+            Some(Box::new(TestMenu)),
         );
         assert!(!wm.has_any_active_windows());
 
@@ -998,7 +998,7 @@ mod tests {
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
                 None,
-                Box::new(TestMenu),
+                Some(Box::new(TestMenu)),
             ),
             recorder: KeyRecorder {
                 received_key: false,
@@ -1098,7 +1098,7 @@ mod tests {
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
                 None,
-                Box::new(TestMenu),
+                Some(Box::new(TestMenu)),
             ),
             recorder: KeyRecorder {
                 received_key: false,

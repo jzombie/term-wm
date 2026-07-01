@@ -111,7 +111,7 @@ impl WmBuilder {
         current: Id,
         top_panel: Option<Box<dyn TopPanel<WindowId<Id>>>>,
         bottom_panel: Option<Box<dyn BottomPanel>>,
-        menu_overlay: Box<dyn MenuOverlay<WmMenuAction>>,
+        menu_overlay: Option<Box<dyn MenuOverlay<WmMenuAction>>>,
     ) -> WindowManager<Id> {
         let app_ctx = self.app_ctx.expect("app_ctx must be set before building");
         WindowManager::with_config(current, self.config, app_ctx, top_panel, bottom_panel, menu_overlay)

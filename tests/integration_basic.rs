@@ -32,7 +32,7 @@ fn mouse_capture_flow_through_window_manager() {
         ctx,
         Some(top_panel),
         Some(bottom_panel),
-        menu,
+        Some(menu),
     );
     // default starts enabled (from config)
     assert!(wm.mouse_capture_enabled());

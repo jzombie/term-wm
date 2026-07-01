@@ -130,7 +130,7 @@ impl App {
         let mut app = Self {
             windows: builder
                 .app_ctx(Arc::clone(&app_ctx))
-                .build(0, Some(top_panel), Some(bottom_panel), menu_overlay),
+                .build(0, Some(top_panel), Some(bottom_panel), Some(menu_overlay)),
             terminals: Vec::new(),
         };
 

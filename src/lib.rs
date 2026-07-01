@@ -5,7 +5,7 @@ pub use term_wm_ui_components::*;
 pub mod tracing_sub;
 
 use term_wm_core::config::WmBuilder;
-use term_wm_core::window::{NoopMenu, WindowId, WindowManager, WmMenuAction};
+use term_wm_core::window::{WindowId, WindowManager, WmMenuAction};
 
 pub trait WindowManagerExt<Id> {
     fn new_standalone(current: Id, app_ctx: term_wm_core::app_context::AppContext) -> Self;
@@ -28,7 +28,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManagerExt<Id> for W
             Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
         WmBuilder::standalone()
             .app_ctx(std::sync::Arc::new(app_ctx))
-            .build(current, Some(top_panel), Some(bottom_panel), menu)
+            .build(current, Some(top_panel), Some(bottom_panel), Some(menu))
     }
 
     fn new_embedded(current: Id, app_ctx: term_wm_core::app_context::AppContext) -> Self {
@@ -48,7 +48,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManagerExt<Id> for W
                 current,
                 Some(top_panel),
                 Some(bottom_panel),
-                Box::new(NoopMenu),
+                None,
             )
     }
 }

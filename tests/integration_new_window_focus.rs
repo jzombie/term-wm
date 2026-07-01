@@ -24,7 +24,7 @@ fn new_window_is_focused() {
         ctx,
         Some(top_panel),
         Some(bottom_panel),
-        menu,
+        Some(menu),
     );
 
     // Initially there should be no app-level focused window.
