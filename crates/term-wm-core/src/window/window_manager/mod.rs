@@ -2763,18 +2763,18 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
 
-        // Without direct mode, a click in the content area would be consumed by
-        // handle_managed_event (e.g. focus_window_at). The callback should NOT
-        // be invoked for a plain Down event since chrome handles it first.
+        // In normal mode, a click in the content area is not consumed by chrome
+        // (no chrome element at that position). handle_managed_event returns
+        // false so the event flows through to the focused window callback.
         let mut callback_invoked = false;
         let consumed = wm.dispatch_focused_event(&click, |_, _| {
             callback_invoked = true;
             true
         });
         assert!(
-            !callback_invoked,
-            "normal mode: chrome must consume click before callback"
+            callback_invoked,
+            "normal mode: click in content area must reach component"
         );
-        assert!(consumed, "normal mode: chrome must consume the event");
+        assert!(consumed, "normal mode: dispatch returns the callback's result");
     }
 }
