@@ -1,3 +1,5 @@
+> _see also "damage tracking"_
+
 Here is a breakdown of the architectural strategies for building extreme-performance terminal window managers, based on the research notes for overhauling systems like `term-wm`:
 
 ### 1. Case Studies: How Modern Terminals Handle Performance
