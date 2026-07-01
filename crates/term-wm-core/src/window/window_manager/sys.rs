@@ -2,6 +2,7 @@ use crossterm::event::{Event, MouseEventKind};
 
 use super::{SystemWindowId, WindowManager};
 use crate::components::Overlay;
+use crate::window::decorator::HeaderAction;
 
 impl WindowManager {
     pub(crate) fn system_window_entry(
@@ -129,6 +130,18 @@ impl WindowManager {
         self.system_windows.values().any(|w| w.visible()) || !self.overlays.is_empty()
     }
 
+    /// Hide all visible system windows.
+    pub fn close_all_system_windows(&mut self) {
+        let ids: Vec<SystemWindowId> = self
+            .system_windows
+            .iter()
+            .filter_map(|(&id, entry)| entry.visible().then_some(id))
+            .collect();
+        for id in ids {
+            self.hide_system_window(id);
+        }
+    }
+
     pub fn has_any_active_windows(&self) -> bool {
         if self.has_active_system_windows() {
             return true;
@@ -147,15 +160,22 @@ impl WindowManager {
             return false;
         }
         match event {
-            Event::Mouse(mouse) => {
-                if self.managed_draw_order.is_empty() {
-                    return false;
-                }
-                let hit =
-                    self.hit_test_region_topmost(mouse.column, mouse.row, &self.managed_draw_order);
-                if let Some(key) = hit {
-                    if matches!(mouse.kind, MouseEventKind::Down(_)) {
-                        self.focus_window_id(key);
+            Event::Mouse(mouse)
+                if matches!(mouse.kind, MouseEventKind::Down(_)) =>
+            {
+                let decorator = self.decorator();
+                for (&sys_id, entry) in &self.system_windows {
+                    if !entry.visible() {
+                        continue;
+                    }
+                    let action = decorator.hit_test(
+                        self.managed_area,
+                        mouse.column,
+                        mouse.row,
+                    );
+                    if action == HeaderAction::Close {
+                        self.hide_system_window(sys_id);
+                        return true;
                     }
                 }
                 false

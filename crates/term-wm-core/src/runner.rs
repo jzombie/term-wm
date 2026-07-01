@@ -282,6 +282,8 @@ where
                             let passthrough_event = Event::Key(*key);
                             let _ = handle_focused_app_event(&passthrough_event, app);
                         }
+                    } else if app.windows().has_active_system_windows() {
+                        app.windows().close_all_system_windows();
                     } else {
                         app.windows().open_wm_overlay();
                     }
