@@ -25,6 +25,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     where
         F: FnMut(Id, &Event) -> bool,
     {
+        // Block mouse events in focused windows if direct mode is enabled
         if let Event::Mouse(mouse) = event {
             let focused = self.focused_window();
             let in_content = self.config.chrome_enabled
