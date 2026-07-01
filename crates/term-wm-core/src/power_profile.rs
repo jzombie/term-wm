@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use ratatui::style::Color;
 
-use crate::theme;
+use crate::theme::Theme;
 
 /// How long (in ms) since the last input event before switching from
 /// HighPerformance to PowerSaver.
@@ -88,10 +88,10 @@ impl PowerProfile {
         }
     }
 
-    pub fn indicator_color(&self) -> Color {
+    pub fn indicator_color(&self, theme: &Theme) -> Color {
         match self {
-            Self::HighPerformance => theme::profile_high_bg(),
-            Self::PowerSaver => theme::profile_low_bg(),
+            Self::HighPerformance => theme.profile_high,
+            Self::PowerSaver => theme.profile_low,
         }
     }
 

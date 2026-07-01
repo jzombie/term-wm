@@ -7,7 +7,6 @@ use ratatui::{
 use term_wm_core::{
     components::{Component, ComponentContext},
     layout::rect_contains,
-    theme,
     top_panel_trait::TopPanel as TopPanelTrait,
     ui::{UiFrame, safe_set_string, truncate_to_width},
 };
@@ -162,6 +161,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> WmTopPanelComponent<R> {
         selection_copied: bool,
         menu_open: bool,
         label_for: F,
+        theme: &term_wm_core::theme::Theme,
     ) where
         F: Fn(R) -> String,
     {
@@ -181,8 +181,8 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> WmTopPanelComponent<R> {
             for xx in bounds.x..bounds.x.saturating_add(bounds.width) {
                 if let Some(cell) = buffer.cell_mut((xx, yy)) {
                     let mut st = cell.style();
-                    st.bg = Some(theme::bottom_panel_bg());
-                    st.fg = Some(theme::bottom_panel_fg());
+                    st.bg = Some(theme.bottom_panel_bg);
+                    st.fg = Some(theme.bottom_panel_fg);
                     cell.set_style(st);
                 }
             }
@@ -194,7 +194,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> WmTopPanelComponent<R> {
         let menu_width = menu_icon.chars().count() as u16;
         if x.saturating_add(menu_width) <= max_x {
             let menu_style = if menu_open {
-                Style::default().bg(theme::menu_bg()).fg(theme::menu_fg())
+                Style::default().bg(theme.menu_bg).fg(theme.menu_fg)
             } else {
                 Style::default()
             };
@@ -230,11 +230,11 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> WmTopPanelComponent<R> {
                 }
                 let item_style = if focused {
                     Style::default()
-                        .bg(theme::menu_selected_bg())
-                        .fg(theme::menu_selected_fg())
+                        .bg(theme.menu_selected_bg)
+                        .fg(theme.menu_selected_fg)
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(theme::panel_inactive_fg())
+                    Style::default().fg(theme.panel_inactive_fg)
                 };
                 safe_set_string(buffer, bounds, x, y, &chunk, item_style);
                 self.list.window_hits.push(PanelWindowHit {
@@ -270,35 +270,35 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> WmTopPanelComponent<R> {
         if total_width > 0 && indicator_x < max_x {
             let selection_style = if window_selection_enabled {
                 Style::default()
-                    .fg(theme::success_bg())
+                    .fg(theme.success)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(theme::panel_inactive_fg())
+                Style::default().fg(theme.panel_inactive_fg)
             };
             let copy_style = if selection_copy_available && clipboard_enabled {
                 let mut style = Style::default()
-                    .fg(theme::success_bg())
+                    .fg(theme.success)
                     .add_modifier(Modifier::BOLD);
                 if selection_copied {
-                    style = style.fg(theme::accent());
+                    style = style.fg(theme.accent);
                 }
                 style
             } else {
-                Style::default().fg(theme::panel_inactive_fg())
+                Style::default().fg(theme.panel_inactive_fg)
             };
             let mouse_style = if mouse_capture_enabled {
                 Style::default()
-                    .fg(theme::success_bg())
+                    .fg(theme.success)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(theme::panel_inactive_fg())
+                Style::default().fg(theme.panel_inactive_fg)
             };
             let clip_style = if clipboard_enabled {
                 Style::default()
-                    .fg(theme::success_bg())
+                    .fg(theme.success)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(theme::panel_inactive_fg())
+                Style::default().fg(theme.panel_inactive_fg)
             };
             let mut cursor = indicator_x;
             if selection_width > 0 && cursor < max_x {
@@ -481,6 +481,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> TopPanelTrait<R> for WmTopPanelCompon
         selection_copied: bool,
         menu_open: bool,
         label_for: &dyn Fn(R) -> String,
+        theme: &term_wm_core::theme::Theme,
     ) {
         self.render(
             frame,
@@ -497,6 +498,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> TopPanelTrait<R> for WmTopPanelCompon
             selection_copied,
             menu_open,
             label_for,
+            theme,
         );
     }
 

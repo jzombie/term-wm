@@ -25,7 +25,7 @@ impl WmKeybindingOverlayComponent {
         let mut dialog = DialogOverlayComponent::new();
         dialog.set_dim_backdrop(true);
         dialog.set_auto_close_on_outside_click(true);
-        dialog.set_bg(term_wm_core::theme::dialog_bg());
+        dialog.set_bg(term_wm_core::theme::NOIR.dialog_bg);
         dialog.set_size(60, 80);
         let list = ScrollViewComponent::new(ListComponent::new(String::new()));
         let mut overlay = Self {

@@ -1,6 +1,7 @@
 use crossterm::event::Event;
 use ratatui::prelude::Rect;
 
+use crate::theme::Theme;
 use crate::ui::UiFrame;
 
 pub trait TopPanel<Id: Copy + Eq + Ord>: std::fmt::Debug {
@@ -31,6 +32,7 @@ pub trait TopPanel<Id: Copy + Eq + Ord>: std::fmt::Debug {
         selection_copied: bool,
         menu_open: bool,
         label_for: &dyn Fn(Id) -> String,
+        theme: &Theme,
     );
 
     fn menu_icon_rect(&self) -> Option<Rect>;

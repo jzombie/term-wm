@@ -1,4 +1,4 @@
-use std::sync::Arc;
+
 
 use crossterm::event::{Event, MouseEvent};
 use ratatui::prelude::Rect;
@@ -193,7 +193,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             crate::wm_config::HintVisibility::Always => {
                 if self.config.wm_overlay_enabled {
                     let hints = self
-                        .keybindings
+                        .keybindings()
                         .bottom_hints_for_layer(crate::constants::MAX_BOTTOM_HINTS, active_layer);
                     if let Some(p) = &mut self.bottom_panel {
                         p.set_keybinding_hints(hints);
@@ -201,7 +201,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 } else {
                     // Embedded mode: no overlay, all actions are always dispatchable.
                     let hints = self
-                        .keybindings
+                        .keybindings()
                         .bottom_hints(crate::constants::MAX_BOTTOM_HINTS);
                     if let Some(p) = &mut self.bottom_panel {
                         p.set_keybinding_hints(hints);
@@ -402,7 +402,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 .find(|h| crate::layout::rect_contains(h.rect, col, row))
                 .cloned()
         });
-        crate::layout::render_handles(frame, &self.handles, hovered.as_ref());
+        crate::layout::render_handles(frame, &self.handles, hovered.as_ref(), &self.config.theme);
     }
 
     pub fn set_regions_from_plan(&mut self, plan: &LayoutPlan<Id>, area: Rect) {
@@ -455,7 +455,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     ) -> Vec<super::DrawTask<Id>> {
         let mut plan = Vec::new();
         let focused_window = self.wm_focus.current();
-        let decorator = Arc::clone(&self.decorator);
+        let decorator = self.decorator();
         let total = self.managed_draw_order.len() as f32;
         for (i, &id) in self.managed_draw_order.iter().enumerate() {
             let full = self.full_region_for_id(id);

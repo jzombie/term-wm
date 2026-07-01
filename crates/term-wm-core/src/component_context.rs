@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::app_context::AppContext;
 use crate::keybindings::KeyBindings;
+use crate::wm_config::WmConfig;
 
 // Shared component rendering context
 //
@@ -31,6 +32,7 @@ pub struct ComponentContext {
     app_ctx: Arc<AppContext>,
     hover_pos: Option<(u16, u16)>,
     keybindings: Option<Arc<KeyBindings>>,
+    config: Arc<WmConfig>,
 }
 
 /// Viewport metadata describing how the component is projected into a
@@ -188,6 +190,7 @@ impl ComponentContext {
             app_ctx: Arc::new(AppContext::new("", "")),
             hover_pos: None,
             keybindings: None,
+            config: Arc::new(WmConfig::standalone()),
         }
     }
 
@@ -237,6 +240,15 @@ impl ComponentContext {
 
     pub fn keybindings(&self) -> Option<Arc<KeyBindings>> {
         self.keybindings.clone()
+    }
+
+    pub fn config(&self) -> &WmConfig {
+        &self.config
+    }
+
+    pub fn with_config(mut self, config: Arc<WmConfig>) -> Self {
+        self.config = config;
+        self
     }
 
     /// Return a new `ComponentContext` with an attached [`AppContext`].

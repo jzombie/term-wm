@@ -15,19 +15,25 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     pub fn open_wm_overlay(&mut self) {
         self.overlay_visible = true;
         self.overlay_opened_at = Some(std::time::Instant::now());
-        self.menu_overlay.restore();
+        if let Some(menu) = &mut self.menu_overlay {
+            menu.restore();
+        }
     }
 
     pub fn open_wm_overlay_no_passthrough(&mut self) {
         self.overlay_visible = true;
         self.overlay_opened_at = None;
-        self.menu_overlay.restore();
+        if let Some(menu) = &mut self.menu_overlay {
+            menu.restore();
+        }
     }
 
     pub fn close_wm_overlay(&mut self) {
         self.overlay_visible = false;
         self.overlay_opened_at = None;
-        self.menu_overlay.restore();
+        if let Some(menu) = &mut self.menu_overlay {
+            menu.restore();
+        }
     }
 
     pub fn wm_overlay_visible(&self) -> bool {
@@ -35,7 +41,9 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub fn fold_menu(&mut self) {
-        self.menu_overlay.outline();
+        if let Some(menu) = &mut self.menu_overlay {
+            menu.outline();
+        }
     }
 
     pub fn close_exit_confirm(&mut self) {
@@ -83,10 +91,13 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         }
 
         let ctx = self.component_context(false).with_overlay(true);
-        let comp: &mut dyn Component = &mut *self.menu_overlay;
+        let Some(menu) = &mut self.menu_overlay else {
+            return None;
+        };
+        let comp: &mut dyn Component = &mut **menu;
         comp.handle_event(event, &ctx);
 
-        if let Some(action) = self.menu_overlay.selected_action() {
+        if let Some(action) = menu.selected_action() {
             return Some(*action);
         }
 
@@ -112,7 +123,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let Event::Key(key) = event else {
             return false;
         };
-        let kb = &self.keybindings;
+        let kb = self.keybindings();
         kb.matches(Action::MenuUp, key)
             || kb.matches(Action::MenuDown, key)
             || kb.matches(Action::MenuSelect, key)
@@ -134,7 +145,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             .collect();
         let is_obscured =
             |x: u16, y: u16| -> bool { obscuring.iter().any(|r| rect_contains(*r, x, y)) };
-        render_handles_masked(frame, &self.handles, hovered, is_obscured);
+        render_handles_masked(frame, &self.handles, hovered, is_obscured, &self.config.theme);
         let floating_panes: Vec<FloatingPane<WindowId<Id>>> = self
             .windows
             .iter()
@@ -180,11 +191,12 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             self.managed_area,
             &floating_panes,
             &self.managed_draw_order,
+            &self.config.theme,
         );
 
         if let Some((_, _, rect)) = self.drag_snap {
             let buffer = frame.buffer_mut();
-            let color = crate::theme::accent();
+            let color = self.config.theme.accent;
             let clip = rect.intersection(buffer.area);
             if clip.width > 0 && clip.height > 0 {
                 for y in clip.y..clip.y.saturating_add(clip.height) {
@@ -222,7 +234,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                         let paragraph = Paragraph::new(text)
                             .style(
                                 Style::default()
-                                    .fg(crate::theme::accent_alt())
+                                    .fg(self.config.theme.accent_alt)
                                     .bg(Color::Black),
                             )
                             .alignment(Alignment::Center);
@@ -239,21 +251,23 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 self.clipboard_enabled(),
                 self.window_selection_enabled(),
             );
-            self.menu_overlay.set_items(menu_items);
             let anchor = self
                 .top_panel
                 .as_ref()
                 .and_then(|p| p.menu_icon_rect())
                 .map(|r| (r.x, r.y.saturating_add(r.height)));
-            self.menu_overlay.set_anchor(anchor);
-            self.menu_overlay.set_managed_area(self.managed_area);
             let menu_ctx = self
                 .component_context(false)
                 .with_overlay(true)
                 .with_hover_pos(self.hover)
-                .with_keybindings(std::sync::Arc::new(self.keybindings.clone()));
-            let comp: &mut dyn Component = &mut *self.menu_overlay;
-            comp.render(frame, frame.area(), &menu_ctx);
+                .with_keybindings(std::sync::Arc::new(self.keybindings().clone()));
+            if let Some(menu) = &mut self.menu_overlay {
+                menu.set_items(menu_items);
+                menu.set_anchor(anchor);
+                menu.set_managed_area(self.managed_area);
+                let comp: &mut dyn Component = &mut **menu;
+                comp.render(frame, frame.area(), &menu_ctx);
+            }
             oi += 1;
         }
         for overlay_id in [super::OverlayId::ExitConfirm, super::OverlayId::Help] {
@@ -272,7 +286,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                         width: r.width,
                         height: r.height,
                     };
-                    crate::ui::render_drop_shadow(frame, shadow_dest, z);
+                    crate::ui::render_drop_shadow(frame, shadow_dest, z, &self.config.theme);
                 }
                 if let Some(overlay) = self.overlays.get_mut(&overlay_id) {
                     overlay.render(frame, frame.area(), &ctx);

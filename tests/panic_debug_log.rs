@@ -122,7 +122,7 @@ fn render_panic_shows_in_debug_log() {
         Arc::new(AppContext::new("test", "0.0.0")),
         None::<Box<dyn TopPanel<term_wm::window::WindowId<usize>>>>,
         None::<Box<dyn BottomPanel>>,
-        menu,
+        Some(menu),
     );
 
     let mut app = SparseApp { wm, draws: 0 };
