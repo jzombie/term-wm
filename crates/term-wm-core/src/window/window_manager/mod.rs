@@ -225,7 +225,6 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     clipboard_enabled: bool,
     clipboard_dirty: bool,
     overlay_visible: bool,
-
     selection_active: bool,
     selection_dragging: bool,
     selection_text: Option<String>,
