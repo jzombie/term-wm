@@ -1,3 +1,5 @@
+> See also: ratatui-direct-buffer-access.md
+
 **Damage tracking** is a rendering optimization technique essential for achieving high power efficiency and reducing CPU and GPU overhead in modern Wayland compositors and terminal emulators. Instead of recalculating and repainting the entire terminal window for every update, the engine tracks specific "dirty" areas of the screen that have changed and strictly limits draw calls to those regions.
 
 In modern terminal emulators like Alacritty, damage tracking monitors "dirty rows" within the grid so the engine only emits vertices for cells that have been explicitly modified. This keeps overhead near zero during idle periods or localized updates. 
