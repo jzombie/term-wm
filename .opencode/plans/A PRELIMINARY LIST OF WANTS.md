@@ -2,3 +2,4 @@
 
 1. Dynamic configurability using Rust structs (IF eventually wanting to use a different format, it should be parsable into same Rust structs).  Application entrance points should be easily configurable, with the windows that they want to display the primary potentially imperative logic, as part of a builder pattern.  Everything else should probably be part of the configuration. The initialization sequence should be identicial regardless if the app is "standalone" or "embedded".  The *core* distinction between standalone or embedded modes should simply be a configuration difference.
 2. Better application lifecycle management.
+3. "Dirty triangles" damage control should be a separate workspace crate that can work outside of the window manager.  I have a prototype server/client scenario where the client is a dummy buffer render, and the server/client should also take advantage of this algorithm.
