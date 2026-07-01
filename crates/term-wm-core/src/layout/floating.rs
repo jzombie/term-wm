@@ -3,6 +3,7 @@ use ratatui::prelude::Rect;
 use ratatui::style::{Modifier, Style};
 use term_wm_layout_engine::LayoutRect;
 
+use crate::theme::Theme;
 use crate::ui::UiFrame;
 
 pub use term_wm_layout_engine::{FLOATING_MIN_HEIGHT, FLOATING_MIN_WIDTH, ResizeEdge};
@@ -226,6 +227,7 @@ pub fn render_resize_outline<R: Copy + Eq + Ord>(
     bounds: Rect,
     floating: &[FloatingPane<R>],
     draw_order: &[R],
+    theme: &Theme,
 ) {
     let target_edge = dragging.map(|d| d.edge).or_else(|| hovered.map(|h| h.edge));
     let target_id = dragging.map(|d| d.id).or_else(|| hovered.map(|h| h.id));
@@ -254,7 +256,7 @@ pub fn render_resize_outline<R: Copy + Eq + Ord>(
     let right = rect.x.saturating_add(rect.width.saturating_sub(1));
     let bottom = rect.y.saturating_add(rect.height.saturating_sub(1));
     let style = Style::default()
-        .fg(crate::theme::accent_alt())
+        .fg(theme.accent_alt)
         .add_modifier(Modifier::BOLD);
 
     if let Some(edge) = target_edge {

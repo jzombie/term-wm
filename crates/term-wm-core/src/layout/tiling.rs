@@ -2,6 +2,7 @@ use ratatui::prelude::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 
 use super::{FloatingPane, RegionMap, gap_size, rect_contains};
+use crate::theme::Theme;
 use crate::ui::UiFrame;
 
 #[derive(Debug, Clone)]
@@ -429,10 +430,10 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
         self.root.hit_test_handle(area, column, row)
     }
 
-    pub fn render_handles(&self, frame: &mut UiFrame<'_>, area: Rect) {
+    pub fn render_handles(&self, frame: &mut UiFrame<'_>, area: Rect, theme: &Theme) {
         let handles = self.handles(area);
         let hovered = self.hovered_handle(area);
-        render_handles(frame, &handles, hovered.as_ref());
+        render_handles(frame, &handles, hovered.as_ref(), theme);
     }
 
     pub fn handle_event(&mut self, event: &crossterm::event::Event, area: Rect) -> bool {
@@ -737,8 +738,9 @@ pub fn render_handles(
     frame: &mut UiFrame<'_>,
     handles: &[SplitHandle],
     hovered: Option<&SplitHandle>,
+    theme: &Theme,
 ) {
-    render_handles_masked(frame, handles, hovered, |_, _| false);
+    render_handles_masked(frame, handles, hovered, |_, _| false, theme);
 }
 
 pub fn render_handles_masked<F>(
@@ -746,6 +748,7 @@ pub fn render_handles_masked<F>(
     handles: &[SplitHandle],
     hovered: Option<&SplitHandle>,
     is_obscured: F,
+    theme: &Theme,
 ) where
     F: Fn(u16, u16) -> bool,
 {
@@ -758,10 +761,10 @@ pub fn render_handles_masked<F>(
         let is_hovered = hover_rect == Some(handle.rect);
         let style = if is_hovered {
             Style::default()
-                .fg(crate::theme::menu_selected_bg())
+                .fg(theme.menu_selected_bg)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(crate::theme::decorator_border_active())
+            Style::default().fg(theme.decorator_border_active)
         };
         let clip = handle.rect.intersection(buffer.area);
         if clip.width > 0 && clip.height > 0 {
@@ -816,7 +819,7 @@ pub fn render_handles_masked<F>(
         }
         if is_hovered {
             let border_style = Style::default()
-                .fg(crate::theme::accent_alt())
+                .fg(theme.accent_alt)
                 .add_modifier(Modifier::BOLD);
             let max_x = handle
                 .rect

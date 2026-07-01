@@ -688,6 +688,7 @@ where
                         focused: window.focused,
                         direct_mode: wm.direct_mode(WindowId::App(window.id)),
                         hover_pos: wm.hover,
+                        theme: wm.config().theme,
                     };
                     let decorator = wm.decorator();
                     (ctx, decorator)
@@ -718,6 +719,7 @@ where
                         focused: window.focused,
                         direct_mode: wm.direct_mode(WindowId::System(window.id)),
                         hover_pos: wm.hover,
+                        theme: wm.config().theme,
                     };
                     let decorator = wm.decorator();
                     (ctx, decorator)
@@ -763,6 +765,7 @@ fn composite_window<F>(
         )
     });
     let focused = ctx.focused;
+    let theme = ctx.theme;
     let mut buffer = Buffer::empty(local_area);
     {
         let mut offscreen = UiFrame::from_parts(local_area, &mut buffer);
@@ -775,7 +778,7 @@ fn composite_window<F>(
         }
     }
     if surface.draw_shadow {
-        crate::ui::render_drop_shadow(frame, surface.dest, surface.z_depth);
+        crate::ui::render_drop_shadow(frame, surface.dest, surface.z_depth, &theme);
     }
     frame.blit_from_signed(&buffer, surface.dest);
 }

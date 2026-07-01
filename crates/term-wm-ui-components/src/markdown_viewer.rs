@@ -71,7 +71,7 @@ impl MarkdownViewerComponent {
     pub fn from_bytes(bytes: &[u8]) -> Self {
         let mut mv = Self::new();
         if let Ok(s) = str::from_utf8(bytes) {
-            mv.set_markdown(s);
+            mv.set_markdown(s, &term_wm_core::theme::NOIR);
         }
         mv
     }
@@ -91,7 +91,7 @@ impl MarkdownViewerComponent {
         self.text.reset();
     }
 
-    pub fn set_markdown(&mut self, raw: &str) {
+    pub fn set_markdown(&mut self, raw: &str, theme: &term_wm_core::theme::Theme) {
         let parser = Parser::new_ext(raw, Options::all());
 
         let mut lines: Vec<Vec<LinkFragment>> = Vec::new();
@@ -285,14 +285,14 @@ impl MarkdownViewerComponent {
             push_blank_line(&mut lines);
         }
 
-        let linkified = self.linkifier.linkify_fragments(lines);
+        let linkified = self.linkifier.linkify_fragments(lines, theme);
         self.text.set_linkified_text(linkified);
         self.text.set_wrap(true);
     }
 
-    pub fn set_markdown_bytes(&mut self, bytes: &[u8]) {
+    pub fn set_markdown_bytes(&mut self, bytes: &[u8], theme: &term_wm_core::theme::Theme) {
         if let Ok(s) = str::from_utf8(bytes) {
-            self.set_markdown(s);
+            self.set_markdown(s, theme);
         }
     }
 
@@ -417,7 +417,7 @@ mod markdown_tests {
 
     fn sample_viewer() -> MarkdownViewerComponent {
         let mut mv = MarkdownViewerComponent::new();
-        mv.set_markdown(SAMPLE_HELP_MD);
+            mv.set_markdown(SAMPLE_HELP_MD, &term_wm_core::theme::NOIR);
         mv
     }
 
@@ -552,7 +552,7 @@ mod markdown_tests {
             "
         };
         let mut mv = MarkdownViewerComponent::new();
-        mv.set_markdown(md);
+        mv.set_markdown(md, &term_wm_core::theme::NOIR);
         let rendered = mv.rendered_lines();
         let idx = rendered
             .iter()
@@ -591,9 +591,9 @@ mod markdown_tests {
             "
         };
         let mut viewer = MarkdownViewerComponent::new();
-        viewer.set_markdown(md);
-        let mut scroll = ScrollViewComponent::new(viewer);
+        viewer.set_markdown(md, &term_wm_core::theme::NOIR);
 
+        let mut scroll = ScrollViewComponent::new(viewer);
         let area = Rect {
             x: 0,
             y: 0,
@@ -645,7 +645,7 @@ mod markdown_tests {
         };
 
         let mut mv = MarkdownViewerComponent::new();
-        mv.set_markdown(md);
+        mv.set_markdown(md, &term_wm_core::theme::NOIR);
         let mut scroll = ScrollViewComponent::new(mv);
 
         let area = Rect {

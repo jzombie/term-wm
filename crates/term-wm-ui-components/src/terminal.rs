@@ -462,8 +462,9 @@ impl TerminalComponent {
                         symbol = ' ';
                     }
 
+                    let theme = ctx.config().theme;
                     if self.link_overlay.is_link_cell(viewport_row, viewport_col) {
-                        style = decorate_link_style(style);
+                        style = decorate_link_style(style, &theme);
                     }
 
                     if let Some(range) = selection_range {
@@ -471,8 +472,8 @@ impl TerminalComponent {
                         let abs_col = col as usize;
                         if range.contains(LogicalPosition::new(abs_row, abs_col)) {
                             style = style
-                                .bg(term_wm_core::theme::selection_bg())
-                                .fg(term_wm_core::theme::selection_fg());
+                                .bg(theme.selection_bg)
+                                .fg(theme.selection_fg);
                         }
                     }
 

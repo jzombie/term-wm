@@ -65,10 +65,10 @@ impl Component for ConfirmOverlayComponent {
         };
         let paragraph = Paragraph::new(self.body.as_str())
             .alignment(Alignment::Left)
-            .style(Style::default().fg(term_wm_core::theme::dialog_fg()))
+            .style(Style::default().fg(ctx.config().theme.dialog_fg))
             .wrap(Wrap { trim: true });
         frame.render_widget(paragraph, body_rect);
-        let separator_style = Style::default().fg(term_wm_core::theme::dialog_separator());
+        let separator_style = Style::default().fg(ctx.config().theme.dialog_separator);
         let buffer = frame.buffer_mut();
         let bounds = area.intersection(buffer.area);
         if bounds.width == 0 || bounds.height == 0 {
@@ -83,12 +83,12 @@ impl Component for ConfirmOverlayComponent {
         let cancel = "[ Cancel ]";
         let confirm = "[ Exit ]";
         let selected_style = Style::default()
-            .fg(term_wm_core::theme::decorator_header_fg())
-            .bg(term_wm_core::theme::decorator_header_bg())
+            .fg(ctx.config().theme.decorator_header_fg)
+            .bg(ctx.config().theme.decorator_header_bg)
             .add_modifier(Modifier::BOLD);
         let unselected_style = Style::default()
-            .fg(term_wm_core::theme::dialog_fg())
-            .bg(term_wm_core::theme::panel_bg());
+            .fg(ctx.config().theme.dialog_fg)
+            .bg(ctx.config().theme.panel_bg);
 
         let (cancel_style, confirm_style) = if self.selected_confirm {
             // confirm is selected
@@ -150,7 +150,7 @@ impl Overlay for ConfirmOverlayComponent {
 impl ConfirmOverlayComponent {
     pub fn new() -> Self {
         let mut dialog = DialogOverlayComponent::new();
-        dialog.set_bg(term_wm_core::theme::dialog_bg());
+        dialog.set_bg(term_wm_core::theme::NOIR.dialog_bg);
         dialog.set_auto_close_on_outside_click(false);
         Self {
             dialog,

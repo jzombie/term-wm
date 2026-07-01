@@ -67,7 +67,7 @@ impl DialogOverlayComponent {
             visible: false,
             width: 70,
             height: 9,
-            bg: term_wm_core::theme::dialog_bg(),
+            bg: term_wm_core::theme::NOIR.dialog_bg,
             dim_backdrop: false,
             auto_close_on_outside_click: false,
             area: Rect::default(),

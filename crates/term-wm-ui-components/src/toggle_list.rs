@@ -25,7 +25,7 @@ impl Component for ToggleListComponent {
             Block::default()
                 .borders(Borders::ALL)
                 .title(format!("{} (focus)", self.title))
-                .border_style(Style::default().fg(term_wm_core::theme::success_fg()))
+                .border_style(Style::default().fg(ctx.config().theme.success))
         } else {
             Block::default()
                 .borders(Borders::ALL)

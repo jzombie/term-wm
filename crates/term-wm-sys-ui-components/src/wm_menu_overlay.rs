@@ -11,7 +11,6 @@ use term_wm_core::{
     components::{Component, ComponentContext, MenuItem, MenuOverlay, Overlay},
     keybindings::Action,
     layout::rect_contains,
-    theme,
     ui::UiFrame,
 };
 
@@ -120,7 +119,7 @@ impl<R: Clone + std::fmt::Debug + 'static> WmMenuOverlay<R> {
             .then(|| (my.saturating_sub(drop_rect.y).saturating_sub(1)) as usize)
             .filter(|&idx| idx < item_count)
         });
-        self.menu.render_items(frame, drop_rect, hovered_idx);
+        self.menu.render_items(frame, drop_rect, hovered_idx, &ctx.config().theme);
 
         self.item_hits.clear();
         for idx in 0..item_count.min((drop_rect.height.saturating_sub(1)) as usize) {
@@ -158,7 +157,7 @@ impl<R: Clone + std::fmt::Debug + 'static> WmMenuOverlay<R> {
         }
         let block = Block::default().borders(Borders::ALL).border_style(
             Style::default()
-                .fg(theme::menu_fg())
+                .fg(term_wm_core::theme::NOIR.menu_fg)
                 .add_modifier(Modifier::DIM),
         );
         frame.render_widget(block, menu_bounds);

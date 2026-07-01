@@ -222,8 +222,6 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     mouse_capture_dirty: bool,
     window_selection_enabled: bool,
     window_selection_dirty: bool,
-    keyboard_focus_enabled: bool,
-    mouse_focus_click_enabled: bool,
     clipboard_enabled: bool,
     clipboard_dirty: bool,
     overlay_visible: bool,
@@ -234,14 +232,12 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     selection_copied: bool,
     selection_copied_text: Option<String>,
     config: WmConfig,
-    keybindings: KeyBindings,
     hint_visibility: HintVisibility,
     overlay_opened_at: Option<Instant>,
     super_pending: Option<(Instant, KeyEvent)>,
     pub(crate) last_frame_area: ratatui::prelude::Rect,
     overlays: BTreeMap<OverlayId, Box<dyn Overlay>>,
     scroll_keyboard_enabled_default: bool,
-    pub(crate) decorator: Arc<dyn WindowDecorator>,
     floating_resize_offscreen: bool,
     pub(crate) z_order: Vec<WindowId<Id>>,
     pub(crate) drag_snap: Option<(Option<WindowId<Id>>, InsertPosition, Rect)>,
@@ -450,7 +446,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     ) -> Self {
         let mouse_capture_enabled = config.mouse_capture_enabled;
         let clipboard = Some(crate::clipboard::Clipboard::new());
-        let decorator = config.decorator();
         let floating_resize_offscreen = config.floating_resize_offscreen;
         Self {
             app_focus: FocusRing::new(current),
@@ -478,8 +473,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             pending_deadline: None,
             mouse_capture_enabled,
             mouse_capture_dirty: false,
-            keyboard_focus_enabled: config.keyboard_focus_enabled,
-            mouse_focus_click_enabled: config.mouse_focus_click_enabled,
             clipboard_enabled: config.clipboard_enabled,
             clipboard_dirty: false,
             overlay_visible: false,
@@ -490,7 +483,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             selection_copied_text: None,
             window_selection_enabled: config.window_selection_enabled,
             window_selection_dirty: false,
-            keybindings: config.keybindings.clone(),
             hint_visibility: config.hint_visibility,
             config,
             overlay_opened_at: None,
@@ -498,7 +490,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             last_frame_area: Rect::default(),
             overlays: BTreeMap::new(),
             scroll_keyboard_enabled_default: true,
-            decorator,
             floating_resize_offscreen,
             z_order: Vec::new(),
             drag_snap: None,
@@ -525,7 +516,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub fn keybindings(&self) -> &KeyBindings {
-        &self.keybindings
+        &self.config.keybindings
     }
 
     pub fn hint_visibility(&self) -> HintVisibility {
@@ -551,7 +542,9 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     /// Create a [`ComponentContext`] pre-populated with the application
     /// identity from this window manager's [`AppContext`].
     pub fn component_context(&self, focused: bool) -> ComponentContext {
-        ComponentContext::new(focused).with_app_context(Arc::clone(&self.app_ctx))
+        ComponentContext::new(focused)
+            .with_app_context(Arc::clone(&self.app_ctx))
+            .with_config(Arc::new(self.config.clone()))
     }
 
     /// Create a [`ComponentContext`] for a specific window, including the
@@ -651,19 +644,19 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     pub fn keyboard_focus_enabled(&self) -> bool {
-        self.keyboard_focus_enabled
+        self.config.keyboard_focus_enabled
     }
 
     pub fn set_keyboard_focus_enabled(&mut self, enabled: bool) {
-        self.keyboard_focus_enabled = enabled;
+        self.config.keyboard_focus_enabled = enabled;
     }
 
     pub fn mouse_focus_click_enabled(&self) -> bool {
-        self.mouse_focus_click_enabled
+        self.config.mouse_focus_click_enabled
     }
 
     pub fn set_mouse_focus_click_enabled(&mut self, enabled: bool) {
-        self.mouse_focus_click_enabled = enabled;
+        self.config.mouse_focus_click_enabled = enabled;
     }
 
     pub fn set_mouse_capture_enabled(&mut self, enabled: bool) {
@@ -992,10 +985,11 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 selection_copied,
                 wm_overlay_visible,
                 label_for,
+                &self.config.theme,
             );
         }
         if let Some(p) = &mut self.bottom_panel {
-            p.render(frame, panel_active);
+            p.render(frame, panel_active, &self.config.theme);
         }
     }
 }

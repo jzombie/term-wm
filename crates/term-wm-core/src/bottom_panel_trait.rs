@@ -3,6 +3,7 @@ use ratatui::prelude::Rect;
 
 use crate::keybindings::Action;
 use crate::power_profile::PowerProfile;
+use crate::theme::Theme;
 use crate::ui::UiFrame;
 
 pub trait BottomPanel: std::fmt::Debug {
@@ -15,7 +16,7 @@ pub trait BottomPanel: std::fmt::Debug {
 
     fn split_bottom_area(&mut self, area: Rect, height: u16) -> (Rect, Rect);
 
-    fn render(&mut self, frame: &mut UiFrame<'_>, active: bool);
+    fn render(&mut self, frame: &mut UiFrame<'_>, active: bool, theme: &Theme);
 
     fn hit_test_hint(&self, event: &Event) -> Option<Action>;
 

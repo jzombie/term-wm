@@ -18,6 +18,7 @@ pub struct WindowRenderCtx<'a> {
     pub focused: bool,
     pub direct_mode: bool,
     pub hover_pos: Option<(u16, u16)>,
+    pub theme: crate::theme::Theme,
 }
 
 pub trait WindowDecorator: std::fmt::Debug {
@@ -96,23 +97,24 @@ impl WindowDecorator for DefaultDecorator {
             focused,
             direct_mode,
             hover_pos,
+            theme,
         } = ctx;
         let buffer = frame.buffer_mut();
 
         let focused_header_style = Style::default()
-            .bg(crate::theme::decorator_header_bg())
-            .fg(crate::theme::decorator_header_fg())
+            .bg(theme.decorator_header_bg)
+            .fg(theme.decorator_header_fg)
             .add_modifier(Modifier::BOLD);
         let normal_header_style = Style::default()
-            .bg(crate::theme::panel_bg())
-            .fg(crate::theme::decorator_header_fg());
+            .bg(theme.panel_bg)
+            .fg(theme.decorator_header_fg);
         let border_style = if focused {
             Style::default()
-                .fg(crate::theme::decorator_border_active())
+                .fg(theme.decorator_border_active)
                 .bg(Color::Reset)
         } else {
             Style::default()
-                .fg(crate::theme::decorator_border())
+                .fg(theme.decorator_border)
                 .bg(Color::Reset)
         };
 
@@ -122,9 +124,9 @@ impl WindowDecorator for DefaultDecorator {
             normal_header_style
         };
         let header_bg = if focused {
-            crate::theme::decorator_header_bg()
+            theme.decorator_header_bg
         } else {
-            crate::theme::panel_bg()
+            theme.panel_bg
         };
 
         let outer_left = rect.x;
@@ -153,23 +155,23 @@ impl WindowDecorator for DefaultDecorator {
             }
         }
         if self.show_buttons {
-            let contrast_fg = crate::theme::menu_selected_fg();
+            let contrast_fg = theme.menu_selected_fg;
             for (bx, action, sym) in header_buttons(outer_right) {
                 if let Some(cell) = buffer.cell_mut((bx, header_y)) {
                     cell.set_symbol(sym);
                     let stoplight_fg = match action {
-                        HeaderAction::Close => crate::theme::error_bg(),
-                        HeaderAction::Minimize => crate::theme::warning_bg(),
-                        HeaderAction::Maximize => crate::theme::accent(),
-                        _ => crate::theme::decorator_header_fg(),
+                        HeaderAction::Close => theme.error,
+                        HeaderAction::Minimize => theme.warning,
+                        HeaderAction::Maximize => theme.accent,
+                        _ => theme.decorator_header_fg,
                     };
                     let is_hovered = hover_pos == Some((bx, header_y));
                     let style = if is_hovered {
                         let (hover_bg, hover_fg) = match action {
-                            HeaderAction::Close => (crate::theme::error_bg(), contrast_fg),
-                            HeaderAction::Minimize => (crate::theme::warning_bg(), contrast_fg),
-                            HeaderAction::Maximize => (crate::theme::accent(), contrast_fg),
-                            _ => (crate::theme::accent_alt(), contrast_fg),
+                            HeaderAction::Close => (theme.error, contrast_fg),
+                            HeaderAction::Minimize => (theme.warning, contrast_fg),
+                            HeaderAction::Maximize => (theme.accent, contrast_fg),
+                            _ => (theme.accent_alt, contrast_fg),
                         };
                         Style::default()
                             .bg(hover_bg)
@@ -177,8 +179,8 @@ impl WindowDecorator for DefaultDecorator {
                             .add_modifier(Modifier::BOLD)
                     } else if action == HeaderAction::ToggleDirectMode && direct_mode && focused {
                         Style::default()
-                            .bg(crate::theme::decorator_header_fg())
-                            .fg(crate::theme::decorator_header_bg())
+                            .bg(theme.decorator_header_fg)
+                            .fg(theme.decorator_header_bg)
                     } else {
                         Style::default().bg(header_bg).fg(stoplight_fg)
                     };

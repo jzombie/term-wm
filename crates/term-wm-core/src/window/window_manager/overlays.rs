@@ -112,7 +112,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let Event::Key(key) = event else {
             return false;
         };
-        let kb = &self.keybindings;
+        let kb = self.keybindings();
         kb.matches(Action::MenuUp, key)
             || kb.matches(Action::MenuDown, key)
             || kb.matches(Action::MenuSelect, key)
@@ -134,7 +134,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             .collect();
         let is_obscured =
             |x: u16, y: u16| -> bool { obscuring.iter().any(|r| rect_contains(*r, x, y)) };
-        render_handles_masked(frame, &self.handles, hovered, is_obscured);
+        render_handles_masked(frame, &self.handles, hovered, is_obscured, &self.config.theme);
         let floating_panes: Vec<FloatingPane<WindowId<Id>>> = self
             .windows
             .iter()
@@ -180,11 +180,12 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             self.managed_area,
             &floating_panes,
             &self.managed_draw_order,
+            &self.config.theme,
         );
 
         if let Some((_, _, rect)) = self.drag_snap {
             let buffer = frame.buffer_mut();
-            let color = crate::theme::accent();
+            let color = self.config.theme.accent;
             let clip = rect.intersection(buffer.area);
             if clip.width > 0 && clip.height > 0 {
                 for y in clip.y..clip.y.saturating_add(clip.height) {
@@ -222,7 +223,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                         let paragraph = Paragraph::new(text)
                             .style(
                                 Style::default()
-                                    .fg(crate::theme::accent_alt())
+                                    .fg(self.config.theme.accent_alt)
                                     .bg(Color::Black),
                             )
                             .alignment(Alignment::Center);
@@ -251,7 +252,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 .component_context(false)
                 .with_overlay(true)
                 .with_hover_pos(self.hover)
-                .with_keybindings(std::sync::Arc::new(self.keybindings.clone()));
+                .with_keybindings(std::sync::Arc::new(self.keybindings().clone()));
             let comp: &mut dyn Component = &mut *self.menu_overlay;
             comp.render(frame, frame.area(), &menu_ctx);
             oi += 1;
@@ -272,7 +273,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                         width: r.width,
                         height: r.height,
                     };
-                    crate::ui::render_drop_shadow(frame, shadow_dest, z);
+                    crate::ui::render_drop_shadow(frame, shadow_dest, z, &self.config.theme);
                 }
                 if let Some(overlay) = self.overlays.get_mut(&overlay_id) {
                     overlay.render(frame, frame.area(), &ctx);

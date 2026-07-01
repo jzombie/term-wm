@@ -173,7 +173,7 @@ impl Component for TextRendererComponent {
             remaining = remaining.saturating_sub(rows_to_render);
             cum_visual += line_vh;
         }
-        self.render_selection_overlay(frame);
+        self.render_selection_overlay(frame, &ctx.config().theme);
     }
 
     fn handle_event(&mut self, event: &crossterm::event::Event, ctx: &ComponentContext) -> bool {
@@ -346,7 +346,7 @@ impl TextRendererComponent {
         ))
     }
 
-    fn render_selection_overlay(&mut self, frame: &mut UiFrame<'_>) {
+    fn render_selection_overlay(&mut self, frame: &mut UiFrame<'_>, theme: &term_wm_core::theme::Theme) {
         if !self.selection_enabled {
             return;
         }
@@ -379,8 +379,8 @@ impl TextRendererComponent {
                 {
                     let style = cell
                         .style()
-                        .bg(term_wm_core::theme::selection_bg())
-                        .fg(term_wm_core::theme::selection_fg());
+                        .bg(theme.selection_bg)
+                        .fg(theme.selection_fg);
                     cell.set_style(style);
                 }
             }
