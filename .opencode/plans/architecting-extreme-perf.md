@@ -1,3 +1,7 @@
+See also:
+  - thread_model.md
+  - damage-tracking-rendering-optimization.md
+
 > _see also "damage tracking"_
 
 Here is a breakdown of the architectural strategies for building extreme-performance terminal window managers, based on the research notes for overhauling systems like `term-wm`:

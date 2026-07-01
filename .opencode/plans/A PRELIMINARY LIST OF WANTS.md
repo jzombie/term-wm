@@ -1,2 +1,4 @@
+> _"It is about designing systems that are fundamentally safe by default, yet infinitely extensible by design."_
+
 1. Dynamic configurability using Rust structs (IF eventually wanting to use a different format, it should be parsable into same Rust structs).  Application entrance points should be easily configurable, with the windows that they want to display the primary potentially imperative logic, as part of a builder pattern.  Everything else should probably be part of the configuration. The initialization sequence should be identicial regardless if the app is "standalone" or "embedded".  The *core* distinction between standalone or embedded modes should simply be a configuration difference.
 2. Better application lifecycle management.
