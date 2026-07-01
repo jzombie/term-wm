@@ -467,11 +467,6 @@ where
                     }
                 }
             } else {
-                if app.enumerate_windows().is_empty() && !app.windows().has_active_system_windows()
-                {
-                    update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Quit);
-                }
                 // Forward any timed-out pending Esc to the terminal.
                 if let Some(super_event) = app.windows().take_expired_super_event() {
                     let _ = handle_focused_app_event(&super_event, app);
