@@ -143,6 +143,22 @@ impl Clipboard {
     }
 }
 
+/// Length of the OSC 52 header `\x1b]52;` (ESC + ] + "52;").
+const OSC52_HEADER_LEN: usize = 5;
+
+/// Offset past the `ESC ]` introducer to reach the command.
+const OSC52_ESC_OFFSET: usize = 2;
+
+/// Length of the clipboard-parameter `c;` following the header.
+const CLIPBOARD_PARAM_LEN: usize = 2;
+
+/// Length of the ST string terminator `\x1b\\`.
+const ST_TERMINATOR_LEN: usize = 2;
+
+/// Maximum bytes to buffer for an in-progress OSC 52 sequence before
+/// giving up (safety valve against malformed / non-terminated sequences).
+const MAX_OSC52_BUFFER_BYTES: usize = 4 * 1024 * 1024;
+
 /// Scan `data` for a complete OSC 52 clipboard sequence
 /// (`OSC 52 ; c ; BASE64 ST`) and return the decoded text.
 ///
@@ -153,25 +169,25 @@ pub fn extract_osc52_text(data: &[u8]) -> Option<String> {
     let mut i = 0;
     while i < data.len() {
         // Find \x1b]52;
-        if i + 5 > data.len() || data[i] != 0x1b || data[i + 1] != b']' {
+        if i + OSC52_HEADER_LEN > data.len() || data[i] != 0x1b || data[i + 1] != b']' {
             i += 1;
             continue;
         }
         // Check for "52;" or "52;c;" or "52;c;" after the ESC ] introducer
         // The format is: ESC ] 5 2 ; c ; <base64> ST
         let header = b"52;";
-        if i + 5 + header.len() > data.len() {
+        if i + OSC52_HEADER_LEN + header.len() > data.len() {
             break;
         }
-        if &data[i + 2..i + 2 + header.len()] != header {
+        if &data[i + OSC52_ESC_OFFSET..i + OSC52_ESC_OFFSET + header.len()] != header {
             i += 1;
             continue;
         }
-        let content_start = i + 2 + header.len(); // "52;" starts at i+2
+        let content_start = i + OSC52_ESC_OFFSET + header.len();
         // Skip optional "c;" — some terminals send "52;c;" and
         // some just "52;".  We accept both.
         let payload_start = if data[content_start..].starts_with(b"c;") {
-            content_start + 2
+            content_start + CLIPBOARD_PARAM_LEN
         } else {
             content_start
         };
@@ -202,6 +218,114 @@ pub fn extract_osc52_text(data: &[u8]) -> Option<String> {
         break;
     }
     None
+}
+
+/// Cross-chunk buffer for extracting OSC 52 clipboard sequences from a
+/// streaming byte source (e.g., a PTY reader thread).
+///
+/// Typical use:
+/// ```ignore
+/// let mut extractor = Osc52Extractor::new();
+/// loop {
+///     let n = reader.read(&mut buf)?;
+///     if n == 0 { break; }
+///     if let Some(text) = extractor.push(&buf[..n], &prev_tail) {
+///         // text was extracted from a complete OSC 52 sequence
+///     }
+///     // update prev_tail from buf[..n]
+/// }
+/// ```
+pub struct Osc52Extractor {
+    buf: Vec<u8>,
+}
+
+impl Osc52Extractor {
+    pub fn new() -> Self {
+        Self { buf: Vec::new() }
+    }
+
+    /// Feed the latest chunk of data and the tail of the previous chunk
+    /// (typically the last 3 bytes).  Returns the decoded clipboard text
+    /// if a complete OSC 52 sequence was detected, `None` otherwise.
+    ///
+    /// `prev_tail` is used to detect the `ESC ] 5 2 ;` header when it
+    /// straddles a chunk boundary (rare in practice).  Pass an empty
+    /// slice when there is no previous chunk or when the gap between
+    /// chunks makes the tail irrelevant.
+    pub fn push(&mut self, data: &[u8], prev_tail: &[u8]) -> Option<String> {
+        if !self.buf.is_empty() {
+            self.buf.extend_from_slice(data);
+            return self.try_extract(data, prev_tail);
+        }
+
+        // Common case: header lies entirely inside the current chunk.
+        if let Some(pos) = data
+            .windows(OSC52_HEADER_LEN)
+            .position(|w| w == b"\x1b]52;")
+        {
+            self.buf.extend_from_slice(&data[pos..]);
+            return self.try_extract(data, prev_tail);
+        }
+
+        // Rare case: header straddles the chunk boundary.
+        if !prev_tail.is_empty() {
+            let mut combined = prev_tail.to_vec();
+            combined.extend_from_slice(data);
+            if let Some(pos) = combined
+                .windows(OSC52_HEADER_LEN)
+                .position(|w| w == b"\x1b]52;")
+            {
+                let tail_len = prev_tail.len();
+                if pos < tail_len {
+                    self.buf.extend_from_slice(&combined[pos..tail_len]);
+                }
+                self.buf
+                    .extend_from_slice(&data[pos.saturating_sub(tail_len)..]);
+                return self.try_extract(data, prev_tail);
+            }
+        }
+
+        None
+    }
+
+    /// Returns `true` when we are in the middle of buffering an OSC 52
+    /// sequence (header seen, terminator not yet).
+    pub fn is_active(&self) -> bool {
+        !self.buf.is_empty()
+    }
+
+    /// Discard any in-progress buffered data.
+    pub fn clear(&mut self) {
+        self.buf.clear();
+    }
+
+    /// Check `data` and `prev_tail` for a terminator and, if found, run
+    /// the full extraction against the accumulated buffer.
+    /// Safety-valve at [`MAX_OSC52_BUFFER_BYTES`].
+    fn try_extract(&mut self, data: &[u8], prev_tail: &[u8]) -> Option<String> {
+        // BEL (\x07) is always within a single chunk.
+        // ST (\x1b\\) can span the chunk boundary.
+        let has_term = data.contains(&0x07)
+            || data.windows(ST_TERMINATOR_LEN).any(|w| w == b"\x1b\\")
+            || (!prev_tail.is_empty()
+                && prev_tail.last() == Some(&0x1b)
+                && data.first() == Some(&b'\\'));
+        if has_term {
+            let result = extract_osc52_text(&self.buf);
+            self.buf.clear();
+            return result;
+        }
+        if self.buf.len() >= MAX_OSC52_BUFFER_BYTES {
+            self.buf.clear();
+        }
+        None
+    }
+}
+
+impl Default for Osc52Extractor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]
@@ -376,5 +500,94 @@ mod tests {
         );
         assert!(seq.ends_with('\x07'), "should end with BEL terminator");
         assert_eq!(extract_osc52_text(&buf), Some("clip test".to_string()));
+    }
+
+    // ── Osc52Extractor ──────────────────────────────────────────────
+
+    #[test]
+    fn extractor_single_chunk_bel() {
+        let seq = format_osc52_bytes("hello");
+        let mut ex = Osc52Extractor::new();
+        let result = ex.push(&seq, &[]);
+        assert_eq!(result.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn extractor_multi_chunk_bel() {
+        let seq = format_osc52_bytes("this is a longer test");
+        let mid = seq.len() / 3;
+        let mut ex = Osc52Extractor::new();
+        assert!(ex.push(&seq[..mid], &[]).is_none());
+        assert!(ex.is_active());
+        assert!(ex.push(&seq[mid..2 * mid], &[]).is_none());
+        assert!(ex.is_active());
+        let result = ex.push(&seq[2 * mid..], &[]);
+        assert_eq!(result.as_deref(), Some("this is a longer test"));
+        assert!(!ex.is_active());
+    }
+
+    #[test]
+    fn extractor_header_cross_boundary() {
+        // Force `\x1b]52;` to straddle chunk boundary:
+        // chunk 0 ends with `\x1b]5`, chunk 1 starts with `2;c;...\x07`
+        let seq = format_osc52_bytes("test");
+        let split = 3; // split at byte 3 so chunk 0 = `\x1b]5`
+        assert_eq!(&seq[..split], b"\x1b]5");
+        assert_eq!(&seq[split..split + 3], b"2;c");
+
+        let mut ex = Osc52Extractor::new();
+
+        // Feed chunk 0 with empty tail — no header detected yet.
+        assert!(ex.push(&seq[..split], &[]).is_none());
+        assert!(!ex.is_active());
+
+        // Feed chunk 1 with the last 3 bytes of chunk 0 as tail
+        // (simulating a PTY history tail). Now the header is detected
+        // via the concatenated window.
+        let result = ex.push(&seq[split..], &seq[..split]);
+        assert_eq!(result.as_deref(), Some("test"));
+    }
+
+    #[test]
+    fn extractor_st_terminator_cross_boundary() {
+        // Build an ST-terminated sequence where ST straddles the boundary.
+        let text = "boundary test";
+        let encoded = base64::engine::general_purpose::STANDARD.encode(text);
+        let mut seq = b"\x1b]52;c;".to_vec();
+        seq.extend_from_slice(encoded.as_bytes());
+        seq.extend_from_slice(b"\x1b\\"); // ST terminator
+
+        let split = seq.len() - 2; // `\x1b` in chunk 0, `\\` in chunk 1
+        assert_eq!(seq[split], 0x1b);
+        assert_eq!(seq[split + 1], b'\\');
+
+        let mut ex = Osc52Extractor::new();
+        // Feed chunk 0 — header is found, buffering starts.
+        let _ = ex.push(&seq[..split], &[]); // first chunk (no tail needed)
+        assert!(ex.is_active());
+
+        // Feed chunk 1 — `\\` should combine with `\x1b` from chunk 0
+        // through the history tail mechanism.
+        let result = ex.push(&seq[split..], &seq[split - 2..split]);
+        assert_eq!(result.as_deref(), Some("boundary test"));
+    }
+
+    #[test]
+    fn extractor_normal_data_no_false_positive() {
+        let data = b"hello\nworld\nthis is just normal text\nno osc sequences\n";
+        let mut ex = Osc52Extractor::new();
+        assert!(ex.push(data, &[]).is_none());
+        assert!(!ex.is_active());
+    }
+
+    #[test]
+    fn extractor_clears_on_4mb_limit() {
+        let mut ex = Osc52Extractor::new();
+        // Fake a large malformed sequence: seed the inner buf directly.
+        ex.buf = vec![0u8; 4 * 1024 * 1024];
+        assert!(ex.is_active());
+        // Next push with no terminator should hit the safety valve.
+        assert!(ex.push(b"", &[]).is_none());
+        assert!(!ex.is_active());
     }
 }

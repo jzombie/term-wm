@@ -3,6 +3,41 @@ use ratatui::style::{Color, Modifier, Style};
 
 use crate::ui::UiFrame;
 
+// ── Window decoration layout constants ──────────────────────────
+
+/// Left border column width (1 cell).
+pub const LEFT_BORDER_WIDTH: u16 = 1;
+
+/// Right border column width (1 cell).
+pub const RIGHT_BORDER_WIDTH: u16 = 1;
+
+/// Top border row height (1 cell).
+pub const TOP_BORDER_HEIGHT: u16 = 1;
+
+/// Bottom border row height (1 cell).
+pub const BOTTOM_BORDER_HEIGHT: u16 = 1;
+
+/// Header row height below the top border (1 cell).
+pub const HEADER_HEIGHT: u16 = 1;
+
+/// Spacing between adjacent window buttons in the header.
+const HEADER_BUTTON_GAP: u16 = 2;
+
+/// Content area x = window_rect.x + LEFT_BORDER_WIDTH.
+pub const CONTENT_X_OFFSET: u16 = LEFT_BORDER_WIDTH;
+
+/// Content area y = window_rect.y + TOP_BORDER_HEIGHT + HEADER_HEIGHT.
+pub const CONTENT_Y_OFFSET: u16 = TOP_BORDER_HEIGHT + HEADER_HEIGHT;
+
+/// Content area width = window_rect.width - (LEFT_BORDER_WIDTH + RIGHT_BORDER_WIDTH).
+pub const CONTENT_WIDTH_SHRINK: u16 = LEFT_BORDER_WIDTH + RIGHT_BORDER_WIDTH;
+
+/// Content area height = window_rect.height - (TOP_BORDER_HEIGHT + HEADER_HEIGHT + BOTTOM_BORDER_HEIGHT).
+pub const CONTENT_HEIGHT_SHRINK: u16 = TOP_BORDER_HEIGHT + HEADER_HEIGHT + BOTTOM_BORDER_HEIGHT;
+
+/// Adjustment to convert a width/height to a 0-based rightmost/bottommost coordinate.
+const EDGE_INDEX_ADJUST: u16 = 1;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HeaderAction {
     Minimize,
@@ -54,10 +89,10 @@ impl Default for DefaultDecorator {
 }
 
 fn header_buttons(outer_right: u16) -> [(u16, HeaderAction, &'static str); 4] {
-    let close_x = outer_right.saturating_sub(2);
-    let max_x = close_x.saturating_sub(2);
-    let min_x = max_x.saturating_sub(2);
-    let kb_x = min_x.saturating_sub(2);
+    let close_x = outer_right.saturating_sub(HEADER_BUTTON_GAP);
+    let max_x = close_x.saturating_sub(HEADER_BUTTON_GAP);
+    let min_x = max_x.saturating_sub(HEADER_BUTTON_GAP);
+    let kb_x = min_x.saturating_sub(HEADER_BUTTON_GAP);
     [
         (close_x, HeaderAction::Close, "✖"),
         (max_x, HeaderAction::Maximize, "▢"),
@@ -73,8 +108,11 @@ impl WindowDecorator for DefaultDecorator {
         }
 
         let outer_left = rect.x;
-        let outer_right = rect.x.saturating_add(rect.width).saturating_sub(1);
-        let header_y = rect.y.saturating_add(1);
+        let outer_right = rect
+            .x
+            .saturating_add(rect.width)
+            .saturating_sub(EDGE_INDEX_ADJUST);
+        let header_y = rect.y.saturating_add(TOP_BORDER_HEIGHT);
 
         if y != header_y {
             return HeaderAction::None;
@@ -129,21 +167,30 @@ impl WindowDecorator for DefaultDecorator {
 
         let outer_left = rect.x;
         let outer_top = rect.y;
-        let outer_right = rect.x.saturating_add(rect.width).saturating_sub(1);
-        let outer_bottom = rect.y.saturating_add(rect.height).saturating_sub(1);
-        let header_y = rect.y.saturating_add(1);
+        let outer_right = rect
+            .x
+            .saturating_add(rect.width)
+            .saturating_sub(EDGE_INDEX_ADJUST);
+        let outer_bottom = rect
+            .y
+            .saturating_add(rect.height)
+            .saturating_sub(EDGE_INDEX_ADJUST);
+        let header_y = rect.y.saturating_add(TOP_BORDER_HEIGHT);
 
         // Header Background & Title
-        for x in outer_left.saturating_add(1)..outer_right {
+        for x in outer_left.saturating_add(LEFT_BORDER_WIDTH)..outer_right {
             if let Some(cell) = buffer.cell_mut((x, header_y)) {
                 cell.set_symbol(" ");
                 cell.set_style(header_style);
             }
         }
         let title_len = title.len() as u16;
-        let header_width = outer_right.saturating_sub(outer_left).saturating_sub(1);
+        let header_width = outer_right
+            .saturating_sub(outer_left)
+            .saturating_sub(RIGHT_BORDER_WIDTH);
         if title_len <= header_width {
-            let start_x = outer_left + 1 + (header_width - title_len) / 2;
+            let start_x =
+                outer_left.saturating_add(LEFT_BORDER_WIDTH) + (header_width - title_len) / 2;
             for (idx, ch) in title.chars().enumerate() {
                 let x = start_x + idx as u16;
                 if let Some(cell) = buffer.cell_mut((x, header_y)) {
@@ -214,7 +261,7 @@ impl WindowDecorator for DefaultDecorator {
                 cell.set_style(border_style);
             }
         }
-        for y in outer_top.saturating_add(1)..outer_bottom {
+        for y in outer_top.saturating_add(TOP_BORDER_HEIGHT)..outer_bottom {
             if let Some(cell) = buffer.cell_mut((outer_left, y)) {
                 cell.set_symbol("│");
                 cell.set_style(border_style);
@@ -228,10 +275,10 @@ impl WindowDecorator for DefaultDecorator {
 
     fn content_area(&self, window_rect: Rect) -> Rect {
         Rect {
-            x: window_rect.x.saturating_add(1),
-            y: window_rect.y.saturating_add(2),
-            width: window_rect.width.saturating_sub(2),
-            height: window_rect.height.saturating_sub(3),
+            x: window_rect.x.saturating_add(CONTENT_X_OFFSET),
+            y: window_rect.y.saturating_add(CONTENT_Y_OFFSET),
+            width: window_rect.width.saturating_sub(CONTENT_WIDTH_SHRINK),
+            height: window_rect.height.saturating_sub(CONTENT_HEIGHT_SHRINK),
         }
     }
 }
@@ -268,10 +315,10 @@ mod tests {
 
         // buttons: compute positions (right-to-left: close, maximize, minimize, direct)
         let outer_right = rect.x + rect.width - 1;
-        let close_x = outer_right.saturating_sub(2);
-        let max_x = close_x.saturating_sub(2);
-        let min_x = max_x.saturating_sub(2);
-        let kb_x = min_x.saturating_sub(2);
+        let close_x = outer_right.saturating_sub(HEADER_BUTTON_GAP);
+        let max_x = close_x.saturating_sub(HEADER_BUTTON_GAP);
+        let min_x = max_x.saturating_sub(HEADER_BUTTON_GAP);
+        let kb_x = min_x.saturating_sub(HEADER_BUTTON_GAP);
 
         assert_eq!(dec.hit_test(rect, close_x, header_y), HeaderAction::Close);
         assert_eq!(dec.hit_test(rect, max_x, header_y), HeaderAction::Maximize);

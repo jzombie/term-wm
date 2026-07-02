@@ -15,6 +15,19 @@ use super::utils::KeyboardNormalizer;
 use crate::power_profile::PowerProfile;
 use crate::window::WindowKey;
 
+/// Delay window for coalescing PTY wakeups before triggering a render.
+/// Multiple wakeups within this window are collapsed into a single render.
+/// Capacity of the crossbeam channel between event producers and the event
+/// loop. 256 slots provides natural backpressure: when the channel is full,
+/// the sender blocks → the producer backs off.
+const EVENT_CHANNEL_CAPACITY: usize = 256;
+
+/// How often the crossterm input thread polls for new events (100 ms).
+/// Keeps the thread responsive to shutdown signals while being idle-friendly.
+const INPUT_THREAD_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+const COALESCE_DELAY: Duration = Duration::from_millis(3);
+
 /// Events that can flow through the unified event channel.
 #[derive(Debug, Clone)]
 pub enum UnifiedEvent {
@@ -52,13 +65,21 @@ pub struct UnifiedEventSource {
     normalizer: KeyboardNormalizer,
     /// Timestamp of the last input event (for power profiling).
     last_event_at: Option<Instant>,
+    /// Deadline for coalescing PTY wakeups. When `Some`, wakeups are batched
+    /// until this instant before triggering a render.
+    coalesce_deadline: Option<Instant>,
 }
 
 impl UnifiedEventSource {
     /// Create a new unified event source, spawning a background thread
     /// that reads crossterm events.
+    ///
+    /// The bounded channel (256 slots) provides mechanical backpressure:
+    /// when the channel is full, PTY reader threads block on `send()` →
+    /// OS pipe buffer fills → child process `write()` blocks → prevents
+    /// memory exhaustion under extreme output load.
     pub fn new() -> io::Result<Self> {
-        let (tx, rx) = bounded::<UnifiedEvent>(256);
+        let (tx, rx) = bounded::<UnifiedEvent>(EVENT_CHANNEL_CAPACITY);
         let shutdown = Arc::new(AtomicBool::new(false));
         let input_tx = tx.clone();
         let input_shutdown = Arc::clone(&shutdown);
@@ -72,7 +93,7 @@ impl UnifiedEventSource {
                         break;
                     }
                     // Blocking poll with short timeout so we can check shutdown.
-                    if crossterm::event::poll(Duration::from_millis(100)).unwrap_or(false) {
+                    if crossterm::event::poll(INPUT_THREAD_POLL_INTERVAL).unwrap_or(false) {
                         match crossterm::event::read() {
                             Ok(event) => {
                                 if input_tx.send(UnifiedEvent::Input(event)).is_err() {
@@ -97,6 +118,7 @@ impl UnifiedEventSource {
             signal_received: false,
             normalizer: KeyboardNormalizer::new(),
             last_event_at: None,
+            coalesce_deadline: None,
         })
     }
 
@@ -161,14 +183,25 @@ impl EventSource for UnifiedEventSource {
             match self.rx.recv_timeout(remaining) {
                 Ok(UnifiedEvent::Input(event)) => {
                     self.last_event_at = Some(Instant::now());
+                    self.coalesce_deadline = None;
                     self.pending_event = Some(event);
                     return Ok(true);
                 }
                 Ok(UnifiedEvent::PtyWakeup(key)) => {
                     self.dirty_windows.insert(key);
-                    // Don't return true — wakeups just trigger a render
-                    // on the next idle tick.  Drain any more immediate events.
-                    remaining = remaining.saturating_sub(Duration::from_millis(1));
+                    if self.coalesce_deadline.is_none() {
+                        self.coalesce_deadline = Some(Instant::now() + COALESCE_DELAY);
+                    }
+                    if let Some(deadline) = self.coalesce_deadline {
+                        let now = Instant::now();
+                        if now >= deadline {
+                            self.coalesce_deadline = None;
+                            self.dirty_windows.clear();
+                            return Ok(false);
+                        }
+                        let coalesce_remaining = deadline.saturating_duration_since(now);
+                        remaining = remaining.min(coalesce_remaining);
+                    }
                     continue;
                 }
                 Ok(UnifiedEvent::Signal) => {
@@ -182,6 +215,8 @@ impl EventSource for UnifiedEventSource {
             }
         }
 
+        self.coalesce_deadline = None;
+        self.dirty_windows.clear();
         Ok(false)
     }
 
@@ -286,7 +321,10 @@ impl EventSource for UnifiedEventSource {
     }
 
     fn current_profile(&self) -> PowerProfile {
-        crate::power_profile::profile_from_activity(self.last_event_at)
+        crate::power_profile::profile_from_activity(
+            self.last_event_at,
+            !self.dirty_windows.is_empty(),
+        )
     }
 }
 
@@ -305,7 +343,7 @@ mod tests {
     /// `input_buffer` so `poll()/read()` can process every event.
     #[test]
     fn drain_pending_preserves_all_input_events() {
-        let (tx, rx) = bounded(256);
+        let (tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
         let mut source = UnifiedEventSource {
             rx,
             tx: tx.clone(),
@@ -317,6 +355,7 @@ mod tests {
             signal_received: false,
             normalizer: KeyboardNormalizer::new(),
             last_event_at: None,
+            coalesce_deadline: None,
         };
         // Prevent the no-op handle from panicking on join in drop
         let dummy_handle = std::thread::spawn(|| {});
@@ -383,6 +422,83 @@ mod tests {
         assert!(
             !source.poll(Duration::ZERO).unwrap(),
             "poll must return false after buffer drained"
+        );
+    }
+
+    /// Dirty windows must be cleared after `poll()` returns `Ok(false)`,
+    /// otherwise the power profile stays at `Streaming` (16ms) forever.
+    #[test]
+    fn dirty_windows_cleared_after_poll_ok_false() {
+        let (tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
+        let mut source = UnifiedEventSource {
+            rx,
+            tx: tx.clone(),
+            _input_handle: std::thread::spawn(|| {}),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            dirty_windows: HashSet::new(),
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            coalesce_deadline: None,
+        };
+        // Prevent the no-op handle from panicking on drop
+        let dummy_handle = std::thread::spawn(|| {});
+        source._input_handle = dummy_handle;
+
+        // Baseline: no input, no dirty → PowerSaver
+        assert_eq!(source.current_profile(), PowerProfile::PowerSaver);
+
+        // Send a PtyWakeup — drain_pending will pick it up inside poll()
+        tx.send(UnifiedEvent::PtyWakeup(WindowKey::default()))
+            .unwrap();
+
+        // poll() should drain the PtyWakeup, arm coalesce, then either
+        // coalesce-expire or timeout, clear dirty_windows, and return Ok(false).
+        assert!(
+            !source.poll(Duration::from_secs(1)).unwrap(),
+            "poll must return Ok(false) after PtyWakeup drain"
+        );
+
+        // After poll returns, dirty_windows must be empty.
+        assert!(
+            source.take_dirty_windows().is_empty(),
+            "dirty_windows must be cleared after poll returns Ok(false)"
+        );
+
+        // With dirty_windows empty and no input, profile returns to PowerSaver.
+        assert_eq!(
+            source.current_profile(),
+            PowerProfile::PowerSaver,
+            "profile must return to PowerSaver after dirty_windows cleared"
+        );
+    }
+
+    /// Verify that a non-empty dirty_windows causes Streaming profile,
+    /// confirming the mechanism the bug fix relies on.
+    #[test]
+    fn dirty_windows_causes_streaming_profile() {
+        let (_tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
+        let mut set = HashSet::new();
+        set.insert(WindowKey::default());
+        let source = UnifiedEventSource {
+            rx,
+            tx: _tx,
+            _input_handle: std::thread::spawn(|| {}),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            dirty_windows: set,
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            coalesce_deadline: None,
+        };
+        assert_eq!(
+            source.current_profile(),
+            PowerProfile::Streaming,
+            "dirty_windows must elevate profile to Streaming"
         );
     }
 }
