@@ -277,7 +277,7 @@ impl WindowManager {
     /// Pre-compute all display titles in one pass from a single snapshot of
     /// `build_display_order()`.  Same-title windows are numbered by the order
     /// the title was assigned (`title_set_order`), so the first window to get
-    /// "htop" is "htop (keys[1])" regardless of creation order.
+    /// "htop" is "htop (keys\[1\])" regardless of creation order.
     pub fn window_titles(&self) -> Vec<(WindowKey, String)> {
         let order = self.build_display_order();
         #[allow(clippy::type_complexity)]

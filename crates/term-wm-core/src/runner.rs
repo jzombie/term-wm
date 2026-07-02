@@ -973,6 +973,193 @@ mod tests {
         assert!(app.recorder.received_key, "component must receive the key");
     }
 
+    // ── selection_snapshot_from ──────────────────────────────────────
+
+    #[test]
+    fn selection_snapshot_from_active_returns_text() {
+        let status = SelectionStatus {
+            active: true,
+            dragging: false,
+        };
+        let (s, text) = selection_snapshot_from(status, Some("hello".into()));
+        assert!(s.active);
+        assert_eq!(text, Some("hello".into()));
+    }
+
+    #[test]
+    fn selection_snapshot_from_dragging_returns_text() {
+        let status = SelectionStatus {
+            active: false,
+            dragging: true,
+        };
+        let (s, text) = selection_snapshot_from(status, Some("dragging".into()));
+        assert!(s.dragging);
+        assert_eq!(text, Some("dragging".into()));
+    }
+
+    #[test]
+    fn selection_snapshot_from_active_and_dragging_returns_text() {
+        let status = SelectionStatus {
+            active: true,
+            dragging: true,
+        };
+        let (s, text) = selection_snapshot_from(status, Some("both".into()));
+        assert!(s.active);
+        assert!(s.dragging);
+        assert_eq!(text, Some("both".into()));
+    }
+
+    #[test]
+    fn selection_snapshot_from_inactive_returns_none_text() {
+        let status = SelectionStatus {
+            active: false,
+            dragging: false,
+        };
+        let (s, text) = selection_snapshot_from(status, Some("ignored".into()));
+        assert!(!s.active);
+        assert!(!s.dragging);
+        assert_eq!(text, None);
+    }
+
+    #[test]
+    fn selection_snapshot_from_inactive_none_text() {
+        let status = SelectionStatus {
+            active: false,
+            dragging: false,
+        };
+        let (_s, text) = selection_snapshot_from(status, None);
+        assert_eq!(text, None);
+    }
+
+    #[test]
+    fn selection_snapshot_from_active_none_text() {
+        let status = SelectionStatus {
+            active: true,
+            dragging: false,
+        };
+        let (s, text) = selection_snapshot_from(status, None);
+        assert!(s.active);
+        assert_eq!(text, None);
+    }
+
+    // ── WindowDrawState ──────────────────────────────────────────────
+
+    fn make_keys(n: usize) -> Vec<WindowKey> {
+        let mut wm = crate::window::WindowManager::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        (0..n).map(|_| wm.create_window()).collect()
+    }
+
+    #[test]
+    fn window_draw_state_update_first_call_returns_true() {
+        let mut state = WindowDrawState::default();
+        let keys = make_keys(3);
+        assert!(state.update(&keys));
+        assert_eq!(state.known, keys);
+    }
+
+    #[test]
+    fn window_draw_state_update_same_list_returns_false() {
+        let mut state = WindowDrawState::default();
+        let keys = make_keys(3);
+        state.update(&keys);
+        assert!(!state.update(&keys));
+    }
+
+    #[test]
+    fn window_draw_state_update_different_list_returns_true() {
+        let mut state = WindowDrawState::default();
+        let a = make_keys(3);
+        let b = make_keys(2);
+        state.update(&a);
+        assert!(state.update(&b));
+        assert_eq!(state.known, b);
+    }
+
+    #[test]
+    fn window_draw_state_update_empty_lists() {
+        let mut state = WindowDrawState::default();
+        // First update from empty to empty — no change, returns false
+        assert!(!state.update(&[]));
+        // Second update — same, still false
+        assert!(!state.update(&[]));
+    }
+
+    #[test]
+    fn window_draw_state_default_is_empty() {
+        let state = WindowDrawState::default();
+        assert!(state.known.is_empty());
+    }
+
+    // ── auto_layout_for_windows ──────────────────────────────────────
+
+    #[test]
+    fn auto_layout_two_windows_creates_split() {
+        let mut wm = crate::window::WindowManager::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        let k1 = wm.create_window();
+        let k2 = wm.create_window();
+        let layout = auto_layout_for_windows(&[k1, k2]).unwrap();
+        let node = layout.root();
+        match node {
+            crate::layout::LayoutNode::Split { .. } => {
+                assert!(node.subtree_any(|id| id == k1));
+                assert!(node.subtree_any(|id| id == k2));
+            }
+            _ => panic!("expected Split for two windows"),
+        }
+    }
+
+    #[test]
+    fn auto_layout_three_windows_all_present() {
+        let mut wm = crate::window::WindowManager::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        let k1 = wm.create_window();
+        let k2 = wm.create_window();
+        let k3 = wm.create_window();
+        let layout = auto_layout_for_windows(&[k1, k2, k3]).unwrap();
+        let node = layout.root();
+        assert!(node.subtree_any(|id| id == k1));
+        assert!(node.subtree_any(|id| id == k2));
+        assert!(node.subtree_any(|id| id == k3));
+    }
+
+    #[test]
+    fn auto_layout_multiple_windows_uses_all() {
+        let mut wm = crate::window::WindowManager::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        // Use 4 windows — this reliably works within 80x24 default area
+        let keys: Vec<WindowKey> = (0..4).map(|_| wm.create_window()).collect();
+        let layout = auto_layout_for_windows(&keys).unwrap();
+        let node = layout.root();
+        for k in &keys {
+            assert!(
+                node.subtree_any(|id| id == *k),
+                "window must appear in layout"
+            );
+        }
+    }
+
     #[derive(Debug)]
     struct TestMenu;
     impl crate::components::Component for TestMenu {

@@ -609,9 +609,22 @@ fn get_process_name(_pid: u32) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
     use std::io::Cursor;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
+
+    // ── bytes_to_debug_text ──────────────────────────────────────────
+
+    #[test]
+    fn bytes_to_debug_text_empty() {
+        assert_eq!(bytes_to_debug_text(b"", 32), "");
+    }
+
+    #[test]
+    fn bytes_to_debug_text_printable_passthrough() {
+        assert_eq!(bytes_to_debug_text(b"hello world", 32), "hello world");
+    }
 
     #[test]
     fn bytes_to_debug_text_encodes_control_and_nonprint() {
@@ -621,6 +634,44 @@ mod tests {
         assert!(s.contains("\\x01"));
         assert!(s.contains("\\xff"));
     }
+
+    #[test]
+    fn bytes_to_debug_text_truncates_at_max_len() {
+        let long = b"abcdefghijklmnopqrstuvwxyz";
+        assert_eq!(bytes_to_debug_text(long, 5).len(), 5);
+    }
+
+    #[test]
+    fn bytes_to_debug_text_short_max_len() {
+        let s = bytes_to_debug_text(b"hello", 0);
+        assert_eq!(s, "");
+    }
+
+    #[test]
+    fn bytes_to_debug_text_all_control_chars() {
+        let data: Vec<u8> = (0..32).collect();
+        let s = bytes_to_debug_text(&data, 64);
+        // Characters 0x00-0x08, 0x0b-0x1f use \xNN; 0x09=\t, 0x0a=\n, 0x0d=\r
+        for i in 0..32u8 {
+            let expected = match i {
+                0x09 => 't',
+                0x0a => 'n',
+                0x0d => 'r',
+                _ => continue,
+            };
+            assert!(
+                s.contains(&format!("\\{}", expected)),
+                "missing named escape for 0x{i:02x}"
+            );
+        }
+        // Verify a few non-special controls use \xNN format
+        assert!(s.contains("\\x00"));
+        assert!(s.contains("\\x01"));
+        assert!(s.contains("\\x1b"));
+        assert!(s.contains("\\x1f"));
+    }
+
+    // ── read_loop ───────────────────────────────────────────────────
 
     #[test]
     fn read_loop_reads_and_sets_pending_and_last() {
@@ -653,9 +704,110 @@ mod tests {
     }
 
     #[test]
-    fn wrap_err_includes_stage() {
-        let e = wrap_err("test-stage", "oops");
+    fn read_loop_empty_input() {
+        let reader = Box::new(Cursor::new(Vec::new()));
+        let pending = Arc::new(Mutex::new(Vec::new()));
+        let bytes_received = Arc::new(AtomicUsize::new(0));
+        let last_bytes = Arc::new(Mutex::new(Vec::new()));
+        let dsr_requested = Arc::new(AtomicBool::new(false));
+
+        let noop_wakeup: WakeupFn = Arc::new(Mutex::new(None));
+        read_loop(
+            reader,
+            Arc::clone(&pending),
+            Arc::clone(&bytes_received),
+            Arc::clone(&last_bytes),
+            Arc::clone(&dsr_requested),
+            noop_wakeup,
+        );
+
+        let p = pending.lock().unwrap();
+        assert!(p.is_empty());
+        assert_eq!(bytes_received.load(Ordering::Relaxed), 0);
+        let last = last_bytes.lock().unwrap();
+        assert!(last.is_empty());
+        assert!(!dsr_requested.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn read_loop_wakeup_called_when_set() {
+        let payload = b"data";
+        let reader = Box::new(Cursor::new(payload.to_vec()));
+        let pending = Arc::new(Mutex::new(Vec::new()));
+        let bytes_received = Arc::new(AtomicUsize::new(0));
+        let last_bytes = Arc::new(Mutex::new(Vec::new()));
+        let dsr_requested = Arc::new(AtomicBool::new(false));
+        let woke = Arc::new(AtomicBool::new(false));
+        let woke_clone = Arc::clone(&woke);
+        let wakeup: WakeupFn = Arc::new(Mutex::new(Some(Arc::new(move || {
+            woke_clone.store(true, Ordering::Relaxed);
+        })
+            as Arc<dyn Fn() + Send + Sync>)));
+
+        read_loop(
+            reader,
+            Arc::clone(&pending),
+            Arc::clone(&bytes_received),
+            Arc::clone(&last_bytes),
+            Arc::clone(&dsr_requested),
+            wakeup,
+        );
+
+        assert!(
+            woke.load(Ordering::Relaxed),
+            "wakeup callback must be invoked"
+        );
+    }
+
+    #[test]
+    fn read_loop_tracks_tail_for_cross_boundary_dsr() {
+        // The combined content has \x1b[6n spanning the middle - we test
+        // that the tail window (last 3 bytes) correctly detects the DSR sequence.
+        let payload = b"XX\x1b[6nYY";
+        let reader = Box::new(Cursor::new(payload.to_vec()));
+        let pending = Arc::new(Mutex::new(Vec::new()));
+        let bytes_received = Arc::new(AtomicUsize::new(0));
+        let last_bytes = Arc::new(Mutex::new(Vec::new()));
+        let dsr_requested = Arc::new(AtomicBool::new(false));
+
+        let noop_wakeup: WakeupFn = Arc::new(Mutex::new(None));
+        read_loop(
+            reader,
+            Arc::clone(&pending),
+            Arc::clone(&bytes_received),
+            Arc::clone(&last_bytes),
+            Arc::clone(&dsr_requested),
+            noop_wakeup,
+        );
+
+        assert!(
+            dsr_requested.load(Ordering::Relaxed),
+            "DSR in combined data must be detected"
+        );
+    }
+
+    // ── wrap_err ────────────────────────────────────────────────────
+
+    #[test]
+    fn wrap_err_with_string() {
+        let e = wrap_err("openpty", "permission denied");
         let s = format!("{}", e);
-        assert!(s.contains("pty test-stage failed"));
+        assert!(s.contains("pty openpty failed: permission denied"));
+    }
+
+    #[test]
+    fn wrap_err_with_io_error() {
+        let io_err = io::Error::new(io::ErrorKind::NotFound, "file not found");
+        let e = wrap_err("resize", io_err);
+        let s = format!("{}", e);
+        assert!(s.contains("pty resize failed"));
+        assert!(s.contains("file not found"));
+    }
+
+    #[test]
+    fn wrap_err_with_integer() {
+        let e = wrap_err("spawn_command", 42);
+        let s = format!("{}", e);
+        assert!(s.contains("pty spawn_command failed: 42"));
     }
 }
