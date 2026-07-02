@@ -45,6 +45,7 @@ pulldown-cmark = "0.13.0"
 ratatui = "0.30.0"
 resvg = "0.47.0"
 shell-words = "1.1.1"
+console = "0.16.4"
 strum = { version = "0.28", features = ["derive"] }
 tempfile = "3.24.0"
 term-wm-core = { path = "crates/term-wm-core", version = "0.8.1-alpha" }

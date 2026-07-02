@@ -1,19 +1,5 @@
 pub fn strip_ansi_escapes(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' && chars.peek() == Some(&'[') {
-            chars.next();
-            for c in chars.by_ref() {
-                if c.is_ascii_alphabetic() || c == '~' {
-                    break;
-                }
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
+    console::strip_ansi_codes(s).into_owned()
 }
 
 #[cfg(test)]
@@ -94,6 +80,9 @@ mod tests {
 
     #[test]
     fn newlines_preserved() {
-        assert_eq!(strip_ansi_escapes("line1\n\x1b[33mline2\x1b[0m\n"), "line1\nline2\n");
+        assert_eq!(
+            strip_ansi_escapes("line1\n\x1b[33mline2\x1b[0m\n"),
+            "line1\nline2\n"
+        );
     }
 }
