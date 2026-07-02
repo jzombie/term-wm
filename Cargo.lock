@@ -3493,31 +3493,3 @@ checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core",
 ]
-
-[[patch.unused]]
-name = "muxio-core"
-version = "0.12.0-alpha"
-
-[[patch.unused]]
-name = "muxio-rpc-service"
-version = "0.12.0-alpha"
-
-[[patch.unused]]
-name = "muxio-rpc-service-caller"
-version = "0.12.0-alpha"
-
-[[patch.unused]]
-name = "muxio-rpc-service-endpoint"
-version = "0.12.0-alpha"
-
-[[patch.unused]]
-name = "muxio-tokio-mpsc-adapter"
-version = "0.12.0-alpha"
-
-[[patch.unused]]
-name = "muxio-tokio-rpc-ipc-client"
-version = "0.12.0-alpha"
-
-[[patch.unused]]
-name = "muxio-tokio-rpc-ipc-server"
-version = "0.12.0-alpha"
