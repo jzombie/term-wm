@@ -8,6 +8,7 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+console = { workspace = true }
 crossbeam-channel = { workspace = true }
 crossterm = { workspace = true }
 linkify = { workspace = true }
