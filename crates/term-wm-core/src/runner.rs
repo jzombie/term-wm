@@ -13,9 +13,7 @@ use crate::keybindings::Action;
 use crate::layout::{LayoutNode, TilingLayout};
 use crate::ui::UiFrame;
 use crate::window::decorator::{WindowDecorator, WindowRenderCtx};
-use crate::window::{
-    DrawTask, WindowKey, WindowManager, WindowSurface, WmMenuAction,
-};
+use crate::window::{DrawTask, WindowKey, WindowManager, WindowSurface, WmMenuAction};
 
 pub trait WindowManagerHost {
     fn windows(&mut self) -> &mut WindowManager;

@@ -3,8 +3,8 @@ use std::io;
 use std::sync::Arc;
 
 use clap::Parser;
-use line_ending::LineEnding;
 use crossbeam_channel::Sender;
+use line_ending::LineEnding;
 
 use term_wm::app_context::AppContext;
 use term_wm::components::{Component, MenuOverlay};
@@ -327,5 +327,3 @@ impl WindowProvider for App {
             .and_then(|sv| sv.content.take_pending_title())
     }
 }
-
-

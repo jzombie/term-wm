@@ -97,7 +97,6 @@ impl WindowProvider for SparseApp {
             self.window_key.map(|k| vec![k]).unwrap_or_default()
         }
     }
-
 }
 
 #[test]
