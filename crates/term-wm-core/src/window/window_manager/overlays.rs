@@ -142,7 +142,7 @@ impl WindowManager {
         let obscuring: Vec<ratatui::prelude::Rect> = self
             .managed_draw_order
             .iter()
-            .filter_map(|&id| self.regions.get(id))
+            .filter_map(|&key| self.regions.get(key))
             .collect();
         let is_obscured =
             |x: u16, y: u16| -> bool { obscuring.iter().any(|r| rect_contains(*r, x, y)) };
@@ -159,7 +159,7 @@ impl WindowManager {
             .filter_map(|(key, window)| {
                 window.floating_rect.map(|rect| match rect {
                     FloatRectSpec::Absolute(fr) => FloatingPane {
-                        id: key,
+                        key,
                         rect: crate::layout::RectSpec::Absolute(ratatui::prelude::Rect {
                             x: fr.x.max(0) as u16,
                             y: fr.y.max(0) as u16,
@@ -173,7 +173,7 @@ impl WindowManager {
                         width,
                         height,
                     } => FloatingPane {
-                        id: key,
+                        key,
                         rect: crate::layout::RectSpec::Percent {
                             x,
                             y,
@@ -186,8 +186,8 @@ impl WindowManager {
             .collect();
 
         let mut visible_regions = crate::layout::RegionMap::default();
-        for id in self.regions.ids() {
-            visible_regions.set(id, self.visible_region_for_id(id));
+        for key in self.regions.ids() {
+            visible_regions.set(key, self.visible_region_for_key(key));
         }
 
         crate::layout::floating::render_resize_outline(

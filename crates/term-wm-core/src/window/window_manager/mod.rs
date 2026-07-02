@@ -96,7 +96,7 @@ pub struct WindowSurface {
 
 #[derive(Debug, Clone, Copy)]
 pub struct WindowDrawContext {
-    pub id: WindowKey,
+    pub key: WindowKey,
     pub surface: WindowSurface,
     pub focused: bool,
 }
@@ -822,7 +822,7 @@ impl WindowManager {
         }
         self.drag_header = None;
         self.drag_last_event = None;
-        self.apply_snap(drag.id);
+        self.apply_snap(drag.key);
         true
     }
 
@@ -882,11 +882,11 @@ impl WindowManager {
         let selection_dragging = self.selection_dragging();
         let selection_copied = self.selection_copied();
         let wm_overlay_visible = self.wm_overlay_visible();
-        let label_for = &move |id| {
+        let label_for = &move |key| {
             titles_map
-                .get(&id)
+                .get(&key)
                 .cloned()
-                .unwrap_or_else(|| format!("{:?}", id))
+                .unwrap_or_else(|| format!("{:?}", key))
         };
         if let Some(p) = &mut self.top_panel {
             p.render(
@@ -1030,7 +1030,7 @@ fn float_rect_visible(rect: crate::window::FloatRect, bounds: Rect) -> Rect {
 
 fn map_layout_node(node: &LayoutNode<WindowKey>) -> LayoutNode<WindowKey> {
     match node {
-        LayoutNode::Leaf(id) => LayoutNode::leaf(*id),
+        LayoutNode::Leaf(key) => LayoutNode::leaf(*key),
         LayoutNode::Split {
             direction,
             children,
@@ -1155,7 +1155,7 @@ mod tests {
         let node = LayoutNode::leaf(key);
         let mapped = map_layout_node(&node);
         match mapped {
-            LayoutNode::Leaf(id) => assert_eq!(id, key),
+            LayoutNode::Leaf(key) => assert_eq!(key, key),
             _ => panic!("expected leaf"),
         }
     }
@@ -1559,17 +1559,17 @@ mod tests {
             height: 1,
         };
         wm.resize_handles.push(ResizeHandle {
-            id: keys[1],
+            key: keys[1],
             rect: overlapping,
             edge: ResizeEdge::Left,
         });
         wm.resize_handles.push(ResizeHandle {
-            id: keys[2],
+            key: keys[2],
             rect: overlapping,
             edge: ResizeEdge::Left,
         });
         wm.resize_handles.push(ResizeHandle {
-            id: keys[1],
+            key: keys[1],
             rect: Rect {
                 x: 8,
                 y: 1,
@@ -1597,7 +1597,7 @@ mod tests {
             "floating window should mask layout handles"
         );
         assert_eq!(
-            resize_hover.map(|handle| handle.id),
+            resize_hover.map(|handle| handle.key),
             Some(keys[2]),
             "topmost window should own the hover"
         );
@@ -1605,7 +1605,7 @@ mod tests {
         wm.hover = Some((8, 1));
         let (_, resize_hover) = wm.hover_targets();
         assert_eq!(
-            resize_hover.map(|handle| handle.id),
+            resize_hover.map(|handle| handle.key),
             Some(keys[1]),
             "background window should hover once it is exposed"
         );
@@ -1656,7 +1656,7 @@ mod tests {
         let header_rect = wm
             .floating_headers
             .iter()
-            .find(|handle| handle.id == debug_key)
+            .find(|handle| handle.key == debug_key)
             .expect("debug header present")
             .rect;
         assert!(!wm.is_window_floating(debug_key));
@@ -1724,10 +1724,10 @@ mod tests {
             height: 24,
         });
 
-        let id = keys[1];
+        let key = keys[1];
         // Set up a floating window so apply_snap has a valid target.
         wm.set_floating_rect(
-            id,
+            key,
             Some(FloatRectSpec::Absolute(FloatRect {
                 x: 10,
                 y: 5,
@@ -1738,7 +1738,7 @@ mod tests {
 
         // Simulate abandoned drag (mouse released outside terminal).
         wm.drag_header = Some(HeaderDrag {
-            id,
+            key,
             initial_x: 10,
             initial_y: 5,
             start_x: 15,
@@ -1794,7 +1794,7 @@ mod tests {
             row: 9,
             modifiers: KeyModifiers::NONE,
         };
-        let content = wm.region_for_id(keys[1]);
+        let content = wm.region_for_key(keys[1]);
         let localized = Event::Mouse(MouseEvent {
             column: global.column.saturating_sub(content.x),
             row: global.row.saturating_sub(content.y),
@@ -1852,15 +1852,15 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
 
-        let mut received_id = None;
+        let mut received_key = None;
         let mut received_event = None;
-        let _consumed = wm.dispatch_focused_event(&scroll, |id, evt| {
-            received_id = Some(id);
+        let _consumed = wm.dispatch_focused_event(&scroll, |key, evt| {
+            received_key = Some(key);
             received_event = Some(evt.clone());
             true
         });
 
-        assert_eq!(received_id, Some(keys[2]));
+        assert_eq!(received_key, Some(keys[2]));
 
         if let Some(Event::Mouse(m)) = received_event {
             // Chrome adds 1-col / 2-row offset: content starts at (6,7) relative
@@ -1915,13 +1915,13 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
 
-        let mut received_id = None;
-        wm.dispatch_focused_event(&scroll, |id, _| {
-            received_id = Some(id);
+        let mut received_key = None;
+        wm.dispatch_focused_event(&scroll, |key, _| {
+            received_key = Some(key);
             true
         });
 
-        assert_eq!(received_id, Some(keys[2]));
+        assert_eq!(received_key, Some(keys[2]));
     }
 
     #[test]
@@ -1963,13 +1963,13 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
 
-        let mut received_id = None;
-        wm.dispatch_focused_event(&scroll, |id, _| {
-            received_id = Some(id);
+        let mut received_key = None;
+        wm.dispatch_focused_event(&scroll, |key, _| {
+            received_key = Some(key);
             true
         });
 
-        assert_eq!(received_id, Some(keys[1]));
+        assert_eq!(received_key, Some(keys[1]));
     }
 
     #[test]
@@ -2017,14 +2017,14 @@ mod tests {
             None,
         );
         let keys = make_keys(&mut wm, 100);
-        let id = keys[42];
-        assert!(!wm.direct_mode(id), "default is false");
+        let key = keys[42];
+        assert!(!wm.direct_mode(key), "default is false");
 
-        wm.set_direct_mode(id, true);
-        assert!(wm.direct_mode(id));
+        wm.set_direct_mode(key, true);
+        assert!(wm.direct_mode(key));
 
-        wm.set_direct_mode(id, false);
-        assert!(!wm.direct_mode(id));
+        wm.set_direct_mode(key, false);
+        assert!(!wm.direct_mode(key));
     }
 
     #[test]
@@ -2073,11 +2073,11 @@ mod tests {
         });
         wm.focus_app_window(keys[1]);
 
-        let win_id = keys[1];
+        let win_key = keys[1];
 
         // The K button position must match what hit_test computes
         // using the full window rect (not the inset header rect).
-        let full_rect = wm.full_region_for_id(win_id);
+        let full_rect = wm.full_region_for_key(win_key);
         let outer_right = full_rect
             .x
             .saturating_add(full_rect.width)
@@ -2096,7 +2096,7 @@ mod tests {
             full_rect
         );
 
-        assert!(!wm.direct_mode(win_id), "starts off");
+        assert!(!wm.direct_mode(win_key), "starts off");
 
         let click = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -2109,7 +2109,7 @@ mod tests {
             "header D button click should be handled"
         );
         assert!(
-            wm.direct_mode(win_id),
+            wm.direct_mode(win_key),
             "clicking D toggles direct_mode to true"
         );
 
@@ -2121,7 +2121,7 @@ mod tests {
         });
         assert!(wm.handle_managed_event(&click2));
         assert!(
-            !wm.direct_mode(win_id),
+            !wm.direct_mode(win_key),
             "second click toggles back to false"
         );
     }
@@ -2154,17 +2154,17 @@ mod tests {
         });
         wm.focus_app_window(keys[1]);
 
-        let win_id = keys[1];
+        let win_key = keys[1];
         let header = wm
             .floating_headers
             .iter()
-            .find(|h| h.id == win_id)
+            .find(|h| h.key == win_key)
             .expect("floating header for window 1");
 
         let drag_x = header.rect.x.saturating_add(header.rect.width) / 2;
         let drag_y = header.rect.y;
 
-        assert!(!wm.direct_mode(win_id));
+        assert!(!wm.direct_mode(win_key));
 
         let click = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -2173,7 +2173,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         assert!(wm.handle_managed_event(&click));
-        assert!(!wm.direct_mode(win_id), "drag area click must not toggle");
+        assert!(!wm.direct_mode(win_key), "drag area click must not toggle");
     }
 
     #[test]
@@ -2217,7 +2217,7 @@ mod tests {
         );
         let keys = make_keys(&mut wm, 100);
         wm.drag_header = Some(HeaderDrag {
-            id: keys[1],
+            key: keys[1],
             initial_x: 0,
             initial_y: 0,
             start_x: 0,
@@ -2242,7 +2242,7 @@ mod tests {
         );
         let keys = make_keys(&mut wm, 100);
         wm.drag_header = Some(HeaderDrag {
-            id: keys[1],
+            key: keys[1],
             initial_x: 0,
             initial_y: 0,
             start_x: 0,
@@ -2267,7 +2267,7 @@ mod tests {
         );
         let keys = make_keys(&mut wm, 100);
         wm.drag_header = Some(HeaderDrag {
-            id: keys[1],
+            key: keys[1],
             initial_x: 0,
             initial_y: 0,
             start_x: 0,
@@ -2292,7 +2292,7 @@ mod tests {
         );
         let keys = make_keys(&mut wm, 100);
         wm.drag_header = Some(HeaderDrag {
-            id: keys[1],
+            key: keys[1],
             initial_x: 0,
             initial_y: 0,
             start_x: 0,
@@ -2326,9 +2326,9 @@ mod tests {
             height: 24,
         });
 
-        let id = keys[1];
+        let key = keys[1];
         wm.set_floating_rect(
-            id,
+            key,
             Some(FloatRectSpec::Absolute(FloatRect {
                 x: 10,
                 y: 5,
@@ -2337,9 +2337,9 @@ mod tests {
             })),
         );
 
-        let window_id = keys[2];
+        let window_key = keys[2];
         wm.regions.set(
-            window_id,
+            window_key,
             Rect {
                 x: 0,
                 y: 0,
@@ -2348,18 +2348,18 @@ mod tests {
             },
         );
         wm.managed_layout = Some(crate::layout::TilingLayout::new(
-            crate::layout::LayoutNode::leaf(window_id),
+            crate::layout::LayoutNode::leaf(window_key),
         ));
 
         wm.drag_header = Some(HeaderDrag {
-            id,
+            key,
             initial_x: 10,
             initial_y: 5,
             start_x: 15,
             start_y: 10,
         });
         wm.drag_snap = Some((
-            Some(window_id),
+            Some(window_key),
             InsertPosition::Right,
             Rect {
                 x: 40,
@@ -2373,7 +2373,10 @@ mod tests {
         assert!(wm.take_expired_drag_snap());
         assert!(wm.drag_header.is_none());
         assert!(wm.drag_snap.is_none());
-        assert!(wm.layout_contains(id), "snapped window should be in layout");
+        assert!(
+            wm.layout_contains(key),
+            "snapped window should be in layout"
+        );
     }
 
     #[test]
@@ -2418,13 +2421,13 @@ mod tests {
         });
         wm.focus_app_window(keys[1]);
 
-        let win_id = keys[1];
-        wm.set_direct_mode(win_id, true);
-        assert!(wm.direct_mode(win_id));
+        let win_key = keys[1];
+        wm.set_direct_mode(win_key, true);
+        assert!(wm.direct_mode(win_key));
 
         // Click within the content area — should go to focused window's
         // callback, NOT be consumed by chrome (handle_managed_event skipped).
-        let content = wm.region_for_id(win_id);
+        let content = wm.region_for_key(win_key);
         let click = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: content.x + 1,
@@ -2468,11 +2471,11 @@ mod tests {
         });
         wm.focus_app_window(keys[1]);
 
-        let win_id = keys[1];
-        wm.set_direct_mode(win_id, true);
+        let win_key = keys[1];
+        wm.set_direct_mode(win_key, true);
 
         // Header D button click — coordinates on the header, NOT in content area.
-        let full_rect = wm.full_region_for_id(win_id);
+        let full_rect = wm.full_region_for_key(win_key);
         let outer_right = full_rect
             .x
             .saturating_add(full_rect.width)
@@ -2487,7 +2490,7 @@ mod tests {
             crate::window::decorator::HeaderAction::ToggleDirectMode,
         );
 
-        assert!(wm.direct_mode(win_id), "direct mode enabled before click");
+        assert!(wm.direct_mode(win_key), "direct mode enabled before click");
 
         // This click is on the header (not content area) — chrome should still
         // handle it despite direct mode being on.
@@ -2512,7 +2515,7 @@ mod tests {
         );
         assert!(consumed, "header D click must be consumed by chrome");
         assert!(
-            !wm.direct_mode(win_id),
+            !wm.direct_mode(win_key),
             "header D click must toggle direct_mode off"
         );
     }
@@ -2542,10 +2545,10 @@ mod tests {
         });
         wm.focus_app_window(keys[1]);
 
-        let win_id = keys[1];
-        assert!(!wm.direct_mode(win_id), "direct mode is off");
+        let win_key = keys[1];
+        assert!(!wm.direct_mode(win_key), "direct mode is off");
 
-        let content = wm.region_for_id(win_id);
+        let content = wm.region_for_key(win_key);
         let click = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: content.x + 1,
@@ -2607,7 +2610,7 @@ mod tests {
         let header_rect = wm
             .floating_headers
             .iter()
-            .find(|h| h.id == debug_key)
+            .find(|h| h.key == debug_key)
             .expect("header should exist")
             .rect;
         let down = Event::Mouse(MouseEvent {

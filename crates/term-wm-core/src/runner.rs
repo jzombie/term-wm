@@ -438,7 +438,7 @@ where
                     // managed_draw_order is bottom-to-top; iterate in reverse
                     // to find the topmost window under the cursor.
                     for &key in targets.iter().rev() {
-                        let rect = app.windows().full_region_for_id(key);
+                        let rect = app.windows().full_region_for_key(key);
                         if rect.width > 0
                             && rect.height > 0
                             && crate::layout::rect_contains(rect, mouse.column, mouse.row)
@@ -635,11 +635,14 @@ where
                 window.surface.z_depth = z;
                 let (ctx, decorator) = {
                     let wm = app.windows();
-                    let title = all_titles.get(&window.id).map(String::as_str).unwrap_or("");
+                    let title = all_titles
+                        .get(&window.key)
+                        .map(String::as_str)
+                        .unwrap_or("");
                     let ctx = WindowRenderCtx {
                         title,
                         focused: window.focused,
-                        direct_mode: wm.direct_mode(window.id),
+                        direct_mode: wm.direct_mode(window.key),
                         hover_pos: wm.hover,
                         theme: wm.config().theme,
                     };
@@ -654,13 +657,14 @@ where
                     |subframe| {
                         let ctx = app
                             .windows()
-                            .component_context_for(window.focused, window.id);
+                            .component_context_for(window.focused, window.key);
                         // Try the app's component first, then fall back to
                         // WindowManager-owned components (debug log, etc.)
-                        if let Some(component) = app.window_component(window.id) {
+                        if let Some(component) = app.window_component(window.key) {
                             component.resize(window.surface.inner, &ctx);
                             component.render(subframe, window.surface.inner, &ctx);
-                        } else if let Some(component) = app.windows().component_for_key(window.id) {
+                        } else if let Some(component) = app.windows().component_for_key(window.key)
+                        {
                             component.resize(window.surface.inner, &ctx);
                             component.render(subframe, window.surface.inner, &ctx);
                         }

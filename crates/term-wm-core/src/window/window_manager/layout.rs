@@ -34,16 +34,16 @@ impl WindowManager {
     }
 
     pub fn full_region(&self, key: WindowKey) -> Rect {
-        self.full_region_for_id(key)
+        self.full_region_for_key(key)
     }
 
     pub fn region(&self, key: WindowKey) -> Rect {
-        self.region_for_id(key)
+        self.region_for_key(key)
     }
 
     pub(super) fn window_content_offset(&self, key: WindowKey) -> (u16, u16) {
-        let full = self.full_region_for_id(key);
-        let content = self.region_for_id(key);
+        let full = self.full_region_for_key(key);
+        let content = self.region_for_key(key);
         (
             content.x.saturating_sub(full.x),
             content.y.saturating_sub(full.y),
@@ -68,7 +68,7 @@ impl WindowManager {
     pub fn localize_event(&self, key: WindowKey, event: &Event) -> Option<Event> {
         match event {
             Event::Mouse(mouse) => {
-                let dest = self.window_dest(key, self.full_region_for_id(key));
+                let dest = self.window_dest(key, self.full_region_for_key(key));
                 let column =
                     (i32::from(mouse.column) - dest.x).clamp(0, i32::from(u16::MAX)) as u16;
                 let row = (i32::from(mouse.row) - dest.y).clamp(0, i32::from(u16::MAX)) as u16;
@@ -86,7 +86,7 @@ impl WindowManager {
     pub(super) fn localize_event_content(&self, key: WindowKey, event: &Event) -> Option<Event> {
         match event {
             Event::Mouse(mouse) => {
-                let dest = self.window_dest(key, self.full_region_for_id(key));
+                let dest = self.window_dest(key, self.full_region_for_key(key));
                 let (offset_x, offset_y) = self.window_content_offset(key);
                 let content_x = dest.x + i32::from(offset_x);
                 let content_y = dest.y + i32::from(offset_y);
@@ -104,12 +104,12 @@ impl WindowManager {
         }
     }
 
-    pub fn full_region_for_id(&self, id: WindowKey) -> Rect {
-        self.regions.get(id).unwrap_or_default()
+    pub fn full_region_for_key(&self, key: WindowKey) -> Rect {
+        self.regions.get(key).unwrap_or_default()
     }
 
-    pub(super) fn region_for_id(&self, id: WindowKey) -> Rect {
-        let rect = self.regions.get(id).unwrap_or_default();
+    pub(super) fn region_for_key(&self, key: WindowKey) -> Rect {
+        let rect = self.regions.get(key).unwrap_or_default();
         if self.config.chrome_enabled {
             let area = if self.floating_resize_offscreen {
                 rect
@@ -132,15 +132,15 @@ impl WindowManager {
 
     pub fn set_regions_from_layout(&mut self, layout: &LayoutNode<WindowKey>, area: Rect) {
         self.regions = RegionMap::default();
-        for (id, rect) in layout.layout(area) {
-            self.regions.set(id, rect);
+        for (key, rect) in layout.layout(area) {
+            self.regions.set(key, rect);
         }
     }
 
     pub fn register_tiling_layout(&mut self, layout: &TilingLayout<WindowKey>, area: Rect) {
         let (regions, handles) = layout.root().layout_with_handles(area);
-        for (id, rect) in regions {
-            self.regions.set(id, rect);
+        for (key, rect) in regions {
+            self.regions.set(key, rect);
         }
         self.handles.extend(handles);
     }
@@ -247,22 +247,22 @@ impl WindowManager {
         }
         self.clamp_floating_to_bounds();
         let z_snapshot = self.z_order.clone();
-        let mut active_ids: Vec<WindowKey> = Vec::new();
+        let mut active_keys: Vec<WindowKey> = Vec::new();
 
         if let Some(layout) = self.managed_layout.as_ref() {
             let (regions, handles) = layout.root().layout_with_handles(self.managed_area);
-            for (id, rect) in &regions {
-                if self.is_window_floating(*id) {
+            for (key, rect) in &regions {
+                if self.is_window_floating(*key) {
                     continue;
                 }
-                if self.is_minimized(*id) {
+                if self.is_minimized(*key) {
                     continue;
                 }
-                self.regions.set(*id, *rect);
-                if let Some(header) = floating_header_for_region(*id, *rect, self.managed_area) {
+                self.regions.set(*key, *rect);
+                if let Some(header) = floating_header_for_region(*key, *rect, self.managed_area) {
                     self.floating_headers.push(header);
                 }
-                active_ids.push(*id);
+                active_keys.push(*key);
             }
             let filtered_handles: Vec<SplitHandle> = handles
                 .into_iter()
@@ -274,63 +274,64 @@ impl WindowManager {
                     };
                     let left = children.get(handle.index);
                     let right = children.get(handle.index + 1);
-                    left.is_some_and(|node| node.subtree_any(|id| !self.is_window_floating(id)))
-                        || right
-                            .is_some_and(|node| node.subtree_any(|id| !self.is_window_floating(id)))
+                    left.is_some_and(|node| node.subtree_any(|key| !self.is_window_floating(key)))
+                        || right.is_some_and(|node| {
+                            node.subtree_any(|key| !self.is_window_floating(key))
+                        })
                 })
                 .collect();
             self.handles.extend(filtered_handles);
         }
-        let mut floating_ids: Vec<WindowKey> = self
+        let mut floating_keys: Vec<WindowKey> = self
             .windows
             .iter()
-            .filter_map(|(id, window)| {
+            .filter_map(|(key, window)| {
                 if window.is_floating() && !window.minimized {
-                    Some(id)
+                    Some(key)
                 } else {
                     None
                 }
             })
             .collect();
-        floating_ids.sort_by_key(|id| {
+        floating_keys.sort_by_key(|key| {
             z_snapshot
                 .iter()
-                .position(|existing| existing == id)
+                .position(|existing| existing == key)
                 .unwrap_or(usize::MAX)
         });
-        for floating_id in floating_ids {
-            let Some(spec) = self.floating_rect(floating_id) else {
+        for floating_key in floating_keys {
+            let Some(spec) = self.floating_rect(floating_key) else {
                 continue;
             };
             let rect = spec.resolve(self.managed_area);
-            self.regions.set(floating_id, rect);
+            self.regions.set(floating_key, rect);
             let visible = self.visible_rect_from_spec(spec);
             if visible.width > 0 && visible.height > 0 {
                 self.resize_handles.extend(resize_handles_for_region(
-                    floating_id,
+                    floating_key,
                     visible,
                     self.managed_area,
                 ));
                 if let Some(header) =
-                    floating_header_for_region(floating_id, visible, self.managed_area)
+                    floating_header_for_region(floating_key, visible, self.managed_area)
                 {
                     self.floating_headers.push(header);
                 }
             }
-            active_ids.push(floating_id);
+            active_keys.push(floating_key);
         }
 
-        self.z_order.retain(|id| active_ids.contains(id));
-        for &id in &active_ids {
-            if !self.z_order.contains(&id) {
-                self.z_order.push(id);
+        self.z_order.retain(|key| active_keys.contains(key));
+        for &key in &active_keys {
+            if !self.z_order.contains(&key) {
+                self.z_order.push(key);
             }
         }
         self.managed_draw_order = self.z_order.clone();
-        self.rebuild_focus_ring(&active_ids);
+        self.rebuild_focus_ring(&active_keys);
         let focused = *self.focus.current();
         if self.z_order.last().copied() != Some(focused) {
-            self.focus_window_id(focused);
+            self.focus_window_key(focused);
         }
     }
 
@@ -344,14 +345,14 @@ impl WindowManager {
         ordered.sort_by_key(|(_, window)| window.creation_order);
 
         let mut out: Vec<WindowKey> = Vec::new();
-        for (id, window) in ordered {
-            if self.managed_draw_order.contains(&id) || window.minimized {
-                out.push(id);
+        for (key, window) in ordered {
+            if self.managed_draw_order.contains(&key) || window.minimized {
+                out.push(key);
             }
         }
-        for id in &self.managed_draw_order {
-            if !out.contains(id) {
-                out.push(*id);
+        for key in &self.managed_draw_order {
+            if !out.contains(key) {
+                out.push(*key);
             }
         }
         out
@@ -384,19 +385,19 @@ impl WindowManager {
     pub fn set_regions_from_plan(&mut self, plan: &LayoutPlan<WindowKey>, area: Rect) {
         let plan_regions = plan.regions(area);
         self.regions = RegionMap::default();
-        for id in plan_regions.ids() {
-            if let Some(rect) = plan_regions.get(id) {
-                self.regions.set(id, rect);
+        for key in plan_regions.ids() {
+            if let Some(rect) = plan_regions.get(key) {
+                self.regions.set(key, rect);
             }
         }
     }
 
     pub fn hit_test_region(&self, column: u16, row: u16, ids: &[WindowKey]) -> Option<WindowKey> {
-        for id in ids {
-            let rect = self.visible_region_for_id(*id);
+        for key in ids {
+            let rect = self.visible_region_for_key(*key);
             if rect.width > 0 && rect.height > 0 && crate::layout::rect_contains(rect, column, row)
             {
-                return Some(*id);
+                return Some(*key);
             }
         }
         None
@@ -408,19 +409,19 @@ impl WindowManager {
         row: u16,
         ids: &[WindowKey],
     ) -> Option<WindowKey> {
-        for id in ids.iter().rev() {
-            let rect = self.visible_region_for_id(*id);
+        for key in ids.iter().rev() {
+            let rect = self.visible_region_for_key(*key);
             if rect.width > 0 && rect.height > 0 && crate::layout::rect_contains(rect, column, row)
             {
-                return Some(*id);
+                return Some(*key);
             }
         }
         None
     }
 
     pub fn clear_window_backgrounds(&self, frame: &mut crate::ui::UiFrame<'_>) {
-        for id in self.regions.ids() {
-            let rect = self.full_region_for_id(id);
+        for key in self.regions.ids() {
+            let rect = self.full_region_for_key(key);
             frame.render_widget(Clear, rect);
         }
     }
@@ -435,7 +436,7 @@ impl WindowManager {
         let _total = self.managed_draw_order.len() as f32;
         let num_app = self.managed_draw_order.len();
         for (i, &key) in self.managed_draw_order.iter().enumerate() {
-            let full = self.full_region_for_id(key);
+            let full = self.full_region_for_key(key);
             if full.width == 0 || full.height == 0 {
                 continue;
             }
@@ -451,7 +452,7 @@ impl WindowManager {
             }
             let z = super::WindowManager::compute_z_depth(i, num_app);
             plan.push(super::DrawTask::App(super::WindowDrawContext {
-                id: key,
+                key,
                 surface: super::WindowSurface {
                     full,
                     inner,
@@ -479,13 +480,13 @@ impl WindowManager {
             None
         };
         let hovered_resize = self.resize_handles.iter().find(|handle| {
-            crate::layout::rect_contains(handle.rect, column, row) && topmost == Some(handle.id)
+            crate::layout::rect_contains(handle.rect, column, row) && topmost == Some(handle.key)
         });
         (hovered, hovered_resize)
     }
 
-    pub(super) fn window_dest(&self, id: WindowKey, fallback: Rect) -> crate::window::FloatRect {
-        if let Some(spec) = self.floating_rect(id) {
+    pub(super) fn window_dest(&self, key: WindowKey, fallback: Rect) -> crate::window::FloatRect {
+        if let Some(spec) = self.floating_rect(key) {
             spec.resolve_signed(self.managed_area)
         } else {
             crate::window::FloatRect {
@@ -501,11 +502,11 @@ impl WindowManager {
         super::float_rect_visible(spec.resolve_signed(self.managed_area), self.managed_area)
     }
 
-    pub(super) fn visible_region_for_id(&self, key: WindowKey) -> Rect {
+    pub(super) fn visible_region_for_key(&self, key: WindowKey) -> Rect {
         if let Some(spec) = self.floating_rect(key) {
             self.visible_rect_from_spec(spec)
         } else {
-            self.full_region_for_id(key)
+            self.full_region_for_key(key)
         }
     }
 
@@ -519,13 +520,13 @@ impl WindowManager {
             return;
         }
         let mut updates: Vec<(WindowKey, FloatRectSpec)> = Vec::new();
-        let floating_ids: Vec<WindowKey> = self
+        let floating_keys: Vec<WindowKey> = self
             .windows
             .iter()
-            .filter_map(|(id, window)| window.floating_rect.as_ref().map(|_| id))
+            .filter_map(|(key, window)| window.floating_rect.as_ref().map(|_| key))
             .collect();
-        for id in floating_ids {
-            let Some(FloatRectSpec::Absolute(fr)) = self.floating_rect(id) else {
+        for key in floating_keys {
+            let Some(FloatRectSpec::Absolute(fr)) = self.floating_rect(key) else {
                 continue;
             };
 
@@ -596,7 +597,7 @@ impl WindowManager {
             };
 
             updates.push((
-                id,
+                key,
                 FloatRectSpec::Absolute(crate::window::FloatRect {
                     x,
                     y,
@@ -605,16 +606,16 @@ impl WindowManager {
                 }),
             ));
         }
-        for (id, spec) in updates {
-            self.set_floating_rect(id, Some(spec));
+        for (key, spec) in updates {
+            self.set_floating_rect(key, Some(spec));
         }
     }
 
     pub fn bring_to_front(&mut self, key: WindowKey) {
-        self.bring_to_front_id(key);
+        self.bring_to_front_key(key);
     }
 
-    pub(super) fn bring_to_front_id(&mut self, key: WindowKey) {
+    pub(super) fn bring_to_front_key(&mut self, key: WindowKey) {
         if let Some(pos) = self.z_order.iter().position(|&x| x == key) {
             let item = self.z_order.remove(pos);
             self.z_order.push(item);
@@ -622,23 +623,23 @@ impl WindowManager {
     }
 
     pub fn bring_all_floating_to_front(&mut self) {
-        let ids: Vec<WindowKey> = self
+        let keys: Vec<WindowKey> = self
             .z_order
             .iter()
             .copied()
-            .filter(|id| self.is_window_floating(*id))
+            .filter(|key| self.is_window_floating(*key))
             .collect();
-        for id in ids {
-            self.bring_to_front_id(id);
+        for key in keys {
+            self.bring_to_front_key(key);
         }
     }
 
-    pub(super) fn bring_floating_to_front_id(&mut self, key: WindowKey) {
-        self.bring_to_front_id(key);
+    pub(super) fn bring_floating_to_front_key(&mut self, key: WindowKey) {
+        self.bring_to_front_key(key);
     }
 
     #[expect(dead_code)]
     pub(super) fn bring_floating_to_front(&mut self, key: WindowKey) {
-        self.bring_floating_to_front_id(key);
+        self.bring_floating_to_front_key(key);
     }
 }

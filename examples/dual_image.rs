@@ -115,11 +115,11 @@ impl WindowProvider for App {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        if Some(window.id) == self.left_key {
+        if Some(window.key) == self.left_key {
             frame.render_widget(Clear, area);
             self.left
                 .render(frame, area, &ComponentContext::new(window.focused));
-        } else if Some(window.id) == self.right_key {
+        } else if Some(window.key) == self.right_key {
             frame.render_widget(Clear, area);
             self.right
                 .render(frame, area, &ComponentContext::new(window.focused));

@@ -503,7 +503,7 @@ impl<Id: Copy + Eq + Ord> LayoutPlan<Id> {
             regions.set(id, rect);
         }
         for floating in &self.floating {
-            regions.set(floating.id, floating.rect.resolve(area));
+            regions.set(floating.key, floating.rect.resolve(area));
         }
         regions
     }

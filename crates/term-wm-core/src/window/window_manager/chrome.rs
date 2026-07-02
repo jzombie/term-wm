@@ -68,7 +68,7 @@ impl WindowManager {
                     if self.is_minimized(key) {
                         self.restore_minimized(key);
                     }
-                    self.focus_window_id(key);
+                    self.focus_window_key(key);
                 }
                 return true;
             }
@@ -154,7 +154,7 @@ impl WindowManager {
                 self.set_prev_floating_rect(key, Some(current));
                 self.set_floating_rect(key, Some(full));
             }
-            self.bring_floating_to_front_id(key);
+            self.bring_floating_to_front_key(key);
             return;
         }
         let prev_rect = if let Some(rect) = self.regions.get(key) {
@@ -174,7 +174,7 @@ impl WindowManager {
         };
         self.set_prev_floating_rect(key, Some(prev_rect));
         self.set_floating_rect(key, Some(full));
-        self.bring_floating_to_front_id(key);
+        self.bring_floating_to_front_key(key);
     }
 
     pub fn close_window(&mut self, key: WindowKey) {

@@ -320,10 +320,10 @@ impl WindowProvider for App {
         window: WindowDrawContext,
         ctx: &ComponentContext,
     ) {
-        if Some(window.id) == self.debug_key {
+        if Some(window.key) == self.debug_key {
             return; // rendered by WindowManager via component_for_key
         }
-        render_pane(frame, self, window.id, window.surface.inner, ctx.clone());
+        render_pane(frame, self, window.key, window.surface.inner, ctx.clone());
     }
 
     fn empty_window_message(&self) -> &str {

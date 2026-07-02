@@ -33,7 +33,7 @@ impl WindowManager {
         if let Event::Mouse(mouse) = event {
             let focused = self.focused_window();
             let in_content = self.config.chrome_enabled
-                && rect_contains(self.region_for_id(focused), mouse.column, mouse.row);
+                && rect_contains(self.region_for_key(focused), mouse.column, mouse.row);
             if !(in_content && self.direct_mode(focused)) && self.handle_managed_event(event) {
                 return true;
             }
@@ -69,11 +69,11 @@ impl WindowManager {
             self.unmaximize_window(prev);
         }
         self.focus.set_current(key);
-        self.bring_to_front_id(key);
+        self.bring_to_front_key(key);
         self.managed_draw_order = self.z_order.clone();
     }
 
-    pub fn focus_window_id(&mut self, key: WindowKey) {
+    pub fn focus_window_key(&mut self, key: WindowKey) {
         // If another window was maximized (full-screen floating), restore it
         // so the newly-focused window isn't hidden behind it.
         let prev = *self.focus.current();
@@ -81,7 +81,7 @@ impl WindowManager {
             self.unmaximize_window(prev);
         }
         self.focus.set_current(key);
-        self.bring_to_front_id(key);
+        self.bring_to_front_key(key);
         self.managed_draw_order = self.z_order.clone();
     }
 
@@ -114,14 +114,14 @@ impl WindowManager {
         let mut next_order: Vec<WindowKey> = Vec::with_capacity(active.len());
         let mut seen: BTreeSet<WindowKey> = BTreeSet::new();
 
-        for &id in self.focus.order() {
-            if active.contains(&id) && seen.insert(id) {
-                next_order.push(id);
+        for &key in self.focus.order() {
+            if active.contains(&key) && seen.insert(key) {
+                next_order.push(key);
             }
         }
-        for &id in active_keys {
-            if seen.insert(id) {
-                next_order.push(id);
+        for &key in active_keys {
+            if seen.insert(key) {
+                next_order.push(key);
             }
         }
         self.focus.set_order(next_order);
@@ -133,7 +133,7 @@ impl WindowManager {
         }
         self.focus.advance(forward);
         let focused = *self.focus.current();
-        self.focus_window_id(focused);
+        self.focus_window_key(focused);
     }
 
     pub(super) fn select_fallback_focus(&mut self) {
@@ -154,7 +154,7 @@ impl WindowManager {
                         self.advance_focus(true);
                     } else if let Some(current) = self.focus.order().first().copied() {
                         self.focus.set_current(current);
-                        self.bring_to_front_id(current);
+                        self.bring_to_front_key(current);
                         self.managed_draw_order = self.z_order.clone();
                     }
                     true
@@ -163,7 +163,7 @@ impl WindowManager {
                         self.advance_focus(false);
                     } else if let Some(current) = self.focus.order().last().copied() {
                         self.focus.set_current(current);
-                        self.bring_to_front_id(current);
+                        self.bring_to_front_key(current);
                         self.managed_draw_order = self.z_order.clone();
                     }
                     true
@@ -181,9 +181,9 @@ impl WindowManager {
                                 mouse.row,
                                 &self.managed_draw_order,
                             );
-                            if let Some(id) = hit {
-                                self.focus.set_current(id);
-                                self.bring_floating_to_front_id(id);
+                            if let Some(key) = hit {
+                                self.focus.set_current(key);
+                                self.bring_floating_to_front_key(key);
                                 return true;
                             }
                             return false;
@@ -192,7 +192,7 @@ impl WindowManager {
                         if let Some(hit) = hit {
                             self.focus.set_current(hit);
                             if self.config.wm_overlay_enabled {
-                                self.bring_floating_to_front_id(hit);
+                                self.bring_floating_to_front_key(hit);
                             }
                             true
                         } else {
