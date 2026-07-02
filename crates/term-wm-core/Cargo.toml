@@ -17,4 +17,5 @@ slotmap = "1.1"
 strum = { workspace = true, features = ["derive"] }
 term-wm-layout-engine = { workspace = true }
 term-wm-pty-engine = { workspace = true }
+console = { workspace = true }
 tracing = { workspace = true }
