@@ -41,9 +41,16 @@ struct Cli {
 fn main() -> io::Result<()> {
     let cli = Cli::parse();
 
+    // Determine total number of windows to open by default.
+    //
+    // Behavior:
+    // - If no commands provided: open `--count` shells (default 2 if not given).
+    // - If commands provided: if `--count` given use it, otherwise default to
+    //   the number of commands.
     let total = if cli.cmds.is_empty() {
         cli.count.unwrap_or(2).max(1)
     } else {
+        // default to number of commands when count not given
         cli.count
             .map(|c| c.max(1))
             .unwrap_or_else(|| cli.cmds.len().max(1))
@@ -133,15 +140,20 @@ impl App {
 
         let mut error_occurred = false;
 
+        // If commands provided, open one per command; otherwise open `num_windows`
+        // shells using the default shell.
         if !commands.is_empty() {
             let mut it = commands.into_iter();
             for _ in 0..num_windows {
                 if let Some(cmd) = it.next() {
+                    // Spawn an interactive shell and send the command as input so
+                    // that when the command exits the shell remains.
                     let cb = default_shell_command();
                     if let Err(e) = app.spawn_terminal_with_command(cb) {
                         tracing::error!("Window spawn error: {}", e);
                         error_occurred = true;
                     }
+                    // If spawn succeeded, write the command into the PTY.
                     if !error_occurred
                         && let Some(key) = app.terminals.keys().last().copied()
                         && let Some(ref mut pane) = app.terminals.get_mut(&key)
