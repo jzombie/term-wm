@@ -150,22 +150,10 @@ impl WindowManager {
                 }
                 let kb = self.keybindings();
                 if kb.matches(crate::keybindings::Action::FocusNext, key) {
-                    if self.config.wm_overlay_enabled {
-                        self.advance_focus(true);
-                    } else if let Some(current) = self.focus.order().first().copied() {
-                        self.focus.set_current(current);
-                        self.bring_to_front_key(current);
-                        self.managed_draw_order = self.z_order.clone();
-                    }
+                    self.advance_focus(true);
                     true
                 } else if kb.matches(crate::keybindings::Action::FocusPrev, key) {
-                    if self.config.wm_overlay_enabled {
-                        self.advance_focus(false);
-                    } else if let Some(current) = self.focus.order().last().copied() {
-                        self.focus.set_current(current);
-                        self.bring_to_front_key(current);
-                        self.managed_draw_order = self.z_order.clone();
-                    }
+                    self.advance_focus(false);
                     true
                 } else {
                     false
