@@ -234,7 +234,12 @@ mod tests {
     impl SharedMockChild {
         fn new() -> (Self, Arc<Mutex<MockChild>>) {
             let inner = Arc::new(Mutex::new(MockChild::new()));
-            (Self { inner: Arc::clone(&inner) }, inner)
+            (
+                Self {
+                    inner: Arc::clone(&inner),
+                },
+                inner,
+            )
         }
     }
 
@@ -253,7 +258,10 @@ mod tests {
             let mut inner = self.inner.lock().unwrap();
             if inner.exited {
                 Ok(Some(
-                    inner.exit_status.take().unwrap_or(ExitStatus::with_exit_code(0)),
+                    inner
+                        .exit_status
+                        .take()
+                        .unwrap_or(ExitStatus::with_exit_code(0)),
                 ))
             } else {
                 Ok(None)
@@ -279,13 +287,8 @@ mod tests {
         ZombieChild::new(Box::new(MockChild::new()), dummy_handle())
     }
 
-    fn make_shared_zombie(
-        state: Arc<Mutex<MockChild>>,
-    ) -> ZombieChild {
-        ZombieChild::new(
-            Box::new(SharedMockChild { inner: state }),
-            dummy_handle(),
-        )
+    fn make_shared_zombie(state: Arc<Mutex<MockChild>>) -> ZombieChild {
+        ZombieChild::new(Box::new(SharedMockChild { inner: state }), dummy_handle())
     }
 
     /// Wait up to `timeout` for `predicate` to return true, sleeping
