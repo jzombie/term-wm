@@ -62,19 +62,28 @@ impl SessionPushFrame {
         match tag {
             TAG_RAW_OUTPUT => {
                 if bytes.len() < 13 {
-                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "truncated raw_output"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "truncated raw_output",
+                    ));
                 }
                 let id = u64::from_le_bytes(bytes[1..9].try_into().unwrap());
                 let len = u32::from_le_bytes(bytes[9..13].try_into().unwrap()) as usize;
                 if bytes.len() < 13 + len {
-                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "truncated raw_output data"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "truncated raw_output data",
+                    ));
                 }
                 let data = bytes[13..13 + len].to_vec();
                 Ok((Self::RawOutput { id, data }, 13 + len))
             }
             TAG_SESSION_EXITED => {
                 if bytes.len() < 13 {
-                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "truncated session_exited"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "truncated session_exited",
+                    ));
                 }
                 let id = u64::from_le_bytes(bytes[1..9].try_into().unwrap());
                 let status = i32::from_le_bytes(bytes[9..13].try_into().unwrap());
@@ -82,17 +91,26 @@ impl SessionPushFrame {
             }
             TAG_TITLE_CHANGED => {
                 if bytes.len() < 13 {
-                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "truncated title_changed"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "truncated title_changed",
+                    ));
                 }
                 let id = u64::from_le_bytes(bytes[1..9].try_into().unwrap());
                 let len = u32::from_le_bytes(bytes[9..13].try_into().unwrap()) as usize;
                 if bytes.len() < 13 + len {
-                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "truncated title_changed data"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "truncated title_changed data",
+                    ));
                 }
                 let title = String::from_utf8_lossy(&bytes[13..13 + len]).into_owned();
                 Ok((Self::TitleChanged { id, title }, 13 + len))
             }
-            _ => Err(io::Error::new(io::ErrorKind::InvalidData, format!("unknown frame tag: {tag}"))),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unknown frame tag: {tag}"),
+            )),
         }
     }
 }

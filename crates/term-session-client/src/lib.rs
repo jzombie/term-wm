@@ -16,7 +16,7 @@ use muxio_tokio_mpsc_adapter::ChannelCallerExt;
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient, RpcServiceCallerInterface};
 use portable_pty::PtySize;
 use term_session_muxio_service_definitions::{
-    Spawn, SUBSCRIBE_OUTPUT_METHOD_ID, STREAM_INPUT_METHOD_ID,
+    STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
 };
 use term_wm_pty_engine::Pane;
 use term_wm_pty_engine::clipboard::{Clipboard, extract_osc52_text};
@@ -43,7 +43,8 @@ impl Drop for TerminalGuard {
 /// for muxio IPC, then runs the synchronous crossterm event loop on the
 /// calling thread.
 pub fn run_session(socket_path: &str) -> io::Result<()> {
-    let rt = tokio::runtime::Runtime::new().map_err(|e| io::Error::other(format!("runtime: {e}")))?;
+    let rt =
+        tokio::runtime::Runtime::new().map_err(|e| io::Error::other(format!("runtime: {e}")))?;
 
     // Connect via muxio IPC
     let client: Arc<RpcIpcClient> = rt
@@ -78,7 +79,9 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         rt.spawn(async move {
             while let Some(chunk) = reader.recv().await {
                 match chunk {
-                    Ok(data) => { let _ = push_tx.send(data); }
+                    Ok(data) => {
+                        let _ = push_tx.send(data);
+                    }
                     Err(_) => break,
                 }
             }
@@ -95,7 +98,9 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     })?;
 
     let input_writer = Box::new(move |data: &[u8]| -> io::Result<()> {
-        writer.send(data.to_vec()).map_err(|e| io::Error::other(e.to_string()))?;
+        writer
+            .send(data.to_vec())
+            .map_err(|e| io::Error::other(e.to_string()))?;
         Ok(())
     });
 
@@ -150,9 +155,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         let has_new_data = prev_content.as_deref() != Some(&current_content);
 
         // Process OSC 52 clipboard data
-        if has_new_data
-            && let Some(text) = extract_osc52_text(&current_content)
-        {
+        if has_new_data && let Some(text) = extract_osc52_text(&current_content) {
             let _ = clipboard.set(&text);
         }
 

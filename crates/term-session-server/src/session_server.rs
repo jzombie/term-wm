@@ -4,15 +4,13 @@ use std::time::Duration;
 use muxio_core::rpc::rpc_internals::RpcStreamEvent;
 use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;
 use muxio_rpc_service_endpoint::{RpcServiceEndpointInterface, StreamResponder};
-use muxio_tokio_rpc_ipc_server::{
-    RpcIpcServer, RpcIpcServerEvent,
-};
+use muxio_tokio_rpc_ipc_server::{RpcIpcServer, RpcIpcServerEvent};
 use portable_pty::PtySize;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 use term_session_muxio_service_definitions::{
-    CloseSession, ListSessions, ResizePty, Spawn, WriteInput, STREAM_INPUT_METHOD_ID,
-    SUBSCRIBE_OUTPUT_METHOD_ID,
+    CloseSession, ListSessions, ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
+    Spawn, WriteInput,
 };
 
 use crate::session::Session;
@@ -186,7 +184,9 @@ pub async fn run_server(
                 let (id, data) = WriteInput::decode_request(&payload)
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
                 let mut guard = state.lock().await;
-                if let Some(session) = guard.session.as_mut() && session.id == id {
+                if let Some(session) = guard.session.as_mut()
+                    && session.id == id
+                {
                     let _ = session.pty.write_bytes(&data);
                 }
                 WriteInput::encode_response(())
@@ -225,32 +225,27 @@ pub async fn run_server(
     // Register SubscribeOutput (streaming handler for PTY output pushes)
     let st = Arc::clone(&state);
     endpoint
-        .register_stream_handler(
-            SUBSCRIBE_OUTPUT_METHOD_ID,
-            move |event, respond, ctx| {
-                // Store the StreamResponder on the very first event (Header)
-                // so the push loop can start sending output immediately.
-                let is_new = matches!(&event, RpcStreamEvent::Header { .. });
-                if is_new
-                    && let Ok(mut guard) = st.try_lock()
+        .register_stream_handler(SUBSCRIBE_OUTPUT_METHOD_ID, move |event, respond, ctx| {
+            // Store the StreamResponder on the very first event (Header)
+            // so the push loop can start sending output immediately.
+            let is_new = matches!(&event, RpcStreamEvent::Header { .. });
+            if is_new && let Ok(mut guard) = st.try_lock() {
+                // Generate snapshot while holding the lock
+                let snapshot = guard.session.as_mut().map(|s| s.generate_snapshot());
+                guard.subscribers.push(SubscriberEntry {
+                    conn_id: ctx.conn_id,
+                    respond: respond.clone(),
+                });
+                drop(guard);
+                // Send snapshot through the responder (will be buffered
+                // until set_writer is called after read_bytes returns)
+                if let Some(data) = snapshot
+                    && !data.is_empty()
                 {
-                    // Generate snapshot while holding the lock
-                    let snapshot = guard.session.as_mut().map(|s| s.generate_snapshot());
-                    guard.subscribers.push(SubscriberEntry {
-                        conn_id: ctx.conn_id,
-                        respond: respond.clone(),
-                    });
-                    drop(guard);
-                    // Send snapshot through the responder (will be buffered
-                    // until set_writer is called after read_bytes returns)
-                    if let Some(data) = snapshot
-                        && !data.is_empty()
-                    {
-                        respond.respond(data, false);
-                    }
+                    respond.respond(data, false);
                 }
-            },
-        )
+            }
+        })
         .await
         .map_err(|e| format!("register SubscribeOutput: {e:?}"))?;
 
