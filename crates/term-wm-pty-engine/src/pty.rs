@@ -659,7 +659,10 @@ mod tests {
                 0x0d => 'r',
                 _ => continue,
             };
-            assert!(s.contains(&format!("\\{}", expected)), "missing named escape for 0x{i:02x}");
+            assert!(
+                s.contains(&format!("\\{}", expected)),
+                "missing named escape for 0x{i:02x}"
+            );
         }
         // Verify a few non-special controls use \xNN format
         assert!(s.contains("\\x00"));
@@ -738,7 +741,8 @@ mod tests {
         let woke_clone = Arc::clone(&woke);
         let wakeup: WakeupFn = Arc::new(Mutex::new(Some(Arc::new(move || {
             woke_clone.store(true, Ordering::Relaxed);
-        }) as Arc<dyn Fn() + Send + Sync>)));
+        })
+            as Arc<dyn Fn() + Send + Sync>)));
 
         read_loop(
             reader,
@@ -749,7 +753,10 @@ mod tests {
             wakeup,
         );
 
-        assert!(woke.load(Ordering::Relaxed), "wakeup callback must be invoked");
+        assert!(
+            woke.load(Ordering::Relaxed),
+            "wakeup callback must be invoked"
+        );
     }
 
     #[test]
@@ -773,7 +780,10 @@ mod tests {
             noop_wakeup,
         );
 
-        assert!(dsr_requested.load(Ordering::Relaxed), "DSR in combined data must be detected");
+        assert!(
+            dsr_requested.load(Ordering::Relaxed),
+            "DSR in combined data must be detected"
+        );
     }
 
     // ── wrap_err ────────────────────────────────────────────────────

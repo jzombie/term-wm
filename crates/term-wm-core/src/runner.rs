@@ -977,7 +977,10 @@ mod tests {
 
     #[test]
     fn selection_snapshot_from_active_returns_text() {
-        let status = SelectionStatus { active: true, dragging: false };
+        let status = SelectionStatus {
+            active: true,
+            dragging: false,
+        };
         let (s, text) = selection_snapshot_from(status, Some("hello".into()));
         assert!(s.active);
         assert_eq!(text, Some("hello".into()));
@@ -985,7 +988,10 @@ mod tests {
 
     #[test]
     fn selection_snapshot_from_dragging_returns_text() {
-        let status = SelectionStatus { active: false, dragging: true };
+        let status = SelectionStatus {
+            active: false,
+            dragging: true,
+        };
         let (s, text) = selection_snapshot_from(status, Some("dragging".into()));
         assert!(s.dragging);
         assert_eq!(text, Some("dragging".into()));
@@ -993,7 +999,10 @@ mod tests {
 
     #[test]
     fn selection_snapshot_from_active_and_dragging_returns_text() {
-        let status = SelectionStatus { active: true, dragging: true };
+        let status = SelectionStatus {
+            active: true,
+            dragging: true,
+        };
         let (s, text) = selection_snapshot_from(status, Some("both".into()));
         assert!(s.active);
         assert!(s.dragging);
@@ -1002,7 +1011,10 @@ mod tests {
 
     #[test]
     fn selection_snapshot_from_inactive_returns_none_text() {
-        let status = SelectionStatus { active: false, dragging: false };
+        let status = SelectionStatus {
+            active: false,
+            dragging: false,
+        };
         let (s, text) = selection_snapshot_from(status, Some("ignored".into()));
         assert!(!s.active);
         assert!(!s.dragging);
@@ -1011,14 +1023,20 @@ mod tests {
 
     #[test]
     fn selection_snapshot_from_inactive_none_text() {
-        let status = SelectionStatus { active: false, dragging: false };
+        let status = SelectionStatus {
+            active: false,
+            dragging: false,
+        };
         let (_s, text) = selection_snapshot_from(status, None);
         assert_eq!(text, None);
     }
 
     #[test]
     fn selection_snapshot_from_active_none_text() {
-        let status = SelectionStatus { active: true, dragging: false };
+        let status = SelectionStatus {
+            active: true,
+            dragging: false,
+        };
         let (s, text) = selection_snapshot_from(status, None);
         assert!(s.active);
         assert_eq!(text, None);
@@ -1135,7 +1153,10 @@ mod tests {
         let layout = auto_layout_for_windows(&keys).unwrap();
         let node = layout.root();
         for k in &keys {
-            assert!(node.subtree_any(|id| id == *k), "window must appear in layout");
+            assert!(
+                node.subtree_any(|id| id == *k),
+                "window must appear in layout"
+            );
         }
     }
 

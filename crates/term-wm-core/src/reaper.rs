@@ -128,9 +128,9 @@ impl Default for Reaper {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portable_pty::{Child, ChildKiller, ExitStatus};
     use std::io;
     use std::thread;
-    use portable_pty::{Child, ChildKiller, ExitStatus};
 
     #[derive(Debug)]
     struct MockChild {
@@ -141,7 +141,11 @@ mod tests {
 
     impl MockChild {
         fn new() -> Self {
-            Self { killed: false, exited: false, exit_status: None }
+            Self {
+                killed: false,
+                exited: false,
+                exit_status: None,
+            }
         }
     }
 
@@ -158,7 +162,11 @@ mod tests {
     impl Child for MockChild {
         fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
             if self.exited {
-                Ok(Some(self.exit_status.take().unwrap_or(ExitStatus::with_exit_code(0))))
+                Ok(Some(
+                    self.exit_status
+                        .take()
+                        .unwrap_or(ExitStatus::with_exit_code(0)),
+                ))
             } else {
                 Ok(None)
             }
@@ -243,7 +251,10 @@ mod tests {
         // Second tick: timeout elapsed, should send SIGKILL
         let remaining = r.tick();
         let z = &r.zombies[0];
-        assert!(z.sigkill_sent, "sigkill should have been sent after timeout");
+        assert!(
+            z.sigkill_sent,
+            "sigkill should have been sent after timeout"
+        );
         assert_eq!(remaining, 1);
     }
 
