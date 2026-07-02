@@ -826,8 +826,7 @@ mod tests {
         let mut app = FakeApp { wm, key };
         assert!(!app.enumerate_windows().is_empty());
 
-        let quit_if_no_windows =
-            app.enumerate_windows().is_empty();
+        let quit_if_no_windows = app.enumerate_windows().is_empty();
         assert!(
             !quit_if_no_windows,
             "Runner would quit even though app reports windows"
@@ -1053,5 +1052,3 @@ mod tests {
         fn set_managed_area(&mut self, _area: ratatui::prelude::Rect) {}
     }
 }
-
-
