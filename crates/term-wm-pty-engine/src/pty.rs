@@ -346,8 +346,7 @@ impl Pty {
             // Send DSR response if requested by the reader thread.
             if self.dsr_requested.swap(false, Ordering::Relaxed) {
                 let (row, col) = self.cached_screen.cursor_position();
-                let response =
-                    format!("\x1b[{};{}R", row.saturating_add(1), col.saturating_add(1));
+                let response = format!("\x1b[{};{}R", row.saturating_add(1), col.saturating_add(1));
                 let _ = self.write_bytes(response.as_bytes());
             }
         }
@@ -408,7 +407,6 @@ impl Pty {
             *guard = Some(size);
         }
     }
-
 }
 
 /// Configuration and shared state for the PTY reader thread.
@@ -742,9 +740,7 @@ mod tests {
             bytes_received: Arc::new(AtomicUsize::new(0)),
             last_bytes: Arc::new(Mutex::new(Vec::new())),
             dsr_requested: Arc::new(AtomicBool::new(false)),
-            shared_screen: Arc::new(Mutex::new(
-                vt100::Parser::new(24, 80, 0).screen().clone(),
-            )),
+            shared_screen: Arc::new(Mutex::new(vt100::Parser::new(24, 80, 0).screen().clone())),
             dirty: Arc::new(AtomicBool::new(false)),
             pending_resize: Arc::new(Mutex::new(None)),
             pending_title: Arc::new(Mutex::new(None)),
@@ -808,8 +804,7 @@ mod tests {
         let woke_clone = Arc::clone(&woke);
         args.wakeup = Arc::new(Mutex::new(Some(Arc::new(move || {
             woke_clone.store(true, Ordering::Relaxed);
-        })
-            as Arc<dyn Fn() + Send + Sync>)));
+        }) as Arc<dyn Fn() + Send + Sync>)));
 
         parser_read_loop(args);
 
@@ -843,9 +838,13 @@ mod tests {
         // Portability: `cat` exists on Unix; on Windows the test is skipped.
         // TODO: add Windows support with `cmd /c type CON`
         let cmd = CommandBuilder::new("cat");
-        let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
-        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100)
-            .expect("spawn_with_scrollback");
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
 
         let woke = Arc::new(AtomicBool::new(false));
         let woke_cb = Arc::clone(&woke);

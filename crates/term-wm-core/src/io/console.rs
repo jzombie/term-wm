@@ -165,8 +165,7 @@ impl RenderTarget for ConsoleRenderTarget {
         // before we disable raw mode (which re-enables echo). Without this
         // delay, the terminal emulator might still send mouse events that
         // get echoed as visible characters after raw mode is restored.
-        const MOUSE_DISABLE_DELAY: std::time::Duration =
-            std::time::Duration::from_millis(8);
+        const MOUSE_DISABLE_DELAY: std::time::Duration = std::time::Duration::from_millis(8);
         std::thread::sleep(MOUSE_DISABLE_DELAY);
         terminal::disable_raw_mode()?;
         execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;

@@ -108,7 +108,10 @@ impl WindowDecorator for DefaultDecorator {
         }
 
         let outer_left = rect.x;
-        let outer_right = rect.x.saturating_add(rect.width).saturating_sub(EDGE_INDEX_ADJUST);
+        let outer_right = rect
+            .x
+            .saturating_add(rect.width)
+            .saturating_sub(EDGE_INDEX_ADJUST);
         let header_y = rect.y.saturating_add(TOP_BORDER_HEIGHT);
 
         if y != header_y {
@@ -164,8 +167,14 @@ impl WindowDecorator for DefaultDecorator {
 
         let outer_left = rect.x;
         let outer_top = rect.y;
-        let outer_right = rect.x.saturating_add(rect.width).saturating_sub(EDGE_INDEX_ADJUST);
-        let outer_bottom = rect.y.saturating_add(rect.height).saturating_sub(EDGE_INDEX_ADJUST);
+        let outer_right = rect
+            .x
+            .saturating_add(rect.width)
+            .saturating_sub(EDGE_INDEX_ADJUST);
+        let outer_bottom = rect
+            .y
+            .saturating_add(rect.height)
+            .saturating_sub(EDGE_INDEX_ADJUST);
         let header_y = rect.y.saturating_add(TOP_BORDER_HEIGHT);
 
         // Header Background & Title
@@ -176,9 +185,12 @@ impl WindowDecorator for DefaultDecorator {
             }
         }
         let title_len = title.len() as u16;
-        let header_width = outer_right.saturating_sub(outer_left).saturating_sub(RIGHT_BORDER_WIDTH);
+        let header_width = outer_right
+            .saturating_sub(outer_left)
+            .saturating_sub(RIGHT_BORDER_WIDTH);
         if title_len <= header_width {
-            let start_x = outer_left.saturating_add(LEFT_BORDER_WIDTH) + (header_width - title_len) / 2;
+            let start_x =
+                outer_left.saturating_add(LEFT_BORDER_WIDTH) + (header_width - title_len) / 2;
             for (idx, ch) in title.chars().enumerate() {
                 let x = start_x + idx as u16;
                 if let Some(cell) = buffer.cell_mut((x, header_y)) {

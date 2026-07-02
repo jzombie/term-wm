@@ -258,7 +258,10 @@ impl Osc52Extractor {
         }
 
         // Common case: header lies entirely inside the current chunk.
-        if let Some(pos) = data.windows(OSC52_HEADER_LEN).position(|w| w == b"\x1b]52;") {
+        if let Some(pos) = data
+            .windows(OSC52_HEADER_LEN)
+            .position(|w| w == b"\x1b]52;")
+        {
             self.buf.extend_from_slice(&data[pos..]);
             return self.try_extract(data, prev_tail);
         }
@@ -267,7 +270,10 @@ impl Osc52Extractor {
         if !prev_tail.is_empty() {
             let mut combined = prev_tail.to_vec();
             combined.extend_from_slice(data);
-            if let Some(pos) = combined.windows(OSC52_HEADER_LEN).position(|w| w == b"\x1b]52;") {
+            if let Some(pos) = combined
+                .windows(OSC52_HEADER_LEN)
+                .position(|w| w == b"\x1b]52;")
+            {
                 let tail_len = prev_tail.len();
                 if pos < tail_len {
                     self.buf.extend_from_slice(&combined[pos..tail_len]);

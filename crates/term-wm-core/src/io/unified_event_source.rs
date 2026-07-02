@@ -319,7 +319,10 @@ impl EventSource for UnifiedEventSource {
     }
 
     fn current_profile(&self) -> PowerProfile {
-        crate::power_profile::profile_from_activity(self.last_event_at, !self.dirty_windows.is_empty())
+        crate::power_profile::profile_from_activity(
+            self.last_event_at,
+            !self.dirty_windows.is_empty(),
+        )
     }
 }
 

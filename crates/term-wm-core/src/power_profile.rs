@@ -153,7 +153,10 @@ mod tests {
     #[test]
     fn profile_from_activity_stale_no_dirty_is_powersaver() {
         let stale = Some(Instant::now() - Duration::from_millis(STREAMING_THRESHOLD_MS + 100));
-        assert_eq!(profile_from_activity(stale, false), PowerProfile::PowerSaver);
+        assert_eq!(
+            profile_from_activity(stale, false),
+            PowerProfile::PowerSaver
+        );
     }
 
     #[test]
