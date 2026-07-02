@@ -295,3 +295,81 @@ impl Drop for UnifiedEventSource {
         self.shutdown.store(true, Ordering::Release);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    /// Input events drained by `drain_pending` must be preserved in
+    /// `input_buffer` so `poll()/read()` can process every event.
+    #[test]
+    fn drain_pending_preserves_all_input_events() {
+        let (tx, rx) = bounded(256);
+        let mut source = UnifiedEventSource {
+            rx,
+            tx: tx.clone(),
+            _input_handle: std::thread::spawn(|| {}),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            dirty_windows: HashSet::new(),
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+        };
+        // Prevent the no-op handle from panicking on join in drop
+        let dummy_handle = std::thread::spawn(|| {});
+        source._input_handle = dummy_handle;
+
+        // Send 10 input events into the channel
+        for i in 0..10u8 {
+            let evt = Event::Key(KeyEvent::new(
+                KeyCode::Char(char::from(b'a' + i)),
+                KeyModifiers::NONE,
+            ));
+            tx.send(UnifiedEvent::Input(evt)).unwrap();
+        }
+        // Also mix in some PtyWakeups (the reason drain_pending exists)
+        for _ in 0..3 {
+            tx.send(UnifiedEvent::PtyWakeup(WindowKey::default())).unwrap();
+        }
+
+        // drain_pending must move all Input events into input_buffer
+        source.drain_pending();
+
+        assert_eq!(source.input_buffer.len(), 10,
+            "all 10 input events must be buffered, not dropped");
+
+        // verify ordering is preserved
+        for (i, evt) in source.input_buffer.iter().enumerate() {
+            let expected = char::from(b'a' + i as u8);
+            match evt {
+                Event::Key(k) => {
+                    assert_eq!(k.code, KeyCode::Char(expected),
+                        "event {} should be '{}'", i, expected);
+                }
+                _ => panic!("expected Key event at position {}", i),
+            }
+        }
+
+        // poll should report events available from buffer
+        assert!(source.poll(Duration::ZERO).unwrap(),
+            "poll must return true when buffer is non-empty");
+
+        // read should drain buffer in order
+        for i in 0..10u8 {
+            let evt = source.read().unwrap();
+            let expected = char::from(b'a' + i);
+            match evt {
+                Event::Key(k) => assert_eq!(k.code, KeyCode::Char(expected)),
+                _ => panic!("expected Key event"),
+            }
+        }
+
+        // buffer should now be empty
+        assert!(source.input_buffer.is_empty());
+        assert!(!source.poll(Duration::ZERO).unwrap(),
+            "poll must return false after buffer drained");
+    }
+}
