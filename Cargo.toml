@@ -31,6 +31,7 @@ publish = true
 arboard = "3.6.1"
 base64 = "0.22.1"
 clap = { version = "4.6.1", features = ["derive"] }
+console = "0.16.4"
 crossbeam-channel = "0.5.15"
 crossterm = "0.29.0"
 ctrlc = "3.5.2"
