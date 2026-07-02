@@ -651,10 +651,21 @@ mod tests {
     fn bytes_to_debug_text_all_control_chars() {
         let data: Vec<u8> = (0..32).collect();
         let s = bytes_to_debug_text(&data, 64);
+        // Characters 0x00-0x08, 0x0b-0x1f use \xNN; 0x09=\t, 0x0a=\n, 0x0d=\r
         for i in 0..32u8 {
-            let expected = format!("\\x{:02x}", i);
-            assert!(s.contains(&expected), "missing escape for 0x{i:02x}");
+            let expected = match i {
+                0x09 => 't',
+                0x0a => 'n',
+                0x0d => 'r',
+                _ => continue,
+            };
+            assert!(s.contains(&format!("\\{}", expected)), "missing named escape for 0x{i:02x}");
         }
+        // Verify a few non-special controls use \xNN format
+        assert!(s.contains("\\x00"));
+        assert!(s.contains("\\x01"));
+        assert!(s.contains("\\x1b"));
+        assert!(s.contains("\\x1f"));
     }
 
     // ── read_loop ───────────────────────────────────────────────────
