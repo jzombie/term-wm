@@ -424,4 +424,81 @@ mod tests {
             "poll must return false after buffer drained"
         );
     }
+
+    /// Dirty windows must be cleared after `poll()` returns `Ok(false)`,
+    /// otherwise the power profile stays at `Streaming` (16ms) forever.
+    #[test]
+    fn dirty_windows_cleared_after_poll_ok_false() {
+        let (tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
+        let mut source = UnifiedEventSource {
+            rx,
+            tx: tx.clone(),
+            _input_handle: std::thread::spawn(|| {}),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            dirty_windows: HashSet::new(),
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            coalesce_deadline: None,
+        };
+        // Prevent the no-op handle from panicking on drop
+        let dummy_handle = std::thread::spawn(|| {});
+        source._input_handle = dummy_handle;
+
+        // Baseline: no input, no dirty → PowerSaver
+        assert_eq!(source.current_profile(), PowerProfile::PowerSaver);
+
+        // Send a PtyWakeup — drain_pending will pick it up inside poll()
+        tx.send(UnifiedEvent::PtyWakeup(WindowKey::default()))
+            .unwrap();
+
+        // poll() should drain the PtyWakeup, arm coalesce, then either
+        // coalesce-expire or timeout, clear dirty_windows, and return Ok(false).
+        assert!(
+            !source.poll(Duration::from_secs(1)).unwrap(),
+            "poll must return Ok(false) after PtyWakeup drain"
+        );
+
+        // After poll returns, dirty_windows must be empty.
+        assert!(
+            source.take_dirty_windows().is_empty(),
+            "dirty_windows must be cleared after poll returns Ok(false)"
+        );
+
+        // With dirty_windows empty and no input, profile returns to PowerSaver.
+        assert_eq!(
+            source.current_profile(),
+            PowerProfile::PowerSaver,
+            "profile must return to PowerSaver after dirty_windows cleared"
+        );
+    }
+
+    /// Verify that a non-empty dirty_windows causes Streaming profile,
+    /// confirming the mechanism the bug fix relies on.
+    #[test]
+    fn dirty_windows_causes_streaming_profile() {
+        let (_tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
+        let mut set = HashSet::new();
+        set.insert(WindowKey::default());
+        let source = UnifiedEventSource {
+            rx,
+            tx: _tx,
+            _input_handle: std::thread::spawn(|| {}),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            dirty_windows: set,
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            coalesce_deadline: None,
+        };
+        assert_eq!(
+            source.current_profile(),
+            PowerProfile::Streaming,
+            "dirty_windows must elevate profile to Streaming"
+        );
+    }
 }
