@@ -160,12 +160,14 @@ impl RenderTarget for ConsoleRenderTarget {
         if !self.entered {
             return Ok(());
         }
+        execute!(self.terminal.backend_mut(), DisableMouseCapture)?;
+        // Give the terminal emulator time to process DisableMouseCapture
+        // before we disable raw mode (which re-enables echo). Without this
+        // delay, the terminal emulator might still send mouse events that
+        // get echoed as visible characters after raw mode is restored.
+        std::thread::sleep(std::time::Duration::from_millis(8));
         terminal::disable_raw_mode()?;
-        execute!(
-            self.terminal.backend_mut(),
-            DisableMouseCapture,
-            LeaveAlternateScreen
-        )?;
+        execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;
         self.terminal.show_cursor()?;
         self.entered = false;
         Ok(())
