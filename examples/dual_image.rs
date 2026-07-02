@@ -33,9 +33,19 @@ struct App {
 }
 
 impl App {
-    fn new(paths: Vec<String>) -> io::Result<Self> {
-        let left = SvgImageComponent::new();
-        let right = SvgImageComponent::new();
+    fn new(mut paths: Vec<String>) -> io::Result<Self> {
+        let mut left = SvgImageComponent::new();
+        let mut right = SvgImageComponent::new();
+        left.set_keep_aspect(true);
+        right.set_keep_aspect(true);
+        left.set_colorize(true);
+        right.set_colorize(true);
+        if paths.is_empty() {
+            paths.push("assets/zenOSmosis-logo.svg".to_string());
+        }
+        if paths.len() == 1 {
+            paths.push(paths[0].clone());
+        }
         let hostname = None;
         let top_panel: Box<dyn term_wm_core::top_panel_trait::TopPanel<WindowKey>> = Box::new(
             term_wm_sys_ui_components::WmTopPanelComponent::new("example"),
