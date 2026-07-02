@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::prelude::Rect;
 use ratatui::style::{Modifier, Style};
 
-use crate::components::{Component, ComponentContext, ConfirmAction, SelectionStatus};
+use crate::components::{Component, ConfirmAction, SelectionStatus};
 use crate::debug_event_flags;
 use crate::event_loop::{ControlFlow, EventLoop};
 use crate::io::{EventSource, RenderTarget};
@@ -13,16 +13,14 @@ use crate::keybindings::Action;
 use crate::layout::{LayoutNode, TilingLayout};
 use crate::ui::UiFrame;
 use crate::window::decorator::{WindowDecorator, WindowRenderCtx};
-use crate::window::{
-    DrawTask, WindowDrawContext, WindowId, WindowManager, WindowSurface, WmMenuAction,
-};
+use crate::window::{DrawTask, WindowKey, WindowManager, WindowSurface, WmMenuAction};
 
-pub trait WindowManagerHost<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> {
-    fn windows(&mut self) -> &mut WindowManager<Id>;
+pub trait WindowManagerHost {
+    fn windows(&mut self) -> &mut WindowManager;
     fn wm_new_window(&mut self) -> std::io::Result<()> {
         Ok(())
     }
-    fn wm_close_window(&mut self, _id: Id) -> std::io::Result<()> {
+    fn wm_close_window(&mut self, _key: WindowKey) -> std::io::Result<()> {
         Ok(())
     }
     fn set_clipboard_enabled(&mut self, _enabled: bool) {}
@@ -36,35 +34,35 @@ pub trait WindowManagerHost<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> {
             .open_overlay(crate::window::OverlayId::Keybindings, None);
     }
     fn open_exit_confirm(&mut self) {
-        self.windows()
-            .open_overlay(crate::window::OverlayId::ExitConfirm, None);
+        self.windows().request_quit();
+    }
+    /// Called when a panic is detected.
+    fn on_panic(&mut self) {}
+    /// Toggle the debug log window visibility.
+    fn toggle_debug_window(&mut self) {}
+    /// Called by the runner to check if the app wants to quit.
+    /// The app sets this to `true` to exit the event loop.
+    fn quit_requested(&self) -> bool {
+        false
     }
 }
 
-pub trait WindowProvider<Id: Copy + Eq + Ord + std::fmt::Debug + 'static>:
-    WindowManagerHost<Id>
-{
-    fn enumerate_windows(&mut self) -> Vec<Id>;
-    fn render_window(
-        &mut self,
-        frame: &mut UiFrame<'_>,
-        window: WindowDrawContext<Id>,
-        ctx: &ComponentContext,
-    );
+pub trait WindowProvider: WindowManagerHost {
+    fn enumerate_windows(&mut self) -> Vec<WindowKey>;
 
     fn empty_window_message(&self) -> &str {
         "No windows"
     }
 
-    fn layout_for_windows(&mut self, windows: &[Id]) -> Option<TilingLayout<Id>> {
+    fn layout_for_windows(&mut self, windows: &[WindowKey]) -> Option<TilingLayout<WindowKey>> {
         auto_layout_for_windows(windows)
     }
 
-    fn window_component(&mut self, _id: Id) -> Option<&mut dyn Component> {
+    fn window_component(&mut self, _key: WindowKey) -> Option<&mut dyn Component> {
         None
     }
 
-    fn window_pane_title(&mut self, _id: Id) -> Option<String> {
+    fn window_pane_title(&mut self, _key: WindowKey) -> Option<String> {
         None
     }
 
@@ -72,15 +70,14 @@ pub trait WindowProvider<Id: Copy + Eq + Ord + std::fmt::Debug + 'static>:
         false
     }
 
-    fn focus_regions(&mut self) -> Vec<Id> {
+    fn focus_regions(&mut self) -> Vec<WindowKey> {
         self.enumerate_windows()
     }
 }
 
-fn handle_focused_app_event<A, Id>(event: &Event, app: &mut A) -> bool
+fn handle_focused_app_event<A>(event: &Event, app: &mut A) -> bool
 where
-    A: WindowProvider<Id>,
-    Id: Copy + Eq + Ord + std::fmt::Debug + 'static,
+    A: WindowProvider,
 {
     let focus_id = app.windows().focused_window();
     let direct_mode = app.windows().direct_mode(focus_id);
@@ -89,7 +86,7 @@ where
         .component_context(true)
         .with_direct_mode(direct_mode);
 
-    let mut pending_focus: Option<Id> = None;
+    let mut pending_focus: Option<WindowKey> = None;
     let mut pending_event: Option<Event> = None;
     let consumed = {
         let windows = app.windows();
@@ -112,21 +109,20 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn run_app<O, D, A, Id, FDraw, FMap>(
+pub fn run_app<O, D, A, FDraw, FMap>(
     output: &mut O,
     driver: &mut D,
     app: &mut A,
-    focus_regions: &[Id],
-    map_region: FMap,
+    focus_regions: &[WindowKey],
+    _map_region: FMap,
     mut draw: FDraw,
 ) -> io::Result<()>
 where
     O: RenderTarget,
     D: EventSource,
-    A: WindowProvider<Id>,
-    Id: Copy + Eq + Ord + std::fmt::Debug + 'static,
+    A: WindowProvider,
     FDraw: for<'frame> FnMut(UiFrame<'frame>, &mut A),
-    FMap: Fn(Id) -> Id + Copy,
+    FMap: Fn(WindowKey) -> WindowKey + Copy,
 {
     let mut profile_tracker =
         crate::power_profile::PowerProfileTracker::new(driver.current_profile());
@@ -137,13 +133,13 @@ where
     event_loop.run(|driver, event| {
         let handler = || -> io::Result<ControlFlow> {
             if debug_event_flags::take_panic_pending() {
-                app.windows().open_debug_window();
+                app.on_panic();
             }
             if debug_event_flags::take_error_pending() {
-                app.windows().open_debug_window();
+                app.on_panic();
             }
 
-            for id in app.windows().take_closed_app_windows() {
+            for id in app.windows().take_closed_windows() {
                 app.wm_close_window(id)?;
             }
             let mut flush_state_changes = |app: &mut A, flow: ControlFlow| {
@@ -201,7 +197,7 @@ where
                 // shows countdown), second Super within window opens overlay, timeout
                 // (checked in idle path) forwards the first Super to the terminal.
                 if let Event::Key(key) = &evt {
-                    let focus_id = app.windows().wm_focus();
+                    let focus_id = app.windows().focused_window();
                     if app.windows().direct_mode(focus_id)
                         && !app.windows().wm_overlay_visible()
                         && key.kind == KeyEventKind::Press
@@ -238,28 +234,10 @@ where
                     return flush_state_changes(app, ControlFlow::Continue);
                 }
 
-                // Layer 2b: WM global actions (Global layer only — currently just Esc)
-                // All other actions (FocusNext, scrolling, etc.) are WmMode and only
-                // dispatched when the WM overlay is visible (see below).
-                if let Some(action) = mapped_action {
-                    match action {
-                        Action::Quit => {
-                            app.open_exit_confirm();
-                            update_selection_snapshot(app);
-                            return flush_state_changes(app, ControlFlow::Continue);
-                        }
-                        Action::OpenHelp => {
-                            app.open_help_overlay();
-                            update_selection_snapshot(app);
-                            return flush_state_changes(app, ControlFlow::Continue);
-                        }
-                        Action::OpenKeybindings => {
-                            app.open_keybindings_overlay();
-                            update_selection_snapshot(app);
-                            return flush_state_changes(app, ControlFlow::Continue);
-                        }
-                        _ => {}
-                    }
+                // Layer 2b: Global-layer actions (only WmToggleOverlay is Global;
+                // all other actions are WmMode — dispatched when the overlay is open).
+                if let Some(_action) = mapped_action {
+                    // Only WmToggleOverlay reaches here; handled inline below.
                 }
 
                 // Pre-compute WmMode-layer action for use inside the overlay section.
@@ -310,17 +288,17 @@ where
                                 app.windows().toggle_window_selection();
                             }
                             WmMenuAction::MinimizeWindow => {
-                                let id = app.windows().wm_focus();
+                                let id = app.windows().focused_window();
                                 app.windows().minimize_window(id);
                                 app.windows().close_wm_overlay();
                             }
                             WmMenuAction::MaximizeWindow => {
-                                let id = app.windows().wm_focus();
+                                let id = app.windows().focused_window();
                                 app.windows().toggle_maximize(id);
                                 app.windows().close_wm_overlay();
                             }
                             WmMenuAction::CloseWindow => {
-                                let id = app.windows().wm_focus();
+                                let id = app.windows().focused_window();
                                 app.windows().close_window(id);
                                 app.windows().close_wm_overlay();
                             }
@@ -329,7 +307,7 @@ where
                                 app.windows().close_wm_overlay();
                             }
                             WmMenuAction::ToggleDebugWindow => {
-                                app.windows().toggle_debug_window();
+                                app.toggle_debug_window();
                                 app.windows().close_wm_overlay();
                             }
                             WmMenuAction::Help => {
@@ -356,10 +334,7 @@ where
                     }
                     // Focus routing in WM mode (Tab/Shift+Tab)
                     // Fold menu to outline so user can see the window they focused.
-                    if app
-                        .windows()
-                        .handle_focus_event(&evt, focus_regions, &map_region)
-                    {
+                    if app.windows().handle_focus_event(&evt, focus_regions) {
                         app.windows().fold_menu();
                         update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue);
@@ -435,16 +410,13 @@ where
                     let targets = app.windows().managed_draw_order_all().to_vec();
                     // managed_draw_order is bottom-to-top; iterate in reverse
                     // to find the topmost window under the cursor.
-                    for &id in targets.iter().rev() {
-                        let rect = app.windows().full_region_for_id(id);
+                    for &key in targets.iter().rev() {
+                        let rect = app.windows().full_region_for_key(key);
                         if rect.width > 0
                             && rect.height > 0
                             && crate::layout::rect_contains(rect, mouse.column, mouse.row)
                         {
-                            match id {
-                                WindowId::App(app_id) => app.windows().focus_app_window(app_id),
-                                WindowId::System(_) => app.windows().focus_window_id(id),
-                            }
+                            app.windows().focus_app_window(key);
                             break;
                         }
                     }
@@ -453,9 +425,7 @@ where
                 // In standalone mode without the open overlay, Tab passes through.
                 if !wm_mode
                     && matches!(evt, Event::Key(_))
-                    && app
-                        .windows()
-                        .handle_focus_event(&evt, focus_regions, &map_region)
+                    && app.windows().handle_focus_event(&evt, focus_regions)
                 {
                     update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Continue);
@@ -474,8 +444,7 @@ where
                     }
                 }
             } else {
-                if app.enumerate_windows().is_empty() && !app.windows().has_active_system_windows()
-                {
+                if app.quit_requested() || app.windows().quit_requested() {
                     update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Quit);
                 }
@@ -522,21 +491,20 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn run_window_app<O, D, A, Id>(output: &mut O, driver: &mut D, app: &mut A) -> io::Result<()>
+pub fn run_window_app<O, D, A>(output: &mut O, driver: &mut D, app: &mut A) -> io::Result<()>
 where
     O: RenderTarget,
     D: EventSource,
-    A: WindowProvider<Id>,
-    Id: Copy + Eq + Ord + std::fmt::Debug + 'static,
+    A: WindowProvider,
 {
-    let mut draw_state = WindowDrawState::<Id>::default();
-    let focus_regions: Vec<Id> = app.focus_regions();
+    let mut draw_state = WindowDrawState::default();
+    let focus_regions: Vec<WindowKey> = app.focus_regions();
     run_app(
         output,
         driver,
         app,
         &focus_regions,
-        |id| id,
+        |key| key,
         move |frame, app| {
             let mut frame = frame;
             draw_window_app(&mut frame, app, &mut draw_state);
@@ -556,24 +524,16 @@ fn selection_snapshot_from(
     }
 }
 
-fn update_selection_snapshot<A, Id>(app: &mut A)
+fn update_selection_snapshot<A>(app: &mut A)
 where
-    A: WindowProvider<Id>,
-    Id: Copy + Eq + Ord + std::fmt::Debug + 'static,
+    A: WindowProvider,
 {
     let was_dragging = app.windows().selection_dragging();
-    let focus = app.windows().wm_focus();
-    let (status, text) = match focus {
-        WindowId::App(id) => app
-            .window_component(id)
-            .map(|c| selection_snapshot_from(c.selection_status(), c.selection_text()))
-            .unwrap_or_default(),
-        WindowId::System(sys_id) => app
-            .windows()
-            .system_window_entry_mut(sys_id)
-            .map(|entry| selection_snapshot_from(entry.selection_status(), entry.selection_text()))
-            .unwrap_or_default(),
-    };
+    let focus = app.windows().focused_window();
+    let (status, text) = app
+        .window_component(focus)
+        .map(|c| selection_snapshot_from(c.selection_status(), c.selection_text()))
+        .unwrap_or_default();
     app.windows()
         .set_selection_snapshot(status.active, status.dragging, text);
     if was_dragging && !status.dragging && status.active {
@@ -581,18 +541,13 @@ where
     }
 }
 
-struct WindowDrawState<Id> {
-    known: Vec<Id>,
+#[derive(Default)]
+struct WindowDrawState {
+    known: Vec<WindowKey>,
 }
 
-impl<Id> Default for WindowDrawState<Id> {
-    fn default() -> Self {
-        Self { known: Vec::new() }
-    }
-}
-
-impl<Id: Copy + Eq> WindowDrawState<Id> {
-    fn update(&mut self, windows: &[Id]) -> bool {
+impl WindowDrawState {
+    fn update(&mut self, windows: &[WindowKey]) -> bool {
         if self.known == windows {
             false
         } else {
@@ -602,10 +557,9 @@ impl<Id: Copy + Eq> WindowDrawState<Id> {
     }
 }
 
-fn draw_window_app<A, Id>(frame: &mut UiFrame<'_>, app: &mut A, state: &mut WindowDrawState<Id>)
+fn draw_window_app<A>(frame: &mut UiFrame<'_>, app: &mut A, state: &mut WindowDrawState)
 where
-    A: WindowProvider<Id>,
-    Id: Copy + Eq + Ord + std::fmt::Debug + 'static,
+    A: WindowProvider,
 {
     let area = frame.area();
     let windows = app.enumerate_windows();
@@ -632,36 +586,36 @@ where
         }
     }
 
-    let focus_order: Vec<Id> = windows.to_vec();
+    let focus_order: Vec<WindowKey> = windows.to_vec();
     if !focus_order.is_empty() {
         app.windows().set_focus_order(focus_order);
     }
-    for &id in &windows {
-        if let Some(title) = app.window_pane_title(id) {
-            app.windows().set_window_title(id, title);
+    for &key in &windows {
+        if let Some(title) = app.window_pane_title(key) {
+            app.windows().set_window_title(key, title);
         }
     }
     app.windows().register_managed_layout(area);
-    let all_titles: std::collections::BTreeMap<WindowId<Id>, String> =
+    let all_titles: std::collections::BTreeMap<WindowKey, String> =
         app.windows().window_titles().into_iter().collect();
     let plan = app.windows().window_draw_plan(frame);
     let num_windows = plan.len();
     let total = num_windows + app.windows().visible_overlay_count();
     for (i, task) in plan.into_iter().enumerate() {
-        let z = crate::window::WindowManager::<Id>::compute_z_depth(i, total);
+        let z = WindowManager::compute_z_depth(i, total);
         match task {
             DrawTask::App(mut window) => {
                 window.surface.z_depth = z;
                 let (ctx, decorator) = {
                     let wm = app.windows();
                     let title = all_titles
-                        .get(&WindowId::App(window.id))
+                        .get(&window.key)
                         .map(String::as_str)
                         .unwrap_or("");
                     let ctx = WindowRenderCtx {
                         title,
                         focused: window.focused,
-                        direct_mode: wm.direct_mode(WindowId::App(window.id)),
+                        direct_mode: wm.direct_mode(window.key),
                         hover_pos: wm.hover,
                         theme: wm.config().theme,
                     };
@@ -676,36 +630,17 @@ where
                     |subframe| {
                         let ctx = app
                             .windows()
-                            .component_context_for(window.focused, WindowId::App(window.id));
-                        app.render_window(subframe, window, &ctx);
-                    },
-                );
-            }
-            DrawTask::System(mut window) => {
-                window.surface.z_depth = z;
-                let (ctx, decorator) = {
-                    let wm = app.windows();
-                    let title = all_titles
-                        .get(&WindowId::System(window.id))
-                        .map(String::as_str)
-                        .unwrap_or("");
-                    let ctx = WindowRenderCtx {
-                        title,
-                        focused: window.focused,
-                        direct_mode: wm.direct_mode(WindowId::System(window.id)),
-                        hover_pos: wm.hover,
-                        theme: wm.config().theme,
-                    };
-                    let decorator = wm.decorator();
-                    (ctx, decorator)
-                };
-                composite_window(
-                    frame,
-                    &window.surface,
-                    decorator.as_ref(),
-                    ctx,
-                    |subframe| {
-                        app.windows().render_system_window(subframe, window);
+                            .component_context_for(window.focused, window.key);
+                        // Try the app's component first, then fall back to
+                        // WindowManager-owned components (debug log, etc.)
+                        if let Some(component) = app.window_component(window.key) {
+                            component.resize(window.surface.inner, &ctx);
+                            component.render(subframe, window.surface.inner, &ctx);
+                        } else if let Some(component) = app.windows().component_for_key(window.key)
+                        {
+                            component.resize(window.surface.inner, &ctx);
+                            component.render(subframe, window.surface.inner, &ctx);
+                        }
                     },
                 );
             }
@@ -758,9 +693,7 @@ fn composite_window<F>(
     frame.blit_from_signed(&buffer, surface.dest);
 }
 
-fn auto_layout_for_windows<Id: Copy + Eq + Ord + std::fmt::Debug>(
-    windows: &[Id],
-) -> Option<TilingLayout<Id>> {
+fn auto_layout_for_windows(windows: &[WindowKey]) -> Option<TilingLayout<WindowKey>> {
     use term_wm_layout_engine::{BspNode, LayoutRect, LongestSide, OrientationHeuristic};
 
     if windows.is_empty() {
@@ -777,7 +710,7 @@ fn auto_layout_for_windows<Id: Copy + Eq + Ord + std::fmt::Debug>(
     let mut heuristic = LongestSide;
     let mut windows_iter = windows.iter();
     let first = *windows_iter.next().unwrap();
-    let mut root: BspNode<Id> = BspNode::leaf(first);
+    let mut root: BspNode<WindowKey> = BspNode::leaf(first);
 
     for (depth, &id) in windows_iter.enumerate() {
         let orientation = heuristic.choose(default_area, depth);
@@ -805,7 +738,7 @@ fn auto_layout_for_windows<Id: Copy + Eq + Ord + std::fmt::Debug>(
         }
     }
 
-    let layout_node: LayoutNode<Id> = LayoutNode::from(root);
+    let layout_node: LayoutNode<WindowKey> = LayoutNode::from(root);
     Some(TilingLayout::new(layout_node))
 }
 
@@ -814,49 +747,21 @@ mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
-    #[derive(Debug)]
-    struct TestMenu;
-    impl crate::components::Component for TestMenu {
-        fn render(
-            &mut self,
-            _frame: &mut crate::ui::UiFrame<'_>,
-            _area: ratatui::prelude::Rect,
-            _ctx: &crate::components::ComponentContext,
-        ) {
-        }
-    }
-    impl crate::components::Overlay for TestMenu {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-            self
-        }
-    }
-    impl crate::components::MenuOverlay<crate::window::WmMenuAction> for TestMenu {
-        fn outline(&mut self) {}
-        fn restore(&mut self) {}
-        fn set_items(
-            &mut self,
-            _items: Vec<crate::components::MenuItem<crate::window::WmMenuAction>>,
-        ) {
-        }
-        fn set_timeout(&mut self, _timeout: std::time::Duration) {}
-        fn selected_action(&self) -> Option<&crate::window::WmMenuAction> {
-            None
-        }
-        fn set_anchor(&mut self, _pos: Option<(u16, u16)>) {}
-        fn set_managed_area(&mut self, _area: ratatui::prelude::Rect) {}
-    }
-
     #[test]
     fn auto_layout_empty_and_multiple() {
-        let empty: Vec<u8> = vec![];
+        let empty: Vec<WindowKey> = vec![];
         assert!(auto_layout_for_windows(&empty).is_none());
 
-        let one = vec![1u8];
+        let mut wm = crate::window::WindowManager::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        let key = wm.create_window();
+        let one = vec![key];
         let layout = auto_layout_for_windows(&one).unwrap();
-        // single node should be a leaf
         assert!(matches!(layout.root(), crate::layout::LayoutNode::Leaf(_)));
     }
 
@@ -864,50 +769,34 @@ mod tests {
     fn runner_does_not_quit_when_app_reports_windows_but_wm_has_no_active_regions() {
         use crate::window::WindowManager;
 
-        // Create an empty WindowManager (no active regions/z-order).
-        let wm: WindowManager<usize> = WindowManager::with_config(
-            0,
+        struct FakeApp {
+            wm: WindowManager,
+            key: WindowKey,
+        }
+        impl WindowManagerHost for FakeApp {
+            fn windows(&mut self) -> &mut WindowManager {
+                &mut self.wm
+            }
+        }
+        impl WindowProvider for FakeApp {
+            fn enumerate_windows(&mut self) -> Vec<WindowKey> {
+                vec![self.key]
+            }
+        }
+
+        let mut wm = WindowManager::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             None,
             Some(Box::new(TestMenu)),
         );
-        assert!(!wm.has_any_active_windows());
+        let key = wm.create_window();
 
-        // Create a fake app that enumerates windows (i.e., app-level windows still exist)
-        // while the WM reports no active windows.
-        struct FakeApp {
-            wm: WindowManager<usize>,
-        }
-        impl super::WindowManagerHost<usize> for FakeApp {
-            fn windows(&mut self) -> &mut WindowManager<usize> {
-                &mut self.wm
-            }
-        }
-        impl super::WindowProvider<usize> for FakeApp {
-            fn enumerate_windows(&mut self) -> Vec<usize> {
-                vec![1]
-            }
-            fn render_window(
-                &mut self,
-                _frame: &mut crate::ui::UiFrame<'_>,
-                _window: WindowDrawContext<usize>,
-                _ctx: &ComponentContext,
-            ) {
-            }
-        }
-
-        let mut app = FakeApp { wm };
-
-        // Sanity: the app-level enumerate shows a window, but the WM reports no active regions.
+        let mut app = FakeApp { wm, key };
         assert!(!app.enumerate_windows().is_empty());
-        assert!(!app.windows().has_active_system_windows());
 
-        // The runner's quit condition should NOT trigger a quit here:
-        // quit_if_no_windows = app.enumerate_windows().is_empty() && !app.windows().has_active_system_windows()
-        let quit_if_no_windows =
-            app.enumerate_windows().is_empty() && !app.windows().has_active_system_windows();
+        let quit_if_no_windows = app.enumerate_windows().is_empty();
         assert!(
             !quit_if_no_windows,
             "Runner would quit even though app reports windows"
@@ -916,7 +805,7 @@ mod tests {
 
     #[test]
     fn handle_focused_app_event_routes_key_to_window_component() {
-        use crate::components::ComponentContext;
+        use crate::components::Component;
         use crate::window::WindowManager;
 
         struct KeyRecorder {
@@ -927,10 +816,14 @@ mod tests {
                 &mut self,
                 _frame: &mut crate::ui::UiFrame<'_>,
                 _area: ratatui::layout::Rect,
-                _ctx: &ComponentContext,
+                _ctx: &crate::components::ComponentContext,
             ) {
             }
-            fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
+            fn handle_event(
+                &mut self,
+                event: &Event,
+                _ctx: &crate::components::ComponentContext,
+            ) -> bool {
                 if matches!(event, Event::Key(_)) {
                     self.received_key = true;
                 }
@@ -939,36 +832,25 @@ mod tests {
         }
 
         struct FakeApp {
-            wm: WindowManager<usize>,
+            wm: WindowManager,
             recorder: KeyRecorder,
         }
-        impl super::WindowManagerHost<usize> for FakeApp {
-            fn windows(&mut self) -> &mut WindowManager<usize> {
+        impl WindowManagerHost for FakeApp {
+            fn windows(&mut self) -> &mut WindowManager {
                 &mut self.wm
             }
         }
-        impl super::WindowProvider<usize> for FakeApp {
-            fn enumerate_windows(&mut self) -> Vec<usize> {
-                vec![1]
+        impl WindowProvider for FakeApp {
+            fn enumerate_windows(&mut self) -> Vec<WindowKey> {
+                vec![]
             }
-            fn render_window(
-                &mut self,
-                _frame: &mut crate::ui::UiFrame<'_>,
-                _window: WindowDrawContext<usize>,
-                _ctx: &ComponentContext,
-            ) {
-            }
-            fn window_component(&mut self, _id: usize) -> Option<&mut dyn Component> {
+            fn window_component(&mut self, _key: WindowKey) -> Option<&mut dyn Component> {
                 Some(&mut self.recorder)
-            }
-            fn focus_regions(&mut self) -> Vec<usize> {
-                vec![1]
             }
         }
 
         let mut app = FakeApp {
-            wm: WindowManager::<usize>::with_config(
-                0,
+            wm: WindowManager::with_config(
                 crate::wm_config::WmConfig::standalone(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
@@ -979,22 +861,17 @@ mod tests {
                 received_key: false,
             },
         };
-        app.wm.register_managed_layout(Rect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 24,
-        });
+        let key = app.wm.create_window();
         app.wm.regions.set(
-            WindowId::App(1usize),
-            Rect {
+            key,
+            ratatui::layout::Rect {
                 x: 0,
                 y: 0,
                 width: 80,
                 height: 24,
             },
         );
-        app.wm.focus_app_window(1usize);
+        app.wm.focus_app_window(key);
 
         let evt = Event::Key(KeyEvent {
             code: KeyCode::Char('x'),
@@ -1039,36 +916,25 @@ mod tests {
         }
 
         struct FakeApp {
-            wm: WindowManager<usize>,
+            wm: WindowManager,
             recorder: KeyRecorder,
         }
-        impl super::WindowManagerHost<usize> for FakeApp {
-            fn windows(&mut self) -> &mut WindowManager<usize> {
+        impl WindowManagerHost for FakeApp {
+            fn windows(&mut self) -> &mut WindowManager {
                 &mut self.wm
             }
         }
-        impl super::WindowProvider<usize> for FakeApp {
-            fn enumerate_windows(&mut self) -> Vec<usize> {
-                vec![1]
+        impl WindowProvider for FakeApp {
+            fn enumerate_windows(&mut self) -> Vec<WindowKey> {
+                vec![]
             }
-            fn render_window(
-                &mut self,
-                _frame: &mut crate::ui::UiFrame<'_>,
-                _window: WindowDrawContext<usize>,
-                _ctx: &ComponentContext,
-            ) {
-            }
-            fn window_component(&mut self, _id: usize) -> Option<&mut dyn Component> {
+            fn window_component(&mut self, _key: WindowKey) -> Option<&mut dyn Component> {
                 Some(&mut self.recorder)
-            }
-            fn focus_regions(&mut self) -> Vec<usize> {
-                vec![1]
             }
         }
 
         let mut app = FakeApp {
-            wm: WindowManager::<usize>::with_config(
-                0,
+            wm: WindowManager::with_config(
                 crate::wm_config::WmConfig::standalone(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
@@ -1079,24 +945,19 @@ mod tests {
                 received_key: false,
             },
         };
-        app.wm.register_managed_layout(Rect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 24,
-        });
+        let key = app.wm.create_window();
         app.wm.regions.set(
-            WindowId::App(1usize),
-            Rect {
+            key,
+            ratatui::layout::Rect {
                 x: 0,
                 y: 0,
                 width: 80,
                 height: 24,
             },
         );
-        app.wm.focus_app_window(1usize);
+        app.wm.focus_app_window(key);
 
-        let focus_id = app.wm.wm_focus();
+        let focus_id = app.wm.focused_window();
         app.wm.set_direct_mode(focus_id, true);
         assert!(app.wm.direct_mode(focus_id));
 
@@ -1110,5 +971,227 @@ mod tests {
         let consumed = handle_focused_app_event(&evt, &mut app);
         assert!(consumed, "event must route even when direct_mode is true");
         assert!(app.recorder.received_key, "component must receive the key");
+    }
+
+    // ── selection_snapshot_from ──────────────────────────────────────
+
+    #[test]
+    fn selection_snapshot_from_active_returns_text() {
+        let status = SelectionStatus {
+            active: true,
+            dragging: false,
+        };
+        let (s, text) = selection_snapshot_from(status, Some("hello".into()));
+        assert!(s.active);
+        assert_eq!(text, Some("hello".into()));
+    }
+
+    #[test]
+    fn selection_snapshot_from_dragging_returns_text() {
+        let status = SelectionStatus {
+            active: false,
+            dragging: true,
+        };
+        let (s, text) = selection_snapshot_from(status, Some("dragging".into()));
+        assert!(s.dragging);
+        assert_eq!(text, Some("dragging".into()));
+    }
+
+    #[test]
+    fn selection_snapshot_from_active_and_dragging_returns_text() {
+        let status = SelectionStatus {
+            active: true,
+            dragging: true,
+        };
+        let (s, text) = selection_snapshot_from(status, Some("both".into()));
+        assert!(s.active);
+        assert!(s.dragging);
+        assert_eq!(text, Some("both".into()));
+    }
+
+    #[test]
+    fn selection_snapshot_from_inactive_returns_none_text() {
+        let status = SelectionStatus {
+            active: false,
+            dragging: false,
+        };
+        let (s, text) = selection_snapshot_from(status, Some("ignored".into()));
+        assert!(!s.active);
+        assert!(!s.dragging);
+        assert_eq!(text, None);
+    }
+
+    #[test]
+    fn selection_snapshot_from_inactive_none_text() {
+        let status = SelectionStatus {
+            active: false,
+            dragging: false,
+        };
+        let (_s, text) = selection_snapshot_from(status, None);
+        assert_eq!(text, None);
+    }
+
+    #[test]
+    fn selection_snapshot_from_active_none_text() {
+        let status = SelectionStatus {
+            active: true,
+            dragging: false,
+        };
+        let (s, text) = selection_snapshot_from(status, None);
+        assert!(s.active);
+        assert_eq!(text, None);
+    }
+
+    // ── WindowDrawState ──────────────────────────────────────────────
+
+    fn make_keys(n: usize) -> Vec<WindowKey> {
+        let mut wm = crate::window::WindowManager::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        (0..n).map(|_| wm.create_window()).collect()
+    }
+
+    #[test]
+    fn window_draw_state_update_first_call_returns_true() {
+        let mut state = WindowDrawState::default();
+        let keys = make_keys(3);
+        assert!(state.update(&keys));
+        assert_eq!(state.known, keys);
+    }
+
+    #[test]
+    fn window_draw_state_update_same_list_returns_false() {
+        let mut state = WindowDrawState::default();
+        let keys = make_keys(3);
+        state.update(&keys);
+        assert!(!state.update(&keys));
+    }
+
+    #[test]
+    fn window_draw_state_update_different_list_returns_true() {
+        let mut state = WindowDrawState::default();
+        let a = make_keys(3);
+        let b = make_keys(2);
+        state.update(&a);
+        assert!(state.update(&b));
+        assert_eq!(state.known, b);
+    }
+
+    #[test]
+    fn window_draw_state_update_empty_lists() {
+        let mut state = WindowDrawState::default();
+        // First update from empty to empty — no change, returns false
+        assert!(!state.update(&[]));
+        // Second update — same, still false
+        assert!(!state.update(&[]));
+    }
+
+    #[test]
+    fn window_draw_state_default_is_empty() {
+        let state = WindowDrawState::default();
+        assert!(state.known.is_empty());
+    }
+
+    // ── auto_layout_for_windows ──────────────────────────────────────
+
+    #[test]
+    fn auto_layout_two_windows_creates_split() {
+        let mut wm = crate::window::WindowManager::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        let k1 = wm.create_window();
+        let k2 = wm.create_window();
+        let layout = auto_layout_for_windows(&[k1, k2]).unwrap();
+        let node = layout.root();
+        match node {
+            crate::layout::LayoutNode::Split { .. } => {
+                assert!(node.subtree_any(|id| id == k1));
+                assert!(node.subtree_any(|id| id == k2));
+            }
+            _ => panic!("expected Split for two windows"),
+        }
+    }
+
+    #[test]
+    fn auto_layout_three_windows_all_present() {
+        let mut wm = crate::window::WindowManager::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        let k1 = wm.create_window();
+        let k2 = wm.create_window();
+        let k3 = wm.create_window();
+        let layout = auto_layout_for_windows(&[k1, k2, k3]).unwrap();
+        let node = layout.root();
+        assert!(node.subtree_any(|id| id == k1));
+        assert!(node.subtree_any(|id| id == k2));
+        assert!(node.subtree_any(|id| id == k3));
+    }
+
+    #[test]
+    fn auto_layout_multiple_windows_uses_all() {
+        let mut wm = crate::window::WindowManager::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        // Use 4 windows — this reliably works within 80x24 default area
+        let keys: Vec<WindowKey> = (0..4).map(|_| wm.create_window()).collect();
+        let layout = auto_layout_for_windows(&keys).unwrap();
+        let node = layout.root();
+        for k in &keys {
+            assert!(
+                node.subtree_any(|id| id == *k),
+                "window must appear in layout"
+            );
+        }
+    }
+
+    #[derive(Debug)]
+    struct TestMenu;
+    impl crate::components::Component for TestMenu {
+        fn render(
+            &mut self,
+            _frame: &mut crate::ui::UiFrame<'_>,
+            _area: ratatui::prelude::Rect,
+            _ctx: &crate::components::ComponentContext,
+        ) {
+        }
+    }
+    impl crate::components::Overlay for TestMenu {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+    impl crate::components::MenuOverlay<crate::window::WmMenuAction> for TestMenu {
+        fn outline(&mut self) {}
+        fn restore(&mut self) {}
+        fn set_items(
+            &mut self,
+            _items: Vec<crate::components::MenuItem<crate::window::WmMenuAction>>,
+        ) {
+        }
+        fn set_timeout(&mut self, _timeout: std::time::Duration) {}
+        fn selected_action(&self) -> Option<&crate::window::WmMenuAction> {
+            None
+        }
+        fn set_anchor(&mut self, _pos: Option<(u16, u16)>) {}
+        fn set_managed_area(&mut self, _area: ratatui::prelude::Rect) {}
     }
 }

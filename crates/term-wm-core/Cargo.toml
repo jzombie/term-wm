@@ -8,10 +8,12 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+crossbeam-channel = { workspace = true }
 crossterm = { workspace = true }
 linkify = { workspace = true }
 portable-pty = { workspace = true }
 ratatui = { workspace = true }
+slotmap = "1.1"
 strum = { workspace = true, features = ["derive"] }
 term-wm-layout-engine = { workspace = true }
 term-wm-pty-engine = { workspace = true }

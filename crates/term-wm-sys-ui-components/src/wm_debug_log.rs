@@ -9,7 +9,6 @@ use ratatui::text::{Line, Text};
 use term_wm_core::components::{Component, ComponentContext};
 use term_wm_core::debug_event_flags;
 use term_wm_core::ui::UiFrame;
-use term_wm_core::window::{SystemWindowView, WindowSurface};
 use term_wm_ui_components::{ScrollViewComponent, TextRendererComponent};
 
 const DEFAULT_MAX_LINES: usize = 2000;
@@ -254,34 +253,6 @@ impl WmDebugLogComponent {
 
     pub fn set_selection_enabled(&mut self, enabled: bool) {
         self.scroll_view.content.set_selection_enabled(enabled);
-    }
-}
-
-impl SystemWindowView for WmDebugLogComponent {
-    fn render(
-        &mut self,
-        frame: &mut term_wm_core::ui::UiFrame<'_>,
-        surface: WindowSurface,
-        focused: bool,
-    ) {
-        let ctx = ComponentContext::new(focused);
-        <WmDebugLogComponent as Component>::render(self, frame, surface.inner, &ctx);
-    }
-
-    fn handle_event(&mut self, event: &Event) -> bool {
-        Component::handle_event(self, event, &ComponentContext::default())
-    }
-
-    fn set_selection_enabled(&mut self, enabled: bool) {
-        WmDebugLogComponent::set_selection_enabled(self, enabled);
-    }
-
-    fn selection_status(&self) -> term_wm_core::components::SelectionStatus {
-        self.scroll_view.selection_status()
-    }
-
-    fn selection_text(&mut self) -> Option<String> {
-        self.scroll_view.selection_text()
     }
 }
 

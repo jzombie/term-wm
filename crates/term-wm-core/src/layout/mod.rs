@@ -74,8 +74,8 @@ impl RectSpec {
 }
 
 #[derive(Debug, Clone)]
-pub struct FloatingPane<Id: Copy + Eq + Ord> {
-    pub id: Id,
+pub struct FloatingPane<K: Copy + Eq + Ord> {
+    pub key: K,
     pub rect: RectSpec,
 }
 

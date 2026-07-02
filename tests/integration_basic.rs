@@ -6,7 +6,6 @@ use ratatui::layout::Rect;
 fn default_shell_nonempty() {
     let s = term_wm::default_shell();
     assert!(!s.is_empty());
-    // ensure the command builder can be constructed without panicking
     let _ = term_wm::default_shell_command();
 }
 
@@ -14,7 +13,7 @@ fn default_shell_nonempty() {
 fn mouse_capture_flow_through_window_manager() {
     let ctx = Arc::new(term_wm::AppContext::new("test", "0.0.0"));
     let top_panel: Box<
-        dyn term_wm_core::top_panel_trait::TopPanel<term_wm_core::window::WindowId<usize>>,
+        dyn term_wm_core::top_panel_trait::TopPanel<term_wm_core::window::WindowKey>,
     > = Box::new(term_wm_sys_ui_components::WmTopPanelComponent::new(
         &ctx.app_name,
     ));
@@ -26,8 +25,7 @@ fn mouse_capture_flow_through_window_manager() {
         ));
     let menu: Box<dyn term_wm_core::components::MenuOverlay<term_wm_core::window::WmMenuAction>> =
         Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
-    let mut wm: term_wm::window::WindowManager<usize> = term_wm::window::WindowManager::with_config(
-        0,
+    let mut wm: term_wm::window::WindowManager = term_wm::window::WindowManager::with_config(
         term_wm::wm_config::WmConfig::standalone(),
         ctx,
         Some(top_panel),

@@ -3,14 +3,15 @@ use std::time::{Duration, Instant};
 use crossterm::event::{Event, MouseEventKind};
 use ratatui::prelude::Rect;
 
-use super::{WindowId, WindowManager};
+use super::WindowManager;
 use crate::layout::InsertPosition;
 use crate::layout::floating::*;
+use crate::window::WindowKey;
 use term_wm_layout_engine::{
     EdgeResistance, LayoutRect, apply_resize_drag_signed, detect_quadrant,
 };
 
-impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
+impl WindowManager {
     pub(super) fn handle_header_drag_event(&mut self, event: &Event) -> bool {
         use crate::window::decorator::HeaderAction;
         let Event::Mouse(mouse) = event else {
@@ -35,65 +36,65 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                     })
                     .copied()
                 {
-                    if let Some(hit_id) = topmost_hit
-                        && hit_id != header.id
+                    if let Some(hit_key) = topmost_hit
+                        && hit_key != header.key
                     {
                         return false;
                     }
 
-                    let rect = self.full_region_for_id(header.id);
+                    let rect = self.full_region_for_key(header.key);
                     match self.decorator().hit_test(rect, mouse.column, mouse.row) {
                         HeaderAction::Minimize => {
-                            self.minimize_window(header.id);
+                            self.minimize_window(header.key);
                             self.last_header_click = None;
                             return true;
                         }
                         HeaderAction::Maximize => {
-                            self.toggle_maximize(header.id);
+                            self.toggle_maximize(header.key);
                             self.last_header_click = None;
                             return true;
                         }
                         HeaderAction::Close => {
-                            self.close_window(header.id);
+                            self.close_window(header.key);
                             self.last_header_click = None;
                             return true;
                         }
                         HeaderAction::ToggleDirectMode => {
-                            self.toggle_direct_mode(header.id);
+                            self.toggle_direct_mode(header.key);
                             self.last_header_click = None;
                             return true;
                         }
                         HeaderAction::Drag => {
                             let now = Instant::now();
-                            if let Some((prev_id, prev)) = self.last_header_click
-                                && prev_id == header.id
+                            if let Some((prev_key, prev)) = self.last_header_click
+                                && prev_key == header.key
                                 && now.duration_since(prev) <= Duration::from_millis(500)
                             {
-                                self.toggle_maximize(header.id);
+                                self.toggle_maximize(header.key);
                                 self.last_header_click = None;
                                 return true;
                             }
-                            self.last_header_click = Some((header.id, now));
+                            self.last_header_click = Some((header.key, now));
                         }
                         HeaderAction::None => {}
                     }
 
-                    if self.is_window_floating(header.id) {
-                        self.bring_floating_to_front_id(header.id);
+                    if self.is_window_floating(header.key) {
+                        self.bring_floating_to_front_key(header.key);
                     } else {
-                        let _ = self.detach_to_floating(header.id, rect);
+                        let _ = self.detach_to_floating(header.key, rect);
                     }
 
                     let (initial_x, initial_y) =
                         if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
-                            self.floating_rect(header.id)
+                            self.floating_rect(header.key)
                         {
                             (fr.x, fr.y)
                         } else {
                             (rect.x as i32, rect.y as i32)
                         };
                     self.drag_header = Some(HeaderDrag {
-                        id: header.id,
+                        key: header.key,
                         initial_x,
                         initial_y,
                         start_x: mouse.column,
@@ -106,9 +107,9 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             MouseEventKind::Drag(_) => {
                 self.drag_last_event = Some(Instant::now());
                 if let Some(drag) = self.drag_header {
-                    if self.is_window_floating(drag.id) {
+                    if self.is_window_floating(drag.key) {
                         self.move_floating(
-                            drag.id,
+                            drag.key,
                             mouse.column,
                             mouse.row,
                             drag.start_x,
@@ -119,7 +120,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                         let dx = mouse.column.abs_diff(drag.start_x);
                         let dy = mouse.row.abs_diff(drag.start_y);
                         if dx + dy > 2 {
-                            self.update_snap_preview(drag.id, mouse.column, mouse.row);
+                            self.update_snap_preview(drag.key, mouse.column, mouse.row);
                         } else {
                             self.drag_snap = None;
                         }
@@ -133,14 +134,14 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 if let Some(drag) = self.drag_header.take()
                     && self.drag_snap.is_some()
                 {
-                    self.apply_snap(drag.id);
+                    self.apply_snap(drag.key);
                     return true;
                 }
             }
             MouseEventKind::Up(_) => {
                 if let Some(drag) = self.drag_header.take() {
                     if self.drag_snap.is_some() {
-                        self.apply_snap(drag.id);
+                        self.apply_snap(drag.key);
                     }
                     return true;
                 }
@@ -157,10 +158,10 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let Some(hit) = self.hit_test_region_topmost(column, row, &self.managed_draw_order) else {
             return false;
         };
-        if !matches!(hit, WindowId::App(_)) {
+        if !matches!(hit, _) {
             return false;
         }
-        self.focus_window_id(hit);
+        self.focus_window_key(hit);
         true
     }
 
@@ -187,27 +188,27 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                     })
                     .copied();
                 if let Some(handle) = hit {
-                    if let Some(hit_id) = topmost_hit
-                        && hit_id != handle.id
+                    if let Some(hit_key) = topmost_hit
+                        && hit_key != handle.key
                     {
                         return false;
                     }
 
-                    let rect = self.full_region_for_id(handle.id);
-                    if !self.is_window_floating(handle.id) {
+                    let rect = self.full_region_for_key(handle.key);
+                    if !self.is_window_floating(handle.key) {
                         return false;
                     }
-                    self.bring_floating_to_front_id(handle.id);
+                    self.bring_floating_to_front_key(handle.key);
                     let (start_x, start_y, start_width, start_height) =
                         if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
-                            self.floating_rect(handle.id)
+                            self.floating_rect(handle.key)
                         {
                             (fr.x, fr.y, fr.width, fr.height)
                         } else {
                             (rect.x as i32, rect.y as i32, rect.width, rect.height)
                         };
                     self.drag_resize = Some(ResizeDrag {
-                        id: handle.id,
+                        key: handle.key,
                         edge: handle.edge,
                         start_rect: rect,
                         start_col: mouse.column,
@@ -222,7 +223,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             }
             MouseEventKind::Drag(_) => {
                 if let Some(drag) = self.drag_resize.as_ref()
-                    && self.is_window_floating(drag.id)
+                    && self.is_window_floating(drag.key)
                 {
                     let bounds = LayoutRect {
                         x: self.managed_area.x as i32,
@@ -244,7 +245,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                         self.floating_resize_offscreen,
                     );
                     self.set_floating_rect(
-                        drag.id,
+                        drag.key,
                         Some(crate::window::FloatRectSpec::Absolute(resized)),
                     );
                     return true;
@@ -258,8 +259,8 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         false
     }
 
-    pub(super) fn detach_to_floating(&mut self, id: WindowId<Id>, rect: Rect) -> bool {
-        if self.is_window_floating(id) {
+    pub(super) fn detach_to_floating(&mut self, key: WindowKey, rect: Rect) -> bool {
+        if self.is_window_floating(key) {
             return true;
         }
         if self.managed_layout.is_none() {
@@ -271,7 +272,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let x = rect.x;
         let y = rect.y;
         self.set_floating_rect(
-            id,
+            key,
             Some(crate::window::FloatRectSpec::Absolute(
                 crate::window::FloatRect {
                     x: x as i32,
@@ -281,20 +282,20 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 },
             )),
         );
-        self.bring_to_front_id(id);
+        self.bring_to_front_key(key);
         true
     }
 
-    pub(super) fn layout_contains(&self, id: WindowId<Id>) -> bool {
+    pub(super) fn layout_contains(&self, key: WindowKey) -> bool {
         self.managed_layout
             .as_ref()
-            .is_some_and(|layout| layout.root().subtree_any(|node_id| node_id == id))
+            .is_some_and(|layout| layout.root().subtree_any(|node_key| node_key == key))
     }
 
     #[allow(clippy::too_many_arguments)]
     pub(super) fn move_floating(
         &mut self,
-        id: WindowId<Id>,
+        key: WindowKey,
         column: u16,
         row: u16,
         start_mouse_x: u16,
@@ -304,7 +305,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     ) {
         let panel_active = self.panel_active();
         let bounds = self.managed_area;
-        let Some(crate::window::FloatRectSpec::Absolute(fr)) = self.floating_rect(id) else {
+        let Some(crate::window::FloatRectSpec::Absolute(fr)) = self.floating_rect(key) else {
             return;
         };
         let width = fr.width.max(1);
@@ -328,7 +329,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let x = resistance.apply_x(x, bounds_layout);
 
         self.set_floating_rect(
-            id,
+            key,
             Some(crate::window::FloatRectSpec::Absolute(
                 crate::window::FloatRect {
                     x,
@@ -342,29 +343,29 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
 
     pub(super) fn update_snap_preview(
         &mut self,
-        dragging_id: WindowId<Id>,
+        dragging_key: WindowKey,
         mouse_x: u16,
         mouse_y: u16,
     ) {
         self.drag_snap = None;
         let area = self.managed_area;
 
-        let target = self.z_order.iter().rev().find_map(|&id| {
-            if id == dragging_id {
+        let target = self.z_order.iter().rev().find_map(|&key| {
+            if key == dragging_key {
                 return None;
             }
-            if self.managed_layout.is_some() && self.is_window_floating(id) {
+            if self.managed_layout.is_some() && self.is_window_floating(key) {
                 return None;
             }
-            let rect = self.regions.get(id)?;
+            let rect = self.regions.get(key)?;
             if crate::layout::rect_contains(rect, mouse_x, mouse_y) {
-                Some((id, rect))
+                Some((key, rect))
             } else {
                 None
             }
         });
 
-        if let Some((target_id, rect)) = target {
+        if let Some((target_key, rect)) = target {
             let target_layout = LayoutRect {
                 x: rect.x as i32,
                 y: rect.y as i32,
@@ -388,7 +389,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 height: engine_preview.height,
             };
 
-            self.drag_snap = Some((Some(target_id), pos, preview));
+            self.drag_snap = Some((Some(target_key), pos, preview));
             return;
         }
 
@@ -418,7 +419,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         }
     }
 
-    pub(super) fn apply_snap(&mut self, id: WindowId<Id>) {
+    pub(super) fn apply_snap(&mut self, key: WindowKey) {
         use crate::layout::LayoutNode;
         if let Some((target, position, preview)) = self.drag_snap.take() {
             let other_windows_exist = if let Some(layout) = &self.managed_layout {
@@ -428,9 +429,9 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             };
 
             if target.is_none() && !other_windows_exist {
-                if self.is_window_floating(id) {
+                if self.is_window_floating(key) {
                     self.set_floating_rect(
-                        id,
+                        key,
                         Some(crate::window::FloatRectSpec::Absolute(
                             crate::window::FloatRect {
                                 x: preview.x as i32,
@@ -444,88 +445,88 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
                 return;
             }
 
-            if self.is_window_floating(id) {
-                self.clear_floating_rect(id);
+            if self.is_window_floating(key) {
+                self.clear_floating_rect(key);
             }
 
-            if self.layout_contains(id)
+            if self.layout_contains(key)
                 && let Some(layout) = &mut self.managed_layout
             {
                 let should_retile = match target {
-                    Some(target_id) => target_id != id,
+                    Some(target_key) => target_key != key,
                     None => true,
                 };
                 if should_retile {
-                    layout.root_mut().remove_leaf(id);
+                    layout.root_mut().remove_leaf(key);
                 } else {
-                    self.bring_to_front_id(id);
+                    self.bring_to_front_key(key);
                     return;
                 }
             }
 
-            if let Some(target_id) = target
-                && self.is_window_floating(target_id)
+            if let Some(target_key) = target
+                && self.is_window_floating(target_key)
             {
-                self.clear_floating_rect(target_id);
+                self.clear_floating_rect(target_key);
                 if self.managed_layout.is_none() {
                     self.managed_layout = Some(crate::layout::TilingLayout::new(LayoutNode::leaf(
-                        target_id,
+                        target_key,
                     )));
                 }
             }
 
             if let Some(layout) = &mut self.managed_layout {
-                let success = if let Some(target_id) = target {
-                    layout.root_mut().insert_leaf(target_id, id, position)
+                let success = if let Some(target_key) = target {
+                    layout.root_mut().insert_leaf(target_key, key, position)
                 } else {
                     false
                 };
 
                 if !success {
-                    layout.split_root(id, position);
+                    layout.split_root(key, position);
                 }
 
-                if let Some(pos) = self.z_order.iter().position(|&z_id| z_id == id) {
+                if let Some(pos) = self.z_order.iter().position(|&z_key| z_key == key) {
                     self.z_order.remove(pos);
                 }
-                self.z_order.push(id);
+                self.z_order.push(key);
                 self.managed_draw_order = self.z_order.clone();
             } else {
-                self.managed_layout = Some(crate::layout::TilingLayout::new(LayoutNode::leaf(id)));
+                self.managed_layout = Some(crate::layout::TilingLayout::new(LayoutNode::leaf(key)));
             }
 
             let mut pending_snap = Vec::new();
-            for r_id in self.regions.ids() {
-                if r_id != id && self.is_window_floating(r_id) {
-                    pending_snap.push(r_id);
+            for r_key in self.regions.ids() {
+                if r_key != key && self.is_window_floating(r_key) {
+                    pending_snap.push(r_key);
                 }
             }
-            for float_id in pending_snap {
-                self.tile_window_id(float_id);
+            for float_key in pending_snap {
+                self.tile_window_key(float_key);
             }
         }
     }
 
-    pub fn tile_window(&mut self, id: Id) -> bool {
-        self.tile_window_id(WindowId::app(id))
+    pub fn tile_window(&mut self, key: WindowKey) -> bool {
+        self.tile_window_key(key)
     }
 
-    pub(super) fn tile_window_id(&mut self, id: WindowId<Id>) -> bool {
+    pub(super) fn tile_window_key(&mut self, key: WindowKey) -> bool {
         use crate::layout::LayoutNode;
-        if self.layout_contains(id) {
-            if self.is_window_floating(id) {
-                self.clear_floating_rect(id);
+        if self.layout_contains(key) {
+            if self.is_window_floating(key) {
+                self.clear_floating_rect(key);
             }
-            self.focus_window_id(id);
+            self.focus_window_key(key);
             return true;
         }
         if self.managed_layout.is_none() {
-            self.managed_layout = Some(crate::layout::TilingLayout::new(LayoutNode::leaf(id)));
-            self.focus_window_id(id);
+            self.managed_layout = Some(crate::layout::TilingLayout::new(LayoutNode::leaf(key)));
+            self.focus_window_key(key);
             return true;
         }
 
-        let current_focus = *self.wm_focus.current();
+        let current_focus = *self.focus.current();
 
         let Some(layout) = self.managed_layout.as_mut() else {
             return false;
@@ -535,20 +536,20 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             .regions
             .ids()
             .iter()
-            .find(|r_id| **r_id == current_focus)
+            .find(|r_key| **r_key == current_focus)
             .copied();
 
         if let Some(target) = target
             && layout
                 .root_mut()
-                .insert_leaf(target, id, InsertPosition::Right)
+                .insert_leaf(target, key, InsertPosition::Right)
         {
-            self.focus_window_id(id);
+            self.focus_window_key(key);
             return true;
         }
 
-        layout.split_root(id, InsertPosition::Right);
-        self.focus_window_id(id);
+        layout.split_root(key, InsertPosition::Right);
+        self.focus_window_key(key);
         true
     }
 }

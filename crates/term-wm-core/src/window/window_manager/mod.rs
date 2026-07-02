@@ -3,7 +3,6 @@ mod drag;
 mod focus;
 mod layout;
 mod overlays;
-mod sys;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -11,25 +10,23 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyEvent};
 use ratatui::prelude::Rect;
+use slotmap::SlotMap;
 
+use super::WindowKey;
 use super::decorator::WindowDecorator;
 use super::entry::Window;
 use crate::app_context::AppContext;
 use crate::bottom_panel_trait::BottomPanel;
-use crate::components::{ComponentContext, MenuItem, MenuOverlay, Overlay, SelectionStatus};
+use crate::components::{ComponentContext, MenuItem, MenuOverlay, Overlay};
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
 use crate::power_profile::PowerProfile;
+use crate::reaper::Reaper;
 use crate::top_panel_trait::TopPanel;
 use crate::ui::UiFrame;
 use crate::wm_config::{HintVisibility, WmConfig};
 use term_wm_layout_engine::FocusRing;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum SystemWindowId {
-    DebugLog,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum OverlayId {
@@ -37,29 +34,6 @@ pub enum OverlayId {
     Keybindings,
     ExitConfirm,
     SelectionPreview,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum WindowId<Id: Copy + Eq + Ord> {
-    App(Id),
-    System(SystemWindowId),
-}
-
-impl<Id: Copy + Eq + Ord> WindowId<Id> {
-    fn app(id: Id) -> Self {
-        Self::App(id)
-    }
-
-    fn system(id: SystemWindowId) -> Self {
-        Self::System(id)
-    }
-
-    fn as_app(self) -> Option<Id> {
-        match self {
-            Self::App(id) => Some(id),
-            Self::System(_) => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -121,100 +95,36 @@ pub struct WindowSurface {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct WindowDrawContext<Id: Copy + Eq + Ord> {
-    pub id: Id,
+pub struct WindowDrawContext {
+    pub key: WindowKey,
     pub surface: WindowSurface,
     pub focused: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum DrawTask<Id: Copy + Eq + Ord> {
-    App(WindowDrawContext<Id>),
-    System(SystemWindowDraw),
+pub enum DrawTask {
+    App(WindowDrawContext),
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct SystemWindowDraw {
-    pub id: SystemWindowId,
-    pub surface: WindowSurface,
-    pub focused: bool,
-}
-
-pub trait SystemWindowView {
-    fn render(&mut self, frame: &mut UiFrame<'_>, surface: WindowSurface, focused: bool);
-    fn handle_event(&mut self, event: &Event) -> bool;
-    fn set_selection_enabled(&mut self, _enabled: bool) {}
-    fn selection_status(&self) -> SelectionStatus {
-        SelectionStatus::default()
-    }
-    fn selection_text(&mut self) -> Option<String> {
-        None
-    }
-}
-
-pub(crate) struct SystemWindowEntry {
-    component: Box<dyn SystemWindowView>,
-    visible: bool,
-}
-
-impl SystemWindowEntry {
-    fn new(component: Box<dyn SystemWindowView>) -> Self {
-        Self {
-            component,
-            visible: false,
-        }
-    }
-
-    fn visible(&self) -> bool {
-        self.visible
-    }
-
-    fn set_visible(&mut self, visible: bool) {
-        self.visible = visible;
-    }
-
-    fn render(&mut self, frame: &mut UiFrame<'_>, surface: WindowSurface, focused: bool) {
-        self.component.render(frame, surface, focused);
-    }
-
-    pub(crate) fn selection_status(&self) -> SelectionStatus {
-        self.component.selection_status()
-    }
-
-    pub(crate) fn selection_text(&mut self) -> Option<String> {
-        self.component.selection_text()
-    }
-
-    fn handle_event(&mut self, event: &Event) -> bool {
-        self.component.handle_event(event)
-    }
-
-    fn set_selection_enabled(&mut self, enabled: bool) {
-        self.component.set_selection_enabled(enabled);
-    }
-}
-
-pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
-    app_focus: FocusRing<Id>,
-    wm_focus: FocusRing<WindowId<Id>>,
-    windows: BTreeMap<WindowId<Id>, Window>,
-    pub(crate) regions: RegionMap<WindowId<Id>>,
-    scroll: BTreeMap<Id, ScrollState>,
+pub struct WindowManager {
+    focus: FocusRing<WindowKey>,
+    windows: SlotMap<WindowKey, Window>,
+    pub(crate) regions: RegionMap<WindowKey>,
+    scroll: BTreeMap<WindowKey, ScrollState>,
     pub(crate) handles: Vec<SplitHandle>,
-    pub(crate) resize_handles: Vec<ResizeHandle<WindowId<Id>>>,
-    pub(crate) floating_headers: Vec<DragHandle<WindowId<Id>>>,
-    pub(crate) managed_draw_order: Vec<WindowId<Id>>,
-    managed_draw_order_app: Vec<Id>,
-    pub(crate) managed_layout: Option<TilingLayout<WindowId<Id>>>,
-    closed_app_windows: Vec<Id>,
+    pub(crate) resize_handles: Vec<ResizeHandle<WindowKey>>,
+    pub(crate) floating_headers: Vec<DragHandle<WindowKey>>,
+    pub(crate) managed_draw_order: Vec<WindowKey>,
+    pub(crate) managed_layout: Option<TilingLayout<WindowKey>>,
+    closed_windows: Vec<WindowKey>,
     pub(crate) managed_area: Rect,
     app_ctx: Arc<AppContext>,
-    top_panel: Option<Box<dyn TopPanel<WindowId<Id>>>>,
+    top_panel: Option<Box<dyn TopPanel<WindowKey>>>,
     bottom_panel: Option<Box<dyn BottomPanel>>,
     menu_overlay: Option<Box<dyn MenuOverlay<WmMenuAction>>>,
-    pub(crate) drag_header: Option<HeaderDrag<WindowId<Id>>>,
-    pub(crate) last_header_click: Option<(WindowId<Id>, Instant)>,
-    pub(crate) drag_resize: Option<ResizeDrag<WindowId<Id>>>,
+    pub(crate) drag_header: Option<HeaderDrag<WindowKey>>,
+    pub(crate) last_header_click: Option<(WindowKey, Instant)>,
+    pub(crate) drag_resize: Option<ResizeDrag<WindowKey>>,
     pub(crate) hover: Option<(u16, u16)>,
     capture_deadline: Option<Instant>,
     pending_deadline: Option<Instant>,
@@ -238,15 +148,18 @@ pub struct WindowManager<Id: Copy + Eq + Ord + std::fmt::Debug> {
     overlays: BTreeMap<OverlayId, Box<dyn Overlay>>,
     scroll_keyboard_enabled_default: bool,
     floating_resize_offscreen: bool,
-    pub(crate) z_order: Vec<WindowId<Id>>,
-    pub(crate) drag_snap: Option<(Option<WindowId<Id>>, InsertPosition, Rect)>,
+    pub(crate) z_order: Vec<WindowKey>,
+    pub(crate) drag_snap: Option<(Option<WindowKey>, InsertPosition, Rect)>,
     drag_last_event: Option<Instant>,
-    system_windows: BTreeMap<SystemWindowId, SystemWindowEntry>,
+    // No separate component map — components live on the Window struct
+    // in the SlotMap.  See `Window.component`.
     next_window_seq: usize,
     next_title_seq: usize,
     synthetic_event: Option<Event>,
     clipboard: Option<crate::clipboard::Clipboard>,
     power_profile: PowerProfile,
+    pub(crate) reaper: Reaper,
+    quit_requested: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -265,83 +178,87 @@ pub enum WmMenuAction {
     ToggleWindowSelection,
 }
 
-impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
-    fn window_mut(&mut self, id: WindowId<Id>) -> &mut Window {
-        let seq = &mut self.next_window_seq;
-        self.windows.entry(id).or_insert_with(|| {
-            let order = *seq;
-            *seq = order.saturating_add(1);
-            tracing::debug!(window_id = ?id, seq = order, "opened window");
-            Window::new(order)
-        })
+impl WindowManager {
+    /// Allocate a new window entry in the SlotMap and return its key.
+    /// The window starts with default state (no title, not floating, etc.).
+    pub fn create_window(&mut self) -> WindowKey {
+        let order = self.next_window_seq;
+        self.next_window_seq = self.next_window_seq.saturating_add(1);
+        tracing::debug!(seq = order, "opened window");
+        self.windows.insert(Window::new(order))
     }
 
-    fn window(&self, id: WindowId<Id>) -> Option<&Window> {
-        self.windows.get(&id)
+    /// Access the Reaper for async child-process teardown.
+    pub fn reaper(&mut self) -> &mut Reaper {
+        &mut self.reaper
     }
 
-    fn is_minimized(&self, id: WindowId<Id>) -> bool {
-        self.window(id).is_some_and(|window| window.minimized)
+    fn window_mut(&mut self, key: WindowKey) -> &mut Window {
+        self.windows
+            .get_mut(key)
+            .unwrap_or_else(|| panic!("window_mut called for unknown key {:?}", key))
     }
 
-    fn set_minimized(&mut self, id: WindowId<Id>, value: bool) {
-        self.window_mut(id).minimized = value;
+    fn window(&self, key: WindowKey) -> Option<&Window> {
+        self.windows.get(key)
     }
 
-    fn floating_rect(&self, id: WindowId<Id>) -> Option<crate::window::FloatRectSpec> {
-        self.window(id).and_then(|window| window.floating_rect)
+    fn is_minimized(&self, key: WindowKey) -> bool {
+        self.window(key).is_some_and(|window| window.minimized)
     }
 
-    fn set_floating_rect(&mut self, id: WindowId<Id>, rect: Option<crate::window::FloatRectSpec>) {
-        self.window_mut(id).floating_rect = rect;
+    fn set_minimized(&mut self, key: WindowKey, value: bool) {
+        self.window_mut(key).minimized = value;
     }
 
-    fn clear_floating_rect(&mut self, id: WindowId<Id>) {
-        self.window_mut(id).floating_rect = None;
+    fn floating_rect(&self, key: WindowKey) -> Option<crate::window::FloatRectSpec> {
+        self.window(key).and_then(|window| window.floating_rect)
+    }
+
+    fn set_floating_rect(&mut self, key: WindowKey, rect: Option<crate::window::FloatRectSpec>) {
+        self.window_mut(key).floating_rect = rect;
+    }
+
+    fn clear_floating_rect(&mut self, key: WindowKey) {
+        self.window_mut(key).floating_rect = None;
     }
 
     fn set_prev_floating_rect(
         &mut self,
-        id: WindowId<Id>,
+        key: WindowKey,
         rect: Option<crate::window::FloatRectSpec>,
     ) {
-        self.window_mut(id).prev_floating_rect = rect;
+        self.window_mut(key).prev_floating_rect = rect;
     }
 
-    fn take_prev_floating_rect(
-        &mut self,
-        id: WindowId<Id>,
-    ) -> Option<crate::window::FloatRectSpec> {
-        self.window_mut(id).prev_floating_rect.take()
+    fn take_prev_floating_rect(&mut self, key: WindowKey) -> Option<crate::window::FloatRectSpec> {
+        self.window_mut(key).prev_floating_rect.take()
     }
 
-    fn is_window_floating(&self, id: WindowId<Id>) -> bool {
-        self.window(id).is_some_and(|window| window.is_floating())
+    fn is_window_floating(&self, key: WindowKey) -> bool {
+        self.window(key).is_some_and(|window| window.is_floating())
     }
 
-    pub fn direct_mode(&self, id: WindowId<Id>) -> bool {
-        self.window(id).is_some_and(|window| window.direct_mode)
+    pub fn direct_mode(&self, key: WindowKey) -> bool {
+        self.window(key).is_some_and(|window| window.direct_mode)
     }
 
-    pub fn set_direct_mode(&mut self, id: WindowId<Id>, value: bool) {
-        self.window_mut(id).direct_mode = value;
+    pub fn set_direct_mode(&mut self, key: WindowKey, value: bool) {
+        self.window_mut(key).direct_mode = value;
     }
 
-    pub fn toggle_direct_mode(&mut self, id: WindowId<Id>) {
-        let current = self.direct_mode(id);
-        self.set_direct_mode(id, !current);
+    pub fn toggle_direct_mode(&mut self, key: WindowKey) {
+        let current = self.direct_mode(key);
+        self.set_direct_mode(key, !current);
     }
 
-    pub fn window_title(&self, id: WindowId<Id>) -> String {
+    pub fn window_title(&self, key: WindowKey) -> String {
         let base = self
-            .window(id)
-            .map(|window| window.title_or_default(id))
-            .unwrap_or_else(|| match id {
-                WindowId::App(app_id) => format!("{:?}", app_id),
-                WindowId::System(SystemWindowId::DebugLog) => "Debug Log".to_string(),
-            });
+            .window(key)
+            .map(|window| window.title_or_default(key))
+            .unwrap_or_else(|| format!("{:?}", key));
         let order = self.build_display_order();
-        let same: Vec<&WindowId<Id>> = order
+        let same: Vec<&WindowKey> = order
             .iter()
             .filter(|oid| {
                 self.window(**oid)
@@ -353,20 +270,20 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         if same.len() <= 1 {
             return base;
         }
-        let nth = same.iter().position(|&&oid| oid == id).unwrap_or(0) + 1;
+        let nth = same.iter().position(|&&oid| oid == key).unwrap_or(0) + 1;
         format!("{} ({})", base, nth)
     }
 
     /// Pre-compute all display titles in one pass from a single snapshot of
     /// `build_display_order()`.  Same-title windows are numbered by the order
     /// the title was assigned (`title_set_order`), so the first window to get
-    /// "htop" is "htop (1)" regardless of creation order.
-    pub fn window_titles(&self) -> Vec<(WindowId<Id>, String)> {
+    /// "htop" is "htop (keys\[1\])" regardless of creation order.
+    pub fn window_titles(&self) -> Vec<(WindowKey, String)> {
         let order = self.build_display_order();
         #[allow(clippy::type_complexity)]
         let mut groups: std::collections::BTreeMap<
             String,
-            Vec<(WindowId<Id>, Option<usize>)>,
+            Vec<(WindowKey, Option<usize>)>,
         > = std::collections::BTreeMap::new();
         for &oid in &order {
             let base = self
@@ -398,17 +315,16 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     }
 
     fn clear_all_floating(&mut self) {
-        for window in self.windows.values_mut() {
+        for (_key, window) in self.windows.iter_mut() {
             window.floating_rect = None;
             window.prev_floating_rect = None;
         }
     }
 
     pub fn with_config(
-        current: Id,
         config: WmConfig,
         app_ctx: Arc<AppContext>,
-        top_panel: Option<Box<dyn TopPanel<WindowId<Id>>>>,
+        top_panel: Option<Box<dyn TopPanel<WindowKey>>>,
         bottom_panel: Option<Box<dyn BottomPanel>>,
         menu_overlay: Option<Box<dyn MenuOverlay<WmMenuAction>>>,
     ) -> Self {
@@ -416,18 +332,19 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let clipboard = Some(crate::clipboard::Clipboard::new());
         let floating_resize_offscreen = config.floating_resize_offscreen;
         Self {
-            app_focus: FocusRing::new(current),
-            wm_focus: FocusRing::new(WindowId::system(SystemWindowId::DebugLog)),
-            windows: BTreeMap::new(),
+            focus: FocusRing::new(
+                /* placeholder, will be set on first window */
+                slotmap::DefaultKey::default(),
+            ),
+            windows: SlotMap::with_capacity(32),
             regions: RegionMap::default(),
             scroll: BTreeMap::new(),
             handles: Vec::new(),
             resize_handles: Vec::new(),
             floating_headers: Vec::new(),
             managed_draw_order: Vec::new(),
-            managed_draw_order_app: Vec::new(),
             managed_layout: None,
-            closed_app_windows: Vec::new(),
+            closed_windows: Vec::new(),
             managed_area: Rect::default(),
             app_ctx,
             top_panel,
@@ -462,17 +379,40 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             z_order: Vec::new(),
             drag_snap: None,
             drag_last_event: None,
-            system_windows: BTreeMap::new(),
             next_window_seq: 0,
             next_title_seq: 0,
             synthetic_event: None,
             clipboard,
             power_profile: PowerProfile::PowerSaver,
+            reaper: Reaper::default(),
+            quit_requested: false,
         }
     }
 
-    pub fn take_closed_app_windows(&mut self) -> Vec<Id> {
-        std::mem::take(&mut self.closed_app_windows)
+    /// Request a clean shutdown on the next idle tick.
+    pub fn request_quit(&mut self) {
+        self.quit_requested = true;
+    }
+
+    /// Returns `true` if a quit has been requested.
+    pub fn quit_requested(&self) -> bool {
+        self.quit_requested
+    }
+
+    /// Remove a key from the focus ring's order (called after closing a window).
+    fn remove_from_focus_ring(&mut self, key: WindowKey) {
+        let order: Vec<WindowKey> = self
+            .focus
+            .order()
+            .iter()
+            .copied()
+            .filter(|k| *k != key)
+            .collect();
+        self.focus.set_order(order);
+    }
+
+    pub fn take_closed_windows(&mut self) -> Vec<WindowKey> {
+        std::mem::take(&mut self.closed_windows)
     }
 
     pub fn take_synthetic_event(&mut self) -> Option<Event> {
@@ -518,9 +458,9 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
     /// Create a [`ComponentContext`] for a specific window, including the
     /// window's direct-mode state so children (scroll view, terminal) can
     /// adapt their rendering and event handling automatically.
-    pub fn component_context_for(&self, focused: bool, id: WindowId<Id>) -> ComponentContext {
+    pub fn component_context_for(&self, focused: bool, key: WindowKey) -> ComponentContext {
         self.component_context(focused)
-            .with_direct_mode(self.direct_mode(id))
+            .with_direct_mode(self.direct_mode(key))
     }
 
     /// Number of overlays that will be rendered this frame.
@@ -556,9 +496,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             p.begin_frame();
             p.set_power_profile(self.power_profile);
         }
-        if crate::debug_event_flags::take_panic_pending() {
-            self.show_system_window(SystemWindowId::DebugLog);
-        }
         if !self.config.wm_overlay_enabled {
             self.clear_capture();
         } else {
@@ -575,7 +512,6 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         self.resize_handles.clear();
         self.floating_headers.clear();
         self.managed_draw_order.clear();
-        self.managed_draw_order_app.clear();
     }
 
     pub fn arm_capture(&mut self, timeout: Duration) {
@@ -760,7 +696,9 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         }
         self.clipboard_enabled = enabled;
         self.clipboard_dirty = true;
-        self.apply_clipboard_selection_state(enabled);
+        for overlay in self.overlays.values_mut() {
+            crate::components::Overlay::set_selection_enabled(&mut **overlay, enabled);
+        }
     }
 
     pub fn toggle_clipboard_enabled(&mut self) {
@@ -781,9 +719,30 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         }
     }
 
-    pub fn set_system_window(&mut self, id: SystemWindowId, component: Box<dyn SystemWindowView>) {
-        self.system_windows
-            .insert(id, SystemWindowEntry::new(component));
+    /// Register a component directly on a window in the SlotMap.
+    /// Creates the SlotMap entry, stores the component, and returns the
+    /// WindowKey.  The App or runner retrieves the component via
+    /// `WindowProvider::window_component` → `component_for_key`.
+    pub fn set_system_window(
+        &mut self,
+        component: Box<dyn crate::components::Component>,
+    ) -> WindowKey {
+        let key = self.create_window();
+        if let Some(w) = self.windows.get_mut(key) {
+            w.component = Some(component);
+        }
+        key
+    }
+
+    /// Retrieve the component stored on a window in the SlotMap, if any.
+    /// Used by `WindowProvider::window_component` implementations.
+    pub fn component_for_key(
+        &mut self,
+        key: WindowKey,
+    ) -> Option<&mut dyn crate::components::Component> {
+        let w = self.windows.get_mut(key)?;
+        let c = w.component.as_mut()?;
+        Some(c.as_mut())
     }
 
     pub fn open_overlay(&mut self, id: OverlayId, overlay: Option<Box<dyn Overlay>>) {
@@ -875,7 +834,7 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         }
         self.drag_header = None;
         self.drag_last_event = None;
-        self.apply_snap(drag.id);
+        self.apply_snap(drag.key);
         true
     }
 
@@ -923,11 +882,11 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
             })
         };
         let display = self.build_display_order();
-        let titles_map: std::collections::BTreeMap<WindowId<Id>, String> =
+        let titles_map: std::collections::BTreeMap<WindowKey, String> =
             self.window_titles().into_iter().collect();
         let selection_copy_available = self.selection_text.is_some();
         let panel_active = self.panel_active();
-        let focus_current = *self.wm_focus.current();
+        let focus_current = *self.focus.current();
         let mouse_capture_enabled = self.mouse_capture_enabled();
         let clipboard_enabled = self.clipboard_enabled();
         let window_selection_enabled = self.window_selection_enabled();
@@ -935,11 +894,11 @@ impl<Id: Copy + Eq + Ord + std::fmt::Debug + 'static> WindowManager<Id> {
         let selection_dragging = self.selection_dragging();
         let selection_copied = self.selection_copied();
         let wm_overlay_visible = self.wm_overlay_visible();
-        let label_for = &move |id| {
-            titles_map.get(&id).cloned().unwrap_or_else(|| match id {
-                WindowId::App(app_id) => format!("{:?}", app_id),
-                WindowId::System(SystemWindowId::DebugLog) => "Debug Log".to_string(),
-            })
+        let label_for = &move |key| {
+            titles_map
+                .get(&key)
+                .cloned()
+                .unwrap_or_else(|| format!("{:?}", key))
         };
         if let Some(p) = &mut self.top_panel {
             p.render(
@@ -1081,9 +1040,9 @@ fn float_rect_visible(rect: crate::window::FloatRect, bounds: Rect) -> Rect {
     }
 }
 
-fn map_layout_node<Id: Copy + Eq + Ord>(node: &LayoutNode<Id>) -> LayoutNode<WindowId<Id>> {
+fn map_layout_node(node: &LayoutNode<WindowKey>) -> LayoutNode<WindowKey> {
     match node {
-        LayoutNode::Leaf(id) => LayoutNode::leaf(WindowId::app(*id)),
+        LayoutNode::Leaf(key) => LayoutNode::leaf(*key),
         LayoutNode::Split {
             direction,
             children,
@@ -1110,6 +1069,11 @@ fn rects_intersect(a: Rect, b: Rect) -> bool {
     let b_right = b.x.saturating_add(b.width);
     let b_bottom = b.y.saturating_add(b.height);
     a.x < b_right && a_right > b.x && a.y < b_bottom && a_bottom > b.y
+}
+
+#[cfg(test)]
+fn make_keys(wm: &mut WindowManager, n: usize) -> Vec<WindowKey> {
+    (0..n).map(|_| wm.create_window()).collect()
 }
 
 #[cfg(test)]
@@ -1191,14 +1155,19 @@ mod tests {
     }
 
     #[test]
-    fn map_layout_node_maps_leaf_to_windowid_app() {
-        let node = LayoutNode::leaf(3usize);
+    fn map_layout_node_maps_leaf_to_windowkey() {
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        let key = wm.create_window();
+        let node = LayoutNode::leaf(key);
         let mapped = map_layout_node(&node);
         match mapped {
-            LayoutNode::Leaf(id) => match id {
-                WindowId::App(r) => assert_eq!(r, 3usize),
-                _ => panic!("expected App window id"),
-            },
+            LayoutNode::Leaf(key) => assert_eq!(key, key),
             _ => panic!("expected leaf"),
         }
     }
@@ -1219,14 +1188,14 @@ mod tests {
     #[test]
     fn click_focusing_topmost_window() {
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
 
         let r1 = Rect {
             x: 0,
@@ -1240,13 +1209,16 @@ mod tests {
             width: 10,
             height: 10,
         };
-        wm.regions.set(WindowId::app(1usize), r1);
-        wm.regions.set(WindowId::app(2usize), r2);
-        wm.z_order.push(WindowId::app(1usize));
-        wm.z_order.push(WindowId::app(2usize));
+        wm.regions.set(keys[1], r1);
+        wm.regions.set(keys[2], r2);
+        wm.z_order.push(keys[1]);
+        wm.z_order.push(keys[2]);
         wm.managed_draw_order = wm.z_order.clone();
 
-        assert!(matches!(wm.wm_focus.current(), WindowId::System(_)));
+        assert!(
+            !wm.windows.contains_key(*wm.focus.current()),
+            "initial focus should be a placeholder, not a real window"
+        );
 
         let clicked_col = 6u16;
         let clicked_row = 6u16;
@@ -1258,23 +1230,23 @@ mod tests {
         };
         let evt = Event::Mouse(mouse);
         let _handled = wm.handle_managed_event(&evt);
-        assert_eq!(*wm.wm_focus.current(), WindowId::app(2usize));
+        assert_eq!(*wm.focus.current(), keys[2]);
     }
 
     #[test]
     fn enforce_min_visible_margin_horizontal() {
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
-            WindowId::app(1usize),
+            keys[1],
             Some(FloatRectSpec::Absolute(FloatRect {
                 x: -4,
                 y: 0,
@@ -1288,9 +1260,7 @@ mod tests {
             width: 10,
             height: 10,
         });
-        let got = wm
-            .floating_rect(WindowId::app(1))
-            .expect("floating rect present");
+        let got = wm.floating_rect(keys[1]).expect("floating rect present");
         match got {
             FloatRectSpec::Absolute(fr) => {
                 let bounds = wm.managed_area;
@@ -1305,17 +1275,17 @@ mod tests {
     #[test]
     fn enforce_min_visible_margin_vertical() {
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
-            WindowId::app(2usize),
+            keys[2],
             Some(FloatRectSpec::Absolute(FloatRect {
                 x: 0,
                 y: -3,
@@ -1329,9 +1299,7 @@ mod tests {
             width: 10,
             height: 10,
         });
-        let got = wm
-            .floating_rect(WindowId::app(2))
-            .expect("floating rect present");
+        let got = wm.floating_rect(keys[2]).expect("floating rect present");
         match got {
             FloatRectSpec::Absolute(fr) => {
                 assert!(fr.y >= 0);
@@ -1343,30 +1311,28 @@ mod tests {
     #[test]
     fn maximize_persists_across_resize() {
         use crate::window::FloatRectSpec;
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
         wm.register_managed_layout(ratatui::layout::Rect {
             x: 0,
             y: 0,
             width: 20,
             height: 15,
         });
-        wm.toggle_maximize(WindowId::app(3usize));
+        wm.toggle_maximize(keys[3]);
         wm.register_managed_layout(ratatui::layout::Rect {
             x: 0,
             y: 0,
             width: 30,
             height: 20,
         });
-        let got = wm
-            .floating_rect(WindowId::app(3))
-            .expect("floating rect present");
+        let got = wm.floating_rect(keys[3]).expect("floating rect present");
         match got {
             FloatRectSpec::Absolute(fr) => {
                 assert_eq!(fr.width, wm.managed_area.width);
@@ -1379,36 +1345,30 @@ mod tests {
     #[test]
     fn minimize_and_restore_preserves_floating_rect() {
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
         let original = FloatRect {
             x: 5,
             y: 3,
             width: 10,
             height: 8,
         };
-        wm.set_floating_rect(
-            WindowId::app(1usize),
-            Some(FloatRectSpec::Absolute(original)),
-        );
+        wm.set_floating_rect(keys[1], Some(FloatRectSpec::Absolute(original)));
         wm.register_managed_layout(Rect {
             x: 0,
             y: 0,
             width: 20,
             height: 15,
         });
-        wm.minimize_window(WindowId::app(1usize));
-        assert!(
-            wm.is_minimized(WindowId::app(1usize)),
-            "window should be minimized"
-        );
-        let after_minimize = wm.floating_rect(WindowId::app(1usize));
+        wm.minimize_window(keys[1]);
+        assert!(wm.is_minimized(keys[1]), "window should be minimized");
+        let after_minimize = wm.floating_rect(keys[1]);
         assert!(
             after_minimize.is_some(),
             "floating rect should survive minimize"
@@ -1418,12 +1378,9 @@ mod tests {
             Some(FloatRectSpec::Absolute(original)),
             "floating rect should be unchanged after minimize"
         );
-        wm.restore_minimized(WindowId::app(1usize));
-        assert!(
-            !wm.is_minimized(WindowId::app(1usize)),
-            "window should be restored"
-        );
-        let after_restore = wm.floating_rect(WindowId::app(1usize));
+        wm.restore_minimized(keys[1]);
+        assert!(!wm.is_minimized(keys[1]), "window should be restored");
+        let after_restore = wm.floating_rect(keys[1]);
         assert_eq!(
             after_restore,
             Some(FloatRectSpec::Absolute(original)),
@@ -1434,21 +1391,21 @@ mod tests {
     #[test]
     fn localize_event_converts_to_local_coords() {
         use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
         let target_rect = ratatui::layout::Rect {
             x: 10,
             y: 5,
             width: 20,
             height: 8,
         };
-        wm.set_region(1, target_rect);
+        wm.set_region(keys[1], target_rect);
         let mouse = MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: 15,
@@ -1457,7 +1414,7 @@ mod tests {
         };
         let event = Event::Mouse(mouse);
         let window_local = wm
-            .localize_event(WindowId::app(1), &event)
+            .localize_event(keys[1], &event)
             .expect("window-local event");
         if let Event::Mouse(local) = window_local {
             assert_eq!(local.column, 5);
@@ -1467,7 +1424,7 @@ mod tests {
         }
 
         let content_local = wm
-            .localize_event_to_app(1, &event)
+            .localize_event_to_app(keys[1], &event)
             .expect("content-local event");
         if let Event::Mouse(local) = content_local {
             assert_eq!(local.column, 4);
@@ -1481,17 +1438,17 @@ mod tests {
     fn localize_event_handles_negative_origin() {
         use crate::window::{FloatRect, FloatRectSpec};
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
-            WindowId::app(1usize),
+            keys[1],
             Some(FloatRectSpec::Absolute(FloatRect {
                 x: -5,
                 y: 1,
@@ -1514,7 +1471,7 @@ mod tests {
         let event = Event::Mouse(mouse);
 
         let window_local = wm
-            .localize_event(WindowId::app(1), &event)
+            .localize_event(keys[1], &event)
             .expect("window-local event");
         if let Event::Mouse(local) = window_local {
             assert_eq!(local.column, 5);
@@ -1524,7 +1481,7 @@ mod tests {
         }
 
         let content_local = wm
-            .localize_event_to_app(1, &event)
+            .localize_event_to_app(keys[1], &event)
             .expect("content-local event");
         if let Event::Mouse(local) = content_local {
             assert_eq!(local.column, 4);
@@ -1537,17 +1494,17 @@ mod tests {
     #[test]
     fn hit_test_uses_visible_bounds_for_floating_windows() {
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
         wm.set_floating_resize_offscreen(true);
         wm.set_floating_rect(
-            WindowId::app(1usize),
+            keys[1],
             Some(FloatRectSpec::Absolute(FloatRect {
                 x: -5,
                 y: 0,
@@ -1562,7 +1519,7 @@ mod tests {
             height: 10,
         });
         wm.regions.set(
-            WindowId::app(2usize),
+            keys[2],
             ratatui::layout::Rect {
                 x: 0,
                 y: 0,
@@ -1570,26 +1527,26 @@ mod tests {
                 height: 10,
             },
         );
-        wm.managed_draw_order = vec![WindowId::app(2usize), WindowId::app(1usize)];
+        wm.managed_draw_order = vec![keys[2], keys[1]];
 
         let hit = wm.hit_test_region_topmost(8, 2, &wm.managed_draw_order);
-        assert_eq!(hit, Some(WindowId::app(2usize)));
+        assert_eq!(hit, Some(keys[2]));
     }
 
     #[test]
     fn hover_targets_respects_occlusion() {
         use crate::layout::floating::{ResizeEdge, ResizeHandle};
         use crate::layout::tiling::SplitHandle;
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
         wm.regions.set(
-            WindowId::app(1usize),
+            keys[1],
             Rect {
                 x: 0,
                 y: 0,
@@ -1598,7 +1555,7 @@ mod tests {
             },
         );
         wm.regions.set(
-            WindowId::app(2usize),
+            keys[2],
             Rect {
                 x: 0,
                 y: 0,
@@ -1606,7 +1563,7 @@ mod tests {
                 height: 5,
             },
         );
-        wm.managed_draw_order = vec![WindowId::app(1usize), WindowId::app(2usize)];
+        wm.managed_draw_order = vec![keys[1], keys[2]];
         let overlapping = Rect {
             x: 2,
             y: 1,
@@ -1614,17 +1571,17 @@ mod tests {
             height: 1,
         };
         wm.resize_handles.push(ResizeHandle {
-            id: WindowId::app(1usize),
+            key: keys[1],
             rect: overlapping,
             edge: ResizeEdge::Left,
         });
         wm.resize_handles.push(ResizeHandle {
-            id: WindowId::app(2usize),
+            key: keys[2],
             rect: overlapping,
             edge: ResizeEdge::Left,
         });
         wm.resize_handles.push(ResizeHandle {
-            id: WindowId::app(1usize),
+            key: keys[1],
             rect: Rect {
                 x: 8,
                 y: 1,
@@ -1652,16 +1609,16 @@ mod tests {
             "floating window should mask layout handles"
         );
         assert_eq!(
-            resize_hover.map(|handle| handle.id),
-            Some(WindowId::app(2usize)),
+            resize_hover.map(|handle| handle.key),
+            Some(keys[2]),
             "topmost window should own the hover"
         );
 
         wm.hover = Some((8, 1));
         let (_, resize_hover) = wm.hover_targets();
         assert_eq!(
-            resize_hover.map(|handle| handle.id),
-            Some(WindowId::app(1usize)),
+            resize_hover.map(|handle| handle.key),
+            Some(keys[1]),
             "background window should hover once it is exposed"
         );
 
@@ -1676,34 +1633,31 @@ mod tests {
 
     #[test]
     fn system_window_header_drag_detaches_to_floating() {
+        use crate::layout::LayoutNode;
         use crate::ui::UiFrame;
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-        struct DummyDebugComponent;
-        impl SystemWindowView for DummyDebugComponent {
+        struct DummyComponent;
+        impl crate::components::Component for DummyComponent {
             fn render(
                 &mut self,
                 _frame: &mut UiFrame<'_>,
-                _surface: WindowSurface,
-                _focused: bool,
+                _area: ratatui::prelude::Rect,
+                _ctx: &crate::components::ComponentContext,
             ) {
-            }
-            fn handle_event(&mut self, _event: &Event) -> bool {
-                false
             }
         }
 
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
-        wm.set_system_window(SystemWindowId::DebugLog, Box::new(DummyDebugComponent));
+        let debug_key = wm.set_system_window(Box::new(DummyComponent));
         wm.set_panel_visible(false);
-        wm.show_system_window(SystemWindowId::DebugLog);
+        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(debug_key)));
         wm.register_managed_layout(Rect {
             x: 0,
             y: 0,
@@ -1711,14 +1665,13 @@ mod tests {
             height: 24,
         });
 
-        let debug_id = WindowId::system(SystemWindowId::DebugLog);
         let header_rect = wm
             .floating_headers
             .iter()
-            .find(|handle| handle.id == debug_id)
+            .find(|handle| handle.key == debug_key)
             .expect("debug header present")
             .rect;
-        assert!(!wm.is_window_floating(debug_id));
+        assert!(!wm.is_window_floating(debug_key));
 
         let down = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -1726,9 +1679,9 @@ mod tests {
             row: header_rect.y,
             modifiers: KeyModifiers::NONE,
         });
-        assert!(wm.handle_managed_event(&down));
-        assert!(wm.is_window_floating(debug_id));
-        let start_rect = match wm.floating_rect(debug_id).expect("floating rect present") {
+        assert!(wm.handle_header_drag_event(&down));
+        assert!(wm.is_window_floating(debug_key));
+        let start_rect = match wm.floating_rect(debug_key).expect("floating rect present") {
             crate::window::FloatRectSpec::Absolute(fr) => fr,
             _ => panic!("expected absolute rect"),
         };
@@ -1741,9 +1694,9 @@ mod tests {
             row: drag_row,
             modifiers: KeyModifiers::NONE,
         });
-        assert!(wm.handle_managed_event(&drag));
+        assert!(wm.handle_header_drag_event(&drag));
 
-        let moved = match wm.floating_rect(debug_id).expect("floating rect present") {
+        let moved = match wm.floating_rect(debug_key).expect("floating rect present") {
             crate::window::FloatRectSpec::Absolute(fr) => fr,
             _ => panic!("expected absolute rect"),
         };
@@ -1756,7 +1709,7 @@ mod tests {
             row: drag_row,
             modifiers: KeyModifiers::NONE,
         });
-        assert!(wm.handle_managed_event(&up));
+        assert!(wm.handle_header_drag_event(&up));
         assert!(wm.drag_header.is_none());
     }
 
@@ -1767,14 +1720,14 @@ mod tests {
         use crate::window::{FloatRect, FloatRectSpec};
         use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
 
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
         wm.register_managed_layout(Rect {
             x: 0,
@@ -1783,10 +1736,10 @@ mod tests {
             height: 24,
         });
 
-        let id = WindowId::App(1usize);
+        let key = keys[1];
         // Set up a floating window so apply_snap has a valid target.
         wm.set_floating_rect(
-            id,
+            key,
             Some(FloatRectSpec::Absolute(FloatRect {
                 x: 10,
                 y: 5,
@@ -1797,7 +1750,7 @@ mod tests {
 
         // Simulate abandoned drag (mouse released outside terminal).
         wm.drag_header = Some(HeaderDrag {
-            id,
+            key,
             initial_x: 10,
             initial_y: 5,
             start_x: 15,
@@ -1831,21 +1784,21 @@ mod tests {
     #[test]
     fn adjust_event_rebases_app_mouse_coordinates() {
         use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
         let full = Rect {
             x: 10,
             y: 3,
             width: 12,
             height: 8,
         };
-        wm.regions.set(WindowId::app(1usize), full);
+        wm.regions.set(keys[1], full);
 
         let global = MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -1853,7 +1806,7 @@ mod tests {
             row: 9,
             modifiers: KeyModifiers::NONE,
         };
-        let content = wm.region_for_id(WindowId::app(1));
+        let content = wm.region_for_key(keys[1]);
         let localized = Event::Mouse(MouseEvent {
             column: global.column.saturating_sub(content.x),
             row: global.row.saturating_sub(content.y),
@@ -1861,50 +1814,7 @@ mod tests {
             modifiers: global.modifiers,
         });
 
-        let rebased = wm.adjust_event_for_window(WindowId::app(1), &localized);
-        let Event::Mouse(result) = rebased else {
-            panic!("expected mouse event");
-        };
-        assert_eq!(result.column, global.column - full.x);
-        assert_eq!(result.row, global.row - full.y);
-    }
-
-    #[test]
-    fn adjust_event_rebases_system_mouse_coordinates() {
-        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            None,
-            None,
-        );
-        let full = Rect {
-            x: 2,
-            y: 4,
-            width: 15,
-            height: 6,
-        };
-        wm.regions
-            .set(WindowId::system(SystemWindowId::DebugLog), full);
-
-        let global = MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 7,
-            row: 8,
-            modifiers: KeyModifiers::NONE,
-        };
-        let content = wm.region_for_id(WindowId::system(SystemWindowId::DebugLog));
-        let localized = Event::Mouse(MouseEvent {
-            column: global.column.saturating_sub(content.x),
-            row: global.row.saturating_sub(content.y),
-            kind: global.kind,
-            modifiers: global.modifiers,
-        });
-
-        let rebased =
-            wm.adjust_event_for_window(WindowId::system(SystemWindowId::DebugLog), &localized);
+        let rebased = wm.adjust_event_for_window(keys[1], &localized);
         let Event::Mouse(result) = rebased else {
             panic!("expected mouse event");
         };
@@ -1915,14 +1825,14 @@ mod tests {
     #[test]
     fn hover_scroll_routes_to_non_focused_window() {
         use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
 
         let r1 = Rect {
             x: 0,
@@ -1936,16 +1846,16 @@ mod tests {
             width: 10,
             height: 10,
         };
-        wm.regions.set(WindowId::app(1usize), r1);
-        wm.regions.set(WindowId::app(2usize), r2);
+        wm.regions.set(keys[1], r1);
+        wm.regions.set(keys[2], r2);
         // Window 2 is topmost (last in draw order)
-        wm.z_order = vec![WindowId::app(1usize), WindowId::app(2usize)];
+        wm.z_order = vec![keys[1], keys[2]];
         wm.managed_draw_order = wm.z_order.clone();
         // Focus on window 1 without altering z_order (unlike focus_app_window which brings to front)
-        wm.app_focus.set_current(1usize);
-        wm.wm_focus.set_current(WindowId::app(1usize));
-        assert_eq!(wm.focus(), 1usize);
-        assert_eq!(wm.focused_window(), WindowId::app(1usize));
+        wm.focus.set_current(keys[1]);
+        wm.focus.set_current(keys[1]);
+        assert_eq!(wm.focused_window(), keys[1]);
+        assert_eq!(wm.focused_window(), keys[1]);
 
         let scroll = Event::Mouse(MouseEvent {
             kind: MouseEventKind::ScrollUp,
@@ -1954,15 +1864,15 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
 
-        let mut received_id = None;
+        let mut received_key = None;
         let mut received_event = None;
-        let _consumed = wm.dispatch_focused_event(&scroll, |id, evt| {
-            received_id = Some(id);
+        let _consumed = wm.dispatch_focused_event(&scroll, |key, evt| {
+            received_key = Some(key);
             received_event = Some(evt.clone());
             true
         });
 
-        assert_eq!(received_id, Some(2usize));
+        assert_eq!(received_key, Some(keys[2]));
 
         if let Some(Event::Mouse(m)) = received_event {
             // Chrome adds 1-col / 2-row offset: content starts at (6,7) relative
@@ -1975,20 +1885,20 @@ mod tests {
             panic!("expected localized mouse event");
         }
 
-        assert_eq!(wm.focus(), 1usize, "focus must not change");
+        assert_eq!(wm.focused_window(), keys[1], "focus must not change");
     }
 
     #[test]
     fn hover_scroll_over_focused_window_routes_normally() {
         use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
 
         let r1 = Rect {
             x: 0,
@@ -2002,13 +1912,13 @@ mod tests {
             width: 10,
             height: 10,
         };
-        wm.regions.set(WindowId::app(1usize), r1);
-        wm.regions.set(WindowId::app(2usize), r2);
-        wm.z_order.push(WindowId::app(1usize));
-        wm.z_order.push(WindowId::app(2usize));
+        wm.regions.set(keys[1], r1);
+        wm.regions.set(keys[2], r2);
+        wm.z_order.push(keys[1]);
+        wm.z_order.push(keys[2]);
         wm.managed_draw_order = wm.z_order.clone();
 
-        wm.focus_app_window(2usize);
+        wm.focus_app_window(keys[2]);
 
         let scroll = Event::Mouse(MouseEvent {
             kind: MouseEventKind::ScrollDown,
@@ -2017,26 +1927,26 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
 
-        let mut received_id = None;
-        wm.dispatch_focused_event(&scroll, |id, _| {
-            received_id = Some(id);
+        let mut received_key = None;
+        wm.dispatch_focused_event(&scroll, |key, _| {
+            received_key = Some(key);
             true
         });
 
-        assert_eq!(received_id, Some(2usize));
+        assert_eq!(received_key, Some(keys[2]));
     }
 
     #[test]
     fn hover_scroll_outside_all_windows_routes_to_focused() {
         use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
 
         let r1 = Rect {
             x: 0,
@@ -2050,13 +1960,13 @@ mod tests {
             width: 10,
             height: 10,
         };
-        wm.regions.set(WindowId::app(1usize), r1);
-        wm.regions.set(WindowId::app(2usize), r2);
-        wm.z_order.push(WindowId::app(1usize));
-        wm.z_order.push(WindowId::app(2usize));
+        wm.regions.set(keys[1], r1);
+        wm.regions.set(keys[2], r2);
+        wm.z_order.push(keys[1]);
+        wm.z_order.push(keys[2]);
         wm.managed_draw_order = wm.z_order.clone();
 
-        wm.focus_app_window(1usize);
+        wm.focus_app_window(keys[1]);
 
         let scroll = Event::Mouse(MouseEvent {
             kind: MouseEventKind::ScrollUp,
@@ -2065,42 +1975,42 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
 
-        let mut received_id = None;
-        wm.dispatch_focused_event(&scroll, |id, _| {
-            received_id = Some(id);
+        let mut received_key = None;
+        wm.dispatch_focused_event(&scroll, |key, _| {
+            received_key = Some(key);
             true
         });
 
-        assert_eq!(received_id, Some(1usize));
+        assert_eq!(received_key, Some(keys[1]));
     }
 
     #[test]
     fn direct_mode_defaults_to_false() {
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
-        wm.focus_app_window(0);
-        let focus = wm.wm_focus();
+        let keys = make_keys(&mut wm, 100);
+        wm.focus_app_window(keys[0]);
+        let focus = wm.focused_window();
         assert!(!wm.direct_mode(focus));
     }
 
     #[test]
     fn direct_mode_toggle_cycles_state() {
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
-        wm.focus_app_window(0);
-        let focus = wm.wm_focus();
+        let keys = make_keys(&mut wm, 100);
+        wm.focus_app_window(keys[0]);
+        let focus = wm.focused_window();
 
         assert!(!wm.direct_mode(focus));
         wm.toggle_direct_mode(focus);
@@ -2111,36 +2021,36 @@ mod tests {
 
     #[test]
     fn direct_mode_set_get_roundtrip() {
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
-        let id = WindowId::app(42usize);
-        assert!(!wm.direct_mode(id), "default is false");
+        let keys = make_keys(&mut wm, 100);
+        let key = keys[42];
+        assert!(!wm.direct_mode(key), "default is false");
 
-        wm.set_direct_mode(id, true);
-        assert!(wm.direct_mode(id));
+        wm.set_direct_mode(key, true);
+        assert!(wm.direct_mode(key));
 
-        wm.set_direct_mode(id, false);
-        assert!(!wm.direct_mode(id));
+        wm.set_direct_mode(key, false);
+        assert!(!wm.direct_mode(key));
     }
 
     #[test]
     fn direct_mode_is_per_window() {
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
-        let id_a = WindowId::app(1usize);
-        let id_b = WindowId::app(2usize);
+        let keys = make_keys(&mut wm, 100);
+        let id_a = keys[1];
+        let id_b = keys[2];
 
         wm.set_direct_mode(id_a, true);
         assert!(wm.direct_mode(id_a));
@@ -2152,20 +2062,20 @@ mod tests {
         use crate::layout::{LayoutNode, TilingLayout};
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
 
         // Create a proper managed layout with window 1
-        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(1usize)));
-        wm.managed_draw_order = vec![WindowId::App(1usize)];
-        wm.z_order = vec![WindowId::App(1usize)];
+        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(keys[1])));
+        wm.managed_draw_order = vec![keys[1]];
+        wm.z_order = vec![keys[1]];
 
         wm.register_managed_layout(Rect {
             x: 0,
@@ -2173,13 +2083,13 @@ mod tests {
             width: 80,
             height: 24,
         });
-        wm.focus_app_window(1usize);
+        wm.focus_app_window(keys[1]);
 
-        let win_id = WindowId::App(1usize);
+        let win_key = keys[1];
 
         // The K button position must match what hit_test computes
         // using the full window rect (not the inset header rect).
-        let full_rect = wm.full_region_for_id(win_id);
+        let full_rect = wm.full_region_for_key(win_key);
         let outer_right = full_rect
             .x
             .saturating_add(full_rect.width)
@@ -2198,7 +2108,7 @@ mod tests {
             full_rect
         );
 
-        assert!(!wm.direct_mode(win_id), "starts off");
+        assert!(!wm.direct_mode(win_key), "starts off");
 
         let click = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -2211,7 +2121,7 @@ mod tests {
             "header D button click should be handled"
         );
         assert!(
-            wm.direct_mode(win_id),
+            wm.direct_mode(win_key),
             "clicking D toggles direct_mode to true"
         );
 
@@ -2223,7 +2133,7 @@ mod tests {
         });
         assert!(wm.handle_managed_event(&click2));
         assert!(
-            !wm.direct_mode(win_id),
+            !wm.direct_mode(win_key),
             "second click toggles back to false"
         );
     }
@@ -2233,20 +2143,20 @@ mod tests {
         use crate::layout::{LayoutNode, TilingLayout};
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
 
         // Create a proper managed layout with window 1
-        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(1usize)));
-        wm.managed_draw_order = vec![WindowId::App(1usize)];
-        wm.z_order = vec![WindowId::App(1usize)];
+        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(keys[1])));
+        wm.managed_draw_order = vec![keys[1]];
+        wm.z_order = vec![keys[1]];
 
         wm.register_managed_layout(Rect {
             x: 0,
@@ -2254,19 +2164,19 @@ mod tests {
             width: 80,
             height: 24,
         });
-        wm.focus_app_window(1usize);
+        wm.focus_app_window(keys[1]);
 
-        let win_id = WindowId::App(1usize);
+        let win_key = keys[1];
         let header = wm
             .floating_headers
             .iter()
-            .find(|h| h.id == win_id)
+            .find(|h| h.key == win_key)
             .expect("floating header for window 1");
 
         let drag_x = header.rect.x.saturating_add(header.rect.width) / 2;
         let drag_y = header.rect.y;
 
-        assert!(!wm.direct_mode(win_id));
+        assert!(!wm.direct_mode(win_key));
 
         let click = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -2275,34 +2185,34 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         assert!(wm.handle_managed_event(&click));
-        assert!(!wm.direct_mode(win_id), "drag area click must not toggle");
+        assert!(!wm.direct_mode(win_key), "drag area click must not toggle");
     }
 
     #[test]
     fn drag_snap_timeout_none_disables_remaining() {
         let mut config = WmConfig::standalone();
         config.drag_snap_timeout = None;
-        let wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let _keys = make_keys(&mut wm, 100);
         assert!(wm.drag_snap_remaining().is_none());
     }
 
     #[test]
     fn drag_snap_remaining_none_when_no_drag() {
-        let wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let _keys = make_keys(&mut wm, 100);
         assert!(wm.drag_snap_remaining().is_none());
     }
 
@@ -2310,16 +2220,16 @@ mod tests {
     fn drag_snap_remaining_returns_some_when_dragging() {
         use crate::layout::floating::HeaderDrag;
 
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
         wm.drag_header = Some(HeaderDrag {
-            id: WindowId::App(1usize),
+            key: keys[1],
             initial_x: 0,
             initial_y: 0,
             start_x: 0,
@@ -2335,16 +2245,16 @@ mod tests {
     fn drag_snap_remaining_zero_when_expired() {
         use crate::layout::floating::HeaderDrag;
 
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
         wm.drag_header = Some(HeaderDrag {
-            id: WindowId::App(1usize),
+            key: keys[1],
             initial_x: 0,
             initial_y: 0,
             start_x: 0,
@@ -2360,16 +2270,16 @@ mod tests {
 
         let mut config = WmConfig::standalone();
         config.drag_snap_timeout = None;
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
         wm.drag_header = Some(HeaderDrag {
-            id: WindowId::App(1usize),
+            key: keys[1],
             initial_x: 0,
             initial_y: 0,
             start_x: 0,
@@ -2385,16 +2295,16 @@ mod tests {
 
         let mut config = WmConfig::standalone();
         config.drag_snap_timeout = Some(Duration::from_secs(10));
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
         wm.drag_header = Some(HeaderDrag {
-            id: WindowId::App(1usize),
+            key: keys[1],
             initial_x: 0,
             initial_y: 0,
             start_x: 0,
@@ -2412,14 +2322,14 @@ mod tests {
 
         let mut config = WmConfig::standalone();
         config.drag_snap_timeout = Some(Duration::from_secs(1));
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
         wm.register_managed_layout(Rect {
             x: 0,
@@ -2428,9 +2338,9 @@ mod tests {
             height: 24,
         });
 
-        let id = WindowId::App(1usize);
+        let key = keys[1];
         wm.set_floating_rect(
-            id,
+            key,
             Some(FloatRectSpec::Absolute(FloatRect {
                 x: 10,
                 y: 5,
@@ -2439,9 +2349,9 @@ mod tests {
             })),
         );
 
-        let window_id = WindowId::app(2usize);
+        let window_key = keys[2];
         wm.regions.set(
-            window_id,
+            window_key,
             Rect {
                 x: 0,
                 y: 0,
@@ -2450,18 +2360,18 @@ mod tests {
             },
         );
         wm.managed_layout = Some(crate::layout::TilingLayout::new(
-            crate::layout::LayoutNode::leaf(window_id),
+            crate::layout::LayoutNode::leaf(window_key),
         ));
 
         wm.drag_header = Some(HeaderDrag {
-            id,
+            key,
             initial_x: 10,
             initial_y: 5,
             start_x: 15,
             start_y: 10,
         });
         wm.drag_snap = Some((
-            Some(window_id),
+            Some(window_key),
             InsertPosition::Right,
             Rect {
                 x: 40,
@@ -2475,93 +2385,22 @@ mod tests {
         assert!(wm.take_expired_drag_snap());
         assert!(wm.drag_header.is_none());
         assert!(wm.drag_snap.is_none());
-        assert!(wm.layout_contains(id), "snapped window should be in layout");
-    }
-
-    #[test]
-    fn drag_last_event_updated_on_drag_events() {
-        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            None,
-            None,
+        assert!(
+            wm.layout_contains(key),
+            "snapped window should be in layout"
         );
-
-        let id = WindowId::system(SystemWindowId::DebugLog);
-        struct DummyDebug;
-        impl SystemWindowView for DummyDebug {
-            fn render(
-                &mut self,
-                _frame: &mut UiFrame<'_>,
-                _surface: WindowSurface,
-                _focused: bool,
-            ) {
-            }
-            fn handle_event(&mut self, _event: &Event) -> bool {
-                false
-            }
-        }
-        wm.set_system_window(SystemWindowId::DebugLog, Box::new(DummyDebug));
-        wm.set_panel_visible(false);
-        wm.show_system_window(SystemWindowId::DebugLog);
-        // register_managed_layout builds display order (populates floating_headers)
-        wm.register_managed_layout(Rect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 24,
-        });
-
-        // Down on system window header should start drag and set drag_last_event
-        let header_rect = wm
-            .floating_headers
-            .iter()
-            .find(|h| h.id == id)
-            .expect("header should exist")
-            .rect;
-        let down = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: header_rect.x,
-            row: header_rect.y,
-            modifiers: KeyModifiers::NONE,
-        });
-        assert!(wm.handle_managed_event(&down));
-        assert!(wm.drag_last_event.is_some());
-
-        // Drag should refresh drag_last_event (reset old value)
-        wm.drag_last_event = Some(Instant::now() - Duration::from_secs(10));
-        let drag = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Drag(MouseButton::Left),
-            column: header_rect.x + 5,
-            row: header_rect.y,
-            modifiers: KeyModifiers::NONE,
-        });
-        assert!(wm.handle_managed_event(&drag));
-        // drag_last_event should now be recent (not the old 10s ago value)
-        if let Some(last) = wm.drag_last_event {
-            assert!(
-                last.elapsed() < Duration::from_secs(1),
-                "drag should refresh drag_last_event"
-            );
-        } else {
-            panic!("drag_last_event should be set after drag");
-        }
     }
 
     #[test]
     fn power_profile_change_updates_value() {
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let _keys = make_keys(&mut wm, 100);
         assert_eq!(wm.power_profile, PowerProfile::PowerSaver);
         wm.set_power_profile(PowerProfile::HighPerformance);
         assert_eq!(wm.power_profile, PowerProfile::HighPerformance);
@@ -2574,33 +2413,33 @@ mod tests {
         use crate::layout::{LayoutNode, TilingLayout};
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
-        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(1usize)));
-        wm.managed_draw_order = vec![WindowId::App(1usize)];
-        wm.z_order = vec![WindowId::App(1usize)];
+        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(keys[1])));
+        wm.managed_draw_order = vec![keys[1]];
+        wm.z_order = vec![keys[1]];
         wm.register_managed_layout(Rect {
             x: 0,
             y: 0,
             width: 80,
             height: 24,
         });
-        wm.focus_app_window(1usize);
+        wm.focus_app_window(keys[1]);
 
-        let win_id = WindowId::App(1usize);
-        wm.set_direct_mode(win_id, true);
-        assert!(wm.direct_mode(win_id));
+        let win_key = keys[1];
+        wm.set_direct_mode(win_key, true);
+        assert!(wm.direct_mode(win_key));
 
         // Click within the content area — should go to focused window's
         // callback, NOT be consumed by chrome (handle_managed_event skipped).
-        let content = wm.region_for_id(win_id);
+        let content = wm.region_for_key(win_key);
         let click = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: content.x + 1,
@@ -2624,31 +2463,31 @@ mod tests {
         use crate::layout::{LayoutNode, TilingLayout};
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
-        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(1usize)));
-        wm.managed_draw_order = vec![WindowId::App(1usize)];
-        wm.z_order = vec![WindowId::App(1usize)];
+        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(keys[1])));
+        wm.managed_draw_order = vec![keys[1]];
+        wm.z_order = vec![keys[1]];
         wm.register_managed_layout(Rect {
             x: 0,
             y: 0,
             width: 80,
             height: 24,
         });
-        wm.focus_app_window(1usize);
+        wm.focus_app_window(keys[1]);
 
-        let win_id = WindowId::App(1usize);
-        wm.set_direct_mode(win_id, true);
+        let win_key = keys[1];
+        wm.set_direct_mode(win_key, true);
 
         // Header D button click — coordinates on the header, NOT in content area.
-        let full_rect = wm.full_region_for_id(win_id);
+        let full_rect = wm.full_region_for_key(win_key);
         let outer_right = full_rect
             .x
             .saturating_add(full_rect.width)
@@ -2663,7 +2502,7 @@ mod tests {
             crate::window::decorator::HeaderAction::ToggleDirectMode,
         );
 
-        assert!(wm.direct_mode(win_id), "direct mode enabled before click");
+        assert!(wm.direct_mode(win_key), "direct mode enabled before click");
 
         // This click is on the header (not content area) — chrome should still
         // handle it despite direct mode being on.
@@ -2688,7 +2527,7 @@ mod tests {
         );
         assert!(consumed, "header D click must be consumed by chrome");
         assert!(
-            !wm.direct_mode(win_id),
+            !wm.direct_mode(win_key),
             "header D click must toggle direct_mode off"
         );
     }
@@ -2698,30 +2537,30 @@ mod tests {
         use crate::layout::{LayoutNode, TilingLayout};
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-        let mut wm = WindowManager::<usize>::with_config(
-            0,
+        let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
             None,
         );
+        let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
-        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(1usize)));
-        wm.managed_draw_order = vec![WindowId::App(1usize)];
-        wm.z_order = vec![WindowId::App(1usize)];
+        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(keys[1])));
+        wm.managed_draw_order = vec![keys[1]];
+        wm.z_order = vec![keys[1]];
         wm.register_managed_layout(Rect {
             x: 0,
             y: 0,
             width: 80,
             height: 24,
         });
-        wm.focus_app_window(1usize);
+        wm.focus_app_window(keys[1]);
 
-        let win_id = WindowId::App(1usize);
-        assert!(!wm.direct_mode(win_id), "direct mode is off");
+        let win_key = keys[1];
+        assert!(!wm.direct_mode(win_key), "direct mode is off");
 
-        let content = wm.region_for_id(win_id);
+        let content = wm.region_for_key(win_key);
         let click = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: content.x + 1,
@@ -2745,5 +2584,71 @@ mod tests {
             consumed,
             "normal mode: dispatch returns the callback's result"
         );
+    }
+
+    #[test]
+    fn drag_last_event_updated_on_drag_events() {
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        struct DummyComponent;
+        impl crate::components::Component for DummyComponent {
+            fn render(
+                &mut self,
+                _frame: &mut crate::ui::UiFrame<'_>,
+                _area: ratatui::prelude::Rect,
+                _ctx: &crate::components::ComponentContext,
+            ) {
+            }
+        }
+
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+
+        let debug_key = wm.set_system_window(Box::new(DummyComponent));
+        wm.set_panel_visible(false);
+        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(debug_key)));
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        let header_rect = wm
+            .floating_headers
+            .iter()
+            .find(|h| h.key == debug_key)
+            .expect("header should exist")
+            .rect;
+        let down = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: header_rect.x,
+            row: header_rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(wm.handle_header_drag_event(&down));
+        assert!(wm.drag_last_event.is_some());
+
+        wm.drag_last_event = Some(Instant::now() - Duration::from_secs(10));
+        let drag = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: header_rect.x + 5,
+            row: header_rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(wm.handle_header_drag_event(&drag));
+        if let Some(last) = wm.drag_last_event {
+            assert!(
+                last.elapsed() < Duration::from_secs(1),
+                "drag should refresh drag_last_event"
+            );
+        } else {
+            panic!("drag_last_event should be set after drag");
+        }
     }
 }

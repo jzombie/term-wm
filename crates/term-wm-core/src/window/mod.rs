@@ -5,9 +5,14 @@ mod window_manager;
 use ratatui::prelude::Rect;
 use term_wm_layout_engine::{LayoutRect, RectSpec};
 
+/// Slotmap-backed generational key used as the universal window identifier.
+/// Replaces `WindowId<Id>` entirely — the generation counter makes stale
+/// keys mathematically impossible to resolve.
+pub type WindowKey = slotmap::DefaultKey;
+
 pub use window_manager::{
-    DrawTask, OverlayId, ScrollState, SuperPressResult, SystemWindowDraw, SystemWindowId,
-    SystemWindowView, WindowDrawContext, WindowId, WindowManager, WindowSurface, WmMenuAction,
+    DrawTask, OverlayId, ScrollState, SuperPressResult, WindowDrawContext, WindowManager,
+    WindowSurface, WmMenuAction,
 };
 
 /// Signed floating rectangle (alias for engine `LayoutRect`).
