@@ -168,11 +168,12 @@ mod tests {
     use super::*;
     use portable_pty::{Child, ChildKiller, ExitStatus};
     use std::io;
+    use std::sync::Mutex;
     use std::time::Duration;
 
     #[derive(Debug)]
     struct MockChild {
-        killed: bool,
+        kill_count: usize,
         exited: bool,
         exit_status: Option<ExitStatus>,
     }
@@ -180,7 +181,7 @@ mod tests {
     impl MockChild {
         fn new() -> Self {
             Self {
-                killed: false,
+                kill_count: 0,
                 exited: false,
                 exit_status: None,
             }
@@ -189,7 +190,7 @@ mod tests {
 
     impl ChildKiller for MockChild {
         fn kill(&mut self) -> io::Result<()> {
-            self.killed = true;
+            self.kill_count += 1;
             Ok(())
         }
         fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
@@ -222,12 +223,84 @@ mod tests {
         }
     }
 
+    /// A `MockChild` wrapped in `Arc<Mutex<...>>` so tests can observe
+    /// side-effects (kill count, exit status) after the reaper thread
+    /// processes it.
+    #[derive(Debug)]
+    struct SharedMockChild {
+        inner: Arc<Mutex<MockChild>>,
+    }
+
+    impl SharedMockChild {
+        fn new() -> (Self, Arc<Mutex<MockChild>>) {
+            let inner = Arc::new(Mutex::new(MockChild::new()));
+            (
+                Self {
+                    inner: Arc::clone(&inner),
+                },
+                inner,
+            )
+        }
+    }
+
+    impl ChildKiller for SharedMockChild {
+        fn kill(&mut self) -> io::Result<()> {
+            self.inner.lock().unwrap().kill_count += 1;
+            Ok(())
+        }
+        fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+            Box::new(MockChild::new())
+        }
+    }
+
+    impl Child for SharedMockChild {
+        fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.exited {
+                Ok(Some(
+                    inner
+                        .exit_status
+                        .take()
+                        .unwrap_or(ExitStatus::with_exit_code(0)),
+                ))
+            } else {
+                Ok(None)
+            }
+        }
+        fn wait(&mut self) -> io::Result<ExitStatus> {
+            Ok(ExitStatus::with_exit_code(0))
+        }
+        fn process_id(&self) -> Option<u32> {
+            Some(42)
+        }
+        #[cfg(windows)]
+        fn as_raw_handle(&self) -> Option<*mut std::ffi::c_void> {
+            None
+        }
+    }
+
     fn dummy_handle() -> JoinHandle<()> {
         thread::spawn(|| {})
     }
 
     fn make_zombie() -> ZombieChild {
         ZombieChild::new(Box::new(MockChild::new()), dummy_handle())
+    }
+
+    fn make_shared_zombie(state: Arc<Mutex<MockChild>>) -> ZombieChild {
+        ZombieChild::new(Box::new(SharedMockChild { inner: state }), dummy_handle())
+    }
+
+    /// Wait up to `timeout` for `predicate` to return true, sleeping
+    /// `REAPER_ACTIVE_TICK` between attempts.
+    fn wait_for<F: Fn() -> bool>(timeout: Duration, predicate: F) {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if predicate() {
+                return;
+            }
+            thread::sleep(REAPER_ACTIVE_TICK);
+        }
     }
 
     #[test]
@@ -257,7 +330,56 @@ mod tests {
     fn reaper_responds_to_shutdown() {
         let r = Reaper::new(Duration::from_secs(5));
         r.reap(make_zombie());
-        // Drop will trigger shutdown — just verify it doesn't hang
+        drop(r);
+    }
+
+    #[test]
+    fn reaper_sends_sighup() {
+        let r = Reaper::new(Duration::from_secs(5));
+        let (_child, state) = SharedMockChild::new();
+        r.reap(make_shared_zombie(state.clone()));
+        wait_for(Duration::from_secs(2), || {
+            state.lock().unwrap().kill_count >= 1
+        });
+        assert!(
+            state.lock().unwrap().kill_count >= 1,
+            "reaper should send SIGHUP (kill) within 2s"
+        );
+        drop(r);
+    }
+
+    #[test]
+    fn reaper_reaps_exited_child() {
+        let r = Reaper::new(Duration::from_secs(5));
+        let (_child, state) = SharedMockChild::new();
+        state.lock().unwrap().exited = true;
+        state.lock().unwrap().exit_status = Some(ExitStatus::with_exit_code(0));
+        r.reap(make_shared_zombie(state.clone()));
+
+        // The reaper should send SIGHUP, then on the next tick see
+        // that the child has exited and drop it (removing from its vec).
+        wait_for(Duration::from_secs(2), || {
+            state.lock().unwrap().kill_count >= 1
+        });
+        drop(r);
+    }
+
+    #[test]
+    fn reaper_sends_sigkill_after_timeout() {
+        let r = Reaper::new(Duration::from_millis(50));
+        let (_child, state) = SharedMockChild::new();
+        r.reap(make_shared_zombie(state.clone()));
+
+        wait_for(Duration::from_secs(2), || {
+            state.lock().unwrap().kill_count >= 1
+        });
+        wait_for(Duration::from_secs(2), || {
+            state.lock().unwrap().kill_count >= 2
+        });
+        assert!(
+            state.lock().unwrap().kill_count >= 2,
+            "reaper should send SIGKILL after shutdown_timeout elapses"
+        );
         drop(r);
     }
 }

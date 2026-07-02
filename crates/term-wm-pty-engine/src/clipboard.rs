@@ -173,6 +173,7 @@ pub fn extract_osc52_text(data: &[u8]) -> Option<String> {
             i += 1;
             continue;
         }
+        // Check for "52;" or "52;c;" or "52;c;" after the ESC ] introducer
         // The format is: ESC ] 5 2 ; c ; <base64> ST
         let header = b"52;";
         if i + OSC52_HEADER_LEN + header.len() > data.len() {
