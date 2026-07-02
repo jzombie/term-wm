@@ -8,7 +8,28 @@ use std::time::Instant;
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
-use crate::clipboard::{Clipboard, extract_osc52_text};
+use crate::clipboard::{Clipboard, Osc52Extractor};
+
+/// Size of the PTY master read buffer (single `read()` call).
+const PTY_READ_BUF_SIZE: usize = 4096;
+
+/// Number of bytes from the end of the previous chunk to carry forward
+/// for cross-boundary pattern detection (DSR, OSC 52 header).
+const HISTORY_TAIL_LEN: usize = 3;
+
+/// Length of the DSR request sequence `\x1b[6n`.
+const DSR_PATTERN_LEN: usize = 4;
+
+/// Extra bytes to search past the prune target when looking for a newline
+/// boundary during history cap.
+const PRUNE_SEARCH_WINDOW: usize = 1024;
+
+/// Buffer size for `proc_name()` on macOS.
+#[cfg(target_os = "macos")]
+const PROC_NAME_BUF_SIZE: usize = 64;
+
+/// How often to check the foreground process group for title changes.
+const FOREGROUND_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 use crate::title::extract_osc_title;
 
 pub type PtyResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -18,6 +39,8 @@ type WakeupFn = Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
 pub struct Pty {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
+    /// Raw bytes from the reader thread, kept for consumers that need
+    /// unparsed output (e.g., session server forwarding).
     pending: Arc<Mutex<Vec<u8>>>,
     bytes_received: Arc<AtomicUsize>,
     last_bytes: Arc<Mutex<Vec<u8>>>,
@@ -26,22 +49,32 @@ pub struct Pty {
     foreground_title: Arc<Mutex<Option<String>>>,
     last_fg_pid: u32,
     last_fg_check: Instant,
-    history: Vec<u8>,
-    parser: vt100::Parser,
+    /// Parsed screen shared by the reader thread. The reader writes,
+    /// the main thread reads.
+    shared_screen: Arc<Mutex<vt100::Screen>>,
+    /// Set by the reader thread when a new screen clone is available.
+    dirty: Arc<AtomicBool>,
+    /// Main-thread local cache of the parsed screen.
+    cached_screen: vt100::Screen,
     size: PtySize,
     pty_size: PtySize,
     scrollback_len: usize,
-    scrollback_used: usize,
     child: Option<Box<dyn Child + Send + Sync>>,
     exited: bool,
     exit_status: Option<portable_pty::ExitStatus>,
     reader: Option<JoinHandle<()>>,
-    pending_resize: Option<PtySize>,
+    /// Resize request sent from main thread to reader thread.
+    pending_resize: Arc<Mutex<Option<PtySize>>>,
     /// Wakeup callback invoked by the reader thread after each read batch.
     /// Wrapped in Arc+Mutex so it can be set after the reader thread starts.
     wakeup: WakeupFn,
 }
 
+/// The bounded channel between PTY reader threads and the main event loop
+/// provides mechanical backpressure: when the channel is full, the reader
+/// thread's `send()` blocks → the PTY master read call pauses → the OS
+/// pipe buffer fills → the child process's `write()` blocks. This prevents
+/// memory exhaustion when output floods faster than the UI can render.
 /// Parts of a `Pty` that can be moved into the `Reaper` for async teardown.
 pub struct PtyParts {
     pub child: Option<Box<dyn Child + Send + Sync>>,
@@ -86,17 +119,32 @@ impl Pty {
         let reader_wakeup = Arc::clone(&wakeup);
         let pending_title = Arc::new(Mutex::new(None));
         let foreground_title = Arc::new(Mutex::new(None));
+        let initial = vt100::Parser::new(size.rows, size.cols, scrollback_len);
+        let shared_screen = Arc::new(Mutex::new(initial.screen().clone()));
+        let dirty = Arc::new(AtomicBool::new(false));
+        let pending_resize = Arc::new(Mutex::new(None::<PtySize>));
+        let reader_screen = Arc::clone(&shared_screen);
+        let reader_dirty = Arc::clone(&dirty);
+        let reader_pending_resize = Arc::clone(&pending_resize);
+        let reader_pending_title = Arc::clone(&pending_title);
         let reader_handle = thread::spawn(move || {
-            read_loop(
+            parser_read_loop(ParserReadLoopArgs {
                 reader,
-                reader_pending,
-                reader_bytes,
-                reader_last,
-                reader_dsr,
-                reader_wakeup,
-            )
+                pending: reader_pending,
+                bytes_received: reader_bytes,
+                last_bytes: reader_last,
+                dsr_requested: reader_dsr,
+                shared_screen: reader_screen,
+                dirty: reader_dirty,
+                pending_resize: reader_pending_resize,
+                pending_title: reader_pending_title,
+                wakeup: reader_wakeup,
+                scrollback_len,
+                rows: size.rows,
+                cols: size.cols,
+                osc52_text: None,
+            })
         });
-        let parser = vt100::Parser::new(size.rows, size.cols, scrollback_len);
         Ok(Self {
             master: pair.master,
             writer,
@@ -108,18 +156,18 @@ impl Pty {
             foreground_title,
             last_fg_pid: 0,
             last_fg_check: Instant::now(),
-            history: Vec::new(),
-            parser,
+            shared_screen,
+            dirty,
+            cached_screen: initial.screen().clone(),
             size,
             pty_size: size,
             scrollback_len,
-            scrollback_used: 0,
             child: Some(child),
             exited: false,
             exit_status: None,
             reader: Some(reader_handle),
-            pending_resize: None,
-            wakeup: Arc::new(Mutex::new(None)),
+            pending_resize,
+            wakeup,
         })
     }
 
@@ -154,7 +202,10 @@ impl Pty {
         if size.rows < 2 || size.cols < 2 {
             return Ok(());
         }
-        if size == self.pty_size && self.pending_resize.is_none() {
+        if size == self.pty_size
+            && let Ok(guard) = self.pending_resize.lock()
+            && guard.is_none()
+        {
             return Ok(());
         }
         self.master
@@ -188,7 +239,7 @@ impl Pty {
     }
 
     fn poll_foreground(&mut self) {
-        if self.last_fg_check.elapsed() >= std::time::Duration::from_secs(1) {
+        if self.last_fg_check.elapsed() >= FOREGROUND_POLL_INTERVAL {
             self.last_fg_check = Instant::now();
             if let Some(fg_pid) = self.foreground_pid()
                 && fg_pid != self.last_fg_pid
@@ -223,78 +274,15 @@ impl Pty {
     }
 
     /// Read pending bytes from the PTY reader thread (non-blocking).
-    /// Returns bytes that have NOT been fed to the internal vt100 parser.
-    /// The server uses this to forward raw bytes to clients while handling
-    /// terminal emulation itself.
+    /// Used by the session server to forward raw bytes to remote clients.
     pub fn drain_pending(&mut self) -> Vec<u8> {
         let mut pending = self.pending.lock().unwrap_or_else(|err| err.into_inner());
         pending.split_off(0)
     }
 
-    pub fn update(&mut self) {
-        self.poll_foreground();
-
-        let bytes = {
-            let mut pending = self.pending.lock().unwrap_or_else(|err| err.into_inner());
-            if pending.is_empty() {
-                return;
-            }
-            pending.split_off(0)
-        };
-        if let Some(size) = self.pending_resize.take() {
-            self.apply_resize(size);
-        }
-        self.history.extend_from_slice(&bytes);
-
-        // Cap history to avoid unbounded memory usage.
-        // We keep enough to likely cover the scrollback + active screen.
-        // 1MB is roughly 5000-10000 lines of typical terminal output.
-        const MAX_HISTORY_CAP: usize = 2 * 1024 * 1024; // 2MB
-        const PRUNE_TARGET: usize = 1024 * 1024; // 1MB
-
-        if self.history.len() > MAX_HISTORY_CAP {
-            let prune_amount = self.history.len() - PRUNE_TARGET;
-            // Try to cut at a newline to preserve line structure
-            let search_end = (prune_amount + 1024).min(self.history.len());
-            let cut_index = self.history[prune_amount..search_end]
-                .iter()
-                .position(|&b| b == b'\n')
-                .map(|i| prune_amount + i + 1)
-                .unwrap_or(prune_amount);
-
-            self.history.drain(0..cut_index);
-        }
-
-        self.parser.process(&bytes);
-        if self.dsr_requested.swap(false, Ordering::Relaxed) {
-            let (row, col) = self.parser.screen().cursor_position();
-            let response = format!("\x1b[{};{}R", row.saturating_add(1), col.saturating_add(1));
-            let _ = self.write_bytes(response.as_bytes());
-        }
-        // Intercept OSC 52 clipboard sequences from the child process.
-        // Clipboard::set() does both OSC 52 passthrough (for remote
-        // terminals like SSH/tmux/Zed) and arboard (for local access).
-        if let Some(text) = extract_osc52_text(&bytes) {
-            let mut cb = Clipboard::new();
-            let _ = cb.set(&text);
-        }
-
-        if let Some(title) = extract_osc_title(&bytes) {
-            *self
-                .pending_title
-                .lock()
-                .unwrap_or_else(|err| err.into_inner()) = Some(title);
-        }
-
-        let added = bytes.iter().filter(|b| **b == b'\n').count();
-        if added > 0 && self.scrollback_len > 0 {
-            self.scrollback_used = (self.scrollback_used + added).min(self.scrollback_len);
-        }
-    }
-
     pub fn screen_lines(&mut self) -> Vec<String> {
-        self.update();
-        let contents = self.parser.screen().contents();
+        let screen = self.screen();
+        let contents = screen.contents();
         let mut lines: Vec<String> = contents.lines().map(|line| line.to_string()).collect();
         if lines.len() < self.size.rows as usize {
             lines.resize(self.size.rows as usize, String::new());
@@ -332,7 +320,6 @@ impl Pty {
     /// Kill the child process if present.
     pub fn kill_child(&mut self) -> PtyResult<()> {
         if let Some(mut child) = self.child.take() {
-            // Attempt to kill the child process.
             child.kill().map_err(|err| wrap_err("kill", err))?;
             self.exited = true;
             self.child = None;
@@ -344,9 +331,27 @@ impl Pty {
         self.size
     }
 
+    /// Return a reference to the cached parsed screen.
+    /// If the reader thread has published new content, clones from
+    /// shared state. Also handles periodic foreground title polling
+    /// and DSR responses.
     pub fn screen(&mut self) -> &vt100::Screen {
-        self.update();
-        self.parser.screen()
+        self.poll_foreground();
+        if self.dirty.load(Ordering::Acquire) {
+            if let Ok(guard) = self.shared_screen.lock() {
+                self.cached_screen = guard.clone();
+            }
+            self.dirty.store(false, Ordering::Release);
+
+            // Send DSR response if requested by the reader thread.
+            if self.dsr_requested.swap(false, Ordering::Relaxed) {
+                let (row, col) = self.cached_screen.cursor_position();
+                let response =
+                    format!("\x1b[{};{}R", row.saturating_add(1), col.saturating_add(1));
+                let _ = self.write_bytes(response.as_bytes());
+            }
+        }
+        &self.cached_screen
     }
 
     pub fn bytes_received(&self) -> usize {
@@ -363,8 +368,9 @@ impl Pty {
     }
 
     pub fn screen_mut(&mut self) -> &mut vt100::Screen {
-        self.update();
-        self.parser.screen_mut()
+        // Ensure cached_screen is up-to-date before returning a mutable ref.
+        self.screen();
+        &mut self.cached_screen
     }
 
     pub fn scrollback(&mut self) -> usize {
@@ -380,20 +386,15 @@ impl Pty {
         self.scrollback_len
     }
 
-    pub fn scrollback_used(&self) -> usize {
-        self.scrollback_used
-    }
-
     pub fn max_scrollback(&mut self) -> usize {
         if self.scrollback_len == 0 {
             return 0;
         }
-        self.update();
-        let screen = self.parser.screen_mut();
-        let current = screen.scrollback();
-        screen.set_scrollback(self.scrollback_len);
-        let max = screen.scrollback();
-        screen.set_scrollback(current);
+        self.screen();
+        let current = self.cached_screen.scrollback();
+        self.cached_screen.set_scrollback(self.scrollback_len);
+        let max = self.cached_screen.scrollback();
+        self.cached_screen.set_scrollback(current);
         max
     }
 
@@ -403,63 +404,124 @@ impl Pty {
 
     fn apply_resize(&mut self, size: PtySize) {
         self.size = size;
-        let mut new_parser = vt100::Parser::new(size.rows, size.cols, self.scrollback_len);
-        new_parser.process(&self.history);
-        self.parser = new_parser;
-        self.pending_resize = None;
+        if let Ok(mut guard) = self.pending_resize.lock() {
+            *guard = Some(size);
+        }
     }
 
-    #[allow(dead_code)]
-    fn alternate_screen_cached(&self) -> bool {
-        self.parser.screen().alternate_screen()
-    }
-
-    #[allow(dead_code)]
-    fn has_pending_output(&self) -> bool {
-        self.pending
-            .lock()
-            .map(|pending| !pending.is_empty())
-            .unwrap_or(false)
-    }
 }
 
-fn read_loop(
-    mut reader: Box<dyn Read + Send>,
+/// Configuration and shared state for the PTY reader thread.
+struct ParserReadLoopArgs {
+    reader: Box<dyn Read + Send>,
     pending: Arc<Mutex<Vec<u8>>>,
     bytes_received: Arc<AtomicUsize>,
     last_bytes: Arc<Mutex<Vec<u8>>>,
     dsr_requested: Arc<AtomicBool>,
+    shared_screen: Arc<Mutex<vt100::Screen>>,
+    dirty: Arc<AtomicBool>,
+    pending_resize: Arc<Mutex<Option<PtySize>>>,
+    pending_title: Arc<Mutex<Option<String>>>,
     wakeup: WakeupFn,
-) {
-    let mut tail: Vec<u8> = Vec::new();
-    let mut buf = [0u8; 4096];
+    scrollback_len: usize,
+    rows: u16,
+    cols: u16,
+    /// Test-only hook: when `Some`, the extracted OSC 52 text is written here
+    /// in addition to the real clipboard, so tests can assert the value.
+    osc52_text: Option<Arc<Mutex<Option<String>>>>,
+}
+
+fn parser_read_loop(args: ParserReadLoopArgs) {
+    let ParserReadLoopArgs {
+        mut reader,
+        pending,
+        bytes_received,
+        last_bytes,
+        dsr_requested,
+        shared_screen,
+        dirty,
+        pending_resize,
+        pending_title,
+        wakeup,
+        scrollback_len,
+        rows,
+        cols,
+        osc52_text,
+    } = args;
+    let mut parser = vt100::Parser::new(rows, cols, scrollback_len);
+    let mut history: Vec<u8> = Vec::new();
+    let mut buf = [0u8; PTY_READ_BUF_SIZE];
+    let mut osc52 = Osc52Extractor::new();
     loop {
+        // Check for pending resize from main thread
+        if let Ok(mut resize_opt) = pending_resize.lock()
+            && let Some(size) = resize_opt.take()
+        {
+            let mut new_parser = vt100::Parser::new(size.rows, size.cols, scrollback_len);
+            new_parser.process(&history);
+            parser = new_parser;
+        }
+
         match reader.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
                 bytes_received.fetch_add(n, Ordering::Relaxed);
-                let combined = if tail.is_empty() {
+                let combined = if history.is_empty() {
                     buf[..n].to_vec()
                 } else {
-                    let mut tmp = tail.clone();
+                    let end = history.len().saturating_sub(HISTORY_TAIL_LEN);
+                    let mut tmp = history[end..].to_vec();
                     tmp.extend_from_slice(&buf[..n]);
                     tmp
                 };
-                if combined.windows(4).any(|w| w == b"\x1b[6n") {
+                if combined.windows(DSR_PATTERN_LEN).any(|w| w == b"\x1b[6n") {
                     dsr_requested.store(true, Ordering::Relaxed);
-                }
-                if combined.len() > 3 {
-                    tail = combined[combined.len() - 3..].to_vec();
-                } else {
-                    tail = combined;
                 }
                 if let Ok(mut last) = last_bytes.lock() {
                     last.clear();
                     last.extend_from_slice(&buf[..n]);
                 }
-                if let Ok(mut pending) = pending.lock() {
-                    pending.extend_from_slice(&buf[..n]);
+                if let Ok(mut p) = pending.lock() {
+                    p.extend_from_slice(&buf[..n]);
                 }
+
+                history.extend_from_slice(&buf[..n]);
+                // Cap history to avoid unbounded memory usage.
+                const MAX_HISTORY_CAP: usize = 2 * 1024 * 1024;
+                const PRUNE_TARGET: usize = 1024 * 1024;
+                if history.len() > MAX_HISTORY_CAP {
+                    let prune_amount = history.len() - PRUNE_TARGET;
+                    let search_end = (prune_amount + PRUNE_SEARCH_WINDOW).min(history.len());
+                    let cut_index = history[prune_amount..search_end]
+                        .iter()
+                        .position(|&b| b == b'\n')
+                        .map(|i| prune_amount + i + 1)
+                        .unwrap_or(prune_amount);
+                    history.drain(0..cut_index);
+                }
+
+                parser.process(&buf[..n]);
+                if let Some(title) = extract_osc_title(&buf[..n])
+                    && let Ok(mut guard) = pending_title.lock()
+                {
+                    *guard = Some(title);
+                }
+                // Intercept OSC 52 clipboard sequences (cross-chunk buffering).
+                let tail = &history[history.len().saturating_sub(HISTORY_TAIL_LEN)..];
+                if let Some(text) = osc52.push(&buf[..n], tail) {
+                    let mut cb = Clipboard::new();
+                    let _ = cb.set(&text);
+                    if let Some(ref capture) = osc52_text {
+                        *capture.lock().unwrap() = Some(text);
+                    }
+                }
+
+                // Publish parsed screen to main thread
+                if let Ok(mut guard) = shared_screen.lock() {
+                    *guard = parser.screen().clone();
+                }
+                dirty.store(true, Ordering::Release);
+
                 // Wakeup the main thread — new data is available.
                 if let Ok(guard) = wakeup.lock()
                     && let Some(ref cb) = *guard
@@ -497,7 +559,7 @@ fn bytes_to_debug_text(bytes: &[u8], max_len: usize) -> String {
 /// libproc. On Linux reads `/proc/<pid>/comm`. On other platforms returns None.
 #[cfg(target_os = "macos")]
 fn get_process_name(pid: u32) -> Option<String> {
-    let mut name = [0u8; 64];
+    let mut name = [0u8; PROC_NAME_BUF_SIZE];
     let result = unsafe {
         libc::proc_name(
             pid as libc::c_int,
@@ -671,55 +733,62 @@ mod tests {
         assert!(s.contains("\\x1f"));
     }
 
-    // ── read_loop ───────────────────────────────────────────────────
+    // ── parser_read_loop ─────────────────────────────────────────────
+
+    fn make_parser_test_args() -> ParserReadLoopArgs {
+        ParserReadLoopArgs {
+            reader: Box::new(Cursor::new(Vec::new())),
+            pending: Arc::new(Mutex::new(Vec::new())),
+            bytes_received: Arc::new(AtomicUsize::new(0)),
+            last_bytes: Arc::new(Mutex::new(Vec::new())),
+            dsr_requested: Arc::new(AtomicBool::new(false)),
+            shared_screen: Arc::new(Mutex::new(
+                vt100::Parser::new(24, 80, 0).screen().clone(),
+            )),
+            dirty: Arc::new(AtomicBool::new(false)),
+            pending_resize: Arc::new(Mutex::new(None)),
+            pending_title: Arc::new(Mutex::new(None)),
+            wakeup: Arc::new(Mutex::new(None)),
+            scrollback_len: 0,
+            rows: 24,
+            cols: 80,
+            osc52_text: None,
+        }
+    }
 
     #[test]
-    fn read_loop_reads_and_sets_pending_and_last() {
+    fn parser_read_loop_reads_and_sets_pending_and_last() {
         let payload = b"hello\r\n\x1b[6nworld";
-        let reader = Box::new(Cursor::new(payload.to_vec()));
-        let pending = Arc::new(Mutex::new(Vec::new()));
-        let bytes_received = Arc::new(AtomicUsize::new(0));
-        let last_bytes = Arc::new(Mutex::new(Vec::new()));
-        let dsr_requested = Arc::new(AtomicBool::new(false));
+        let mut args = make_parser_test_args();
+        args.reader = Box::new(Cursor::new(payload.to_vec()));
+        let pending = Arc::clone(&args.pending);
+        let bytes_received = Arc::clone(&args.bytes_received);
+        let last_bytes = Arc::clone(&args.last_bytes);
+        let dsr_requested = Arc::clone(&args.dsr_requested);
+        let dirty = Arc::clone(&args.dirty);
 
-        // run read_loop directly (it will exit on EOF)
-        let noop_wakeup: WakeupFn = Arc::new(Mutex::new(None));
-        read_loop(
-            reader,
-            Arc::clone(&pending),
-            Arc::clone(&bytes_received),
-            Arc::clone(&last_bytes),
-            Arc::clone(&dsr_requested),
-            noop_wakeup,
-        );
+        parser_read_loop(args);
 
-        // pending should be populated
         let p = pending.lock().unwrap();
         assert!(!p.is_empty());
         assert!(bytes_received.load(Ordering::Relaxed) > 0);
         let last = last_bytes.lock().unwrap();
         assert!(!last.is_empty());
-        // the sequence \x1b[6n should have set dsr_requested to true
         assert!(dsr_requested.load(Ordering::Relaxed));
+        assert!(dirty.load(Ordering::Relaxed));
     }
 
     #[test]
-    fn read_loop_empty_input() {
-        let reader = Box::new(Cursor::new(Vec::new()));
-        let pending = Arc::new(Mutex::new(Vec::new()));
-        let bytes_received = Arc::new(AtomicUsize::new(0));
-        let last_bytes = Arc::new(Mutex::new(Vec::new()));
-        let dsr_requested = Arc::new(AtomicBool::new(false));
+    fn parser_read_loop_empty_input() {
+        let mut args = make_parser_test_args();
+        args.reader = Box::new(Cursor::new(Vec::new()));
+        let pending = Arc::clone(&args.pending);
+        let bytes_received = Arc::clone(&args.bytes_received);
+        let last_bytes = Arc::clone(&args.last_bytes);
+        let dsr_requested = Arc::clone(&args.dsr_requested);
+        let dirty = Arc::clone(&args.dirty);
 
-        let noop_wakeup: WakeupFn = Arc::new(Mutex::new(None));
-        read_loop(
-            reader,
-            Arc::clone(&pending),
-            Arc::clone(&bytes_received),
-            Arc::clone(&last_bytes),
-            Arc::clone(&dsr_requested),
-            noop_wakeup,
-        );
+        parser_read_loop(args);
 
         let p = pending.lock().unwrap();
         assert!(p.is_empty());
@@ -727,31 +796,22 @@ mod tests {
         let last = last_bytes.lock().unwrap();
         assert!(last.is_empty());
         assert!(!dsr_requested.load(Ordering::Relaxed));
+        assert!(!dirty.load(Ordering::Relaxed));
     }
 
     #[test]
-    fn read_loop_wakeup_called_when_set() {
+    fn parser_read_loop_wakeup_called_when_set() {
         let payload = b"data";
-        let reader = Box::new(Cursor::new(payload.to_vec()));
-        let pending = Arc::new(Mutex::new(Vec::new()));
-        let bytes_received = Arc::new(AtomicUsize::new(0));
-        let last_bytes = Arc::new(Mutex::new(Vec::new()));
-        let dsr_requested = Arc::new(AtomicBool::new(false));
+        let mut args = make_parser_test_args();
+        args.reader = Box::new(Cursor::new(payload.to_vec()));
         let woke = Arc::new(AtomicBool::new(false));
         let woke_clone = Arc::clone(&woke);
-        let wakeup: WakeupFn = Arc::new(Mutex::new(Some(Arc::new(move || {
+        args.wakeup = Arc::new(Mutex::new(Some(Arc::new(move || {
             woke_clone.store(true, Ordering::Relaxed);
         })
             as Arc<dyn Fn() + Send + Sync>)));
 
-        read_loop(
-            reader,
-            Arc::clone(&pending),
-            Arc::clone(&bytes_received),
-            Arc::clone(&last_bytes),
-            Arc::clone(&dsr_requested),
-            wakeup,
-        );
+        parser_read_loop(args);
 
         assert!(
             woke.load(Ordering::Relaxed),
@@ -760,29 +820,59 @@ mod tests {
     }
 
     #[test]
-    fn read_loop_tracks_tail_for_cross_boundary_dsr() {
-        // The combined content has \x1b[6n spanning the middle - we test
-        // that the tail window (last 3 bytes) correctly detects the DSR sequence.
+    fn parser_read_loop_tracks_tail_for_cross_boundary_dsr() {
         let payload = b"XX\x1b[6nYY";
-        let reader = Box::new(Cursor::new(payload.to_vec()));
-        let pending = Arc::new(Mutex::new(Vec::new()));
-        let bytes_received = Arc::new(AtomicUsize::new(0));
-        let last_bytes = Arc::new(Mutex::new(Vec::new()));
-        let dsr_requested = Arc::new(AtomicBool::new(false));
+        let mut args = make_parser_test_args();
+        args.reader = Box::new(Cursor::new(payload.to_vec()));
+        let dsr_requested = Arc::clone(&args.dsr_requested);
 
-        let noop_wakeup: WakeupFn = Arc::new(Mutex::new(None));
-        read_loop(
-            reader,
-            Arc::clone(&pending),
-            Arc::clone(&bytes_received),
-            Arc::clone(&last_bytes),
-            Arc::clone(&dsr_requested),
-            noop_wakeup,
-        );
+        parser_read_loop(args);
 
         assert!(
             dsr_requested.load(Ordering::Relaxed),
             "DSR in combined data must be detected"
+        );
+    }
+
+    /// Regression test: the wakeup Arc created in spawn_with_scrollback
+    /// must be the same allocation shared with the reader thread so that
+    /// set_wakeup() provided callbacks are actually invoked on output.
+    #[test]
+    fn set_wakeup_fires_callback_from_spawn() {
+        // Use cat, which blocks on input, so we control when output happens.
+        // Portability: `cat` exists on Unix; on Windows the test is skipped.
+        // TODO: add Windows support with `cmd /c type CON`
+        let cmd = CommandBuilder::new("cat");
+        let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100)
+            .expect("spawn_with_scrollback");
+
+        let woke = Arc::new(AtomicBool::new(false));
+        let woke_cb = Arc::clone(&woke);
+        pty.set_wakeup(Some(Arc::new(move || {
+            woke_cb.store(true, Ordering::Relaxed);
+        }) as Arc<dyn Fn() + Send + Sync>));
+
+        // Write to the PTY — terminal echo triggers a read on the master
+        // side, which the reader thread processes and fires the callback.
+        let _ = pty.write_str("hello\n");
+
+        // Wait for callback with timeout (up to 5s)
+        for _ in 0..250 {
+            if woke.load(Ordering::Relaxed) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        // Clean up
+        if let Some(child) = pty.child.as_mut() {
+            let _ = child.kill();
+        }
+
+        assert!(
+            woke.load(Ordering::Relaxed),
+            "wakeup callback must fire when PTY outputs data after set_wakeup"
         );
     }
 

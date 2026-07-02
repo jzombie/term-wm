@@ -191,12 +191,12 @@ mod tests {
         let mut ev = EventLoop::new(driver);
         ev.run(|driver, _evt| {
             // First handler call: profile is still PowerSaver.
-            //   → Continue → poll() gets 500ms
-            // Second handler call: switch to HighPerformance.
+            //   → Continue → poll() gets 3600s
+            // Second handler call: switch to Streaming.
             //   → Continue → poll() gets 16ms
             // Third handler call: Quit.
             if driver.intervals.len() == 1 {
-                driver.profile = PowerProfile::HighPerformance;
+                driver.profile = PowerProfile::Streaming;
             }
             if driver.intervals.len() >= 2 {
                 Ok(ControlFlow::Quit)
@@ -208,13 +208,13 @@ mod tests {
 
         assert_eq!(
             ev.driver().intervals[0],
-            Duration::from_millis(500),
-            "PowerSaver should give 500ms poll interval"
+            Duration::from_secs(3600),
+            "PowerSaver should give 3600s poll interval"
         );
         assert_eq!(
             ev.driver().intervals[1],
             Duration::from_millis(16),
-            "HighPerformance should give 16ms poll interval"
+            "Streaming should give 16ms poll interval"
         );
     }
 }
