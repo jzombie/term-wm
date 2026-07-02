@@ -332,30 +332,41 @@ mod tests {
         }
         // Also mix in some PtyWakeups (the reason drain_pending exists)
         for _ in 0..3 {
-            tx.send(UnifiedEvent::PtyWakeup(WindowKey::default())).unwrap();
+            tx.send(UnifiedEvent::PtyWakeup(WindowKey::default()))
+                .unwrap();
         }
 
         // drain_pending must move all Input events into input_buffer
         source.drain_pending();
 
-        assert_eq!(source.input_buffer.len(), 10,
-            "all 10 input events must be buffered, not dropped");
+        assert_eq!(
+            source.input_buffer.len(),
+            10,
+            "all 10 input events must be buffered, not dropped"
+        );
 
         // verify ordering is preserved
         for (i, evt) in source.input_buffer.iter().enumerate() {
             let expected = char::from(b'a' + i as u8);
             match evt {
                 Event::Key(k) => {
-                    assert_eq!(k.code, KeyCode::Char(expected),
-                        "event {} should be '{}'", i, expected);
+                    assert_eq!(
+                        k.code,
+                        KeyCode::Char(expected),
+                        "event {} should be '{}'",
+                        i,
+                        expected
+                    );
                 }
                 _ => panic!("expected Key event at position {}", i),
             }
         }
 
         // poll should report events available from buffer
-        assert!(source.poll(Duration::ZERO).unwrap(),
-            "poll must return true when buffer is non-empty");
+        assert!(
+            source.poll(Duration::ZERO).unwrap(),
+            "poll must return true when buffer is non-empty"
+        );
 
         // read should drain buffer in order
         for i in 0..10u8 {
@@ -369,7 +380,9 @@ mod tests {
 
         // buffer should now be empty
         assert!(source.input_buffer.is_empty());
-        assert!(!source.poll(Duration::ZERO).unwrap(),
-            "poll must return false after buffer drained");
+        assert!(
+            !source.poll(Duration::ZERO).unwrap(),
+            "poll must return false after buffer drained"
+        );
     }
 }

@@ -1220,12 +1220,22 @@ mod tests {
     /// Helper: creates a TerminalComponent with a TestPane containing known content.
     /// Returns (term, row_base) where row_base = max_scrollback - scrollback
     /// so tests can compute correct logical positions for visible row N as row_base + N.
-    fn make_term_with_content(width: u16, height: u16, max_sb: usize, text: &str) -> (TerminalComponent, usize) {
+    fn make_term_with_content(
+        width: u16,
+        height: u16,
+        max_sb: usize,
+        text: &str,
+    ) -> (TerminalComponent, usize) {
         let mut pane = TestPane::new(max_sb);
         pane.set_parser_size(height, width);
         pane.write_to_parser(text.as_bytes());
         let mut term = TerminalComponent::from_pane(Box::new(pane));
-        term.last_area = Rect { x: 0, y: 0, width, height };
+        term.last_area = Rect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        };
         term.selection_enabled = true;
         let row_base = term.pane.max_scrollback();
         (term, row_base)
@@ -1242,7 +1252,8 @@ mod tests {
 
     #[test]
     fn selection_text_multi_line_crlf() {
-        let (mut term, rb) = make_term_with_content(80, 24, 2000, "Line one\r\nLine two\r\nLine three");
+        let (mut term, rb) =
+            make_term_with_content(80, 24, 2000, "Line one\r\nLine two\r\nLine three");
         term.selection.begin_drag(LogicalPosition::new(rb, 0));
         term.selection.update_drag(LogicalPosition::new(rb + 2, 5));
         let text = term.selection_text();
@@ -1251,7 +1262,8 @@ mod tests {
 
     #[test]
     fn selection_text_end_col_zero_adjustment() {
-        let (mut term, rb) = make_term_with_content(80, 24, 2000, "First line of content\r\nSecond line here");
+        let (mut term, rb) =
+            make_term_with_content(80, 24, 2000, "First line of content\r\nSecond line here");
         term.selection.begin_drag(LogicalPosition::new(rb, 5));
         term.selection.update_drag(LogicalPosition::new(rb + 1, 0));
         let text = term.selection_text();
@@ -1260,7 +1272,8 @@ mod tests {
 
     #[test]
     fn selection_text_full_row() {
-        let (mut term, rb) = make_term_with_content(80, 24, 2000, "The quick brown fox jumps over the lazy dog");
+        let (mut term, rb) =
+            make_term_with_content(80, 24, 2000, "The quick brown fox jumps over the lazy dog");
         term.selection.begin_drag(LogicalPosition::new(rb, 0));
         term.selection.update_drag(LogicalPosition::new(rb, 80));
         let text = term.selection_text();
