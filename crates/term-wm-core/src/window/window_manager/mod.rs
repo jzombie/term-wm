@@ -189,8 +189,8 @@ impl WindowManager {
     }
 
     /// Access the Reaper for async child-process teardown.
-    pub fn reaper(&mut self) -> &mut Reaper {
-        &mut self.reaper
+    pub fn reaper(&self) -> &Reaper {
+        &self.reaper
     }
 
     fn window_mut(&mut self, key: WindowKey) -> &mut Window {
@@ -1080,6 +1080,13 @@ fn make_keys(wm: &mut WindowManager, n: usize) -> Vec<WindowKey> {
 mod tests {
     use super::*;
     use ratatui::layout::{Direction, Rect};
+
+    /// Test fixture: how far back to set `drag_last_event` to simulate
+    /// a stale/expired drag (10 seconds).
+    const STALE_EVENT_OFFSET: Duration = Duration::from_secs(10);
+
+    /// Test fixture: short drag-snap timeout (1 second).
+    const SHORT_SNAP_TIMEOUT: Duration = Duration::from_secs(1);
 
     #[test]
     fn clamp_rect_inside_and_outside() {
@@ -2260,7 +2267,7 @@ mod tests {
             start_x: 0,
             start_y: 0,
         });
-        wm.drag_last_event = Some(Instant::now() - Duration::from_secs(10));
+        wm.drag_last_event = Some(Instant::now() - STALE_EVENT_OFFSET);
         assert_eq!(wm.drag_snap_remaining(), Some(Duration::ZERO));
     }
 
@@ -2285,7 +2292,7 @@ mod tests {
             start_x: 0,
             start_y: 0,
         });
-        wm.drag_last_event = Some(Instant::now() - Duration::from_secs(10));
+        wm.drag_last_event = Some(Instant::now() - STALE_EVENT_OFFSET);
         assert!(!wm.take_expired_drag_snap());
     }
 
@@ -2294,7 +2301,7 @@ mod tests {
         use crate::layout::floating::HeaderDrag;
 
         let mut config = WmConfig::standalone();
-        config.drag_snap_timeout = Some(Duration::from_secs(10));
+        config.drag_snap_timeout = Some(STALE_EVENT_OFFSET);
         let mut wm = WindowManager::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
@@ -2321,7 +2328,7 @@ mod tests {
         use crate::window::{FloatRect, FloatRectSpec};
 
         let mut config = WmConfig::standalone();
-        config.drag_snap_timeout = Some(Duration::from_secs(1));
+        config.drag_snap_timeout = Some(SHORT_SNAP_TIMEOUT);
         let mut wm = WindowManager::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
@@ -2380,7 +2387,7 @@ mod tests {
                 height: 24,
             },
         ));
-        wm.drag_last_event = Some(Instant::now() - Duration::from_secs(10));
+        wm.drag_last_event = Some(Instant::now() - STALE_EVENT_OFFSET);
 
         assert!(wm.take_expired_drag_snap());
         assert!(wm.drag_header.is_none());
@@ -2402,8 +2409,8 @@ mod tests {
         );
         let _keys = make_keys(&mut wm, 100);
         assert_eq!(wm.power_profile, PowerProfile::PowerSaver);
-        wm.set_power_profile(PowerProfile::HighPerformance);
-        assert_eq!(wm.power_profile, PowerProfile::HighPerformance);
+        wm.set_power_profile(PowerProfile::Interactive);
+        assert_eq!(wm.power_profile, PowerProfile::Interactive);
         wm.set_power_profile(PowerProfile::PowerSaver);
         assert_eq!(wm.power_profile, PowerProfile::PowerSaver);
     }
@@ -2634,7 +2641,7 @@ mod tests {
         assert!(wm.handle_header_drag_event(&down));
         assert!(wm.drag_last_event.is_some());
 
-        wm.drag_last_event = Some(Instant::now() - Duration::from_secs(10));
+        wm.drag_last_event = Some(Instant::now() - STALE_EVENT_OFFSET);
         let drag = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
             column: header_rect.x + 5,
@@ -2644,7 +2651,7 @@ mod tests {
         assert!(wm.handle_header_drag_event(&drag));
         if let Some(last) = wm.drag_last_event {
             assert!(
-                last.elapsed() < Duration::from_secs(1),
+                last.elapsed() < SHORT_SNAP_TIMEOUT,
                 "drag should refresh drag_last_event"
             );
         } else {

@@ -85,6 +85,25 @@ Terminal Size Constraints
 - Buffer allocations scale with terminal size. Code must not assume small fixed dimensions or use stack-allocated arrays indexed by coordinates.
 - Review all PRs for new hardcoded size limits, bare u16 arithmetic on coordinates, or size assumptions.
 
+Comment Preservation
+- Do NOT remove existing code comments. If the underlying functionality changes,
+  update the comment to reflect the new behavior rather than deleting it.
+- Outdated comments mislead future readers; prefer updating over removing.
+
+Magic Strings and Numbers
+- All hardcoded string literals and numeric constants used more than once (or
+  whose purpose is non-obvious) MUST be extracted into named `const` bindings.
+- Examples of what to extract:
+  - Buffer sizes (`4096` → `PTY_READ_BUF_SIZE`)
+  - Timeouts / durations (`Duration::from_secs(1)` → `FOREGROUND_POLL_INTERVAL`)
+  - Thresholds (`100` → `INTERACTIVE_THRESHOLD_MS`)
+  - Layout dimensions (`2` → `HEADER_BUTTON_GAP`, `3` → `CONTENT_HEIGHT_SHRINK`)
+  - Channel capacities (`256` → `EVENT_CHANNEL_CAPACITY`)
+  - Protocol constants (`5` → `OSC52_HEADER_LEN`)
+- Zero and one are acceptable inline when their meaning is structurally
+  obvious (e.g., `offset + 1` for "skip one cell").
+- Always prefer `const` (not `static`) for compile-time evaluable values.
+
 Notes for Automation/Agents
 - Automation editing component files should prefer minimal, surgical changes via `apply_patch`.
 - Where work spans multiple files, agents must create a `manage_todo_list` plan first and provide concise progress updates after batches of changes.

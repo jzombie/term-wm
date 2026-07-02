@@ -4,32 +4,61 @@ use ratatui::style::Color;
 
 use crate::theme::Theme;
 
-/// How long (in ms) since the last input event before switching from
-/// HighPerformance to PowerSaver.
-pub const ACTIVE_THRESHOLD_MS: u64 = 500;
+/// How long (in ms) since the last input event before switching to Streaming.
+pub const INTERACTIVE_THRESHOLD_MS: u64 = 100;
+
+/// How long (in ms) since the last input event before switching to PowerSaver.
+pub const STREAMING_THRESHOLD_MS: u64 = 500;
+
+/// Poll interval when the user is actively typing (~120 fps).
+const INTERACTIVE_POLL_INTERVAL: Duration = Duration::from_millis(8);
+
+/// Poll interval when PTY data is flowing (~60 fps).
+const STREAMING_POLL_INTERVAL: Duration = Duration::from_millis(16);
+
+/// Poll interval when idle (blocks on channel, no CPU burn).
+const POWERSAVER_POLL_INTERVAL: Duration = Duration::from_secs(3600);
 
 /// Fixed-behavior power profile variant.
 ///
 /// Each variant has a single, predictable `poll_interval`. The active
-/// variant is auto-selected by `ConsoleEventSource` based on `last_event_at`.
+/// variant is auto-selected by `profile_from_activity` which considers
+/// both the timestamp of the last input event and whether any windows
+/// have dirty PTY data.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum PowerProfile {
-    /// 60 fps poll interval, never skip idle renders.
-    HighPerformance,
-    /// 2 fps poll interval, skip idle renders.
+    /// 120 fps poll (~8ms) — user is actively typing (<100ms since last input).
+    Interactive,
+    /// 60 fps poll (~16ms) — PTY data flowing or recent activity.
+    Streaming,
+    /// Blocks on channel (~3600s) — no activity, no dirty windows.
     #[default]
     PowerSaver,
 }
 
-/// Determine the active power profile from the timestamp of the last input event.
+/// Determine the active power profile from the timestamp of the last input event
+/// and whether any windows have pending dirty PTY data.
 ///
-/// Returns `HighPerformance` if an event occurred within [`ACTIVE_THRESHOLD_MS`],
-/// otherwise returns `PowerSaver`.
-pub fn profile_from_activity(last_event_at: Option<Instant>) -> PowerProfile {
+/// - [`Interactive`] if an input event occurred within [`INTERACTIVE_THRESHOLD_MS`].
+/// - [`Streaming`] if an input event occurred within [`STREAMING_THRESHOLD_MS`],
+///   or if `has_dirty_windows` is true.
+/// - [`PowerSaver`] otherwise.
+///
+/// [`Interactive`]: PowerProfile::Interactive
+/// [`Streaming`]: PowerProfile::Streaming
+/// [`PowerSaver`]: PowerProfile::PowerSaver
+pub fn profile_from_activity(
+    last_event_at: Option<Instant>,
+    has_dirty_windows: bool,
+) -> PowerProfile {
     match last_event_at {
-        Some(t) if (t.elapsed().as_millis() as u64) < ACTIVE_THRESHOLD_MS => {
-            PowerProfile::HighPerformance
+        Some(t) if (t.elapsed().as_millis() as u64) < INTERACTIVE_THRESHOLD_MS => {
+            PowerProfile::Interactive
         }
+        Some(t) if (t.elapsed().as_millis() as u64) < STREAMING_THRESHOLD_MS => {
+            PowerProfile::Streaming
+        }
+        _ if has_dirty_windows => PowerProfile::Streaming,
         _ => PowerProfile::PowerSaver,
     }
 }
@@ -37,7 +66,7 @@ pub fn profile_from_activity(last_event_at: Option<Instant>) -> PowerProfile {
 /// Tracks the active power profile and detects changes over time.
 ///
 /// Used by the main event loop to detect when [`PowerProfile`] changes
-/// (e.g. from `PowerSaver` → `HighPerformance` on user input) and propagate
+/// (e.g. from `PowerSaver` → `Interactive` on user input) and propagate
 /// the new profile to [`WindowManager`].
 ///
 /// The poll interval returned by [`PowerProfile::poll_interval`] directly
@@ -76,21 +105,24 @@ impl PowerProfile {
     /// Fixed poll interval for this profile variant.
     pub fn poll_interval(&self) -> Duration {
         match self {
-            Self::HighPerformance => Duration::from_millis(16),
-            Self::PowerSaver => Duration::from_millis(500),
+            Self::Interactive => INTERACTIVE_POLL_INTERVAL,
+            Self::Streaming => STREAMING_POLL_INTERVAL,
+            Self::PowerSaver => POWERSAVER_POLL_INTERVAL,
         }
     }
 
     pub fn name(&self) -> &'static str {
         match self {
-            Self::HighPerformance => "HighPerformance",
+            Self::Interactive => "Interactive",
+            Self::Streaming => "Streaming",
             Self::PowerSaver => "PowerSaver",
         }
     }
 
     pub fn indicator_color(&self, theme: &Theme) -> Color {
         match self {
-            Self::HighPerformance => theme.profile_high,
+            Self::Interactive => theme.profile_high,
+            Self::Streaming => theme.profile_mid,
             Self::PowerSaver => theme.profile_low,
         }
     }
@@ -107,21 +139,41 @@ mod tests {
 
     #[test]
     fn profile_from_activity_none_is_powersaver() {
-        assert_eq!(profile_from_activity(None), PowerProfile::PowerSaver);
+        assert_eq!(profile_from_activity(None, false), PowerProfile::PowerSaver);
     }
 
     #[test]
-    fn profile_from_activity_recent_is_high_performance() {
+    fn profile_from_activity_recent_is_interactive() {
         assert_eq!(
-            profile_from_activity(Some(Instant::now())),
-            PowerProfile::HighPerformance
+            profile_from_activity(Some(Instant::now()), false),
+            PowerProfile::Interactive
         );
     }
 
     #[test]
-    fn profile_from_activity_stale_is_powersaver() {
-        let stale = Some(Instant::now() - Duration::from_millis(ACTIVE_THRESHOLD_MS + 100));
-        assert_eq!(profile_from_activity(stale), PowerProfile::PowerSaver);
+    fn profile_from_activity_stale_no_dirty_is_powersaver() {
+        let stale = Some(Instant::now() - Duration::from_millis(STREAMING_THRESHOLD_MS + 100));
+        assert_eq!(
+            profile_from_activity(stale, false),
+            PowerProfile::PowerSaver
+        );
+    }
+
+    #[test]
+    fn profile_from_activity_stale_with_dirty_is_streaming() {
+        let stale = Some(Instant::now() - Duration::from_millis(STREAMING_THRESHOLD_MS + 100));
+        assert_eq!(profile_from_activity(stale, true), PowerProfile::Streaming);
+    }
+
+    #[test]
+    fn profile_from_activity_none_with_dirty_is_streaming() {
+        assert_eq!(profile_from_activity(None, true), PowerProfile::Streaming);
+    }
+
+    #[test]
+    fn profile_from_activity_mid_is_streaming() {
+        let mid = Some(Instant::now() - Duration::from_millis(200));
+        assert_eq!(profile_from_activity(mid, false), PowerProfile::Streaming);
     }
 
     #[test]
@@ -134,24 +186,24 @@ mod tests {
     fn tracker_returns_some_on_change() {
         let mut tracker = PowerProfileTracker::new(PowerProfile::PowerSaver);
         assert_eq!(
-            tracker.poll(PowerProfile::HighPerformance),
-            Some(PowerProfile::HighPerformance)
+            tracker.poll(PowerProfile::Interactive),
+            Some(PowerProfile::Interactive)
         );
     }
 
     #[test]
     fn tracker_stays_changed() {
         let mut tracker = PowerProfileTracker::new(PowerProfile::PowerSaver);
-        tracker.poll(PowerProfile::HighPerformance);
-        assert!(tracker.poll(PowerProfile::HighPerformance).is_none());
+        tracker.poll(PowerProfile::Interactive);
+        assert!(tracker.poll(PowerProfile::Interactive).is_none());
     }
 
     #[test]
     fn tracker_current_returns_last_seen() {
         let mut tracker = PowerProfileTracker::new(PowerProfile::PowerSaver);
         assert_eq!(tracker.current(), PowerProfile::PowerSaver);
-        tracker.poll(PowerProfile::HighPerformance);
-        assert_eq!(tracker.current(), PowerProfile::HighPerformance);
+        tracker.poll(PowerProfile::Interactive);
+        assert_eq!(tracker.current(), PowerProfile::Interactive);
     }
 
     #[test]
@@ -160,18 +212,26 @@ mod tests {
     }
 
     #[test]
-    fn high_performance_poll_interval_is_16ms() {
+    fn interactive_poll_interval_is_8ms() {
         assert_eq!(
-            PowerProfile::HighPerformance.poll_interval(),
-            Duration::from_millis(16)
+            PowerProfile::Interactive.poll_interval(),
+            INTERACTIVE_POLL_INTERVAL
         );
     }
 
     #[test]
-    fn power_saver_poll_interval_is_500ms() {
+    fn streaming_poll_interval_is_16ms() {
+        assert_eq!(
+            PowerProfile::Streaming.poll_interval(),
+            STREAMING_POLL_INTERVAL
+        );
+    }
+
+    #[test]
+    fn power_saver_poll_interval_is_3600s() {
         assert_eq!(
             PowerProfile::PowerSaver.poll_interval(),
-            Duration::from_millis(500)
+            POWERSAVER_POLL_INTERVAL
         );
     }
 }
