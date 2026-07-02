@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::io;
 use std::sync::{
     Arc,
@@ -44,6 +44,8 @@ pub struct UnifiedEventSource {
     dirty_windows: HashSet<WindowKey>,
     /// Cached input event (poll returned true, waiting for read).
     pending_event: Option<Event>,
+    /// Buffer for input events drained during `drain_pending` so none are lost.
+    input_buffer: VecDeque<Event>,
     /// Signal received flag.
     signal_received: bool,
     /// Keyboard normalizer for consistent event handling.
@@ -91,6 +93,7 @@ impl UnifiedEventSource {
             shutdown,
             dirty_windows: HashSet::new(),
             pending_event: None,
+            input_buffer: VecDeque::new(),
             signal_received: false,
             normalizer: KeyboardNormalizer::new(),
             last_event_at: None,
@@ -105,16 +108,14 @@ impl UnifiedEventSource {
     /// Drain all pending events from the channel (non-blocking) into internal
     /// state.  Called at the start of each event-loop iteration so PtyWakeup
     /// floods don't cause render-backlog.
+    ///
+    /// Input events are moved into `input_buffer` so none are lost during
+    /// bursts (paste, key repeat).  `poll()` checks the buffer first.
     fn drain_pending(&mut self) {
         loop {
             match self.rx.try_recv() {
                 Ok(UnifiedEvent::Input(event)) => {
-                    self.last_event_at = Some(Instant::now());
-                    if self.pending_event.is_none() {
-                        self.pending_event = Some(event);
-                    }
-                    // Only cache the first input; rest will be picked up
-                    // by subsequent poll() calls.
+                    self.input_buffer.push_back(event);
                 }
                 Ok(UnifiedEvent::PtyWakeup(key)) => {
                     self.dirty_windows.insert(key);
@@ -149,7 +150,7 @@ impl EventSource for UnifiedEventSource {
         // First drain any pending events non-blocking.
         self.drain_pending();
 
-        if self.pending_event.is_some() {
+        if self.pending_event.is_some() || !self.input_buffer.is_empty() {
             return Ok(true);
         }
 
@@ -185,13 +186,21 @@ impl EventSource for UnifiedEventSource {
     }
 
     fn read(&mut self) -> io::Result<Event> {
+        // Check pending_event first (set by poll()), then drain input_buffer.
         if let Some(event) = self.pending_event.take()
             && let Some(normalized) = self.normalizer.normalize(event)
         {
             return Ok(normalized);
         }
-        // Fallback: block on the channel for an input event.
+        // Fallback: check buffer, then block on the channel.
         loop {
+            if let Some(event) = self.input_buffer.pop_front() {
+                self.last_event_at = Some(Instant::now());
+                if let Some(normalized) = self.normalizer.normalize(event) {
+                    return Ok(normalized);
+                }
+                continue;
+            }
             match self.rx.recv() {
                 Ok(UnifiedEvent::Input(event)) => {
                     self.last_event_at = Some(Instant::now());

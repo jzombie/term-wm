@@ -732,7 +732,7 @@ struct TestPane {
 impl TestPane {
     fn new(max_sb: usize) -> Self {
         Self {
-            parser: vt100::Parser::new(1, 1, 0),
+            parser: vt100::Parser::new(24, 80, max_sb),
             current_scrollback: 0,
             max_sb,
             alt_screen: false,
@@ -742,6 +742,14 @@ impl TestPane {
 
     fn set_scrollback_value(&mut self, val: usize) {
         self.current_scrollback = val.min(self.max_sb);
+    }
+
+    fn write_to_parser(&mut self, bytes: &[u8]) {
+        self.parser.process(bytes);
+    }
+
+    fn set_parser_size(&mut self, rows: u16, cols: u16) {
+        self.parser.screen_mut().set_size(rows, cols);
     }
 
     #[allow(dead_code)]
@@ -1204,6 +1212,86 @@ mod tests {
             shared2.borrow().offset_y,
             100,
             "viewport should follow new content to max"
+        );
+    }
+
+    // --- Selection text extraction tests ---
+
+    /// Helper: creates a TerminalComponent with a TestPane containing known content.
+    /// Returns (term, row_base) where row_base = max_scrollback - scrollback
+    /// so tests can compute correct logical positions for visible row N as row_base + N.
+    fn make_term_with_content(width: u16, height: u16, max_sb: usize, text: &str) -> (TerminalComponent, usize) {
+        let mut pane = TestPane::new(max_sb);
+        pane.set_parser_size(height, width);
+        pane.write_to_parser(text.as_bytes());
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        term.last_area = Rect { x: 0, y: 0, width, height };
+        term.selection_enabled = true;
+        let row_base = term.pane.max_scrollback();
+        (term, row_base)
+    }
+
+    #[test]
+    fn selection_text_single_line_ascii() {
+        let (mut term, rb) = make_term_with_content(80, 24, 2000, "Hello World");
+        term.selection.begin_drag(LogicalPosition::new(rb, 0));
+        term.selection.update_drag(LogicalPosition::new(rb, 11));
+        let text = term.selection_text();
+        assert_eq!(text, Some("Hello World".to_string()));
+    }
+
+    #[test]
+    fn selection_text_multi_line_crlf() {
+        let (mut term, rb) = make_term_with_content(80, 24, 2000, "Line one\r\nLine two\r\nLine three");
+        term.selection.begin_drag(LogicalPosition::new(rb, 0));
+        term.selection.update_drag(LogicalPosition::new(rb + 2, 5));
+        let text = term.selection_text();
+        assert_eq!(text, Some("Line one\nLine two\nLine ".to_string()));
+    }
+
+    #[test]
+    fn selection_text_end_col_zero_adjustment() {
+        let (mut term, rb) = make_term_with_content(80, 24, 2000, "First line of content\r\nSecond line here");
+        term.selection.begin_drag(LogicalPosition::new(rb, 5));
+        term.selection.update_drag(LogicalPosition::new(rb + 1, 0));
+        let text = term.selection_text();
+        assert_eq!(text, Some(" line of content".to_string()));
+    }
+
+    #[test]
+    fn selection_text_full_row() {
+        let (mut term, rb) = make_term_with_content(80, 24, 2000, "The quick brown fox jumps over the lazy dog");
+        term.selection.begin_drag(LogicalPosition::new(rb, 0));
+        term.selection.update_drag(LogicalPosition::new(rb, 80));
+        let text = term.selection_text();
+        assert_eq!(
+            text,
+            Some("The quick brown fox jumps over the lazy dog".to_string())
+        );
+    }
+
+    #[test]
+    fn selection_text_wide_chars() {
+        let (mut term, rb) = make_term_with_content(80, 24, 2000, "Hello 世界 World");
+        term.selection.begin_drag(LogicalPosition::new(rb, 0));
+        term.selection.update_drag(LogicalPosition::new(rb, 19));
+        let text = term.selection_text();
+        assert!(text.is_some(), "should have selection text");
+        let t = text.unwrap();
+        assert!(t.contains("世界"), "should include CJK chars: got {:?}", t);
+    }
+
+    #[test]
+    fn selection_text_clipboard_full_26_chars() {
+        let (mut term, rb) = make_term_with_content(80, 24, 2000, "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+        term.selection.begin_drag(LogicalPosition::new(rb, 0));
+        term.selection.update_drag(LogicalPosition::new(rb, 26));
+        let text = term.selection_text();
+        assert_eq!(
+            text,
+            Some("ABCDEFGHIJKLMNOPQRSTUVWXYZ".to_string()),
+            "should copy all 26 chars, got: {:?}",
+            text
         );
     }
 }
