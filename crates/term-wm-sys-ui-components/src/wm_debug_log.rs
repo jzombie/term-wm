@@ -6,7 +6,7 @@ use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Text};
 
-use term_wm_core::components::{Component, ComponentContext};
+use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::debug_event_flags;
 use term_wm_core::ui::UiFrame;
 use term_wm_ui_components::{ScrollViewComponent, TextRendererComponent};
@@ -135,7 +135,7 @@ impl DebugLogWriter {
             return;
         }
         if force {
-            let text = String::from_utf8_lossy(&self.pending).to_string();
+            let text = strip_ansi_escapes(&String::from_utf8_lossy(&self.pending));
             self.pending.clear();
             for line in text.split('\n') {
                 if !line.is_empty() || force {
@@ -148,7 +148,7 @@ impl DebugLogWriter {
             return;
         };
         let drained: Vec<u8> = self.pending.drain(..=pos).collect();
-        let text = String::from_utf8_lossy(&drained).to_string();
+        let text = strip_ansi_escapes(&String::from_utf8_lossy(&drained));
         for line in text.split('\n') {
             if !line.is_empty() {
                 self.handle.push(line.to_string());
@@ -168,6 +168,23 @@ impl Write for DebugLogWriter {
         self.flush_pending(true);
         Ok(())
     }
+}
+
+fn strip_ansi_escapes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' && chars.next() == Some('[') {
+            for c in chars.by_ref() {
+                if c.is_ascii_alphabetic() || c == '~' {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 #[derive(Debug)]
@@ -213,6 +230,14 @@ impl Component for WmDebugLogComponent {
             self.follow_tail = self.is_at_bottom();
         }
         handled
+    }
+
+    fn selection_status(&self) -> SelectionStatus {
+        self.scroll_view.selection_status()
+    }
+
+    fn selection_text(&mut self) -> Option<String> {
+        self.scroll_view.selection_text()
     }
 }
 
