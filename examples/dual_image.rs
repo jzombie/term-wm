@@ -1,7 +1,6 @@
 use std::io;
 use std::sync::Arc;
 
-use ratatui::prelude::Rect;
 use ratatui::widgets::Clear;
 
 use term_wm::SvgImageComponent;
@@ -38,8 +37,8 @@ struct App {
 
 impl App {
     fn new(paths: Vec<String>) -> io::Result<Self> {
-        let mut left = SvgImageComponent::new();
-        let mut right = SvgImageComponent::new();
+        let left = SvgImageComponent::new();
+        let right = SvgImageComponent::new();
         let hostname = None;
         let top_panel: Box<dyn term_wm_core::top_panel_trait::TopPanel<WindowKey>> = Box::new(
             term_wm_sys_ui_components::WmTopPanelComponent::new("example"),

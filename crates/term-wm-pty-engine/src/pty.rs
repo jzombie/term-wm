@@ -13,6 +13,8 @@ use crate::title::extract_osc_title;
 
 pub type PtyResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+type WakeupFn = Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
+
 pub struct Pty {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
@@ -37,7 +39,7 @@ pub struct Pty {
     pending_resize: Option<PtySize>,
     /// Wakeup callback invoked by the reader thread after each read batch.
     /// Wrapped in Arc+Mutex so it can be set after the reader thread starts.
-    wakeup: Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
+    wakeup: WakeupFn,
 }
 
 /// Parts of a `Pty` that can be moved into the `Reaper` for async teardown.
@@ -80,7 +82,7 @@ impl Pty {
         let reader_bytes = Arc::clone(&bytes_received);
         let reader_last = Arc::clone(&last_bytes);
         let reader_dsr = Arc::clone(&dsr_requested);
-        let wakeup: Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>> = Arc::new(Mutex::new(None));
+        let wakeup: WakeupFn = Arc::new(Mutex::new(None));
         let reader_wakeup = Arc::clone(&wakeup);
         let pending_title = Arc::new(Mutex::new(None));
         let foreground_title = Arc::new(Mutex::new(None));
@@ -427,7 +429,7 @@ fn read_loop(
     bytes_received: Arc<AtomicUsize>,
     last_bytes: Arc<Mutex<Vec<u8>>>,
     dsr_requested: Arc<AtomicBool>,
-    wakeup: Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
+    wakeup: WakeupFn,
 ) {
     let mut tail: Vec<u8> = Vec::new();
     let mut buf = [0u8; 4096];
@@ -459,10 +461,10 @@ fn read_loop(
                     pending.extend_from_slice(&buf[..n]);
                 }
                 // Wakeup the main thread — new data is available.
-                if let Ok(guard) = wakeup.lock() {
-                    if let Some(ref cb) = *guard {
-                        cb();
-                    }
+                if let Ok(guard) = wakeup.lock()
+                    && let Some(ref cb) = *guard
+                {
+                    cb();
                 }
             }
             Err(_) => break,
@@ -630,8 +632,7 @@ mod tests {
         let dsr_requested = Arc::new(AtomicBool::new(false));
 
         // run read_loop directly (it will exit on EOF)
-        let noop_wakeup: Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>> =
-            Arc::new(Mutex::new(None));
+        let noop_wakeup: WakeupFn = Arc::new(Mutex::new(None));
         read_loop(
             reader,
             Arc::clone(&pending),

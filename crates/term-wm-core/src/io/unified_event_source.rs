@@ -82,7 +82,7 @@ impl UnifiedEventSource {
                     }
                 }
             })
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| io::Error::other(e.to_string()))?;
 
         Ok(Self {
             rx,
@@ -185,10 +185,10 @@ impl EventSource for UnifiedEventSource {
     }
 
     fn read(&mut self) -> io::Result<Event> {
-        if let Some(event) = self.pending_event.take() {
-            if let Some(normalized) = self.normalizer.normalize(event) {
-                return Ok(normalized);
-            }
+        if let Some(event) = self.pending_event.take()
+            && let Some(normalized) = self.normalizer.normalize(event)
+        {
+            return Ok(normalized);
         }
         // Fallback: block on the channel for an input event.
         loop {

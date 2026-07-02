@@ -206,6 +206,7 @@ impl WindowManager {
         }
     }
 
+    #[expect(dead_code)]
     pub(super) fn focus_for_region(&self, key: WindowKey) -> Option<WindowKey> {
         if *self.focus.current() == key {
             Some(key)

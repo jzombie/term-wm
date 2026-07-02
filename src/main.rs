@@ -146,14 +146,13 @@ impl App {
                         tracing::error!("Window spawn error: {}", e);
                         error_occurred = true;
                     }
-                    if !error_occurred {
-                        if let Some(key) = app.terminals.keys().last().copied() {
-                            if let Some(ref mut pane) = app.terminals.get_mut(&key) {
-                                let mut line = cmd;
-                                line.push_str(LineEnding::from_current_platform().as_str());
-                                let _ = pane.content.write_bytes(line.as_bytes());
-                            }
-                        }
+                    if !error_occurred
+                        && let Some(key) = app.terminals.keys().last().copied()
+                        && let Some(ref mut pane) = app.terminals.get_mut(&key)
+                    {
+                        let mut line = cmd;
+                        line.push_str(LineEnding::from_current_platform().as_str());
+                        let _ = pane.content.write_bytes(line.as_bytes());
                     }
                 } else if let Err(e) = app.wm_new_window() {
                     tracing::error!("Window spawn error: {}", e);
@@ -307,10 +306,10 @@ impl WindowProvider for App {
                 }
             })
             .collect();
-        if self.debug_visible {
-            if let Some(debug_key) = self.debug_key {
-                keys.push(debug_key);
-            }
+        if self.debug_visible
+            && let Some(debug_key) = self.debug_key
+        {
+            keys.push(debug_key);
         }
         keys
     }

@@ -17,7 +17,7 @@ use super::decorator::WindowDecorator;
 use super::entry::Window;
 use crate::app_context::AppContext;
 use crate::bottom_panel_trait::BottomPanel;
-use crate::components::{ComponentContext, MenuItem, MenuOverlay, Overlay, SelectionStatus};
+use crate::components::{ComponentContext, MenuItem, MenuOverlay, Overlay};
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
@@ -2102,7 +2102,7 @@ mod tests {
             None,
             None,
         );
-        let keys = make_keys(&mut wm, 100);
+        let _keys = make_keys(&mut wm, 100);
         assert!(wm.drag_snap_remaining().is_none());
     }
 
@@ -2115,7 +2115,7 @@ mod tests {
             None,
             None,
         );
-        let keys = make_keys(&mut wm, 100);
+        let _keys = make_keys(&mut wm, 100);
         assert!(wm.drag_snap_remaining().is_none());
     }
 
@@ -2300,7 +2300,7 @@ mod tests {
             None,
             None,
         );
-        let keys = make_keys(&mut wm, 100);
+        let _keys = make_keys(&mut wm, 100);
         assert_eq!(wm.power_profile, PowerProfile::PowerSaver);
         wm.set_power_profile(PowerProfile::HighPerformance);
         assert_eq!(wm.power_profile, PowerProfile::HighPerformance);

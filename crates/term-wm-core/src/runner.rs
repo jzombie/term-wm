@@ -123,7 +123,7 @@ pub fn run_app<O, D, A, FDraw, FMap>(
     driver: &mut D,
     app: &mut A,
     focus_regions: &[WindowKey],
-    map_region: FMap,
+    _map_region: FMap,
     mut draw: FDraw,
 ) -> io::Result<()>
 where
@@ -568,14 +568,9 @@ where
     }
 }
 
+#[derive(Default)]
 struct WindowDrawState {
     known: Vec<WindowKey>,
-}
-
-impl Default for WindowDrawState {
-    fn default() -> Self {
-        Self { known: Vec::new() }
-    }
 }
 
 impl WindowDrawState {

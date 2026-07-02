@@ -340,11 +340,7 @@ impl WindowManager {
     }
 
     pub fn build_display_order(&self) -> Vec<WindowKey> {
-        let mut ordered: Vec<(WindowKey, &super::Window)> = self
-            .windows
-            .iter()
-            .map(|(id, window)| (id, window))
-            .collect();
+        let mut ordered: Vec<(WindowKey, &super::Window)> = self.windows.iter().collect();
         ordered.sort_by_key(|(_, window)| window.creation_order);
 
         let mut out: Vec<WindowKey> = Vec::new();
@@ -436,7 +432,7 @@ impl WindowManager {
         let mut plan = Vec::new();
         let focused_window = self.focus.current();
         let decorator = self.decorator();
-        let total = self.managed_draw_order.len() as f32;
+        let _total = self.managed_draw_order.len() as f32;
         let num_app = self.managed_draw_order.len();
         for (i, &key) in self.managed_draw_order.iter().enumerate() {
             let full = self.full_region_for_id(key);
@@ -641,6 +637,7 @@ impl WindowManager {
         self.bring_to_front_id(key);
     }
 
+    #[expect(dead_code)]
     pub(super) fn bring_floating_to_front(&mut self, key: WindowKey) {
         self.bring_floating_to_front_id(key);
     }

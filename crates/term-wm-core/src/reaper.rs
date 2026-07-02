@@ -72,29 +72,30 @@ impl Reaper {
             }
 
             // Step 2: Try to reap — non-blocking try_wait().
-            if let Some(ref mut child) = z.child {
-                if child.try_wait().ok().flatten().is_some() {
-                    // Child exited — drop child handle to close resources.
-                    drop(z.child.take());
-                    // The reader thread will unblock once the FD is closed.
-                    // Since we dropped the child (and portable-pty closes
-                    // the master FD when the last handle drops), the reader
-                    // should get EIO/EBADF and exit.
-                    if let Some(handle) = z.reader_handle.take() {
-                        let _ = handle.join();
-                    }
-                    return false; // fully reaped
+            if let Some(ref mut child) = z.child
+                && child.try_wait().ok().flatten().is_some()
+            {
+                // Child exited — drop child handle to close resources.
+                drop(z.child.take());
+                // The reader thread will unblock once the FD is closed.
+                // Since we dropped the child (and portable-pty closes
+                // the master FD when the last handle drops), the reader
+                // should get EIO/EBADF and exit.
+                if let Some(handle) = z.reader_handle.take() {
+                    let _ = handle.join();
                 }
+                return false; // fully reaped
             }
 
             // Step 3: If timeout elapsed and we haven't sent SIGKILL, force-kill.
-            if let Some(killed_at) = z.killed_at {
-                if !z.sigkill_sent && killed_at.elapsed() >= timeout {
-                    if let Some(ref mut child) = z.child {
-                        let _ = child.kill(); // portable-pty kill sends SIGKILL on second call
-                    }
-                    z.sigkill_sent = true;
+            if let Some(killed_at) = z.killed_at
+                && !z.sigkill_sent
+                && killed_at.elapsed() >= timeout
+            {
+                if let Some(ref mut child) = z.child {
+                    let _ = child.kill(); // portable-pty kill sends SIGKILL on second call
                 }
+                z.sigkill_sent = true;
             }
 
             true // still waiting
