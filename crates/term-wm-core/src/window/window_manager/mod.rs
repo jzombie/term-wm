@@ -1203,7 +1203,10 @@ mod tests {
         wm.z_order.push(keys[2]);
         wm.managed_draw_order = wm.z_order.clone();
 
-        assert!(matches!(*wm.focus.current(), _));
+        assert!(
+            !wm.windows.contains_key(*wm.focus.current()),
+            "initial focus should be a placeholder, not a real window"
+        );
 
         let clicked_col = 6u16;
         let clicked_row = 6u16;
@@ -1614,6 +1617,88 @@ mod tests {
             handle_hover.is_some(),
             "layout handles should respond off-window"
         );
+    }
+
+    #[test]
+    fn system_window_header_drag_detaches_to_floating() {
+        use crate::layout::LayoutNode;
+        use crate::ui::UiFrame;
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        struct DummyComponent;
+        impl crate::components::Component for DummyComponent {
+            fn render(
+                &mut self,
+                _frame: &mut UiFrame<'_>,
+                _area: ratatui::prelude::Rect,
+                _ctx: &crate::components::ComponentContext,
+            ) {
+            }
+        }
+
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        let debug_key = wm.set_system_window(Box::new(DummyComponent));
+        wm.set_panel_visible(false);
+        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(debug_key)));
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        let header_rect = wm
+            .floating_headers
+            .iter()
+            .find(|handle| handle.id == debug_key)
+            .expect("debug header present")
+            .rect;
+        assert!(!wm.is_window_floating(debug_key));
+
+        let down = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: header_rect.x,
+            row: header_rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(wm.handle_header_drag_event(&down));
+        assert!(wm.is_window_floating(debug_key));
+        let start_rect = match wm.floating_rect(debug_key).expect("floating rect present") {
+            crate::window::FloatRectSpec::Absolute(fr) => fr,
+            _ => panic!("expected absolute rect"),
+        };
+
+        let drag_col = header_rect.x.saturating_add(5);
+        let drag_row = header_rect.y.saturating_add(1);
+        let drag = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: drag_col,
+            row: drag_row,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(wm.handle_header_drag_event(&drag));
+
+        let moved = match wm.floating_rect(debug_key).expect("floating rect present") {
+            crate::window::FloatRectSpec::Absolute(fr) => fr,
+            _ => panic!("expected absolute rect"),
+        };
+        assert_eq!(moved.x, start_rect.x + 5);
+        assert_eq!(moved.y, start_rect.y + 1);
+
+        let up = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: drag_col,
+            row: drag_row,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(wm.handle_header_drag_event(&up));
+        assert!(wm.drag_header.is_none());
     }
 
     #[test]
@@ -2484,5 +2569,71 @@ mod tests {
             consumed,
             "normal mode: dispatch returns the callback's result"
         );
+    }
+
+    #[test]
+    fn drag_last_event_updated_on_drag_events() {
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        struct DummyComponent;
+        impl crate::components::Component for DummyComponent {
+            fn render(
+                &mut self,
+                _frame: &mut crate::ui::UiFrame<'_>,
+                _area: ratatui::prelude::Rect,
+                _ctx: &crate::components::ComponentContext,
+            ) {
+            }
+        }
+
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+
+        let debug_key = wm.set_system_window(Box::new(DummyComponent));
+        wm.set_panel_visible(false);
+        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(debug_key)));
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        let header_rect = wm
+            .floating_headers
+            .iter()
+            .find(|h| h.id == debug_key)
+            .expect("header should exist")
+            .rect;
+        let down = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: header_rect.x,
+            row: header_rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(wm.handle_header_drag_event(&down));
+        assert!(wm.drag_last_event.is_some());
+
+        wm.drag_last_event = Some(Instant::now() - Duration::from_secs(10));
+        let drag = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: header_rect.x + 5,
+            row: header_rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(wm.handle_header_drag_event(&drag));
+        if let Some(last) = wm.drag_last_event {
+            assert!(
+                last.elapsed() < Duration::from_secs(1),
+                "drag should refresh drag_last_event"
+            );
+        } else {
+            panic!("drag_last_event should be set after drag");
+        }
     }
 }

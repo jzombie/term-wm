@@ -789,6 +789,52 @@ mod tests {
     }
 
     #[test]
+    fn runner_does_not_quit_when_app_reports_windows_but_wm_has_no_active_regions() {
+        use crate::window::WindowManager;
+
+        struct FakeApp {
+            wm: WindowManager,
+            key: WindowKey,
+        }
+        impl WindowManagerHost for FakeApp {
+            fn windows(&mut self) -> &mut WindowManager {
+                &mut self.wm
+            }
+        }
+        impl WindowProvider for FakeApp {
+            fn enumerate_windows(&mut self) -> Vec<WindowKey> {
+                vec![self.key]
+            }
+            fn render_window(
+                &mut self,
+                _frame: &mut crate::ui::UiFrame<'_>,
+                _window: WindowDrawContext,
+                _ctx: &ComponentContext,
+            ) {
+            }
+        }
+
+        let mut wm = WindowManager::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            Some(Box::new(TestMenu)),
+        );
+        let key = wm.create_window();
+
+        let mut app = FakeApp { wm, key };
+        assert!(!app.enumerate_windows().is_empty());
+
+        let quit_if_no_windows =
+            app.enumerate_windows().is_empty();
+        assert!(
+            !quit_if_no_windows,
+            "Runner would quit even though app reports windows"
+        );
+    }
+
+    #[test]
     fn handle_focused_app_event_routes_key_to_window_component() {
         use crate::components::Component;
         use crate::window::WindowManager;
@@ -883,6 +929,95 @@ mod tests {
         );
     }
 
+    #[test]
+    fn handle_focused_app_event_with_direct_mode_still_routes() {
+        use crate::components::ComponentContext;
+        use crate::window::WindowManager;
+
+        struct KeyRecorder {
+            received_key: bool,
+        }
+        impl Component for KeyRecorder {
+            fn render(
+                &mut self,
+                _frame: &mut crate::ui::UiFrame<'_>,
+                _area: ratatui::layout::Rect,
+                _ctx: &ComponentContext,
+            ) {
+            }
+            fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
+                if matches!(event, Event::Key(_)) {
+                    self.received_key = true;
+                }
+                true
+            }
+        }
+
+        struct FakeApp {
+            wm: WindowManager,
+            recorder: KeyRecorder,
+        }
+        impl WindowManagerHost for FakeApp {
+            fn windows(&mut self) -> &mut WindowManager {
+                &mut self.wm
+            }
+        }
+        impl WindowProvider for FakeApp {
+            fn enumerate_windows(&mut self) -> Vec<WindowKey> {
+                vec![]
+            }
+            fn render_window(
+                &mut self,
+                _frame: &mut crate::ui::UiFrame<'_>,
+                _window: WindowDrawContext,
+                _ctx: &ComponentContext,
+            ) {
+            }
+            fn window_component(&mut self, _key: WindowKey) -> Option<&mut dyn Component> {
+                Some(&mut self.recorder)
+            }
+        }
+
+        let mut app = FakeApp {
+            wm: WindowManager::with_config(
+                crate::wm_config::WmConfig::standalone(),
+                std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+                None,
+                None,
+                Some(Box::new(TestMenu)),
+            ),
+            recorder: KeyRecorder {
+                received_key: false,
+            },
+        };
+        let key = app.wm.create_window();
+        app.wm.regions.set(
+            key,
+            ratatui::layout::Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        app.wm.focus_app_window(key);
+
+        let focus_id = app.wm.focused_window();
+        app.wm.set_direct_mode(focus_id, true);
+        assert!(app.wm.direct_mode(focus_id));
+
+        let evt = Event::Key(KeyEvent {
+            code: KeyCode::Char('x'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        });
+
+        let consumed = handle_focused_app_event(&evt, &mut app);
+        assert!(consumed, "event must route even when direct_mode is true");
+        assert!(app.recorder.received_key, "component must receive the key");
+    }
+
     #[derive(Debug)]
     struct TestMenu;
     impl crate::components::Component for TestMenu {
@@ -919,4 +1054,4 @@ mod tests {
     }
 }
 
-// TODO: Rewrite tests for WindowKey-based API
+
