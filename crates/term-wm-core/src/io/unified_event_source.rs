@@ -196,6 +196,7 @@ impl EventSource for UnifiedEventSource {
                         let now = Instant::now();
                         if now >= deadline {
                             self.coalesce_deadline = None;
+                            self.dirty_windows.clear();
                             return Ok(false);
                         }
                         let coalesce_remaining = deadline.saturating_duration_since(now);
@@ -215,6 +216,7 @@ impl EventSource for UnifiedEventSource {
         }
 
         self.coalesce_deadline = None;
+        self.dirty_windows.clear();
         Ok(false)
     }
 
