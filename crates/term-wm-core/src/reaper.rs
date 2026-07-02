@@ -177,6 +177,11 @@ mod tests {
         fn process_id(&self) -> Option<u32> {
             Some(42)
         }
+
+        #[cfg(windows)]
+        fn as_raw_handle(&self) -> Option<*mut std::ffi::c_void> {
+            None
+        }
     }
 
     fn dummy_handle() -> thread::JoinHandle<()> {
