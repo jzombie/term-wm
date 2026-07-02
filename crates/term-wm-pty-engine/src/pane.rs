@@ -1,6 +1,8 @@
 use std::io;
+use std::sync::Arc;
+use std::thread::JoinHandle;
 
-use portable_pty::{ExitStatus, PtySize};
+use portable_pty::{Child, ExitStatus, PtySize};
 
 use crate::PtyResult;
 
@@ -19,7 +21,16 @@ pub trait Pane {
     fn bytes_received(&self) -> usize;
     fn last_bytes_text(&self) -> String;
     fn kill_child(&mut self) -> PtyResult<()>;
+    /// Set a wakeup callback invoked when new PTY data is available.
+    fn set_wakeup(&mut self, _cb: Option<Arc<dyn Fn() + Send + Sync>>) {}
     fn take_pending_title(&mut self) -> Option<String> {
+        None
+    }
+    /// Extract the child process and reader thread handle so they can be
+    /// moved into the `Reaper` for async teardown.
+    /// Returns `None` by default (for mock panes). The real `Pty` impl
+    /// returns `(child, reader_handle)`.
+    fn take_parts(&mut self) -> Option<(Box<dyn Child + Send + Sync>, JoinHandle<()>)> {
         None
     }
 }
@@ -83,5 +94,17 @@ impl Pane for crate::Pty {
 
     fn take_pending_title(&mut self) -> Option<String> {
         crate::Pty::take_pending_title(self)
+    }
+
+    fn take_parts(&mut self) -> Option<(Box<dyn Child + Send + Sync>, JoinHandle<()>)> {
+        let parts = self.into_parts();
+        match (parts.child, parts.reader_handle) {
+            (Some(child), Some(handle)) => Some((child, handle)),
+            _ => None,
+        }
+    }
+
+    fn set_wakeup(&mut self, cb: Option<Arc<dyn Fn() + Send + Sync>>) {
+        crate::Pty::set_wakeup(self, cb)
     }
 }

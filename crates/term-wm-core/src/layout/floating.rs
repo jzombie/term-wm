@@ -9,15 +9,15 @@ use crate::ui::UiFrame;
 pub use term_wm_layout_engine::{FLOATING_MIN_HEIGHT, FLOATING_MIN_WIDTH, ResizeEdge};
 
 #[derive(Debug, Clone, Copy)]
-pub struct ResizeHandle<R: Copy + Eq + Ord> {
-    pub id: R,
+pub struct ResizeHandle<K: Copy + Eq + Ord> {
+    pub key: K,
     pub rect: Rect,
     pub edge: ResizeEdge,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ResizeDrag<R: Copy + Eq + Ord> {
-    pub id: R,
+pub struct ResizeDrag<K: Copy + Eq + Ord> {
+    pub key: K,
     pub edge: ResizeEdge,
     pub start_rect: Rect,
     pub start_col: u16,
@@ -29,8 +29,8 @@ pub struct ResizeDrag<R: Copy + Eq + Ord> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct HeaderDrag<R: Copy + Eq + Ord> {
-    pub id: R,
+pub struct HeaderDrag<K: Copy + Eq + Ord> {
+    pub key: K,
     pub initial_x: i32,
     pub initial_y: i32,
     pub start_x: u16,
@@ -38,16 +38,16 @@ pub struct HeaderDrag<R: Copy + Eq + Ord> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct DragHandle<R: Copy + Eq + Ord> {
-    pub id: R,
+pub struct DragHandle<K: Copy + Eq + Ord> {
+    pub key: K,
     pub rect: Rect,
 }
 
-pub fn resize_handles_for_region<R: Copy + Eq + Ord>(
-    id: R,
+pub fn resize_handles_for_region<K: Copy + Eq + Ord>(
+    key: K,
     rect: Rect,
     _bounds: Rect,
-) -> Vec<ResizeHandle<R>> {
+) -> Vec<ResizeHandle<K>> {
     let mut handles = Vec::new();
     if rect.width == 0 || rect.height == 0 {
         return handles;
@@ -59,7 +59,7 @@ pub fn resize_handles_for_region<R: Copy + Eq + Ord>(
     let can_right = true;
     let can_bottom = true;
     handles.push(ResizeHandle {
-        id,
+        key,
         rect: Rect {
             x: rect.x,
             y: rect.y,
@@ -69,7 +69,7 @@ pub fn resize_handles_for_region<R: Copy + Eq + Ord>(
         edge: ResizeEdge::TopLeft,
     });
     handles.push(ResizeHandle {
-        id,
+        key,
         rect: Rect {
             x: right,
             y: rect.y,
@@ -79,7 +79,7 @@ pub fn resize_handles_for_region<R: Copy + Eq + Ord>(
         edge: ResizeEdge::TopRight,
     });
     handles.push(ResizeHandle {
-        id,
+        key,
         rect: Rect {
             x: rect.x,
             y: bottom,
@@ -89,7 +89,7 @@ pub fn resize_handles_for_region<R: Copy + Eq + Ord>(
         edge: ResizeEdge::BottomLeft,
     });
     handles.push(ResizeHandle {
-        id,
+        key,
         rect: Rect {
             x: right,
             y: bottom,
@@ -100,7 +100,7 @@ pub fn resize_handles_for_region<R: Copy + Eq + Ord>(
     });
     if rect.width > 2 && can_top {
         handles.push(ResizeHandle {
-            id,
+            key,
             rect: Rect {
                 x: rect.x.saturating_add(1),
                 y: rect.y,
@@ -112,7 +112,7 @@ pub fn resize_handles_for_region<R: Copy + Eq + Ord>(
     }
     if rect.width > 2 && can_bottom {
         handles.push(ResizeHandle {
-            id,
+            key,
             rect: Rect {
                 x: rect.x.saturating_add(1),
                 y: bottom,
@@ -124,7 +124,7 @@ pub fn resize_handles_for_region<R: Copy + Eq + Ord>(
     }
     if rect.height > 2 && can_left {
         handles.push(ResizeHandle {
-            id,
+            key,
             rect: Rect {
                 x: rect.x,
                 y: rect.y.saturating_add(1),
@@ -136,7 +136,7 @@ pub fn resize_handles_for_region<R: Copy + Eq + Ord>(
     }
     if rect.height > 2 && can_right {
         handles.push(ResizeHandle {
-            id,
+            key,
             rect: Rect {
                 x: right,
                 y: rect.y.saturating_add(1),
@@ -159,11 +159,11 @@ pub fn resize_handles_for_region<R: Copy + Eq + Ord>(
     handles
 }
 
-pub fn floating_header_for_region<R: Copy + Eq + Ord>(
-    id: R,
+pub fn floating_header_for_region<K: Copy + Eq + Ord>(
+    key: K,
     rect: Rect,
     bounds: Rect,
-) -> Option<DragHandle<R>> {
+) -> Option<DragHandle<K>> {
     if rect.width < 3 || rect.height < 3 {
         return None;
     }
@@ -172,7 +172,7 @@ pub fn floating_header_for_region<R: Copy + Eq + Ord>(
         return None;
     }
     Some(DragHandle {
-        id,
+        key,
         rect: Rect {
             x: rect.x.saturating_add(1),
             y: header_y,
@@ -220,32 +220,32 @@ pub fn apply_resize_drag(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn render_resize_outline<R: Copy + Eq + Ord>(
+pub fn render_resize_outline<K: Copy + Eq + Ord>(
     frame: &mut UiFrame<'_>,
-    hovered: Option<ResizeHandle<R>>,
-    dragging: Option<ResizeDrag<R>>,
-    regions: &RegionMap<R>,
+    hovered: Option<ResizeHandle<K>>,
+    dragging: Option<ResizeDrag<K>>,
+    regions: &RegionMap<K>,
     bounds: Rect,
-    floating: &[FloatingPane<R>],
-    draw_order: &[R],
+    floating: &[FloatingPane<K>],
+    draw_order: &[K],
     theme: &Theme,
 ) {
     let target_edge = dragging.map(|d| d.edge).or_else(|| hovered.map(|h| h.edge));
-    let target_id = dragging.map(|d| d.id).or_else(|| hovered.map(|h| h.id));
-    let Some(id) = target_id else { return };
-    let Some(rect) = regions.get(id) else { return };
+    let target_key = dragging.map(|d| d.key).or_else(|| hovered.map(|h| h.key));
+    let Some(key) = target_key else { return };
+    let Some(rect) = regions.get(key) else { return };
     if rect.width < 3 || rect.height < 3 {
         return;
     }
     let buffer = frame.buffer_mut();
-    if !floating.iter().any(|p| p.id == id) {
+    if !floating.iter().any(|p| p.key == key) {
         return;
     }
 
-    let obscuring: Vec<Rect> = if let Some(idx) = draw_order.iter().position(|&x| x == id) {
+    let obscuring: Vec<Rect> = if let Some(idx) = draw_order.iter().position(|&x| x == key) {
         draw_order[idx + 1..]
             .iter()
-            .filter_map(|&above_id| regions.get(above_id))
+            .filter_map(|&above_key| regions.get(above_key))
             .collect()
     } else {
         Vec::new()

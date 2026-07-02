@@ -13,6 +13,8 @@ use crate::title::extract_osc_title;
 
 pub type PtyResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+type WakeupFn = Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
+
 pub struct Pty {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
@@ -33,8 +35,17 @@ pub struct Pty {
     child: Option<Box<dyn Child + Send + Sync>>,
     exited: bool,
     exit_status: Option<portable_pty::ExitStatus>,
-    _reader: JoinHandle<()>,
+    reader: Option<JoinHandle<()>>,
     pending_resize: Option<PtySize>,
+    /// Wakeup callback invoked by the reader thread after each read batch.
+    /// Wrapped in Arc+Mutex so it can be set after the reader thread starts.
+    wakeup: WakeupFn,
+}
+
+/// Parts of a `Pty` that can be moved into the `Reaper` for async teardown.
+pub struct PtyParts {
+    pub child: Option<Box<dyn Child + Send + Sync>>,
+    pub reader_handle: Option<JoinHandle<()>>,
 }
 
 impl Pty {
@@ -71,6 +82,8 @@ impl Pty {
         let reader_bytes = Arc::clone(&bytes_received);
         let reader_last = Arc::clone(&last_bytes);
         let reader_dsr = Arc::clone(&dsr_requested);
+        let wakeup: WakeupFn = Arc::new(Mutex::new(None));
+        let reader_wakeup = Arc::clone(&wakeup);
         let pending_title = Arc::new(Mutex::new(None));
         let foreground_title = Arc::new(Mutex::new(None));
         let reader_handle = thread::spawn(move || {
@@ -80,6 +93,7 @@ impl Pty {
                 reader_bytes,
                 reader_last,
                 reader_dsr,
+                reader_wakeup,
             )
         });
         let parser = vt100::Parser::new(size.rows, size.cols, scrollback_len);
@@ -103,9 +117,33 @@ impl Pty {
             child: Some(child),
             exited: false,
             exit_status: None,
-            _reader: reader_handle,
+            reader: Some(reader_handle),
             pending_resize: None,
+            wakeup: Arc::new(Mutex::new(None)),
         })
+    }
+
+    /// Set a wakeup callback invoked by the reader thread after each read batch.
+    pub fn set_wakeup(&mut self, cb: Option<Arc<dyn Fn() + Send + Sync>>) {
+        if let Ok(mut guard) = self.wakeup.lock() {
+            *guard = cb;
+        }
+    }
+
+    /// Extract the child and reader handle for async reaping.
+    /// After this call, the Pty is a shell — `update()` will no longer
+    /// receive new data. Used by `Reaper::reap()`.
+    pub fn into_parts(&mut self) -> PtyParts {
+        PtyParts {
+            child: self.child.take(),
+            reader_handle: self.reader.take(),
+        }
+    }
+
+    /// Number of bytes received from the pty — always returns 0 after
+    /// `into_parts()` has been called.
+    pub fn reader_is_alive(&self) -> bool {
+        self.reader.is_some()
     }
 
     pub fn resize(&mut self, size: PtySize) -> PtyResult<()> {
@@ -391,6 +429,7 @@ fn read_loop(
     bytes_received: Arc<AtomicUsize>,
     last_bytes: Arc<Mutex<Vec<u8>>>,
     dsr_requested: Arc<AtomicBool>,
+    wakeup: WakeupFn,
 ) {
     let mut tail: Vec<u8> = Vec::new();
     let mut buf = [0u8; 4096];
@@ -420,6 +459,12 @@ fn read_loop(
                 }
                 if let Ok(mut pending) = pending.lock() {
                     pending.extend_from_slice(&buf[..n]);
+                }
+                // Wakeup the main thread — new data is available.
+                if let Ok(guard) = wakeup.lock()
+                    && let Some(ref cb) = *guard
+                {
+                    cb();
                 }
             }
             Err(_) => break,
@@ -587,12 +632,14 @@ mod tests {
         let dsr_requested = Arc::new(AtomicBool::new(false));
 
         // run read_loop directly (it will exit on EOF)
+        let noop_wakeup: WakeupFn = Arc::new(Mutex::new(None));
         read_loop(
             reader,
             Arc::clone(&pending),
             Arc::clone(&bytes_received),
             Arc::clone(&last_bytes),
             Arc::clone(&dsr_requested),
+            noop_wakeup,
         );
 
         // pending should be populated

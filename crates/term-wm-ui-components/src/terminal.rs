@@ -625,6 +625,21 @@ impl TerminalComponent {
         let _ = self.pane.kill_child();
     }
 
+    /// Extract the child process and reader thread handle for async reaping.
+    pub fn take_parts(
+        &mut self,
+    ) -> Option<(
+        Box<dyn portable_pty::Child + Send + Sync>,
+        std::thread::JoinHandle<()>,
+    )> {
+        self.pane.take_parts()
+    }
+
+    /// Set a wakeup callback for when new PTY data arrives.
+    pub fn set_wakeup(&mut self, cb: Option<std::sync::Arc<dyn Fn() + Send + Sync>>) {
+        self.pane.set_wakeup(cb);
+    }
+
     fn link_at_position(&self, mouse: &MouseEvent) -> Option<String> {
         if self.last_area.width == 0 || self.last_area.height == 0 {
             return None;

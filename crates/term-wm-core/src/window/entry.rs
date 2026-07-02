@@ -1,6 +1,9 @@
-use super::{FloatRectSpec, SystemWindowId, WindowId};
+use super::FloatRectSpec;
+use crate::components::Component;
 
-#[derive(Debug, Clone)]
+/// A window entry in the SlotMap — the single source of truth for all
+/// window data, including the optional renderable component.
+/// Process teardown is handled by the `Reaper`, not by `Drop`.
 pub struct Window {
     pub title: Option<String>,
     pub title_set_order: Option<usize>,
@@ -9,6 +12,10 @@ pub struct Window {
     pub prev_floating_rect: Option<FloatRectSpec>,
     pub creation_order: usize,
     pub direct_mode: bool,
+    /// The renderable component (terminal, debug log, etc.).
+    /// `None` for chrome-only windows or windows whose component is
+    /// managed by the application via `WindowProvider::window_component`.
+    pub component: Option<Box<dyn Component>>,
 }
 
 impl Window {
@@ -21,17 +28,12 @@ impl Window {
             prev_floating_rect: None,
             creation_order,
             direct_mode: false,
+            component: None,
         }
     }
 
-    pub fn title_or_default<Id: Copy + Eq + Ord + std::fmt::Debug>(
-        &self,
-        id: WindowId<Id>,
-    ) -> String {
-        self.title.clone().unwrap_or_else(|| match id {
-            WindowId::App(app_id) => format!("{:?}", app_id),
-            WindowId::System(SystemWindowId::DebugLog) => "Debug Log".to_string(),
-        })
+    pub fn title_or_default(&self, key: super::WindowKey) -> String {
+        self.title.clone().unwrap_or_else(|| format!("{:?}", key))
     }
 
     pub fn is_floating(&self) -> bool {
