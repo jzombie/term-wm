@@ -9,6 +9,7 @@ use ratatui::text::{Line, Text};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::debug_event_flags;
 use term_wm_core::ui::UiFrame;
+use term_wm_core::utils::ansi::strip_ansi_escapes;
 use term_wm_ui_components::{ScrollViewComponent, TextRendererComponent};
 
 const DEFAULT_MAX_LINES: usize = 2000;
@@ -168,23 +169,6 @@ impl Write for DebugLogWriter {
         self.flush_pending(true);
         Ok(())
     }
-}
-
-fn strip_ansi_escapes(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' && chars.next() == Some('[') {
-            for c in chars.by_ref() {
-                if c.is_ascii_alphabetic() || c == '~' {
-                    break;
-                }
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
 }
 
 #[derive(Debug)]
