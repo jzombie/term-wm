@@ -140,24 +140,17 @@ fn render_panic_shows_in_debug_log() {
 
     let panic_msg = "intentional-panic-from-draw";
 
-    let result = run_app(
-        &mut output,
-        &mut driver,
-        &mut app,
-        &focus_regions,
-        |k| k,
-        {
-            move |_frame, app| {
-                app.draws += 1;
-                if app.draws == 1 {
-                    panic!("{}", panic_msg);
-                } else if let Some(k) = app.window_key.take() {
-                    app.wm.close_window(k);
-                    app.should_quit = true;
-                }
+    let result = run_app(&mut output, &mut driver, &mut app, &focus_regions, |k| k, {
+        move |_frame, app| {
+            app.draws += 1;
+            if app.draws == 1 {
+                panic!("{}", panic_msg);
+            } else if let Some(k) = app.window_key.take() {
+                app.wm.close_window(k);
+                app.should_quit = true;
             }
-        },
-    );
+        }
+    });
 
     assert!(result.is_ok(), "run_app should return Ok after panic");
 

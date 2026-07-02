@@ -809,7 +809,11 @@ mod tests {
                 _ctx: &crate::components::ComponentContext,
             ) {
             }
-            fn handle_event(&mut self, event: &Event, _ctx: &crate::components::ComponentContext) -> bool {
+            fn handle_event(
+                &mut self,
+                event: &Event,
+                _ctx: &crate::components::ComponentContext,
+            ) -> bool {
                 if matches!(event, Event::Key(_)) {
                     self.received_key = true;
                 }
@@ -874,8 +878,14 @@ mod tests {
         });
 
         let consumed = handle_focused_app_event(&evt, &mut app);
-        assert!(consumed, "handle_focused_app_event must route key to component");
-        assert!(app.recorder.received_key, "component must receive the key event");
+        assert!(
+            consumed,
+            "handle_focused_app_event must route key to component"
+        );
+        assert!(
+            app.recorder.received_key,
+            "component must receive the key event"
+        );
     }
 
     #[derive(Debug)]

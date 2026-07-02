@@ -41,11 +41,9 @@ impl App {
         let mut left = SvgImageComponent::new();
         let mut right = SvgImageComponent::new();
         let hostname = None;
-        let top_panel: Box<
-            dyn term_wm_core::top_panel_trait::TopPanel<WindowKey>,
-        > = Box::new(term_wm_sys_ui_components::WmTopPanelComponent::new(
-            "example",
-        ));
+        let top_panel: Box<dyn term_wm_core::top_panel_trait::TopPanel<WindowKey>> = Box::new(
+            term_wm_sys_ui_components::WmTopPanelComponent::new("example"),
+        );
         let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> = Box::new(
             term_wm_sys_ui_components::WmBottomPanelComponent::new("example", "0.0.0", hostname),
         );
@@ -120,10 +118,12 @@ impl WindowProvider for App {
         }
         if Some(window.id) == self.left_key {
             frame.render_widget(Clear, area);
-            self.left.render(frame, area, &ComponentContext::new(window.focused));
+            self.left
+                .render(frame, area, &ComponentContext::new(window.focused));
         } else if Some(window.id) == self.right_key {
             frame.render_widget(Clear, area);
-            self.right.render(frame, area, &ComponentContext::new(window.focused));
+            self.right
+                .render(frame, area, &ComponentContext::new(window.focused));
         }
     }
 

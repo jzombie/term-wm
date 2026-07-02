@@ -980,7 +980,6 @@ pub fn wm_menu_items(
             action: WmMenuAction::ExitUi,
         },
     ]
-
 }
 
 fn clamp_rect(area: Rect, bounds: Rect) -> Rect {
@@ -1246,9 +1245,7 @@ mod tests {
             width: 10,
             height: 10,
         });
-        let got = wm
-            .floating_rect(keys[1])
-            .expect("floating rect present");
+        let got = wm.floating_rect(keys[1]).expect("floating rect present");
         match got {
             FloatRectSpec::Absolute(fr) => {
                 let bounds = wm.managed_area;
@@ -1287,9 +1284,7 @@ mod tests {
             width: 10,
             height: 10,
         });
-        let got = wm
-            .floating_rect(keys[2])
-            .expect("floating rect present");
+        let got = wm.floating_rect(keys[2]).expect("floating rect present");
         match got {
             FloatRectSpec::Absolute(fr) => {
                 assert!(fr.y >= 0);
@@ -1322,9 +1317,7 @@ mod tests {
             width: 30,
             height: 20,
         });
-        let got = wm
-            .floating_rect(keys[3])
-            .expect("floating rect present");
+        let got = wm.floating_rect(keys[3]).expect("floating rect present");
         match got {
             FloatRectSpec::Absolute(fr) => {
                 assert_eq!(fr.width, wm.managed_area.width);
@@ -1351,10 +1344,7 @@ mod tests {
             width: 10,
             height: 8,
         };
-        wm.set_floating_rect(
-            keys[1],
-            Some(FloatRectSpec::Absolute(original)),
-        );
+        wm.set_floating_rect(keys[1], Some(FloatRectSpec::Absolute(original)));
         wm.register_managed_layout(Rect {
             x: 0,
             y: 0,
@@ -1362,10 +1352,7 @@ mod tests {
             height: 15,
         });
         wm.minimize_window(keys[1]);
-        assert!(
-            wm.is_minimized(keys[1]),
-            "window should be minimized"
-        );
+        assert!(wm.is_minimized(keys[1]), "window should be minimized");
         let after_minimize = wm.floating_rect(keys[1]);
         assert!(
             after_minimize.is_some(),
@@ -1377,10 +1364,7 @@ mod tests {
             "floating rect should be unchanged after minimize"
         );
         wm.restore_minimized(keys[1]);
-        assert!(
-            !wm.is_minimized(keys[1]),
-            "window should be restored"
-        );
+        assert!(!wm.is_minimized(keys[1]), "window should be restored");
         let after_restore = wm.floating_rect(keys[1]);
         assert_eq!(
             after_restore,
@@ -1406,7 +1390,7 @@ mod tests {
             width: 20,
             height: 8,
         };
-        wm.set_region(keys[1],  target_rect);
+        wm.set_region(keys[1], target_rect);
         let mouse = MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: 15,
