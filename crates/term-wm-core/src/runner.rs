@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::prelude::Rect;
 use ratatui::style::{Modifier, Style};
 
-use crate::components::{Component, ComponentContext, ConfirmAction, SelectionStatus};
+use crate::components::{Component, ConfirmAction, SelectionStatus};
 use crate::debug_event_flags;
 use crate::event_loop::{ControlFlow, EventLoop};
 use crate::io::{EventSource, RenderTarget};
@@ -14,7 +14,7 @@ use crate::layout::{LayoutNode, TilingLayout};
 use crate::ui::UiFrame;
 use crate::window::decorator::{WindowDecorator, WindowRenderCtx};
 use crate::window::{
-    DrawTask, WindowDrawContext, WindowKey, WindowManager, WindowSurface, WmMenuAction,
+    DrawTask, WindowKey, WindowManager, WindowSurface, WmMenuAction,
 };
 
 pub trait WindowManagerHost {
@@ -36,8 +36,7 @@ pub trait WindowManagerHost {
             .open_overlay(crate::window::OverlayId::Keybindings, None);
     }
     fn open_exit_confirm(&mut self) {
-        self.windows()
-            .open_overlay(crate::window::OverlayId::ExitConfirm, None);
+        self.windows().request_quit();
     }
     /// Called when a panic is detected.
     fn on_panic(&mut self) {}
@@ -52,12 +51,6 @@ pub trait WindowManagerHost {
 
 pub trait WindowProvider: WindowManagerHost {
     fn enumerate_windows(&mut self) -> Vec<WindowKey>;
-    fn render_window(
-        &mut self,
-        frame: &mut UiFrame<'_>,
-        window: WindowDrawContext,
-        ctx: &ComponentContext,
-    );
 
     fn empty_window_message(&self) -> &str {
         "No windows"
@@ -243,28 +236,10 @@ where
                     return flush_state_changes(app, ControlFlow::Continue);
                 }
 
-                // Layer 2b: WM global actions (Global layer only — currently just Esc)
-                // All other actions (FocusNext, scrolling, etc.) are WmMode and only
-                // dispatched when the WM overlay is visible (see below).
-                if let Some(action) = mapped_action {
-                    match action {
-                        Action::Quit => {
-                            app.open_exit_confirm();
-                            update_selection_snapshot(app);
-                            return flush_state_changes(app, ControlFlow::Continue);
-                        }
-                        Action::OpenHelp => {
-                            app.open_help_overlay();
-                            update_selection_snapshot(app);
-                            return flush_state_changes(app, ControlFlow::Continue);
-                        }
-                        Action::OpenKeybindings => {
-                            app.open_keybindings_overlay();
-                            update_selection_snapshot(app);
-                            return flush_state_changes(app, ControlFlow::Continue);
-                        }
-                        _ => {}
-                    }
+                // Layer 2b: Global-layer actions (only WmToggleOverlay is Global;
+                // all other actions are WmMode — dispatched when the overlay is open).
+                if let Some(_action) = mapped_action {
+                    // Only WmToggleOverlay reaches here; handled inline below.
                 }
 
                 // Pre-compute WmMode-layer action for use inside the overlay section.
@@ -471,7 +446,7 @@ where
                     }
                 }
             } else {
-                if app.quit_requested() {
+                if app.quit_requested() || app.windows().quit_requested() {
                     update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Quit);
                 }
@@ -809,13 +784,6 @@ mod tests {
             fn enumerate_windows(&mut self) -> Vec<WindowKey> {
                 vec![self.key]
             }
-            fn render_window(
-                &mut self,
-                _frame: &mut crate::ui::UiFrame<'_>,
-                _window: WindowDrawContext,
-                _ctx: &ComponentContext,
-            ) {
-            }
         }
 
         let mut wm = WindowManager::with_config(
@@ -877,13 +845,6 @@ mod tests {
         impl WindowProvider for FakeApp {
             fn enumerate_windows(&mut self) -> Vec<WindowKey> {
                 vec![]
-            }
-            fn render_window(
-                &mut self,
-                _frame: &mut crate::ui::UiFrame<'_>,
-                _window: WindowDrawContext,
-                _ctx: &ComponentContext,
-            ) {
             }
             fn window_component(&mut self, _key: WindowKey) -> Option<&mut dyn Component> {
                 Some(&mut self.recorder)
@@ -968,13 +929,6 @@ mod tests {
         impl WindowProvider for FakeApp {
             fn enumerate_windows(&mut self) -> Vec<WindowKey> {
                 vec![]
-            }
-            fn render_window(
-                &mut self,
-                _frame: &mut crate::ui::UiFrame<'_>,
-                _window: WindowDrawContext,
-                _ctx: &ComponentContext,
-            ) {
             }
             fn window_component(&mut self, _key: WindowKey) -> Option<&mut dyn Component> {
                 Some(&mut self.recorder)

@@ -1,15 +1,12 @@
 use std::io;
 use std::sync::Arc;
 
-use ratatui::widgets::Clear;
-
 use term_wm::SvgImageComponent;
-use term_wm::components::{Component, ComponentContext};
+use term_wm::components::Component;
 use term_wm::io::RenderTarget;
 use term_wm::io::console::{ConsoleEventSource, ConsoleRenderTarget};
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
-use term_wm::ui::UiFrame;
-use term_wm::window::{WindowDrawContext, WindowKey, WindowManager};
+use term_wm::window::{WindowKey, WindowManager};
 use term_wm::wm_config::WmConfig;
 
 fn main() -> io::Result<()> {
@@ -103,27 +100,6 @@ impl WindowProvider for App {
             keys.push(k);
         }
         keys
-    }
-
-    fn render_window(
-        &mut self,
-        frame: &mut UiFrame<'_>,
-        window: WindowDrawContext,
-        _ctx: &ComponentContext,
-    ) {
-        let area = window.surface.inner;
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-        if Some(window.key) == self.left_key {
-            frame.render_widget(Clear, area);
-            self.left
-                .render(frame, area, &ComponentContext::new(window.focused));
-        } else if Some(window.key) == self.right_key {
-            frame.render_widget(Clear, area);
-            self.right
-                .render(frame, area, &ComponentContext::new(window.focused));
-        }
     }
 
     fn empty_window_message(&self) -> &str {

@@ -7,11 +7,11 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
 use term_wm::app_context::AppContext;
-use term_wm::components::{ComponentContext, MenuOverlay};
+use term_wm::components::MenuOverlay;
 use term_wm::io::{EventSource, RenderTarget};
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_app};
 use term_wm::ui::UiFrame;
-use term_wm::window::{WindowDrawContext, WindowKey, WindowManager, WmMenuAction};
+use term_wm::window::{WindowKey, WindowManager, WmMenuAction};
 use term_wm::wm_config::WmConfig;
 
 #[derive(Debug)]
@@ -98,13 +98,6 @@ impl WindowProvider for SparseApp {
         }
     }
 
-    fn render_window(
-        &mut self,
-        _frame: &mut UiFrame<'_>,
-        _window: WindowDrawContext,
-        _ctx: &ComponentContext,
-    ) {
-    }
 }
 
 #[test]

@@ -4,13 +4,10 @@ use std::sync::Arc;
 
 use clap::Parser;
 use line_ending::LineEnding;
-use ratatui::prelude::Rect;
-
 use crossbeam_channel::Sender;
 
 use term_wm::app_context::AppContext;
-use term_wm::components::MenuOverlay;
-use term_wm::components::{Component, ComponentContext};
+use term_wm::components::{Component, MenuOverlay};
 use term_wm::config::WmBuilder;
 use term_wm::io::{
     RenderTarget,
@@ -18,8 +15,7 @@ use term_wm::io::{
     unified_event_source::{UnifiedEvent, UnifiedEventSource},
 };
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
-use term_wm::ui::UiFrame;
-use term_wm::window::{OverlayId, WindowDrawContext, WindowKey, WindowManager};
+use term_wm::window::{OverlayId, WindowKey, WindowManager};
 use term_wm::{ScrollViewComponent, TerminalComponent, default_shell_command};
 use term_wm_sys_ui_components::wm_debug_log::{
     WmDebugLogComponent, install_panic_hook, set_global_debug_log,
@@ -314,18 +310,6 @@ impl WindowProvider for App {
         keys
     }
 
-    fn render_window(
-        &mut self,
-        frame: &mut UiFrame<'_>,
-        window: WindowDrawContext,
-        ctx: &ComponentContext,
-    ) {
-        if Some(window.key) == self.debug_key {
-            return; // rendered by WindowManager via component_for_key
-        }
-        render_pane(frame, self, window.key, window.surface.inner, ctx.clone());
-    }
-
     fn empty_window_message(&self) -> &str {
         "all shells exited"
     }
@@ -344,18 +328,4 @@ impl WindowProvider for App {
     }
 }
 
-fn render_pane(
-    frame: &mut UiFrame<'_>,
-    app: &mut App,
-    key: WindowKey,
-    area: Rect,
-    ctx: ComponentContext,
-) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    if let Some(sv) = app.terminals.get_mut(&key) {
-        sv.resize(area, &ctx);
-        sv.render(frame, area, &ctx);
-    }
-}
+

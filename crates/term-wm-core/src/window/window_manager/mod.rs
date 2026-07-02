@@ -159,6 +159,7 @@ pub struct WindowManager {
     clipboard: Option<crate::clipboard::Clipboard>,
     power_profile: PowerProfile,
     pub(crate) reaper: Reaper,
+    quit_requested: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -384,7 +385,18 @@ impl WindowManager {
             clipboard,
             power_profile: PowerProfile::PowerSaver,
             reaper: Reaper::default(),
+            quit_requested: false,
         }
+    }
+
+    /// Request a clean shutdown on the next idle tick.
+    pub fn request_quit(&mut self) {
+        self.quit_requested = true;
+    }
+
+    /// Returns `true` if a quit has been requested.
+    pub fn quit_requested(&self) -> bool {
+        self.quit_requested
     }
 
     /// Remove a key from the focus ring's order (called after closing a window).
