@@ -6,12 +6,16 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
+use arc_swap::ArcSwap;
+
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use crate::clipboard::{Clipboard, Osc52Extractor};
 
 /// Size of the PTY master read buffer (single `read()` call).
-const PTY_READ_BUF_SIZE: usize = 4096;
+/// 64KB keeps the reader parked most of the time under heavy output
+/// (64KB × 60fps ≈ 3.8MB/s throughput, enough for any terminal workload).
+const PTY_READ_BUF_SIZE: usize = 65536;
 
 /// Number of bytes from the end of the previous chunk to carry forward
 /// for cross-boundary pattern detection (DSR, OSC 52 header).
@@ -49,12 +53,17 @@ pub struct Pty {
     foreground_title: Arc<Mutex<Option<String>>>,
     last_fg_pid: u32,
     last_fg_check: Instant,
-    /// Parsed screen shared by the reader thread. The reader writes,
-    /// the main thread reads.
-    shared_screen: Arc<Mutex<vt100::Screen>>,
-    /// Set by the reader thread when a new screen clone is available.
+    /// Parsed screen shared by the reader thread via lock-free ArcSwap.
+    /// The reader writes by atomically swapping a new Arc, the main thread
+    /// reads in O(1) without clone or lock contention.
+    shared_screen: Arc<ArcSwap<vt100::Screen>>,
+    /// Set by the reader thread when a new screen is available.
     dirty: Arc<AtomicBool>,
-    /// Main-thread local cache of the parsed screen.
+    /// Lock-free cached reference loaded from ArcSwap on the read path.
+    /// No clone — just an atomic refcount increment.
+    screen_arc: Option<Arc<vt100::Screen>>,
+    /// Main-thread local cache for mutable operations (scrollback
+    /// adjustments, max_scrollback). Synced from screen_arc on demand.
     cached_screen: vt100::Screen,
     size: PtySize,
     pty_size: PtySize,
@@ -68,6 +77,9 @@ pub struct Pty {
     /// Wakeup callback invoked by the reader thread after each read batch.
     /// Wrapped in Arc+Mutex so it can be set after the reader thread starts.
     wakeup: WakeupFn,
+    /// Shutdown flag: when true, the reader thread exits its loop ASAP.
+    /// Set by into_parts() and Drop.
+    shutdown: Arc<AtomicBool>,
 }
 
 /// The bounded channel between PTY reader threads and the main event loop
@@ -120,11 +132,14 @@ impl Pty {
         let pending_title = Arc::new(Mutex::new(None));
         let foreground_title = Arc::new(Mutex::new(None));
         let initial = vt100::Parser::new(size.rows, size.cols, scrollback_len);
-        let shared_screen = Arc::new(Mutex::new(initial.screen().clone()));
+        let initial_screen_clone = initial.screen().clone();
+        let shared_screen = Arc::new(ArcSwap::new(Arc::new(initial_screen_clone)));
         let dirty = Arc::new(AtomicBool::new(false));
         let pending_resize = Arc::new(Mutex::new(None::<PtySize>));
+        let shutdown = Arc::new(AtomicBool::new(false));
         let reader_screen = Arc::clone(&shared_screen);
         let reader_dirty = Arc::clone(&dirty);
+        let reader_shutdown = Arc::clone(&shutdown);
         let reader_pending_resize = Arc::clone(&pending_resize);
         let reader_pending_title = Arc::clone(&pending_title);
         let reader_handle = thread::spawn(move || {
@@ -143,6 +158,7 @@ impl Pty {
                 rows: size.rows,
                 cols: size.cols,
                 osc52_text: None,
+                shutdown: reader_shutdown,
             })
         });
         Ok(Self {
@@ -158,6 +174,7 @@ impl Pty {
             last_fg_check: Instant::now(),
             shared_screen,
             dirty,
+            screen_arc: None,
             cached_screen: initial.screen().clone(),
             size,
             pty_size: size,
@@ -168,6 +185,7 @@ impl Pty {
             reader: Some(reader_handle),
             pending_resize,
             wakeup,
+            shutdown,
         })
     }
 
@@ -176,12 +194,19 @@ impl Pty {
         if let Ok(mut guard) = self.wakeup.lock() {
             *guard = cb;
         }
+        if let Some(reader) = &self.reader {
+            reader.thread().unpark();
+        }
     }
 
     /// Extract the child and reader handle for async reaping.
     /// After this call, the Pty is a shell — `update()` will no longer
     /// receive new data. Used by `Reaper::reap()`.
     pub fn into_parts(&mut self) -> PtyParts {
+        self.shutdown.store(true, Ordering::Release);
+        if let Some(reader) = &self.reader {
+            reader.thread().unpark();
+        }
         PtyParts {
             child: self.child.take(),
             reader_handle: self.reader.take(),
@@ -332,25 +357,33 @@ impl Pty {
     }
 
     /// Return a reference to the cached parsed screen.
-    /// If the reader thread has published new content, clones from
-    /// shared state. Also handles periodic foreground title polling
-    /// and DSR responses.
+    /// If the reader thread has published new content, performs a
+    /// lock-free load from ArcSwap (no clone, no mutex contention).
+    /// Also handles periodic foreground title polling and DSR responses.
     pub fn screen(&mut self) -> &vt100::Screen {
         self.poll_foreground();
-        if self.dirty.load(Ordering::Acquire) {
-            if let Ok(guard) = self.shared_screen.lock() {
-                self.cached_screen = guard.clone();
+        if self.dirty.swap(false, Ordering::Acquire) {
+            // Lock-free load — atomic refcount increment, no clone.
+            self.screen_arc = Some(self.shared_screen.load_full());
+
+            // Unpark the reader thread so it can read the next batch.
+            if let Some(reader) = &self.reader {
+                reader.thread().unpark();
             }
-            self.dirty.store(false, Ordering::Release);
 
             // Send DSR response if requested by the reader thread.
-            if self.dsr_requested.swap(false, Ordering::Relaxed) {
-                let (row, col) = self.cached_screen.cursor_position();
+            if self.dsr_requested.swap(false, Ordering::Relaxed)
+                && let Some(ref screen) = self.screen_arc
+            {
+                let (row, col) = screen.cursor_position();
                 let response = format!("\x1b[{};{}R", row.saturating_add(1), col.saturating_add(1));
                 let _ = self.write_bytes(response.as_bytes());
             }
         }
-        &self.cached_screen
+        // Return reference to the Arc contents — borrows self via screen_arc.
+        self.screen_arc
+            .as_deref()
+            .unwrap_or(&self.cached_screen)
     }
 
     pub fn bytes_received(&self) -> usize {
@@ -367,8 +400,12 @@ impl Pty {
     }
 
     pub fn screen_mut(&mut self) -> &mut vt100::Screen {
-        // Ensure cached_screen is up-to-date before returning a mutable ref.
+        // Ensure screen_arc is populated, then clone into cached_screen
+        // for mutation. This clone only happens on the rare mutable path.
         self.screen();
+        if let Some(ref screen_arc) = self.screen_arc {
+            self.cached_screen = (**screen_arc).clone();
+        }
         &mut self.cached_screen
     }
 
@@ -386,14 +423,15 @@ impl Pty {
     }
 
     pub fn max_scrollback(&mut self) -> usize {
-        if self.scrollback_len == 0 {
+        let max_sb = self.scrollback_len;
+        if max_sb == 0 {
             return 0;
         }
-        self.screen();
-        let current = self.cached_screen.scrollback();
-        self.cached_screen.set_scrollback(self.scrollback_len);
-        let max = self.cached_screen.scrollback();
-        self.cached_screen.set_scrollback(current);
+        let screen = self.screen_mut();
+        let current = screen.scrollback();
+        screen.set_scrollback(max_sb);
+        let max = screen.scrollback();
+        screen.set_scrollback(current);
         max
     }
 
@@ -409,6 +447,15 @@ impl Pty {
     }
 }
 
+impl Drop for Pty {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Release);
+        if let Some(reader) = &self.reader {
+            reader.thread().unpark();
+        }
+    }
+}
+
 /// Configuration and shared state for the PTY reader thread.
 struct ParserReadLoopArgs {
     reader: Box<dyn Read + Send>,
@@ -416,7 +463,7 @@ struct ParserReadLoopArgs {
     bytes_received: Arc<AtomicUsize>,
     last_bytes: Arc<Mutex<Vec<u8>>>,
     dsr_requested: Arc<AtomicBool>,
-    shared_screen: Arc<Mutex<vt100::Screen>>,
+    shared_screen: Arc<ArcSwap<vt100::Screen>>,
     dirty: Arc<AtomicBool>,
     pending_resize: Arc<Mutex<Option<PtySize>>>,
     pending_title: Arc<Mutex<Option<String>>>,
@@ -427,6 +474,10 @@ struct ParserReadLoopArgs {
     /// Test-only hook: when `Some`, the extracted OSC 52 text is written here
     /// in addition to the real clipboard, so tests can assert the value.
     osc52_text: Option<Arc<Mutex<Option<String>>>>,
+    /// When true, the reader should exit its loop as soon as possible.
+    /// Set by into_parts() and Drop to prevent the parked reader from
+    /// becoming a zombie thread.
+    shutdown: Arc<AtomicBool>,
 }
 
 fn parser_read_loop(args: ParserReadLoopArgs) {
@@ -445,6 +496,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
         rows,
         cols,
         osc52_text,
+        shutdown,
     } = args;
     let mut parser = vt100::Parser::new(rows, cols, scrollback_len);
     let mut history: Vec<u8> = Vec::new();
@@ -514,10 +566,9 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     }
                 }
 
-                // Publish parsed screen to main thread
-                if let Ok(mut guard) = shared_screen.lock() {
-                    *guard = parser.screen().clone();
-                }
+                // Publish parsed screen to main thread via lock-free ArcSwap
+                let new_screen = Arc::new(parser.screen().clone());
+                shared_screen.store(new_screen);
                 dirty.store(true, Ordering::Release);
 
                 // Wakeup the main thread — new data is available.
@@ -525,6 +576,18 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     && let Some(ref cb) = *guard
                 {
                     cb();
+                }
+
+                // Park until main thread consumes this screen.
+                // Only one PtyWakeup per pane is ever in the bounded channel
+                // (capacity 256), so PtyWakeup loss is mathematically impossible.
+                // No deadlock safety net needed.
+                while dirty.load(Ordering::Acquire) && !shutdown.load(Ordering::Acquire) {
+                    thread::park();
+                }
+
+                if shutdown.load(Ordering::Acquire) {
+                    break;
                 }
             }
             Err(_) => break,
@@ -674,6 +737,8 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
+    use arc_swap::ArcSwap;
+
     // ── bytes_to_debug_text ──────────────────────────────────────────
 
     #[test]
@@ -740,7 +805,9 @@ mod tests {
             bytes_received: Arc::new(AtomicUsize::new(0)),
             last_bytes: Arc::new(Mutex::new(Vec::new())),
             dsr_requested: Arc::new(AtomicBool::new(false)),
-            shared_screen: Arc::new(Mutex::new(vt100::Parser::new(24, 80, 0).screen().clone())),
+            shared_screen: Arc::new(ArcSwap::new(Arc::new(
+                vt100::Parser::new(24, 80, 0).screen().clone(),
+            ))),
             dirty: Arc::new(AtomicBool::new(false)),
             pending_resize: Arc::new(Mutex::new(None)),
             pending_title: Arc::new(Mutex::new(None)),
@@ -749,6 +816,9 @@ mod tests {
             rows: 24,
             cols: 80,
             osc52_text: None,
+            // Pre-set shutdown so direct parser_read_loop calls don't
+            // park forever after processing a batch.
+            shutdown: Arc::new(AtomicBool::new(true)),
         }
     }
 

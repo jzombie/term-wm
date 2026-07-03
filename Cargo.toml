@@ -32,6 +32,7 @@ publish = true
 
 [workspace.dependencies]
 arboard = "3.6.1"
+arc-swap = "1.9.2"
 base64 = "0.22.1"
 bitcode = "0.6.9"
 clap = { version = "4.6.1", features = ["derive"] }
