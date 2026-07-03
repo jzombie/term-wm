@@ -142,6 +142,13 @@ where
             for id in app.windows().take_closed_windows() {
                 app.wm_close_window(id)?;
             }
+            // Process AppExited notifications — close windows whose PTY child
+            // exited.  SlotMap returns None for stale keys (generational
+            // indexing), so close_window safely no-ops on already-removed keys.
+            for key in driver.take_exited_windows() {
+                app.windows().close_window(key);
+                app.wm_close_window(key)?;
+            }
             let mut flush_state_changes = |app: &mut A, flow: ControlFlow| {
                 if let Some(enabled) = app.windows().take_mouse_capture_change() {
                     let _ = driver.set_mouse_capture(enabled);

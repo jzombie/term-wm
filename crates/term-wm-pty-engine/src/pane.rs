@@ -1,10 +1,9 @@
 use std::io;
-use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use portable_pty::{Child, ExitStatus, PtySize};
 
-use crate::PtyResult;
+use crate::{PtyResult, PtyStatus};
 
 pub trait Pane {
     fn resize(&mut self, size: PtySize) -> PtyResult<()>;
@@ -21,8 +20,8 @@ pub trait Pane {
     fn bytes_received(&self) -> usize;
     fn last_bytes_text(&self) -> String;
     fn kill_child(&mut self) -> PtyResult<()>;
-    /// Set a wakeup callback invoked when new PTY data is available.
-    fn set_wakeup(&mut self, _cb: Option<Arc<dyn Fn() + Send + Sync>>) {}
+    /// Set a status callback invoked on PTY data or exit.
+    fn set_status_callback(&mut self, _cb: Option<Box<dyn Fn(PtyStatus) + Send + Sync>>) {}
     fn take_pending_title(&mut self) -> Option<String> {
         None
     }
@@ -104,7 +103,7 @@ impl Pane for crate::Pty {
         }
     }
 
-    fn set_wakeup(&mut self, cb: Option<Arc<dyn Fn() + Send + Sync>>) {
-        crate::Pty::set_wakeup(self, cb)
+    fn set_status_callback(&mut self, cb: Option<Box<dyn Fn(PtyStatus) + Send + Sync>>) {
+        crate::Pty::set_status_callback(self, cb)
     }
 }

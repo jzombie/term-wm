@@ -4,6 +4,7 @@ use crossterm::event::{Event, KeyEvent, KeyEventKind, KeyEventState, MouseEventK
 
 use super::WindowManager;
 use crate::window::WindowKey;
+use crate::window::entry::WindowState;
 
 impl WindowManager {
     pub fn decorator(&self) -> Arc<dyn super::WindowDecorator> {
@@ -65,8 +66,8 @@ impl WindowManager {
                     .as_ref()
                     .and_then(|p| p.hit_test_window(event))
                 {
-                    if self.is_minimized(key) {
-                        self.restore_minimized(key);
+                    if self.window_state(key) == Some(WindowState::Iconic) {
+                        self.transition_window(key, WindowState::Mapped);
                     }
                     self.focus_window_key(key);
                 }
@@ -113,28 +114,11 @@ impl WindowManager {
     }
 
     pub fn minimize_window(&mut self, key: WindowKey) {
-        if self.is_minimized(key) {
-            return;
-        }
-        self.z_order.retain(|x| *x != key);
-        self.managed_draw_order.retain(|x| *x != key);
-        self.set_minimized(key, true);
-        if *self.focus.current() == key {
-            self.select_fallback_focus();
-        }
+        self.transition_window(key, WindowState::Iconic);
     }
 
     pub fn restore_minimized(&mut self, key: WindowKey) {
-        if !self.is_minimized(key) {
-            return;
-        }
-        self.set_minimized(key, false);
-        if !self.z_order.contains(&key) {
-            self.z_order.push(key);
-        }
-        if !self.managed_draw_order.contains(&key) {
-            self.managed_draw_order.push(key);
-        }
+        self.transition_window(key, WindowState::Mapped);
     }
 
     pub fn toggle_maximize(&mut self, key: WindowKey) {
@@ -177,20 +161,17 @@ impl WindowManager {
         self.bring_floating_to_front_key(key);
     }
 
+    pub fn shade_window(&mut self, key: WindowKey) {
+        self.transition_window(key, WindowState::Shaded);
+    }
+
+    pub fn unshade_window(&mut self, key: WindowKey) {
+        self.transition_window(key, WindowState::Mapped);
+    }
+
     pub fn close_window(&mut self, key: WindowKey) {
         tracing::debug!(window_key = ?key, "closing window");
-
-        // Do all cleanup FIRST while the key is still valid in the SlotMap.
-        self.clear_floating_rect(key);
-        self.z_order.retain(|x| *x != key);
-        self.managed_draw_order.retain(|x| *x != key);
-        self.set_minimized(key, false);
-        self.regions.remove(key);
-        self.scroll.remove(&key);
-        self.remove_from_focus_ring(key);
-        if *self.focus.current() == key {
-            self.select_fallback_focus();
-        }
+        self.transition_window(key, WindowState::Unmapped);
         self.closed_windows.push(key);
 
         // Remove from SlotMap.  If the window has a WindowManager-owned

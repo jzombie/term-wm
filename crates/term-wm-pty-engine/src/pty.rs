@@ -34,11 +34,12 @@ const PROC_NAME_BUF_SIZE: usize = 64;
 
 /// How often to check the foreground process group for title changes.
 const FOREGROUND_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+use crate::PtyStatus;
 use crate::title::extract_osc_title;
 
 pub type PtyResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-type WakeupFn = Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
+type StatusCallback = Arc<Mutex<Option<Box<dyn Fn(PtyStatus) + Send + Sync>>>>;
 
 pub struct Pty {
     master: Box<dyn MasterPty + Send>,
@@ -74,9 +75,8 @@ pub struct Pty {
     reader: Option<JoinHandle<()>>,
     /// Resize request sent from main thread to reader thread.
     pending_resize: Arc<Mutex<Option<PtySize>>>,
-    /// Wakeup callback invoked by the reader thread after each read batch.
-    /// Wrapped in Arc+Mutex so it can be set after the reader thread starts.
-    wakeup: WakeupFn,
+    /// Status callback invoked by the reader thread on wakeup and exit.
+    status_cb: StatusCallback,
     /// Shutdown flag: when true, the reader thread exits its loop ASAP.
     /// Set by into_parts() and Drop.
     shutdown: Arc<AtomicBool>,
@@ -127,8 +127,9 @@ impl Pty {
         let reader_bytes = Arc::clone(&bytes_received);
         let reader_last = Arc::clone(&last_bytes);
         let reader_dsr = Arc::clone(&dsr_requested);
-        let wakeup: WakeupFn = Arc::new(Mutex::new(None));
-        let reader_wakeup = Arc::clone(&wakeup);
+        let status_cb: StatusCallback = Arc::new(Mutex::new(None));
+        let reader_status_cb = Arc::clone(&status_cb);
+
         let pending_title = Arc::new(Mutex::new(None));
         let foreground_title = Arc::new(Mutex::new(None));
         let initial = vt100::Parser::new(size.rows, size.cols, scrollback_len);
@@ -153,7 +154,7 @@ impl Pty {
                 dirty: reader_dirty,
                 pending_resize: reader_pending_resize,
                 pending_title: reader_pending_title,
-                wakeup: reader_wakeup,
+                status_cb: reader_status_cb,
                 scrollback_len,
                 rows: size.rows,
                 cols: size.cols,
@@ -184,14 +185,15 @@ impl Pty {
             exit_status: None,
             reader: Some(reader_handle),
             pending_resize,
-            wakeup,
+            status_cb,
             shutdown,
         })
     }
 
-    /// Set a wakeup callback invoked by the reader thread after each read batch.
-    pub fn set_wakeup(&mut self, cb: Option<Arc<dyn Fn() + Send + Sync>>) {
-        if let Ok(mut guard) = self.wakeup.lock() {
+    /// Set a status callback invoked by the reader thread on data and exit.
+    /// Uses `Arc<Mutex<>>` so the reader thread (which holds a clone) sees updates.
+    pub fn set_status_callback(&mut self, cb: Option<Box<dyn Fn(PtyStatus) + Send + Sync>>) {
+        if let Ok(mut guard) = self.status_cb.lock() {
             *guard = cb;
         }
         if let Some(reader) = &self.reader {
@@ -463,7 +465,7 @@ struct ParserReadLoopArgs {
     dirty: Arc<AtomicBool>,
     pending_resize: Arc<Mutex<Option<PtySize>>>,
     pending_title: Arc<Mutex<Option<String>>>,
-    wakeup: WakeupFn,
+    status_cb: StatusCallback,
     scrollback_len: usize,
     rows: u16,
     cols: u16,
@@ -487,7 +489,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
         dirty,
         pending_resize,
         pending_title,
-        wakeup,
+        status_cb,
         scrollback_len,
         rows,
         cols,
@@ -509,7 +511,16 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
         }
 
         match reader.read(&mut buf) {
-            Ok(0) => break,
+            Ok(0) => {
+                // EOF — child exited. Send wakeup for final screen, then exited.
+                if let Ok(guard) = status_cb.lock()
+                    && let Some(ref cb) = *guard
+                {
+                    cb(crate::PtyStatus::Wakeup);
+                    cb(crate::PtyStatus::Exited);
+                }
+                break;
+            }
             Ok(n) => {
                 bytes_received.fetch_add(n, Ordering::Relaxed);
                 let combined = if history.is_empty() {
@@ -567,11 +578,11 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 shared_screen.store(new_screen);
                 dirty.store(true, Ordering::Release);
 
-                // Wakeup the main thread — new data is available.
-                if let Ok(guard) = wakeup.lock()
+                // Notify main thread — new data is available.
+                if let Ok(guard) = status_cb.lock()
                     && let Some(ref cb) = *guard
                 {
-                    cb();
+                    cb(crate::PtyStatus::Wakeup);
                 }
 
                 // Park until main thread consumes this screen.
@@ -586,7 +597,14 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     break;
                 }
             }
-            Err(_) => break,
+            Err(_) => {
+                if let Ok(guard) = status_cb.lock()
+                    && let Some(ref cb) = *guard
+                {
+                    cb(crate::PtyStatus::Exited);
+                }
+                break;
+            }
         }
     }
 }
@@ -808,7 +826,7 @@ mod tests {
             dirty: Arc::new(AtomicBool::new(false)),
             pending_resize: Arc::new(Mutex::new(None)),
             pending_title: Arc::new(Mutex::new(None)),
-            wakeup: Arc::new(Mutex::new(None)),
+            status_cb: Arc::new(Mutex::new(None)),
             scrollback_len: 0,
             rows: 24,
             cols: 80,
@@ -863,21 +881,25 @@ mod tests {
     }
 
     #[test]
-    fn parser_read_loop_wakeup_called_when_set() {
+    fn parser_read_loop_status_callback_called_when_set() {
         let payload = b"data";
         let mut args = make_parser_test_args();
         args.reader = Box::new(Cursor::new(payload.to_vec()));
         let woke = Arc::new(AtomicBool::new(false));
         let woke_clone = Arc::clone(&woke);
-        args.wakeup = Arc::new(Mutex::new(Some(Arc::new(move || {
-            woke_clone.store(true, Ordering::Relaxed);
-        }) as Arc<dyn Fn() + Send + Sync>)));
+        if let Ok(mut guard) = args.status_cb.lock() {
+            *guard = Some(Box::new(move |status| {
+                if status == crate::PtyStatus::Wakeup {
+                    woke_clone.store(true, Ordering::Relaxed);
+                }
+            }));
+        }
 
         parser_read_loop(args);
 
         assert!(
             woke.load(Ordering::Relaxed),
-            "wakeup callback must be invoked"
+            "status callback must be invoked on wakeup"
         );
     }
 
@@ -896,11 +918,8 @@ mod tests {
         );
     }
 
-    /// Regression test: the wakeup Arc created in spawn_with_scrollback
-    /// must be the same allocation shared with the reader thread so that
-    /// set_wakeup() provided callbacks are actually invoked on output.
     #[test]
-    fn set_wakeup_fires_callback_from_spawn() {
+    fn set_status_callback_fires_from_spawn() {
         // Use cat, which blocks on input, so we control when output happens.
         // Portability: `cat` exists on Unix; on Windows the test is skipped.
         // TODO: add Windows support with `cmd /c type CON`
@@ -915,9 +934,11 @@ mod tests {
 
         let woke = Arc::new(AtomicBool::new(false));
         let woke_cb = Arc::clone(&woke);
-        pty.set_wakeup(Some(Arc::new(move || {
-            woke_cb.store(true, Ordering::Relaxed);
-        }) as Arc<dyn Fn() + Send + Sync>));
+        pty.set_status_callback(Some(Box::new(move |status| {
+            if status == crate::PtyStatus::Wakeup {
+                woke_cb.store(true, Ordering::Relaxed);
+            }
+        })));
 
         // Write to the PTY — terminal echo triggers a read on the master
         // side, which the reader thread processes and fires the callback.
@@ -938,7 +959,7 @@ mod tests {
 
         assert!(
             woke.load(Ordering::Relaxed),
-            "wakeup callback must fire when PTY outputs data after set_wakeup"
+            "status callback must fire on Wakeup when PTY outputs data"
         );
     }
 
@@ -1219,7 +1240,7 @@ mod tests {
     }
 
     #[test]
-    fn set_wakeup_with_existing_reader_does_not_panic() {
+    fn set_status_callback_with_existing_reader_does_not_panic() {
         let cmd = CommandBuilder::new("cat");
         let size = PtySize {
             rows: 24,
@@ -1229,11 +1250,10 @@ mod tests {
         };
         let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
 
-        // set_wakeup should unparks the reader (no-op if already awake).
-        pty.set_wakeup(Some(Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>));
+        pty.set_status_callback(Some(Box::new(|_| {})));
 
-        // Also test clearing the wakeup.
-        pty.set_wakeup(None);
+        // Also test clearing the callback.
+        pty.set_status_callback(None);
 
         if let Some(child) = pty.child.as_mut() {
             let _ = child.kill();

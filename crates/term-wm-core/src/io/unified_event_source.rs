@@ -35,6 +35,8 @@ pub enum UnifiedEvent {
     Input(Event),
     /// A PTY reader thread has new data available for `WindowKey`.
     PtyWakeup(WindowKey),
+    /// A PTY child process has exited. Sent from the reader thread on EOF.
+    AppExited(WindowKey),
     /// An OS signal was received (SIGINT, SIGTERM).
     Signal,
     /// Periodic tick for timing.
@@ -55,6 +57,8 @@ pub struct UnifiedEventSource {
     /// Accumulated PTY wakeups since the last idle tick — batch-drained
     /// so thousands of wakeups/sec collapse into a single render.
     dirty_windows: HashSet<WindowKey>,
+    /// Accumulated window exit notifications since the last drain.
+    exited_windows: Vec<WindowKey>,
     /// Cached input event (poll returned true, waiting for read).
     pending_event: Option<Event>,
     /// Buffer for input events drained during `drain_pending` so none are lost.
@@ -113,6 +117,7 @@ impl UnifiedEventSource {
             _input_handle,
             shutdown,
             dirty_windows: HashSet::new(),
+            exited_windows: Vec::new(),
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -142,11 +147,14 @@ impl UnifiedEventSource {
                 Ok(UnifiedEvent::PtyWakeup(key)) => {
                     self.dirty_windows.insert(key);
                 }
+                Ok(UnifiedEvent::AppExited(key)) => {
+                    self.exited_windows.push(key);
+                }
                 Ok(UnifiedEvent::Signal) => {
                     self.signal_received = true;
                 }
                 Ok(UnifiedEvent::Tick) => {
-                    // No-op — tick is implicit in the event-loop cycle.
+                    // No-op — tick is implicit in the event-cycle loop.
                 }
                 Err(crossbeam_channel::TryRecvError::Empty) => break,
                 Err(crossbeam_channel::TryRecvError::Disconnected) => break,
@@ -236,6 +244,13 @@ impl EventSource for UnifiedEventSource {
                     }
                     continue;
                 }
+                Ok(UnifiedEvent::AppExited(key)) => {
+                    self.exited_windows.push(key);
+                    if self.coalesce_deadline.is_none() {
+                        self.coalesce_deadline = Some(Instant::now() + COALESCE_DELAY);
+                    }
+                    continue;
+                }
                 Ok(UnifiedEvent::Signal) => {
                     self.signal_received = true;
                     return Ok(false);
@@ -287,6 +302,9 @@ impl EventSource for UnifiedEventSource {
                 Ok(UnifiedEvent::PtyWakeup(key)) => {
                     self.dirty_windows.insert(key);
                 }
+                Ok(UnifiedEvent::AppExited(key)) => {
+                    self.exited_windows.push(key);
+                }
                 Ok(UnifiedEvent::Signal) => {
                     self.signal_received = true;
                 }
@@ -313,6 +331,9 @@ impl EventSource for UnifiedEventSource {
                     self.pending_event = Some(event);
                 }
                 Ok(UnifiedEvent::PtyWakeup(_)) => {}
+                Ok(UnifiedEvent::AppExited(key)) => {
+                    self.exited_windows.push(key);
+                }
                 Ok(UnifiedEvent::Signal) => self.signal_received = true,
                 Ok(UnifiedEvent::Tick) => {}
                 Err(_) => {
@@ -337,6 +358,9 @@ impl EventSource for UnifiedEventSource {
                     self.pending_event = Some(event);
                 }
                 Ok(UnifiedEvent::PtyWakeup(_)) => {}
+                Ok(UnifiedEvent::AppExited(key)) => {
+                    self.exited_windows.push(key);
+                }
                 Ok(UnifiedEvent::Signal) => self.signal_received = true,
                 Ok(UnifiedEvent::Tick) => {}
                 Err(_) => {
@@ -367,6 +391,10 @@ impl EventSource for UnifiedEventSource {
             !self.dirty_windows.is_empty(),
         )
     }
+
+    fn take_exited_windows(&mut self) -> Vec<WindowKey> {
+        std::mem::take(&mut self.exited_windows)
+    }
 }
 
 impl Drop for UnifiedEventSource {
@@ -391,6 +419,7 @@ mod tests {
             _input_handle: std::thread::spawn(|| {}),
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
+            exited_windows: Vec::new(),
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -477,6 +506,7 @@ mod tests {
             _input_handle: std::thread::spawn(|| {}),
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
+            exited_windows: Vec::new(),
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -531,6 +561,7 @@ mod tests {
             _input_handle: std::thread::spawn(|| {}),
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: set,
+            exited_windows: Vec::new(),
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -543,5 +574,42 @@ mod tests {
             PowerProfile::Streaming,
             "dirty_windows must elevate profile to Streaming"
         );
+    }
+
+    /// Regression: `take_exited_windows` must be reachable through the
+    /// `EventSource` trait so that generic runner code (`D: EventSource`)
+    /// actually gets the accumulated exit keys. Before the fix the method
+    /// was only inherent — the trait override was missing, and the default
+    /// no-op impl silently returned an empty vec, so exited windows never
+    /// closed.
+    #[test]
+    fn take_exited_windows_returns_accumulated_keys_through_trait() {
+        use super::EventSource;
+        let (_tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
+        let key = WindowKey::default();
+        let mut source = UnifiedEventSource {
+            rx,
+            tx: _tx,
+            _input_handle: std::thread::spawn(|| {}),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            dirty_windows: HashSet::new(),
+            exited_windows: vec![key],
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            coalesce_deadline: None,
+        };
+        let dummy_handle = std::thread::spawn(|| {});
+        source._input_handle = dummy_handle;
+
+        // Call through the trait, not an inherent method. Would return
+        // Vec::new() if the trait override were missing.
+        let exited = EventSource::take_exited_windows(&mut source);
+        assert_eq!(exited, vec![key], "must return the pre-populated key");
+
+        let again = EventSource::take_exited_windows(&mut source);
+        assert!(again.is_empty(), "second call must drain");
     }
 }

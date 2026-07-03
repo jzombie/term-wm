@@ -20,8 +20,8 @@ use term_wm_core::utils::selectable_text::{
     LogicalPosition, SelectionController, SelectionHost, SelectionRange, SelectionViewport,
     handle_selection_mouse, maintain_selection_drag,
 };
-use term_wm_pty_engine::Pane;
 use term_wm_pty_engine::input_encoding::{key_to_bytes, mouse_event_allowed, mouse_event_to_bytes};
+use term_wm_pty_engine::{Pane, PtyStatus};
 
 // This controls the scrollback buffer size in the vt100 parser.
 // It determines how many lines you can scroll up to see.
@@ -635,9 +635,9 @@ impl TerminalComponent {
         self.pane.take_parts()
     }
 
-    /// Set a wakeup callback for when new PTY data arrives.
-    pub fn set_wakeup(&mut self, cb: Option<std::sync::Arc<dyn Fn() + Send + Sync>>) {
-        self.pane.set_wakeup(cb);
+    /// Set a status callback for PTY data and exit notifications.
+    pub fn set_status_callback(&mut self, cb: Option<Box<dyn Fn(PtyStatus) + Send + Sync>>) {
+        self.pane.set_status_callback(cb);
     }
 
     fn link_at_position(&self, mouse: &MouseEvent) -> Option<String> {
