@@ -1465,6 +1465,10 @@ mod tests {
             None,
         );
         let keys = make_keys(&mut wm, 100);
+        // Map all windows first — minimize requires Mapped state
+        for &k in &keys {
+            wm.transition_window(k, crate::window::entry::WindowState::Mapped);
+        }
         let original = FloatRect {
             x: 5,
             y: 3,

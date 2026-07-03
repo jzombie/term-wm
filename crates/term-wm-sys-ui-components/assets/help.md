@@ -31,6 +31,11 @@ WM layer and can use WM commands (like **%FOCUS_NEXT%** / **%FOCUS_PREV%**).
 To send **%SUPER%** to the currently focused application, press **%SUPER%**
 twice quickly. (The second press is forwarded to the active window.)
 
+Per-window **direct mode** (toggled via the `[D]` header button) disables all WM
+key interception, including **%SUPER%**, so keyboard-driven apps receive every
+keystroke unfiltered. In direct mode, a single **%SUPER%** is deferred (a countdown
+appears in the panel); a second **%SUPER%** within the timeout opens the WM overlay.
+
 ## Mouse Capture
 
 Mouse capture is enabled by default when supported. To disable it, open the
