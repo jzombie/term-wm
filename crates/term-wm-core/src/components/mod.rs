@@ -43,7 +43,7 @@ pub trait Component {
     }
 }
 
-pub trait Overlay: Component + std::fmt::Debug + Any {
+pub trait Overlay: Component + Any {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
     fn visible(&self) -> bool {

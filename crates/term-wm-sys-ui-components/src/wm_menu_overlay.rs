@@ -17,7 +17,6 @@ use term_wm_core::{
 use term_wm_ui_components::DialogOverlayComponent;
 use term_wm_ui_components::menu::MenuComponent;
 
-#[derive(Debug)]
 pub struct WmMenuOverlay<R> {
     menu: MenuComponent<R>,
     outlined: bool,
@@ -30,7 +29,17 @@ pub struct WmMenuOverlay<R> {
     last_action: Option<R>,
 }
 
-impl<R: Clone + std::fmt::Debug + 'static> WmMenuOverlay<R> {
+impl<R> std::fmt::Debug for WmMenuOverlay<R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WmMenuOverlay")
+            .field("outlined", &self.outlined)
+            .field("anchor", &self.anchor)
+            .field("managed_area", &self.managed_area)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<R: Clone + 'static> WmMenuOverlay<R> {
     pub fn new() -> Self {
         Self {
             menu: MenuComponent::new(),
@@ -178,7 +187,7 @@ impl<R: Clone + std::fmt::Debug + 'static> WmMenuOverlay<R> {
     }
 }
 
-impl<R: Clone + std::fmt::Debug + 'static> Component for WmMenuOverlay<R> {
+impl<R: Clone + 'static> Component for WmMenuOverlay<R> {
     fn render(&mut self, frame: &mut UiFrame<'_>, _area: Rect, ctx: &ComponentContext) {
         self.auto_restore();
         if self.outlined {
@@ -237,7 +246,7 @@ impl<R: Clone + std::fmt::Debug + 'static> Component for WmMenuOverlay<R> {
     }
 }
 
-impl<R: Clone + std::fmt::Debug + 'static> Overlay for WmMenuOverlay<R> {
+impl<R: Clone + 'static> Overlay for WmMenuOverlay<R> {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -246,7 +255,7 @@ impl<R: Clone + std::fmt::Debug + 'static> Overlay for WmMenuOverlay<R> {
     }
 }
 
-impl<R: Clone + std::fmt::Debug + 'static> MenuOverlay<R> for WmMenuOverlay<R> {
+impl<R: Clone + 'static> MenuOverlay<R> for WmMenuOverlay<R> {
     fn outline(&mut self) {
         self.outlined = true;
         self.outlined_at = Some(Instant::now());
@@ -278,7 +287,7 @@ impl<R: Clone + std::fmt::Debug + 'static> MenuOverlay<R> for WmMenuOverlay<R> {
     }
 }
 
-impl<R: Clone + std::fmt::Debug + 'static> Default for WmMenuOverlay<R> {
+impl<R: Clone + 'static> Default for WmMenuOverlay<R> {
     fn default() -> Self {
         Self::new()
     }

@@ -15,18 +15,18 @@ use super::utils::KeyboardNormalizer;
 use crate::power_profile::PowerProfile;
 use crate::window::WindowKey;
 
-/// Delay window for coalescing PTY wakeups before triggering a render.
-/// Multiple wakeups within this window are collapsed into a single render.
 /// Capacity of the crossbeam channel between event producers and the event
-/// loop. 256 slots provides natural backpressure: when the channel is full,
-/// the sender blocks → the producer backs off.
+/// loop. Generous capacity since wakeup gating (dirty.swap) prevents flooding.
 const EVENT_CHANNEL_CAPACITY: usize = 256;
+
+/// Frame pacing delay for PTY wakeups. When a PtyWakeup arrives, we wait
+/// this long before triggering a render, preventing an uncapped render loop.
+/// 16ms = ~60fps, matching the Streaming power profile poll interval.
+const COALESCE_DELAY: Duration = Duration::from_millis(16);
 
 /// How often the crossterm input thread polls for new events (100 ms).
 /// Keeps the thread responsive to shutdown signals while being idle-friendly.
 const INPUT_THREAD_POLL_INTERVAL: Duration = Duration::from_millis(100);
-
-const COALESCE_DELAY: Duration = Duration::from_millis(3);
 
 /// Events that can flow through the unified event channel.
 #[derive(Debug, Clone)]
@@ -65,8 +65,8 @@ pub struct UnifiedEventSource {
     normalizer: KeyboardNormalizer,
     /// Timestamp of the last input event (for power profiling).
     last_event_at: Option<Instant>,
-    /// Deadline for coalescing PTY wakeups. When `Some`, wakeups are batched
-    /// until this instant before triggering a render.
+    /// Deadline for the frame pacing delay. When a PtyWakeup is received,
+    /// we block in recv_timeout until this deadline before triggering a render.
     coalesce_deadline: Option<Instant>,
 }
 
@@ -176,10 +176,43 @@ impl EventSource for UnifiedEventSource {
             return Ok(true);
         }
 
-        // Block on the channel for up to `timeout`.
+        // If drain_pending found dirty windows, arm the coalesce deadline.
+        // This prevents a 3600s freeze when a PtyWakeup arrives between
+        // handler(None) and drain_pending (common under heavy streaming):
+        // the PtyWakeup is consumed by drain_pending but no coalesce
+        // deadline is set, so recv_timeout would block for the full
+        // PowerSaver interval.
+        if !self.dirty_windows.is_empty() && self.coalesce_deadline.is_none() {
+            self.coalesce_deadline = Some(Instant::now() + COALESCE_DELAY);
+        }
+
+        // Clamp remaining to the coalesce deadline so we never block
+        // longer than 16ms when there are unprocessed dirty windows.
         let mut remaining = timeout;
+        if let Some(deadline) = self.coalesce_deadline {
+            let now = Instant::now();
+            if now >= deadline {
+                self.coalesce_deadline = None;
+                return Ok(false);
+            }
+            remaining = remaining.min(deadline.saturating_duration_since(now));
+        }
 
         while remaining > Duration::ZERO {
+            // Check coalesce deadline before each blocking call.
+            if let Some(deadline) = self.coalesce_deadline {
+                let now = Instant::now();
+                if now >= deadline {
+                    self.coalesce_deadline = None;
+                    return Ok(false);
+                }
+                remaining = remaining.min(deadline.saturating_duration_since(now));
+                if remaining <= Duration::ZERO {
+                    self.coalesce_deadline = None;
+                    return Ok(false);
+                }
+            }
+
             match self.rx.recv_timeout(remaining) {
                 Ok(UnifiedEvent::Input(event)) => {
                     self.last_event_at = Some(Instant::now());
@@ -196,7 +229,6 @@ impl EventSource for UnifiedEventSource {
                         let now = Instant::now();
                         if now >= deadline {
                             self.coalesce_deadline = None;
-                            self.dirty_windows.clear();
                             return Ok(false);
                         }
                         let coalesce_remaining = deadline.saturating_duration_since(now);
@@ -211,7 +243,16 @@ impl EventSource for UnifiedEventSource {
                 Ok(UnifiedEvent::Tick) => {
                     return Ok(false);
                 }
-                Err(_) => break, // timeout or disconnected
+                Err(_) => {
+                    // Check if the coalesce deadline expired during the wait.
+                    if let Some(deadline) = self.coalesce_deadline
+                        && Instant::now() >= deadline
+                    {
+                        self.coalesce_deadline = None;
+                        return Ok(false);
+                    }
+                    break;
+                }
             }
         }
 
@@ -454,24 +495,26 @@ mod tests {
         tx.send(UnifiedEvent::PtyWakeup(WindowKey::default()))
             .unwrap();
 
-        // poll() should drain the PtyWakeup, arm coalesce, then either
-        // coalesce-expire or timeout, clear dirty_windows, and return Ok(false).
+        // poll() should drain the PtyWakeup, arm the 16ms frame pacer, then
+        // let it expire and return Ok(false) with dirty_windows still set.
         assert!(
             !source.poll(Duration::from_secs(1)).unwrap(),
-            "poll must return Ok(false) after PtyWakeup drain"
+            "poll must return Ok(false) after PtyWakeup expiry"
         );
 
-        // After poll returns, dirty_windows must be empty.
+        // After poll returns, dirty_windows must contain the key
+        // (coalesce arms the timer but does NOT clear dirty_windows on expiry).
         assert!(
-            source.take_dirty_windows().is_empty(),
-            "dirty_windows must be cleared after poll returns Ok(false)"
+            !source.take_dirty_windows().is_empty(),
+            "dirty_windows must still contain the key after poll"
         );
 
-        // With dirty_windows empty and no input, profile returns to PowerSaver.
+        // After taking the dirty windows, profile returns to PowerSaver
+        // (no input activity, no dirty windows).
         assert_eq!(
             source.current_profile(),
             PowerProfile::PowerSaver,
-            "profile must return to PowerSaver after dirty_windows cleared"
+            "profile must return to PowerSaver after dirty_windows consumed"
         );
     }
 
