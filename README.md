@@ -45,7 +45,7 @@ Per-window **direct mode** (toggled via the `[D]` header button) disables all WM
 |-----------------|----------------|--------------------------------------------------------------------------|
 | App Focused     | Press Esc once | Enters WM Mode. An overlay appears; keys now control the window manager. |
 | WM Mode         | Press Esc once | Dismisses overlay; focus returns to the app.                             |
-| Any             | Double-tap Esc | Routes a single `Esc` through to the focused child window.               |
+| Default         | Double-tap Esc | Routes a single `Esc` through to the focused child window.               |
 | Direct Mode     | Type normally  | All keystrokes, including `Esc`, pass through to the terminal.           |
 | Direct Mode     | Tap Esc once   | Deferred; countdown shown in panel.                                      |
 | Direct Mode     | Double-tap Esc | Opens WM overlay (inverted double-Esc).                                  |
