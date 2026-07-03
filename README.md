@@ -31,7 +31,7 @@ Working with the terminal grid, the project aims to provide a rich window manage
 
 As a standalone application, `term-wm` allows you to manage multiple shell sessions, panes, and floating windows with a philosophy centered on **zero-conflict key bindings** with your running applications.
 
-### The "No-Conflict" Philosophy (`Esc`)
+### The "No-Conflict" Philosophy (The `Esc` Super Key)
 
 Unlike other multiplexers that require complex prefix chords (like `Ctrl+b`), `term-wm` uses `Esc` as a context-aware modifier. This ensures that sub-shells and embedded apps (like `vim`, `tmux`, `screen`, etc.) retain their own keybindings without fighting the window manager.
 
