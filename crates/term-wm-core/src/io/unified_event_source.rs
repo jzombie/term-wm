@@ -176,10 +176,43 @@ impl EventSource for UnifiedEventSource {
             return Ok(true);
         }
 
-        // Block on the channel for up to `timeout`.
+        // If drain_pending found dirty windows, arm the coalesce deadline.
+        // This prevents a 3600s freeze when a PtyWakeup arrives between
+        // handler(None) and drain_pending (common under heavy streaming):
+        // the PtyWakeup is consumed by drain_pending but no coalesce
+        // deadline is set, so recv_timeout would block for the full
+        // PowerSaver interval.
+        if !self.dirty_windows.is_empty() && self.coalesce_deadline.is_none() {
+            self.coalesce_deadline = Some(Instant::now() + COALESCE_DELAY);
+        }
+
+        // Clamp remaining to the coalesce deadline so we never block
+        // longer than 16ms when there are unprocessed dirty windows.
         let mut remaining = timeout;
+        if let Some(deadline) = self.coalesce_deadline {
+            let now = Instant::now();
+            if now >= deadline {
+                self.coalesce_deadline = None;
+                return Ok(false);
+            }
+            remaining = remaining.min(deadline.saturating_duration_since(now));
+        }
 
         while remaining > Duration::ZERO {
+            // Check coalesce deadline before each blocking call.
+            if let Some(deadline) = self.coalesce_deadline {
+                let now = Instant::now();
+                if now >= deadline {
+                    self.coalesce_deadline = None;
+                    return Ok(false);
+                }
+                remaining = remaining.min(deadline.saturating_duration_since(now));
+                if remaining <= Duration::ZERO {
+                    self.coalesce_deadline = None;
+                    return Ok(false);
+                }
+            }
+
             match self.rx.recv_timeout(remaining) {
                 Ok(UnifiedEvent::Input(event)) => {
                     self.last_event_at = Some(Instant::now());
@@ -210,7 +243,16 @@ impl EventSource for UnifiedEventSource {
                 Ok(UnifiedEvent::Tick) => {
                     return Ok(false);
                 }
-                Err(_) => break, // timeout or disconnected
+                Err(_) => {
+                    // Check if the coalesce deadline expired during the wait.
+                    if let Some(deadline) = self.coalesce_deadline {
+                        if Instant::now() >= deadline {
+                            self.coalesce_deadline = None;
+                            return Ok(false);
+                        }
+                    }
+                    break;
+                }
             }
         }
 
