@@ -6,7 +6,7 @@ use crate::power_profile::PowerProfile;
 use crate::theme::Theme;
 use crate::ui::UiFrame;
 
-pub trait BottomPanel: std::fmt::Debug {
+pub trait BottomPanel {
     fn begin_frame(&mut self);
 
     fn area(&self) -> Rect;

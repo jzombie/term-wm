@@ -1,7 +1,7 @@
 use std::io;
 
 use crossterm::event::{Event, KeyEventKind, MouseEventKind};
-use ratatui::buffer::Buffer;
+use ratatui::buffer::{Buffer, Cell};
 use ratatui::prelude::Rect;
 use ratatui::style::{Modifier, Style};
 
@@ -544,6 +544,7 @@ where
 #[derive(Default)]
 struct WindowDrawState {
     known: Vec<WindowKey>,
+    scratch_cells: Vec<Cell>,
 }
 
 impl WindowDrawState {
@@ -642,6 +643,7 @@ where
                             component.render(subframe, window.surface.inner, &ctx);
                         }
                     },
+                    &mut state.scratch_cells,
                 );
             }
         }
@@ -656,6 +658,7 @@ fn composite_window<F>(
     decorator: &dyn WindowDecorator,
     mut ctx: WindowRenderCtx<'_>,
     mut render_content: F,
+    scratch: &mut Vec<Cell>,
 ) where
     F: FnMut(&mut UiFrame<'_>),
 {
@@ -676,7 +679,13 @@ fn composite_window<F>(
     });
     let focused = ctx.focused;
     let theme = ctx.theme;
-    let mut buffer = Buffer::empty(local_area);
+    let size = local_area.area() as usize;
+    scratch.clear();
+    scratch.resize(size, Cell::default());
+    let mut buffer = Buffer {
+        area: local_area,
+        content: std::mem::take(scratch),
+    };
     {
         let mut offscreen = UiFrame::from_parts(local_area, &mut buffer);
         decorator.render_window(&mut offscreen, local_area, ctx);
@@ -691,6 +700,7 @@ fn composite_window<F>(
         crate::ui::render_drop_shadow(frame, surface.dest, surface.z_depth, &theme);
     }
     frame.blit_from_signed(&buffer, surface.dest);
+    *scratch = buffer.content;
 }
 
 fn auto_layout_for_windows(windows: &[WindowKey]) -> Option<TilingLayout<WindowKey>> {
