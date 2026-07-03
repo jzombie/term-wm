@@ -15,12 +15,11 @@ use super::utils::KeyboardNormalizer;
 use crate::power_profile::PowerProfile;
 use crate::window::WindowKey;
 
-/// Delay window for coalescing PTY wakeups before triggering a render.
-/// Multiple wakeups within this window are collapsed into a single render.
 /// Capacity of the crossbeam channel between event producers and the event
-/// loop. 256 slots provides natural backpressure: when the channel is full,
-/// the sender blocks → the producer backs off.
-const EVENT_CHANNEL_CAPACITY: usize = 256;
+/// loop. When the channel is full, the sender blocks → the producer backs off.
+/// Tuned to engage mechanical backpressure after ~8 PTY read batches (~32KB)
+/// so CPU doesn't spin parsing data the renderer hasn't consumed.
+const EVENT_CHANNEL_CAPACITY: usize = 8;
 
 /// How often the crossterm input thread polls for new events (100 ms).
 /// Keeps the thread responsive to shutdown signals while being idle-friendly.
