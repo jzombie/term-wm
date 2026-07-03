@@ -1060,8 +1060,7 @@ mod tests {
         }
         let mut parser = vt100::Parser::new(24, 80, 100);
         parser.process(&lines);
-        pty.shared_screen
-            .store(Arc::new(parser.screen().clone()));
+        pty.shared_screen.store(Arc::new(parser.screen().clone()));
         pty.dirty.store(true, Ordering::Release);
 
         // Load into cached_screen.
@@ -1074,11 +1073,18 @@ mod tests {
         // set_scrollback mutates cached_screen via screen_mut().
         // screen() MUST return &cached_screen so the mutation is visible.
         let sb_available = pty.max_scrollback();
-        assert!(sb_available >= 3, "need at least 3 scrollback lines, got {sb_available}");
+        assert!(
+            sb_available >= 3,
+            "need at least 3 scrollback lines, got {sb_available}"
+        );
         pty.set_scrollback(3);
 
         // scrollback() → screen() → must see the mutation.
-        assert_eq!(pty.scrollback(), 3, "scrollback() must reflect set_scrollback");
+        assert_eq!(
+            pty.scrollback(),
+            3,
+            "scrollback() must reflect set_scrollback"
+        );
 
         // screen().scrollback() → must also see the mutation.
         assert_eq!(
@@ -1110,8 +1116,7 @@ mod tests {
         // When a new screen arrives via ArcSwap, the new scrollback wins.
         let mut parser2 = vt100::Parser::new(24, 80, 100);
         parser2.process(b"fresh output");
-        pty.shared_screen
-            .store(Arc::new(parser2.screen().clone()));
+        pty.shared_screen.store(Arc::new(parser2.screen().clone()));
         pty.dirty.store(true, Ordering::Release);
         let _s = pty.screen();
 
@@ -1150,12 +1155,14 @@ mod tests {
         }
         let mut parser = vt100::Parser::new(24, 80, 100);
         parser.process(&lines);
-        pty.shared_screen
-            .store(Arc::new(parser.screen().clone()));
+        pty.shared_screen.store(Arc::new(parser.screen().clone()));
         pty.dirty.store(true, Ordering::Release);
         let _s = pty.screen();
 
-        assert!(pty.max_scrollback() >= 3, "need enough scrollback for this test");
+        assert!(
+            pty.max_scrollback() >= 3,
+            "need enough scrollback for this test"
+        );
 
         // Mutate via screen_mut() directly.
         pty.screen_mut().set_scrollback(3);
