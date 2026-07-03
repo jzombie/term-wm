@@ -10,7 +10,6 @@ use term_wm_core::{
     ui::{UiFrame, safe_set_string, truncate_to_width},
 };
 
-#[derive(Debug)]
 pub struct WmBottomPanelComponent {
     area: Rect,
     app_name: String,
