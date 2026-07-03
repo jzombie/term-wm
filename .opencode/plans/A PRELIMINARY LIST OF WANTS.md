@@ -11,3 +11,4 @@ This is a high-level overview of what I'm looking for, but might not contain all
 6. Configurable scrollback buffering that can scale to millions without impacting performance or balooning memory (goal, a few hundred megabytes of RAM with several million lines of scrollback).  Research advanced memory paging.
 7. Snapshot testing using `insta` crate
 8. [can this work?] Terminal windows should buffer directly inside the PTY, if possible, where scrolling would fetch via API instead of a local buffer.
+9. Debug log could show system/UI uptime (derived from a centralized state) rendered in a footer of the log application; it could also feature the ability to clear the log entirely.
