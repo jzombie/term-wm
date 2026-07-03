@@ -515,4 +515,23 @@ mod tests {
             "no action should be stored"
         );
     }
+
+    #[test]
+    fn debug_format() {
+        let overlay: WmMenuOverlay<&'static str> = WmMenuOverlay::new();
+        let s = format!("{:?}", overlay);
+        // Manual Debug impl skips R-typed fields and includes outlined/anchor.
+        assert!(
+            s.contains("WmMenuOverlay"),
+            "Debug should include struct name: {s}"
+        );
+        assert!(
+            s.contains("outlined"),
+            "Debug should include outlined field: {s}"
+        );
+        assert!(
+            !s.contains("last_action"),
+            "Debug should NOT include R-typed fields"
+        );
+    }
 }
