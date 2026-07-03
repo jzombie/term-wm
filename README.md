@@ -37,11 +37,18 @@ Unlike other multiplexers that require complex prefix chords (like `Ctrl+b`), `t
 
 > _Should_ the `Esc` key need to be sent to a child window, pressing `Esc` twice (double-`Esc`) will route it to the window as a single key press.
 
-| Context     | Action         | Behavior                                                                 |
-|-------------|----------------|--------------------------------------------------------------------------|
-| App Focused | Press Esc      | Enters WM Mode. An overlay appears; keys now control the window manager. |
-| WM Mode     | Press Esc      | Dismisses overlay; focus returns to the app.                             |
-| Any         | Double-tap Esc | Routes a single `Esc` through to the focused child window.               |
+Per-window **direct mode** (toggled via the `[D]` header button) disables all WM key interception, including `Esc`, so keyboard-driven apps receive every keystroke unfiltered. Mouse interaction and window chrome (resize, drag) continue to work.
+
+> _In direct mode the double-`Esc` behavior is inverted_ — a single `Esc` is deferred, and a second `Esc` opens the WM overlay.
+
+| Context         | Action         | Behavior                                                                 |
+|-----------------|----------------|--------------------------------------------------------------------------|
+| App Focused     | Press Esc once | Enters WM Mode. An overlay appears; keys now control the window manager. |
+| WM Mode         | Press Esc once | Dismisses overlay; focus returns to the app.                             |
+| Any             | Double-tap Esc | Routes a single `Esc` through to the focused child window.               |
+| Direct Mode     | Type normally  | All keystrokes, including `Esc`, pass through to the terminal.           |
+| Direct Mode     | Tap Esc once   | Deferred; countdown shown in panel.                                      |
+| Direct Mode     | Double-tap Esc | Opens WM overlay (inverted double-Esc).                                  |
 
 
 ## For Developers: The Library
