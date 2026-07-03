@@ -1,13 +1,28 @@
 use super::FloatRectSpec;
 use crate::components::Component;
 
+/// Canonical window lifecycle states.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowState {
+    /// Allocated in SlotMap, invisible, not in layout tree.
+    Realized,
+    /// Visible, geometry routed to layout tree.
+    Mapped,
+    /// Hidden (withdrawn), in memory.
+    Unmapped,
+    /// Mapped but hidden from workspace (minimized).
+    Iconic,
+    /// Chrome-only visible (title bar only).
+    Shaded,
+}
+
 /// A window entry in the SlotMap — the single source of truth for all
 /// window data, including the optional renderable component.
 /// Process teardown is handled by the `Reaper`, not by `Drop`.
 pub struct Window {
     pub title: Option<String>,
     pub title_set_order: Option<usize>,
-    pub minimized: bool,
+    pub state: WindowState,
     pub floating_rect: Option<FloatRectSpec>,
     pub prev_floating_rect: Option<FloatRectSpec>,
     pub creation_order: usize,
@@ -23,7 +38,7 @@ impl Window {
         Self {
             title: None,
             title_set_order: None,
-            minimized: false,
+            state: WindowState::Realized,
             floating_rect: None,
             prev_floating_rect: None,
             creation_order,

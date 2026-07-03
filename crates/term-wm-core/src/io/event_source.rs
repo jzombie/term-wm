@@ -27,6 +27,11 @@ pub trait EventSource {
     fn current_profile(&self) -> PowerProfile {
         PowerProfile::PowerSaver
     }
+
+    /// Take accumulated window exit notifications. Default returns empty.
+    fn take_exited_windows(&mut self) -> Vec<crate::window::WindowKey> {
+        Vec::new()
+    }
 }
 
 impl<T: EventSource + ?Sized> EventSource for &mut T {
@@ -56,6 +61,10 @@ impl<T: EventSource + ?Sized> EventSource for &mut T {
 
     fn current_profile(&self) -> PowerProfile {
         (**self).current_profile()
+    }
+
+    fn take_exited_windows(&mut self) -> Vec<crate::window::WindowKey> {
+        (**self).take_exited_windows()
     }
 }
 

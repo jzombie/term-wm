@@ -16,6 +16,7 @@ pub mod term_color;
 pub use term_wm_pty_engine::Pane;
 pub use term_wm_pty_engine::Pty;
 pub use term_wm_pty_engine::PtyResult;
+pub use term_wm_pty_engine::PtyStatus;
 pub use term_wm_pty_engine::clipboard;
 pub use term_wm_pty_engine::title;
 pub mod config;

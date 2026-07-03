@@ -16,7 +16,7 @@ use term_wm::io::{
 };
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
 use term_wm::window::{OverlayId, WindowKey, WindowManager};
-use term_wm::{ScrollViewComponent, TerminalComponent, default_shell_command};
+use term_wm::{PtyStatus, ScrollViewComponent, TerminalComponent, default_shell_command};
 use term_wm_sys_ui_components::wm_debug_log::{
     WmDebugLogComponent, install_panic_hook, set_global_debug_log,
 };
@@ -197,9 +197,16 @@ impl App {
             .set_selection_enabled(self.windows.clipboard_enabled());
         let key = self.windows.create_window();
         let tx = self.pty_wakeup_tx.clone();
-        sv.content.set_wakeup(Some(std::sync::Arc::new(move || {
-            let _ = tx.send(UnifiedEvent::PtyWakeup(key));
-        })));
+        let tx_clone = tx.clone();
+        sv.content
+            .set_status_callback(Some(Box::new(move |status| match status {
+                PtyStatus::Wakeup => {
+                    let _ = tx_clone.send(UnifiedEvent::PtyWakeup(key));
+                }
+                PtyStatus::Exited => {
+                    let _ = tx_clone.send(UnifiedEvent::AppExited(key));
+                }
+            })));
         self.terminals.insert(key, sv);
         self.windows.set_focus(key);
         self.windows.tile_window(key);
@@ -265,9 +272,16 @@ impl WindowManagerHost for App {
             .set_selection_enabled(self.windows.clipboard_enabled());
         let key = self.windows.create_window();
         let tx = self.pty_wakeup_tx.clone();
-        sv.content.set_wakeup(Some(std::sync::Arc::new(move || {
-            let _ = tx.send(UnifiedEvent::PtyWakeup(key));
-        })));
+        let tx_clone = tx.clone();
+        sv.content
+            .set_status_callback(Some(Box::new(move |status| match status {
+                PtyStatus::Wakeup => {
+                    let _ = tx_clone.send(UnifiedEvent::PtyWakeup(key));
+                }
+                PtyStatus::Exited => {
+                    let _ = tx_clone.send(UnifiedEvent::AppExited(key));
+                }
+            })));
         self.terminals.insert(key, sv);
         self.windows.set_focus(key);
         self.windows.tile_window(key);
@@ -303,17 +317,7 @@ impl WindowManagerHost for App {
 
 impl WindowProvider for App {
     fn enumerate_windows(&mut self) -> Vec<WindowKey> {
-        let mut keys: Vec<WindowKey> = self
-            .terminals
-            .iter_mut()
-            .filter_map(|(key, sv)| {
-                if sv.content.has_exited() {
-                    None
-                } else {
-                    Some(*key)
-                }
-            })
-            .collect();
+        let mut keys: Vec<WindowKey> = self.terminals.keys().copied().collect();
         if self.debug_visible
             && let Some(debug_key) = self.debug_key
         {

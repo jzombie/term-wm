@@ -6,7 +6,7 @@ use super::WindowManager;
 use crate::keybindings::ActionLayer;
 use crate::layout::floating::*;
 use crate::layout::{LayoutNode, LayoutPlan, RegionMap, SplitHandle, TilingLayout};
-use crate::window::{FloatRectSpec, WindowKey};
+use crate::window::{FloatRectSpec, WindowKey, WindowState};
 
 impl WindowManager {
     pub fn scroll(&self, key: WindowKey) -> super::ScrollState {
@@ -255,7 +255,7 @@ impl WindowManager {
                 if self.is_window_floating(*key) {
                     continue;
                 }
-                if self.is_minimized(*key) {
+                if self.window_state(*key) == Some(WindowState::Iconic) {
                     continue;
                 }
                 self.regions.set(*key, *rect);
@@ -286,7 +286,7 @@ impl WindowManager {
             .windows
             .iter()
             .filter_map(|(key, window)| {
-                if window.is_floating() && !window.minimized {
+                if window.is_floating() && window.state != WindowState::Iconic {
                     Some(key)
                 } else {
                     None
@@ -346,7 +346,7 @@ impl WindowManager {
 
         let mut out: Vec<WindowKey> = Vec::new();
         for (key, window) in ordered {
-            if self.managed_draw_order.contains(&key) || window.minimized {
+            if self.managed_draw_order.contains(&key) || window.state == WindowState::Iconic {
                 out.push(key);
             }
         }
@@ -641,5 +641,41 @@ impl WindowManager {
     #[expect(dead_code)]
     pub(super) fn bring_floating_to_front(&mut self, key: WindowKey) {
         self.bring_floating_to_front_key(key);
+    }
+
+    /// Remove a window from the tiling layout.
+    /// Idempotent — safe to call even if already detached.
+    pub(super) fn detach_from_tiling_layout(&mut self, key: WindowKey) {
+        if let Some(ref mut layout) = self.managed_layout {
+            let _ = layout.root_mut().remove_leaf(key);
+        }
+    }
+
+    /// Re-insert a window into the tiling layout (attaches next to current focus).
+    pub(super) fn reattach_to_tiling_layout(&mut self, key: WindowKey) {
+        use crate::layout::LayoutNode;
+        if self.layout_contains(key) {
+            return;
+        }
+        if self.managed_layout.is_none() {
+            self.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(key)));
+            return;
+        }
+        let current_focus = *self.focus.current();
+        let Some(layout) = self.managed_layout.as_mut() else {
+            return;
+        };
+        if current_focus == key {
+            // Focus was previously set to this window; insert at root.
+            layout.split_root(key, crate::layout::InsertPosition::Right);
+            return;
+        }
+        let inserted =
+            layout
+                .root_mut()
+                .insert_leaf(current_focus, key, crate::layout::InsertPosition::Right);
+        if !inserted {
+            layout.split_root(key, crate::layout::InsertPosition::Right);
+        }
     }
 }
