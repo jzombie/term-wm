@@ -124,12 +124,13 @@ _The benchmark reports frame pacing, render times (avg/1% lows), and cell-update
 
 ### Power-Aware Rendering
 
-`term-wm` includes an automatic power profiling system that adjusts rendering behavior based on user activity:
+`term-wm` includes an automatic power profiling system that adjusts the event-loop poll interval based on user activity and PTY data flow, reducing CPU usage when idle:
 
-- **HighPerformance** (~60 fps, 16ms interval) — active when keyboard input is detected.
-- **PowerSaver** (~2 fps, 500ms interval, default) — activates after a short idle period, reducing CPU usage and conserving battery on laptops.
+- **Interactive** (~120 fps, 8ms interval) — active when keyboard input was received within the last 100ms.
+- **Streaming** (~60 fps, 16ms interval) — active when PTY data is flowing (dirty windows pending render) or input was received within the last 500ms.
+- **PowerSaver** (blocks on channel, 3600s interval, default) — no input and no dirty windows; the event loop blocks on the channel with no CPU burn.
 
-The runtime auto-detects the active profile via `ConsoleEventSource` and propagates it through `WindowManager` on each frame. Developers can hook into `BottomPanelTrait::set_power_profile` for custom indicators or override `current_profile()` on custom `EventSource` implementations.
+The active profile is derived by `UnifiedEventSource::current_profile()` which calls `profile_from_activity(last_event_at, has_dirty_windows)`. The runner detects changes via `PowerProfileTracker` and propagates the new profile to `WindowManager` each frame. Developers can hook into `BottomPanelTrait::set_power_profile` for custom indicators or override `current_profile()` on custom `EventSource` implementations.
 
 ## License
 
