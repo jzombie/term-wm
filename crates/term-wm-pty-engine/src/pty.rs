@@ -943,6 +943,147 @@ mod tests {
         );
     }
 
+    // ── screen / screen_mut / into_parts / Drop ─────────────────────
+    //
+    // These tests exercise the ArcSwap-based screen sharing path (screen()
+    // with dirty=true), the screen_mut() clone-from-Arc path, the into_parts()
+    // shutdown signaling, and the Drop impl.  They use a real Pty spawned
+    // with `cat` so the reader thread is alive.
+
+    #[test]
+    fn screen_loads_from_arcswap_when_dirty() {
+        let cmd = CommandBuilder::new("cat");
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+
+        // Initially dirty is false → screen() returns cached_screen.
+        // screen_arc should be None — checked after borrow is released.
+        {
+            let _s = pty.screen();
+        }
+        assert!(pty.screen_arc.is_none(), "screen_arc starts as None");
+
+        // Simulate reader thread publishing a new screen.
+        let mut new_parser = vt100::Parser::new(24, 80, 100);
+        new_parser.process(b"hello world");
+        let new_screen = Arc::new(new_parser.screen().clone());
+        pty.shared_screen.store(new_screen);
+        pty.dirty.store(true, Ordering::Release);
+
+        // screen() should load from ArcSwap, set screen_arc, clear dirty.
+        {
+            let s = pty.screen();
+            // Verify content is from the new screen
+            if let Some(cell) = s.cell(0, 0) {
+                let contents = cell.contents();
+                assert!(
+                    contents.contains('h'),
+                    "expected 'h' from new screen, got {contents:?}"
+                );
+            }
+        }
+        // After screen's borrow is released we can check internal state.
+        assert!(
+            pty.screen_arc.is_some(),
+            "screen_arc must be set after loading from ArcSwap"
+        );
+
+        assert!(!pty.dirty.load(Ordering::Acquire), "dirty must be cleared");
+
+        // Clean up: kill child so the reader thread exits.
+        if let Some(child) = pty.child.as_mut() {
+            let _ = child.kill();
+        }
+    }
+
+    #[test]
+    fn screen_mut_syncs_from_screen_arc() {
+        let cmd = CommandBuilder::new("cat");
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+
+        // Publish a new screen via ArcSwap.
+        let mut new_parser = vt100::Parser::new(24, 80, 100);
+        new_parser.process(b"content");
+        pty.shared_screen
+            .store(Arc::new(new_parser.screen().clone()));
+        pty.dirty.store(true, Ordering::Release);
+
+        // screen_mut() calls screen() → loads ArcSwap into screen_arc,
+        // then clones from screen_arc into cached_screen.
+        let screen = pty.screen_mut();
+        // Verify content from the new screen is accessible.
+        let cell = screen.cell(0, 0);
+        assert!(cell.is_some(), "expected a cell at (0,0)");
+        assert_eq!(cell.unwrap().contents(), "c");
+
+        // Clean up.
+        if let Some(child) = pty.child.as_mut() {
+            let _ = child.kill();
+        }
+    }
+
+    #[test]
+    fn into_parts_takes_child_and_reader() {
+        let cmd = CommandBuilder::new("cat");
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+
+        assert!(
+            pty.reader_is_alive(),
+            "reader should be alive before into_parts"
+        );
+
+        let parts = pty.into_parts();
+        assert!(parts.child.is_some(), "child should be taken");
+        assert!(
+            parts.reader_handle.is_some(),
+            "reader handle should be taken"
+        );
+        assert!(
+            !pty.reader_is_alive(),
+            "reader should be dead after into_parts"
+        );
+        assert!(pty.child.is_none(), "child should be None after into_parts");
+    }
+
+    #[test]
+    fn set_wakeup_with_existing_reader_does_not_panic() {
+        let cmd = CommandBuilder::new("cat");
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+
+        // set_wakeup should unparks the reader (no-op if already awake).
+        pty.set_wakeup(Some(Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>));
+
+        // Also test clearing the wakeup.
+        pty.set_wakeup(None);
+
+        if let Some(child) = pty.child.as_mut() {
+            let _ = child.kill();
+        }
+    }
+
     // ── wrap_err ────────────────────────────────────────────────────
 
     #[test]
