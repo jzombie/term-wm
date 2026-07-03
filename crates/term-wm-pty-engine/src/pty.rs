@@ -360,11 +360,16 @@ impl Pty {
     /// If the reader thread has published new content, performs a
     /// lock-free load from ArcSwap (no clone, no mutex contention).
     /// Also handles periodic foreground title polling and DSR responses.
+    /// Always returns a reference to `cached_screen`, which reflects both
+    /// new screen data (synced from ArcSwap on dirty) and any mutations
+    /// made via `screen_mut()` (e.g., `set_scrollback`).
     pub fn screen(&mut self) -> &vt100::Screen {
         self.poll_foreground();
         if self.dirty.swap(false, Ordering::Acquire) {
             // Lock-free load — atomic refcount increment, no clone.
-            self.screen_arc = Some(self.shared_screen.load_full());
+            let fresh = self.shared_screen.load_full();
+            self.cached_screen = (*fresh).clone();
+            self.screen_arc = Some(fresh);
 
             // Unpark the reader thread so it can read the next batch.
             if let Some(reader) = &self.reader {
@@ -372,16 +377,13 @@ impl Pty {
             }
 
             // Send DSR response if requested by the reader thread.
-            if self.dsr_requested.swap(false, Ordering::Relaxed)
-                && let Some(ref screen) = self.screen_arc
-            {
-                let (row, col) = screen.cursor_position();
+            if self.dsr_requested.swap(false, Ordering::Relaxed) {
+                let (row, col) = self.cached_screen.cursor_position();
                 let response = format!("\x1b[{};{}R", row.saturating_add(1), col.saturating_add(1));
                 let _ = self.write_bytes(response.as_bytes());
             }
         }
-        // Return reference to the Arc contents — borrows self via screen_arc.
-        self.screen_arc.as_deref().unwrap_or(&self.cached_screen)
+        &self.cached_screen
     }
 
     pub fn bytes_received(&self) -> usize {
@@ -398,12 +400,8 @@ impl Pty {
     }
 
     pub fn screen_mut(&mut self) -> &mut vt100::Screen {
-        // Ensure screen_arc is populated, then clone into cached_screen
-        // for mutation. This clone only happens on the rare mutable path.
+        // `screen()` already syncs `cached_screen` from ArcSwap on dirty.
         self.screen();
-        if let Some(ref screen_arc) = self.screen_arc {
-            self.cached_screen = (**screen_arc).clone();
-        }
         &mut self.cached_screen
     }
 
