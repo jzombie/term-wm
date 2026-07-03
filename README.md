@@ -31,17 +31,24 @@ Working with the terminal grid, the project aims to provide a rich window manage
 
 As a standalone application, `term-wm` allows you to manage multiple shell sessions, panes, and floating windows with a philosophy centered on **zero-conflict key bindings** with your running applications.
 
-### The "No-Conflict" Philosophy (`Esc`)
+### The "No-Conflict" Philosophy (The `Esc` Super Key)
 
 Unlike other multiplexers that require complex prefix chords (like `Ctrl+b`), `term-wm` uses `Esc` as a context-aware modifier. This ensures that sub-shells and embedded apps (like `vim`, `tmux`, `screen`, etc.) retain their own keybindings without fighting the window manager.
 
 > _Should_ the `Esc` key need to be sent to a child window, pressing `Esc` twice (double-`Esc`) will route it to the window as a single key press.
 
-| Context     | Action         | Behavior                                                                 |
-|-------------|----------------|--------------------------------------------------------------------------|
-| App Focused | Press Esc      | Enters WM Mode. An overlay appears; keys now control the window manager. |
-| WM Mode     | Press Esc      | Dismisses overlay; focus returns to the app.                             |
-| Any         | Double-tap Esc | Routes a single `Esc` through to the focused child window.               |
+Per-window **direct mode** (toggled via the `[D]` header button) disables all WM key interception, including `Esc`, so keyboard-driven apps receive every keystroke unfiltered. Mouse interaction and window chrome (resize, drag) continue to work.
+
+> _In direct mode the double-`Esc` behavior is inverted_ — a single `Esc` is deferred, and a second `Esc` opens the WM overlay.
+
+| Context         | Action         | Behavior                                                                 |
+|-----------------|----------------|--------------------------------------------------------------------------|
+| App Focused     | Tap Esc once   | Enters WM Mode. An overlay appears; keys now control the window manager. |
+| WM Mode         | Tap Esc once   | Dismisses overlay; focus returns to the app.                             |
+| Default         | Double-tap Esc | Routes a single `Esc` through to the focused child window.               |
+| Direct Mode     | Type normally  | All keystrokes, including `Esc`, pass through to the terminal.           |
+| Direct Mode     | Tap Esc once   | Deferred; countdown shown in panel.                                      |
+| Direct Mode     | Double-tap Esc | Opens WM overlay (inverted double-Esc).                                  |
 
 
 ## For Developers: The Library
@@ -124,12 +131,13 @@ _The benchmark reports frame pacing, render times (avg/1% lows), and cell-update
 
 ### Power-Aware Rendering
 
-`term-wm` includes an automatic power profiling system that adjusts rendering behavior based on user activity:
+`term-wm` includes an automatic power profiling system that adjusts the event-loop poll interval based on user activity and PTY data flow, reducing CPU usage when idle:
 
-- **HighPerformance** (~60 fps, 16ms interval) — active when keyboard input is detected.
-- **PowerSaver** (~2 fps, 500ms interval, default) — activates after a short idle period, reducing CPU usage and conserving battery on laptops.
+- **Interactive** (~120 fps, 8ms interval) — active when keyboard input was received within the last 100ms.
+- **Streaming** (~60 fps, 16ms interval) — active when PTY data is flowing (dirty windows pending render) or input was received within the last 500ms.
+- **PowerSaver** (blocks on channel, 3600s interval, default) — no input and no dirty windows; the event loop blocks on the channel with no CPU burn.
 
-The runtime auto-detects the active profile via `ConsoleEventSource` and propagates it through `WindowManager` on each frame. Developers can hook into `BottomPanelTrait::set_power_profile` for custom indicators or override `current_profile()` on custom `EventSource` implementations.
+The active profile is derived by `UnifiedEventSource::current_profile()` which calls `profile_from_activity(last_event_at, has_dirty_windows)`. The runner detects changes via `PowerProfileTracker` and propagates the new profile to `WindowManager` each frame. Developers can hook into `BottomPanelTrait::set_power_profile` for custom indicators or override `current_profile()` on custom `EventSource` implementations.
 
 ## License
 

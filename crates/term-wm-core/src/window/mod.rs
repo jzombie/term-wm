@@ -10,6 +10,8 @@ use term_wm_layout_engine::{LayoutRect, RectSpec};
 /// keys mathematically impossible to resolve.
 pub type WindowKey = slotmap::DefaultKey;
 
+pub use entry::WindowState;
+
 pub use window_manager::{
     DrawTask, OverlayId, ScrollState, SuperPressResult, WindowDrawContext, WindowManager,
     WindowSurface, WmMenuAction,

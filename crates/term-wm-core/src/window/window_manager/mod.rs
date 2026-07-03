@@ -14,7 +14,7 @@ use slotmap::SlotMap;
 
 use super::WindowKey;
 use super::decorator::WindowDecorator;
-use super::entry::Window;
+use super::entry::{Window, WindowState};
 use crate::app_context::AppContext;
 use crate::bottom_panel_trait::BottomPanel;
 use crate::components::{ComponentContext, MenuItem, MenuOverlay, Overlay};
@@ -203,12 +203,107 @@ impl WindowManager {
         self.windows.get(key)
     }
 
-    fn is_minimized(&self, key: WindowKey) -> bool {
-        self.window(key).is_some_and(|window| window.minimized)
+    pub fn window_state(&self, key: WindowKey) -> Option<WindowState> {
+        self.window(key).map(|w| w.state)
     }
 
-    fn set_minimized(&mut self, key: WindowKey, value: bool) {
-        self.window_mut(key).minimized = value;
+    /// Validate that a state transition is legal.
+    fn is_valid_transition(old: WindowState, new: WindowState) -> bool {
+        matches!(
+            (old, new),
+            (WindowState::Realized, WindowState::Mapped)
+                | (WindowState::Realized, WindowState::Unmapped)
+                | (WindowState::Mapped, WindowState::Iconic)
+                | (WindowState::Iconic, WindowState::Mapped)
+                | (WindowState::Mapped, WindowState::Unmapped)
+                | (WindowState::Unmapped, WindowState::Mapped)
+                | (WindowState::Mapped, WindowState::Shaded)
+                | (WindowState::Shaded, WindowState::Mapped)
+        )
+    }
+
+    /// Transition a window to a new state, applying all side-effects atomically.
+    /// Borrows `self.windows` briefly then drops before layout/focus mutations.
+    pub fn transition_window(&mut self, key: WindowKey, new_state: WindowState) {
+        // Step 1: Read old state (immutable borrow, immediately dropped)
+        let old_state = match self.window(key) {
+            Some(w) => w.state,
+            None => {
+                tracing::warn!("transition_window: unknown key {:?}", key);
+                return;
+            }
+        };
+        if old_state == new_state {
+            return;
+        }
+        debug_assert!(
+            Self::is_valid_transition(old_state, new_state),
+            "Illegal window state transition: {:?} -> {:?}",
+            old_state,
+            new_state
+        );
+
+        // Step 2: Mutate state (brief mutable borrow, immediately dropped)
+        self.window_mut(key).state = new_state;
+
+        // Step 3: Side-effects — full &mut self available
+        match (old_state, new_state) {
+            (WindowState::Realized, WindowState::Mapped) => {
+                self.z_order.push(key);
+                self.managed_draw_order.push(key);
+                self.focus_add(key);
+            }
+            (WindowState::Mapped, WindowState::Iconic) => {
+                self.z_order.retain(|x| *x != key);
+                self.managed_draw_order.retain(|x| *x != key);
+                if *self.focus.current() == key {
+                    self.select_fallback_focus();
+                }
+                self.detach_from_tiling_layout(key);
+            }
+            (WindowState::Iconic, WindowState::Mapped) => {
+                if !self.z_order.contains(&key) {
+                    self.z_order.push(key);
+                }
+                if !self.managed_draw_order.contains(&key) {
+                    self.managed_draw_order.push(key);
+                }
+                self.reattach_to_tiling_layout(key);
+                self.focus_add(key);
+            }
+            (_, WindowState::Unmapped) => {
+                self.clear_floating_rect(key);
+                self.z_order.retain(|x| *x != key);
+                self.managed_draw_order.retain(|x| *x != key);
+                self.regions.remove(key);
+                self.scroll.remove(&key);
+                self.remove_from_focus_ring(key);
+                if *self.focus.current() == key {
+                    self.select_fallback_focus();
+                }
+                self.detach_from_tiling_layout(key);
+            }
+            (WindowState::Unmapped, WindowState::Mapped) => {
+                if !self.z_order.contains(&key) {
+                    self.z_order.push(key);
+                }
+                if !self.managed_draw_order.contains(&key) {
+                    self.managed_draw_order.push(key);
+                }
+                self.reattach_to_tiling_layout(key);
+                self.focus_add(key);
+            }
+            (WindowState::Mapped, WindowState::Shaded) => {
+                // Keep in z-order and draw order so chrome renders,
+                // but remove content region so only the title bar shows.
+                self.regions.remove(key);
+            }
+            (WindowState::Shaded, WindowState::Mapped) => {
+                self.regions.remove(key);
+                self.reattach_to_tiling_layout(key);
+            }
+            _ => {}
+        }
     }
 
     fn floating_rect(&self, key: WindowKey) -> Option<crate::window::FloatRectSpec> {
@@ -409,6 +504,16 @@ impl WindowManager {
             .filter(|k| *k != key)
             .collect();
         self.focus.set_order(order);
+    }
+
+    /// Add a key to the focus ring if not already present, and set it as current.
+    fn focus_add(&mut self, key: WindowKey) {
+        if !self.focus.order().contains(&key) {
+            let mut order = self.focus.order().to_vec();
+            order.push(key);
+            self.focus.set_order(order);
+        }
+        self.focus.set_current(key);
     }
 
     pub fn take_closed_windows(&mut self) -> Vec<WindowKey> {
@@ -1360,6 +1465,10 @@ mod tests {
             None,
         );
         let keys = make_keys(&mut wm, 100);
+        // Map all windows first — minimize requires Mapped state
+        for &k in &keys {
+            wm.transition_window(k, crate::window::entry::WindowState::Mapped);
+        }
         let original = FloatRect {
             x: 5,
             y: 3,
@@ -1374,7 +1483,11 @@ mod tests {
             height: 15,
         });
         wm.minimize_window(keys[1]);
-        assert!(wm.is_minimized(keys[1]), "window should be minimized");
+        assert_eq!(
+            wm.window_state(keys[1]),
+            Some(crate::window::entry::WindowState::Iconic),
+            "window should be minimized"
+        );
         let after_minimize = wm.floating_rect(keys[1]);
         assert!(
             after_minimize.is_some(),
@@ -1386,7 +1499,11 @@ mod tests {
             "floating rect should be unchanged after minimize"
         );
         wm.restore_minimized(keys[1]);
-        assert!(!wm.is_minimized(keys[1]), "window should be restored");
+        assert_eq!(
+            wm.window_state(keys[1]),
+            Some(crate::window::entry::WindowState::Mapped),
+            "window should be restored"
+        );
         let after_restore = wm.floating_rect(keys[1]);
         assert_eq!(
             after_restore,
@@ -2657,5 +2774,316 @@ mod tests {
         } else {
             panic!("drag_last_event should be set after drag");
         }
+    }
+
+    // ── is_valid_transition (pure model) ──────────────────────────────
+
+    #[test]
+    fn is_valid_transition_accepts_all_legal_pairs() {
+        use crate::window::entry::WindowState::*;
+        let legal = &[
+            (Realized, Mapped),
+            (Realized, Unmapped),
+            (Mapped, Iconic),
+            (Iconic, Mapped),
+            (Mapped, Unmapped),
+            (Unmapped, Mapped),
+            (Mapped, Shaded),
+            (Shaded, Mapped),
+        ];
+        for &(old, new) in legal {
+            assert!(
+                WindowManager::is_valid_transition(old, new),
+                "legal transition {:?} -> {:?} should be valid",
+                old,
+                new,
+            );
+        }
+    }
+
+    #[test]
+    fn is_valid_transition_rejects_all_illegal_pairs() {
+        use crate::window::entry::WindowState::*;
+        let states = [Realized, Mapped, Unmapped, Iconic, Shaded];
+        let legal = &[
+            (Realized, Mapped),
+            (Realized, Unmapped),
+            (Mapped, Iconic),
+            (Iconic, Mapped),
+            (Mapped, Unmapped),
+            (Unmapped, Mapped),
+            (Mapped, Shaded),
+            (Shaded, Mapped),
+        ];
+        for &old in &states {
+            for &new in &states {
+                let is_legal = legal.contains(&(old, new));
+                assert_eq!(
+                    WindowManager::is_valid_transition(old, new),
+                    is_legal,
+                    "transition {:?} -> {:?} validity mismatch",
+                    old,
+                    new,
+                );
+            }
+        }
+    }
+
+    // ── transition_window (side-effect assertions) ────────────────────
+
+    #[test]
+    fn transition_window_realized_to_mapped() {
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        let key = wm.create_window();
+        assert_eq!(wm.window_state(key), Some(WindowState::Realized));
+
+        wm.transition_window(key, WindowState::Mapped);
+        assert_eq!(wm.window_state(key), Some(WindowState::Mapped));
+        assert!(wm.z_order.contains(&key), "must be in z_order");
+        assert!(
+            wm.managed_draw_order.contains(&key),
+            "must be in managed_draw_order"
+        );
+        assert_eq!(*wm.focus.current(), key, "must become focused");
+    }
+
+    fn mapped_keys(wm: &mut WindowManager, n: usize) -> Vec<WindowKey> {
+        let raw = make_keys(wm, n);
+        for &k in &raw {
+            wm.transition_window(k, WindowState::Mapped);
+        }
+        raw
+    }
+
+    #[test]
+    fn transition_window_mapped_to_iconic_removes_from_z_order() {
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        let keys = mapped_keys(&mut wm, 100);
+        let target = keys[1];
+        let focus = keys[0];
+        wm.focus_window_key(focus);
+
+        wm.transition_window(target, WindowState::Iconic);
+        assert_eq!(wm.window_state(target), Some(WindowState::Iconic));
+        assert!(!wm.z_order.contains(&target), "removed from z_order");
+        assert!(
+            !wm.managed_draw_order.contains(&target),
+            "removed from draw order"
+        );
+        assert_eq!(*wm.focus.current(), focus, "focus unchanged");
+    }
+
+    #[test]
+    fn transition_window_iconic_to_mapped_restores_z_order() {
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        let keys = mapped_keys(&mut wm, 100);
+        let target = keys[1];
+        wm.transition_window(target, WindowState::Iconic);
+        assert!(!wm.z_order.contains(&target), "was removed");
+
+        wm.transition_window(target, WindowState::Mapped);
+        assert_eq!(wm.window_state(target), Some(WindowState::Mapped));
+        assert!(wm.z_order.contains(&target), "restored to z_order");
+        assert!(
+            wm.managed_draw_order.contains(&target),
+            "restored to draw order"
+        );
+    }
+
+    #[test]
+    fn transition_window_mapped_to_unmapped_cleans_up() {
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        let keys = mapped_keys(&mut wm, 100);
+        let target = keys[1];
+        wm.focus_window_key(target);
+        wm.set_floating_rect(
+            target,
+            Some(crate::window::FloatRectSpec::Absolute(
+                crate::window::FloatRect {
+                    x: 5,
+                    y: 5,
+                    width: 10,
+                    height: 10,
+                },
+            )),
+        );
+        assert!(wm.floating_rect(target).is_some(), "was floating");
+
+        wm.transition_window(target, WindowState::Unmapped);
+        assert_eq!(wm.window_state(target), Some(WindowState::Unmapped));
+        assert!(!wm.z_order.contains(&target), "removed from z_order");
+        assert!(
+            wm.window(target).is_some_and(|w| w.floating_rect.is_none()),
+            "floating rect cleared"
+        );
+        // Focus ring auto-fallbacks via set_order removing current → first()
+        assert!(
+            *wm.focus.current() != target,
+            "focus must move away from unmapped window"
+        );
+    }
+
+    // ── close_window ──────────────────────────────────────────────────
+
+    #[test]
+    fn close_window_cleans_up_layout_and_state() {
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        let keys = mapped_keys(&mut wm, 100);
+        let target = keys[1];
+        wm.focus_window_key(target);
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        wm.close_window(target);
+        assert_eq!(
+            wm.window_state(target),
+            None,
+            "window should be removed from SlotMap (no component)"
+        );
+        assert!(
+            !wm.closed_windows.is_empty(),
+            "key pushed to closed_windows"
+        );
+        assert!(wm.closed_windows.contains(&target));
+        assert!(!wm.z_order.contains(&target), "not in z_order");
+        assert!(
+            !wm.managed_draw_order.contains(&target),
+            "not in draw order"
+        );
+    }
+
+    #[test]
+    fn close_window_system_window_keeps_slotmap_entry() {
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        struct Dummy;
+        impl crate::components::Component for Dummy {
+            fn render(
+                &mut self,
+                _frame: &mut crate::ui::UiFrame<'_>,
+                _area: Rect,
+                _ctx: &crate::components::ComponentContext,
+            ) {
+            }
+        }
+        let key = wm.set_system_window(Box::new(Dummy));
+        wm.transition_window(key, WindowState::Mapped);
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        wm.close_window(key);
+        assert!(
+            wm.window(key).is_some(),
+            "SlotMap entry preserved for system window"
+        );
+        assert_eq!(
+            wm.window_state(key),
+            Some(WindowState::Unmapped),
+            "state is Unmapped"
+        );
+    }
+
+    // ── shade_window / unshade_window ─────────────────────────────────
+
+    #[test]
+    fn shade_and_unshade_window() {
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        let keys = mapped_keys(&mut wm, 100);
+        let target = keys[1];
+
+        // Before shade: state is Mapped, in z_order
+        assert_eq!(wm.window_state(target), Some(WindowState::Mapped));
+        assert!(wm.z_order.contains(&target), "in z_order before shade");
+
+        wm.shade_window(target);
+        assert_eq!(
+            wm.window_state(target),
+            Some(WindowState::Shaded),
+            "state is Shaded after shade_window"
+        );
+        assert!(
+            wm.z_order.contains(&target),
+            "still in z_order (chrome visible)"
+        );
+
+        wm.unshade_window(target);
+        assert_eq!(
+            wm.window_state(target),
+            Some(WindowState::Mapped),
+            "state is Mapped after unshade_window"
+        );
+        assert!(
+            wm.z_order.contains(&target),
+            "still in z_order after unshade"
+        );
+    }
+
+    #[test]
+    fn shade_is_idempotent() {
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        let keys = mapped_keys(&mut wm, 100);
+        let target = keys[1];
+        wm.shade_window(target);
+        wm.shade_window(target); // second shade is a no-op
+        assert_eq!(
+            wm.window_state(target),
+            Some(WindowState::Shaded),
+            "still Shaded after double shade"
+        );
     }
 }
