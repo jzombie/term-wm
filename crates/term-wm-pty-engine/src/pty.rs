@@ -381,9 +381,7 @@ impl Pty {
             }
         }
         // Return reference to the Arc contents — borrows self via screen_arc.
-        self.screen_arc
-            .as_deref()
-            .unwrap_or(&self.cached_screen)
+        self.screen_arc.as_deref().unwrap_or(&self.cached_screen)
     }
 
     pub fn bytes_received(&self) -> usize {
