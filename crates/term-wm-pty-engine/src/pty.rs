@@ -730,6 +730,7 @@ mod tests {
     use super::*;
     use std::io;
     use std::io::Cursor;
+    use std::io::Write;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
@@ -1024,6 +1025,156 @@ mod tests {
         let cell = screen.cell(0, 0);
         assert!(cell.is_some(), "expected a cell at (0,0)");
         assert_eq!(cell.unwrap().contents(), "c");
+
+        // Clean up.
+        if let Some(child) = pty.child.as_mut() {
+            let _ = child.kill();
+        }
+    }
+
+    #[test]
+    fn set_scrollback_mutation_visible_through_scrollback_and_screen() {
+        // Regression test: Pty::screen() must return &cached_screen (which
+        // reflects mutations like set_scrollback), not &screen_arc (the raw
+        // ArcSwap snapshot which is never mutated).
+        //
+        // Generate enough output (30 lines in a 24-row terminal) to fill the
+        // scrollback buffer so that set_scrollback(N) isn't clamped to 0.
+        let cmd = CommandBuilder::new("cat");
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+
+        // Consume any initial dirty so cached_screen is synced from screen_arc.
+        let _s = pty.screen();
+
+        // Publish a screen with enough content to fill scrollback.
+        // 30 lines in a 24-row terminal → 6 lines in the scrollback buffer.
+        let mut lines = Vec::new();
+        for i in 0..30 {
+            writeln!(lines, "line {}", i).unwrap();
+        }
+        let mut parser = vt100::Parser::new(24, 80, 100);
+        parser.process(&lines);
+        pty.shared_screen
+            .store(Arc::new(parser.screen().clone()));
+        pty.dirty.store(true, Ordering::Release);
+
+        // Load into cached_screen.
+        let _s = pty.screen();
+
+        // Start at bottom (scrollback == 0).
+        assert_eq!(pty.scrollback(), 0);
+
+        // ── The core of the bug ─────────────────────────────────────
+        // set_scrollback mutates cached_screen via screen_mut().
+        // screen() MUST return &cached_screen so the mutation is visible.
+        let sb_available = pty.max_scrollback();
+        assert!(sb_available >= 3, "need at least 3 scrollback lines, got {sb_available}");
+        pty.set_scrollback(3);
+
+        // scrollback() → screen() → must see the mutation.
+        assert_eq!(pty.scrollback(), 3, "scrollback() must reflect set_scrollback");
+
+        // screen().scrollback() → must also see the mutation.
+        assert_eq!(
+            pty.screen().scrollback(),
+            3,
+            "screen().scrollback() must reflect set_scrollback"
+        );
+
+        // Verify the raw ArcSwap snapshot was NOT mutated (sanity check
+        // that we're truly testing cached_screen vs screen_arc).
+        if let Some(ref screen_arc) = pty.screen_arc {
+            assert_eq!(
+                screen_arc.scrollback(),
+                0,
+                "the ArcSwap snapshot must remain untouched by set_scrollback"
+            );
+        }
+
+        // ── Mutation survives subsequent clean screen() calls ──────
+        // Calling screen() again (dirty=false) must not clobber the mutation.
+        let _s = pty.screen();
+        assert_eq!(
+            pty.scrollback(),
+            3,
+            "mutation must survive repeated screen() calls without new data"
+        );
+
+        // ── New ArcSwap data replaces the mutation (expected) ──────
+        // When a new screen arrives via ArcSwap, the new scrollback wins.
+        let mut parser2 = vt100::Parser::new(24, 80, 100);
+        parser2.process(b"fresh output");
+        pty.shared_screen
+            .store(Arc::new(parser2.screen().clone()));
+        pty.dirty.store(true, Ordering::Release);
+        let _s = pty.screen();
+
+        assert_eq!(
+            pty.scrollback(),
+            0,
+            "new screen data must reset scrollback to its value"
+        );
+
+        // Clean up.
+        if let Some(child) = pty.child.as_mut() {
+            let _ = child.kill();
+        }
+    }
+
+    #[test]
+    fn screen_mut_then_screen_see_consistent_scrollback() {
+        // screen_mut() and screen() both go through cached_screen.
+        // Any mutation via screen_mut() must be visible through screen().
+        let cmd = CommandBuilder::new("cat");
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+
+        // Sync cached_screen.
+        let _s = pty.screen();
+
+        // Publish and load a screen with scrollback content (30 lines).
+        let mut lines = Vec::new();
+        for i in 0..30 {
+            writeln!(lines, "line {}", i).unwrap();
+        }
+        let mut parser = vt100::Parser::new(24, 80, 100);
+        parser.process(&lines);
+        pty.shared_screen
+            .store(Arc::new(parser.screen().clone()));
+        pty.dirty.store(true, Ordering::Release);
+        let _s = pty.screen();
+
+        assert!(pty.max_scrollback() >= 3, "need enough scrollback for this test");
+
+        // Mutate via screen_mut() directly.
+        pty.screen_mut().set_scrollback(3);
+
+        // screen() must see the same scrollback.
+        assert_eq!(
+            pty.screen().scrollback(),
+            3,
+            "screen() must see mutation made via screen_mut()"
+        );
+
+        // Mutate via set_scrollback() which uses screen_mut() internally.
+        pty.set_scrollback(5);
+
+        assert_eq!(
+            pty.screen().scrollback(),
+            5,
+            "screen() must see mutation made via set_scrollback"
+        );
 
         // Clean up.
         if let Some(child) = pty.child.as_mut() {
