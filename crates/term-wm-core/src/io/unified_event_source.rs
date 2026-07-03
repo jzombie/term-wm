@@ -245,11 +245,11 @@ impl EventSource for UnifiedEventSource {
                 }
                 Err(_) => {
                     // Check if the coalesce deadline expired during the wait.
-                    if let Some(deadline) = self.coalesce_deadline {
-                        if Instant::now() >= deadline {
-                            self.coalesce_deadline = None;
-                            return Ok(false);
-                        }
+                    if let Some(deadline) = self.coalesce_deadline
+                        && Instant::now() >= deadline
+                    {
+                        self.coalesce_deadline = None;
+                        return Ok(false);
                     }
                     break;
                 }
