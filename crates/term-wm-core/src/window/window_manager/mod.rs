@@ -2721,7 +2721,10 @@ mod tests {
             true
         });
         assert!(consumed_down, "down event must be consumed by chrome");
-        assert_eq!(callback_count, 0, "callback must not be called for header down");
+        assert_eq!(
+            callback_count, 0,
+            "callback must not be called for header down"
+        );
         assert!(wm.drag_header.is_some(), "drag must be in progress");
 
         // Now send a Drag event with the cursor deep into the content area.
@@ -2772,7 +2775,10 @@ mod tests {
             true
         });
         assert!(consumed_up, "up event must be consumed by chrome");
-        assert_eq!(callback_count, 0, "callback must not be called for header up");
+        assert_eq!(
+            callback_count, 0,
+            "callback must not be called for header up"
+        );
         assert!(wm.drag_header.is_none(), "drag must be finished after up");
     }
 
