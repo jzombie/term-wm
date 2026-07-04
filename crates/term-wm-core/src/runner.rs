@@ -431,6 +431,15 @@ where
                 // Route Tab/Shift+Tab through focus routing for embedded mode only.
                 // In standalone mode without the open overlay, Tab passes through.
                 if !wm_mode
+                    && let Event::Key(key) = &evt
+                    && key.kind == KeyEventKind::Press
+                    && app.windows().keybindings().matches(Action::Quit, key)
+                {
+                    app.open_exit_confirm();
+                    update_selection_snapshot(app);
+                    return flush_state_changes(app, ControlFlow::Continue);
+                }
+                if !wm_mode
                     && matches!(evt, Event::Key(_))
                     && app.windows().handle_focus_event(&evt, focus_regions)
                 {
