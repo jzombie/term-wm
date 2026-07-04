@@ -2657,6 +2657,132 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_focused_event_still_drags_header_in_direct_mode() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        use crate::window::FloatRectSpec;
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        let keys = make_keys(&mut wm, 100);
+        wm.set_panel_visible(false);
+        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(keys[1])));
+        wm.managed_draw_order = vec![keys[1]];
+        wm.z_order = vec![keys[1]];
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_app_window(keys[1]);
+
+        let win_key = keys[1];
+        wm.set_direct_mode(win_key, true);
+        assert!(wm.direct_mode(win_key));
+
+        // Set a known floating rect so we can verify movement.
+        wm.set_floating_rect(
+            win_key,
+            Some(FloatRectSpec::Absolute(crate::window::FloatRect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 20,
+            })),
+        );
+
+        // The window is now floating; floating_headers should contain its header.
+        let header_rect = wm
+            .floating_headers
+            .iter()
+            .find(|h| h.key == win_key)
+            .expect("floating header should exist")
+            .rect;
+
+        // MouseDown on the header — should start a drag via chrome.
+        let click_col = header_rect.x;
+        let click_row = header_rect.y;
+        let down = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: click_col,
+            row: click_row,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        let mut callback_count = 0;
+        let consumed_down = wm.dispatch_focused_event(&down, |_, _| {
+            callback_count += 1;
+            true
+        });
+        assert!(consumed_down, "down event must be consumed by chrome");
+        assert_eq!(
+            callback_count, 0,
+            "callback must not be called for header down"
+        );
+        assert!(wm.drag_header.is_some(), "drag must be in progress");
+
+        // Now send a Drag event with the cursor deep into the content area.
+        // Without the fix, in_content=true + direct_mode=true would block it.
+        let content = wm.region_for_key(win_key);
+        let drag_col = content.x + content.width / 2;
+        let drag_row = content.y + content.height / 2;
+        let drag = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: drag_col,
+            row: drag_row,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        let consumed_drag = wm.dispatch_focused_event(&drag, |_, _| {
+            callback_count += 1;
+            true
+        });
+        assert!(
+            consumed_drag,
+            "drag event deep in content area must still be consumed by chrome"
+        );
+        assert_eq!(
+            callback_count, 0,
+            "callback must not be called during drag in direct mode"
+        );
+
+        // The window should have moved.
+        let moved = match wm.floating_rect(win_key) {
+            Some(FloatRectSpec::Absolute(fr)) => fr,
+            _ => panic!("expected absolute floating rect"),
+        };
+        assert!(
+            moved.y > 0 || moved.x > 0,
+            "window must have moved during drag (moved: {:?}, start: (0,0))",
+            (moved.x, moved.y)
+        );
+
+        // MouseUp — should end the drag.
+        let up = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: drag_col,
+            row: drag_row,
+            modifiers: KeyModifiers::NONE,
+        });
+        let consumed_up = wm.dispatch_focused_event(&up, |_, _| {
+            callback_count += 1;
+            true
+        });
+        assert!(consumed_up, "up event must be consumed by chrome");
+        assert_eq!(
+            callback_count, 0,
+            "callback must not be called for header up"
+        );
+        assert!(wm.drag_header.is_none(), "drag must be finished after up");
+    }
+
+    #[test]
     fn dispatch_focused_event_normal_behavior_when_not_direct_mode() {
         use crate::layout::{LayoutNode, TilingLayout};
         use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};

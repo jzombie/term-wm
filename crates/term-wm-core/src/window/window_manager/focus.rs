@@ -29,12 +29,20 @@ impl WindowManager {
     where
         F: FnMut(WindowKey, &Event) -> bool,
     {
-        // Block mouse events in focused windows if direct mode is enabled
+        // In direct mode, mouse events over the content area bypass chrome
+        // and go straight to the terminal component, unless a header or
+        // resize drag is in progress, in which case the cursor entering
+        // the content area should not cancel the drag.
         if let Event::Mouse(mouse) = event {
             let focused = self.focused_window();
             let in_content = self.config.chrome_enabled
                 && rect_contains(self.region_for_key(focused), mouse.column, mouse.row);
-            if !(in_content && self.direct_mode(focused)) && self.handle_managed_event(event) {
+            if !(in_content
+                && self.direct_mode(focused)
+                && self.drag_header.is_none()
+                && self.drag_resize.is_none())
+                && self.handle_managed_event(event)
+            {
                 return true;
             }
         }
