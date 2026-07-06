@@ -190,7 +190,7 @@ pub struct WindowManager {
     super_timer_id: Option<TaskId>,
     /// ID of the drag-snap timer in the TaskScheduler, for cancellation.
     drag_timer_id: Option<TaskId>,
-    /// Handle to the shared TaskScheduler<SystemTask> for registering/cancelling
+    /// Handle to the shared `TaskScheduler<SystemTask>` for registering/cancelling
     /// system-level timers (super-passthrough, drag-snap).
     system_task_handle: Option<TaskHandle<SystemTask>>,
     pub(crate) last_frame_area: ratatui::prelude::Rect,
