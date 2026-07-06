@@ -2,75 +2,65 @@
 
 ## Problem
 
-Running commands inside a term-wm shell renders at ~2 FPS. The bottleneck is the per-frame cost of `render_screen`'s O(rows × cols) cell extraction, combined with unnecessary `vt100::Screen` cloning on every PTY batch.
+Running commands inside a term-wm shell renders at ~2 FPS. The reader thread (`pty.rs:577`) clones the full `vt100::Screen` into `ArcSwap` on every PTY batch, then parks until the main thread consumes it. The main thread does an O(rows × cols) cell extraction in `render_screen` every frame.
 
-## Architecture: Pull-Based Rendering with Direct Buffer Blitting
+## Architecture: In-Place Mutation + Conditional Snapshot + Hoisted Defaults
 
-Following the Alacritty/Zellij/Ghostty pattern: the PTY thread parses bytes and flags dirty. The main thread pulls state on its own tick and blits directly to the Ratatui buffer.
+### Change 1: Shared parser with conditional clone (eliminate allocation flood)
 
-### Change 1: Conditional screen snapshot (stop cloning every batch)
-
-The reader thread only clones the `vt100::Screen` when the renderer has consumed the previous frame. This eliminates the allocation flood under high throughput.
+Wrap the `vt100::Parser` in `Arc<Mutex<>>`. The reader processes bytes in-place, sets a dirty flag, and only clones the screen when the renderer signals readiness.
 
 **File:** `crates/term-wm-pty-engine/src/pty.rs`
 
-Add to `Pty`:
+Replace `shared_screen: ArcSwap<Arc<vt100::Screen>>` with:
 
 ```rust
+shared_parser: Arc<Mutex<vt100::Parser>>,
 render_ready: Arc<AtomicBool>,
 ```
 
-Reader thread loop (replaces current park/unpark):
+Reader thread (replaces lines 560-594):
 
 ```rust
-loop {
-    // Block on OS read() — the only blocking point
-    let n = reader.read(&mut buf)?;
-    if n == 0 { break; }
-
-    // Parse bytes into vt100::Parser (cheap — just byte processing)
+// Parse bytes in-place (no clone)
+{
+    let mut parser = shared_parser.lock().unwrap();
     parser.process(&buf[..n]);
+}
+dirty.store(true, Ordering::Release);
 
-    // Clone and publish only if renderer consumed the previous frame
-    if render_ready.swap(false, Ordering::AcqRel) {
-        let screen = parser.screen().clone();
-        shared_screen.store(Arc::new(screen));
-        dirty.store(true, Ordering::Release);
-        // Fire PtyWakeup
-        status_cb(PtyStatus::Wakeup);
+// Clone screen only if renderer consumed the previous frame
+if render_ready.swap(false, Ordering::AcqRel) {
+    let screen = {
+        let parser = shared_parser.lock().unwrap();
+        parser.screen().clone()
+    };
+    shared_screen.store(Arc::new(screen));
+    // Fire PtyWakeup
+    if let Some(ref cb) = *status_cb.lock().unwrap() {
+        cb(PtyStatus::Wakeup);
     }
-    // If render_ready was false: bytes are parsed (parser state updated),
-    // but no clone happens. Next clone will include all accumulated data.
+}
+// Do NOT park — loop back to read()
+```
+
+In `Pty::screen()`, signal reader after consuming (line ~370):
+
+```rust
+if self.dirty.swap(false, Ordering::Acquire) {
+    let fresh = self.shared_screen.load_full();
+    self.cached_screen = (*fresh).clone();
+    self.render_ready.store(true, Ordering::Release);  // signal reader
 }
 ```
 
-In `Pty::screen()`, signal the reader after consuming:
+**Why this works:**
+- Reader never parks — blocks only on `read()` syscall
+- Parsing is in-place — no allocation per batch
+- Clone happens at most once per render frame (60Hz), not per byte batch
+- Under idle conditions (no new data), reader blocks on `read()`, zero CPU
 
-```rust
-pub fn screen(&mut self) -> &vt100::Screen {
-    self.poll_foreground();
-    if self.dirty.swap(false, Ordering::Acquire) {
-        let fresh = self.shared_screen.load_full();
-        self.cached_screen = (*fresh).clone();
-        self.render_ready.store(true, Ordering::Release);  // signal reader
-    }
-    &self.cached_screen
-}
-```
-
-**File:** `crates/term-wm-pty-engine/src/pane.rs`
-
-Add to `Pane` trait:
-
-```rust
-fn set_render_ready(&mut self, _ready: Arc<AtomicBool>) {}
-```
-
-### Change 2: Pull-based tick coalescing (main thread drives render rate)
-
-The `FramePacer` already runs at ~60 FPS and coalesces `PtyWakeup` events. No changes needed here — the pacer correctly batches multiple wakeups into a single render pass. The `render_ready` flag from Change 1 ensures the reader only clones when the pacer-driven render has consumed the previous frame.
-
-### Change 3: Hoist loop-invariant computations
+### Change 2: Hoist loop-invariant computations
 
 Move `screen.fgcolor()` and `screen.bgcolor()` outside the per-cell loop.
 
@@ -93,13 +83,26 @@ fn resolve_colors(
 ) -> (Option<TColor>, Option<TColor>)
 ```
 
+### Change 3: Direct buffer writes (already implemented)
+
+The current `render_screen` already writes directly to `frame.buffer_mut()` — there is no Ratatui declarative widget overhead for the terminal grid. The cell loop at lines 482-548 reads from `vt100::Screen` and writes to `buffer.cell_mut()` directly. No changes needed here.
+
 ## Files to Modify
 
 | File | Change |
 |------|--------|
-| `crates/term-wm-pty-engine/src/pty.rs` | Add `render_ready` flag. Replace park/unpark with conditional clone. Signal reader in `screen()`. |
+| `crates/term-wm-pty-engine/src/pty.rs` | Add `shared_parser: Arc<Mutex<vt100::Parser>>`, `render_ready: Arc<AtomicBool>`. Replace ArcSwap clone with in-place parse + conditional clone. Remove reader parking. Signal reader in `screen()`. |
 | `crates/term-wm-pty-engine/src/pane.rs` | Add `set_render_ready()` to `Pane` trait. |
 | `crates/term-wm-ui-components/src/terminal.rs` | Hoist `screen.fgcolor()`/`bgcolor()` out of cell loop. |
+
+## Implementation Steps
+
+1. Add `shared_parser: Arc<Mutex<vt100::Parser>>` and `render_ready: Arc<AtomicBool>` to `Pty`
+2. Modify reader thread: parse in-place, conditional clone, no parking
+3. Modify `Pty::screen()`: signal `render_ready` after consuming
+4. Add `set_render_ready()` to `Pane` trait
+5. Wire `render_ready` from `TerminalComponent` to the `Pty` during `on_mount`
+6. Hoist `screen.fgcolor()`/`bgcolor()` out of cell loop
 
 ## Verification
 
@@ -114,5 +117,5 @@ cargo run -p term-bench -- --duration 5        # before: ~2 fps, after: ~50+ fps
 
 # CPU idle test:
 # Run 'sleep 100' — reader blocks on read(), 0% CPU
-# Run 'yes' — reader parses continuously, clones only at 60Hz
+# Run 'yes' — reader parses continuously, clones at most 60Hz
 ```
