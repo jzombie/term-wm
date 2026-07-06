@@ -52,8 +52,9 @@ fn render_screen(&self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentCont
     let buffer = frame.buffer_mut();
     let visible = area.intersection(buffer.area);
 
-    // Lock parser, read cells directly into buffer — zero copies
-    let mut parser = self.shared_parser.lock().unwrap();
+    // Single borrow_mut — avoids RefCell double-borrow panic
+    let mut pane = self.pane.borrow_mut();
+    let mut parser = pane.shared_parser().lock().unwrap();
     let screen = parser.screen();
 
     let default_fg = screen.fgcolor();
@@ -68,20 +69,23 @@ fn render_screen(&self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentCont
             }
         }
     }
-    // Lock dropped here — reader can process next batch
+
+    // Reset dirty flag using the same mutable borrow — no second borrow_mut
+    pane.take_dirty();
+    // Lock and borrow dropped here — reader can process next batch
 }
 ```
 
 **Why this works:**
 - Reader blocks only on `read()` — never clones, never parks
 - Main thread reads cells directly from the parser — zero intermediate allocations
-- Lock contention is minimal: reader holds lock for ~microseconds (process + drop), main thread holds for ~16ms (render). They don't overlap in practice.
+- Lock contention is expected and intentional: under high throughput, the reader thread will attempt to acquire the lock while the main thread holds it during the ~16ms render pass. The reader blocks on the mutex, the OS pipe fills, and the child process stalls. This is mechanical backpressure — the mutex natively throttles the reader to the render rate.
 - Parser state is always current — no stale snapshots
 - When PTY stream pauses, reader blocks on `read()`, parser retains last state, main thread renders it on next tick
 
 ### Change 2: Reset dirty flag on render
 
-The consumer (main thread) must acknowledge the mutation by resetting the `dirty` flag after blitting cells.
+The consumer (main thread) must acknowledge the mutation by resetting the `dirty` flag after blitting cells. This is done using the existing `pane` borrow from Change 1 — no second `borrow_mut()`.
 
 **File:** `crates/term-wm-pty-engine/src/pane.rs`
 
@@ -101,12 +105,7 @@ fn take_dirty(&self) -> bool {
 
 **File:** `crates/term-wm-ui-components/src/terminal.rs`
 
-In `render_screen`, call `take_dirty()` after blitting:
-
-```rust
-// After the cell loop completes:
-self.pane.borrow_mut().take_dirty();
-```
+In `render_screen`, call `take_dirty()` on the existing `pane` binding — see Change 1's code block where `pane.take_dirty()` is called after the cell loop using the same `let mut pane = self.pane.borrow_mut();` borrow. Do NOT write `self.pane.borrow_mut().take_dirty()` — that would panic.
 
 This ensures the `FramePacer` and power-profiling heuristics see `dirty=false` after each render, allowing proper idle-frame coalescing.
 
