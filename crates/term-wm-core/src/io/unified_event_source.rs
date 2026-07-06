@@ -597,7 +597,7 @@ mod tests {
         );
         // Also verify that stale last_event_at + pending_work still gives Streaming
         let (tx2, rx2) = bounded(EVENT_CHANNEL_CAPACITY);
-        let stale = Some(Instant::now() - Duration::from_secs(3600));
+        let stale = Instant::now().checked_sub(Duration::from_secs(3600));
         let source2 = UnifiedEventSource {
             rx: rx2,
             tx: tx2,

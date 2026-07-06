@@ -163,6 +163,8 @@ pub trait Overlay<Msg>: Component<Msg> + std::any::Any {
     fn visible(&self) -> bool {
         true
     }
+    /// Optional terminal-area rect behind which a drop-shadow should be
+    /// rendered.  The overlay is drawn on top of the shadow.
     fn shadow_rect(&self, _area: Rect) -> Option<Rect> {
         None
     }

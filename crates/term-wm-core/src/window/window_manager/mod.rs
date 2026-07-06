@@ -190,7 +190,7 @@ pub struct WindowManager {
     super_timer_id: Option<TaskId>,
     /// ID of the drag-snap timer in the TaskScheduler, for cancellation.
     drag_timer_id: Option<TaskId>,
-    /// Handle to the shared TaskScheduler<SystemTask> for registering/cancelling
+    /// Handle to the shared `TaskScheduler<SystemTask>` for registering/cancelling
     /// system-level timers (super-passthrough, drag-snap).
     system_task_handle: Option<TaskHandle<SystemTask>>,
     pub(crate) last_frame_area: ratatui::prelude::Rect,
@@ -742,7 +742,8 @@ impl WindowManager {
                 (MouseCaptureState::DraggingWindow { .. }, MouseEventKind::Moved)
                     if self.drag_snap.is_some() =>
                 {
-                    // Mouse re-entered after release outside terminal
+                    // Mouse re-entered the terminal after being released outside
+                    // during a header drag (no Up event was delivered).
                     self.cancel_drag_snap_timer();
                     self.drag_last_event = None;
                     if let Some(capture) = self.mouse_capture.take()

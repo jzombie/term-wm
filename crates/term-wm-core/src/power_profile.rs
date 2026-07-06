@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn profile_from_activity_stale_no_dirty_is_powersaver() {
-        let stale = Some(Instant::now() - Duration::from_millis(STREAMING_THRESHOLD_MS + 100));
+        let stale = Instant::now().checked_sub(Duration::from_millis(STREAMING_THRESHOLD_MS + 100));
         assert_eq!(
             profile_from_activity(stale, false),
             PowerProfile::PowerSaver
@@ -161,7 +161,7 @@ mod tests {
 
     #[test]
     fn profile_from_activity_stale_with_dirty_is_streaming() {
-        let stale = Some(Instant::now() - Duration::from_millis(STREAMING_THRESHOLD_MS + 100));
+        let stale = Instant::now().checked_sub(Duration::from_millis(STREAMING_THRESHOLD_MS + 100));
         assert_eq!(profile_from_activity(stale, true), PowerProfile::Streaming);
     }
 
@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn profile_from_activity_mid_is_streaming() {
-        let mid = Some(Instant::now() - Duration::from_millis(200));
+        let mid = Instant::now().checked_sub(Duration::from_millis(200));
         assert_eq!(profile_from_activity(mid, false), PowerProfile::Streaming);
     }
 

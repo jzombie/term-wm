@@ -6,5 +6,5 @@
   - [X] Remove dead `localize_event` / `localize_event_content` code from `layout.rs` (unused by mouse dispatch)
   - [X] Make `screen_area` from `ComponentContext` the single source of truth for `last_area` in all components (TerminalComponent ✓, ListComponent ✓, TextRendererComponent ✓; ScrollViewComponent uses `viewport_area` which is already correct)
 - [X] Restore missing tests.  Several tests were deleted.  You can find them by doing a diff against main.
-- [] Behavior regression where menu items show "hovered" state even if mouse is outside of menu area.
+- [X] Behavior regression where menu items show "hovered" state even if mouse is outside of menu area.
 - [] New TODOs in main.rs for deduping and centralizing new window handling

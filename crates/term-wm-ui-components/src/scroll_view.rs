@@ -193,6 +193,8 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
     }
 
     pub(crate) fn compute_layout(&self, area: Rect) -> Rect {
+        // Simple reservation strategy:
+        // Use previous frame's content size to decide on scrollbars.
         let state = self.shared_state.borrow();
         let content_w = state.content_width;
         let content_h = state.content_height;
@@ -239,6 +241,7 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
             .map(|sa| self.compute_layout(sa))
             .unwrap_or_default();
 
+        // Vertical scrollbar: assumes it is immediately to the right of viewport
         if content_h > view_h {
             let sb_area = Rect {
                 x: va.x.saturating_add(va.width),
@@ -278,6 +281,8 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
             }
         }
 
+        // Skip in direct mode so scroll passes through to the terminal
+        // component for encoding and forwarding to the PTY app.
         if !ctx.direct_mode() {
             match mouse.kind {
                 MouseEventKind::ScrollUp => {
@@ -377,6 +382,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
             let info = handle.info();
             let child_ctx = ctx.with_viewport(info, Some(handle));
 
+            // 4. Render Child
             registry.push_clip(inner_area);
             self.content
                 .borrow()
@@ -488,6 +494,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
                 st.pending_offset_y = Some(st.offset_y);
             }
             _ => {
+                // 3. Create context with ViewportHandle
                 let handle = self.viewport_handle();
                 let info = handle.info();
                 let child_ctx = ctx.with_viewport(info, Some(handle));

@@ -130,7 +130,7 @@ impl<T> TaskHandle<T> {
 
     /// Cancel a previously scheduled task (lazy, O(1)).
     ///
-    /// The actual heap entry is removed on the next call to [`drain_expired`].
+    /// The actual heap entry is removed on the next call to `drain_expired`.
     /// Cancelling a non-existent or already-fired ID is a no-op.
     pub fn cancel(&self, id: TaskId) {
         self.inner.borrow_mut().cancelled.insert(id);
@@ -198,7 +198,7 @@ impl<T> TaskHandle<T> {
 
     /// Drain expired tasks without requiring `T: Clone`.
     ///
-    /// Unlike [`drain_expired`], this method does **not** re-insert repeating
+    /// Unlike `drain_expired`, this method does **not** re-insert repeating
     /// tasks — it returns them as one-shot payloads.  Use this when `T` is
     /// not [`Clone`] or when you only care about one-shot tasks.
     pub fn drain_expired_once(&self) -> Vec<(TaskId, T)> {
