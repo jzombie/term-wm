@@ -5,7 +5,8 @@ This is a high-level overview of what I'm looking for, but might not contain all
 1. Dynamic configurability using Rust structs (IF eventually wanting to use a different format, it should be parsable into same Rust structs).  Application entrance points should be easily configurable, with the windows that they want to display the primary potentially imperative logic, as part of a builder pattern.  Everything else should probably be part of the configuration. The initialization sequence should be identicial regardless if the app is "standalone" or "embedded".  The *core* distinction between standalone or embedded modes should simply be a configuration difference.
 2. Better application lifecycle management.
 2b. I want to ensure this is wired up, and formalized, as a state machine instead of the current ad-hoc imperative lifecycle management.  Canonical window states: Realized (allocated, invisible), Mapped (visible, geometry routed to layout tree), Unmapped/Withdrawn (hidden, in memory), Iconic/Minimized (mapped but hidden from workspace), and Shaded (chrome-only visible).  Async teardown via `AppExited(WindowKey)` control message from background PTY thread to main loop (never direct UI mutation from background).  Strict boundary between Window Server (UI arbiter) and Application Runner (PTY I/O task).  Slotmap/WindowKey as single source of truth — layout trees and z-order hold only lightweight keys, never window data directly.
-2c. Multi-phase component lifecycle [See multi-phase-component-lifecycle.md]
+2c. [DONE] Multi-phase component lifecycle [See multi-phase-component-lifecycle.md]
+2d. [PENDING] Better window physics (Digital physics for terminal window managers via NotebookLM)
 3. Better threading model (see thread-model.md)
 4. "Dirty rectangles" damage control should be a separate workspace crate that can work outside of the window manager.  I have a prototype server/client scenario where the client is a dummy buffer render, and the server/client should also take advantage of this algorithm. This change calculation should also be usable for calculating deltas if the rendering is going to be performed over network. For usage with Ratatui, it *must use* Direct Buffer Access.  If this requires an API change in term-wm, that's *okay*, it just needs to be done. [See ratatui-direct-buffer-access.md]
 5. Render coalescing [see render-coalescing.md]
@@ -14,5 +15,5 @@ This is a high-level overview of what I'm looking for, but might not contain all
 8. [can this work?] Terminal windows should buffer directly inside the PTY, if possible, where scrolling would fetch via API instead of a local buffer.
 9. Debug log could show system/UI uptime (derived from a centralized state) rendered in a footer of the log application; it could also feature the ability to clear the log entirely.
 10. [DONE] Rename overlay.rs and any associated terminology.  When I think of "overlay", I think of whatever is driving some modal.  I can't even reason about what overlay.rs does in this context.
-11. Extremely simple API and README examples, showing how custom Ratatui components can easily be turned into Windows.
+11. [IN PROGRESS] Extremely simple API and README examples, showing how custom Ratatui components can easily be turned into Windows.
 12. Make an *extremely professional* README.  Do deep research on best practices.

@@ -44,9 +44,14 @@ pub struct TerminalComponent {
     selection_enabled: bool,
     last_scrollback: Cell<usize>,
     last_max_scrollback: Cell<usize>,
+    window_key: Option<term_wm_core::window::WindowKey>,
 }
 
 impl Component<TermWmAction> for TerminalComponent {
+    fn on_mount(&mut self, key: term_wm_core::window::WindowKey, _app: &term_wm_core::app_context::AppContext) {
+        self.window_key = Some(key);
+    }
+
     fn handle_events(
         &mut self,
         event: &Event,
@@ -263,6 +268,7 @@ impl TerminalComponent {
             selection_enabled: false,
             last_scrollback: Cell::new(0),
             last_max_scrollback: Cell::new(0),
+            window_key: None,
         }
     }
 
@@ -285,6 +291,7 @@ impl TerminalComponent {
             selection_enabled: false,
             last_scrollback: Cell::new(0),
             last_max_scrollback: Cell::new(0),
+            window_key: None,
         };
         Ok(comp)
     }

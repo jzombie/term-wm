@@ -1,5 +1,5 @@
 use std::io;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, OnceLock};
 
 use clap::Parser;
 use crossbeam_channel::Sender;
@@ -185,24 +185,17 @@ impl App {
             true
         });
 
-        // Bridge: the status callback needs WindowKey, but create_window()
-        // returns it after the component is boxed. Use Arc<Mutex<Option<WindowKey>>>
-        // as a shared holder — set initially to None, populated after create_window.
-        let key_holder = Arc::new(Mutex::new(None::<WindowKey>));
+        let key_holder = Arc::new(OnceLock::new());
         let kh = key_holder.clone();
         let tx = self.pty_wakeup_tx.clone();
         pane.set_status_callback(Some(Box::new(move |status| match status {
             PtyStatus::Wakeup => {
-                if let Ok(guard) = kh.lock()
-                    && let Some(&key) = guard.as_ref()
-                {
+                if let Some(&key) = kh.get() {
                     let _ = tx.send(UnifiedEvent::PtyWakeup(key));
                 }
             }
             PtyStatus::Exited => {
-                if let Ok(guard) = kh.lock()
-                    && let Some(&key) = guard.as_ref()
-                {
+                if let Some(&key) = kh.get() {
                     let _ = tx.send(UnifiedEvent::AppExited(key));
                 }
             }
@@ -212,7 +205,7 @@ impl App {
         let key = self.windows.create_window(Box::new(sv));
 
         // The key is now known — store it so the callback can use it.
-        *key_holder.lock().unwrap() = Some(key);
+        let _ = key_holder.set(key);
 
         // Enable selection for the new terminal.
         let clipboard_enabled = self.windows.clipboard_enabled();
@@ -287,21 +280,17 @@ impl WindowManagerHost for App {
             let _ = webbrowser::open(url);
             true
         });
-        let key_holder = Arc::new(Mutex::new(None::<WindowKey>));
+        let key_holder = Arc::new(OnceLock::new());
         let kh = key_holder.clone();
         let tx = self.pty_wakeup_tx.clone();
         pane.set_status_callback(Some(Box::new(move |status| match status {
             PtyStatus::Wakeup => {
-                if let Ok(guard) = kh.lock()
-                    && let Some(&key) = guard.as_ref()
-                {
+                if let Some(&key) = kh.get() {
                     let _ = tx.send(UnifiedEvent::PtyWakeup(key));
                 }
             }
             PtyStatus::Exited => {
-                if let Ok(guard) = kh.lock()
-                    && let Some(&key) = guard.as_ref()
-                {
+                if let Some(&key) = kh.get() {
                     let _ = tx.send(UnifiedEvent::AppExited(key));
                 }
             }
@@ -311,7 +300,7 @@ impl WindowManagerHost for App {
         let key = self.windows.create_window(Box::new(sv));
 
         // The key is now known — store it so the callback can use it.
-        *key_holder.lock().unwrap() = Some(key);
+        let _ = key_holder.set(key);
 
         // Enable selection for the new terminal.
         let clipboard_enabled = self.windows.clipboard_enabled();
