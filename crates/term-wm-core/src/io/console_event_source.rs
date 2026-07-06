@@ -1,23 +1,26 @@
 use std::collections::VecDeque;
-use std::io::{self, Stdout};
+use std::io;
 use std::time::{Duration, Instant};
 
-use crossterm::event::DisableMouseCapture;
 use crossterm::event::{Event, KeyEvent, MouseEvent};
-use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
-use crossterm::{execute, terminal};
-use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
 
-use super::utils::KeyboardNormalizer;
-use super::{EventSource, RenderTarget};
+use super::EventSource;
 use crate::power_profile::PowerProfile;
-use crate::ui::UiFrame;
+use crate::utils::KeyboardNormalizer;
 
+/// Reads crossterm input events directly on the main thread.
+///
+/// Used in tests and embedded mode.  Production uses [`UnifiedEventSource`]
+/// which runs input on a background thread and integrates PTY wakeups.
+///
+/// [`UnifiedEventSource`]: super::unified_event_source::UnifiedEventSource
 pub struct ConsoleEventSource {
     normalizer: KeyboardNormalizer,
     event_queue: VecDeque<Event>,
     last_event_at: Option<Instant>,
+    /// Set by the runner when there's pending work (e.g. countdown timer)
+    /// to force frequent polling regardless of recent input activity.
+    pending_work: bool,
 }
 
 impl Default for ConsoleEventSource {
@@ -32,6 +35,7 @@ impl ConsoleEventSource {
             normalizer: KeyboardNormalizer::new(),
             event_queue: VecDeque::new(),
             last_event_at: None,
+            pending_work: false,
         }
     }
 
@@ -116,81 +120,19 @@ impl EventSource for ConsoleEventSource {
         }
     }
 
+    /// Called by the runner each cycle to signal whether there's pending
+    /// work (e.g. a countdown timer).  When true the event source includes
+    /// it in `has_dirty_windows` so the power profile stays at Streaming.
+    fn set_pending_work(&mut self, pending: bool) {
+        self.pending_work = pending;
+    }
+
     fn poll_interval(&self) -> Duration {
         self.current_profile().poll_interval()
     }
 
     fn current_profile(&self) -> PowerProfile {
-        crate::power_profile::profile_from_activity(self.last_event_at, false)
-    }
-}
-
-pub struct ConsoleRenderTarget {
-    terminal: Terminal<CrosstermBackend<Stdout>>,
-    entered: bool,
-}
-
-impl ConsoleRenderTarget {
-    pub fn new() -> io::Result<Self> {
-        let stdout = io::stdout();
-        let backend = CrosstermBackend::new(stdout);
-        let terminal = Terminal::new(backend)?;
-        Ok(Self {
-            terminal,
-            entered: false,
-        })
-    }
-}
-
-impl RenderTarget for ConsoleRenderTarget {
-    type Backend = CrosstermBackend<Stdout>;
-
-    fn enter(&mut self) -> io::Result<()> {
-        if self.entered {
-            return Ok(());
-        }
-        execute!(self.terminal.backend_mut(), EnterAlternateScreen)?;
-        terminal::enable_raw_mode()?;
-        self.terminal.hide_cursor()?;
-        self.entered = true;
-        Ok(())
-    }
-
-    fn exit(&mut self) -> io::Result<()> {
-        if !self.entered {
-            return Ok(());
-        }
-        execute!(self.terminal.backend_mut(), DisableMouseCapture)?;
-        // Give the terminal emulator time to process DisableMouseCapture
-        // before we disable raw mode (which re-enables echo). Without this
-        // delay, the terminal emulator might still send mouse events that
-        // get echoed as visible characters after raw mode is restored.
-        const MOUSE_DISABLE_DELAY: std::time::Duration = std::time::Duration::from_millis(8);
-        std::thread::sleep(MOUSE_DISABLE_DELAY);
-        terminal::disable_raw_mode()?;
-        execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;
-        self.terminal.show_cursor()?;
-        self.entered = false;
-        Ok(())
-    }
-
-    fn draw<F>(&mut self, f: F) -> io::Result<()>
-    where
-        F: FnOnce(UiFrame<'_>),
-    {
-        self.terminal
-            .draw(move |frame| {
-                let wrapper = UiFrame::new(frame);
-                f(wrapper);
-            })
-            .map(|_| ())
-            .map_err(|err| io::Error::other(err.to_string()))
-    }
-}
-
-impl Drop for ConsoleRenderTarget {
-    fn drop(&mut self) {
-        let _ = self.exit();
+        crate::power_profile::profile_from_activity(self.last_event_at, self.pending_work)
     }
 }
 
@@ -246,5 +188,28 @@ mod tests {
         } else {
             panic!("expected key");
         }
+    }
+
+    #[test]
+    fn pending_work_elevates_profile_to_streaming() {
+        use crate::power_profile::PowerProfile;
+        let mut d = ConsoleEventSource::new();
+        assert_eq!(
+            d.current_profile(),
+            PowerProfile::PowerSaver,
+            "no activity, no pending_work → PowerSaver"
+        );
+        d.set_pending_work(true);
+        assert_eq!(
+            d.current_profile(),
+            PowerProfile::Streaming,
+            "pending_work must elevate to Streaming"
+        );
+        d.set_pending_work(false);
+        assert_eq!(
+            d.current_profile(),
+            PowerProfile::PowerSaver,
+            "clearing pending_work restores PowerSaver"
+        );
     }
 }

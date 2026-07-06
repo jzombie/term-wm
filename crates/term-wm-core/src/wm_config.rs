@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::keybindings::{Action, KeyBindings};
+use crate::actions::TermWmAction;
+use crate::keybindings::KeyBindings;
 use crate::theme::NOIR;
 use crate::window::decorator::{DefaultDecorator, WindowDecorator};
 
@@ -33,12 +34,12 @@ pub enum HintVisibility {
 pub fn validate_keybindings(kb: &KeyBindings) -> KeyBindings {
     let validated = kb.clone();
 
-    if validated.combos_for(Action::Quit).is_empty() {
+    if validated.combos_for(TermWmAction::Quit).is_empty() {
         tracing::warn!("No keybinding configured for Quit — user must have alternate exit path");
     }
 
     let mut collision_log: Vec<String> = Vec::new();
-    let actions: Vec<(Action, Vec<String>)> = validated.help_entries();
+    let actions: Vec<(TermWmAction, Vec<String>)> = validated.help_entries();
     for (i, (action_a, combos_a)) in actions.iter().enumerate() {
         for (action_b, combos_b) in actions.iter().skip(i + 1) {
             for ca in combos_a {

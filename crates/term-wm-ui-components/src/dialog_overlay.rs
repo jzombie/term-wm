@@ -1,11 +1,15 @@
+use std::collections::VecDeque;
+
 use crossterm::event::{Event, MouseEventKind};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
+use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext};
 use term_wm_core::layout::rect_contains;
 use term_wm_core::ui::UiFrame;
+use term_wm_core::window::WindowKey;
 
 #[derive(Debug, Clone)]
 pub struct DialogOverlayComponent {
@@ -17,16 +21,16 @@ pub struct DialogOverlayComponent {
     bg: Color,
     dim_backdrop: bool,
     auto_close_on_outside_click: bool,
-    area: Rect,
 }
 
-impl Component for DialogOverlayComponent {
-    fn resize(&mut self, area: Rect, _ctx: &ComponentContext) {
-        self.area = area;
-    }
-
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _ctx: &ComponentContext) {
-        self.area = area;
+impl Component<TermWmAction> for DialogOverlayComponent {
+    fn render(
+        &self,
+        frame: &mut UiFrame<'_>,
+        area: Rect,
+        _ctx: &ComponentContext,
+        _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
         if !self.visible || area.width == 0 || area.height == 0 {
             return;
         }
@@ -54,9 +58,27 @@ impl Component for DialogOverlayComponent {
         frame.render_widget(paragraph, rect);
     }
 
-    fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
-        self.handle_click_outside(event, self.area)
+    fn handle_events(
+        &mut self,
+        event: &Event,
+        ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        if self.handle_click_outside(event, ctx.screen_area().unwrap_or_default()) {
+            EventResult::Consumed
+        } else {
+            EventResult::Ignored
+        }
     }
+
+    fn update(
+        &mut self,
+        _action: TermWmAction,
+        _ctx: &ComponentContext,
+        _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+    ) {
+    }
+
+    fn destroy(&mut self) {}
 }
 
 impl DialogOverlayComponent {
@@ -70,7 +92,6 @@ impl DialogOverlayComponent {
             bg: term_wm_core::theme::NOIR.dialog_bg,
             dim_backdrop: false,
             auto_close_on_outside_click: false,
-            area: Rect::default(),
         }
     }
 

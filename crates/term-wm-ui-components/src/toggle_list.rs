@@ -1,10 +1,14 @@
+use std::collections::VecDeque;
+
 use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem};
 
+use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext};
 use term_wm_core::ui::UiFrame;
+use term_wm_core::window::WindowKey;
 
 #[derive(Clone)]
 pub struct ToggleItem {
@@ -19,8 +23,14 @@ pub struct ToggleListComponent {
     title: String,
 }
 
-impl Component for ToggleListComponent {
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
+impl Component<TermWmAction> for ToggleListComponent {
+    fn render(
+        &self,
+        frame: &mut UiFrame<'_>,
+        area: Rect,
+        ctx: &ComponentContext,
+        _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
         let block = if ctx.focused() {
             Block::default()
                 .borders(Borders::ALL)
@@ -69,41 +79,60 @@ impl Component for ToggleListComponent {
         frame.render_widget(list, inner);
     }
 
-    fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
+    fn handle_events(
+        &mut self,
+        event: &Event,
+        _ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
         match event {
             Event::Key(key) => {
                 let kb = term_wm_core::keybindings::KeyBindings::default();
-                if kb.matches(term_wm_core::keybindings::Action::MenuUp, key)
-                    || kb.matches(term_wm_core::keybindings::Action::MenuPrev, key)
+                if kb.matches(TermWmAction::MenuUp, key) || kb.matches(TermWmAction::MenuPrev, key)
                 {
-                    self.bump_selection(-1);
-                    true
-                } else if kb.matches(term_wm_core::keybindings::Action::MenuDown, key)
-                    || kb.matches(term_wm_core::keybindings::Action::MenuNext, key)
+                    EventResult::Action(TermWmAction::MenuUp)
+                } else if kb.matches(TermWmAction::MenuDown, key)
+                    || kb.matches(TermWmAction::MenuNext, key)
                 {
-                    self.bump_selection(1);
-                    true
-                } else if kb.matches(term_wm_core::keybindings::Action::ScrollPageUp, key) {
-                    self.bump_selection(-5);
-                    true
-                } else if kb.matches(term_wm_core::keybindings::Action::ScrollPageDown, key) {
-                    self.bump_selection(5);
-                    true
-                } else if kb.matches(term_wm_core::keybindings::Action::ScrollHome, key) {
-                    self.selected = 0;
-                    true
-                } else if kb.matches(term_wm_core::keybindings::Action::ScrollEnd, key) {
-                    if !self.items.is_empty() {
-                        self.selected = self.items.len() - 1;
-                    }
-                    true
-                } else if kb.matches(term_wm_core::keybindings::Action::ToggleSelection, key) {
-                    self.toggle_selected()
+                    EventResult::Action(TermWmAction::MenuDown)
+                } else if kb.matches(TermWmAction::ScrollPageUp, key) {
+                    EventResult::Action(TermWmAction::ScrollPageUp)
+                } else if kb.matches(TermWmAction::ScrollPageDown, key) {
+                    EventResult::Action(TermWmAction::ScrollPageDown)
+                } else if kb.matches(TermWmAction::ScrollHome, key) {
+                    EventResult::Action(TermWmAction::ScrollHome)
+                } else if kb.matches(TermWmAction::ScrollEnd, key) {
+                    EventResult::Action(TermWmAction::ScrollEnd)
+                } else if kb.matches(TermWmAction::ToggleSelection, key) {
+                    EventResult::Action(TermWmAction::ToggleSelection)
                 } else {
-                    false
+                    EventResult::Ignored
                 }
             }
-            _ => false,
+            _ => EventResult::Ignored,
+        }
+    }
+
+    fn update(
+        &mut self,
+        action: TermWmAction,
+        _ctx: &ComponentContext,
+        _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+    ) {
+        match action {
+            TermWmAction::MenuUp | TermWmAction::MenuPrev => self.bump_selection(-1),
+            TermWmAction::MenuDown | TermWmAction::MenuNext => self.bump_selection(1),
+            TermWmAction::ScrollPageUp => self.bump_selection(-5),
+            TermWmAction::ScrollPageDown => self.bump_selection(5),
+            TermWmAction::ScrollHome => self.selected = 0,
+            TermWmAction::ScrollEnd => {
+                if !self.items.is_empty() {
+                    self.selected = self.items.len() - 1;
+                }
+            }
+            TermWmAction::ToggleSelection => {
+                self.toggle_selected();
+            }
+            _ => {}
         }
     }
 }
@@ -169,6 +198,8 @@ impl ToggleListComponent {
 mod tests {
     use super::*;
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    use std::collections::VecDeque;
+    use term_wm_core::actions::EventResult;
     use term_wm_core::components::Component;
 
     fn make_items(n: usize) -> Vec<ToggleItem> {
@@ -179,6 +210,12 @@ mod tests {
                 checked: i % 2 == 0,
             })
             .collect()
+    }
+
+    fn dispatch(t: &mut ToggleListComponent, event: &Event, ctx: &ComponentContext) {
+        if let EventResult::Action(action) = t.handle_events(event, ctx) {
+            t.update(action, ctx, &mut VecDeque::new());
+        }
     }
 
     #[test]
@@ -203,17 +240,20 @@ mod tests {
         let mut t = ToggleListComponent::new("s");
         t.set_items(make_items(5));
         let ctx = ComponentContext::new(true);
-        t.handle_event(
+        dispatch(
+            &mut t,
             &Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
             &ctx,
         );
         assert_eq!(t.selected(), 1);
-        t.handle_event(
+        dispatch(
+            &mut t,
             &Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE)),
             &ctx,
         );
         assert_eq!(t.selected(), 0);
-        t.handle_event(
+        dispatch(
+            &mut t,
             &Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)),
             &ctx,
         );

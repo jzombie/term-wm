@@ -1,13 +1,16 @@
+use std::collections::VecDeque;
+
 use crossterm::event::{Event, MouseEventKind};
 use ratatui::{layout::Rect, style::Style};
 
 use term_wm_core::{
+    actions::{EventResult, TermWmAction},
     bottom_panel_trait::BottomPanel as BottomPanelTrait,
     components::{Component, ComponentContext},
-    keybindings::Action,
     layout::rect_contains,
     power_profile::PowerProfile,
     ui::{UiFrame, safe_set_string, truncate_to_width},
+    window::WindowKey,
 };
 
 pub struct WmBottomPanelComponent {
@@ -15,8 +18,8 @@ pub struct WmBottomPanelComponent {
     app_name: String,
     app_version: String,
     hostname: Option<String>,
-    keybinding_hints: Vec<(Action, Vec<String>)>,
-    hint_rects: Vec<(Rect, Action)>,
+    keybinding_hints: Vec<(TermWmAction, Vec<String>)>,
+    hint_rects: Vec<(Rect, TermWmAction)>,
     power_profile: PowerProfile,
 }
 
@@ -45,11 +48,11 @@ impl WmBottomPanelComponent {
         self.hostname = Some(hostname.to_string());
     }
 
-    pub fn set_keybinding_hints(&mut self, hints: Vec<(Action, Vec<String>)>) {
+    pub fn set_keybinding_hints(&mut self, hints: Vec<(TermWmAction, Vec<String>)>) {
         self.keybinding_hints = hints;
     }
 
-    pub fn keybinding_hints(&self) -> &[(Action, Vec<String>)] {
+    pub fn keybinding_hints(&self) -> &[(TermWmAction, Vec<String>)] {
         &self.keybinding_hints
     }
 
@@ -176,7 +179,7 @@ impl WmBottomPanelComponent {
                             width: available_w,
                             height: 1,
                         },
-                        *action,
+                        action.clone(),
                     ));
                     break;
                 }
@@ -188,7 +191,7 @@ impl WmBottomPanelComponent {
                         width: entry_width,
                         height: 1,
                     },
-                    *action,
+                    action.clone(),
                 ));
 
                 safe_set_string(buffer, bounds, cursor_x, area.y, &combo_str, combo_style);
@@ -235,7 +238,7 @@ impl WmBottomPanelComponent {
         }
     }
 
-    pub fn hit_test_hint(&self, event: &Event) -> Option<Action> {
+    pub fn hit_test_hint(&self, event: &Event) -> Option<TermWmAction> {
         let Event::Mouse(mouse) = event else {
             return None;
         };
@@ -244,7 +247,7 @@ impl WmBottomPanelComponent {
         }
         for (rect, action) in &self.hint_rects {
             if rect_contains(*rect, mouse.column, mouse.row) {
-                return Some(*action);
+                return Some(action.clone());
             }
         }
         None
@@ -260,11 +263,11 @@ impl BottomPanelTrait for WmBottomPanelComponent {
         self.area()
     }
 
-    fn set_keybinding_hints(&mut self, hints: Vec<(Action, Vec<String>)>) {
+    fn set_keybinding_hints(&mut self, hints: Vec<(TermWmAction, Vec<String>)>) {
         self.set_keybinding_hints(hints);
     }
 
-    fn keybinding_hints(&self) -> &[(Action, Vec<String>)] {
+    fn keybinding_hints(&self) -> &[(TermWmAction, Vec<String>)] {
         self.keybinding_hints()
     }
 
@@ -281,7 +284,7 @@ impl BottomPanelTrait for WmBottomPanelComponent {
         self.render(frame, active, theme);
     }
 
-    fn hit_test_hint(&self, event: &Event) -> Option<Action> {
+    fn hit_test_hint(&self, event: &Event) -> Option<TermWmAction> {
         self.hit_test_hint(event)
     }
 
@@ -290,12 +293,33 @@ impl BottomPanelTrait for WmBottomPanelComponent {
     }
 }
 
-impl Component for WmBottomPanelComponent {
-    fn render(&mut self, _frame: &mut UiFrame<'_>, _area: Rect, _ctx: &ComponentContext) {}
-
-    fn handle_event(&mut self, _event: &Event, _ctx: &ComponentContext) -> bool {
-        false
+impl Component<TermWmAction> for WmBottomPanelComponent {
+    fn render(
+        &self,
+        _frame: &mut UiFrame<'_>,
+        _area: Rect,
+        _ctx: &ComponentContext,
+        _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
     }
+
+    fn handle_events(
+        &mut self,
+        _event: &Event,
+        _ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        EventResult::Ignored
+    }
+
+    fn update(
+        &mut self,
+        _action: TermWmAction,
+        _ctx: &ComponentContext,
+        _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+    ) {
+    }
+
+    fn destroy(&mut self) {}
 }
 
 impl Default for WmBottomPanelComponent {

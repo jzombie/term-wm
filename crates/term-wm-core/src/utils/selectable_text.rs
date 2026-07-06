@@ -93,10 +93,15 @@ pub trait SelectableSurface {
 /// coordinates and auto-scroll while selecting.
 pub trait SelectionViewport {
     /// Rectangle describing the currently rendered area for the component.
-    fn selection_viewport(&self) -> Rect;
+    fn selection_viewport(&self, area: Rect) -> Rect;
 
     /// Map the provided screen-space point to a logical text position.
-    fn logical_position_from_point(&mut self, column: u16, row: u16) -> Option<LogicalPosition>;
+    fn logical_position_from_point(
+        &mut self,
+        area: Rect,
+        column: u16,
+        row: u16,
+    ) -> Option<LogicalPosition>;
 
     /// Scroll vertically by `delta` logical rows. Positive values move down.
     fn scroll_selection_vertical(&mut self, delta: isize);
@@ -110,11 +115,10 @@ pub trait SelectionViewport {
         (0, 0)
     }
 
-    /// Logical content size (width, height) backing the viewport. Defaults to
-    /// the viewport dimensions for non-scrollable surfaces.
+    /// Logical content size (width, height) backing the viewport. Override in
+    /// impl to provide actual content dimensions; default returns zero.
     fn selection_content_size(&self) -> (usize, usize) {
-        let area = self.selection_viewport();
-        (area.width as usize, area.height as usize)
+        (0, 0)
     }
 }
 
@@ -292,18 +296,18 @@ pub fn handle_selection_mouse<H: SelectionHost>(
     host: &mut H,
     enabled: bool,
     mouse: &MouseEvent,
+    area: Rect,
 ) -> bool {
     if !enabled {
         return false;
     }
-    let area = host.selection_viewport();
     if area.width == 0 || area.height == 0 {
         return false;
     }
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {
             if rect_contains(area, mouse.column, mouse.row)
-                && let Some(pos) = host.logical_position_from_point(mouse.column, mouse.row)
+                && let Some(pos) = host.logical_position_from_point(area, mouse.column, mouse.row)
             {
                 let selection = host.selection_controller();
                 selection.set_pointer(mouse.column, mouse.row);
@@ -317,7 +321,7 @@ pub fn handle_selection_mouse<H: SelectionHost>(
                 if !selection.button_down() {
                     return false;
                 }
-                if let Some(pos) = host.logical_position_from_point(mouse.column, mouse.row) {
+                if let Some(pos) = host.logical_position_from_point(area, mouse.column, mouse.row) {
                     let selection = host.selection_controller();
                     selection.activate_drag(pos);
                     selection.set_pointer(mouse.column, mouse.row);
@@ -328,8 +332,8 @@ pub fn handle_selection_mouse<H: SelectionHost>(
                 selection.set_pointer(mouse.column, mouse.row);
                 selection.set_button_down(true);
             }
-            auto_scroll_selection(host, mouse.column, mouse.row);
-            if let Some(pos) = host.logical_position_from_point(mouse.column, mouse.row) {
+            auto_scroll_selection(host, area, mouse.column, mouse.row);
+            if let Some(pos) = host.logical_position_from_point(area, mouse.column, mouse.row) {
                 host.selection_controller().update_drag(pos);
             }
             true
@@ -367,8 +371,8 @@ pub fn handle_selection_mouse<H: SelectionHost>(
                     selection.set_pointer(mouse.column, mouse.row);
                     selection.set_button_down(true);
                 }
-                auto_scroll_selection(host, mouse.column, mouse.row);
-                if let Some(pos) = host.logical_position_from_point(mouse.column, mouse.row) {
+                auto_scroll_selection(host, area, mouse.column, mouse.row);
+                if let Some(pos) = host.logical_position_from_point(area, mouse.column, mouse.row) {
                     host.selection_controller().update_drag(pos);
                 }
                 return true;
@@ -383,8 +387,12 @@ pub fn handle_selection_mouse<H: SelectionHost>(
     }
 }
 
-fn auto_scroll_selection<V: SelectionViewport>(viewport: &mut V, column: u16, row: u16) -> bool {
-    let area = viewport.selection_viewport();
+fn auto_scroll_selection<V: SelectionViewport>(
+    viewport: &mut V,
+    area: Rect,
+    column: u16,
+    row: u16,
+) -> bool {
     if area.width == 0 || area.height == 0 {
         return false;
     }
@@ -469,7 +477,7 @@ fn auto_scroll_selection<V: SelectionViewport>(viewport: &mut V, column: u16, ro
 
 /// Continue scrolling/selection updates using the last drag pointer, even when
 /// no new mouse events arrive (e.g., cursor held outside the viewport).
-pub fn maintain_selection_drag<H: SelectionHost>(host: &mut H) -> bool {
+pub fn maintain_selection_drag<H: SelectionHost>(host: &mut H, area: Rect) -> bool {
     let pointer = {
         let selection = host.selection_controller();
         if !selection.is_dragging() {
@@ -483,7 +491,6 @@ pub fn maintain_selection_drag<H: SelectionHost>(host: &mut H) -> bool {
         return false;
     };
 
-    let area = host.selection_viewport();
     let inside_viewport = rect_contains(area, column, row);
     let timeout = drag_idle_timeout(area, column, row);
     let stale = {
@@ -502,10 +509,10 @@ pub fn maintain_selection_drag<H: SelectionHost>(host: &mut H) -> bool {
         return false;
     }
 
-    maintain_selection_drag_active(host)
+    maintain_selection_drag_active(host, area)
 }
 
-fn maintain_selection_drag_active<H: SelectionHost>(host: &mut H) -> bool {
+fn maintain_selection_drag_active<H: SelectionHost>(host: &mut H, area: Rect) -> bool {
     if !host.selection_controller().is_dragging() {
         return false;
     }
@@ -516,8 +523,8 @@ fn maintain_selection_drag_active<H: SelectionHost>(host: &mut H) -> bool {
         return false;
     };
 
-    let mut changed = auto_scroll_selection(host, column, row);
-    if let Some(pos) = host.logical_position_from_point(column, row) {
+    let mut changed = auto_scroll_selection(host, area, column, row);
+    if let Some(pos) = host.logical_position_from_point(area, column, row) {
         host.selection_controller().update_drag(pos);
         changed = true;
     }
@@ -591,8 +598,8 @@ mod tests {
     }
 
     impl SelectionViewport for TestHost {
-        fn selection_viewport(&self) -> Rect {
-            self.viewport
+        fn selection_viewport(&self, area: Rect) -> Rect {
+            area
         }
 
         fn selection_viewport_offsets(&self) -> (usize, usize) {
@@ -612,11 +619,12 @@ mod tests {
 
         fn logical_position_from_point(
             &mut self,
+            area: Rect,
             column: u16,
             row: u16,
         ) -> Option<LogicalPosition> {
-            let col = column.saturating_sub(self.viewport.x) as usize;
-            let row = row.saturating_sub(self.viewport.y) as usize;
+            let col = column.saturating_sub(area.x) as usize;
+            let row = row.saturating_sub(area.y) as usize;
             Some(LogicalPosition::new(row, col))
         }
 
@@ -688,11 +696,13 @@ mod tests {
     #[test]
     fn mouse_up_clears_button_state() {
         let mut host = TestHost::new(Rect::new(0, 0, 10, 5));
+        let area = Rect::new(0, 0, 10, 5);
         // Down records position but doesn't consume — clicks pass through
         assert!(!handle_selection_mouse(
             &mut host,
             true,
-            &mouse(1, 1, MouseEventKind::Down(MouseButton::Left))
+            &mouse(1, 1, MouseEventKind::Down(MouseButton::Left)),
+            area,
         ));
         assert!(!host.controller().is_dragging());
         assert!(host.controller().button_down());
@@ -701,7 +711,8 @@ mod tests {
         assert!(handle_selection_mouse(
             &mut host,
             true,
-            &mouse(3, 1, MouseEventKind::Drag(MouseButton::Left))
+            &mouse(3, 1, MouseEventKind::Drag(MouseButton::Left)),
+            area,
         ));
         assert!(host.controller().is_dragging());
         assert!(host.controller().button_down());
@@ -710,7 +721,8 @@ mod tests {
         assert!(handle_selection_mouse(
             &mut host,
             true,
-            &mouse(3, 1, MouseEventKind::Up(MouseButton::Left))
+            &mouse(3, 1, MouseEventKind::Up(MouseButton::Left)),
+            area,
         ));
         assert!(!host.controller().is_dragging());
         assert!(!host.controller().button_down());
@@ -719,11 +731,13 @@ mod tests {
     #[test]
     fn moved_event_treats_drag_as_complete() {
         let mut host = TestHost::new(Rect::new(0, 0, 10, 5));
+        let area = Rect::new(0, 0, 10, 5);
         // Down records anchor but doesn't consume
         handle_selection_mouse(
             &mut host,
             true,
             &mouse(2, 2, MouseEventKind::Down(MouseButton::Left)),
+            area,
         );
         assert!(host.controller().button_down());
         assert!(!host.controller().is_dragging());
@@ -732,7 +746,8 @@ mod tests {
         assert!(handle_selection_mouse(
             &mut host,
             true,
-            &mouse(4, 2, MouseEventKind::Drag(MouseButton::Left))
+            &mouse(4, 2, MouseEventKind::Drag(MouseButton::Left)),
+            area,
         ));
         assert!(host.controller().is_dragging());
         assert!(host.controller().button_down());
@@ -740,7 +755,7 @@ mod tests {
         // Moved with our internal button-down state should be treated like
         // a Drag (do not finalize). Ensure drag remains active.
         let continued =
-            handle_selection_mouse(&mut host, true, &mouse(6, 2, MouseEventKind::Moved));
+            handle_selection_mouse(&mut host, true, &mouse(6, 2, MouseEventKind::Moved), area);
         assert!(continued);
         assert!(host.controller().is_dragging());
         assert!(host.controller().button_down());
@@ -749,21 +764,24 @@ mod tests {
     #[test]
     fn maintain_stops_when_button_released() {
         let mut host = TestHost::new(Rect::new(0, 0, 10, 5));
+        let area = Rect::new(0, 0, 10, 5);
         // Down + Drag to activate selection
         handle_selection_mouse(
             &mut host,
             true,
             &mouse(1, 1, MouseEventKind::Down(MouseButton::Left)),
+            area,
         );
         assert!(handle_selection_mouse(
             &mut host,
             true,
-            &mouse(3, 1, MouseEventKind::Drag(MouseButton::Left))
+            &mouse(3, 1, MouseEventKind::Drag(MouseButton::Left)),
+            area,
         ));
         host.selection_controller().set_pointer(0, 0);
         host.selection_controller().set_button_down(false);
 
-        let changed = maintain_selection_drag(&mut host);
+        let changed = maintain_selection_drag(&mut host, area);
         assert!(!changed);
         assert!(!host.controller().is_dragging());
         assert!(!host.controller().button_down());
@@ -772,22 +790,25 @@ mod tests {
     #[test]
     fn maintain_scrolls_when_button_down() {
         let mut host = TestHost::new(Rect::new(5, 5, 10, 5));
+        let area = Rect::new(5, 5, 10, 5);
         // Down + Drag to activate selection
         handle_selection_mouse(
             &mut host,
             true,
             &mouse(6, 6, MouseEventKind::Down(MouseButton::Left)),
+            area,
         );
         assert!(handle_selection_mouse(
             &mut host,
             true,
-            &mouse(8, 6, MouseEventKind::Drag(MouseButton::Left))
+            &mouse(8, 6, MouseEventKind::Drag(MouseButton::Left)),
+            area,
         ));
         // Simulate pointer beyond the right edge to trigger horizontal scrolling.
         host.selection_controller().set_pointer(20, 6);
         host.selection_controller().set_button_down(true);
 
-        let changed = maintain_selection_drag(&mut host);
+        let changed = maintain_selection_drag(&mut host, area);
         assert!(changed);
         assert!(host.controller().is_dragging());
         assert!(host.controller().button_down());

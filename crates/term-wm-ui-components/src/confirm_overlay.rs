@@ -3,40 +3,58 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Paragraph, Wrap};
 
+use std::cell::Cell;
+use std::collections::VecDeque;
+
 use crate::dialog_overlay::DialogOverlayComponent;
-use term_wm_core::components::{Component, ComponentContext, ConfirmAction, Overlay};
+use term_wm_core::actions::{ConfirmAction, EventResult, TermWmAction};
+use term_wm_core::components::{Component, ComponentContext, Overlay};
 use term_wm_core::layout::rect_contains;
 use term_wm_core::ui::{UiFrame, safe_set_string};
+use term_wm_core::window::WindowKey;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ConfirmOverlayComponent {
     dialog: DialogOverlayComponent,
     visible: bool,
     body: String,
     selected_confirm: bool,
-    cancel_rect: Option<Rect>,
-    confirm_rect: Option<Rect>,
-    area: Rect,
+    cancel_rect: Cell<Option<Rect>>,
+    confirm_rect: Cell<Option<Rect>>,
 }
 
-impl Component for ConfirmOverlayComponent {
-    fn resize(&mut self, area: Rect, _ctx: &ComponentContext) {
-        self.area = area;
+impl Default for ConfirmOverlayComponent {
+    fn default() -> Self {
+        Self {
+            dialog: DialogOverlayComponent::new(),
+            visible: false,
+            body: String::new(),
+            selected_confirm: false,
+            cancel_rect: Cell::new(None),
+            confirm_rect: Cell::new(None),
+        }
     }
+}
 
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
-        self.area = area;
+impl Component<TermWmAction> for ConfirmOverlayComponent {
+    fn render(
+        &self,
+        frame: &mut UiFrame<'_>,
+        area: Rect,
+        ctx: &ComponentContext,
+        registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
         if !self.visible || area.width == 0 || area.height == 0 {
             return;
         }
         let dialog_ctx = ctx.with_overlay(true).with_focus(true);
-        self.dialog.render(frame, area, &dialog_ctx);
+        self.dialog.render(frame, area, &dialog_ctx, registry);
         let rect = self.dialog.rect_for(area);
         if rect.width < 3 || rect.height < 3 {
             return;
         }
-        self.cancel_rect = None;
-        self.confirm_rect = None;
+        self.cancel_rect.set(None);
+        self.confirm_rect.set(None);
         let inner = Rect {
             x: rect.x.saturating_add(1),
             y: rect.y.saturating_add(1),
@@ -91,10 +109,8 @@ impl Component for ConfirmOverlayComponent {
             .bg(ctx.config().theme.panel_bg);
 
         let (cancel_style, confirm_style) = if self.selected_confirm {
-            // confirm is selected
             (unselected_style, selected_style)
         } else {
-            // cancel is selected
             (selected_style, unselected_style)
         };
         let total_width = cancel.len() + 1 + confirm.len();
@@ -104,41 +120,54 @@ impl Component for ConfirmOverlayComponent {
         safe_set_string(buffer, bounds, start_x, button_y, cancel, cancel_style);
         let confirm_x = start_x.saturating_add(cancel.len() as u16 + 1);
         safe_set_string(buffer, bounds, confirm_x, button_y, confirm, confirm_style);
-        self.cancel_rect = Some(Rect {
+        self.cancel_rect.set(Some(Rect {
             x: start_x,
             y: button_y,
             width: cancel.len() as u16,
             height: 1,
-        });
-        self.confirm_rect = Some(Rect {
+        }));
+        self.confirm_rect.set(Some(Rect {
             x: confirm_x,
             y: button_y,
             width: confirm.len() as u16,
             height: 1,
-        });
+        }));
     }
 
-    fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
+    fn handle_events(
+        &mut self,
+        event: &Event,
+        _ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
         if self.handle_confirm_event(event).is_some() {
-            return true;
+            return EventResult::Consumed;
         }
         let Event::Key(key) = event else {
-            return false;
+            return EventResult::Ignored;
         };
         let kb = term_wm_core::keybindings::KeyBindings::default();
-        kb.matches(term_wm_core::keybindings::Action::ConfirmToggle, key)
-            || kb.matches(term_wm_core::keybindings::Action::ConfirmLeft, key)
-            || kb.matches(term_wm_core::keybindings::Action::ConfirmRight, key)
+        if kb.matches(TermWmAction::ConfirmToggle, key)
+            || kb.matches(TermWmAction::ConfirmLeft, key)
+            || kb.matches(TermWmAction::ConfirmRight, key)
+        {
+            EventResult::Consumed
+        } else {
+            EventResult::Ignored
+        }
     }
+
+    fn update(
+        &mut self,
+        _action: TermWmAction,
+        _ctx: &ComponentContext,
+        _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+    ) {
+    }
+
+    fn destroy(&mut self) {}
 }
 
-impl Overlay for ConfirmOverlayComponent {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
+impl Overlay<TermWmAction> for ConfirmOverlayComponent {
     fn visible(&self) -> bool {
         self.visible
     }
@@ -157,9 +186,8 @@ impl ConfirmOverlayComponent {
             visible: false,
             body: String::new(),
             selected_confirm: false,
-            cancel_rect: None,
-            confirm_rect: None,
-            area: Rect::default(),
+            cancel_rect: Cell::new(None),
+            confirm_rect: Cell::new(None),
         }
     }
 
@@ -192,12 +220,14 @@ impl ConfirmOverlayComponent {
             Event::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::Down(_)) => {
                 if self
                     .confirm_rect
+                    .get()
                     .is_some_and(|rect| rect_contains(rect, mouse.column, mouse.row))
                 {
                     return Some(ConfirmAction::Confirm);
                 }
                 if self
                     .cancel_rect
+                    .get()
                     .is_some_and(|rect| rect_contains(rect, mouse.column, mouse.row))
                 {
                     return Some(ConfirmAction::Cancel);
@@ -206,22 +236,22 @@ impl ConfirmOverlayComponent {
             }
             Event::Key(key) => {
                 let kb = term_wm_core::keybindings::KeyBindings::default();
-                if kb.matches(term_wm_core::keybindings::Action::ConfirmToggle, key) {
+                if kb.matches(TermWmAction::ConfirmToggle, key) {
                     self.selected_confirm = !self.selected_confirm;
                     None
-                } else if kb.matches(term_wm_core::keybindings::Action::ConfirmLeft, key) {
+                } else if kb.matches(TermWmAction::ConfirmLeft, key) {
                     self.selected_confirm = false;
                     None
-                } else if kb.matches(term_wm_core::keybindings::Action::ConfirmRight, key) {
+                } else if kb.matches(TermWmAction::ConfirmRight, key) {
                     self.selected_confirm = true;
                     None
-                } else if kb.matches(term_wm_core::keybindings::Action::ConfirmAccept, key) {
+                } else if kb.matches(TermWmAction::ConfirmAccept, key) {
                     if self.selected_confirm {
                         Some(ConfirmAction::Confirm)
                     } else {
                         Some(ConfirmAction::Cancel)
                     }
-                } else if kb.matches(term_wm_core::keybindings::Action::ConfirmCancel, key) {
+                } else if kb.matches(TermWmAction::ConfirmCancel, key) {
                     Some(ConfirmAction::Cancel)
                 } else {
                     None
@@ -239,7 +269,7 @@ mod tests {
         Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
 
-    fn ev_for(action: term_wm_core::keybindings::Action) -> Event {
+    fn ev_for(action: TermWmAction) -> Event {
         use crossterm::event::KeyEvent;
         use term_wm_core::keybindings::KeyBindings;
         if let Some(combo) = KeyBindings::default().first_combo(action) {
@@ -257,40 +287,40 @@ mod tests {
     fn handle_event_recognizes_keys() {
         let mut o = ConfirmOverlayComponent::new();
         let ctx = ComponentContext::new(true);
-        assert!(o.handle_event(
-            &ev_for(term_wm_core::keybindings::Action::ConfirmAccept),
-            &ctx
-        ));
-        assert!(o.handle_event(
-            &ev_for(term_wm_core::keybindings::Action::ConfirmAccept),
-            &ctx
-        ));
-        assert!(o.handle_event(
-            &ev_for(term_wm_core::keybindings::Action::ConfirmCancel),
-            &ctx
-        ));
-        assert!(o.handle_event(
-            &ev_for(term_wm_core::keybindings::Action::ConfirmToggle),
-            &ctx
-        ));
+        assert!(
+            !o.handle_events(&ev_for(TermWmAction::ConfirmAccept), &ctx)
+                .is_ignored()
+        );
+        assert!(
+            !o.handle_events(&ev_for(TermWmAction::ConfirmAccept), &ctx)
+                .is_ignored()
+        );
+        assert!(
+            !o.handle_events(&ev_for(TermWmAction::ConfirmCancel), &ctx)
+                .is_ignored()
+        );
+        assert!(
+            !o.handle_events(&ev_for(TermWmAction::ConfirmToggle), &ctx)
+                .is_ignored()
+        );
     }
 
     #[test]
     fn handle_confirm_event_mouse_and_keys() {
         let mut o = ConfirmOverlayComponent::new();
         // set rects so mouse tests work
-        o.confirm_rect = Some(ratatui::layout::Rect {
+        o.confirm_rect.set(Some(ratatui::layout::Rect {
             x: 2,
             y: 3,
             width: 4,
             height: 1,
-        });
-        o.cancel_rect = Some(ratatui::layout::Rect {
+        }));
+        o.cancel_rect.set(Some(ratatui::layout::Rect {
             x: 0,
             y: 3,
             width: 2,
             height: 1,
-        });
+        }));
 
         let m = MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),

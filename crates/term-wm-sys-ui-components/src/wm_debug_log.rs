@@ -1,3 +1,6 @@
+// TODO: Look into https://crates.io/crates/tui-logger
+
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -6,10 +9,12 @@ use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Text};
 
+use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::debug_event_flags;
 use term_wm_core::ui::UiFrame;
 use term_wm_core::utils::ansi::strip_ansi_escapes;
+use term_wm_core::window::WindowKey;
 use term_wm_ui_components::{ScrollViewComponent, TextRendererComponent};
 
 const DEFAULT_MAX_LINES: usize = 2000;
@@ -175,13 +180,19 @@ impl Write for DebugLogWriter {
 pub struct WmDebugLogComponent {
     handle: DebugLogHandle,
     scroll_view: ScrollViewComponent<TextRendererComponent>,
-    follow_tail: bool,
-    last_total: usize,
-    last_view: usize,
+    follow_tail: Cell<bool>,
+    last_total: Cell<usize>,
+    last_view: Cell<usize>,
 }
 
-impl Component for WmDebugLogComponent {
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
+impl Component<TermWmAction> for WmDebugLogComponent {
+    fn render(
+        &self,
+        frame: &mut UiFrame<'_>,
+        area: Rect,
+        ctx: &ComponentContext,
+        registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -192,35 +203,50 @@ impl Component for WmDebugLogComponent {
         };
         let total = lines.len();
         let view = area.height as usize;
-        self.last_total = total;
-        self.last_view = view;
+        self.last_total.set(total);
+        self.last_view.set(view);
 
         let text = Text::from(lines.into_iter().map(Line::from).collect::<Vec<_>>());
-        self.scroll_view.content.set_text(text);
-        self.scroll_view.content.set_wrap(false);
-        if self.follow_tail {
+        {
+            let mut content = self.scroll_view.content.borrow_mut();
+            content.set_text(text);
+            content.set_wrap(false);
+        }
+        if self.follow_tail.get() {
             self.scroll_view
                 .viewport_handle()
                 .scroll_vertical_to(usize::MAX);
         }
-        self.follow_tail = self.is_at_bottom();
+        self.follow_tail.set(self.is_at_bottom());
 
-        self.scroll_view.render(frame, area, ctx);
+        self.scroll_view.render(frame, area, ctx, registry);
     }
 
-    fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
-        let handled = self.scroll_view.handle_event(event, ctx);
-        if handled {
-            self.follow_tail = self.is_at_bottom();
-        }
-        handled
+    fn handle_events(
+        &mut self,
+        event: &Event,
+        ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        self.scroll_view.handle_events(event, ctx)
     }
+
+    fn update(
+        &mut self,
+        action: TermWmAction,
+        ctx: &ComponentContext,
+        actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+    ) {
+        self.scroll_view.update(action, ctx, actions);
+        self.follow_tail.set(self.is_at_bottom());
+    }
+
+    fn destroy(&mut self) {}
 
     fn selection_status(&self) -> SelectionStatus {
         self.scroll_view.selection_status()
     }
 
-    fn selection_text(&mut self) -> Option<String> {
+    fn selection_text(&self) -> Option<String> {
         self.scroll_view.selection_text()
     }
 }
@@ -236,9 +262,9 @@ impl WmDebugLogComponent {
             Self {
                 handle: handle.clone(),
                 scroll_view: ScrollViewComponent::new(renderer),
-                follow_tail: true,
-                last_total: 0,
-                last_view: 0,
+                follow_tail: Cell::new(true),
+                last_total: Cell::new(0),
+                last_view: Cell::new(0),
             },
             handle,
         )
@@ -249,10 +275,10 @@ impl WmDebugLogComponent {
     }
 
     fn is_at_bottom(&self) -> bool {
-        if self.last_view == 0 {
+        if self.last_view.get() == 0 {
             true
         } else {
-            self.renderer_offset() >= self.last_total.saturating_sub(self.last_view)
+            self.renderer_offset() >= self.last_total.get().saturating_sub(self.last_view.get())
         }
     }
 
@@ -261,7 +287,10 @@ impl WmDebugLogComponent {
     }
 
     pub fn set_selection_enabled(&mut self, enabled: bool) {
-        self.scroll_view.content.set_selection_enabled(enabled);
+        self.scroll_view
+            .content
+            .borrow_mut()
+            .set_selection_enabled(enabled);
     }
 }
 
@@ -316,35 +345,44 @@ mod tests {
         let mut buffer = Buffer::empty(area);
         {
             let mut frame = UiFrame::from_parts(area, &mut buffer);
-            Component::render(&mut comp, &mut frame, area, &ComponentContext::new(true));
+            Component::render(
+                &comp,
+                &mut frame,
+                area,
+                &ComponentContext::new(true),
+                &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+            );
         }
-        let max_off = comp.last_total.saturating_sub(comp.last_view);
+        let ctx = ComponentContext::new(true);
+        let max_off = comp.last_total.get().saturating_sub(comp.last_view.get());
         comp.scroll_view
             .viewport_handle()
             .scroll_vertical_to(max_off);
-        comp.follow_tail = true;
+        comp.follow_tail.set(true);
 
-        Component::handle_event(
-            &mut comp,
-            &Event::Key(crossterm::event::KeyEvent::new(
-                KeyCode::PageUp,
-                crossterm::event::KeyModifiers::NONE,
-            )),
-            &ComponentContext::new(true),
-        );
+        // PageUp: handle_events returns ScrollView action, update processes it
+        let page_up = Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::PageUp,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        let page_up_result = comp.handle_events(&page_up, &ctx);
+        if let term_wm_core::actions::EventResult::Action(action) = page_up_result {
+            comp.update(action, &ctx, &mut VecDeque::new());
+        }
         assert!(comp.renderer_offset() < max_off);
 
+        // ScrollDown mouse event: handle_events returns ScrollView action, update processes it
         let before = comp.renderer_offset();
-        Component::handle_event(
-            &mut comp,
-            &Event::Mouse(MouseEvent {
-                kind: MouseEventKind::ScrollDown,
-                column: 0,
-                row: 0,
-                modifiers: crossterm::event::KeyModifiers::NONE,
-            }),
-            &ComponentContext::new(true),
-        );
+        let scroll_down = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
+        let scroll_result = comp.handle_events(&scroll_down, &ctx);
+        if let term_wm_core::actions::EventResult::Action(action) = scroll_result {
+            comp.update(action, &ctx, &mut VecDeque::new());
+        }
         assert!(comp.renderer_offset() >= before);
     }
 }

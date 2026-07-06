@@ -50,7 +50,7 @@ impl WindowManager {
         )
     }
 
-    pub(super) fn adjust_event_for_window(&self, key: WindowKey, event: &Event) -> Event {
+    pub fn adjust_event_for_window(&self, key: WindowKey, event: &Event) -> Event {
         if let Event::Mouse(mut mouse) = event.clone() {
             let (offset_x, offset_y) = self.window_content_offset(key);
             mouse.column = mouse.column.saturating_add(offset_x);
@@ -61,10 +61,12 @@ impl WindowManager {
         }
     }
 
+    #[cfg(test)]
     pub fn localize_event_to_app(&self, key: WindowKey, event: &Event) -> Option<Event> {
         self.localize_event_content(key, event)
     }
 
+    #[cfg(test)]
     pub fn localize_event(&self, key: WindowKey, event: &Event) -> Option<Event> {
         match event {
             Event::Mouse(mouse) => {

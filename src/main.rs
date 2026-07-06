@@ -1,17 +1,15 @@
-use std::collections::BTreeMap;
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 use crossbeam_channel::Sender;
-use line_ending::LineEnding;
 
+use term_wm::actions::TermWmAction;
 use term_wm::app_context::AppContext;
 use term_wm::components::{Component, MenuOverlay};
 use term_wm::config::WmBuilder;
 use term_wm::io::{
-    RenderTarget,
-    console::ConsoleRenderTarget,
+    ConsoleRenderTarget, RenderTarget,
     unified_event_source::{UnifiedEvent, UnifiedEventSource},
 };
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
@@ -70,7 +68,6 @@ fn main() -> io::Result<()> {
 
 struct App {
     windows: WindowManager,
-    terminals: BTreeMap<WindowKey, ScrollViewComponent<TerminalComponent>>,
     pty_wakeup_tx: Sender<UnifiedEvent>,
     debug_key: Option<WindowKey>,
     debug_visible: bool,
@@ -109,7 +106,7 @@ impl App {
         let config = builder.config().clone();
         let mut raw_menu = term_wm_sys_ui_components::WmMenuOverlay::new();
         raw_menu.set_timeout(config.menu_outline_timeout);
-        let menu_overlay: Box<dyn MenuOverlay<term_wm_core::window::WmMenuAction>> = if embedded {
+        let menu_overlay: Box<dyn MenuOverlay<term_wm_core::actions::TermWmAction>> = if embedded {
             Box::new(term_wm_sys_ui_components::WmMenuOverlay::new())
         } else {
             Box::new(raw_menu)
@@ -120,7 +117,6 @@ impl App {
                 Some(bottom_panel),
                 Some(menu_overlay),
             ),
-            terminals: BTreeMap::new(),
             pty_wakeup_tx,
             debug_key: None,
             debug_visible: false,
@@ -149,18 +145,9 @@ impl App {
                     // Spawn an interactive shell and send the command as input so
                     // that when the command exits the shell remains.
                     let cb = default_shell_command();
-                    if let Err(e) = app.spawn_terminal_with_command(cb) {
+                    if let Err(e) = app.spawn_terminal_with_command(cb, Some(cmd)) {
                         tracing::error!("Window spawn error: {}", e);
                         error_occurred = true;
-                    }
-                    // If spawn succeeded, write the command into the PTY.
-                    if !error_occurred
-                        && let Some(key) = app.terminals.keys().last().copied()
-                        && let Some(ref mut pane) = app.terminals.get_mut(&key)
-                    {
-                        let mut line = cmd;
-                        line.push_str(LineEnding::from_current_platform().as_str());
-                        let _ = pane.content.write_bytes(line.as_bytes());
                     }
                 } else if let Err(e) = app.wm_new_window() {
                     tracing::error!("Window spawn error: {}", e);
@@ -177,41 +164,75 @@ impl App {
         }
 
         if error_occurred {
-            // Debug window already created — include it in enumerate_windows
-            // by ensuring debug_key is set.
+            // Debug window already created
         }
 
         app.open_help_overlay();
         Ok(app)
     }
 
-    fn spawn_terminal_with_command(&mut self, cmd: portable_pty::CommandBuilder) -> io::Result<()> {
+    // TODO: Extract to a reusable place
+    // TODO: Dedupe this and `wm_new_window`
+    fn spawn_terminal_with_command(
+        &mut self,
+        cmd: portable_pty::CommandBuilder,
+        command_to_send: Option<String>,
+    ) -> io::Result<()> {
+        // Configure the terminal BEFORE boxing (type erasure trap)
         let mut pane = TerminalComponent::spawn_default(cmd).map_err(io::Error::other)?;
         pane.set_link_handler_fn(|url| {
             let _ = webbrowser::open(url);
             true
         });
+
+        // Bridge: the status callback needs WindowKey, but create_window()
+        // returns it after the component is boxed. Use Arc<Mutex<Option<WindowKey>>>
+        // as a shared holder — set initially to None, populated after create_window.
+        let key_holder = Arc::new(Mutex::new(None::<WindowKey>));
+        let kh = key_holder.clone();
+        let tx = self.pty_wakeup_tx.clone();
+        pane.set_status_callback(Some(Box::new(move |status| match status {
+            PtyStatus::Wakeup => {
+                if let Ok(guard) = kh.lock()
+                    && let Some(&key) = guard.as_ref()
+                {
+                    let _ = tx.send(UnifiedEvent::PtyWakeup(key));
+                }
+            }
+            PtyStatus::Exited => {
+                if let Ok(guard) = kh.lock()
+                    && let Some(&key) = guard.as_ref()
+                {
+                    let _ = tx.send(UnifiedEvent::AppExited(key));
+                }
+            }
+        })));
         let mut sv = ScrollViewComponent::new(pane);
         sv.set_keyboard_enabled(false);
-        sv.content
-            .set_selection_enabled(self.windows.clipboard_enabled());
-        let key = self.windows.create_window();
-        let tx = self.pty_wakeup_tx.clone();
-        let tx_clone = tx.clone();
-        sv.content
-            .set_status_callback(Some(Box::new(move |status| match status {
-                PtyStatus::Wakeup => {
-                    let _ = tx_clone.send(UnifiedEvent::PtyWakeup(key));
-                }
-                PtyStatus::Exited => {
-                    let _ = tx_clone.send(UnifiedEvent::AppExited(key));
-                }
-            })));
-        self.terminals.insert(key, sv);
+        let key = self.windows.create_window(Box::new(sv));
+
+        // The key is now known — store it so the callback can use it.
+        *key_holder.lock().unwrap() = Some(key);
+
+        // Enable selection for the new terminal.
+        let clipboard_enabled = self.windows.clipboard_enabled();
+        if let Some(comp) = self.windows.component_for_key_mut(key) {
+            comp.set_selection_enabled(clipboard_enabled);
+        }
+
+        // Inject boot-time command via the `paste` trait method.
+        if let Some(line) = command_to_send {
+            let mut line = line;
+            line.push_str(line_ending::LineEnding::from_current_platform().as_str());
+            if let Some(comp) = self.windows.component_for_key_mut(key) {
+                let _ = comp.paste(&line);
+            }
+        }
+
         self.windows.set_focus(key);
         self.windows.tile_window(key);
         self.windows
-            .set_window_title(key, format!("Shell {}", self.terminals.len()));
+            .set_window_title(key, format!("Shell {}", self.windows.window_count()));
         Ok(())
     }
 }
@@ -266,27 +287,42 @@ impl WindowManagerHost for App {
             let _ = webbrowser::open(url);
             true
         });
+        let key_holder = Arc::new(Mutex::new(None::<WindowKey>));
+        let kh = key_holder.clone();
+        let tx = self.pty_wakeup_tx.clone();
+        pane.set_status_callback(Some(Box::new(move |status| match status {
+            PtyStatus::Wakeup => {
+                if let Ok(guard) = kh.lock()
+                    && let Some(&key) = guard.as_ref()
+                {
+                    let _ = tx.send(UnifiedEvent::PtyWakeup(key));
+                }
+            }
+            PtyStatus::Exited => {
+                if let Ok(guard) = kh.lock()
+                    && let Some(&key) = guard.as_ref()
+                {
+                    let _ = tx.send(UnifiedEvent::AppExited(key));
+                }
+            }
+        })));
         let mut sv = ScrollViewComponent::new(pane);
         sv.set_keyboard_enabled(false);
-        sv.content
-            .set_selection_enabled(self.windows.clipboard_enabled());
-        let key = self.windows.create_window();
-        let tx = self.pty_wakeup_tx.clone();
-        let tx_clone = tx.clone();
-        sv.content
-            .set_status_callback(Some(Box::new(move |status| match status {
-                PtyStatus::Wakeup => {
-                    let _ = tx_clone.send(UnifiedEvent::PtyWakeup(key));
-                }
-                PtyStatus::Exited => {
-                    let _ = tx_clone.send(UnifiedEvent::AppExited(key));
-                }
-            })));
-        self.terminals.insert(key, sv);
+        let key = self.windows.create_window(Box::new(sv));
+
+        // The key is now known — store it so the callback can use it.
+        *key_holder.lock().unwrap() = Some(key);
+
+        // Enable selection for the new terminal.
+        let clipboard_enabled = self.windows.clipboard_enabled();
+        if let Some(comp) = self.windows.component_for_key_mut(key) {
+            comp.set_selection_enabled(clipboard_enabled);
+        }
+
         self.windows.set_focus(key);
         self.windows.tile_window(key);
         self.windows
-            .set_window_title(key, format!("Shell {}", self.terminals.len()));
+            .set_window_title(key, format!("Shell {}", self.windows.window_count()));
         Ok(())
     }
 
@@ -295,13 +331,11 @@ impl WindowManagerHost for App {
             self.debug_visible = false;
             return Ok(());
         }
-        if let Some(mut sv) = self.terminals.remove(&key) {
-            sv.content.terminate();
-            if let Some((child, reader_handle)) = sv.content.take_parts() {
-                self.windows
-                    .reaper()
-                    .reap(term_wm::reaper::ZombieChild::new(child, reader_handle));
-            }
+        // Call destroy on the component (kills child process).
+        // The component will be dropped after this, and the OS will
+        // clean up the child process. See also: Reaper for async reaping.
+        if let Some(comp) = self.windows.component_for_key_mut(key) {
+            comp.destroy();
         }
         Ok(())
     }
@@ -309,20 +343,25 @@ impl WindowManagerHost for App {
     fn set_clipboard_enabled(&mut self, _enabled: bool) {}
 
     fn set_window_selection_enabled(&mut self, enabled: bool) {
-        for sv in self.terminals.values_mut() {
-            sv.content.set_selection_enabled(enabled);
+        for key in self.windows.all_window_keys() {
+            if let Some(comp) = self.windows.component_for_key_mut(key) {
+                comp.set_selection_enabled(enabled);
+            }
         }
     }
 }
 
 impl WindowProvider for App {
     fn enumerate_windows(&mut self) -> Vec<WindowKey> {
-        let mut keys: Vec<WindowKey> = self.terminals.keys().copied().collect();
-        if self.debug_visible
-            && let Some(debug_key) = self.debug_key
-        {
-            keys.push(debug_key);
-        }
+        let mut keys = self.windows.all_window_keys();
+        // Filter out system windows that aren't visible
+        keys.retain(|&k| {
+            if self.debug_key == Some(k) {
+                self.debug_visible
+            } else {
+                true
+            }
+        });
         keys
     }
 
@@ -330,16 +369,13 @@ impl WindowProvider for App {
         "all shells exited"
     }
 
-    fn window_component(&mut self, key: WindowKey) -> Option<&mut dyn Component> {
-        if let Some(sv) = self.terminals.get_mut(&key) {
-            return Some(sv as &mut dyn Component);
-        }
-        self.windows.component_for_key(key)
+    fn window_component(&mut self, key: WindowKey) -> Option<&mut dyn Component<TermWmAction>> {
+        self.windows.component_for_key_mut(key)
     }
 
     fn window_pane_title(&mut self, key: WindowKey) -> Option<String> {
-        self.terminals
-            .get_mut(&key)
-            .and_then(|sv| sv.content.take_pending_title())
+        self.windows
+            .component_for_key_mut(key)
+            .and_then(|comp| comp.take_pending_title())
     }
 }

@@ -1,13 +1,16 @@
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::rc::Rc;
 
 use crossterm::event::{Event, MouseEvent, MouseEventKind};
 use ratatui::prelude::Rect;
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 
+use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::component_context::{ViewportHandle, ViewportSharedState};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::ui::UiFrame;
+use term_wm_core::window::WindowKey;
 
 // --- Scroll Logic Helpers (Public API) ---
 
@@ -161,22 +164,20 @@ fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
 
 #[derive(Debug)]
 pub struct ScrollViewComponent<C> {
-    pub content: C,
+    pub content: RefCell<C>,
     shared_state: Rc<RefCell<ViewportSharedState>>,
     v_drag: ScrollbarDrag,
     h_drag: ScrollbarDrag,
-    pub viewport_area: Rect,
     keyboard_enabled: bool,
 }
 
-impl<C: Component> ScrollViewComponent<C> {
+impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
     pub fn new(content: C) -> Self {
         Self {
-            content,
+            content: RefCell::new(content),
             shared_state: Rc::new(RefCell::new(ViewportSharedState::default())),
             v_drag: ScrollbarDrag::new(),
             h_drag: ScrollbarDrag::new(),
-            viewport_area: Rect::default(),
             keyboard_enabled: true,
         }
     }
@@ -191,15 +192,12 @@ impl<C: Component> ScrollViewComponent<C> {
         }
     }
 
-    fn compute_layout(&mut self, area: Rect) -> Rect {
-        // Simple reservation strategy:
-        // Use previous frame's content size to decide on scrollbars.
+    pub(crate) fn compute_layout(&self, area: Rect) -> Rect {
         let state = self.shared_state.borrow();
         let content_w = state.content_width;
         let content_h = state.content_height;
-        drop(state); // Drop borrow
+        drop(state);
 
-        // If we don't know content size yet, give full area.
         if content_w == 0 && content_h == 0 {
             return area;
         }
@@ -217,10 +215,6 @@ impl<C: Component> ScrollViewComponent<C> {
             view_h = view_h.saturating_sub(1);
         }
 
-        // Re-check V if H reduced height?
-        // (If reducing height makes V needed unexpectedly? Unlikely if content_h check used original height.
-        // But if content_h matched exactly, reducing height might trigger wrap... but we use content size from CHILD which is usually absolute).
-
         Rect {
             x: area.x,
             y: area.y,
@@ -228,19 +222,129 @@ impl<C: Component> ScrollViewComponent<C> {
             height: view_h,
         }
     }
-}
 
-impl<C: Component> Component for ScrollViewComponent<C> {
-    fn resize(&mut self, area: Rect, ctx: &ComponentContext) {
-        // Predict layout and resize child
-        let inner = self.compute_layout(area);
-        self.viewport_area = inner;
-        self.content.resize(inner, ctx);
+    fn on_mouse(&mut self, event: &Event, ctx: &ComponentContext) -> EventResult<TermWmAction> {
+        let Event::Mouse(mouse) = event else {
+            return EventResult::Ignored;
+        };
+        let state = self.shared_state.borrow();
+        let content_h = state.content_height;
+        let view_h = state.height;
+        let content_w = state.content_width;
+        let view_w = state.width;
+        drop(state);
+
+        let va = ctx
+            .screen_area()
+            .map(|sa| self.compute_layout(sa))
+            .unwrap_or_default();
+
+        if content_h > view_h {
+            let sb_area = Rect {
+                x: va.x.saturating_add(va.width),
+                y: va.y,
+                width: 1,
+                height: va.height,
+            };
+            if let Some(new_off) =
+                self.v_drag
+                    .handle_mouse(mouse, sb_area, content_h, view_h, ScrollbarAxis::Vertical)
+            {
+                let mut st = self.shared_state.borrow_mut();
+                st.offset_y = new_off;
+                st.pending_offset_y = Some(new_off);
+                return EventResult::Consumed;
+            }
+        }
+
+        if content_w > view_w {
+            let sb_area = Rect {
+                x: va.x,
+                y: va.y.saturating_add(va.height),
+                width: va.width,
+                height: 1,
+            };
+            if let Some(new_off) = self.h_drag.handle_mouse(
+                mouse,
+                sb_area,
+                content_w,
+                view_w,
+                ScrollbarAxis::Horizontal,
+            ) {
+                let mut st = self.shared_state.borrow_mut();
+                st.offset_x = new_off;
+                st.pending_offset_x = Some(new_off);
+                return EventResult::Consumed;
+            }
+        }
+
+        if !ctx.direct_mode() {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    return EventResult::Action(TermWmAction::ScrollView(-3));
+                }
+                MouseEventKind::ScrollDown => {
+                    return EventResult::Action(TermWmAction::ScrollView(3));
+                }
+                _ => {}
+            }
+        }
+
+        let handle = self.viewport_handle();
+        let info = handle.info();
+        let child_ctx = ctx.with_viewport(info, Some(handle));
+        self.content.borrow_mut().handle_events(event, &child_ctx)
     }
 
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
+    fn on_key(&mut self, event: &Event, ctx: &ComponentContext) -> EventResult<TermWmAction> {
+        let handle = self.viewport_handle();
+        let info = handle.info();
+        let child_ctx = ctx.with_viewport(info, Some(handle));
+
+        if self.keyboard_enabled
+            && ctx.focused()
+            && let Event::Key(key) = event
+            && key.kind == crossterm::event::KeyEventKind::Press
+        {
+            use crossterm::event::KeyCode;
+            match key.code {
+                KeyCode::Up => {
+                    return EventResult::Action(TermWmAction::ScrollView(-1));
+                }
+                KeyCode::Down => {
+                    return EventResult::Action(TermWmAction::ScrollView(1));
+                }
+                KeyCode::PageUp => {
+                    let height = self.shared_state.borrow().height as isize;
+                    return EventResult::Action(TermWmAction::ScrollView(-height));
+                }
+                KeyCode::PageDown => {
+                    let height = self.shared_state.borrow().height as isize;
+                    return EventResult::Action(TermWmAction::ScrollView(height));
+                }
+                KeyCode::Home => {
+                    return EventResult::Action(TermWmAction::ScrollToTop);
+                }
+                KeyCode::End => {
+                    return EventResult::Action(TermWmAction::ScrollToBottom);
+                }
+                _ => {}
+            }
+        }
+
+        self.content.borrow_mut().handle_events(event, &child_ctx)
+    }
+}
+
+impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent<C> {
+    fn render(
+        &self,
+        frame: &mut UiFrame<'_>,
+        area: Rect,
+        ctx: &ComponentContext,
+        registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
         if area.width == 0 || area.height == 0 {
-            self.viewport_area = Rect::default();
             return;
         }
 
@@ -248,11 +352,8 @@ impl<C: Component> Component for ScrollViewComponent<C> {
         let mut attempt = 0;
 
         loop {
-            // 1. Compute layout (potentially reserving space for scrollbars)
             let inner_area = self.compute_layout(area);
-            self.viewport_area = inner_area;
 
-            // 2. Update Shared State for this frame's Viewport properties
             {
                 let mut state = self.shared_state.borrow_mut();
                 state.width = inner_area.width as usize;
@@ -272,15 +373,16 @@ impl<C: Component> Component for ScrollViewComponent<C> {
                 }
             }
 
-            // 3. Create context with ViewportHandle
             let handle = self.viewport_handle();
             let info = handle.info();
             let child_ctx = ctx.with_viewport(info, Some(handle));
 
-            // 4. Render Child
-            self.content.render(frame, inner_area, &child_ctx);
+            registry.push_clip(inner_area);
+            self.content
+                .borrow()
+                .render(frame, inner_area, &child_ctx, registry);
+            registry.pop_clip();
 
-            // Retrieve updated state (child might have updated content_size during render)
             let state = self.shared_state.borrow();
             let content_w = state.content_width;
             let content_h = state.content_height;
@@ -292,8 +394,6 @@ impl<C: Component> Component for ScrollViewComponent<C> {
             let has_vertical_reserved = inner_area.width < area.width;
             let needs_horizontal = inner_area.width > 0 && content_w > inner_area.width as usize;
             let has_horizontal_reserved = inner_area.height < area.height;
-
-            // store final values in loop-local variables (use them directly below)
 
             let drop_vertical = has_vertical_reserved && !needs_vertical && area.width > 0;
             let drop_horizontal = has_horizontal_reserved && !needs_horizontal && area.height > 0;
@@ -308,7 +408,6 @@ impl<C: Component> Component for ScrollViewComponent<C> {
                 continue;
             }
 
-            // 5. Render Scrollbars with finalized layout (skip in direct mode)
             if !ctx.direct_mode() {
                 if needs_vertical {
                     let sb_area = Rect {
@@ -349,153 +448,78 @@ impl<C: Component> Component for ScrollViewComponent<C> {
         }
     }
 
-    fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
-        // Handle scrollbar drags interactions first
-        if let Event::Mouse(mouse) = event {
-            let state = self.shared_state.borrow();
-            let content_h = state.content_height;
-            let view_h = state.height;
-            let content_w = state.content_width;
-            let view_w = state.width;
-            drop(state);
-
-            // Vertical Scrollbar
-            if content_h > view_h {
-                // Assumes vertical scrollbar is immediately to the right of viewport
-                let sb_area = Rect {
-                    x: self
-                        .viewport_area
-                        .x
-                        .saturating_add(self.viewport_area.width),
-                    y: self.viewport_area.y,
-                    width: 1,
-                    height: self.viewport_area.height,
-                };
-                if let Some(new_off) = self.v_drag.handle_mouse(
-                    mouse,
-                    sb_area,
-                    content_h,
-                    view_h,
-                    ScrollbarAxis::Vertical,
-                ) {
-                    let mut st = self.shared_state.borrow_mut();
-                    st.offset_y = new_off;
-                    st.pending_offset_y = Some(new_off);
-                    return true;
-                }
-            }
-
-            // Horizontal Scrollbar
-            if content_w > view_w {
-                let sb_area = Rect {
-                    x: self.viewport_area.x,
-                    y: self
-                        .viewport_area
-                        .y
-                        .saturating_add(self.viewport_area.height),
-                    width: self.viewport_area.width,
-                    height: 1,
-                };
-                if let Some(new_off) = self.h_drag.handle_mouse(
-                    mouse,
-                    sb_area,
-                    content_w,
-                    view_w,
-                    ScrollbarAxis::Horizontal,
-                ) {
-                    let mut st = self.shared_state.borrow_mut();
-                    st.offset_x = new_off;
-                    st.pending_offset_x = Some(new_off);
-                    return true;
-                }
-            }
+    fn handle_events(
+        &mut self,
+        event: &Event,
+        ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        match event {
+            Event::Mouse(_) => self.on_mouse(event, ctx),
+            Event::Key(_) => self.on_key(event, ctx),
+            _ => EventResult::Ignored,
         }
+    }
 
-        // Mouse Wheel (Common) — skip in direct mode so scroll passes through
-        // to the terminal component for encoding and forwarding to the PTY app.
-        if !ctx.direct_mode()
-            && let Event::Mouse(mouse) = event
-        {
-            match mouse.kind {
-                MouseEventKind::ScrollUp => {
-                    let mut st = self.shared_state.borrow_mut();
-                    st.offset_y = st.offset_y.saturating_sub(3);
-                    st.pending_offset_y = Some(st.offset_y);
-                    return true;
-                }
-                MouseEventKind::ScrollDown => {
-                    let mut st = self.shared_state.borrow_mut();
+    fn update(
+        &mut self,
+        action: TermWmAction,
+        ctx: &ComponentContext,
+        actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+    ) {
+        match action {
+            TermWmAction::ScrollView(delta) => {
+                let mut st = self.shared_state.borrow_mut();
+                if delta < 0 {
+                    st.offset_y = st.offset_y.saturating_sub(delta.unsigned_abs());
+                } else {
                     let max = st.content_height.saturating_sub(st.height);
-                    st.offset_y = (st.offset_y + 3).min(max);
-                    st.pending_offset_y = Some(st.offset_y);
-                    return true;
+                    st.offset_y = (st.offset_y + delta as usize).min(max);
                 }
-                _ => {}
+                st.pending_offset_y = Some(st.offset_y);
+            }
+            TermWmAction::ScrollToTop => {
+                let mut st = self.shared_state.borrow_mut();
+                st.offset_y = 0;
+                st.pending_offset_y = Some(0);
+            }
+            TermWmAction::ScrollToBottom => {
+                let mut st = self.shared_state.borrow_mut();
+                st.offset_y = st.content_height.saturating_sub(st.height);
+                st.pending_offset_y = Some(st.offset_y);
+            }
+            _ => {
+                let handle = self.viewport_handle();
+                let info = handle.info();
+                let child_ctx = ctx.with_viewport(info, Some(handle));
+                self.content
+                    .borrow_mut()
+                    .update(action, &child_ctx, actions);
             }
         }
+    }
 
-        // Pass to child
-        // Construct child context
-        let handle = self.viewport_handle();
-        let info = handle.info();
-        let child_ctx = ctx.with_viewport(info, Some(handle));
-
-        if self.content.handle_event(event, &child_ctx) {
-            return true;
-        }
-
-        if self.keyboard_enabled
-            && ctx.focused()
-            && let Event::Key(key) = event
-            && key.kind == crossterm::event::KeyEventKind::Press
-        {
-            use crossterm::event::KeyCode;
-            let mut st = self.shared_state.borrow_mut();
-            let max_y = st.content_height.saturating_sub(st.height);
-            match key.code {
-                KeyCode::Up => {
-                    st.offset_y = st.offset_y.saturating_sub(1);
-                    st.pending_offset_y = Some(st.offset_y);
-                    return true;
-                }
-                KeyCode::Down => {
-                    st.offset_y = (st.offset_y + 1).min(max_y);
-                    st.pending_offset_y = Some(st.offset_y);
-                    return true;
-                }
-                KeyCode::PageUp => {
-                    st.offset_y = st.offset_y.saturating_sub(st.height);
-                    st.pending_offset_y = Some(st.offset_y);
-                    return true;
-                }
-                KeyCode::PageDown => {
-                    st.offset_y = (st.offset_y + st.height).min(max_y);
-                    st.pending_offset_y = Some(st.offset_y);
-                    return true;
-                }
-                KeyCode::Home => {
-                    st.offset_y = 0;
-                    st.pending_offset_y = Some(st.offset_y);
-                    return true;
-                }
-                KeyCode::End => {
-                    st.offset_y = max_y;
-                    st.pending_offset_y = Some(st.offset_y);
-                    return true;
-                }
-                _ => {}
-            }
-        }
-
-        false
+    fn destroy(&mut self) {
+        self.content.borrow_mut().destroy();
     }
 
     fn selection_status(&self) -> SelectionStatus {
-        self.content.selection_status()
+        self.content.borrow().selection_status()
     }
 
-    fn selection_text(&mut self) -> Option<String> {
-        self.content.selection_text()
+    fn selection_text(&self) -> Option<String> {
+        self.content.borrow().selection_text()
+    }
+
+    fn take_pending_title(&mut self) -> Option<String> {
+        self.content.borrow_mut().take_pending_title()
+    }
+
+    fn set_selection_enabled(&mut self, enabled: bool) {
+        self.content.borrow_mut().set_selection_enabled(enabled);
+    }
+
+    fn paste(&mut self, text: &str) -> bool {
+        self.content.borrow_mut().paste(text)
     }
 }
 
@@ -632,21 +656,80 @@ mod tests {
         assert!(!rect_contains(r2, 3, 1));
     }
 
-    // --- Direct mode scroll tests ---
-
     struct EventRecorder {
         received_scroll: bool,
     }
-    impl Component for EventRecorder {
-        fn render(&mut self, _frame: &mut UiFrame<'_>, _area: Rect, _ctx: &ComponentContext) {}
-        fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
+    impl Component<TermWmAction> for EventRecorder {
+        fn render(
+            &self,
+            _frame: &mut UiFrame<'_>,
+            _area: Rect,
+            _ctx: &ComponentContext,
+            _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+        ) {
+        }
+        fn handle_events(
+            &mut self,
+            event: &Event,
+            _ctx: &ComponentContext,
+        ) -> EventResult<TermWmAction> {
             if matches!(event, Event::Mouse(m)
                 if matches!(m.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown)
             ) {
                 self.received_scroll = true;
             }
-            false
+            EventResult::Ignored
         }
+    }
+
+    struct SelectableRecorder {
+        selection_enabled: bool,
+        selection_active: bool,
+    }
+    impl Component<TermWmAction> for SelectableRecorder {
+        fn render(
+            &self,
+            _frame: &mut UiFrame<'_>,
+            _area: Rect,
+            _ctx: &ComponentContext,
+            _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+        ) {
+        }
+        fn handle_events(
+            &mut self,
+            _event: &Event,
+            _ctx: &ComponentContext,
+        ) -> EventResult<TermWmAction> {
+            EventResult::Ignored
+        }
+        fn selection_status(&self) -> SelectionStatus {
+            SelectionStatus {
+                active: self.selection_active,
+                dragging: false,
+            }
+        }
+        fn set_selection_enabled(&mut self, enabled: bool) {
+            self.selection_enabled = enabled;
+        }
+    }
+
+    #[test]
+    fn scroll_view_set_selection_enabled_delegates_to_inner() {
+        let mut sv = ScrollViewComponent::new(SelectableRecorder {
+            selection_enabled: false,
+            selection_active: false,
+        });
+
+        // Initially disabled
+        assert!(!sv.content.borrow().selection_enabled);
+
+        // Enable via ScrollViewComponent's set_selection_enabled
+        sv.set_selection_enabled(true);
+        assert!(sv.content.borrow().selection_enabled);
+
+        // Disable again
+        sv.set_selection_enabled(false);
+        assert!(!sv.content.borrow().selection_enabled);
     }
 
     #[test]
@@ -664,9 +747,11 @@ mod tests {
             row: 5,
             modifiers: KeyModifiers::NONE,
         });
-        // Without direct mode, scroll event should be consumed by scroll view.
-        let consumed = sv.handle_event(&scroll_down, &ctx);
-        assert!(consumed, "scroll must be consumed in normal mode");
+        let consumed = sv.handle_events(&scroll_down, &ctx);
+        assert!(
+            !consumed.is_ignored(),
+            "scroll must be consumed in normal mode"
+        );
     }
 
     #[test]
@@ -677,7 +762,6 @@ mod tests {
             received_scroll: false,
         });
 
-        // Direct mode context
         let ctx = ComponentContext::new(true).with_direct_mode(true);
         let scroll_down = Event::Mouse(MouseEvent {
             kind: MouseEventKind::ScrollDown,
@@ -685,13 +769,13 @@ mod tests {
             row: 5,
             modifiers: KeyModifiers::NONE,
         });
-        let consumed = sv.handle_event(&scroll_down, &ctx);
-        // In direct mode, scroll should NOT be consumed by scroll view —
-        // it falls through to the child. Our EventRecorder returns false
-        // so consumed is false.
-        assert!(!consumed, "scroll must NOT be consumed in direct mode");
+        let consumed = sv.handle_events(&scroll_down, &ctx);
         assert!(
-            sv.content.received_scroll,
+            consumed.is_ignored(),
+            "scroll must NOT be consumed in direct mode"
+        );
+        assert!(
+            sv.content.borrow().received_scroll,
             "scroll must reach child component in direct mode"
         );
     }
@@ -714,18 +798,16 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
 
-        // Direct mode: non-scroll events pass through to child
-        let consumed_dm = sv.handle_event(&click, &ctx_dm);
+        let consumed_dm = sv.handle_events(&click, &ctx_dm);
         assert!(
-            !consumed_dm,
+            !consumed_dm.is_consumed(),
             "non-scroll click should not be consumed regardless"
         );
 
-        // Normal mode: non-scroll events pass through to child (only scroll is consumed)
-        sv.content.received_scroll = false;
-        let consumed_normal = sv.handle_event(&click, &ctx_normal);
+        sv.content.borrow_mut().received_scroll = false;
+        let consumed_normal = sv.handle_events(&click, &ctx_normal);
         assert!(
-            !consumed_normal,
+            !consumed_normal.is_consumed(),
             "non-scroll click should not be consumed in normal mode either"
         );
     }

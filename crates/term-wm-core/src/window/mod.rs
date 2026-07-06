@@ -14,7 +14,7 @@ pub use entry::WindowState;
 
 pub use window_manager::{
     DrawTask, OverlayId, ScrollState, SuperPressResult, WindowDrawContext, WindowManager,
-    WindowSurface, WmMenuAction,
+    WindowSurface,
 };
 
 /// Signed floating rectangle (alias for engine `LayoutRect`).

@@ -3,7 +3,7 @@ pub use term_wm_ui_components::*;
 pub mod tracing_sub;
 
 use term_wm_core::config::WmBuilder;
-use term_wm_core::window::{WindowKey, WindowManager, WmMenuAction};
+use term_wm_core::window::{WindowKey, WindowManager};
 
 pub trait WindowManagerExt: Sized {
     fn new_standalone(app_ctx: term_wm_core::app_context::AppContext) -> Self;
@@ -22,8 +22,9 @@ impl WindowManagerExt for WindowManager {
                 &app_ctx.app_version,
                 hostname,
             ));
-        let menu: Box<dyn term_wm_core::components::MenuOverlay<WmMenuAction>> =
-            Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
+        let menu: Box<
+            dyn term_wm_core::components::MenuOverlay<term_wm_core::actions::TermWmAction>,
+        > = Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
         WmBuilder::standalone()
             .app_ctx(std::sync::Arc::new(app_ctx))
             .build(Some(top_panel), Some(bottom_panel), Some(menu))

@@ -975,4 +975,99 @@ mod tests {
         // after removal, node should simplify back to leaf(1)
         assert_eq!(node.unwrap_leaf(), Some(1));
     }
+
+    #[test]
+    fn hit_test_handle_finds_gap() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let node = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(1), LayoutNode::Leaf(2)],
+            weights: vec![1.0, 1.0],
+            constraints: vec![Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)],
+            resizable: true,
+        };
+        let (_, handles) = node.layout_with_handles(area);
+        assert_eq!(handles.len(), 1, "2-window split must produce 1 handle");
+        let handle = &handles[0];
+        assert_eq!(handle.direction, Direction::Horizontal);
+        assert_eq!(handle.index, 0);
+        // The gap rect should be at the split point
+        assert!(handle.rect.width > 0);
+        assert_eq!(handle.rect.height, 24);
+        // hit_test_handle at the gap center should find it
+        let center_col = handle.rect.x + handle.rect.width / 2;
+        let center_row = handle.rect.y + handle.rect.height / 2;
+        let found = node.hit_test_handle(area, center_col, center_row);
+        assert!(found.is_some(), "hit_test_handle must find the gap");
+        assert_eq!(found.unwrap().direction, Direction::Horizontal);
+    }
+
+    #[test]
+    fn tiling_handle_event_direct() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let mut layout = TilingLayout::new(LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(1), LayoutNode::Leaf(2)],
+            weights: vec![1.0, 1.0],
+            constraints: vec![Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)],
+            resizable: true,
+        });
+
+        // Find the gap position
+        let handles = layout.handles(area);
+        assert_eq!(handles.len(), 1);
+        let gap = &handles[0].rect;
+        let gap_col = gap.x + gap.width / 2;
+        let gap_row = gap.y + gap.height / 2;
+
+        // Down at the gap
+        let down = crossterm::event::Event::Mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: gap_col,
+            row: gap_row,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
+        assert!(layout.handle_event(&down, area), "Down must hit the handle");
+
+        // Drag right by 10 columns
+        let drag = crossterm::event::Event::Mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+            column: gap_col + 10,
+            row: gap_row,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
+        assert!(layout.handle_event(&drag, area), "Drag must adjust split");
+
+        // Up to release
+        let up = crossterm::event::Event::Mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left),
+            column: gap_col + 10,
+            row: gap_row,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
+        assert!(layout.handle_event(&up, area), "Up must clear drag state");
+
+        // Verify layout changed: get new regions
+        let (regions, _) = layout.root.layout_with_handles(area);
+        assert_eq!(regions.len(), 2);
+        // Left window should now be wider than right (we dragged right)
+        let left_width = regions[0].1.width;
+        let right_width = regions[1].1.width;
+        assert!(
+            left_width > right_width,
+            "after dragging split right, left ({}) must be wider than right ({})",
+            left_width,
+            right_width
+        );
+    }
 }

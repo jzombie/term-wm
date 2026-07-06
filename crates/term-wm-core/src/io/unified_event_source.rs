@@ -11,18 +11,14 @@ use crossbeam_channel::{Receiver, Sender, bounded};
 use crossterm::event::{Event, KeyEvent, MouseEvent};
 
 use super::EventSource;
-use super::utils::KeyboardNormalizer;
+use super::frame_pacer::FramePacer;
 use crate::power_profile::PowerProfile;
+use crate::utils::KeyboardNormalizer;
 use crate::window::WindowKey;
 
 /// Capacity of the crossbeam channel between event producers and the event
 /// loop. Generous capacity since wakeup gating (dirty.swap) prevents flooding.
 const EVENT_CHANNEL_CAPACITY: usize = 256;
-
-/// Frame pacing delay for PTY wakeups. When a PtyWakeup arrives, we wait
-/// this long before triggering a render, preventing an uncapped render loop.
-/// 16ms = ~60fps, matching the Streaming power profile poll interval.
-const COALESCE_DELAY: Duration = Duration::from_millis(16);
 
 /// How often the crossterm input thread polls for new events (100 ms).
 /// Keeps the thread responsive to shutdown signals while being idle-friendly.
@@ -69,9 +65,12 @@ pub struct UnifiedEventSource {
     normalizer: KeyboardNormalizer,
     /// Timestamp of the last input event (for power profiling).
     last_event_at: Option<Instant>,
-    /// Deadline for the frame pacing delay. When a PtyWakeup is received,
-    /// we block in recv_timeout until this deadline before triggering a render.
-    coalesce_deadline: Option<Instant>,
+    /// Frame pacing: ensures renders fire at most once per 16ms interval.
+    frame_pacer: FramePacer,
+    /// Set by the runner via [`EventSource::set_pending_work`] when there's
+    /// pending work (e.g. countdown timer) that requires frequent polling
+    /// regardless of PTY dirty-window state.
+    pending_work: bool,
 }
 
 impl UnifiedEventSource {
@@ -123,7 +122,8 @@ impl UnifiedEventSource {
             signal_received: false,
             normalizer: KeyboardNormalizer::new(),
             last_event_at: None,
-            coalesce_deadline: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: false,
         })
     }
 
@@ -184,39 +184,35 @@ impl EventSource for UnifiedEventSource {
             return Ok(true);
         }
 
-        // If drain_pending found dirty windows, arm the coalesce deadline.
+        // If drain_pending found dirty windows, arm the frame deadline.
         // This prevents a 3600s freeze when a PtyWakeup arrives between
         // handler(None) and drain_pending (common under heavy streaming):
-        // the PtyWakeup is consumed by drain_pending but no coalesce
+        // the PtyWakeup is consumed by drain_pending but no frame
         // deadline is set, so recv_timeout would block for the full
         // PowerSaver interval.
-        if !self.dirty_windows.is_empty() && self.coalesce_deadline.is_none() {
-            self.coalesce_deadline = Some(Instant::now() + COALESCE_DELAY);
+        if !self.dirty_windows.is_empty() {
+            self.frame_pacer.notify_pending();
         }
 
-        // Clamp remaining to the coalesce deadline so we never block
+        // Clamp remaining to the frame deadline so we never block
         // longer than 16ms when there are unprocessed dirty windows.
+        if self.frame_pacer.try_expire() {
+            return Ok(false);
+        }
         let mut remaining = timeout;
-        if let Some(deadline) = self.coalesce_deadline {
-            let now = Instant::now();
-            if now >= deadline {
-                self.coalesce_deadline = None;
-                return Ok(false);
-            }
-            remaining = remaining.min(deadline.saturating_duration_since(now));
+        if let Some(t) = self.frame_pacer.time_until_deadline() {
+            remaining = remaining.min(t);
         }
 
         while remaining > Duration::ZERO {
-            // Check coalesce deadline before each blocking call.
-            if let Some(deadline) = self.coalesce_deadline {
-                let now = Instant::now();
-                if now >= deadline {
-                    self.coalesce_deadline = None;
-                    return Ok(false);
-                }
-                remaining = remaining.min(deadline.saturating_duration_since(now));
+            // Check frame deadline before each blocking call.
+            if self.frame_pacer.try_expire() {
+                return Ok(false);
+            }
+            if let Some(t) = self.frame_pacer.time_until_deadline() {
+                remaining = remaining.min(t);
                 if remaining <= Duration::ZERO {
-                    self.coalesce_deadline = None;
+                    self.frame_pacer.reset();
                     return Ok(false);
                 }
             }
@@ -224,31 +220,24 @@ impl EventSource for UnifiedEventSource {
             match self.rx.recv_timeout(remaining) {
                 Ok(UnifiedEvent::Input(event)) => {
                     self.last_event_at = Some(Instant::now());
-                    self.coalesce_deadline = None;
+                    self.frame_pacer.reset();
                     self.pending_event = Some(event);
                     return Ok(true);
                 }
                 Ok(UnifiedEvent::PtyWakeup(key)) => {
                     self.dirty_windows.insert(key);
-                    if self.coalesce_deadline.is_none() {
-                        self.coalesce_deadline = Some(Instant::now() + COALESCE_DELAY);
+                    self.frame_pacer.notify_pending();
+                    if self.frame_pacer.try_expire() {
+                        return Ok(false);
                     }
-                    if let Some(deadline) = self.coalesce_deadline {
-                        let now = Instant::now();
-                        if now >= deadline {
-                            self.coalesce_deadline = None;
-                            return Ok(false);
-                        }
-                        let coalesce_remaining = deadline.saturating_duration_since(now);
-                        remaining = remaining.min(coalesce_remaining);
+                    if let Some(t) = self.frame_pacer.time_until_deadline() {
+                        remaining = remaining.min(t);
                     }
                     continue;
                 }
                 Ok(UnifiedEvent::AppExited(key)) => {
                     self.exited_windows.push(key);
-                    if self.coalesce_deadline.is_none() {
-                        self.coalesce_deadline = Some(Instant::now() + COALESCE_DELAY);
-                    }
+                    self.frame_pacer.notify_pending();
                     continue;
                 }
                 Ok(UnifiedEvent::Signal) => {
@@ -259,11 +248,8 @@ impl EventSource for UnifiedEventSource {
                     return Ok(false);
                 }
                 Err(_) => {
-                    // Check if the coalesce deadline expired during the wait.
-                    if let Some(deadline) = self.coalesce_deadline
-                        && Instant::now() >= deadline
-                    {
-                        self.coalesce_deadline = None;
+                    // Check if the frame deadline expired during the wait.
+                    if self.frame_pacer.try_expire() {
                         return Ok(false);
                     }
                     break;
@@ -271,7 +257,7 @@ impl EventSource for UnifiedEventSource {
             }
         }
 
-        self.coalesce_deadline = None;
+        self.frame_pacer.reset();
         self.dirty_windows.clear();
         Ok(false)
     }
@@ -381,6 +367,13 @@ impl EventSource for UnifiedEventSource {
         }
     }
 
+    /// Called by the runner each cycle to signal whether there's pending
+    /// work (e.g. a countdown timer).  When true the profile stays at
+    /// Streaming even if both `dirty_windows` and `last_event_at` are stale.
+    fn set_pending_work(&mut self, pending: bool) {
+        self.pending_work = pending;
+    }
+
     fn poll_interval(&self) -> Duration {
         self.current_profile().poll_interval()
     }
@@ -388,7 +381,7 @@ impl EventSource for UnifiedEventSource {
     fn current_profile(&self) -> PowerProfile {
         crate::power_profile::profile_from_activity(
             self.last_event_at,
-            !self.dirty_windows.is_empty(),
+            !self.dirty_windows.is_empty() || self.pending_work,
         )
     }
 
@@ -425,7 +418,8 @@ mod tests {
             signal_received: false,
             normalizer: KeyboardNormalizer::new(),
             last_event_at: None,
-            coalesce_deadline: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: false,
         };
         // Prevent the no-op handle from panicking on join in drop
         let dummy_handle = std::thread::spawn(|| {});
@@ -512,7 +506,8 @@ mod tests {
             signal_received: false,
             normalizer: KeyboardNormalizer::new(),
             last_event_at: None,
-            coalesce_deadline: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: false,
         };
         // Prevent the no-op handle from panicking on drop
         let dummy_handle = std::thread::spawn(|| {});
@@ -567,12 +562,61 @@ mod tests {
             signal_received: false,
             normalizer: KeyboardNormalizer::new(),
             last_event_at: None,
-            coalesce_deadline: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: false,
         };
         assert_eq!(
             source.current_profile(),
             PowerProfile::Streaming,
             "dirty_windows must elevate profile to Streaming"
+        );
+    }
+
+    #[test]
+    fn pending_work_causes_streaming_profile() {
+        let (tx1, rx1) = bounded(EVENT_CHANNEL_CAPACITY);
+        let source = UnifiedEventSource {
+            rx: rx1,
+            tx: tx1,
+            _input_handle: std::thread::spawn(|| {}),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            dirty_windows: HashSet::new(),
+            exited_windows: Vec::new(),
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: true,
+        };
+        assert_eq!(
+            source.current_profile(),
+            PowerProfile::Streaming,
+            "pending_work must elevate profile to Streaming even without dirty_windows"
+        );
+        // Also verify that stale last_event_at + pending_work still gives Streaming
+        let (tx2, rx2) = bounded(EVENT_CHANNEL_CAPACITY);
+        let stale = Some(Instant::now() - Duration::from_secs(3600));
+        let source2 = UnifiedEventSource {
+            rx: rx2,
+            tx: tx2,
+            _input_handle: std::thread::spawn(|| {}),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            dirty_windows: HashSet::new(),
+            exited_windows: Vec::new(),
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: stale,
+            frame_pacer: FramePacer::new(),
+            pending_work: true,
+        };
+        assert_eq!(
+            source2.current_profile(),
+            PowerProfile::Streaming,
+            "pending_work must keep Streaming even with stale last_event_at"
         );
     }
 
@@ -599,7 +643,8 @@ mod tests {
             signal_received: false,
             normalizer: KeyboardNormalizer::new(),
             last_event_at: None,
-            coalesce_deadline: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: false,
         };
         let dummy_handle = std::thread::spawn(|| {});
         source._input_handle = dummy_handle;

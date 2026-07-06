@@ -1,5 +1,13 @@
 use std::fmt;
 
+use crossterm::event::Event;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ConfirmAction {
+    Confirm,
+    Cancel,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ActionLayer {
     /// Always active. Only `WmToggleOverlay` (Esc) is in this layer.
@@ -8,45 +16,74 @@ pub enum ActionLayer {
     WmMode,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Action {
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum TermWmAction {
+    // --- Existing Action variants (all preserved) ---
     Quit,
     CloseHelp,
     CycleNextWindow,
     CyclePrevWindow,
     OpenHelp,
     OpenKeybindings,
-    // Focus/tab navigation
     FocusNext,
     FocusPrev,
-    // Window manager overlay
     WmToggleOverlay,
     NewWindow,
     HintToggle,
-    // WM menu navigation
     MenuUp,
     MenuDown,
     MenuSelect,
     MenuNext,
     MenuPrev,
-    // Confirm dialog navigation/actions
     ConfirmToggle,
     ConfirmLeft,
     ConfirmRight,
     ConfirmAccept,
     ConfirmCancel,
-    // Scrolling
     ScrollPageUp,
     ScrollPageDown,
     ScrollHome,
     ScrollEnd,
     ScrollUp,
     ScrollDown,
-    // Selection toggle
     ToggleSelection,
-    // Clipboard
     CopySelection,
     PasteClipboard,
+
+    // --- New component-level actions ---
+
+    // Terminal-level actions
+    KeyToBytes(Vec<u8>),
+    Scroll(isize),
+    MouseToBytes(Vec<u8>),
+    ClearSelection,
+    LinkClicked(usize),
+
+    // ScrollView actions
+    ScrollView(isize),
+    ScrollToTop,
+    ScrollToBottom,
+
+    // WM-level actions from WmMenuAction
+    CloseMenu,
+    Help,
+    CloseWindow,
+    ToggleMouseCapture,
+    ToggleClipboardMode,
+    ToggleWindowSelection,
+    MinimizeWindow,
+    MaximizeWindow,
+    ToggleDebugWindow,
+    BringFloatingFront,
+    ExitUi,
+
+    // Clipboard
+    ConfirmAction(ConfirmAction),
+    ClipboardPaste(String),
+
+    // External events
+    ProcessExited,
+    ProfileChange(crate::power_profile::PowerProfile),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -60,98 +97,195 @@ pub enum Category {
     Selection,
 }
 
-impl Action {
+/// Decouples routing status from state mutation.
+/// - Ignored: not handled, continue routing
+/// - Consumed: handled, no state change, stop routing
+/// - Action(Msg): handled, queue for update phase
+#[derive(Debug, Clone)]
+pub enum EventResult<Msg> {
+    Ignored,
+    Consumed,
+    Action(Msg),
+}
+
+impl<Msg> EventResult<Msg> {
+    pub fn is_ignored(&self) -> bool {
+        matches!(self, Self::Ignored)
+    }
+    pub fn is_consumed(&self) -> bool {
+        matches!(self, Self::Consumed)
+    }
+    pub fn into_action(self) -> Option<Msg> {
+        match self {
+            Self::Action(msg) => Some(msg),
+            _ => None,
+        }
+    }
+}
+
+impl TermWmAction {
     pub fn layer(&self) -> ActionLayer {
         match self {
-            Action::WmToggleOverlay => ActionLayer::Global,
+            TermWmAction::WmToggleOverlay => ActionLayer::Global,
             _ => ActionLayer::WmMode,
         }
     }
 
     pub fn category(&self) -> Category {
         match self {
-            Action::Quit | Action::CloseHelp | Action::OpenHelp | Action::OpenKeybindings => {
-                Category::System
-            }
-            Action::CycleNextWindow
-            | Action::CyclePrevWindow
-            | Action::FocusNext
-            | Action::FocusPrev => Category::Navigation,
-            Action::WmToggleOverlay | Action::NewWindow | Action::HintToggle => Category::Windows,
-            Action::MenuUp
-            | Action::MenuDown
-            | Action::MenuSelect
-            | Action::MenuNext
-            | Action::MenuPrev => Category::Menu,
-            Action::ConfirmToggle
-            | Action::ConfirmLeft
-            | Action::ConfirmRight
-            | Action::ConfirmAccept
-            | Action::ConfirmCancel => Category::Dialogs,
-            Action::ScrollPageUp
-            | Action::ScrollPageDown
-            | Action::ScrollHome
-            | Action::ScrollEnd
-            | Action::ScrollUp
-            | Action::ScrollDown => Category::Scrolling,
-            Action::ToggleSelection | Action::CopySelection | Action::PasteClipboard => {
-                Category::Selection
-            }
+            TermWmAction::Quit
+            | TermWmAction::CloseHelp
+            | TermWmAction::OpenHelp
+            | TermWmAction::OpenKeybindings
+            | TermWmAction::LinkClicked(_)
+            | TermWmAction::ProcessExited
+            | TermWmAction::ProfileChange(_) => Category::System,
+
+            TermWmAction::CycleNextWindow
+            | TermWmAction::CyclePrevWindow
+            | TermWmAction::FocusNext
+            | TermWmAction::FocusPrev => Category::Navigation,
+
+            TermWmAction::WmToggleOverlay
+            | TermWmAction::NewWindow
+            | TermWmAction::HintToggle
+            | TermWmAction::CloseMenu
+            | TermWmAction::Help
+            | TermWmAction::CloseWindow
+            | TermWmAction::ToggleMouseCapture
+            | TermWmAction::ToggleClipboardMode
+            | TermWmAction::ToggleWindowSelection
+            | TermWmAction::MinimizeWindow
+            | TermWmAction::MaximizeWindow
+            | TermWmAction::ToggleDebugWindow
+            | TermWmAction::BringFloatingFront
+            | TermWmAction::ExitUi => Category::Windows,
+
+            TermWmAction::MenuUp
+            | TermWmAction::MenuDown
+            | TermWmAction::MenuSelect
+            | TermWmAction::MenuNext
+            | TermWmAction::MenuPrev => Category::Menu,
+
+            TermWmAction::ConfirmToggle
+            | TermWmAction::ConfirmLeft
+            | TermWmAction::ConfirmRight
+            | TermWmAction::ConfirmAccept
+            | TermWmAction::ConfirmCancel
+            | TermWmAction::ConfirmAction(_) => Category::Dialogs,
+
+            TermWmAction::ScrollPageUp
+            | TermWmAction::ScrollPageDown
+            | TermWmAction::ScrollHome
+            | TermWmAction::ScrollEnd
+            | TermWmAction::ScrollUp
+            | TermWmAction::ScrollDown
+            | TermWmAction::KeyToBytes(_)
+            | TermWmAction::Scroll(_)
+            | TermWmAction::MouseToBytes(_)
+            | TermWmAction::ScrollView(_)
+            | TermWmAction::ScrollToTop
+            | TermWmAction::ScrollToBottom => Category::Scrolling,
+
+            TermWmAction::ToggleSelection
+            | TermWmAction::CopySelection
+            | TermWmAction::PasteClipboard
+            | TermWmAction::ClearSelection
+            | TermWmAction::ClipboardPaste(_) => Category::Selection,
         }
     }
 
     pub fn bottom_hint_priority(&self) -> Option<u8> {
         match self {
-            Action::WmToggleOverlay => Some(100),
-            Action::Quit => Some(90),
-            Action::OpenHelp => Some(80),
-            Action::OpenKeybindings => Some(75),
-            Action::FocusNext => Some(70),
-            Action::FocusPrev => Some(65),
-            Action::CycleNextWindow => Some(60),
-            Action::CyclePrevWindow => Some(55),
-            Action::NewWindow => Some(50),
-            Action::HintToggle => Some(40),
+            TermWmAction::WmToggleOverlay => Some(100),
+            TermWmAction::Quit => Some(90),
+            TermWmAction::OpenHelp => Some(80),
+            TermWmAction::OpenKeybindings => Some(75),
+            TermWmAction::FocusNext => Some(70),
+            TermWmAction::FocusPrev => Some(65),
+            TermWmAction::CycleNextWindow => Some(60),
+            TermWmAction::CyclePrevWindow => Some(55),
+            TermWmAction::NewWindow => Some(50),
+            TermWmAction::HintToggle => Some(40),
 
             _ => None,
         }
     }
 }
 
-impl fmt::Display for Action {
+impl fmt::Display for TermWmAction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-            Action::Quit => "Quit",
-            Action::CloseHelp => "Close help / dialog",
-            Action::CycleNextWindow => "Cycle next window",
-            Action::CyclePrevWindow => "Cycle previous window",
-            Action::OpenHelp => "Open help",
-            Action::OpenKeybindings => "Open keybindings",
-            Action::FocusNext => "Focus next",
-            Action::FocusPrev => "Focus previous",
-            Action::WmToggleOverlay => "Menu",
-            Action::NewWindow => "New window",
-            Action::HintToggle => "Toggle hints",
-            Action::MenuUp => "Menu up",
-            Action::MenuDown => "Menu down",
-            Action::MenuSelect => "Menu select",
-            Action::MenuNext => "Menu next",
-            Action::MenuPrev => "Menu previous",
-            Action::ConfirmToggle => "Confirm toggle",
-            Action::ConfirmLeft => "Confirm left",
-            Action::ConfirmRight => "Confirm right",
-            Action::ConfirmAccept => "Confirm accept",
-            Action::ConfirmCancel => "Confirm cancel",
-            Action::ScrollPageUp => "Scroll page up",
-            Action::ScrollPageDown => "Scroll page down",
-            Action::ScrollHome => "Scroll to top",
-            Action::ScrollEnd => "Scroll to end",
-            Action::ScrollUp => "Scroll up",
-            Action::ScrollDown => "Scroll down",
-            Action::ToggleSelection => "Toggle selection",
-            Action::CopySelection => "Copy selection",
-            Action::PasteClipboard => "Paste clipboard",
+            TermWmAction::Quit => "Quit",
+            TermWmAction::CloseHelp => "Close help / dialog",
+            TermWmAction::CycleNextWindow => "Cycle next window",
+            TermWmAction::CyclePrevWindow => "Cycle previous window",
+            TermWmAction::OpenHelp => "Open help",
+            TermWmAction::OpenKeybindings => "Open keybindings",
+            TermWmAction::FocusNext => "Focus next",
+            TermWmAction::FocusPrev => "Focus previous",
+            TermWmAction::WmToggleOverlay => "Menu",
+            TermWmAction::NewWindow => "New window",
+            TermWmAction::HintToggle => "Toggle hints",
+            TermWmAction::MenuUp => "Menu up",
+            TermWmAction::MenuDown => "Menu down",
+            TermWmAction::MenuSelect => "Menu select",
+            TermWmAction::MenuNext => "Menu next",
+            TermWmAction::MenuPrev => "Menu previous",
+            TermWmAction::ConfirmToggle => "Confirm toggle",
+            TermWmAction::ConfirmLeft => "Confirm left",
+            TermWmAction::ConfirmRight => "Confirm right",
+            TermWmAction::ConfirmAccept => "Confirm accept",
+            TermWmAction::ConfirmCancel => "Confirm cancel",
+            TermWmAction::ScrollPageUp => "Scroll page up",
+            TermWmAction::ScrollPageDown => "Scroll page down",
+            TermWmAction::ScrollHome => "Scroll to top",
+            TermWmAction::ScrollEnd => "Scroll to end",
+            TermWmAction::ScrollUp => "Scroll up",
+            TermWmAction::ScrollDown => "Scroll down",
+            TermWmAction::ToggleSelection => "Toggle selection",
+            TermWmAction::CopySelection => "Copy selection",
+            TermWmAction::PasteClipboard => "Paste clipboard",
+            TermWmAction::KeyToBytes(_) => "Key to bytes",
+            TermWmAction::Scroll(_) => "Scroll",
+            TermWmAction::MouseToBytes(_) => "Mouse to bytes",
+            TermWmAction::ClearSelection => "Clear selection",
+            TermWmAction::LinkClicked(_) => "Link clicked",
+            TermWmAction::ScrollView(_) => "Scroll view",
+            TermWmAction::ScrollToTop => "Scroll view to top",
+            TermWmAction::ScrollToBottom => "Scroll view to bottom",
+            TermWmAction::CloseMenu => "Close menu",
+            TermWmAction::Help => "Help",
+            TermWmAction::CloseWindow => "Close window",
+            TermWmAction::ToggleMouseCapture => "Toggle mouse capture",
+            TermWmAction::ToggleClipboardMode => "Toggle clipboard mode",
+            TermWmAction::ToggleWindowSelection => "Toggle window selection",
+            TermWmAction::MinimizeWindow => "Minimize window",
+            TermWmAction::MaximizeWindow => "Maximize window",
+            TermWmAction::ToggleDebugWindow => "Toggle debug window",
+            TermWmAction::BringFloatingFront => "Bring floating front",
+            TermWmAction::ExitUi => "Exit UI",
+            TermWmAction::ConfirmAction(_) => "Confirm action",
+            TermWmAction::ClipboardPaste(_) => "Clipboard paste",
+            TermWmAction::ProcessExited => "Process exited",
+            TermWmAction::ProfileChange(_) => "Profile change",
         };
         write!(f, "{}", s)
     }
+}
+
+/// System-level tasks managed by the runner's `TaskScheduler<SystemTask>`.
+///
+/// These are tasks that the runner dispatches directly because they need
+/// access to `app` and `driver` (e.g., forwarding timed-out key events,
+/// applying drag-snap).  Component-level tasks use their own scheduler
+/// with a separate type parameter.
+#[derive(Debug, Clone)]
+pub enum SystemTask {
+    /// A super-key passthrough timeout has expired — forward the deferred
+    /// key event to the focused terminal component.
+    SuperPassthrough { event: Event },
+    /// The drag-snap timeout has elapsed — auto-apply the pending layout
+    /// snap for the window that was being dragged.
+    DragSnap,
 }

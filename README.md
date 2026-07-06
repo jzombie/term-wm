@@ -5,7 +5,7 @@
 
 **WORK IN PROGRESS. API SUBJECT TO CHANGE.**
 
-A cross-platform terminal multiplexer, window manager, [Ratatui](https://crates.io/crates/ratatui) component library and runtime.
+A cross-platform terminal multiplexer, window manager, and [Ratatui](https://crates.io/crates/ratatui) framework with an message-passing component model, event loop, and runtime.
 
 It is controllable via mouse and keyboard and works the same over SSH, Mac, Linux, and Windows.
 
@@ -16,8 +16,8 @@ It is controllable via mouse and keyboard and works the same over SSH, Mac, Linu
 
 `term-wm` serves two distinct purposes:
 
-- **For Users:** A standalone, keyboard-driven window manager for your terminal shell.
-- **For Developers:** A reusable library of TUI primitives for building window-managed Ratatui applications.
+- **[For Users](#for-users-the-window-manager):** A standalone, keyboard-driven window manager for your terminal shell.
+- **[For Developers](#for-developers-the-library):** A reusable library of TUI primitives for building window-managed Ratatui applications.
 
 ## Design Philosophy: Retro-Modern
 
@@ -55,7 +55,7 @@ Per-window **direct mode** (toggled via the `[D]` header button) disables all WM
 
 `term-wm` exports its core logic as a crate, allowing you to build complex terminal user interface (TUI) applications without reinventing view navigation or layout engines.
 
-It provides a framework to render Ratatui components in a fashion that automatically handles focus routing and view lifecycle, letting you focus on component creation while term-wm enforces consistent layout.
+`term-wm` handles the internals of Ratatui's [Immediate Mode Rendering](https://ratatui.rs/concepts/rendering/) — your components are pure functions of their own state (`render(&self, ...)`), while `term-wm` manages the draw cycle, frame pacing, event routing, focus, and the `Component` lifecycle (`handle_events` → `update` → `render`).
 
 ### Operation Modes
 

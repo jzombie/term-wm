@@ -14,7 +14,7 @@ fn new_window_is_focused() {
             &ctx.app_version,
             None,
         ));
-    let menu: Box<dyn term_wm_core::components::MenuOverlay<term_wm_core::window::WmMenuAction>> =
+    let menu: Box<dyn term_wm_core::components::MenuOverlay<term_wm_core::actions::TermWmAction>> =
         Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
     let mut wm = WindowManager::with_config(
         term_wm::wm_config::WmConfig::standalone(),
@@ -24,7 +24,7 @@ fn new_window_is_focused() {
         Some(menu),
     );
 
-    let key = wm.create_window();
+    let key = wm.create_window(Box::new(term_wm::components::NoopComponent));
     wm.set_focus(key);
 
     assert_eq!(wm.focused_window(), key);

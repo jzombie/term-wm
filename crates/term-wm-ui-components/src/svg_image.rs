@@ -3,6 +3,7 @@ use std::io;
 use std::path::Path;
 
 use crate::ascii_image::AsciiImageComponent;
+use term_wm_core::actions::TermWmAction;
 use term_wm_core::components::{Component, ComponentContext};
 use term_wm_core::ui::UiFrame;
 
@@ -23,14 +24,15 @@ pub struct SvgImageComponent {
     inner: AsciiImageComponent,
 }
 
-impl Component for SvgImageComponent {
+impl Component<TermWmAction> for SvgImageComponent {
     fn render(
-        &mut self,
+        &self,
         frame: &mut UiFrame<'_>,
         area: ratatui::layout::Rect,
         ctx: &ComponentContext,
+        registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
-        self.inner.render(frame, area, ctx)
+        self.inner.render(frame, area, ctx, registry)
     }
 }
 

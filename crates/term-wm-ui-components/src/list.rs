@@ -1,25 +1,30 @@
+use std::collections::VecDeque;
+
 use crossterm::event::{Event, MouseButton, MouseEventKind};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem};
 
+use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext};
+use term_wm_core::events::LocalMouseEvent;
 use term_wm_core::ui::UiFrame;
+use term_wm_core::window::WindowKey;
 
 pub struct ListComponent {
     items: Vec<String>,
     selected: usize,
     title: String,
-    last_area: Rect,
 }
 
-impl Component for ListComponent {
-    fn resize(&mut self, area: Rect, _ctx: &ComponentContext) {
-        self.last_area = area;
-    }
-
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
-        self.last_area = area;
+impl Component<TermWmAction> for ListComponent {
+    fn render(
+        &self,
+        frame: &mut UiFrame<'_>,
+        area: Rect,
+        ctx: &ComponentContext,
+        _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
         let block = if ctx.focused() {
             Block::default()
                 .borders(Borders::ALL)
@@ -74,61 +79,66 @@ impl Component for ListComponent {
         frame.render_widget(list, inner);
     }
 
-    fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
-        if let Event::Key(key) = event {
-            let kb = term_wm_core::keybindings::KeyBindings::default();
-            if kb.matches(term_wm_core::keybindings::Action::MenuUp, key)
-                || kb.matches(term_wm_core::keybindings::Action::MenuPrev, key)
-            {
-                self.bump_selection(-1);
-                return true;
-            } else if kb.matches(term_wm_core::keybindings::Action::MenuDown, key)
-                || kb.matches(term_wm_core::keybindings::Action::MenuNext, key)
-            {
-                self.bump_selection(1);
-                return true;
-            } else if kb.matches(term_wm_core::keybindings::Action::ScrollPageUp, key) {
-                self.bump_selection(-5);
-                return true;
-            } else if kb.matches(term_wm_core::keybindings::Action::ScrollPageDown, key) {
-                self.bump_selection(5);
-                return true;
-            } else if kb.matches(term_wm_core::keybindings::Action::ScrollHome, key) {
-                self.selected = 0;
-                return true;
-            } else if kb.matches(term_wm_core::keybindings::Action::ScrollEnd, key) {
-                if !self.items.is_empty() {
-                    self.selected = self.items.len() - 1;
-                }
-                return true;
-            }
-        } else if let Event::Mouse(mouse) = event
-            // Mouse click selection: compute which item the user clicked based on the
-            // row within the inner (post-border) area offset by the current viewport scroll.
-            // Event coordinates are window-relative (same as `self.last_area` from resize/render).
-            //   mouse.row - (self.last_area.y + 1)  →  row inside the border
-            //   vp.offset_y.saturating_sub(1)        →  first visible item index
-            && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+    fn on_mouse(
+        &mut self,
+        mouse: &LocalMouseEvent,
+        ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
             && ctx.focused()
             && !self.items.is_empty()
-            && self.last_area.width > 0
-            && self.last_area.height > 0
-            && mouse.column >= self.last_area.x
-            && mouse.column < self.last_area.x.saturating_add(self.last_area.width)
-            && mouse.row > self.last_area.y
-            && mouse.row < self.last_area.y.saturating_add(self.last_area.height)
         {
             let vp = ctx.viewport();
             let skip_n = vp.offset_y.saturating_sub(1);
-            let visible_row =
-                (mouse.row.saturating_sub(self.last_area.y.saturating_add(1))) as usize;
+            let visible_row = mouse.row.saturating_sub(1) as usize;
             let index = skip_n + visible_row;
             if index < self.items.len() {
                 self.selected = index;
-                return true;
+                return EventResult::Consumed;
             }
         }
-        false
+        EventResult::Ignored
+    }
+
+    fn on_key(&mut self, event: &Event, _ctx: &ComponentContext) -> EventResult<TermWmAction> {
+        if let Event::Key(key) = event {
+            let kb = term_wm_core::keybindings::KeyBindings::default();
+            if kb.matches(TermWmAction::MenuUp, key) || kb.matches(TermWmAction::MenuPrev, key) {
+                return EventResult::Action(TermWmAction::MenuUp);
+            } else if kb.matches(TermWmAction::MenuDown, key)
+                || kb.matches(TermWmAction::MenuNext, key)
+            {
+                return EventResult::Action(TermWmAction::MenuDown);
+            } else if kb.matches(TermWmAction::ScrollPageUp, key) {
+                return EventResult::Action(TermWmAction::ScrollPageUp);
+            } else if kb.matches(TermWmAction::ScrollPageDown, key) {
+                return EventResult::Action(TermWmAction::ScrollPageDown);
+            } else if kb.matches(TermWmAction::ScrollHome, key) {
+                return EventResult::Action(TermWmAction::ScrollHome);
+            } else if kb.matches(TermWmAction::ScrollEnd, key) {
+                return EventResult::Action(TermWmAction::ScrollEnd);
+            }
+        }
+        EventResult::Ignored
+    }
+
+    fn update(
+        &mut self,
+        action: TermWmAction,
+        _ctx: &ComponentContext,
+        _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+    ) {
+        match action {
+            TermWmAction::MenuUp | TermWmAction::MenuPrev => self.bump_selection(-1),
+            TermWmAction::MenuDown | TermWmAction::MenuNext => self.bump_selection(1),
+            TermWmAction::ScrollPageUp => self.bump_selection(-5),
+            TermWmAction::ScrollPageDown => self.bump_selection(5),
+            TermWmAction::ScrollHome => self.selected = 0,
+            TermWmAction::ScrollEnd if !self.items.is_empty() => {
+                self.selected = self.items.len() - 1;
+            }
+            _ => {}
+        }
     }
 }
 
@@ -138,7 +148,6 @@ impl ListComponent {
             items: Vec::new(),
             selected: 0,
             title: title.into(),
-            last_area: Rect::default(),
         }
     }
 
@@ -181,6 +190,9 @@ impl ListComponent {
 mod tests {
     use super::*;
     use crossterm::event::{Event, KeyCode, KeyEvent};
+    use std::collections::VecDeque;
+    use term_wm_core::actions::EventResult;
+    use term_wm_core::components::Component;
 
     fn key_event(code: KeyCode) -> Event {
         let mut k = KeyEvent::new(code, crossterm::event::KeyModifiers::NONE);
@@ -188,17 +200,22 @@ mod tests {
         Event::Key(k)
     }
 
+    fn dispatch(list: &mut ListComponent, event: &Event, ctx: &ComponentContext) {
+        if let EventResult::Action(action) = list.handle_events(event, ctx) {
+            list.update(action, ctx, &mut VecDeque::new());
+        }
+    }
+
     #[test]
     fn selection_moves_with_keys() {
         let mut list = ListComponent::new("t");
         list.set_items(vec!["a".into(), "b".into(), "c".into()]);
-        use term_wm_core::components::Component;
         let ctx = ComponentContext::new(true);
         // move down
-        let _ = list.handle_event(&key_event(KeyCode::Down), &ctx);
+        dispatch(&mut list, &key_event(KeyCode::Down), &ctx);
         assert_eq!(list.selected(), 1);
         // move up
-        let _ = list.handle_event(&key_event(KeyCode::Up), &ctx);
+        dispatch(&mut list, &key_event(KeyCode::Up), &ctx);
         assert_eq!(list.selected(), 0);
     }
 
@@ -206,11 +223,10 @@ mod tests {
     fn home_and_end_keys() {
         let mut list = ListComponent::new("t");
         list.set_items(vec!["a".into(), "b".into(), "c".into(), "d".into()]);
-        use term_wm_core::components::Component;
         let ctx = ComponentContext::new(true);
-        let _ = list.handle_event(&key_event(KeyCode::End), &ctx);
+        dispatch(&mut list, &key_event(KeyCode::End), &ctx);
         assert_eq!(list.selected(), 3);
-        let _ = list.handle_event(&key_event(KeyCode::Home), &ctx);
+        dispatch(&mut list, &key_event(KeyCode::Home), &ctx);
         assert_eq!(list.selected(), 0);
     }
 
@@ -218,11 +234,10 @@ mod tests {
     fn page_keys_move_more() {
         let mut list = ListComponent::new("t");
         list.set_items((0..20).map(|i| format!("{}", i)).collect());
-        use term_wm_core::components::Component;
         let ctx = ComponentContext::new(true);
-        let _ = list.handle_event(&key_event(KeyCode::PageDown), &ctx);
+        dispatch(&mut list, &key_event(KeyCode::PageDown), &ctx);
         assert!(list.selected() >= 5);
-        let _ = list.handle_event(&key_event(KeyCode::PageUp), &ctx);
+        dispatch(&mut list, &key_event(KeyCode::PageUp), &ctx);
         assert!(list.selected() < 20);
     }
 }

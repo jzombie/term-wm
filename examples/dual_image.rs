@@ -2,9 +2,10 @@ use std::io;
 use std::sync::Arc;
 
 use term_wm::SvgImageComponent;
-use term_wm::components::Component;
-use term_wm::io::RenderTarget;
-use term_wm::io::console::{ConsoleEventSource, ConsoleRenderTarget};
+use term_wm::actions::TermWmAction;
+use term_wm::components::{Component, component_downcast_mut};
+use term_wm::io::console_event_source::ConsoleEventSource;
+use term_wm::io::{ConsoleRenderTarget, RenderTarget};
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
 use term_wm::window::{WindowKey, WindowManager};
 use term_wm::wm_config::WmConfig;
@@ -24,8 +25,6 @@ fn main() -> io::Result<()> {
 
 struct App {
     wm: WindowManager,
-    left: SvgImageComponent,
-    right: SvgImageComponent,
     pending_paths: Vec<String>,
     loaded_count: usize,
     left_key: Option<WindowKey>,
@@ -54,7 +53,7 @@ impl App {
             term_wm_sys_ui_components::WmBottomPanelComponent::new("example", "0.0.0", hostname),
         );
         let menu_overlay: Box<
-            dyn term_wm_core::components::MenuOverlay<term_wm_core::window::WmMenuAction>,
+            dyn term_wm_core::components::MenuOverlay<term_wm_core::actions::TermWmAction>,
         > = Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
@@ -63,12 +62,11 @@ impl App {
             Some(bottom_panel),
             Some(menu_overlay),
         );
-        let left_key = Some(wm.create_window());
-        let right_key = Some(wm.create_window());
+        // Box the image components and hand ownership to the WindowManager.
+        let left_key = Some(wm.create_window(Box::new(left)));
+        let right_key = Some(wm.create_window(Box::new(right)));
         let mut app = Self {
             wm,
-            left,
-            right,
             pending_paths: paths,
             loaded_count: 0,
             left_key,
@@ -90,10 +88,16 @@ impl WindowManagerHost for App {
             return Ok(());
         }
         let path = &self.pending_paths[self.loaded_count];
-        match self.loaded_count {
-            0 => load_into(&mut self.left, path)?,
-            1 => load_into(&mut self.right, path)?,
-            _ => {}
+        let key = match self.loaded_count {
+            0 => self.left_key,
+            1 => self.right_key,
+            _ => None,
+        };
+        if let Some(key) = key
+            && let Some(comp) = self.wm.component_for_key_mut(key)
+            && let Some(img) = component_downcast_mut::<SvgImageComponent>(comp)
+        {
+            img.load_from_path(path).map_err(io::Error::other)?;
         }
         self.loaded_count += 1;
         Ok(())
@@ -116,17 +120,7 @@ impl WindowProvider for App {
         "no images loaded"
     }
 
-    fn window_component(&mut self, key: WindowKey) -> Option<&mut dyn Component> {
-        if Some(key) == self.left_key {
-            return Some(&mut self.left);
-        }
-        if Some(key) == self.right_key {
-            return Some(&mut self.right);
-        }
-        None
+    fn window_component(&mut self, key: WindowKey) -> Option<&mut dyn Component<TermWmAction>> {
+        self.wm.component_for_key_mut(key)
     }
-}
-
-fn load_into(component: &mut SvgImageComponent, path: &str) -> io::Result<()> {
-    component.load_from_path(path)
 }
