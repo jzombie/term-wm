@@ -270,7 +270,7 @@ where
                 if let Event::Key(key) = &evt {
                     let focus_id = app.windows().focused_window();
                     if app.windows().direct_mode(focus_id)
-                        && !app.windows().wm_overlay_visible()
+                        && !app.windows().command_menu_visible()
                         && key.kind == KeyEventKind::Press
                     {
                         let is_wm_key = app
@@ -279,7 +279,7 @@ where
                             .matches(TermWmAction::WmToggleOverlay, key);
                         match app.windows().handle_super_press(key, is_wm_key) {
                             crate::window::SuperPressResult::DoubleSuper => {
-                                app.windows().open_wm_overlay_no_passthrough();
+                                app.windows().open_command_menu_no_passthrough();
                                 update_selection_snapshot(app);
                                 return flush_state_changes(app, ControlFlow::Continue);
                             }
@@ -320,8 +320,8 @@ where
                     _ => None,
                 };
 
-                // WM overlay toggle (special case due to passthrough logic)
-                let wm_mode = app.windows().config().wm_overlay_enabled;
+                // WM command menu toggle (special case due to passthrough logic)
+                let wm_mode = app.windows().config().wm_command_menu_enabled;
                 if wm_mode
                     && let Event::Key(key) = &evt
                     && key.kind == KeyEventKind::Press
@@ -330,24 +330,24 @@ where
                         .keybindings()
                         .matches(TermWmAction::WmToggleOverlay, key)
                 {
-                    if app.windows().wm_overlay_visible() {
+                    if app.windows().command_menu_visible() {
                         let passthrough = app.windows().super_passthrough_active();
-                        app.windows().close_wm_overlay();
+                        app.windows().close_command_menu();
                         if passthrough {
                             let passthrough_event = Event::Key(*key);
                             let _ = handle_focused_app_event(&passthrough_event, app);
                         }
                     } else {
-                        app.windows().open_wm_overlay();
+                        app.windows().open_command_menu();
                     }
                     update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Continue);
                 }
-                if wm_mode && app.windows().wm_overlay_visible() {
+                if wm_mode && app.windows().command_menu_visible() {
                     if let Some(action) = app.windows().handle_wm_menu_event(&evt) {
                         match action {
                             TermWmAction::CloseMenu => {
-                                app.windows().close_wm_overlay();
+                                app.windows().close_command_menu();
                             }
                             TermWmAction::ToggleMouseCapture => {
                                 app.windows().toggle_mouse_capture();
@@ -361,36 +361,36 @@ where
                             TermWmAction::MinimizeWindow => {
                                 let id = app.windows().focused_window();
                                 app.windows().minimize_window(id);
-                                app.windows().close_wm_overlay();
+                                app.windows().close_command_menu();
                             }
                             TermWmAction::MaximizeWindow => {
                                 let id = app.windows().focused_window();
                                 app.windows().toggle_maximize(id);
-                                app.windows().close_wm_overlay();
+                                app.windows().close_command_menu();
                             }
                             TermWmAction::CloseWindow => {
                                 let id = app.windows().focused_window();
                                 app.windows().close_window(id);
-                                app.windows().close_wm_overlay();
+                                app.windows().close_command_menu();
                             }
                             TermWmAction::NewWindow => {
                                 app.wm_new_window()?;
-                                app.windows().close_wm_overlay();
+                                app.windows().close_command_menu();
                             }
                             TermWmAction::ToggleDebugWindow => {
                                 app.toggle_debug_window();
-                                app.windows().close_wm_overlay();
+                                app.windows().close_command_menu();
                             }
                             TermWmAction::Help => {
                                 app.open_help_overlay();
-                                app.windows().close_wm_overlay();
+                                app.windows().close_command_menu();
                             }
                             TermWmAction::BringFloatingFront => {
                                 app.windows().bring_all_floating_to_front();
-                                app.windows().close_wm_overlay();
+                                app.windows().close_command_menu();
                             }
                             TermWmAction::ExitUi => {
-                                app.windows().close_wm_overlay();
+                                app.windows().close_command_menu();
                                 app.open_exit_confirm();
                                 update_selection_snapshot(app);
                                 return flush_state_changes(app, ControlFlow::Continue);
@@ -410,7 +410,7 @@ where
                         if matches!(&evt, Event::Key(_)) {
                             app.windows().fold_menu();
                         } else {
-                            app.windows().close_wm_overlay();
+                            app.windows().close_command_menu();
                         }
                         update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue);
@@ -426,13 +426,13 @@ where
                             }
                             TermWmAction::OpenHelp => {
                                 app.open_help_overlay();
-                                app.windows().close_wm_overlay();
+                                app.windows().close_command_menu();
                                 update_selection_snapshot(app);
                                 return flush_state_changes(app, ControlFlow::Continue);
                             }
                             TermWmAction::OpenKeybindings => {
                                 app.open_keybindings_overlay();
-                                app.windows().close_wm_overlay();
+                                app.windows().close_command_menu();
                                 update_selection_snapshot(app);
                                 return flush_state_changes(app, ControlFlow::Continue);
                             }
