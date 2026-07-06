@@ -79,7 +79,38 @@ fn render_screen(&self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentCont
 - Parser state is always current — no stale snapshots
 - When PTY stream pauses, reader blocks on `read()`, parser retains last state, main thread renders it on next tick
 
-### Change 2: Hoist loop-invariant computations
+### Change 2: Reset dirty flag on render
+
+The consumer (main thread) must acknowledge the mutation by resetting the `dirty` flag after blitting cells.
+
+**File:** `crates/term-wm-pty-engine/src/pane.rs`
+
+Add to `Pane` trait:
+
+```rust
+fn take_dirty(&self) -> bool { false }
+```
+
+Implement on `Pty`:
+
+```rust
+fn take_dirty(&self) -> bool {
+    self.dirty.swap(false, Ordering::AcqRel)
+}
+```
+
+**File:** `crates/term-wm-ui-components/src/terminal.rs`
+
+In `render_screen`, call `take_dirty()` after blitting:
+
+```rust
+// After the cell loop completes:
+self.pane.borrow_mut().take_dirty();
+```
+
+This ensures the `FramePacer` and power-profiling heuristics see `dirty=false` after each render, allowing proper idle-frame coalescing.
+
+### Change 3: Hoist loop-invariant computations
 
 Already covered in Change 1 — `screen.fgcolor()`/`bgcolor()` are extracted before the cell loop.
 
@@ -88,7 +119,7 @@ Already covered in Change 1 — `screen.fgcolor()`/`bgcolor()` are extracted bef
 | File | Change |
 |------|--------|
 | `crates/term-wm-pty-engine/src/pty.rs` | Replace `shared_screen: ArcSwap` with `shared_parser: Arc<Mutex<vt100::Parser>>` and `dirty: Arc<AtomicBool>`. Simplify reader loop: read → lock → process → unlock → dirty → wakeup. Remove parking. |
-| `crates/term-wm-pty-engine/src/pane.rs` | Add `shared_parser()` accessor to `Pane` trait. |
+| `crates/term-wm-pty-engine/src/pane.rs` | Add `shared_parser()` and `take_dirty()` to `Pane` trait. |
 | `crates/term-wm-ui-components/src/terminal.rs` | Store `shared_parser` handle. Lock parser in `render_screen`, read cells directly. Hoist color defaults. |
 
 ## Verification
