@@ -123,10 +123,10 @@ fn main() -> io::Result<()> {
 #[cfg(feature = "wm")]
 fn run_with_wm(args: &BenchCli) -> io::Result<()> {
     use term_wm::AppContext;
-    use term_wm::standalone::StandaloneApp;
+    use term_wm::term_wm_app::TermWmApp;
     use term_wm::WidgetAdapter;
 
-    let mut app = StandaloneApp::new(AppContext::new("term-bench", env!("CARGO_PKG_VERSION")));
+    let mut app = TermWmApp::new(AppContext::new("term-bench", env!("CARGO_PKG_VERSION")));
 
     let _config = BenchConfig::try_from(args)
         .map_err(|msg| io::Error::new(io::ErrorKind::InvalidInput, msg))?;

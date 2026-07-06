@@ -2,7 +2,7 @@ use std::io;
 
 use term_wm::AppContext;
 use term_wm::SvgImageComponent;
-use term_wm::standalone::StandaloneApp;
+use term_wm::term_wm_app::TermWmApp;
 
 fn main() -> io::Result<()> {
     let mut paths: Vec<String> = std::env::args().skip(1).collect();
@@ -13,7 +13,7 @@ fn main() -> io::Result<()> {
         paths.push(paths[0].clone());
     }
 
-    let mut app = StandaloneApp::new(AppContext::new("example", "0.0.0"));
+    let mut app = TermWmApp::new(AppContext::new("example", "0.0.0"));
 
     let mut left = SvgImageComponent::new();
     left.set_keep_aspect(true);

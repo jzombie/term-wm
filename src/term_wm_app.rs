@@ -16,19 +16,19 @@ use term_wm_core::window::{WindowKey, WindowManager};
 /// use term_wm::prelude::*;
 ///
 /// fn main() -> io::Result<()> {
-///     let mut app = StandaloneApp::new(AppContext::new("myapp", "1.0"));
+///     let mut app = TermWmApp::new(AppContext::new("myapp", "1.0"));
 ///     let key = app.register(MyComponent::new());
 ///     app.run()
 /// }
 /// ```
-pub struct StandaloneApp {
+pub struct TermWmApp {
     wm: WindowManager,
     windows: Vec<WindowKey>,
     should_quit: bool,
     empty_message: String,
 }
 
-impl StandaloneApp {
+impl TermWmApp {
     /// Create a new standalone app with all system chrome (panels, menu).
     pub fn new(app_ctx: AppContext) -> Self {
         let hostname = app_ctx.hostname.as_deref();
@@ -141,7 +141,7 @@ impl StandaloneApp {
     }
 }
 
-impl WindowManagerHost for StandaloneApp {
+impl WindowManagerHost for TermWmApp {
     fn windows(&mut self) -> &mut WindowManager {
         &mut self.wm
     }
@@ -151,7 +151,7 @@ impl WindowManagerHost for StandaloneApp {
     }
 }
 
-impl WindowProvider for StandaloneApp {
+impl WindowProvider for TermWmApp {
     fn enumerate_windows(&mut self) -> Vec<WindowKey> {
         // Prune dead keys — WindowManager is the authoritative owner.
         // Uses O(1) has_window check, no dynamic dispatch.
