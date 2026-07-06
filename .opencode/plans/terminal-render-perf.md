@@ -2,21 +2,15 @@
 
 ## Problem
 
-Running commands inside a term-wm shell renders at ~2 FPS. The `FramePacer` correctly coalesces PTY wakeups at ~60 FPS. The bottleneck is the per-frame cost of `render_screen`'s O(rows × cols) cell extraction, combined with the reader thread parking serialization.
+Running commands inside a term-wm shell renders at ~2 FPS. The bottleneck is the per-frame cost of `render_screen`'s O(rows × cols) cell extraction, combined with unnecessary `vt100::Screen` cloning on every PTY batch.
 
-## Root Cause
+## Architecture: Pull-Based Rendering with Direct Buffer Blitting
 
-1. **Reader parking serialization**: The PTY reader parks after each batch and is only unparked during `Pty::screen()` in `render_screen`. This creates strict read→render→read serialization.
+Following the Alacritty/Zellij/Ghostty pattern: the PTY thread parses bytes and flags dirty. The main thread pulls state on its own tick and blits directly to the Ratatui buffer.
 
-2. **Unconditional screen cloning**: The reader clones the full `vt100::Screen` into `ArcSwap` on every batch, even when the renderer isn't ready. Under high throughput, this floods the heap with O(N) allocations.
+### Change 1: Conditional screen snapshot (stop cloning every batch)
 
-3. **Per-cell render cost**: `screen.fgcolor()`/`bgcolor()` called per cell (same value for all cells).
-
-## Approach
-
-### Change 1: Non-blocking reader with conditional snapshot (primary fix)
-
-The reader thread blocks only on the OS `read()` syscall. After parsing bytes, it checks an atomic flag — if the renderer is ready, it clones the screen; otherwise it skips the clone and loops back to `read()`.
+The reader thread only clones the `vt100::Screen` when the renderer has consumed the previous frame. This eliminates the allocation flood under high throughput.
 
 **File:** `crates/term-wm-pty-engine/src/pty.rs`
 
@@ -26,10 +20,9 @@ Add to `Pty`:
 render_ready: Arc<AtomicBool>,
 ```
 
-Modify the reader thread loop:
+Reader thread loop (replaces current park/unpark):
 
 ```rust
-// Reader thread:
 loop {
     // Block on OS read() — the only blocking point
     let n = reader.read(&mut buf)?;
@@ -38,22 +31,20 @@ loop {
     // Parse bytes into vt100::Parser (cheap — just byte processing)
     parser.process(&buf[..n]);
 
-    // Publish to ArcSwap only if renderer is ready
+    // Clone and publish only if renderer consumed the previous frame
     if render_ready.swap(false, Ordering::AcqRel) {
         let screen = parser.screen().clone();
         shared_screen.store(Arc::new(screen));
         dirty.store(true, Ordering::Release);
-        // Fire PtyWakeup callback
-        if let Some(ref cb) = *status_cb.lock().unwrap() {
-            cb(PtyStatus::Wakeup);
-        }
+        // Fire PtyWakeup
+        status_cb(PtyStatus::Wakeup);
     }
-    // If render_ready was false, we parsed the bytes but skipped the clone.
-    // The parser state is updated, so the next clone will include all accumulated data.
+    // If render_ready was false: bytes are parsed (parser state updated),
+    // but no clone happens. Next clone will include all accumulated data.
 }
 ```
 
-In `Pty::screen()`, after cloning, signal the reader:
+In `Pty::screen()`, signal the reader after consuming:
 
 ```rust
 pub fn screen(&mut self) -> &vt100::Screen {
@@ -61,20 +52,11 @@ pub fn screen(&mut self) -> &vt100::Screen {
     if self.dirty.swap(false, Ordering::Acquire) {
         let fresh = self.shared_screen.load_full();
         self.cached_screen = (*fresh).clone();
-        self.screen_arc = Some(fresh);
         self.render_ready.store(true, Ordering::Release);  // signal reader
-        // ... DSR handling ...
     }
     &self.cached_screen
 }
 ```
-
-**Why this works:**
-- Reader blocks only on `read()` — never spins, never parks
-- Parsing is continuous — bytes are always processed immediately
-- Screen cloning is throttled — only happens when renderer signals readiness
-- No backpressure collapse — reader doesn't flood with clones
-- Parser state accumulates between clones — no data loss
 
 **File:** `crates/term-wm-pty-engine/src/pane.rs`
 
@@ -84,7 +66,11 @@ Add to `Pane` trait:
 fn set_render_ready(&mut self, _ready: Arc<AtomicBool>) {}
 ```
 
-### Change 2: Hoist loop-invariant computations
+### Change 2: Pull-based tick coalescing (main thread drives render rate)
+
+The `FramePacer` already runs at ~60 FPS and coalesces `PtyWakeup` events. No changes needed here — the pacer correctly batches multiple wakeups into a single render pass. The `render_ready` flag from Change 1 ensures the reader only clones when the pacer-driven render has consumed the previous frame.
+
+### Change 3: Hoist loop-invariant computations
 
 Move `screen.fgcolor()` and `screen.bgcolor()` outside the per-cell loop.
 
@@ -111,7 +97,7 @@ fn resolve_colors(
 
 | File | Change |
 |------|--------|
-| `crates/term-wm-pty-engine/src/pty.rs` | Add `render_ready` flag. Modify reader to use conditional snapshot instead of park/unpark. Signal reader in `screen()`. |
+| `crates/term-wm-pty-engine/src/pty.rs` | Add `render_ready` flag. Replace park/unpark with conditional clone. Signal reader in `screen()`. |
 | `crates/term-wm-pty-engine/src/pane.rs` | Add `set_render_ready()` to `Pane` trait. |
 | `crates/term-wm-ui-components/src/terminal.rs` | Hoist `screen.fgcolor()`/`bgcolor()` out of cell loop. |
 
@@ -126,7 +112,7 @@ cargo run -p term-bench -- --duration 5        # direct: ~60 fps (baseline)
 # Inside term-wm shell:
 cargo run -p term-bench -- --duration 5        # before: ~2 fps, after: ~50+ fps
 
-# CPU usage:
-# Run 'sleep 100' — reader should block on read(), 0% CPU
-# Run 'yes' — reader should parse continuously, clone only at 60Hz
+# CPU idle test:
+# Run 'sleep 100' — reader blocks on read(), 0% CPU
+# Run 'yes' — reader parses continuously, clones only at 60Hz
 ```
