@@ -1,6 +1,10 @@
 pub use term_wm_core::*;
 pub use term_wm_ui_components::*;
+pub mod prelude;
+pub mod standalone;
 pub mod tracing_sub;
+pub mod widget_adapter;
+pub use widget_adapter::{WidgetAdapter, StatefulWidgetAdapter};
 
 use term_wm_core::config::WmBuilder;
 use term_wm_core::window::{WindowKey, WindowManager};

@@ -30,6 +30,11 @@ pub trait Component<Msg>: std::any::Any {
     /// Phase 1: Called once when the component is mounted.
     fn init(&mut self) {}
 
+    /// Called immediately after the component is registered with the WindowManager.
+    /// Provides the assigned `WindowKey` and app context, resolving lifecycle
+    /// circularity without `Arc<Mutex<Option<WindowKey>>>` hacks.
+    fn on_mount(&mut self, _key: WindowKey, _app: &crate::app_context::AppContext) {}
+
     /// Phase 2: Evaluate raw events, return EventResult.
     /// Does NOT mutate state.
     fn handle_events(&mut self, event: &Event, ctx: &ComponentContext) -> EventResult<Msg> {

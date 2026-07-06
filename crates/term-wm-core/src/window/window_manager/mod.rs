@@ -225,6 +225,36 @@ impl WindowManager {
         self.windows.insert(Window::new(order, component))
     }
 
+    /// Register a component and invoke its `on_mount` hook with the assigned key.
+    /// Prefer this over `create_window` for components that need their WindowKey.
+    pub fn spawn<C>(&mut self, component: C) -> WindowKey
+    where
+        C: Component<TermWmAction> + 'static,
+    {
+        let app_ctx = self.app_ctx().clone();
+        let key = self.create_window(Box::new(component));
+        if let Some(comp) = self.component_for_key_mut(key) {
+            comp.on_mount(key, &app_ctx);
+        }
+        key
+    }
+
+    /// Register a pre-boxed component and invoke its `on_mount` hook.
+    pub fn spawn_boxed(&mut self, component: Box<dyn Component<TermWmAction>>) -> WindowKey {
+        let app_ctx = self.app_ctx().clone();
+        let key = self.create_window(component);
+        if let Some(comp) = self.component_for_key_mut(key) {
+            comp.on_mount(key, &app_ctx);
+        }
+        key
+    }
+
+    /// Returns true if the key references a live window in the SlotMap.
+    /// O(1) — no component extraction or vtable resolution.
+    pub fn has_window(&self, key: WindowKey) -> bool {
+        self.windows.contains_key(key)
+    }
+
     /// Access the Reaper for async child-process teardown.
     pub fn reaper(&self) -> &Reaper {
         &self.reaper
