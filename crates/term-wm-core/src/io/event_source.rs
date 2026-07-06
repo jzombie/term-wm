@@ -28,6 +28,18 @@ pub trait EventSource {
         PowerProfile::PowerSaver
     }
 
+    /// Signal whether there is pending work (e.g. a countdown timer) that
+    /// requires the event loop to poll frequently even without user input.
+    ///
+    /// The runner calls this every cycle with `true` when `super_pending` is
+    /// active or any overlay is visible.  Implementations should factor this
+    /// into [`current_profile()`] so the poll interval stays short.
+    ///
+    /// The default is a no-op for sources that don't need this signal.
+    ///
+    /// [`current_profile()`]: Self::current_profile
+    fn set_pending_work(&mut self, _pending: bool) {}
+
     /// Take accumulated window exit notifications. Default returns empty.
     fn take_exited_windows(&mut self) -> Vec<crate::window::WindowKey> {
         Vec::new()
@@ -53,6 +65,10 @@ impl<T: EventSource + ?Sized> EventSource for &mut T {
 
     fn set_mouse_capture(&mut self, enabled: bool) -> io::Result<()> {
         (**self).set_mouse_capture(enabled)
+    }
+
+    fn set_pending_work(&mut self, pending: bool) {
+        (**self).set_pending_work(pending)
     }
 
     fn poll_interval(&self) -> Duration {

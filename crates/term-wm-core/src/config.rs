@@ -7,7 +7,7 @@ use crate::keybindings::KeyBindings;
 use crate::theme::Theme;
 use crate::top_panel_trait::TopPanel;
 use crate::window::decorator::WindowDecorator;
-use crate::window::{WindowKey, WindowManager, WmMenuAction};
+use crate::window::{WindowKey, WindowManager};
 use crate::wm_config::{HintVisibility, WmConfig};
 
 /// Builder for [`WmConfig`] and [`WindowManager`].
@@ -110,7 +110,7 @@ impl WmBuilder {
         self,
         top_panel: Option<Box<dyn TopPanel<WindowKey>>>,
         bottom_panel: Option<Box<dyn BottomPanel>>,
-        menu_overlay: Option<Box<dyn MenuOverlay<WmMenuAction>>>,
+        menu_overlay: Option<Box<dyn MenuOverlay<crate::actions::TermWmAction>>>,
     ) -> WindowManager {
         let app_ctx = self.app_ctx.expect("app_ctx must be set before building");
         WindowManager::with_config(self.config, app_ctx, top_panel, bottom_panel, menu_overlay)

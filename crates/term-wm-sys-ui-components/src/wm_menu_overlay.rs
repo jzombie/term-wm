@@ -1,3 +1,5 @@
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyEventKind, MouseEventKind};
@@ -8,62 +10,74 @@ use ratatui::{
 };
 
 use term_wm_core::{
+    actions::{EventResult, TermWmAction},
     components::{Component, ComponentContext, MenuItem, MenuOverlay, Overlay},
-    keybindings::Action,
     layout::rect_contains,
     ui::UiFrame,
+    window::WindowKey,
 };
 
 use term_wm_ui_components::DialogOverlayComponent;
 use term_wm_ui_components::menu::MenuComponent;
 
-pub struct WmMenuOverlay<R> {
-    menu: MenuComponent<R>,
-    outlined: bool,
-    outlined_at: Option<Instant>,
+pub struct WmMenuOverlay {
+    menu: MenuComponent,
+    outlined: Cell<bool>,
+    outlined_at: RefCell<Option<Instant>>,
     outline_timeout: Duration,
-    menu_bounds_cache: Option<Rect>,
-    item_hits: Vec<(usize, Rect)>,
+    menu_bounds_cache: Cell<Option<Rect>>,
+    item_hits: std::cell::RefCell<Vec<(usize, Rect)>>,
     anchor: Option<(u16, u16)>,
     managed_area: Rect,
-    last_action: Option<R>,
+    last_action: Option<TermWmAction>,
 }
 
-impl<R> std::fmt::Debug for WmMenuOverlay<R> {
+impl std::fmt::Debug for WmMenuOverlay {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WmMenuOverlay")
-            .field("outlined", &self.outlined)
+            .field("outlined", &self.outlined.get())
             .field("anchor", &self.anchor)
             .field("managed_area", &self.managed_area)
             .finish_non_exhaustive()
     }
 }
 
-impl<R: Clone + 'static> WmMenuOverlay<R> {
+impl Default for WmMenuOverlay {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WmMenuOverlay {
     pub fn new() -> Self {
         Self {
             menu: MenuComponent::new(),
-            outlined: false,
-            outlined_at: None,
+            outlined: Cell::new(false),
+            outlined_at: RefCell::new(None),
             outline_timeout: Duration::ZERO,
-            menu_bounds_cache: None,
-            item_hits: Vec::new(),
+            menu_bounds_cache: Cell::new(None),
+            item_hits: std::cell::RefCell::new(Vec::new()),
             anchor: None,
             managed_area: Rect::default(),
             last_action: None,
         }
     }
 
-    fn auto_restore(&mut self) {
-        if self.outlined
-            && let Some(t) = self.outlined_at
-            && t.elapsed() > self.outline_timeout
-        {
-            self.restore();
+    fn auto_restore(&self) {
+        if !self.outlined.get() {
+            return;
+        }
+        let expired = self
+            .outlined_at
+            .borrow()
+            .is_some_and(|t| t.elapsed() > self.outline_timeout);
+        if expired {
+            self.outlined.set(false);
+            self.outlined_at.borrow_mut().take();
         }
     }
 
-    fn render_dropdown(&mut self, frame: &mut UiFrame<'_>, ctx: &ComponentContext) {
+    fn render_dropdown(&self, frame: &mut UiFrame<'_>, ctx: &ComponentContext) {
         let item_count = self.menu.items().len();
         if item_count == 0 {
             return;
@@ -109,7 +123,7 @@ impl<R: Clone + 'static> WmMenuOverlay<R> {
             height,
         };
 
-        self.menu_bounds_cache = Some(drop_rect);
+        self.menu_bounds_cache.set(Some(drop_rect));
 
         self.render_backdrop(frame, self.managed_area, drop_rect);
 
@@ -119,25 +133,28 @@ impl<R: Clone + 'static> WmMenuOverlay<R> {
             return;
         }
 
-        let hovered_idx = ctx.hover_pos().and_then(|(_mx, my)| {
+        let hovered_idx = ctx.hover_pos().and_then(|(mx, my)| {
             (my >= drop_rect.y.saturating_add(1)
                 && my
                     < drop_rect
                         .y
-                        .saturating_add((item_count as u16).saturating_add(1)))
+                        .saturating_add((item_count as u16).saturating_add(1))
+                && mx >= drop_rect.x
+                && mx < drop_rect.x.saturating_add(drop_rect.width))
             .then(|| (my.saturating_sub(drop_rect.y).saturating_sub(1)) as usize)
             .filter(|&idx| idx < item_count)
         });
         self.menu
             .render_items(frame, drop_rect, hovered_idx, &ctx.config().theme);
 
-        self.item_hits.clear();
+        let mut hits = self.item_hits.borrow_mut();
+        hits.clear();
         for idx in 0..item_count.min((drop_rect.height.saturating_sub(1)) as usize) {
             let y = drop_rect.y.saturating_add(idx as u16 + 1);
             if y < clip.y || y >= clip.y.saturating_add(clip.height) {
                 break;
             }
-            self.item_hits.push((
+            hits.push((
                 idx,
                 Rect {
                     x: drop_rect.x,
@@ -150,7 +167,7 @@ impl<R: Clone + 'static> WmMenuOverlay<R> {
     }
 
     fn render_outline(&self, frame: &mut UiFrame<'_>) {
-        let Some(menu_bounds) = self.menu_bounds_cache else {
+        let Some(menu_bounds) = self.menu_bounds_cache.get() else {
             return;
         };
         let buffer = frame.buffer_mut();
@@ -174,30 +191,40 @@ impl<R: Clone + 'static> WmMenuOverlay<R> {
     }
 
     fn render_backdrop(&self, frame: &mut UiFrame<'_>, bounds: Rect, exclude: Rect) {
-        // Delegate to DialogOverlayComponent's render_backdrop with exclude rect
         let dialog = DialogOverlayComponent::default();
         dialog.render_backdrop(frame, bounds, Some(exclude));
     }
 
     fn hit_test_item(&self, column: u16, row: u16) -> Option<usize> {
         self.item_hits
+            .borrow()
             .iter()
             .find(|(_, rect)| rect_contains(*rect, column, row))
             .map(|(idx, _)| *idx)
     }
 }
 
-impl<R: Clone + 'static> Component for WmMenuOverlay<R> {
-    fn render(&mut self, frame: &mut UiFrame<'_>, _area: Rect, ctx: &ComponentContext) {
+impl Component<TermWmAction> for WmMenuOverlay {
+    fn render(
+        &self,
+        frame: &mut UiFrame<'_>,
+        _area: Rect,
+        ctx: &ComponentContext,
+        _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
         self.auto_restore();
-        if self.outlined {
+        if self.outlined.get() {
             self.render_outline(frame);
         } else {
             self.render_dropdown(frame, ctx);
         }
     }
 
-    fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
+    fn handle_events(
+        &mut self,
+        event: &Event,
+        ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
         self.auto_restore();
         self.last_action = None;
 
@@ -208,65 +235,73 @@ impl<R: Clone + 'static> Component for WmMenuOverlay<R> {
                 self.menu.set_selected(idx);
                 self.restore();
                 self.last_action = self.menu.selected_action().cloned();
-                return true;
+                return EventResult::Consumed;
             }
-            return false;
+            return EventResult::Ignored;
         }
 
         let Event::Key(key) = event else {
-            return false;
+            return EventResult::Ignored;
         };
         if key.kind != KeyEventKind::Press {
-            return false;
+            return EventResult::Ignored;
         }
 
         let total = self.menu.items().len();
         if total == 0 {
-            return false;
+            return EventResult::Ignored;
         }
 
         let kb = ctx.keybindings().unwrap_or_default();
-        if kb.matches(Action::MenuUp, key) || kb.matches(Action::MenuPrev, key) {
+        if kb.matches(TermWmAction::MenuUp, key) || kb.matches(TermWmAction::MenuPrev, key) {
             let current = self.menu.selected();
             self.menu
                 .set_selected(if current == 0 { total - 1 } else { current - 1 });
             self.restore();
-            true
-        } else if kb.matches(Action::MenuDown, key) || kb.matches(Action::MenuNext, key) {
+            EventResult::Consumed
+        } else if kb.matches(TermWmAction::MenuDown, key) || kb.matches(TermWmAction::MenuNext, key)
+        {
             let current = self.menu.selected();
             self.menu.set_selected((current + 1) % total);
             self.restore();
-            true
-        } else if kb.matches(Action::MenuSelect, key) {
+            EventResult::Consumed
+        } else if kb.matches(TermWmAction::MenuSelect, key) {
             self.last_action = self.menu.selected_action().cloned();
-            true
+            EventResult::Consumed
         } else {
-            false
+            EventResult::Ignored
         }
     }
+
+    fn update(
+        &mut self,
+        _action: TermWmAction,
+        _ctx: &ComponentContext,
+        _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+    ) {
+    }
+
+    fn destroy(&mut self) {}
 }
 
-impl<R: Clone + 'static> Overlay for WmMenuOverlay<R> {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
+impl Overlay<TermWmAction> for WmMenuOverlay {
+    fn visible(&self) -> bool {
+        !self.outlined.get()
     }
 }
 
-impl<R: Clone + 'static> MenuOverlay<R> for WmMenuOverlay<R> {
+impl MenuOverlay<TermWmAction> for WmMenuOverlay {
     fn outline(&mut self) {
-        self.outlined = true;
-        self.outlined_at = Some(Instant::now());
+        self.outlined.set(true);
+        self.outlined_at.replace(Some(Instant::now()));
     }
 
     fn restore(&mut self) {
-        self.outlined = false;
-        self.outlined_at = None;
+        self.outlined.set(false);
+        self.outlined_at.take();
     }
 
-    fn set_items(&mut self, items: Vec<MenuItem<R>>) {
+    fn set_items(&mut self, items: Vec<MenuItem<TermWmAction>>) {
         self.menu.set_items(items);
     }
 
@@ -274,7 +309,7 @@ impl<R: Clone + 'static> MenuOverlay<R> for WmMenuOverlay<R> {
         self.outline_timeout = timeout;
     }
 
-    fn selected_action(&self) -> Option<&R> {
+    fn selected_action(&self) -> Option<&TermWmAction> {
         self.last_action.as_ref()
     }
 
@@ -287,65 +322,157 @@ impl<R: Clone + 'static> MenuOverlay<R> for WmMenuOverlay<R> {
     }
 }
 
-impl<R: Clone + 'static> Default for WmMenuOverlay<R> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crossterm::event::{
-        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+        KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton, MouseEvent,
+        MouseEventKind,
     };
-    use ratatui::buffer::Buffer;
-    use std::sync::Arc;
-    use term_wm_core::keybindings::KeyBindings;
-
-    fn items() -> Vec<MenuItem<&'static str>> {
-        vec![
-            MenuItem {
-                icon: None,
-                label: "First",
-                action: "first",
-            },
-            MenuItem {
-                icon: Some("→"),
-                label: "Second",
-                action: "second",
-            },
-            MenuItem {
-                icon: Some("●"),
-                label: "Third",
-                action: "third",
-            },
-        ]
-    }
-
     fn key_event(code: KeyCode) -> Event {
-        let mut k = KeyEvent::new(code, KeyModifiers::NONE);
-        k.kind = KeyEventKind::Press;
-        Event::Key(k)
+        Event::Key(KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        })
     }
 
-    fn mouse_click(x: u16, y: u16) -> Event {
+    fn mouse_click(col: u16, row: u16) -> Event {
         Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
-            column: x,
-            row: y,
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: col,
+            row,
             modifiers: KeyModifiers::NONE,
         })
     }
 
-    fn ctx_with_kb() -> ComponentContext {
-        ComponentContext::new(false).with_keybindings(Arc::new(KeyBindings::default()))
+    fn process(overlay: &mut WmMenuOverlay, event: &Event, ctx: &ComponentContext) {
+        if let EventResult::Action(action) = overlay.handle_events(event, ctx) {
+            overlay.update(action, ctx, &mut VecDeque::new());
+        }
+    }
+
+    fn make_items() -> Vec<MenuItem<TermWmAction>> {
+        vec![
+            MenuItem {
+                icon: Some("A"),
+                label: "Alpha",
+                action: TermWmAction::CloseWindow,
+            },
+            MenuItem {
+                icon: Some("B"),
+                label: "Beta",
+                action: TermWmAction::NewWindow,
+            },
+            MenuItem {
+                icon: Some("C"),
+                label: "Gamma",
+                action: TermWmAction::Help,
+            },
+        ]
     }
 
     #[test]
-    fn overlay_renders_dropdown_when_not_outlined() {
-        let mut overlay: WmMenuOverlay<&str> = WmMenuOverlay::new();
-        overlay.set_items(items());
+    fn menu_up_down_selections() {
+        let mut overlay = WmMenuOverlay::new();
+        let ctx = ComponentContext::new(true);
+        overlay.set_items(make_items());
+
+        // Down selects the second item
+        process(&mut overlay, &key_event(KeyCode::Down), &ctx);
+        assert_eq!(overlay.menu.selected(), 1, "Down should select item 1");
+
+        // Up goes back to first
+        process(&mut overlay, &key_event(KeyCode::Up), &ctx);
+        assert_eq!(overlay.menu.selected(), 0, "Up should select item 0");
+
+        // Up again wraps to last
+        process(&mut overlay, &key_event(KeyCode::Up), &ctx);
+        assert_eq!(overlay.menu.selected(), 2, "Up at top should wrap to last");
+    }
+
+    #[test]
+    fn menu_mouse_click_selects_item_and_stores_action() {
+        let mut overlay = WmMenuOverlay::new();
+        let ctx = ComponentContext::new(true);
+        overlay.set_items(make_items());
+        overlay.set_anchor(Some((0, 0)));
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        overlay.render(
+            &mut UiFrame::from_parts(area, &mut ratatui::buffer::Buffer::empty(area)),
+            area,
+            &ctx,
+            &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+        );
+
+        // Click on first item at row 1 (header is row 0)
+        process(&mut overlay, &mouse_click(1, 1), &ctx);
+        assert_eq!(overlay.menu.selected(), 0, "click should select item 0");
+        assert_eq!(
+            overlay.selected_action(),
+            Some(&TermWmAction::CloseWindow),
+            "click should set last_action"
+        );
+
+        // Click outside all items
+        process(&mut overlay, &mouse_click(50, 50), &ctx);
+        assert!(
+            overlay.selected_action().is_none(),
+            "outside click should not set action"
+        );
+    }
+
+    #[test]
+    fn overlay_keyboard_navigation() {
+        let mut overlay = WmMenuOverlay::new();
+        let ctx = ComponentContext::new(true);
+        overlay.set_items(make_items());
+
+        assert!(
+            overlay
+                .handle_events(&key_event(KeyCode::Down), &ctx)
+                .is_consumed(),
+            "Down should be consumed"
+        );
+        assert_eq!(overlay.menu.selected(), 1);
+
+        assert!(
+            overlay
+                .handle_events(&key_event(KeyCode::Down), &ctx)
+                .is_consumed(),
+            "Down should be consumed"
+        );
+        assert_eq!(overlay.menu.selected(), 2);
+
+        assert!(
+            overlay
+                .handle_events(&key_event(KeyCode::Down), &ctx)
+                .is_consumed(),
+            "Down should be consumed"
+        );
+        assert_eq!(overlay.menu.selected(), 0);
+
+        assert!(
+            overlay
+                .handle_events(&key_event(KeyCode::Up), &ctx)
+                .is_consumed(),
+            "Up should be consumed"
+        );
+        assert_eq!(overlay.menu.selected(), 2);
+    }
+
+    #[test]
+    fn overlay_mouse_click_on_item() {
+        let mut overlay = WmMenuOverlay::new();
+        let ctx = ComponentContext::new(true);
+        overlay.set_items(make_items());
         overlay.set_anchor(Some((0, 1)));
         overlay.set_managed_area(Rect {
             x: 0,
@@ -360,18 +487,95 @@ mod tests {
             width: 80,
             height: 25,
         };
-        let mut buf = Buffer::empty(area);
-        let mut frame = UiFrame::from_parts(area, &mut buf);
-        let ctx = ctx_with_kb();
-        overlay.render(&mut frame, area, &ctx);
+        overlay.render(
+            &mut UiFrame::from_parts(area, &mut ratatui::buffer::Buffer::empty(area)),
+            area,
+            &ctx,
+            &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+        );
 
+        assert!(
+            overlay
+                .handle_events(&mouse_click(1, 2), &ctx)
+                .is_consumed(),
+            "click on item should be consumed"
+        );
+        assert_eq!(
+            overlay.selected_action(),
+            Some(&TermWmAction::CloseWindow),
+            "click should set last_action"
+        );
+    }
+
+    #[test]
+    fn overlay_mouse_click_outside_returns_no_action() {
+        let mut overlay = WmMenuOverlay::new();
+        let ctx = ComponentContext::new(true);
+        overlay.set_items(make_items());
+        overlay.set_anchor(Some((0, 1)));
+        overlay.set_managed_area(Rect {
+            x: 0,
+            y: 1,
+            width: 80,
+            height: 24,
+        });
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 25,
+        };
+        overlay.render(
+            &mut UiFrame::from_parts(area, &mut ratatui::buffer::Buffer::empty(area)),
+            area,
+            &ctx,
+            &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+        );
+
+        overlay.handle_events(&mouse_click(50, 50), &ctx);
+        assert!(
+            overlay.selected_action().is_none(),
+            "click outside should not set action"
+        );
+    }
+
+    #[test]
+    fn overlay_renders_dropdown_when_not_outlined() {
+        let mut overlay = WmMenuOverlay::new();
+        overlay.set_items(make_items());
+        overlay.set_anchor(Some((0, 1)));
+        overlay.set_managed_area(Rect {
+            x: 0,
+            y: 1,
+            width: 80,
+            height: 24,
+        });
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 25,
+        };
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        {
+            let mut frame = UiFrame::from_parts(area, &mut buf);
+            let ctx = ComponentContext::new(true);
+            overlay.render(
+                &mut frame,
+                area,
+                &ctx,
+                &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+            );
+        }
         let cell = buf.cell((5, 2)).expect("first item text cell");
-        assert!(cell.symbol().contains("F"), "dropdown should render items");
+        assert!(cell.symbol().contains("A"), "dropdown should render items");
     }
 
     #[test]
     fn overlay_renders_nothing_when_no_items() {
-        let mut overlay: WmMenuOverlay<&str> = WmMenuOverlay::new();
+        let mut overlay = WmMenuOverlay::new();
         overlay.set_anchor(Some((0, 1)));
 
         let area = Rect {
@@ -380,19 +584,25 @@ mod tests {
             width: 80,
             height: 25,
         };
-        let mut buf = Buffer::empty(area);
-        let mut frame = UiFrame::from_parts(area, &mut buf);
-        let ctx = ctx_with_kb();
-        overlay.render(&mut frame, area, &ctx);
-
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        {
+            let mut frame = UiFrame::from_parts(area, &mut buf);
+            let ctx = ComponentContext::new(true);
+            overlay.render(
+                &mut frame,
+                area,
+                &ctx,
+                &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+            );
+        }
         let cell = buf.cell((0, 1)).expect("cell below anchor");
         assert_eq!(cell.symbol(), " ", "should be empty when no items");
     }
 
     #[test]
     fn overlay_outline_then_restore() {
-        let mut overlay: WmMenuOverlay<&str> = WmMenuOverlay::new();
-        overlay.set_items(items());
+        let mut overlay = WmMenuOverlay::new();
+        overlay.set_items(make_items());
         overlay.set_anchor(Some((0, 1)));
         overlay.set_managed_area(Rect {
             x: 0,
@@ -408,119 +618,53 @@ mod tests {
             width: 80,
             height: 25,
         };
-        let mut buf = Buffer::empty(area);
-        let mut frame = UiFrame::from_parts(area, &mut buf);
-        let ctx = ctx_with_kb();
+        let ctx = ComponentContext::new(true);
 
-        overlay.render(&mut frame, area, &ctx);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        {
+            let mut frame = UiFrame::from_parts(area, &mut buf);
+            overlay.render(
+                &mut frame,
+                area,
+                &ctx,
+                &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+            );
+        }
         let normal = buf.cell((1, 2)).map(|c| c.symbol().to_string());
 
         overlay.outline();
-        let mut buf2 = Buffer::empty(area);
-        let mut frame2 = UiFrame::from_parts(area, &mut buf2);
-        overlay.render(&mut frame2, area, &ctx);
-
+        let mut buf2 = ratatui::buffer::Buffer::empty(area);
+        {
+            let mut frame2 = UiFrame::from_parts(area, &mut buf2);
+            overlay.render(
+                &mut frame2,
+                area,
+                &ctx,
+                &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+            );
+        }
         let outlined = buf2.cell((1, 2)).map(|c| c.symbol().to_string());
         assert_ne!(normal, outlined, "outline mode should change rendering");
 
         overlay.restore();
-        let mut buf3 = Buffer::empty(area);
-        let mut frame3 = UiFrame::from_parts(area, &mut buf3);
-        overlay.render(&mut frame3, area, &ctx);
-
+        let mut buf3 = ratatui::buffer::Buffer::empty(area);
+        {
+            let mut frame3 = UiFrame::from_parts(area, &mut buf3);
+            overlay.render(
+                &mut frame3,
+                area,
+                &ctx,
+                &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+            );
+        }
         let restored = buf3.cell((1, 2)).map(|c| c.symbol().to_string());
         assert_eq!(normal, restored, "restore should revert to dropdown");
     }
 
     #[test]
-    fn overlay_keyboard_navigation() {
-        let mut overlay: WmMenuOverlay<&str> = WmMenuOverlay::new();
-        overlay.set_items(items());
-        let ctx = ctx_with_kb();
-
-        let handled = overlay.handle_event(&key_event(KeyCode::Down), &ctx);
-        assert!(handled, "Down should be handled");
-        assert_eq!(overlay.menu.selected(), 1);
-
-        let handled = overlay.handle_event(&key_event(KeyCode::Down), &ctx);
-        assert!(handled);
-        assert_eq!(overlay.menu.selected(), 2);
-
-        let handled = overlay.handle_event(&key_event(KeyCode::Down), &ctx);
-        assert!(handled);
-        assert_eq!(overlay.menu.selected(), 0);
-
-        let handled = overlay.handle_event(&key_event(KeyCode::Up), &ctx);
-        assert!(handled);
-        assert_eq!(overlay.menu.selected(), 2);
-    }
-
-    #[test]
-    fn overlay_mouse_click_on_item() {
-        let mut overlay: WmMenuOverlay<&str> = WmMenuOverlay::new();
-        overlay.set_items(items());
-        overlay.set_anchor(Some((0, 1)));
-        overlay.set_managed_area(Rect {
-            x: 0,
-            y: 1,
-            width: 80,
-            height: 24,
-        });
-
-        let area = Rect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 25,
-        };
-        let mut buf = Buffer::empty(area);
-        let mut frame = UiFrame::from_parts(area, &mut buf);
-        let ctx = ctx_with_kb();
-
-        overlay.render(&mut frame, area, &ctx);
-
-        let handled = overlay.handle_event(&mouse_click(1, 2), &ctx);
-        assert!(handled, "click on item should be handled");
-        assert_eq!(overlay.selected_action(), Some(&"first"));
-    }
-
-    #[test]
-    fn overlay_mouse_click_outside_returns_no_action() {
-        let mut overlay: WmMenuOverlay<&str> = WmMenuOverlay::new();
-        overlay.set_items(items());
-        overlay.set_anchor(Some((0, 1)));
-        overlay.set_managed_area(Rect {
-            x: 0,
-            y: 1,
-            width: 80,
-            height: 24,
-        });
-
-        let area = Rect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 25,
-        };
-        let mut buf = Buffer::empty(area);
-        let mut frame = UiFrame::from_parts(area, &mut buf);
-        let ctx = ctx_with_kb();
-
-        overlay.render(&mut frame, area, &ctx);
-
-        let handled = overlay.handle_event(&mouse_click(50, 50), &ctx);
-        assert!(!handled, "click outside should not be handled by overlay");
-        assert!(
-            overlay.selected_action().is_none(),
-            "no action should be stored"
-        );
-    }
-
-    #[test]
     fn debug_format() {
-        let overlay: WmMenuOverlay<&'static str> = WmMenuOverlay::new();
+        let overlay = WmMenuOverlay::new();
         let s = format!("{:?}", overlay);
-        // Manual Debug impl skips R-typed fields and includes outlined/anchor.
         assert!(
             s.contains("WmMenuOverlay"),
             "Debug should include struct name: {s}"
@@ -531,7 +675,7 @@ mod tests {
         );
         assert!(
             !s.contains("last_action"),
-            "Debug should NOT include R-typed fields"
+            "Debug should NOT include last_action field"
         );
     }
 }

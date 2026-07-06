@@ -2,8 +2,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use ratatui::prelude::Rect;
+
 use crate::app_context::AppContext;
 use crate::keybindings::KeyBindings;
+use crate::window::WindowKey;
 use crate::wm_config::WmConfig;
 
 // Shared component rendering context
@@ -18,6 +21,8 @@ use crate::wm_config::WmConfig;
 /// - `focused`: whether the component is currently focused.
 /// - `overlay`: whether the component is being rendered as an overlay (e.g. dialog).
 /// - `direct_mode`: whether the component's window is in direct (passthrough) mode.
+/// - `window_key`: the `WindowKey` of the window this component belongs to,
+///   used for hitbox registration in the registry during render.
 /// - `viewport`: logical offset describing which portion of the component's
 ///   content is currently visible inside a scrolling container.
 /// - `app_ctx`: shared reference to application identity information
@@ -27,12 +32,17 @@ pub struct ComponentContext {
     focused: bool,
     overlay: bool,
     direct_mode: bool,
+    window_key: Option<WindowKey>,
     viewport: ViewportContext,
     viewport_handle: Option<ViewportHandle>,
     app_ctx: Arc<AppContext>,
     hover_pos: Option<(u16, u16)>,
     keybindings: Option<Arc<KeyBindings>>,
     config: Arc<WmConfig>,
+    /// The component's bounding area in **screen coordinates** (absolute).
+    /// Set during render so that components can convert screen-space mouse
+    /// positions to local coordinates via `position.to_local(screen_area)`.
+    screen_area: Option<Rect>,
 }
 
 /// Viewport metadata describing how the component is projected into a
@@ -181,6 +191,7 @@ impl ComponentContext {
             focused,
             overlay: false,
             direct_mode: false,
+            window_key: None,
             viewport: ViewportContext {
                 offset_x: 0,
                 offset_y: 0,
@@ -194,6 +205,7 @@ impl ComponentContext {
             config: DEFAULT_CONFIG
                 .get_or_init(|| Arc::new(WmConfig::standalone()))
                 .clone(),
+            screen_area: None,
         }
     }
 
@@ -249,6 +261,11 @@ impl ComponentContext {
         &self.config
     }
 
+    /// Returns the window key for the window this component belongs to.
+    pub fn window_key(&self) -> Option<WindowKey> {
+        self.window_key
+    }
+
     pub fn with_config(mut self, config: Arc<WmConfig>) -> Self {
         self.config = config;
         self
@@ -284,6 +301,13 @@ impl ComponentContext {
         ctx
     }
 
+    /// Return a new `ComponentContext` with an attached window key.
+    pub fn with_window_key(&self, key: WindowKey) -> Self {
+        let mut ctx = self.clone();
+        ctx.window_key = Some(key);
+        ctx
+    }
+
     /// Return a new `ComponentContext` with updated viewport metadata.
     pub fn with_viewport(&self, viewport: ViewportContext, handle: Option<ViewportHandle>) -> Self {
         let mut ctx = self.clone();
@@ -302,6 +326,18 @@ impl ComponentContext {
     pub fn with_keybindings(&self, kb: Arc<KeyBindings>) -> Self {
         let mut ctx = self.clone();
         ctx.keybindings = Some(kb);
+        ctx
+    }
+
+    /// Returns the component's bounding area in screen coordinates, if set.
+    pub fn screen_area(&self) -> Option<Rect> {
+        self.screen_area
+    }
+
+    /// Return a new `ComponentContext` with a screen-space bounding area.
+    pub fn with_screen_area(&self, area: Rect) -> Self {
+        let mut ctx = self.clone();
+        ctx.screen_area = Some(area);
         ctx
     }
 }

@@ -2911,6 +2911,7 @@ dependencies = [
  "portable-pty",
  "ratatui",
  "slotmap",
+ "smallvec",
  "strum",
  "term-wm-layout-engine",
  "term-wm-pty-engine",

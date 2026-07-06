@@ -1,4 +1,5 @@
 use super::FloatRectSpec;
+use crate::actions::TermWmAction;
 use crate::components::Component;
 
 /// Canonical window lifecycle states.
@@ -17,7 +18,7 @@ pub enum WindowState {
 }
 
 /// A window entry in the SlotMap — the single source of truth for all
-/// window data, including the optional renderable component.
+/// window data, including the renderable component.
 /// Process teardown is handled by the `Reaper`, not by `Drop`.
 pub struct Window {
     pub title: Option<String>,
@@ -27,14 +28,17 @@ pub struct Window {
     pub prev_floating_rect: Option<FloatRectSpec>,
     pub creation_order: usize,
     pub direct_mode: bool,
-    /// The renderable component (terminal, debug log, etc.).
-    /// `None` for chrome-only windows or windows whose component is
-    /// managed by the application via `WindowProvider::window_component`.
-    pub component: Option<Box<dyn Component>>,
+    /// Whether this window was created via `set_system_window`.
+    /// System windows are kept in the SlotMap after close so they can
+    /// be shown again later (debug log, help overlay, etc.).
+    pub is_system_window: bool,
+    /// The renderable component. Every window has one.
+    /// For chrome-only windows, use `NoopComponent`.
+    pub component: Box<dyn Component<TermWmAction>>,
 }
 
 impl Window {
-    pub fn new(creation_order: usize) -> Self {
+    pub fn new(creation_order: usize, component: Box<dyn Component<TermWmAction>>) -> Self {
         Self {
             title: None,
             title_set_order: None,
@@ -43,7 +47,8 @@ impl Window {
             prev_floating_rect: None,
             creation_order,
             direct_mode: false,
-            component: None,
+            is_system_window: false,
+            component,
         }
     }
 

@@ -5,9 +5,9 @@ use ratatui::layout::Alignment;
 use ratatui::style::{Color, Style};
 use ratatui::widgets::Paragraph;
 
-use super::{WindowManager, WmMenuAction};
-use crate::components::{Component, ConfirmAction, Overlay};
-use crate::keybindings::Action;
+use super::WindowManager;
+use crate::actions::{ConfirmAction, EventResult, TermWmAction};
+use crate::components::{Component, Overlay};
 use crate::layout::{FloatingPane, rect_contains, render_handles_masked};
 use crate::window::FloatRectSpec;
 use crate::window::WindowKey;
@@ -68,15 +68,37 @@ impl WindowManager {
         let Some(boxed) = self.overlays.get_mut(&super::OverlayId::Help) else {
             return false;
         };
-        boxed.resize(self.last_frame_area, &ctx);
-        let handled = boxed.handle_event(event, &ctx);
-        if !boxed.visible() {
+
+        let was_dragging = boxed.selection_status().dragging;
+        let result = boxed.handle_events(event, &ctx);
+        let was_handled = !result.is_ignored();
+
+        if let EventResult::Action(action) = result {
+            let mut queue = std::collections::VecDeque::new();
+            boxed.update(action, &ctx, &mut queue);
+            while let Some((_key, _action)) = queue.pop_front() {}
+        }
+
+        let status = boxed.selection_status();
+        let still_visible = boxed.visible();
+        let text = if status.active || status.dragging {
+            boxed.selection_text()
+        } else {
+            None
+        };
+
+        self.set_selection_snapshot(status.active, status.dragging, text);
+        if was_dragging && !status.dragging && status.active {
+            self.copy_selection_to_clipboard();
+        }
+
+        if !still_visible {
             self.overlays.remove(&super::OverlayId::Help);
         }
-        handled
+        was_handled
     }
 
-    pub fn handle_wm_menu_event(&mut self, event: &Event) -> Option<WmMenuAction> {
+    pub fn handle_wm_menu_event(&mut self, event: &Event) -> Option<TermWmAction> {
         if !self.wm_overlay_visible() {
             return None;
         }
@@ -88,24 +110,30 @@ impl WindowManager {
                 .as_ref()
                 .is_some_and(|p| p.menu_icon_contains_point(mouse.column, mouse.row))
         {
-            return Some(WmMenuAction::CloseMenu);
+            return None; // handled by chrome overlay toggle
         }
 
         let ctx = self.component_context(false).with_overlay(true);
         let Some(menu) = &mut self.menu_overlay else {
             return None;
         };
-        let comp: &mut dyn Component = &mut **menu;
-        comp.handle_event(event, &ctx);
+        let comp: &mut dyn Component<TermWmAction> = &mut **menu;
+        if let EventResult::Action(action) = comp.handle_events(event, &ctx) {
+            // Process the action through update
+            let mut queue = std::collections::VecDeque::new();
+            comp.update(action, &ctx, &mut queue);
+            // Drain any cascading actions
+            while let Some((_key, _action)) = queue.pop_front() {}
+        }
 
         if let Some(action) = menu.selected_action() {
-            return Some(*action);
+            return Some(action.clone());
         }
 
         if let Event::Mouse(mouse) = event
             && matches!(mouse.kind, MouseEventKind::Down(_))
         {
-            return Some(WmMenuAction::CloseMenu);
+            return None; // handled by chrome layer
         }
 
         None
@@ -113,7 +141,7 @@ impl WindowManager {
 
     pub fn handle_exit_confirm_event(&mut self, event: &Event) -> Option<ConfirmAction> {
         let comp = self.overlays.get_mut(&super::OverlayId::ExitConfirm)?;
-        let overlay: &mut dyn Overlay = &mut **comp;
+        let overlay: &mut dyn Overlay<TermWmAction> = &mut **comp;
         overlay.handle_confirm_event(event)
     }
 
@@ -125,11 +153,11 @@ impl WindowManager {
             return false;
         };
         let kb = self.keybindings();
-        kb.matches(Action::MenuUp, key)
-            || kb.matches(Action::MenuDown, key)
-            || kb.matches(Action::MenuSelect, key)
-            || kb.matches(Action::MenuNext, key)
-            || kb.matches(Action::MenuPrev, key)
+        kb.matches(TermWmAction::MenuUp, key)
+            || kb.matches(TermWmAction::MenuDown, key)
+            || kb.matches(TermWmAction::MenuSelect, key)
+            || kb.matches(TermWmAction::MenuNext, key)
+            || kb.matches(TermWmAction::MenuPrev, key)
     }
 
     pub fn render_overlays(
@@ -137,6 +165,7 @@ impl WindowManager {
         frame: &mut crate::ui::UiFrame<'_>,
         z_base: usize,
         z_total: usize,
+        registry: &mut crate::hitbox_registry::HitboxRegistry,
     ) {
         let (hovered, hovered_resize) = self.hover_targets();
         let obscuring: Vec<ratatui::prelude::Rect> = self
@@ -190,10 +219,34 @@ impl WindowManager {
             visible_regions.set(key, self.visible_region_for_key(key));
         }
 
+        let drag_resize_state = match &self.mouse_capture {
+            Some(crate::window::window_manager::MouseCaptureState::ResizingWindow {
+                key,
+                edge,
+                start_rect,
+                start_col,
+                start_row,
+                start_x,
+                start_y,
+                start_width,
+                start_height,
+            }) => Some(crate::layout::floating::ResizeDrag {
+                key: *key,
+                edge: *edge,
+                start_rect: *start_rect,
+                start_col: *start_col,
+                start_row: *start_row,
+                start_x: *start_x,
+                start_y: *start_y,
+                start_width: *start_width,
+                start_height: *start_height,
+            }),
+            _ => None,
+        };
         crate::layout::floating::render_resize_outline(
             frame,
             hovered_resize.copied(),
-            self.drag_resize,
+            drag_resize_state,
             &visible_regions,
             self.managed_area,
             &floating_panes,
@@ -272,8 +325,8 @@ impl WindowManager {
                 menu.set_items(menu_items);
                 menu.set_anchor(anchor);
                 menu.set_managed_area(self.managed_area);
-                let comp: &mut dyn Component = &mut **menu;
-                comp.render(frame, frame.area(), &menu_ctx);
+                let comp: &mut dyn Component<TermWmAction> = &mut **menu;
+                comp.render(frame, frame.area(), &menu_ctx, registry);
             }
             oi += 1;
         }
@@ -296,7 +349,7 @@ impl WindowManager {
                     crate::ui::render_drop_shadow(frame, shadow_dest, z, &self.config.theme);
                 }
                 if let Some(overlay) = self.overlays.get_mut(&overlay_id) {
-                    overlay.render(frame, frame.area(), &ctx);
+                    overlay.render(frame, frame.area(), &ctx, registry);
                 }
             }
         }

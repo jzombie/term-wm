@@ -25,7 +25,7 @@ const POWERSAVER_POLL_INTERVAL: Duration = Duration::from_secs(3600);
 /// variant is auto-selected by `profile_from_activity` which considers
 /// both the timestamp of the last input event and whether any windows
 /// have dirty PTY data.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum PowerProfile {
     /// 120 fps poll (~8ms) — user is actively typing (<100ms since last input).
     Interactive,

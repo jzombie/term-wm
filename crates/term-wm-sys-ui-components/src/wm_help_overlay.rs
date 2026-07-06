@@ -1,15 +1,18 @@
+use std::cell::Cell;
+use std::collections::VecDeque;
 use std::str;
+use std::sync::Arc;
 
 use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders, Clear};
 
-use std::sync::Arc;
-
+use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::app_context::AppContext;
-use term_wm_core::components::{Component, ComponentContext, Overlay};
-use term_wm_core::keybindings::{Action, KeyBindings};
+use term_wm_core::components::{Component, ComponentContext, Overlay, SelectionStatus};
+use term_wm_core::keybindings::KeyBindings;
 use term_wm_core::ui::UiFrame;
+use term_wm_core::window::WindowKey;
 use term_wm_ui_components::{DialogOverlayComponent, MarkdownViewerComponent, ScrollViewComponent};
 
 const HELP_CONTENT_BYTES: &[u8] =
@@ -19,17 +22,20 @@ const HELP_CONTENT_BYTES: &[u8] =
 pub struct WmHelpOverlayComponent {
     dialog: DialogOverlayComponent,
     content: ScrollViewComponent<MarkdownViewerComponent>,
-    area: Rect,
+    area: Cell<Rect>,
     keybindings: KeyBindings,
     app_ctx: Arc<AppContext>,
 }
 
-impl Component for WmHelpOverlayComponent {
-    fn resize(&mut self, area: Rect, _ctx: &ComponentContext) {
-        self.area = area;
-    }
-
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _ctx: &ComponentContext) {
+impl Component<TermWmAction> for WmHelpOverlayComponent {
+    fn render(
+        &self,
+        frame: &mut UiFrame<'_>,
+        area: Rect,
+        _ctx: &ComponentContext,
+        registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
+        self.area.set(area);
         if !self.dialog.visible() || area.width == 0 || area.height == 0 {
             return;
         }
@@ -46,42 +52,67 @@ impl Component for WmHelpOverlayComponent {
         };
         frame.render_widget(block, rect);
         let ctx = ComponentContext::new(true).with_overlay(true);
-        self.content.resize(inner, &ctx);
-        self.content.render(frame, inner, &ctx);
+        self.content.render(frame, inner, &ctx, registry);
     }
 
-    fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
+    fn handle_events(
+        &mut self,
+        event: &Event,
+        ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
         if !self.dialog.visible() {
-            return false;
+            return EventResult::Ignored;
         }
         match event {
             Event::Key(key) => {
-                if self.keybindings.matches(Action::CloseHelp, key) {
+                if self.keybindings.matches(TermWmAction::CloseHelp, key) {
                     self.close();
-                    true
+                    EventResult::Consumed
                 } else {
-                    self.content.handle_event(event, ctx)
+                    self.content.handle_events(event, ctx)
                 }
             }
             Event::Mouse(_) => {
-                if self.dialog.handle_click_outside(event, self.area) {
+                if self.dialog.handle_click_outside(event, self.area.get()) {
                     self.close();
-                    return true;
+                    return EventResult::Consumed;
                 }
-                self.content.handle_event(event, ctx)
+                let area = self.area.get();
+                let rect = self.dialog.rect_for(area);
+                let inner = ratatui::layout::Rect {
+                    x: rect.x.saturating_add(1),
+                    y: rect.y.saturating_add(1),
+                    width: rect.width.saturating_sub(2),
+                    height: rect.height.saturating_sub(2),
+                };
+                let ctx = ctx.with_screen_area(inner);
+                self.content.handle_events(event, &ctx)
             }
-            _ => false,
+            _ => EventResult::Ignored,
         }
+    }
+
+    fn update(
+        &mut self,
+        action: TermWmAction,
+        ctx: &ComponentContext,
+        actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+    ) {
+        self.content.update(action, ctx, actions);
+    }
+
+    fn destroy(&mut self) {}
+
+    fn selection_status(&self) -> SelectionStatus {
+        self.content.selection_status()
+    }
+
+    fn selection_text(&self) -> Option<String> {
+        self.content.selection_text()
     }
 }
 
-impl Overlay for WmHelpOverlayComponent {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
+impl Overlay<TermWmAction> for WmHelpOverlayComponent {
     fn visible(&self) -> bool {
         self.dialog.visible()
     }
@@ -105,7 +136,7 @@ impl WmHelpOverlayComponent {
         let mut overlay = Self {
             dialog,
             content: viewer,
-            area: Rect::default(),
+            area: Cell::new(Rect::default()),
             keybindings,
             app_ctx: Arc::clone(app_ctx),
         };
@@ -118,22 +149,22 @@ impl WmHelpOverlayComponent {
                 .replace("%PLATFORM%", &platform)
                 .replace("%REPOSITORY%", env!("CARGO_PKG_REPOSITORY"));
 
-            let focus_next = kb.combos_for(Action::FocusNext).join(" / ");
-            let focus_prev = kb.combos_for(Action::FocusPrev).join(" / ");
-            let new_win = kb.combos_for(Action::NewWindow).join(" / ");
+            let focus_next = kb.combos_for(TermWmAction::FocusNext).join(" / ");
+            let focus_prev = kb.combos_for(TermWmAction::FocusPrev).join(" / ");
+            let new_win = kb.combos_for(TermWmAction::NewWindow).join(" / ");
             let menu_nav = {
-                let a = kb.combos_for(Action::MenuNext).join(" / ");
-                let b = kb.combos_for(Action::MenuPrev).join(" / ");
+                let a = kb.combos_for(TermWmAction::MenuNext).join(" / ");
+                let b = kb.combos_for(TermWmAction::MenuPrev).join(" / ");
                 format!("{} / {}", a, b)
             };
             let menu_alt = {
-                let a = kb.combos_for(Action::MenuUp).join(" / ");
-                let b = kb.combos_for(Action::MenuDown).join(" / ");
+                let a = kb.combos_for(TermWmAction::MenuUp).join(" / ");
+                let b = kb.combos_for(TermWmAction::MenuDown).join(" / ");
                 format!("{} / {}", a, b)
             };
-            let select = kb.combos_for(Action::MenuSelect).join(" / ");
-            let super_key = kb.combos_for(Action::WmToggleOverlay).join(" / ");
-            let help_combo = kb.combos_for(Action::OpenHelp).join(" / ");
+            let select = kb.combos_for(TermWmAction::MenuSelect).join(" / ");
+            let super_key = kb.combos_for(TermWmAction::WmToggleOverlay).join(" / ");
+            let help_combo = kb.combos_for(TermWmAction::OpenHelp).join(" / ");
             let help_label = if help_combo.is_empty() {
                 "Help menu".to_string()
             } else {
@@ -152,12 +183,17 @@ impl WmHelpOverlayComponent {
             overlay
                 .content
                 .content
+                .borrow_mut()
                 .set_markdown(&s, &term_wm_core::theme::NOIR);
         }
-        overlay.content.content.set_link_handler_fn(|url| {
-            let _ = webbrowser::open(url);
-            true
-        });
+        overlay
+            .content
+            .content
+            .borrow_mut()
+            .set_link_handler_fn(|url| {
+                let _ = webbrowser::open(url);
+                true
+            });
         overlay.content.set_keyboard_enabled(true);
         overlay
     }
@@ -168,7 +204,7 @@ impl WmHelpOverlayComponent {
 
     pub fn close(&mut self) {
         self.dialog.set_visible(false);
-        self.content.content.reset();
+        self.content.content.borrow_mut().reset();
     }
 
     pub fn visible(&self) -> bool {
@@ -180,7 +216,10 @@ impl WmHelpOverlayComponent {
     }
 
     pub fn set_selection_enabled(&mut self, enabled: bool) {
-        self.content.content.set_selection_enabled(enabled);
+        self.content
+            .content
+            .borrow_mut()
+            .set_selection_enabled(enabled);
     }
 }
 
@@ -211,7 +250,7 @@ mod tests {
 
     #[test]
     fn placeholders_are_replaced_in_markdown() {
-        let mut overlay = WmHelpOverlayComponent::new(
+        let overlay = WmHelpOverlayComponent::new(
             &Arc::new(AppContext::new(
                 env!("CARGO_PKG_NAME"),
                 env!("CARGO_PKG_VERSION"),
@@ -233,6 +272,7 @@ mod tests {
                 &mut frame,
                 area,
                 &ComponentContext::new(true).with_overlay(true),
+                &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
             );
         }
 
@@ -284,8 +324,8 @@ mod tests {
         );
         overlay.show();
         let ev = Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        let handled = overlay.handle_event(&ev, &ComponentContext::new(true));
-        assert!(handled, "close key should be handled");
+        let result = overlay.handle_events(&ev, &ComponentContext::new(true));
+        assert!(!result.is_ignored(), "close key should be handled");
         assert!(!overlay.visible(), "overlay should be closed by key");
     }
 
@@ -304,7 +344,7 @@ mod tests {
             width: 80,
             height: 24,
         };
-        overlay.area = area;
+        overlay.area.set(area);
 
         let ev = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
@@ -313,9 +353,9 @@ mod tests {
             modifiers: crossterm::event::KeyModifiers::NONE,
         });
 
-        let handled = overlay.handle_event(&ev, &ComponentContext::new(true));
+        let result = overlay.handle_events(&ev, &ComponentContext::new(true));
         assert!(
-            handled,
+            !result.is_ignored(),
             "outside click should be handled when auto-close enabled"
         );
         assert!(

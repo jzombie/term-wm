@@ -23,7 +23,7 @@ fn mouse_capture_flow_through_window_manager() {
             &ctx.app_version,
             None,
         ));
-    let menu: Box<dyn term_wm_core::components::MenuOverlay<term_wm_core::window::WmMenuAction>> =
+    let menu: Box<dyn term_wm_core::components::MenuOverlay<term_wm_core::actions::TermWmAction>> =
         Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
     let mut wm: term_wm::window::WindowManager = term_wm::window::WindowManager::with_config(
         term_wm::wm_config::WmConfig::standalone(),

@@ -38,6 +38,21 @@ Helper-Method Naming
 Component Trait Requirements
 - Every component must implement the shared `Component` trait (e.g., `resize`, `render`, `handle_event`) and import the trait with `use crate::components::Component;` when needed.
 
+Screen-Space Coordinates
+- Components MUST read their screen-space area from `ComponentContext::screen_area()`, never cache it in a `Cell<Rect>`.
+- `screen_area` is set by `dispatch_mouse` from the `HitboxRegistry` hit-test result — the single source of truth.
+- During `render()`, use `ctx.screen_area().unwrap_or(area)` for coordinate conversion.
+- During `handle_events()`, use `ctx.screen_area()` directly — the context carries the exact component bounds.
+- Do NOT store `last_area: Cell<Rect>` or `content_area: Cell<Rect>` — these are immediate-mode anti-patterns that go stale between render and event dispatch.
+
+Component Developer API (Facade Pattern)
+- `handle_events` has a default implementation that converts screen-space mouse coordinates to local coordinates and routes to `on_mouse` / `on_key`.
+- Leaf components should implement `on_mouse(&mut self, mouse: &LocalMouseEvent, ctx: &ComponentContext)` — coordinates are relative to the component's top-left (0, 0).
+- Leaf components should implement `on_key(&mut self, event: &Event, ctx: &ComponentContext)` for keyboard handling.
+- Only override `handle_events` if you need custom routing (e.g., container components that dispatch to children, or components with mixed mouse+keyboard logic).
+- `LocalMouseEvent` provides `col`, `row` (local), `kind`, and `modifiers`.
+- Do NOT call `ctx.screen_area()` in `on_mouse` — the framework has already converted to local coordinates.
+
 Module Exports
 - Keep `src/components/mod.rs` updated to re-export the canonical `*Component` names used across the repo.
 

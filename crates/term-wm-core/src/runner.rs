@@ -5,15 +5,20 @@ use ratatui::buffer::{Buffer, Cell};
 use ratatui::prelude::Rect;
 use ratatui::style::{Modifier, Style};
 
-use crate::components::{Component, ConfirmAction, SelectionStatus};
+use std::collections::VecDeque;
+
+use crate::actions::{ConfirmAction, EventResult, SystemTask, TermWmAction};
+use crate::components::{Component, SelectionStatus};
 use crate::debug_event_flags;
 use crate::event_loop::{ControlFlow, EventLoop};
+use crate::events::crossterm_event_to_wm;
+use crate::hitbox_registry::{HitTarget, HitboxRegistry};
 use crate::io::{EventSource, RenderTarget};
-use crate::keybindings::Action;
 use crate::layout::{LayoutNode, TilingLayout};
+use crate::task_scheduler::TaskScheduler;
 use crate::ui::UiFrame;
 use crate::window::decorator::{WindowDecorator, WindowRenderCtx};
-use crate::window::{DrawTask, WindowKey, WindowManager, WindowSurface, WmMenuAction};
+use crate::window::{DrawTask, WindowKey, WindowManager, WindowSurface};
 
 pub trait WindowManagerHost {
     fn windows(&mut self) -> &mut WindowManager;
@@ -58,7 +63,7 @@ pub trait WindowProvider: WindowManagerHost {
         auto_layout_for_windows(windows)
     }
 
-    fn window_component(&mut self, _key: WindowKey) -> Option<&mut dyn Component> {
+    fn window_component(&mut self, _key: WindowKey) -> Option<&mut dyn Component<TermWmAction>> {
         None
     }
 
@@ -75,36 +80,79 @@ pub trait WindowProvider: WindowManagerHost {
     }
 }
 
+fn drain_action_queue<A: WindowProvider>(
+    app: &mut A,
+    queue: &mut VecDeque<(WindowKey, TermWmAction)>,
+) {
+    while let Some((key, action)) = queue.pop_front() {
+        let ctx = app.windows().component_context_for(true, key);
+        if let Some(comp) = app.window_component(key) {
+            comp.update(action, &ctx, queue);
+        }
+    }
+}
+
 fn handle_focused_app_event<A>(event: &Event, app: &mut A) -> bool
 where
     A: WindowProvider,
 {
+    // Clear hover state when the terminal loses focus so stale
+    // hover highlights do not persist on menus or buttons.
+    // Do not return — allow fall-through to standard dispatch.
+    if matches!(event, Event::FocusLost) {
+        app.windows().clear_hover();
+    }
+
+    // Mouse events: use registry dispatch instead of tree-walk.
+    // The registry is built during the render pass and provides
+    // O(1) hit-testing — no coordinate mutation, no ad-hoc rect_contains.
+    if matches!(event, Event::Mouse(_)) {
+        if let Some(wm_event) = crossterm_event_to_wm(event) {
+            return app.windows().dispatch_mouse(&wm_event);
+        }
+        return false;
+    }
+
     let focus_id = app.windows().focused_window();
+
+    // Phase 1: WM-stored components (chrome, debug log, system windows)
+    if let Some((_key, result)) = app.windows().dispatch_focused_event(event) {
+        if let EventResult::Action(action) = result {
+            let mut queue = VecDeque::from([(focus_id, action)]);
+            drain_action_queue(app, &mut queue);
+        }
+        return true;
+    }
+
+    // Phase 2 Fallback Prep: Compute immutable state FIRST, before mutably borrowing app
     let direct_mode = app.windows().direct_mode(focus_id);
     let ctx = app
         .windows()
-        .component_context(true)
+        .component_context_for(!direct_mode, focus_id)
         .with_direct_mode(direct_mode);
+    let Some((_, localized_evt)) = app.windows().focused_window_event(event) else {
+        return false;
+    };
+    let adjusted_evt = app
+        .windows()
+        .adjust_event_for_window(focus_id, &localized_evt);
 
-    let mut pending_focus: Option<WindowKey> = None;
-    let mut pending_event: Option<Event> = None;
-    let consumed = {
-        let windows = app.windows();
-        windows.dispatch_focused_event(event, |focus_id, localized| {
-            pending_focus = Some(focus_id);
-            pending_event = Some(localized.clone());
-            false
-        })
+    // Phase 2 Dispatch: Mutably borrow app for the component
+    let result = if let Some(comp) = app.window_component(focus_id) {
+        comp.handle_events(&adjusted_evt, &ctx)
+    } else {
+        return false;
     };
 
-    if let (Some(focus_id), Some(localized)) = (pending_focus, pending_event) {
-        if let Some(component) = app.window_component(focus_id) {
-            component.handle_event(&localized, &ctx)
-        } else {
-            false
+    // Phase 3: Process the result
+    match result {
+        EventResult::Action(action) => {
+            let mut queue = VecDeque::from([(focus_id, action)]);
+            drain_action_queue(app, &mut queue);
+            true
         }
-    } else {
-        consumed
+        EventResult::Consumed => true,
+        EventResult::Ignored => false,
     }
 }
 
@@ -114,6 +162,7 @@ pub fn run_app<O, D, A, FDraw, FMap>(
     driver: &mut D,
     app: &mut A,
     focus_regions: &[WindowKey],
+    system_scheduler: TaskScheduler<SystemTask>,
     _map_region: FMap,
     mut draw: FDraw,
 ) -> io::Result<()>
@@ -124,6 +173,7 @@ where
     FDraw: for<'frame> FnMut(UiFrame<'frame>, &mut A),
     FMap: Fn(WindowKey) -> WindowKey + Copy,
 {
+    let system_handle = system_scheduler.handle();
     let mut profile_tracker =
         crate::power_profile::PowerProfileTracker::new(driver.current_profile());
     let mut event_loop = EventLoop::new(driver);
@@ -132,6 +182,19 @@ where
         .set_mouse_capture(app.windows().mouse_capture_enabled())?;
     event_loop.run(|driver, event| {
         let handler = || -> io::Result<ControlFlow> {
+            // Process expired system tasks (super-passthrough, drag-snap)
+            for (_id, task) in system_handle.drain_expired() {
+                match task {
+                    SystemTask::SuperPassthrough { event } => {
+                        app.windows().clear_super_pending();
+                        let _ = handle_focused_app_event(&event, app);
+                    }
+                    SystemTask::DragSnap => {
+                        app.windows().apply_drag_snap_if_pending();
+                    }
+                }
+            }
+
             if debug_event_flags::take_panic_pending() {
                 app.on_panic();
             }
@@ -167,6 +230,7 @@ where
             if let Some(evt) = event {
                 // Synthesized key event from bottom-panel hint click takes priority
                 let evt = app.windows().take_synthetic_event().unwrap_or(evt);
+
                 // Pre-compute the keybinding action using the configured
                 // KeyBindings from WindowManager (not hardcoded defaults).
                 // Only Global-layer actions are proactively dispatched;
@@ -212,7 +276,7 @@ where
                         let is_wm_key = app
                             .windows()
                             .keybindings()
-                            .matches(crate::keybindings::Action::WmToggleOverlay, key);
+                            .matches(TermWmAction::WmToggleOverlay, key);
                         match app.windows().handle_super_press(key, is_wm_key) {
                             crate::window::SuperPressResult::DoubleSuper => {
                                 app.windows().open_wm_overlay_no_passthrough();
@@ -264,7 +328,7 @@ where
                     && app
                         .windows()
                         .keybindings()
-                        .matches(crate::keybindings::Action::WmToggleOverlay, key)
+                        .matches(TermWmAction::WmToggleOverlay, key)
                 {
                     if app.windows().wm_overlay_visible() {
                         let passthrough = app.windows().super_passthrough_active();
@@ -282,55 +346,56 @@ where
                 if wm_mode && app.windows().wm_overlay_visible() {
                     if let Some(action) = app.windows().handle_wm_menu_event(&evt) {
                         match action {
-                            WmMenuAction::CloseMenu => {
+                            TermWmAction::CloseMenu => {
                                 app.windows().close_wm_overlay();
                             }
-                            WmMenuAction::ToggleMouseCapture => {
+                            TermWmAction::ToggleMouseCapture => {
                                 app.windows().toggle_mouse_capture();
                             }
-                            WmMenuAction::ToggleClipboardMode => {
+                            TermWmAction::ToggleClipboardMode => {
                                 app.windows().toggle_clipboard_enabled();
                             }
-                            WmMenuAction::ToggleWindowSelection => {
+                            TermWmAction::ToggleWindowSelection => {
                                 app.windows().toggle_window_selection();
                             }
-                            WmMenuAction::MinimizeWindow => {
+                            TermWmAction::MinimizeWindow => {
                                 let id = app.windows().focused_window();
                                 app.windows().minimize_window(id);
                                 app.windows().close_wm_overlay();
                             }
-                            WmMenuAction::MaximizeWindow => {
+                            TermWmAction::MaximizeWindow => {
                                 let id = app.windows().focused_window();
                                 app.windows().toggle_maximize(id);
                                 app.windows().close_wm_overlay();
                             }
-                            WmMenuAction::CloseWindow => {
+                            TermWmAction::CloseWindow => {
                                 let id = app.windows().focused_window();
                                 app.windows().close_window(id);
                                 app.windows().close_wm_overlay();
                             }
-                            WmMenuAction::NewWindow => {
+                            TermWmAction::NewWindow => {
                                 app.wm_new_window()?;
                                 app.windows().close_wm_overlay();
                             }
-                            WmMenuAction::ToggleDebugWindow => {
+                            TermWmAction::ToggleDebugWindow => {
                                 app.toggle_debug_window();
                                 app.windows().close_wm_overlay();
                             }
-                            WmMenuAction::Help => {
+                            TermWmAction::Help => {
                                 app.open_help_overlay();
                                 app.windows().close_wm_overlay();
                             }
-                            WmMenuAction::BringFloatingFront => {
+                            TermWmAction::BringFloatingFront => {
                                 app.windows().bring_all_floating_to_front();
                                 app.windows().close_wm_overlay();
                             }
-                            WmMenuAction::ExitUi => {
+                            TermWmAction::ExitUi => {
                                 app.windows().close_wm_overlay();
                                 app.open_exit_confirm();
                                 update_selection_snapshot(app);
                                 return flush_state_changes(app, ControlFlow::Continue);
                             }
+                            _ => {}
                         }
                         update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue);
@@ -342,7 +407,11 @@ where
                     // Focus routing in WM mode (Tab/Shift+Tab)
                     // Fold menu to outline so user can see the window they focused.
                     if app.windows().handle_focus_event(&evt, focus_regions) {
-                        app.windows().fold_menu();
+                        if matches!(&evt, Event::Key(_)) {
+                            app.windows().fold_menu();
+                        } else {
+                            app.windows().close_wm_overlay();
+                        }
                         update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue);
                     }
@@ -350,34 +419,34 @@ where
                     // while the WM overlay is open.
                     if let Some(action) = mapped_action_wm_mode {
                         match action {
-                            Action::Quit => {
+                            TermWmAction::Quit => {
                                 app.open_exit_confirm();
                                 update_selection_snapshot(app);
                                 return flush_state_changes(app, ControlFlow::Continue);
                             }
-                            Action::OpenHelp => {
+                            TermWmAction::OpenHelp => {
                                 app.open_help_overlay();
                                 app.windows().close_wm_overlay();
                                 update_selection_snapshot(app);
                                 return flush_state_changes(app, ControlFlow::Continue);
                             }
-                            Action::OpenKeybindings => {
+                            TermWmAction::OpenKeybindings => {
                                 app.open_keybindings_overlay();
                                 app.windows().close_wm_overlay();
                                 update_selection_snapshot(app);
                                 return flush_state_changes(app, ControlFlow::Continue);
                             }
-                            Action::CycleNextWindow => {
+                            TermWmAction::CycleNextWindow => {
                                 app.windows().advance_focus(true);
                                 update_selection_snapshot(app);
                                 return flush_state_changes(app, ControlFlow::Continue);
                             }
-                            Action::CyclePrevWindow => {
+                            TermWmAction::CyclePrevWindow => {
                                 app.windows().advance_focus(false);
                                 update_selection_snapshot(app);
                                 return flush_state_changes(app, ControlFlow::Continue);
                             }
-                            Action::HintToggle => {
+                            TermWmAction::HintToggle => {
                                 let current = app.windows().hint_visibility();
                                 let next = match current {
                                     crate::wm_config::HintVisibility::Always => {
@@ -433,7 +502,7 @@ where
                 if !wm_mode
                     && let Event::Key(key) = &evt
                     && key.kind == KeyEventKind::Press
-                    && app.windows().keybindings().matches(Action::Quit, key)
+                    && app.windows().keybindings().matches(TermWmAction::Quit, key)
                 {
                     app.open_exit_confirm();
                     update_selection_snapshot(app);
@@ -464,20 +533,17 @@ where
                     update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Quit);
                 }
-                // Forward any timed-out pending Esc to the terminal.
-                if let Some(super_event) = app.windows().take_expired_super_event() {
-                    let _ = handle_focused_app_event(&super_event, app);
-                }
-                // Cancel drag snap if mouse left the viewport during a header drag.
-                app.windows().take_expired_drag_snap();
                 update_selection_snapshot(app);
                 app.windows().begin_frame();
                 app.windows().prepare_draw();
                 // Catch render panics (e.g. u16 subtraction overflow with a
-                // tiny viewport) so they don't take down the event loop.
-                // The panic hook records details in the debug log.
-                // I/O errors from the draw are still propagated.
-                let io_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                // tiny viewport, or a component panic) so they don't take
+                // down the event loop.  The panic hook records details in
+                // the debug log.  I/O errors from the draw are propagated.
+                // After a panic, repair the terminal so the next draw starts
+                // from a clean slate (partial escape sequences, wrong cursor
+                // position, etc. are reset).
+                let did_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     output.draw(|frame| {
                         let area = frame.area();
                         if area.width < 2 || area.height < 2 {
@@ -486,13 +552,19 @@ where
                         draw(frame, app)
                     })
                 }))
-                .unwrap_or(Ok(()));
-                io_result?;
+                .is_err();
+                if did_panic {
+                    output.repair()?;
+                }
             }
             flush_state_changes(app, ControlFlow::Continue)
         };
 
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(handler)) {
+        let handler_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(handler));
+
+        system_handle.set_keep_awake(app.windows().visible_overlay_count() > 0);
+        driver.set_pending_work(system_handle.has_pending());
+        match handler_result {
             Ok(result) => result,
             Err(_) => {
                 // A panic occurred outside the render path (e.g. in event
@@ -513,13 +585,20 @@ where
     D: EventSource,
     A: WindowProvider,
 {
-    let mut draw_state = WindowDrawState::default();
+    // Create the system-level task scheduler and pass a handle to the WindowManager
+    // so it can register/cancel timers (super-passthrough, drag-snap) directly.
+    let system_scheduler = TaskScheduler::<SystemTask>::new();
+    let system_handle = system_scheduler.handle();
+    app.windows().set_system_task_handle(system_handle);
+
+    let mut draw_state = WindowDrawState::new();
     let focus_regions: Vec<WindowKey> = app.focus_regions();
     run_app(
         output,
         driver,
         app,
         &focus_regions,
+        system_scheduler,
         |key| key,
         move |frame, app| {
             let mut frame = frame;
@@ -561,9 +640,18 @@ where
 struct WindowDrawState {
     known: Vec<WindowKey>,
     scratch_cells: Vec<Cell>,
+    hitbox_registry: HitboxRegistry,
 }
 
 impl WindowDrawState {
+    fn new() -> Self {
+        Self {
+            known: Vec::new(),
+            scratch_cells: Vec::new(),
+            hitbox_registry: HitboxRegistry::new(),
+        }
+    }
+
     fn update(&mut self, windows: &[WindowKey]) -> bool {
         if self.known == windows {
             false
@@ -618,6 +706,16 @@ where
     let plan = app.windows().window_draw_plan(frame);
     let num_windows = plan.len();
     let total = num_windows + app.windows().visible_overlay_count();
+
+    // Register panel hitboxes BEFORE the window loop (lowest Z-order).
+    app.windows()
+        .register_panel_hitboxes(&mut state.hitbox_registry);
+
+    // Register tiling split handle hitboxes below windows (floating windows
+    // correctly occlude them; tiled windows and handles are disjoint).
+    app.windows()
+        .register_layout_handle_hitboxes(&mut state.hitbox_registry);
+
     for (i, task) in plan.into_iter().enumerate() {
         let z = WindowManager::compute_z_depth(i, total);
         match task {
@@ -639,33 +737,52 @@ where
                     let decorator = wm.decorator();
                     (ctx, decorator)
                 };
+                // Register window content hitbox in SCREEN coordinates.
+                let screen_inner = decorator.content_area(Rect {
+                    x: window.surface.dest.x as u16,
+                    y: window.surface.dest.y as u16,
+                    width: window.surface.dest.width,
+                    height: window.surface.dest.height,
+                });
+                state
+                    .hitbox_registry
+                    .register(HitTarget::Window(window.key), screen_inner);
                 composite_window(
                     frame,
                     &window.surface,
                     decorator.as_ref(),
                     ctx,
-                    |subframe| {
+                    |subframe, registry| {
                         let ctx = app
                             .windows()
-                            .component_context_for(window.focused, window.key);
-                        // Try the app's component first, then fall back to
-                        // WindowManager-owned components (debug log, etc.)
+                            .component_context_for(window.focused, window.key)
+                            .with_screen_area(screen_inner);
                         if let Some(component) = app.window_component(window.key) {
-                            component.resize(window.surface.inner, &ctx);
-                            component.render(subframe, window.surface.inner, &ctx);
+                            component.render(subframe, window.surface.inner, &ctx, registry);
                         } else if let Some(component) = app.windows().component_for_key(window.key)
                         {
-                            component.resize(window.surface.inner, &ctx);
-                            component.render(subframe, window.surface.inner, &ctx);
+                            component.render(subframe, window.surface.inner, &ctx, registry);
                         }
                     },
                     &mut state.scratch_cells,
+                    &mut state.hitbox_registry,
                 );
+                // Register chrome hitboxes AFTER content (higher Z-order).
+                app.windows()
+                    .register_window_chrome_hitboxes(window.key, &mut state.hitbox_registry);
             }
         }
     }
     app.windows().render_panel(frame);
-    app.windows().render_overlays(frame, num_windows, total);
+    app.windows()
+        .render_overlays(frame, num_windows, total, &mut state.hitbox_registry);
+
+    // Swap the draw-time registry into WindowManager for event dispatch.
+    // state.hitbox_registry becomes empty (ready for next frame),
+    // wm.hitbox_registry gets the correctly Z-ordered snapshot.
+    state
+        .hitbox_registry
+        .swap_entries(&mut app.windows().hitbox_registry);
 }
 
 fn composite_window<F>(
@@ -675,8 +792,9 @@ fn composite_window<F>(
     mut ctx: WindowRenderCtx<'_>,
     mut render_content: F,
     scratch: &mut Vec<Cell>,
+    _registry: &mut HitboxRegistry,
 ) where
-    F: FnMut(&mut UiFrame<'_>),
+    F: FnMut(&mut UiFrame<'_>, &mut HitboxRegistry),
 {
     if surface.dest.width == 0 || surface.dest.height == 0 {
         return;
@@ -705,7 +823,7 @@ fn composite_window<F>(
     {
         let mut offscreen = UiFrame::from_parts(local_area, &mut buffer);
         decorator.render_window(&mut offscreen, local_area, ctx);
-        render_content(&mut offscreen);
+        render_content(&mut offscreen, _registry);
     }
     if !focused {
         for cell in buffer.content.iter_mut() {
@@ -785,7 +903,7 @@ mod tests {
             None,
             None,
         );
-        let key = wm.create_window();
+        let key = wm.create_window(Box::new(crate::components::NoopComponent));
         let one = vec![key];
         let layout = auto_layout_for_windows(&one).unwrap();
         assert!(matches!(layout.root(), crate::layout::LayoutNode::Leaf(_)));
@@ -817,7 +935,7 @@ mod tests {
             None,
             Some(Box::new(TestMenu)),
         );
-        let key = wm.create_window();
+        let key = wm.create_window(Box::new(crate::components::NoopComponent));
 
         let mut app = FakeApp { wm, key };
         assert!(!app.enumerate_windows().is_empty());
@@ -831,35 +949,42 @@ mod tests {
 
     #[test]
     fn handle_focused_app_event_routes_key_to_window_component() {
-        use crate::components::Component;
         use crate::window::WindowManager;
 
         struct KeyRecorder {
             received_key: bool,
         }
-        impl Component for KeyRecorder {
+        impl Component<TermWmAction> for KeyRecorder {
             fn render(
-                &mut self,
+                &self,
                 _frame: &mut crate::ui::UiFrame<'_>,
                 _area: ratatui::layout::Rect,
                 _ctx: &crate::components::ComponentContext,
+                _registry: &mut crate::hitbox_registry::HitboxRegistry,
             ) {
             }
-            fn handle_event(
+            fn handle_events(
                 &mut self,
                 event: &Event,
                 _ctx: &crate::components::ComponentContext,
-            ) -> bool {
+            ) -> crate::actions::EventResult<TermWmAction> {
                 if matches!(event, Event::Key(_)) {
                     self.received_key = true;
                 }
-                true
+                crate::actions::EventResult::Consumed
             }
+            fn update(
+                &mut self,
+                _action: TermWmAction,
+                _ctx: &crate::components::ComponentContext,
+                _queue: &mut VecDeque<(crate::window::WindowKey, TermWmAction)>,
+            ) {
+            }
+            fn destroy(&mut self) {}
         }
 
         struct FakeApp {
             wm: WindowManager,
-            recorder: KeyRecorder,
         }
         impl WindowManagerHost for FakeApp {
             fn windows(&mut self) -> &mut WindowManager {
@@ -868,10 +993,13 @@ mod tests {
         }
         impl WindowProvider for FakeApp {
             fn enumerate_windows(&mut self) -> Vec<WindowKey> {
-                vec![]
+                self.wm.all_window_keys()
             }
-            fn window_component(&mut self, _key: WindowKey) -> Option<&mut dyn Component> {
-                Some(&mut self.recorder)
+            fn window_component(
+                &mut self,
+                key: WindowKey,
+            ) -> Option<&mut dyn Component<TermWmAction>> {
+                self.wm.component_for_key_mut(key)
             }
         }
 
@@ -883,11 +1011,11 @@ mod tests {
                 None,
                 Some(Box::new(TestMenu)),
             ),
-            recorder: KeyRecorder {
-                received_key: false,
-            },
         };
-        let key = app.wm.create_window();
+        // Store the KeyRecorder directly in the WindowManager — no sidecar.
+        let key = app.wm.create_window(Box::new(KeyRecorder {
+            received_key: false,
+        }));
         app.wm.regions.set(
             key,
             ratatui::layout::Rect {
@@ -912,38 +1040,55 @@ mod tests {
             "handle_focused_app_event must route key to component"
         );
         assert!(
-            app.recorder.received_key,
+            app.wm
+                .component_for_key_mut(key)
+                .and_then(|c| {
+                    use crate::components::component_downcast_mut;
+                    component_downcast_mut::<KeyRecorder>(c).map(|r| r.received_key)
+                })
+                .unwrap_or(false),
             "component must receive the key event"
         );
     }
 
     #[test]
     fn handle_focused_app_event_with_direct_mode_still_routes() {
-        use crate::components::ComponentContext;
         use crate::window::WindowManager;
 
         struct KeyRecorder {
             received_key: bool,
         }
-        impl Component for KeyRecorder {
+        impl Component<TermWmAction> for KeyRecorder {
             fn render(
-                &mut self,
+                &self,
                 _frame: &mut crate::ui::UiFrame<'_>,
                 _area: ratatui::layout::Rect,
-                _ctx: &ComponentContext,
+                _ctx: &crate::components::ComponentContext,
+                _registry: &mut crate::hitbox_registry::HitboxRegistry,
             ) {
             }
-            fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
+            fn handle_events(
+                &mut self,
+                event: &Event,
+                _ctx: &crate::components::ComponentContext,
+            ) -> crate::actions::EventResult<TermWmAction> {
                 if matches!(event, Event::Key(_)) {
                     self.received_key = true;
                 }
-                true
+                crate::actions::EventResult::Consumed
             }
+            fn update(
+                &mut self,
+                _action: TermWmAction,
+                _ctx: &crate::components::ComponentContext,
+                _queue: &mut VecDeque<(crate::window::WindowKey, TermWmAction)>,
+            ) {
+            }
+            fn destroy(&mut self) {}
         }
 
         struct FakeApp {
             wm: WindowManager,
-            recorder: KeyRecorder,
         }
         impl WindowManagerHost for FakeApp {
             fn windows(&mut self) -> &mut WindowManager {
@@ -952,10 +1097,13 @@ mod tests {
         }
         impl WindowProvider for FakeApp {
             fn enumerate_windows(&mut self) -> Vec<WindowKey> {
-                vec![]
+                self.wm.all_window_keys()
             }
-            fn window_component(&mut self, _key: WindowKey) -> Option<&mut dyn Component> {
-                Some(&mut self.recorder)
+            fn window_component(
+                &mut self,
+                key: WindowKey,
+            ) -> Option<&mut dyn Component<TermWmAction>> {
+                self.wm.component_for_key_mut(key)
             }
         }
 
@@ -967,11 +1115,10 @@ mod tests {
                 None,
                 Some(Box::new(TestMenu)),
             ),
-            recorder: KeyRecorder {
-                received_key: false,
-            },
         };
-        let key = app.wm.create_window();
+        let key = app.wm.create_window(Box::new(KeyRecorder {
+            received_key: false,
+        }));
         app.wm.regions.set(
             key,
             ratatui::layout::Rect {
@@ -996,7 +1143,17 @@ mod tests {
 
         let consumed = handle_focused_app_event(&evt, &mut app);
         assert!(consumed, "event must route even when direct_mode is true");
-        assert!(app.recorder.received_key, "component must receive the key");
+        // Verify through the WindowManager that the component received the key
+        assert!(
+            app.wm
+                .component_for_key_mut(key)
+                .and_then(|c| {
+                    use crate::components::component_downcast_mut;
+                    component_downcast_mut::<KeyRecorder>(c).map(|r| r.received_key)
+                })
+                .unwrap_or(false),
+            "component must receive the key"
+        );
     }
 
     // ── selection_snapshot_from ──────────────────────────────────────
@@ -1078,7 +1235,9 @@ mod tests {
             None,
             None,
         );
-        (0..n).map(|_| wm.create_window()).collect()
+        (0..n)
+            .map(|_| wm.create_window(Box::new(crate::components::NoopComponent)))
+            .collect()
     }
 
     #[test]
@@ -1133,8 +1292,8 @@ mod tests {
             None,
             None,
         );
-        let k1 = wm.create_window();
-        let k2 = wm.create_window();
+        let k1 = wm.create_window(Box::new(crate::components::NoopComponent));
+        let k2 = wm.create_window(Box::new(crate::components::NoopComponent));
         let layout = auto_layout_for_windows(&[k1, k2]).unwrap();
         let node = layout.root();
         match node {
@@ -1155,9 +1314,9 @@ mod tests {
             None,
             None,
         );
-        let k1 = wm.create_window();
-        let k2 = wm.create_window();
-        let k3 = wm.create_window();
+        let k1 = wm.create_window(Box::new(crate::components::NoopComponent));
+        let k2 = wm.create_window(Box::new(crate::components::NoopComponent));
+        let k3 = wm.create_window(Box::new(crate::components::NoopComponent));
         let layout = auto_layout_for_windows(&[k1, k2, k3]).unwrap();
         let node = layout.root();
         assert!(node.subtree_any(|id| id == k1));
@@ -1175,7 +1334,9 @@ mod tests {
             None,
         );
         // Use 4 windows — this reliably works within 80x24 default area
-        let keys: Vec<WindowKey> = (0..4).map(|_| wm.create_window()).collect();
+        let keys: Vec<WindowKey> = (0..4)
+            .map(|_| wm.create_window(Box::new(crate::components::NoopComponent)))
+            .collect();
         let layout = auto_layout_for_windows(&keys).unwrap();
         let node = layout.root();
         for k in &keys {
@@ -1186,35 +1347,52 @@ mod tests {
         }
     }
 
+    use crate::components::Overlay;
+
     #[derive(Debug)]
     struct TestMenu;
-    impl crate::components::Component for TestMenu {
+    impl Component<TermWmAction> for TestMenu {
         fn render(
-            &mut self,
+            &self,
             _frame: &mut crate::ui::UiFrame<'_>,
             _area: ratatui::prelude::Rect,
             _ctx: &crate::components::ComponentContext,
+            _registry: &mut crate::hitbox_registry::HitboxRegistry,
         ) {
         }
-    }
-    impl crate::components::Overlay for TestMenu {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
+        fn handle_events(
+            &mut self,
+            _event: &Event,
+            _ctx: &crate::components::ComponentContext,
+        ) -> crate::actions::EventResult<TermWmAction> {
+            crate::actions::EventResult::Consumed
         }
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-            self
+        fn update(
+            &mut self,
+            _action: TermWmAction,
+            _ctx: &crate::components::ComponentContext,
+            _queue: &mut VecDeque<(crate::window::WindowKey, TermWmAction)>,
+        ) {
+        }
+        fn destroy(&mut self) {}
+    }
+    impl Overlay<TermWmAction> for TestMenu {
+        fn handle_confirm_event(
+            &mut self,
+            _event: &Event,
+        ) -> Option<crate::actions::ConfirmAction> {
+            None
+        }
+        fn visible(&self) -> bool {
+            false
         }
     }
-    impl crate::components::MenuOverlay<crate::window::WmMenuAction> for TestMenu {
+    impl crate::components::MenuOverlay<TermWmAction> for TestMenu {
         fn outline(&mut self) {}
         fn restore(&mut self) {}
-        fn set_items(
-            &mut self,
-            _items: Vec<crate::components::MenuItem<crate::window::WmMenuAction>>,
-        ) {
-        }
+        fn set_items(&mut self, _items: Vec<crate::components::MenuItem<TermWmAction>>) {}
         fn set_timeout(&mut self, _timeout: std::time::Duration) {}
-        fn selected_action(&self) -> Option<&crate::window::WmMenuAction> {
+        fn selected_action(&self) -> Option<&TermWmAction> {
             None
         }
         fn set_anchor(&mut self, _pos: Option<(u16, u16)>) {}

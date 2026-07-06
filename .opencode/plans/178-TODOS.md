@@ -1,0 +1,10 @@
+- [] Keep watching https://youtu.be/iepbyYrF_YQ (Bringing Terminal Aesthetics to the Web With Rust (and Vice Versa) - FOSDEM 2025)
+- [X] Help menu mouse wheel not scrolling, but scrollbar component works directly.  How is this inconsistent and what keeps breaking it? (Fixed: `WmHelpOverlayComponent::update` was empty, now forwards to `self.content.update`)
+- [X] Mouse coordinate cleanup
+  - [X] Adopt `to_local()` in components instead of manual `saturating_sub` (terminal.rs, scroll_view.rs, list.rs, text_renderer.rs)
+  - [X] Fix bare subtraction `mouse.column - area.x` at `terminal.rs:697` → `saturating_sub`
+  - [X] Remove dead `localize_event` / `localize_event_content` code from `layout.rs` (unused by mouse dispatch)
+  - [X] Make `screen_area` from `ComponentContext` the single source of truth for `last_area` in all components (TerminalComponent ✓, ListComponent ✓, TextRendererComponent ✓; ScrollViewComponent uses `viewport_area` which is already correct)
+- [X] Restore missing tests.  Several tests were deleted.  You can find them by doing a diff against main.
+- [] Behavior regression where menu items show "hovered" state even if mouse is outside of menu area.
+- [] New TODOs in main.rs for deduping and centralizing new window handling

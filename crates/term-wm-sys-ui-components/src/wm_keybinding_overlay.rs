@@ -1,21 +1,23 @@
-use std::collections::BTreeMap;
+use std::cell::Cell;
+use std::collections::{BTreeMap, VecDeque};
+use std::sync::Arc;
 
 use crossterm::event::Event;
 use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders, Clear};
 
-use std::sync::Arc;
-
+use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::app_context::AppContext;
 use term_wm_core::components::{Component, ComponentContext, Overlay};
-use term_wm_core::keybindings::{Action, Category, KeyBindings};
+use term_wm_core::keybindings::{Category, KeyBindings};
 use term_wm_core::ui::UiFrame;
+use term_wm_core::window::WindowKey;
 use term_wm_ui_components::{DialogOverlayComponent, ListComponent, ScrollViewComponent};
 
 pub struct WmKeybindingOverlayComponent {
     dialog: DialogOverlayComponent,
     content: ScrollViewComponent<ListComponent>,
-    area: Rect,
+    area: Cell<Rect>,
     keybindings: KeyBindings,
     app_ctx: Arc<AppContext>,
 }
@@ -31,7 +33,7 @@ impl WmKeybindingOverlayComponent {
         let mut overlay = Self {
             dialog,
             content: list,
-            area: Rect::default(),
+            area: Cell::new(Rect::default()),
             keybindings,
             app_ctx: Arc::clone(app_ctx),
         };
@@ -73,7 +75,7 @@ impl WmKeybindingOverlayComponent {
             }
             lines.push("".to_string());
         }
-        self.content.content.set_items(lines);
+        self.content.content.borrow_mut().set_items(lines);
     }
 
     pub fn show(&mut self) {
@@ -98,12 +100,14 @@ impl std::fmt::Debug for WmKeybindingOverlayComponent {
     }
 }
 
-impl Component for WmKeybindingOverlayComponent {
-    fn resize(&mut self, area: Rect, _ctx: &ComponentContext) {
-        self.area = area;
-    }
-
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _ctx: &ComponentContext) {
+impl Component<TermWmAction> for WmKeybindingOverlayComponent {
+    fn render(
+        &self,
+        frame: &mut UiFrame<'_>,
+        area: Rect,
+        _ctx: &ComponentContext,
+        registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
         if !self.dialog.visible() || area.width == 0 || area.height == 0 {
             return;
         }
@@ -120,42 +124,50 @@ impl Component for WmKeybindingOverlayComponent {
         };
         frame.render_widget(block, rect);
         let ctx = ComponentContext::new(true).with_overlay(true);
-        self.content.resize(inner, &ctx);
-        self.content.render(frame, inner, &ctx);
+        self.content.render(frame, inner, &ctx, registry);
     }
 
-    fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
+    fn handle_events(
+        &mut self,
+        event: &Event,
+        ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
         if !self.dialog.visible() {
-            return false;
+            return EventResult::Ignored;
         }
         match event {
             Event::Key(key) => {
-                if self.keybindings.matches(Action::CloseHelp, key) {
+                if self.keybindings.matches(TermWmAction::CloseHelp, key) {
                     self.close();
-                    true
+                    EventResult::Consumed
                 } else {
-                    self.content.handle_event(event, ctx)
+                    self.content.handle_events(event, ctx)
                 }
             }
             Event::Mouse(_) => {
-                if self.dialog.handle_click_outside(event, self.area) {
+                if self.dialog.handle_click_outside(event, self.area.get()) {
                     self.close();
-                    return true;
+                    return EventResult::Consumed;
                 }
-                self.content.handle_event(event, ctx)
+                self.content.handle_events(event, ctx)
             }
-            _ => false,
+            _ => EventResult::Ignored,
         }
     }
+
+    fn update(
+        &mut self,
+        action: TermWmAction,
+        ctx: &ComponentContext,
+        actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+    ) {
+        self.content.update(action, ctx, actions);
+    }
+
+    fn destroy(&mut self) {}
 }
 
-impl Overlay for WmKeybindingOverlayComponent {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
+impl Overlay<TermWmAction> for WmKeybindingOverlayComponent {
     fn visible(&self) -> bool {
         self.dialog.visible()
     }

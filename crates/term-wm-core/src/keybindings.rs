@@ -2,7 +2,7 @@ use std::fmt;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-pub use crate::actions::{Action, ActionLayer, Category};
+pub use crate::actions::{ActionLayer, Category, TermWmAction};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyCombo {
@@ -64,7 +64,7 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
 pub struct KeyBindings {
-    map: BTreeMap<Action, Vec<KeyCombo>>,
+    map: BTreeMap<TermWmAction, Vec<KeyCombo>>,
 }
 
 macro_rules! default_keybindings {
@@ -72,7 +72,7 @@ macro_rules! default_keybindings {
         let mut kb = KeyBindings::new();
         $(
             $(
-                kb.add(Action::$action, KeyCombo::new($code, $mods));
+                kb.add(TermWmAction::$action, KeyCombo::new($code, $mods));
             )*
         )*
         kb
@@ -130,11 +130,11 @@ impl KeyBindings {
         }
     }
 
-    pub fn add(&mut self, action: Action, combo: KeyCombo) {
+    pub fn add(&mut self, action: TermWmAction, combo: KeyCombo) {
         self.map.entry(action).or_default().push(combo);
     }
 
-    pub fn matches(&self, action: Action, key: &KeyEvent) -> bool {
+    pub fn matches(&self, action: TermWmAction, key: &KeyEvent) -> bool {
         if let Some(list) = self.map.get(&action) {
             list.iter().any(|c| c.matches(key))
         } else {
@@ -142,30 +142,34 @@ impl KeyBindings {
         }
     }
 
-    pub fn action_for_key(&self, key: &KeyEvent) -> Option<Action> {
+    pub fn action_for_key(&self, key: &KeyEvent) -> Option<TermWmAction> {
         for (act, list) in &self.map {
             if list.iter().any(|c| c.matches(key)) {
-                return Some(*act);
+                return Some(act.clone());
             }
         }
         None
     }
 
-    /// Map a full `Event` to an `Action`, if the event is a key event.
+    /// Map a full `Event` to an `TermWmAction`, if the event is a key event.
     /// Look up `key` against only actions in the given layer.
-    pub fn action_for_key_in_layer(&self, key: &KeyEvent, layer: ActionLayer) -> Option<Action> {
+    pub fn action_for_key_in_layer(
+        &self,
+        key: &KeyEvent,
+        layer: ActionLayer,
+    ) -> Option<TermWmAction> {
         for (act, list) in &self.map {
             if act.layer() != layer {
                 continue;
             }
             if list.iter().any(|c| c.matches(key)) {
-                return Some(*act);
+                return Some(act.clone());
             }
         }
         None
     }
 
-    pub fn action_for_event(&self, evt: &crossterm::event::Event) -> Option<Action> {
+    pub fn action_for_event(&self, evt: &crossterm::event::Event) -> Option<TermWmAction> {
         if let crossterm::event::Event::Key(k) = evt {
             self.action_for_key(k)
         } else {
@@ -173,16 +177,16 @@ impl KeyBindings {
         }
     }
 
-    pub fn help_entries(&self) -> Vec<(Action, Vec<String>)> {
+    pub fn help_entries(&self) -> Vec<(TermWmAction, Vec<String>)> {
         let mut v = Vec::new();
         for (act, list) in &self.map {
-            v.push((*act, list.iter().map(|c| c.display()).collect()));
+            v.push((act.clone(), list.iter().map(|c| c.display()).collect()));
         }
         v
     }
 
     /// Return the display strings for all combos mapped to `action`.
-    pub fn combos_for(&self, action: Action) -> Vec<String> {
+    pub fn combos_for(&self, action: TermWmAction) -> Vec<String> {
         self.map
             .get(&action)
             .map(|list| list.iter().map(|c| c.display()).collect())
@@ -190,21 +194,21 @@ impl KeyBindings {
     }
 
     /// Return the first `KeyCombo` mapped to `action`, if any.
-    pub fn first_combo(&self, action: Action) -> Option<KeyCombo> {
+    pub fn first_combo(&self, action: TermWmAction) -> Option<KeyCombo> {
         self.map.get(&action).and_then(|list| list.first().cloned())
     }
 
     /// Access the underlying binding map (read-only).
-    pub fn map(&self) -> &BTreeMap<Action, Vec<KeyCombo>> {
+    pub fn map(&self) -> &BTreeMap<TermWmAction, Vec<KeyCombo>> {
         &self.map
     }
 
     /// Returns up to `max` hint entries for actions matching `layer`,
-    /// sorted by `Action::bottom_hint_priority()`.
+    /// sorted by `TermWmAction::bottom_hint_priority()`.
     ///
-    /// Each entry is `(Action, Vec<String>)` where the strings are display
+    /// Each entry is `(TermWmAction, Vec<String>)` where the strings are display
     /// representations of the bound key combos.
-    pub fn bottom_hints(&self, max: usize) -> Vec<(Action, Vec<String>)> {
+    pub fn bottom_hints(&self, max: usize) -> Vec<(TermWmAction, Vec<String>)> {
         self.bottom_hints_filtered(max, None)
     }
 
@@ -213,7 +217,7 @@ impl KeyBindings {
         &self,
         max: usize,
         layer: ActionLayer,
-    ) -> Vec<(Action, Vec<String>)> {
+    ) -> Vec<(TermWmAction, Vec<String>)> {
         self.bottom_hints_filtered(max, Some(layer))
     }
 
@@ -221,8 +225,8 @@ impl KeyBindings {
         &self,
         max: usize,
         layer: Option<ActionLayer>,
-    ) -> Vec<(Action, Vec<String>)> {
-        let mut candidates: Vec<(Action, u8, Vec<String>)> = self
+    ) -> Vec<(TermWmAction, Vec<String>)> {
+        let mut candidates: Vec<(TermWmAction, u8, Vec<String>)> = self
             .map
             .iter()
             .filter_map(|(action, combos)| {
@@ -233,7 +237,7 @@ impl KeyBindings {
                 }
                 let priority = action.bottom_hint_priority()?;
                 let displays: Vec<String> = combos.iter().map(|c| c.display()).collect();
-                Some((*action, priority, displays))
+                Some((action.clone(), priority, displays))
             })
             .collect();
         candidates.sort_by_key(|b| std::cmp::Reverse(b.1));
@@ -251,6 +255,6 @@ mod tests {
     fn defaults_match_quit() {
         let kb = KeyBindings::default();
         let ev = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
-        assert!(kb.matches(Action::Quit, &ev));
+        assert!(kb.matches(TermWmAction::Quit, &ev));
     }
 }

@@ -13,3 +13,6 @@ This is a high-level overview of what I'm looking for, but might not contain all
 7. Snapshot testing using `insta` crate
 8. [can this work?] Terminal windows should buffer directly inside the PTY, if possible, where scrolling would fetch via API instead of a local buffer.
 9. Debug log could show system/UI uptime (derived from a centralized state) rendered in a footer of the log application; it could also feature the ability to clear the log entirely.
+10. Rename overlay.rs and any associated terminology.  When I think of "overlay", I think of whatever is driving some modal.  I can't even reason about what overlay.rs does in this context.
+11. Extremely simple API and README examples, showing how custom Ratatui components can easily be turned into Windows.
+12. Make an *extremely professional* README.  Do deep research on best practices.

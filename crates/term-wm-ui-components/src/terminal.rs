@@ -1,3 +1,5 @@
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use crossterm::event::{
@@ -10,7 +12,9 @@ use ratatui::{
 };
 use vt100::MouseProtocolEncoding;
 
+use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
+use term_wm_core::hitbox_registry::{HitTarget, next_component_id};
 use term_wm_core::layout::rect_contains;
 use term_wm_core::ui::UiFrame;
 use term_wm_core::utils::linkifier::{
@@ -20,6 +24,7 @@ use term_wm_core::utils::selectable_text::{
     LogicalPosition, SelectionController, SelectionHost, SelectionRange, SelectionViewport,
     handle_selection_mouse, maintain_selection_drag,
 };
+use term_wm_core::window::WindowKey;
 use term_wm_pty_engine::input_encoding::{key_to_bytes, mouse_event_allowed, mouse_event_to_bytes};
 use term_wm_pty_engine::{Pane, PtyStatus};
 
@@ -28,145 +33,177 @@ use term_wm_pty_engine::{Pane, PtyStatus};
 const DEFAULT_SCROLLBACK_LEN: usize = 2000;
 
 pub struct TerminalComponent {
-    pane: Box<dyn Pane>,
-    last_size: (u16, u16),
-    last_area: Rect,
+    id: term_wm_core::hitbox_registry::ComponentId,
+    pane: RefCell<Box<dyn Pane>>,
+    last_size: Cell<(u16, u16)>,
     linkifier: Linkifier,
-    link_overlay: LinkOverlay,
+    link_overlay: RefCell<LinkOverlay>,
     link_handler: Option<LinkHandler>,
     command_description: String,
-    selection: SelectionController,
+    selection: RefCell<SelectionController>,
     selection_enabled: bool,
-    last_scrollback: usize,
-    last_max_scrollback: usize,
+    last_scrollback: Cell<usize>,
+    last_max_scrollback: Cell<usize>,
 }
 
-impl Component for TerminalComponent {
-    fn resize(&mut self, area: Rect, _ctx: &ComponentContext) {
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-        let size = (area.width, area.height);
-        if size != self.last_size {
-            let _ = self.pane.resize(PtySize {
-                rows: area.height,
-                cols: area.width,
-                pixel_width: 0,
-                pixel_height: 0,
-            });
-            self.last_size = size;
-        }
-    }
-
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
-        if !ctx.focused() {
-            self.selection.clear();
-        }
-        if area.height == 0 || area.width == 0 {
-            self.last_area = Rect::default();
-            return;
-        }
-        self.last_area = area;
-        let _exited = self.pane.has_exited();
-        self.render_screen(frame, area, ctx);
-    }
-
-    fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
+impl Component<TermWmAction> for TerminalComponent {
+    fn handle_events(
+        &mut self,
+        event: &Event,
+        ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
         match event {
             Event::Key(key) => {
                 if key.kind == KeyEventKind::Release {
-                    return false;
+                    return EventResult::Ignored;
                 }
-                self.selection.clear();
                 if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
                     && key.modifiers.contains(KeyModifiers::SHIFT)
-                    && !self.pane.alternate_screen()
+                    && !self.pane.borrow_mut().alternate_screen()
                 {
                     let delta = if key.code == KeyCode::PageUp {
                         10isize
                     } else {
                         -10isize
                     };
-                    self.scroll_scrollback(delta);
-                    return true;
+                    return EventResult::Action(TermWmAction::Scroll(delta));
                 }
                 let bytes = key_to_bytes(key);
                 if bytes.is_empty() {
-                    return false;
+                    return EventResult::Ignored;
                 }
-                if self.pane.scrollback() > 0 {
-                    self.pane.set_scrollback(0);
-                }
-                if let Err(_err) = self.pane.write_bytes(&bytes) {
-                    #[cfg(windows)]
-                    eprintln!("terminal input write failed: {_err}");
-                }
-                true
+                EventResult::Action(TermWmAction::KeyToBytes(bytes))
             }
             Event::Mouse(mouse) => {
                 if !ctx.direct_mode() {
                     let selection_ready = self.selection_enabled;
-                    if handle_selection_mouse(self, selection_ready, mouse) {
-                        return true;
+                    let area = ctx.screen_area().unwrap_or_default();
+                    if handle_selection_mouse(self, selection_ready, mouse, area) {
+                        return EventResult::Consumed;
                     }
-                    if self.try_handle_link_click(mouse) {
-                        return true;
+                    if self.try_handle_link_click(area, mouse) {
+                        return EventResult::Consumed;
                     }
                 }
-                if !rect_contains(self.last_area, mouse.column, mouse.row) {
-                    return false;
+                let area = ctx.screen_area().unwrap_or_default();
+                if !rect_contains(area, mouse.column, mouse.row) {
+                    return EventResult::Ignored;
                 }
-                // Forward mouse events only when the nested app enabled mouse reporting
-                // (either SGR or the legacy/default X11-style protocol).
-                let screen = self.pane.screen();
+                let mut pane = self.pane.borrow_mut();
+                let screen = pane.screen();
                 let encoding = screen.mouse_protocol_encoding();
 
                 match encoding {
                     MouseProtocolEncoding::Default | MouseProtocolEncoding::Sgr => {}
-                    _ => return false,
+                    _ => return EventResult::Ignored,
                 }
 
                 let mode = screen.mouse_protocol_mode();
-                // Avoid emitting sequences for modes the app didn't request.
                 if !mouse_event_allowed(mode, mouse.kind) {
-                    return false;
+                    return EventResult::Ignored;
                 }
-                // Convert global coordinates into the PTY-local viewport.
                 let local = MouseEvent {
-                    column: mouse.column.saturating_sub(self.last_area.x),
-                    row: mouse.row.saturating_sub(self.last_area.y),
+                    column: mouse.column.saturating_sub(area.x),
+                    row: mouse.row.saturating_sub(area.y),
                     kind: mouse.kind,
                     modifiers: mouse.modifiers,
                 };
                 let bytes = mouse_event_to_bytes(&local, encoding);
                 if bytes.is_empty() {
-                    return false;
+                    return EventResult::Ignored;
                 }
-                if let Err(_err) = self.pane.write_bytes(&bytes) {
+                EventResult::Action(TermWmAction::MouseToBytes(bytes))
+            }
+            _ => EventResult::Ignored,
+        }
+    }
+
+    fn update(
+        &mut self,
+        action: TermWmAction,
+        _ctx: &ComponentContext,
+        _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+    ) {
+        match action {
+            TermWmAction::KeyToBytes(bytes) => {
+                self.selection.borrow_mut().clear();
+                if self.pane.borrow_mut().scrollback() > 0 {
+                    self.pane.borrow_mut().set_scrollback(0);
+                }
+                if let Err(_err) = self.pane.borrow_mut().write_bytes(&bytes) {
+                    #[cfg(windows)]
+                    eprintln!("terminal input write failed: {_err}");
+                }
+            }
+            TermWmAction::Scroll(delta) => {
+                self.scroll_scrollback(delta);
+            }
+            TermWmAction::MouseToBytes(bytes) => {
+                if let Err(_err) = self.pane.borrow_mut().write_bytes(&bytes) {
                     #[cfg(windows)]
                     eprintln!("terminal mouse write failed: {_err}");
                 }
-                true
             }
-            _ => false,
+            _ => {}
         }
+    }
+
+    fn render(
+        &self,
+        frame: &mut UiFrame<'_>,
+        area: Rect,
+        ctx: &ComponentContext,
+        registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
+        if !ctx.focused() {
+            self.selection.borrow_mut().clear();
+        }
+        if area.height == 0 || area.width == 0 {
+            return;
+        }
+        let size = (area.width, area.height);
+        if size != self.last_size.get() {
+            let mut pane = self.pane.borrow_mut();
+            let _ = pane.resize(PtySize {
+                rows: area.height,
+                cols: area.width,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
+            self.last_size.set(size);
+        }
+        // The render-local `area` is offscreen-local; `screen_area` is absolute.
+        let screen_area = ctx.screen_area().unwrap_or(area);
+        let _exited = self.pane.borrow_mut().has_exited();
+        // Register this terminal's clickable area in the hitbox registry.
+        // Use screen coordinates so hit_test matches screen-space mouse positions.
+        if let Some(key) = ctx.window_key() {
+            registry.register(HitTarget::Component(key, self.id), screen_area);
+        }
+        self.render_screen(frame, area, ctx);
+    }
+
+    fn destroy(&mut self) {
+        // Kill the child process on teardown so the OS reaps it.
+        let _ = self.pane.get_mut().kill_child();
     }
 
     fn selection_status(&self) -> SelectionStatus {
         if !self.selection_enabled {
             return SelectionStatus::default();
         }
+        let sel = self.selection.borrow();
         SelectionStatus {
-            active: self.selection.has_selection(),
-            dragging: self.selection.is_dragging(),
+            active: sel.has_selection(),
+            dragging: sel.is_dragging(),
         }
     }
 
-    fn selection_text(&mut self) -> Option<String> {
+    fn selection_text(&self) -> Option<String> {
         if !self.selection_enabled {
             return None;
         }
-        let range = self.selection.selection_range()?.normalized();
+        let range = self.selection.borrow().selection_range()?.normalized();
         if !range.is_non_empty() {
             return None;
         }
@@ -177,7 +214,21 @@ impl Component for TerminalComponent {
         if text.is_empty() {
             return false;
         }
-        self.pane.write_bytes(text.as_bytes()).is_ok()
+        self.pane.borrow_mut().write_bytes(text.as_bytes()).is_ok()
+    }
+
+    fn take_pending_title(&mut self) -> Option<String> {
+        self.pane.get_mut().take_pending_title()
+    }
+
+    fn set_selection_enabled(&mut self, enabled: bool) {
+        if self.selection_enabled == enabled {
+            return;
+        }
+        self.selection_enabled = enabled;
+        if !enabled {
+            self.selection.get_mut().clear();
+        }
     }
 }
 
@@ -201,17 +252,17 @@ impl TerminalComponent {
     /// Construct a terminal wrapper around any Pane implementation.
     pub fn from_pane(pane: Box<dyn Pane>) -> Self {
         Self {
-            pane,
-            last_size: (80, 24),
-            last_area: Rect::default(),
+            id: next_component_id(),
+            pane: RefCell::new(pane),
+            last_size: Cell::new((80, 24)),
             linkifier: Linkifier::new(),
-            link_overlay: LinkOverlay::new(),
+            link_overlay: RefCell::new(LinkOverlay::new()),
             link_handler: None,
             command_description: "pane-override".to_string(),
-            selection: SelectionController::new(),
+            selection: RefCell::new(SelectionController::new()),
             selection_enabled: false,
-            last_scrollback: 0,
-            last_max_scrollback: 0,
+            last_scrollback: Cell::new(0),
+            last_max_scrollback: Cell::new(0),
         }
     }
 
@@ -223,30 +274,31 @@ impl TerminalComponent {
             DEFAULT_SCROLLBACK_LEN,
         )?);
         let comp = Self {
-            pane,
-            last_size: (size.cols, size.rows),
-            last_area: Rect::default(),
+            id: next_component_id(),
+            pane: RefCell::new(pane),
+            last_size: Cell::new((size.cols, size.rows)),
             linkifier: Linkifier::new(),
-            link_overlay: LinkOverlay::new(),
+            link_overlay: RefCell::new(LinkOverlay::new()),
             link_handler: None,
             command_description,
-            selection: SelectionController::new(),
+            selection: RefCell::new(SelectionController::new()),
             selection_enabled: false,
-            last_scrollback: 0,
-            last_max_scrollback: 0,
+            last_scrollback: Cell::new(0),
+            last_max_scrollback: Cell::new(0),
         };
         Ok(comp)
     }
 
     pub fn write_bytes(&mut self, input: &[u8]) -> std::io::Result<()> {
-        self.pane.write_bytes(input)
+        self.pane.get_mut().write_bytes(input)
     }
 
+    #[allow(clippy::collapsible_if)]
     pub fn has_exited(&mut self) -> bool {
-        let exited = self.pane.has_exited();
+        let pane = self.pane.get_mut();
+        let exited = pane.has_exited();
         if exited {
-            // If exiting with error, log it to global log which will trigger debug window
-            if let Some(status) = self.pane.take_exit_status()
+            if let Some(status) = pane.take_exit_status()
                 && !status.success()
             {
                 tracing::error!(
@@ -260,19 +312,19 @@ impl TerminalComponent {
     }
 
     pub fn exit_status(&self) -> Option<portable_pty::ExitStatus> {
-        self.pane.exit_status()
+        self.pane.borrow().exit_status()
     }
 
     pub fn take_exit_status(&mut self) -> Option<portable_pty::ExitStatus> {
-        self.pane.take_exit_status()
+        self.pane.get_mut().take_exit_status()
     }
 
     pub fn bytes_received(&self) -> usize {
-        self.pane.bytes_received()
+        self.pane.borrow().bytes_received()
     }
 
     pub fn last_bytes_text(&self) -> String {
-        self.pane.last_bytes_text()
+        self.pane.borrow().last_bytes_text()
     }
 
     pub fn set_link_handler(&mut self, handler: Option<LinkHandler>) {
@@ -289,80 +341,77 @@ impl TerminalComponent {
     /// Direct access to internal state for testing scroll sync logic.
     #[cfg(test)]
     pub fn set_last_scrollback(&mut self, val: usize) {
-        self.last_scrollback = val;
+        self.last_scrollback.set(val);
     }
 
     #[cfg(test)]
     pub fn set_last_max_scrollback(&mut self, val: usize) {
-        self.last_max_scrollback = val;
+        self.last_max_scrollback.set(val);
     }
 
     #[cfg(test)]
     pub fn pane_mut(&mut self) -> &mut Box<dyn Pane> {
-        &mut self.pane
-    }
-
-    pub fn set_selection_enabled(&mut self, enabled: bool) {
-        if self.selection_enabled == enabled {
-            return;
-        }
-        self.selection_enabled = enabled;
-        if !enabled {
-            self.selection.clear();
-        }
+        self.pane.get_mut()
     }
 
     pub fn take_pending_title(&mut self) -> Option<String> {
-        self.pane.take_pending_title()
+        self.pane.get_mut().take_pending_title()
     }
 
-    fn render_screen(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
-        maintain_selection_drag(self);
+    fn render_screen(&self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
+        // Drag maintenance via RefCell borrow_mut (safe interior mutability
+        // during the otherwise-immutable render phase).
+        {
+            let screen_area = ctx.screen_area().unwrap_or(area);
+            let mut sel_guard = self.selection.borrow_mut();
+            let mut dh = RenderDragHost {
+                selection: &mut sel_guard,
+                pane: &self.pane,
+            };
+            maintain_selection_drag(&mut dh, screen_area);
+        }
+
+        let mut pane = self.pane.borrow_mut();
 
         // Synchronize scroll state with the shared Viewport
-        if !self.pane.alternate_screen()
+        if !pane.alternate_screen()
             && let Some(handle) = ctx.viewport_handle()
         {
-            let used = self.pane.max_scrollback();
+            let used = pane.max_scrollback();
             let view_height = area.height as usize;
             let total_height = used + view_height;
             handle.set_content_size(area.width as usize, total_height);
 
-            let current_sb = self.pane.scrollback();
+            let current_sb = pane.scrollback();
             let view_offset = ctx.viewport().offset_y;
             if current_sb == 0 {
-                // If viewport was scrolled away from where we left it (user
-                // scrolled via mouse wheel / scrollbar), sync scrollback from
-                // the viewport instead of forcing back to bottom.
-                if view_offset < self.last_max_scrollback.saturating_sub(1) {
+                if view_offset < self.last_max_scrollback.get().saturating_sub(1) {
                     let target_sb = used.saturating_sub(view_offset);
-                    self.pane.set_scrollback(target_sb);
+                    pane.set_scrollback(target_sb);
                 } else {
-                    // Follow tail: user is at bottom, keep viewport tracking new content
                     handle.scroll_vertical_to(usize::MAX);
                 }
-            } else if current_sb != self.last_scrollback {
-                // If scrollback changed internally (keys/output), push to viewport
+            } else if current_sb != self.last_scrollback.get() {
                 let new_offset = used.saturating_sub(current_sb);
                 handle.scroll_vertical_to(new_offset);
             } else {
-                // Otherwise sync from viewport (scrollbar/mouse wheel on container)
                 let target_sb = used.saturating_sub(view_offset);
                 if target_sb != current_sb {
-                    self.pane.set_scrollback(target_sb);
+                    pane.set_scrollback(target_sb);
                 }
             }
-            self.last_max_scrollback = used;
+            self.last_max_scrollback.set(used);
         }
 
-        let scrollback_value = self.pane.scrollback();
-        self.last_scrollback = scrollback_value;
+        let scrollback_value = pane.scrollback();
+        self.last_scrollback.set(scrollback_value);
 
         let show_cursor = scrollback_value == 0;
-        let used = self.pane.max_scrollback();
+        let used = pane.max_scrollback();
         let selection_row_base = used.saturating_sub(scrollback_value);
         let selection_range = if self.selection_enabled {
             self.selection
+                .borrow()
                 .selection_range()
                 .filter(|r| r.is_non_empty())
                 .map(|r| r.normalized())
@@ -371,19 +420,17 @@ impl TerminalComponent {
         };
         let buffer = frame.buffer_mut();
 
-        // Optimally only iterate over the visible intersection
         let visible = area.intersection(buffer.area);
         if visible.width == 0 || visible.height == 0 {
-            self.link_overlay.clear();
+            self.link_overlay.borrow_mut().clear();
             return;
         }
 
-        // Calculate offset into the PTY screen
         let start_col = visible.x.saturating_sub(area.x);
         let start_row = visible.y.saturating_sub(area.y);
 
-        let bytes_seen = self.pane.bytes_received();
-        let screen = self.pane.screen();
+        let bytes_seen = pane.bytes_received();
+        let screen = pane.screen();
         let signature = OverlaySignature::new(
             bytes_seen,
             scrollback_value,
@@ -392,7 +439,7 @@ impl TerminalComponent {
             start_row,
             start_col,
         );
-        if !self.link_overlay.is_signature_current(&signature) {
+        if !self.link_overlay.borrow().is_signature_current(&signature) {
             let viewport_height = area.height as usize;
             let viewport_width = area.width as usize;
             let mut row_data: Vec<(usize, usize, String, Vec<usize>)> =
@@ -415,7 +462,7 @@ impl TerminalComponent {
                 }
                 row_data.push((viewport_row, start_col as usize, line, offsets));
             }
-            self.link_overlay.update_view(
+            self.link_overlay.borrow_mut().update_view(
                 signature,
                 viewport_height,
                 viewport_width,
@@ -432,7 +479,6 @@ impl TerminalComponent {
                 let viewport_row = row.saturating_sub(start_row) as usize;
                 let viewport_col = col.saturating_sub(start_col) as usize;
 
-                // If we have a PTY cell, render it
                 if let Some(cell) = screen.cell(row, col) {
                     let mut symbol = cell.contents().chars().next().unwrap_or(' ');
                     let (fg, bg) = resolve_colors(cell, screen);
@@ -463,7 +509,11 @@ impl TerminalComponent {
                     }
 
                     let theme = ctx.config().theme;
-                    if self.link_overlay.is_link_cell(viewport_row, viewport_col) {
+                    if self
+                        .link_overlay
+                        .borrow()
+                        .is_link_cell(viewport_row, viewport_col)
+                    {
                         style = decorate_link_style(style, &theme);
                     }
 
@@ -477,7 +527,6 @@ impl TerminalComponent {
 
                     if let Some(buf_cell) = buffer.cell_mut((cell_x, cell_y)) {
                         let mut buf = [0u8; 4];
-                        // If background is transparent (None), force it to Reset to clear underlying content
                         if bg.is_none() {
                             buf_cell.reset();
                         }
@@ -485,7 +534,6 @@ impl TerminalComponent {
                         buf_cell.set_symbol(sym).set_style(style);
                     }
                 } else if let Some(buf_cell) = buffer.cell_mut((cell_x, cell_y)) {
-                    // Otherwise clear the cell so we don't bleed background
                     buf_cell.reset();
                     buf_cell.set_symbol(" ");
                 }
@@ -505,12 +553,17 @@ impl TerminalComponent {
 }
 
 impl SelectionViewport for TerminalComponent {
-    fn selection_viewport(&self) -> Rect {
-        self.last_area
+    fn selection_viewport(&self, area: Rect) -> Rect {
+        area
     }
 
-    fn logical_position_from_point(&mut self, column: u16, row: u16) -> Option<LogicalPosition> {
-        TerminalComponent::logical_position_from_point(self, column, row)
+    fn logical_position_from_point(
+        &mut self,
+        area: Rect,
+        column: u16,
+        row: u16,
+    ) -> Option<LogicalPosition> {
+        TerminalComponent::logical_position_from_point(self, area, column, row)
     }
 
     fn scroll_selection_vertical(&mut self, delta: isize) {
@@ -525,7 +578,7 @@ impl SelectionViewport for TerminalComponent {
 
 impl SelectionHost for TerminalComponent {
     fn selection_controller(&mut self) -> &mut SelectionController {
-        &mut self.selection
+        self.selection.get_mut()
     }
 }
 
@@ -552,31 +605,30 @@ pub fn default_shell_command() -> CommandBuilder {
 
 impl TerminalComponent {
     fn scroll_scrollback(&mut self, delta: isize) {
-        let current = self.pane.scrollback() as isize;
-        let next = (current + delta).clamp(0, self.pane.scrollback_len() as isize) as usize;
-        self.pane.set_scrollback(next);
+        let pane = self.pane.get_mut();
+        let current = pane.scrollback() as isize;
+        let next = (current + delta).clamp(0, pane.scrollback_len() as isize) as usize;
+        pane.set_scrollback(next);
     }
 
-    fn logical_position_from_point(&mut self, column: u16, row: u16) -> Option<LogicalPosition> {
-        if self.last_area.width == 0 || self.last_area.height == 0 {
+    fn logical_position_from_point(
+        &mut self,
+        area: Rect,
+        column: u16,
+        row: u16,
+    ) -> Option<LogicalPosition> {
+        if area.width == 0 || area.height == 0 {
             return None;
         }
-        let max_x = self
-            .last_area
-            .x
-            .saturating_add(self.last_area.width)
-            .saturating_sub(1);
-        let max_y = self
-            .last_area
-            .y
-            .saturating_add(self.last_area.height)
-            .saturating_sub(1);
-        let clamped_col = column.clamp(self.last_area.x, max_x);
-        let clamped_row = row.clamp(self.last_area.y, max_y);
-        let local_col = clamped_col.saturating_sub(self.last_area.x) as usize;
-        let local_row = clamped_row.saturating_sub(self.last_area.y) as usize;
-        let scrollback_value = self.pane.scrollback();
-        let used = self.pane.max_scrollback();
+        let max_x = area.x.saturating_add(area.width).saturating_sub(1);
+        let max_y = area.y.saturating_add(area.height).saturating_sub(1);
+        let clamped_col = column.clamp(area.x, max_x);
+        let clamped_row = row.clamp(area.y, max_y);
+        let local_col = clamped_col.saturating_sub(area.x) as usize;
+        let local_row = clamped_row.saturating_sub(area.y) as usize;
+        let pane = self.pane.get_mut();
+        let scrollback_value = pane.scrollback();
+        let used = pane.max_scrollback();
         let row_base = used.saturating_sub(scrollback_value);
         Some(LogicalPosition::new(
             row_base.saturating_add(local_row),
@@ -584,12 +636,10 @@ impl TerminalComponent {
         ))
     }
 
-    fn selection_text_for_range(&mut self, range: SelectionRange) -> Option<String> {
-        let row_base = self
-            .pane
-            .max_scrollback()
-            .saturating_sub(self.pane.scrollback());
-        let screen = self.pane.screen();
+    fn selection_text_for_range(&self, range: SelectionRange) -> Option<String> {
+        let mut pane = self.pane.borrow_mut();
+        let row_base = pane.max_scrollback().saturating_sub(pane.scrollback());
+        let screen = pane.screen();
         let (rows, cols) = screen.size();
         if rows == 0 || cols == 0 {
             return None;
@@ -620,48 +670,45 @@ impl TerminalComponent {
         ))
     }
 
-    /// Terminate the underlying PTY child process.
     pub fn terminate(&mut self) {
-        let _ = self.pane.kill_child();
+        let _ = self.pane.get_mut().kill_child();
     }
 
-    /// Extract the child process and reader thread handle for async reaping.
     pub fn take_parts(
         &mut self,
     ) -> Option<(
         Box<dyn portable_pty::Child + Send + Sync>,
         std::thread::JoinHandle<()>,
     )> {
-        self.pane.take_parts()
+        self.pane.get_mut().take_parts()
     }
 
-    /// Set a status callback for PTY data and exit notifications.
     pub fn set_status_callback(&mut self, cb: Option<Box<dyn Fn(PtyStatus) + Send + Sync>>) {
-        self.pane.set_status_callback(cb);
+        self.pane.get_mut().set_status_callback(cb);
     }
 
-    fn link_at_position(&self, mouse: &MouseEvent) -> Option<String> {
-        if self.last_area.width == 0 || self.last_area.height == 0 {
+    fn link_at_position(&self, area: Rect, mouse: &MouseEvent) -> Option<String> {
+        if area.width == 0 || area.height == 0 {
             return None;
         }
-        if mouse.column < self.last_area.x
-            || mouse.column >= self.last_area.x.saturating_add(self.last_area.width)
-            || mouse.row < self.last_area.y
-            || mouse.row >= self.last_area.y.saturating_add(self.last_area.height)
+        if mouse.column < area.x
+            || mouse.column >= area.x.saturating_add(area.width)
+            || mouse.row < area.y
+            || mouse.row >= area.y.saturating_add(area.height)
         {
             return None;
         }
-        let local_x = (mouse.column - self.last_area.x) as usize;
-        let local_y = (mouse.row - self.last_area.y) as usize;
-        self.link_overlay.link_at(local_y, local_x)
+        let local_x = mouse.column.saturating_sub(area.x) as usize;
+        let local_y = mouse.row.saturating_sub(area.y) as usize;
+        self.link_overlay.borrow().link_at(local_y, local_x)
     }
 
-    fn try_handle_link_click(&mut self, mouse: &MouseEvent) -> bool {
+    fn try_handle_link_click(&mut self, area: Rect, mouse: &MouseEvent) -> bool {
         if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
             return false;
         }
 
-        if let Some(url) = self.link_at_position(mouse)
+        if let Some(url) = self.link_at_position(area, mouse)
             && self.invoke_link_handler(&url)
         {
             return true;
@@ -676,6 +723,63 @@ impl TerminalComponent {
         } else {
             webbrowser::open(url).is_ok()
         }
+    }
+}
+
+/// Helper that bridges interior-mutability fields to the `SelectionViewport` /
+/// `SelectionHost` traits so `maintain_selection_drag` can be called from
+/// `render(&self)`.
+struct RenderDragHost<'a> {
+    selection: &'a mut SelectionController,
+    pane: &'a RefCell<Box<dyn Pane>>,
+}
+
+impl SelectionViewport for RenderDragHost<'_> {
+    fn selection_viewport(&self, area: Rect) -> Rect {
+        area
+    }
+
+    fn logical_position_from_point(
+        &mut self,
+        area: Rect,
+        column: u16,
+        row: u16,
+    ) -> Option<LogicalPosition> {
+        if area.width == 0 || area.height == 0 {
+            return None;
+        }
+        let max_x = area.x.saturating_add(area.width).saturating_sub(1);
+        let max_y = area.y.saturating_add(area.height).saturating_sub(1);
+        let clamped_col = column.clamp(area.x, max_x);
+        let clamped_row = row.clamp(area.y, max_y);
+        let local_col = clamped_col.saturating_sub(area.x) as usize;
+        let local_row = clamped_row.saturating_sub(area.y) as usize;
+        let mut pane = self.pane.borrow_mut();
+        let scrollback_value = pane.scrollback();
+        let used = pane.max_scrollback();
+        let row_base = used.saturating_sub(scrollback_value);
+        Some(LogicalPosition::new(
+            row_base.saturating_add(local_row),
+            local_col,
+        ))
+    }
+
+    fn scroll_selection_vertical(&mut self, delta: isize) {
+        if delta == 0 {
+            return;
+        }
+        let mut pane = self.pane.borrow_mut();
+        let current = pane.scrollback() as isize;
+        let next = (current - delta).clamp(0, pane.scrollback_len() as isize) as usize;
+        pane.set_scrollback(next);
+    }
+
+    fn scroll_selection_horizontal(&mut self, _delta: isize) {}
+}
+
+impl SelectionHost for RenderDragHost<'_> {
+    fn selection_controller(&mut self) -> &mut SelectionController {
+        self.selection
     }
 }
 
@@ -883,7 +987,12 @@ mod tests {
         let mut buffer = Buffer::empty(area);
         let mut frame = UiFrame::from_parts(area, &mut buffer);
         let ctx = make_ctx(view_offset, handle);
-        term.render(&mut frame, area, &ctx);
+        term.render(
+            &mut frame,
+            area,
+            &ctx,
+            &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+        );
         let sb = term.pane_mut().scrollback();
         (shared, sb)
     }
@@ -905,7 +1014,12 @@ mod tests {
         let mut buffer = Buffer::empty(area);
         let mut frame = UiFrame::from_parts(area, &mut buffer);
         let ctx = make_ctx(view_offset, handle);
-        term.render(&mut frame, area, &ctx);
+        term.render(
+            &mut frame,
+            area,
+            &ctx,
+            &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+        );
         term.pane_mut().scrollback()
     }
 
@@ -1048,7 +1162,12 @@ mod tests {
         let mut buffer = Buffer::empty(area);
         let mut frame = UiFrame::from_parts(area, &mut buffer);
         let ctx = make_ctx(100, handle);
-        term.render(&mut frame, area, &ctx);
+        term.render(
+            &mut frame,
+            area,
+            &ctx,
+            &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+        );
         let sb = term.pane_mut().scrollback();
         assert_eq!(sb, 50, "scrollback should be unchanged during alt screen");
         assert!(
@@ -1110,7 +1229,12 @@ mod tests {
         let mut buffer = Buffer::empty(area);
         let mut frame = UiFrame::from_parts(area, &mut buffer);
         let ctx = make_ctx(0, handle);
-        term.render(&mut frame, area, &ctx);
+        term.render(
+            &mut frame,
+            area,
+            &ctx,
+            &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+        );
         // After first render, last_max=100, last_sb=0, viewport at max (offset=100)
         let sb2 = run_sync_with_handle(&mut term, &shared);
         assert_eq!(sb2, 0, "at bottom");
@@ -1230,52 +1354,61 @@ mod tests {
         pane.set_parser_size(height, width);
         pane.write_to_parser(text.as_bytes());
         let mut term = TerminalComponent::from_pane(Box::new(pane));
-        term.last_area = Rect {
-            x: 0,
-            y: 0,
-            width,
-            height,
-        };
         term.selection_enabled = true;
-        let row_base = term.pane.max_scrollback();
+        let row_base = term.pane.borrow_mut().max_scrollback();
         (term, row_base)
     }
 
     #[test]
     fn selection_text_single_line_ascii() {
-        let (mut term, rb) = make_term_with_content(80, 24, 2000, "Hello World");
-        term.selection.begin_drag(LogicalPosition::new(rb, 0));
-        term.selection.update_drag(LogicalPosition::new(rb, 11));
+        let (term, rb) = make_term_with_content(80, 24, 2000, "Hello World");
+        term.selection
+            .borrow_mut()
+            .begin_drag(LogicalPosition::new(rb, 0));
+        term.selection
+            .borrow_mut()
+            .update_drag(LogicalPosition::new(rb, 11));
         let text = term.selection_text();
         assert_eq!(text, Some("Hello World".to_string()));
     }
 
     #[test]
     fn selection_text_multi_line_crlf() {
-        let (mut term, rb) =
-            make_term_with_content(80, 24, 2000, "Line one\r\nLine two\r\nLine three");
-        term.selection.begin_drag(LogicalPosition::new(rb, 0));
-        term.selection.update_drag(LogicalPosition::new(rb + 2, 5));
+        let (term, rb) = make_term_with_content(80, 24, 2000, "Line one\r\nLine two\r\nLine three");
+        term.selection
+            .borrow_mut()
+            .begin_drag(LogicalPosition::new(rb, 0));
+        term.selection
+            .borrow_mut()
+            .update_drag(LogicalPosition::new(rb + 2, 5));
         let text = term.selection_text();
         assert_eq!(text, Some("Line one\nLine two\nLine ".to_string()));
     }
 
     #[test]
     fn selection_text_end_col_zero_adjustment() {
-        let (mut term, rb) =
+        let (term, rb) =
             make_term_with_content(80, 24, 2000, "First line of content\r\nSecond line here");
-        term.selection.begin_drag(LogicalPosition::new(rb, 5));
-        term.selection.update_drag(LogicalPosition::new(rb + 1, 0));
+        term.selection
+            .borrow_mut()
+            .begin_drag(LogicalPosition::new(rb, 5));
+        term.selection
+            .borrow_mut()
+            .update_drag(LogicalPosition::new(rb + 1, 0));
         let text = term.selection_text();
         assert_eq!(text, Some(" line of content".to_string()));
     }
 
     #[test]
     fn selection_text_full_row() {
-        let (mut term, rb) =
+        let (term, rb) =
             make_term_with_content(80, 24, 2000, "The quick brown fox jumps over the lazy dog");
-        term.selection.begin_drag(LogicalPosition::new(rb, 0));
-        term.selection.update_drag(LogicalPosition::new(rb, 80));
+        term.selection
+            .borrow_mut()
+            .begin_drag(LogicalPosition::new(rb, 0));
+        term.selection
+            .borrow_mut()
+            .update_drag(LogicalPosition::new(rb, 80));
         let text = term.selection_text();
         assert_eq!(
             text,
@@ -1285,9 +1418,13 @@ mod tests {
 
     #[test]
     fn selection_text_wide_chars() {
-        let (mut term, rb) = make_term_with_content(80, 24, 2000, "Hello 世界 World");
-        term.selection.begin_drag(LogicalPosition::new(rb, 0));
-        term.selection.update_drag(LogicalPosition::new(rb, 19));
+        let (term, rb) = make_term_with_content(80, 24, 2000, "Hello 世界 World");
+        term.selection
+            .borrow_mut()
+            .begin_drag(LogicalPosition::new(rb, 0));
+        term.selection
+            .borrow_mut()
+            .update_drag(LogicalPosition::new(rb, 19));
         let text = term.selection_text();
         assert!(text.is_some(), "should have selection text");
         let t = text.unwrap();
@@ -1296,15 +1433,368 @@ mod tests {
 
     #[test]
     fn selection_text_clipboard_full_26_chars() {
-        let (mut term, rb) = make_term_with_content(80, 24, 2000, "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
-        term.selection.begin_drag(LogicalPosition::new(rb, 0));
-        term.selection.update_drag(LogicalPosition::new(rb, 26));
+        let (term, rb) = make_term_with_content(80, 24, 2000, "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+        term.selection
+            .borrow_mut()
+            .begin_drag(LogicalPosition::new(rb, 0));
+        term.selection
+            .borrow_mut()
+            .update_drag(LogicalPosition::new(rb, 26));
         let text = term.selection_text();
         assert_eq!(
             text,
             Some("ABCDEFGHIJKLMNOPQRSTUVWXYZ".to_string()),
             "should copy all 26 chars, got: {:?}",
             text
+        );
+    }
+
+    #[test]
+    fn mouse_selection_works_through_handle_events() {
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use term_wm_core::components::ComponentContext;
+
+        let (mut term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
+        let ctx = ComponentContext::new(true).with_screen_area(Rect::new(0, 0, 80, 24));
+
+        // Verify selection is enabled
+        assert!(term.selection_enabled, "selection_enabled must be true");
+
+        // Mouse Down at column 1, row 0 — handle_selection_mouse prepares
+        // the drag anchor (sets button_down=true) but returns false.
+        // The event falls through to PTY mouse encoding which returns
+        // Ignored if the PTY hasn't enabled mouse protocol. That's OK —
+        // the anchor is set and the next Drag will activate selection.
+        let down = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 1,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        let _result = term.handle_events(&down, &ctx);
+        // Verify that the drag anchor was prepared
+        assert!(
+            term.selection.borrow().button_down(),
+            "button_down should be set after Down"
+        );
+
+        // Mouse Drag to column 5, row 0 — activates selection
+        let drag = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 5,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        let drag_result = term.handle_events(&drag, &ctx);
+        assert!(
+            drag_result.is_consumed(),
+            "Drag should be consumed by selection: got {:?}",
+            drag_result
+        );
+
+        // Mouse Up — finalizes selection
+        let up = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 5,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        let up_result = term.handle_events(&up, &ctx);
+        assert!(
+            !up_result.is_ignored(),
+            "Up should not be ignored after drag: got {:?}",
+            up_result
+        );
+
+        // Verify the selection text (cols 1-5 → "ello" from "Hello World")
+        let status = term.selection_status();
+        assert!(status.active, "selection should be active after up");
+        let text = term.selection_text();
+        assert_eq!(
+            text,
+            Some("ello".to_string()),
+            "should select 'ello' (cols 1-5 of row 0), got: {:?}",
+            text
+        );
+    }
+
+    #[test]
+    fn mouse_selection_via_dispatch_focused_event() {
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use std::sync::Arc;
+        use term_wm_core::app_context::AppContext;
+        use term_wm_core::components::Component;
+        use term_wm_core::window::WindowManager;
+
+        let (term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
+        let mut sv = crate::scroll_view::ScrollViewComponent::new(term);
+        sv.set_selection_enabled(true);
+        sv.set_keyboard_enabled(false);
+
+        let mut wm = WindowManager::with_config(
+            term_wm_core::wm_config::WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        wm.set_panel_visible(false);
+
+        let key = wm.create_window(Box::new(sv));
+        let raw = wm.component_for_key_mut(key).unwrap();
+        // The component inside the Window IS our ScrollViewComponent.
+        // Verify set_selection_enabled works through the trait.
+        raw.set_selection_enabled(true);
+
+        // Set up managed layout so focus can route events
+        let layout =
+            term_wm_core::layout::TilingLayout::new(term_wm_core::layout::LayoutNode::leaf(key));
+        wm.set_managed_layout(layout);
+        wm.register_managed_layout(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_app_window(key);
+
+        // Simulate rendering to set last_area on the terminal
+        use term_wm_core::components::ComponentContext;
+        use term_wm_core::ui::UiFrame;
+        let area = wm.region(key);
+        let mut buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let mut frame = UiFrame::from_parts(
+            ratatui::prelude::Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+            &mut buffer,
+        );
+        let ctx = ComponentContext::new(true);
+        if let Some(comp) = wm.component_for_key(key) {
+            comp.render(
+                &mut frame,
+                area,
+                &ctx,
+                &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+            );
+        }
+
+        // Now send a mouse event — it should reach the terminal and be consumed by selection
+        let down = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: area.x + 1,
+            row: area.y + 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result_down = wm.dispatch_focused_event(&down);
+        assert!(
+            result_down.is_some(),
+            "down must route to component, got None"
+        );
+
+        let drag = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: area.x + 5,
+            row: area.y + 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result_drag = wm.dispatch_focused_event(&drag);
+        assert!(
+            result_drag.as_ref().is_some_and(|(_, r)| r.is_consumed()),
+            "drag must be consumed by selection, got {:?}",
+            result_drag.map(|(_, r)| r)
+        );
+    }
+
+    #[test]
+    fn mouse_selection_skipped_in_direct_mode_via_dispatch() {
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use std::sync::Arc;
+        use term_wm_core::app_context::AppContext;
+        use term_wm_core::components::Component;
+        use term_wm_core::window::WindowManager;
+
+        let (term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
+        let mut sv = crate::scroll_view::ScrollViewComponent::new(term);
+        sv.set_selection_enabled(true);
+        sv.set_keyboard_enabled(false);
+
+        let mut wm = WindowManager::with_config(
+            term_wm_core::wm_config::WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+        );
+        wm.set_panel_visible(false);
+
+        let key = wm.create_window(Box::new(sv));
+        let raw = wm.component_for_key_mut(key).unwrap();
+        raw.set_selection_enabled(true);
+
+        let layout =
+            term_wm_core::layout::TilingLayout::new(term_wm_core::layout::LayoutNode::leaf(key));
+        wm.set_managed_layout(layout);
+        wm.register_managed_layout(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_app_window(key);
+
+        // Set direct mode on the window
+        wm.set_direct_mode(key, true);
+        assert!(wm.direct_mode(key));
+
+        // Render to set last_area
+        use term_wm_core::components::ComponentContext;
+        use term_wm_core::ui::UiFrame;
+        let area = wm.region(key);
+        let mut buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let mut frame = UiFrame::from_parts(
+            ratatui::prelude::Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+            &mut buffer,
+        );
+        let ctx = ComponentContext::new(true);
+        if let Some(comp) = wm.component_for_key(key) {
+            comp.render(
+                &mut frame,
+                area,
+                &ctx,
+                &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+            );
+        }
+
+        // In direct mode: a Down+Drag must NOT be consumed by selection
+        let down = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: area.x + 1,
+            row: area.y + 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result_down = wm.dispatch_focused_event(&down);
+        assert!(
+            result_down.is_some(),
+            "down must route to component in direct mode, got None"
+        );
+        let (_, down_evt) = result_down.unwrap();
+        // In direct mode, selection is skipped, so Down is not consumed
+        // (it falls through to PTY forwarding, which returns Ignored for
+        //  press-only mode since the test PTY hasn't enabled mouse tracking)
+        assert!(
+            !down_evt.is_consumed(),
+            "down must NOT be consumed in direct mode: got {:?}",
+            down_evt
+        );
+
+        // Drag must also not be consumed (selection is skipped in direct mode)
+        let drag = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: area.x + 5,
+            row: area.y + 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result_drag = wm.dispatch_focused_event(&drag);
+        assert!(
+            result_drag.is_some(),
+            "drag must route to component in direct mode, got None"
+        );
+        let (_, drag_evt) = result_drag.unwrap();
+        assert!(
+            !drag_evt.is_consumed(),
+            "drag must NOT be consumed in direct mode: got {:?}",
+            drag_evt
+        );
+
+        // Verify no selection was made
+        let sel_status = wm
+            .component_for_key(key)
+            .map(|c| c.selection_status())
+            .unwrap();
+        assert!(
+            !sel_status.active,
+            "selection should not be active after direct mode drag"
+        );
+    }
+
+    /// In direct mode, mouse Down must skip selection and go to PTY encoding.
+    #[test]
+    fn direct_mode_mouse_down_skips_selection() {
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use term_wm_core::actions::TermWmAction;
+        use term_wm_core::components::{ComponentContext, EventResult};
+
+        let mut pane = TestPane::new(2000);
+        pane.set_parser_size(24, 80);
+        pane.write_to_parser(b"Hello World");
+        // Enable VT200 mouse mode so mouse_event_allowed() returns true
+        pane.write_to_parser(b"\x1b[?1000h");
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        term.set_selection_enabled(true);
+
+        // Direct mode — selection skipped, PTY encoding expected
+        let ctx = ComponentContext::new(true)
+            .with_direct_mode(true)
+            .with_screen_area(Rect::new(0, 0, 80, 24));
+
+        // Down inside the area — selection must NOT consume it
+        let down = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: 2,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result = term.handle_events(&down, &ctx);
+        match result {
+            EventResult::Action(TermWmAction::MouseToBytes(_)) => {}
+            other => panic!(
+                "in direct mode, Down must produce MouseToBytes (PTY), got {:?}",
+                other
+            ),
+        }
+
+        // Non-direct mode — selection should consume Drag
+        let ctx_normal = ComponentContext::new(true).with_screen_area(Rect::new(0, 0, 80, 24));
+
+        // Send Down first to set button_down (required for Drag consumption)
+        let down_normal = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: 2,
+            modifiers: KeyModifiers::NONE,
+        });
+        let _ = term.handle_events(&down_normal, &ctx_normal);
+
+        let drag = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 10,
+            row: 2,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result_drag = term.handle_events(&drag, &ctx_normal);
+        assert!(
+            matches!(result_drag, EventResult::Consumed),
+            "in normal mode, Drag must be consumed by selection, got {:?}",
+            result_drag
         );
     }
 }
