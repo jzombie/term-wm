@@ -74,8 +74,8 @@ pub struct WmConfig {
     pub floating_windows_enabled: bool,
     /// Show the top/bottom status panel (window list, menu, indicators).
     pub panel_enabled: bool,
-    /// Enable the WM overlay (menu) toggled by Escape.
-    pub wm_overlay_enabled: bool,
+    /// Enable the WM command menu toggled by Escape.
+    pub wm_command_menu_enabled: bool,
     /// Duration of the escape passthrough window.
     pub super_passthrough_window: Duration,
     /// Allow floating windows to be dragged/resized off-screen.
@@ -122,13 +122,13 @@ impl Default for WmConfig {
 impl WmConfig {
     /// Full standalone window manager preset.
     ///
-    /// Chrome, floating windows, panel, and WM overlay are all enabled.
+    /// Chrome, floating windows, panel, and WM command menu are all enabled.
     pub fn standalone() -> Self {
         Self {
             chrome_enabled: true,
             floating_windows_enabled: true,
             panel_enabled: true,
-            wm_overlay_enabled: true,
+            wm_command_menu_enabled: true,
             super_passthrough_window: super_passthrough_window_default(),
             floating_resize_offscreen: true,
             shadow_enabled: true,
@@ -146,14 +146,14 @@ impl WmConfig {
         }
     }
 
-    /// Embedded mode preset: no chrome, no floating windows, no overlay.
+    /// Embedded mode preset: no chrome, no floating windows, no command menu.
     /// Bottom keybinding hints are rendered by the panel in inactive mode.
     pub fn embedded() -> Self {
         Self {
             chrome_enabled: false,
             floating_windows_enabled: false,
             panel_enabled: false,
-            wm_overlay_enabled: false,
+            wm_command_menu_enabled: false,
             super_passthrough_window: super_passthrough_window_default(),
             floating_resize_offscreen: false,
             shadow_enabled: false,

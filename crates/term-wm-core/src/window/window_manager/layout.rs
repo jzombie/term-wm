@@ -174,18 +174,18 @@ impl WindowManager {
     pub fn register_managed_layout(&mut self, area: Rect) {
         self.last_frame_area = area;
         // Compute hints before layout so split_area can reserve space for them.
-        // Show Global-layer hints (WmToggleOverlay only) when overlay closed,
-        // WmMode hints when overlay is open.
-        // In embedded mode (wm_overlay_enabled = false) there is no overlay
+        // Show Global-layer hints (WmToggleOverlay only) when command menu closed,
+        // WmMode hints when command menu is open.
+        // In embedded mode (wm_command_menu_enabled = false) there is no command menu
         // distinction, so show all hints unconditionally.
-        let active_layer = if self.config.wm_overlay_enabled && self.wm_overlay_visible() {
+        let active_layer = if self.config.wm_command_menu_enabled && self.command_menu_visible() {
             ActionLayer::WmMode
         } else {
             ActionLayer::Global
         };
         match self.hint_visibility {
             crate::wm_config::HintVisibility::Always => {
-                if self.config.wm_overlay_enabled {
+                if self.config.wm_command_menu_enabled {
                     let hints = self
                         .keybindings()
                         .bottom_hints_for_layer(crate::constants::MAX_BOTTOM_HINTS, active_layer);

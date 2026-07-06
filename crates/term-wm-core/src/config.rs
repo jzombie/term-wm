@@ -95,8 +95,8 @@ impl WmBuilder {
         self
     }
 
-    pub fn wm_overlay_enabled(mut self, enabled: bool) -> Self {
-        self.config.wm_overlay_enabled = enabled;
+    pub fn wm_command_menu_enabled(mut self, enabled: bool) -> Self {
+        self.config.wm_command_menu_enabled = enabled;
         self
     }
 

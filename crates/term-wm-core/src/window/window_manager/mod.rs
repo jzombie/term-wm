@@ -1,4 +1,5 @@
 mod chrome;
+mod command_menu;
 mod drag;
 mod focus;
 mod layout;
@@ -18,7 +19,7 @@ use super::entry::{Window, WindowState};
 use crate::actions::{SystemTask, TermWmAction};
 use crate::app_context::AppContext;
 use crate::bottom_panel_trait::BottomPanel;
-use crate::components::{ComponentContext, MenuItem, MenuOverlay, Overlay};
+use crate::components::{Component, ComponentContext, MenuItem, MenuOverlay, Overlay};
 use crate::hitbox_registry::{HitTarget, HitboxRegistry};
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
@@ -159,7 +160,7 @@ pub struct WindowManager {
     app_ctx: Arc<AppContext>,
     top_panel: Option<Box<dyn TopPanel<WindowKey>>>,
     bottom_panel: Option<Box<dyn BottomPanel>>,
-    menu_overlay: Option<Box<dyn MenuOverlay<crate::actions::TermWmAction>>>,
+    command_menu: Option<Box<dyn MenuOverlay<crate::actions::TermWmAction>>>,
     // Replaces drag_header + drag_resize
     pub(crate) mouse_capture: Option<MouseCaptureState>,
     pub(crate) last_header_click: Option<(WindowKey, Instant)>,
@@ -172,7 +173,7 @@ pub struct WindowManager {
     window_selection_dirty: bool,
     clipboard_enabled: bool,
     clipboard_dirty: bool,
-    overlay_visible: bool,
+    command_menu_visible: bool,
     selection_active: bool,
     selection_dragging: bool,
     selection_text: Option<String>,
@@ -180,7 +181,7 @@ pub struct WindowManager {
     selection_copied_text: Option<String>,
     config: WmConfig,
     hint_visibility: HintVisibility,
-    overlay_opened_at: Option<Instant>,
+    command_menu_opened_at: Option<Instant>,
     /// The pending super-key event (no timer — managed by the TaskScheduler).
     super_pending_event: Option<KeyEvent>,
     /// Timestamp when the super-key timer was armed, used for panel countdown
@@ -457,7 +458,7 @@ impl WindowManager {
         app_ctx: Arc<AppContext>,
         top_panel: Option<Box<dyn TopPanel<WindowKey>>>,
         bottom_panel: Option<Box<dyn BottomPanel>>,
-        menu_overlay: Option<Box<dyn MenuOverlay<TermWmAction>>>,
+        command_menu: Option<Box<dyn MenuOverlay<TermWmAction>>>,
     ) -> Self {
         let mouse_capture_enabled = config.mouse_capture_enabled;
         let clipboard = Some(crate::clipboard::Clipboard::new());
@@ -481,7 +482,7 @@ impl WindowManager {
             app_ctx,
             top_panel,
             bottom_panel,
-            menu_overlay,
+            command_menu,
             mouse_capture: None,
             last_header_click: None,
             hover: None,
@@ -491,7 +492,7 @@ impl WindowManager {
             mouse_capture_dirty: false,
             clipboard_enabled: config.clipboard_enabled,
             clipboard_dirty: false,
-            overlay_visible: false,
+            command_menu_visible: false,
             selection_active: false,
             selection_dragging: false,
             selection_text: None,
@@ -501,7 +502,7 @@ impl WindowManager {
             window_selection_dirty: false,
             hint_visibility: config.hint_visibility,
             config,
-            overlay_opened_at: None,
+            command_menu_opened_at: None,
             super_pending_event: None,
             super_pending_at: None,
             super_timer_id: None,
@@ -613,7 +614,7 @@ impl WindowManager {
     /// Number of overlays that will be rendered this frame.
     pub fn visible_overlay_count(&self) -> usize {
         let mut n = 0usize;
-        if self.wm_overlay_visible() {
+        if self.command_menu_visible() {
             n += 1;
         }
         if self.overlays.contains_key(&OverlayId::ExitConfirm) {
@@ -643,7 +644,7 @@ impl WindowManager {
             p.begin_frame();
             p.set_power_profile(self.power_profile);
         }
-        if !self.config.wm_overlay_enabled {
+        if !self.config.wm_command_menu_enabled {
             self.clear_capture();
         } else {
             self.refresh_capture();
@@ -933,7 +934,7 @@ impl WindowManager {
 
         let Some((target, hit_rect)) = self.hitbox_registry.hit_test(*position) else {
             // No hitbox — try focus-on-click, then fall through
-            if self.config.wm_overlay_enabled {
+            if self.config.wm_command_menu_enabled {
                 self.focus_window_at(col, row);
             }
             return false;
@@ -1058,13 +1059,13 @@ impl WindowManager {
                 true
             }
             HitTarget::TopPanel => {
-                if self.config.wm_overlay_enabled && self.panel_active() {
+                if self.config.wm_command_menu_enabled && self.panel_active() {
                     let panel_handled = self.handle_panel_click(col, row);
                     if panel_handled {
                         return true;
                     }
                 }
-                if self.config.wm_overlay_enabled {
+                if self.config.wm_command_menu_enabled {
                     self.focus_window_at(col, row);
                 }
                 false
@@ -1159,10 +1160,10 @@ impl WindowManager {
             modifiers: crossterm::event::KeyModifiers::NONE,
         });
         if p.menu_icon_contains_point(col, row) {
-            if self.wm_overlay_visible() {
-                self.close_wm_overlay();
+        if self.command_menu_visible() {
+                self.close_command_menu();
             } else {
-                self.open_wm_overlay();
+                self.open_command_menu();
             }
             return true;
         }
@@ -1205,8 +1206,8 @@ impl WindowManager {
     pub fn clear_capture(&mut self) {
         self.capture_deadline = None;
         self.pending_deadline = None;
-        self.overlay_visible = false;
-        self.overlay_opened_at = None;
+        self.command_menu_visible = false;
+        self.command_menu_opened_at = None;
         self.super_pending_event = None;
         self.super_pending_at = None;
         if let Some(handle) = &self.system_task_handle {
@@ -1217,7 +1218,7 @@ impl WindowManager {
                 handle.cancel(id);
             }
         }
-        if let Some(menu) = &mut self.menu_overlay {
+        if let Some(menu) = &mut self.command_menu {
             menu.restore();
         }
     }
@@ -1226,7 +1227,7 @@ impl WindowManager {
         if !self.mouse_capture_enabled {
             return false;
         }
-        if self.config.wm_overlay_enabled && self.overlay_visible {
+        if self.config.wm_command_menu_enabled && self.command_menu_visible {
             return true;
         }
         self.refresh_capture();
@@ -1647,10 +1648,10 @@ impl WindowManager {
     }
 
     pub fn super_passthrough_remaining(&self) -> Option<Duration> {
-        if !self.wm_overlay_visible() {
+        if !self.command_menu_visible() {
             return None;
         }
-        let opened_at = self.overlay_opened_at?;
+        let opened_at = self.command_menu_opened_at?;
         let elapsed = opened_at.elapsed();
         if elapsed >= self.config.super_passthrough_window {
             return None;
@@ -1659,7 +1660,7 @@ impl WindowManager {
     }
 
     pub fn render_panel(&mut self, frame: &mut UiFrame<'_>) {
-        let status_line = if self.wm_overlay_visible() {
+        let status_line = if self.command_menu_visible() {
             let esc_state = if let Some(remaining) = self.super_passthrough_remaining() {
                 format!("Super passthrough: active ({}ms)", remaining.as_millis())
             } else {
@@ -1686,7 +1687,7 @@ impl WindowManager {
         let selection_active = self.selection_active();
         let selection_dragging = self.selection_dragging();
         let selection_copied = self.selection_copied();
-        let wm_overlay_visible = self.wm_overlay_visible();
+        let wm_overlay_visible = self.command_menu_visible();
         let label_for = &move |key| {
             titles_map
                 .get(&key)
@@ -1714,6 +1715,210 @@ impl WindowManager {
         }
         if let Some(p) = &mut self.bottom_panel {
             p.render(frame, panel_active, &self.config.theme);
+        }
+    }
+
+    pub fn render_overlays(
+        &mut self,
+        frame: &mut UiFrame<'_>,
+        z_base: usize,
+        z_total: usize,
+        registry: &mut crate::hitbox_registry::HitboxRegistry,
+    ) {
+        use std::time::Duration;
+        use ratatui::layout::Alignment;
+        use ratatui::style::{Color, Style};
+        use ratatui::widgets::Paragraph;
+
+        use crate::layout::{FloatingPane, rect_contains, render_handles_masked};
+        use crate::window::FloatRectSpec;
+        use crate::window::WindowKey;
+
+        let (hovered, hovered_resize) = self.hover_targets();
+        let obscuring: Vec<ratatui::prelude::Rect> = self
+            .managed_draw_order
+            .iter()
+            .filter_map(|&key| self.regions.get(key))
+            .collect();
+        let is_obscured =
+            |x: u16, y: u16| -> bool { obscuring.iter().any(|r| rect_contains(*r, x, y)) };
+        render_handles_masked(
+            frame,
+            &self.handles,
+            hovered,
+            is_obscured,
+            &self.config.theme,
+        );
+        let floating_panes: Vec<FloatingPane<WindowKey>> = self
+            .windows
+            .iter()
+            .filter_map(|(key, window)| {
+                window.floating_rect.map(|rect| match rect {
+                    FloatRectSpec::Absolute(fr) => FloatingPane {
+                        key,
+                        rect: crate::layout::RectSpec::Absolute(ratatui::prelude::Rect {
+                            x: fr.x.max(0) as u16,
+                            y: fr.y.max(0) as u16,
+                            width: fr.width,
+                            height: fr.height,
+                        }),
+                    },
+                    FloatRectSpec::Percent {
+                        x,
+                        y,
+                        width,
+                        height,
+                    } => FloatingPane {
+                        key,
+                        rect: crate::layout::RectSpec::Percent {
+                            x,
+                            y,
+                            width,
+                            height,
+                        },
+                    },
+                })
+            })
+            .collect();
+
+        let mut visible_regions = crate::layout::RegionMap::default();
+        for key in self.regions.ids() {
+            visible_regions.set(key, self.visible_region_for_key(key));
+        }
+
+        let drag_resize_state = match &self.mouse_capture {
+            Some(crate::window::window_manager::MouseCaptureState::ResizingWindow {
+                key,
+                edge,
+                start_rect,
+                start_col,
+                start_row,
+                start_x,
+                start_y,
+                start_width,
+                start_height,
+            }) => Some(crate::layout::floating::ResizeDrag {
+                key: *key,
+                edge: *edge,
+                start_rect: *start_rect,
+                start_col: *start_col,
+                start_row: *start_row,
+                start_x: *start_x,
+                start_y: *start_y,
+                start_width: *start_width,
+                start_height: *start_height,
+            }),
+            _ => None,
+        };
+        crate::layout::floating::render_resize_outline(
+            frame,
+            hovered_resize.copied(),
+            drag_resize_state,
+            &visible_regions,
+            self.managed_area,
+            &floating_panes,
+            &self.managed_draw_order,
+            &self.config.theme,
+        );
+
+        if let Some((_, _, rect)) = self.drag_snap {
+            let buffer = frame.buffer_mut();
+            let color = self.config.theme.accent;
+            let clip = rect.intersection(buffer.area);
+            if clip.width > 0 && clip.height > 0 {
+                for y in clip.y..clip.y.saturating_add(clip.height) {
+                    for x in clip.x..clip.x.saturating_add(clip.width) {
+                        if let Some(cell) = buffer.cell_mut((x, y)) {
+                            let mut style = cell.style();
+                            style.bg = Some(color);
+                            cell.set_style(style);
+                        }
+                    }
+                }
+            }
+
+            if let Some(remaining) = self.drag_snap_remaining() {
+                const GRACE: Duration = Duration::from_millis(500);
+                let timeout = self.config.drag_snap_timeout.unwrap();
+                if timeout.saturating_sub(remaining) < GRACE {
+                    // Still within grace period — don't show countdown yet
+                } else {
+                    let text = if remaining == Duration::ZERO {
+                        "Mouse left — snapping...".to_string()
+                    } else {
+                        format!("Mouse left — snapping in {}s", remaining.as_secs().max(1))
+                    };
+                    let text_len = text.len() as u16;
+                    let text_x = rect.x + (rect.width.saturating_sub(text_len)) / 2;
+                    let text_y = rect.y + rect.height / 2;
+                    if text_x >= rect.x && text_y >= rect.y {
+                        let text_area = ratatui::prelude::Rect {
+                            x: text_x,
+                            y: text_y,
+                            width: text_len,
+                            height: 1,
+                        };
+                        let paragraph = Paragraph::new(text)
+                            .style(
+                                Style::default()
+                                    .fg(self.config.theme.accent_alt)
+                                    .bg(Color::Black),
+                            )
+                            .alignment(Alignment::Center);
+                        frame.render_widget(paragraph, text_area);
+                    }
+                }
+            }
+        }
+
+        let mut oi = z_base;
+        if self.command_menu_visible() {
+            let menu_items = wm_menu_items(
+                self.mouse_capture_enabled(),
+                self.clipboard_enabled(),
+                self.window_selection_enabled(),
+            );
+            let anchor = self
+                .top_panel
+                .as_ref()
+                .and_then(|p| p.menu_icon_rect())
+                .map(|r| (r.x, r.y.saturating_add(r.height)));
+            let menu_ctx = self
+                .component_context(false)
+                .with_overlay(true)
+                .with_hover_pos(self.hover)
+                .with_keybindings(std::sync::Arc::new(self.keybindings().clone()));
+            if let Some(menu) = &mut self.command_menu {
+                menu.set_items(menu_items);
+                menu.set_anchor(anchor);
+                menu.set_managed_area(self.managed_area);
+                let comp: &mut dyn Component<TermWmAction> = &mut **menu;
+                comp.render(frame, frame.area(), &menu_ctx, registry);
+            }
+            oi += 1;
+        }
+        for overlay_id in [OverlayId::ExitConfirm, OverlayId::Help] {
+            if self.overlays.contains_key(&overlay_id) {
+                let z = WindowManager::compute_z_depth(oi, z_total);
+                oi += 1;
+                let ctx = self.component_context(false).with_overlay(true);
+                if let Some(r) = self
+                    .overlays
+                    .get(&overlay_id)
+                    .and_then(|o| o.shadow_rect(frame.area()))
+                {
+                    let shadow_dest = crate::window::FloatRect {
+                        x: r.x as i32,
+                        y: r.y as i32,
+                        width: r.width,
+                        height: r.height,
+                    };
+                    crate::ui::render_drop_shadow(frame, shadow_dest, z, &self.config.theme);
+                }
+                if let Some(overlay) = self.overlays.get_mut(&overlay_id) {
+                    overlay.render(frame, frame.area(), &ctx, registry);
+                }
+            }
         }
     }
 }
