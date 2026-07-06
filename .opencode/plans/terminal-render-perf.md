@@ -2,33 +2,26 @@
 
 ## Problem
 
-Running any command inside a term-wm shell renders at ~2 FPS on high-resolution terminals (3840×2160). The `--wm` benchmark path (direct `WidgetAdapter` rendering) runs at 58-60 FPS. The bottleneck is the `TerminalComponent::render_screen` function in `crates/term-wm-ui-components/src/terminal.rs:368`, which performs an unconditional O(rows × cols) cell rendering pass every frame.
+Running any command inside a term-wm shell renders at ~2 FPS on high-resolution terminals. The bottleneck is `TerminalComponent::render_screen` in `crates/term-wm-ui-components/src/terminal.rs:368`, which performs an unconditional O(rows × cols) pass extracting cells from `vt100::Screen` every frame.
 
-## Root Cause Analysis
+Terminal cell counts are ~40K-50K at 4K (character cells, not pixels). The per-cell cost is: `vt100::Screen::cell()` lookup + `resolve_colors()` + 6 attribute checks + link overlay check + selection check + buffer write.
 
-`render_screen` has two full passes over every visible cell:
+## Approach: Retained Blitting + Hoisted Defaults
 
-1. **Link detection pass** (lines 449-479): Already has a fast-path via `OverlaySignature` — skipped when `(bytes_seen, scrollback, area)` unchanged. This is fine.
+### Change 1: Retained buffer with block-copy (primary fix)
 
-2. **Cell rendering pass** (lines 482+): **Always runs unconditionally.** For every cell:
-   - `screen.cell(row, col)` — O(1) when scrollback=0, O(scrollback_offset) otherwise
-   - `resolve_colors(cell, screen)` — calls `screen.fgcolor()` and `screen.bgcolor()` per cell (returns the same values for all cells)
-   - 6 boolean attribute checks (bold, dim, italic, underline, inverse, wide_continuation)
-   - `link_overlay.is_link_cell()` — vec index
-   - Selection range check
-   - `buffer.cell_mut()` write
-
-At 3840×2160, this is ~8M cell operations per frame with no skip.
-
-## Approach: Three-Tier Optimization
-
-### Tier 1: Skip-if-unchanged (lowest risk, highest impact)
-
-Add a frame-level signature check before the render pass. If nothing changed since the last frame, skip the entire O(rows × cols) pass.
+Instead of re-parsing `vt100::Screen` every frame, cache the rendered output in a local `Buffer` and blit from it when nothing changed.
 
 **File:** `crates/term-wm-ui-components/src/terminal.rs`
 
-Add a `last_render_signature` field to `TerminalComponent`:
+Add to `TerminalComponent`:
+
+```rust
+cached_buffer: RefCell<Option<Buffer>>,
+cached_signature: Cell<Option<RenderSignature>>,
+```
+
+The `RenderSignature` must include all states that affect rendering:
 
 ```rust
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -39,125 +32,113 @@ struct RenderSignature {
     area_height: u16,
     start_row: u16,
     start_col: u16,
+    focused: bool,
+    selection_active: bool,
+    selection_range: Option<(u16, u16)>,  // (start, end) normalized
+    link_overlay_version: u64,            // monotonic counter from LinkOverlay
 }
 ```
 
-In `render_screen`, before the cell loop:
+In `render_screen`:
 
 ```rust
-let sig = RenderSignature { bytes_seen, scrollback: scrollback_value, area_width: area.width, area_height: area.height, start_row, start_col };
-if self.last_render_signature.get() == Some(sig) {
-    return; // nothing changed, skip entire render
+let sig = RenderSignature::from_context(ctx, &self, bytes_seen, scrollback_value, area, start_row, start_col);
+
+if self.cached_signature.get() == Some(sig) {
+    // Fast path: blit cached buffer into frame
+    if let Some(cached) = self.cached_buffer.borrow().as_ref() {
+        let dst = frame.buffer_mut();
+        for y in 0..cached.area.height {
+            for x in 0..cached.area.width {
+                let src_pos = (x, y);
+                let dst_x = area.x.saturating_add(x);
+                let dst_y = area.y.saturating_add(y);
+                if let (Some(src_cell), Some(dst_cell)) = (
+                    cached.cell(src_pos),
+                    dst.cell_mut((dst_x, dst_y)),
+                ) {
+                    *dst_cell = src_cell.clone();
+                }
+            }
+        }
+    }
+    return;
 }
-self.last_render_signature.set(Some(sig));
+
+// Slow path: parse vt100::Screen, render into cached buffer, then blit
+let mut cache = Buffer::empty(area);
+{
+    // ... existing full render logic writes to &mut cache ...
+    // (the current pass 2 cell loop, writing to cache instead of frame.buffer_mut())
+}
+*self.cached_buffer.borrow_mut() = cache;
+self.cached_signature.set(Some(sig));
+
+// Blit from cache to frame
+// ... same blit loop as above ...
 ```
 
-Add `last_render_signature: Cell<Option<RenderSignature>>` to `TerminalComponent`.
+**Why this works with immediate-mode:** The buffer is always populated every frame — either from the cache (fast blit) or from fresh parsing (slow path). Ratatui never sees a blank buffer.
 
-**Impact:** When PTY output is idle (no new bytes), this skips the entire render pass. This is the common case during typing pauses, reading output, etc.
+**Why this is correct:** The signature includes all rendering-affecting state. When anything changes (new output, focus change, selection, scrollback, resize), the full re-parse runs once, then subsequent frames use the cache until the next change.
 
-### Tier 2: Hoist loop-invariant computations (low risk)
+### Change 2: Hoist loop-invariant computations
 
-Move `screen.fgcolor()` and `screen.bgcolor()` outside the per-cell loop. These return the same values for every cell in the frame.
+Move `screen.fgcolor()` and `screen.bgcolor()` outside the per-cell loop. These return the same values for every cell.
 
 **File:** `crates/term-wm-ui-components/src/terminal.rs`
 
-Before the cell loop (around line 481):
+Before the cell loop:
 
 ```rust
 let default_fg = screen.fgcolor();
 let default_bg = screen.bgcolor();
 ```
 
-Change `resolve_colors` to accept the pre-computed defaults:
+Pass to `resolve_colors` instead of `screen`:
 
 ```rust
-fn resolve_colors_with_defaults(
-    cell: &vt100::Cell,
-    default_fg: vt100::Color,
-    default_bg: vt100::Color,
-) -> (Option<TColor>, Option<TColor>) {
+fn resolve_colors(cell: &vt100::Cell, default_fg: vt100::Color, default_bg: vt100::Color) -> (Option<TColor>, Option<TColor>) {
     let fg = resolve_color(cell.fgcolor(), default_fg);
     let bg = resolve_color(cell.bgcolor(), default_bg);
-    // ... brighten_indexed for bold ...
+    if cell.bold() {
+        // brighten fg ...
+    }
+    (fg, bg)
 }
 ```
-
-**Impact:** Eliminates ~16M redundant `screen.fgcolor()`/`bgcolor()` calls per frame at 4K resolution.
-
-### Tier 3: Diff-based rendering (medium risk)
-
-Cache the previous frame's cell content and style, only writing cells that changed.
-
-**File:** `crates/term-wm-ui-components/src/terminal.rs`
-
-Add to `TerminalComponent`:
-
-```rust
-prev_cells: RefCell<Vec<Vec<u8>>>,      // previous frame's cell contents (flattened)
-prev_styles: RefCell<Vec<u32>>,         // previous frame's styles (flattened, hash)
-```
-
-In the cell rendering loop, compare current cell against cached cell. Only call `buffer.cell_mut()` and write if different:
-
-```rust
-let cell_changed = prev_content != current_content || prev_style != current_style;
-if cell_changed {
-    // ... existing render logic ...
-    *dst_cell = src_cell;
-    // update cache
-}
-```
-
-**Impact:** Reduces buffer writes from O(rows × cols) to O(changed cells). Most frames in a terminal have very few changes (cursor blink, typing, output stream). This turns 8M writes into ~100-1000 writes per frame.
-
-**Risk:** Must correctly handle initial render (cache is empty), resize (cache is wrong size), and scrollback changes (cache is stale). The `RenderSignature` from Tier 1 handles the resize/scrollback cases — when signature changes, invalidate the entire cache.
 
 ## Files to Modify
 
 | File | Change |
 |------|--------|
-| `crates/term-wm-ui-components/src/terminal.rs` | Add `RenderSignature`, `last_render_signature`, `prev_cells`, `prev_styles` fields. Implement Tier 1, 2, 3 optimizations. |
+| `crates/term-wm-ui-components/src/terminal.rs` | Add `cached_buffer`, `cached_signature`, `RenderSignature` struct. Refactor `render_screen` to use retained blitting. Hoist color defaults. |
 
-## Implementation Order
+## Implementation Steps
 
-1. **Tier 1 first** — skip-if-unchanged. Biggest impact, lowest risk. Test by running a command, waiting, verifying FPS improves during idle periods.
-2. **Tier 2 next** — hoist defaults. Trivial change, measurable improvement.
-3. **Tier 3 last** — diff-based rendering. Most complex, but turns O(rows × cols) into O(changes) per frame.
+1. Add `RenderSignature` struct and `cached_buffer`/`cached_signature` fields to `TerminalComponent`
+2. Refactor `render_screen` to write into a local `Buffer` instead of `frame.buffer_mut()`
+3. Add signature check at top of `render_screen` — blit from cache if signature matches
+4. Hoist `screen.fgcolor()`/`bgcolor()` out of the cell loop
+5. Ensure cache is invalidated on resize, scrollback change, alternate screen toggle, focus change, selection change
 
 ## Verification
 
 ```bash
-# Baseline (without optimizations)
-cargo run -p term-bench -- --duration 5        # direct: ~60 fps
-# Inside term-wm shell:
-cargo run -p term-bench -- --duration 5        # should be ~2 fps
-
-# After Tier 1 (skip-if-unchanged):
-# Direct: unchanged ~60 fps
-# Inside shell: should improve to ~30+ fps during idle, ~2 fps during active output
-
-# After Tier 2 (hoist defaults):
-# Marginal improvement on top of Tier 1
-
-# After Tier 3 (diff-based):
-# Inside shell: should approach ~50+ fps for idle/light-output terminals
-
-# Run existing tests:
-cargo test --workspace
 cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace
+
+# Performance test:
+# Direct mode (baseline):
+cargo run -p term-bench -- --duration 5        # expect ~60 fps
+
+# Inside term-wm shell (before fix):
+cargo run -p term-bench -- --duration 5        # expect ~2 fps
+
+# Inside term-wm shell (after fix):
+cargo run -p term-bench -- --duration 5        # expect ~50+ fps idle, ~30+ fps light output
 ```
 
-## Risk Assessment
+## Risk
 
-| Tier | Risk | Mitigation |
-|------|------|------------|
-| 1 | Low | Signature is a simple hash of observable state. Cache invalidates on any change. |
-| 2 | Low | Pure refactor — same logic, just hoisted. |
-| 3 | Medium | Diff cache must be invalidated on resize, scrollback change, and alternate screen toggle. The `RenderSignature` covers all three. |
-
-## Expected Impact
-
-- **Idle terminal** (no output): 2 FPS → 60 FPS (Tier 1 alone achieves this)
-- **Light output** (typing, prompt updates): 2 FPS → 30-50 FPS (Tier 3)
-- **Heavy output** (cat, htop): Minimal improvement — cells genuinely change every frame
+Low. The retained buffer approach is a standard optimization in terminal emulators. The signature covers all rendering-affecting state. The fallback (full re-parse) is the existing code path.
