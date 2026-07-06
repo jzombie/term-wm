@@ -498,8 +498,8 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
                 st.pending_offset_y = Some(st.offset_y);
             }
             _ => {
-            // 3. Create context with ViewportHandle
-            let handle = self.viewport_handle();
+                // 3. Create context with ViewportHandle
+                let handle = self.viewport_handle();
                 let info = handle.info();
                 let child_ctx = ctx.with_viewport(info, Some(handle));
                 self.content
