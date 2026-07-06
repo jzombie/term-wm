@@ -2,49 +2,58 @@
 
 ## Problem
 
-Running commands inside a term-wm shell renders at ~2 FPS. The `FramePacer` correctly coalesces PTY wakeups at ~60 FPS. The profile (unsymbolicated) shows 54% of samples in a single hot function, likely the per-cell vt100 extraction in `render_screen`.
+Running commands inside a term-wm shell renders at ~2 FPS. The `FramePacer` correctly coalesces PTY wakeups at ~60 FPS. The bottleneck is the per-frame cost of `render_screen`'s O(rows × cols) cell extraction, combined with the reader thread parking serialization.
 
 ## Root Cause
 
-Two coupled issues:
+1. **Reader parking serialization**: The PTY reader parks after each batch and is only unparked during `Pty::screen()` in `render_screen`. This creates strict read→render→read serialization.
 
-1. **Per-frame render cost**: `render_screen` does an unconditional O(rows × cols) cell extraction from `vt100::Screen`, with `screen.fgcolor()`/`bgcolor()` called per cell (returns same value for all cells).
+2. **Unconditional screen cloning**: The reader clones the full `vt100::Screen` into `ArcSwap` on every batch, even when the renderer isn't ready. Under high throughput, this floods the heap with O(N) allocations.
 
-2. **Reader-renderer coupling**: The PTY reader thread parks after each batch and is only unparked inside `Pty::screen()` during render. This creates strict serialization — the reader can't produce the next batch until the main thread renders. The reader also clones the full `vt100::Screen` into `ArcSwap` on every batch, which is expensive under high throughput.
+3. **Per-cell render cost**: `screen.fgcolor()`/`bgcolor()` called per cell (same value for all cells).
 
-## Approach: Render-Driven Snapshots + Hoisted Defaults
+## Approach
 
-### Change 1: Render-driven screen snapshots (primary fix)
+### Change 1: Non-blocking reader with conditional snapshot (primary fix)
 
-Decouple the reader's parsing from screen publishing. The reader thread parses bytes continuously but only clones and publishes the `vt100::Screen` when the renderer signals it's ready for a new frame.
+The reader thread blocks only on the OS `read()` syscall. After parsing bytes, it checks an atomic flag — if the renderer is ready, it clones the screen; otherwise it skips the clone and loops back to `read()`.
 
 **File:** `crates/term-wm-pty-engine/src/pty.rs`
 
-Add a `render_ready` flag (atomic bool) that the main thread sets after consuming a frame:
+Add to `Pty`:
 
 ```rust
-pub struct Pty {
-    // ... existing fields ...
-    render_ready: Arc<AtomicBool>,
+render_ready: Arc<AtomicBool>,
+```
+
+Modify the reader thread loop:
+
+```rust
+// Reader thread:
+loop {
+    // Block on OS read() — the only blocking point
+    let n = reader.read(&mut buf)?;
+    if n == 0 { break; }
+
+    // Parse bytes into vt100::Parser (cheap — just byte processing)
+    parser.process(&buf[..n]);
+
+    // Publish to ArcSwap only if renderer is ready
+    if render_ready.swap(false, Ordering::AcqRel) {
+        let screen = parser.screen().clone();
+        shared_screen.store(Arc::new(screen));
+        dirty.store(true, Ordering::Release);
+        // Fire PtyWakeup callback
+        if let Some(ref cb) = *status_cb.lock().unwrap() {
+            cb(PtyStatus::Wakeup);
+        }
+    }
+    // If render_ready was false, we parsed the bytes but skipped the clone.
+    // The parser state is updated, so the next clone will include all accumulated data.
 }
 ```
 
-In the reader thread, replace the park/unpark mechanism:
-
-```rust
-// BEFORE (lines 588-594):
-while dirty.load(Ordering::Acquire) && !shutdown.load(Ordering::Acquire) {
-    thread::park();
-}
-
-// AFTER:
-// Wait until the renderer signals it's ready for a new frame
-while !render_ready.load(Ordering::Acquire) && !shutdown.load(Ordering::Acquire) {
-    std::thread::yield_now();  // or park with a timeout
-}
-```
-
-In `Pty::screen()`, after cloning the screen, signal the reader:
+In `Pty::screen()`, after cloning, signal the reader:
 
 ```rust
 pub fn screen(&mut self) -> &vt100::Screen {
@@ -60,23 +69,19 @@ pub fn screen(&mut self) -> &vt100::Screen {
 }
 ```
 
-In the main thread, after render completes, the reader is already signaled. The reader will:
-1. Parse incoming bytes into the vt100 parser (cheap — just byte processing)
-2. Check `render_ready` — if true, clone the screen and publish to ArcSwap
-3. Set `dirty = true` and fire `PtyWakeup`
-4. Wait for `render_ready` again
-
-This way:
-- **Parsing is continuous** — bytes are processed immediately, no lag
-- **Screen cloning is throttled** — only happens when the renderer is ready
-- **No backpressure collapse** — the reader doesn't flood with clones
+**Why this works:**
+- Reader blocks only on `read()` — never spins, never parks
+- Parsing is continuous — bytes are always processed immediately
+- Screen cloning is throttled — only happens when renderer signals readiness
+- No backpressure collapse — reader doesn't flood with clones
+- Parser state accumulates between clones — no data loss
 
 **File:** `crates/term-wm-pty-engine/src/pane.rs`
 
-Add `render_ready` accessor to `Pane` trait:
+Add to `Pane` trait:
 
 ```rust
-fn render_ready(&self) -> Option<Arc<AtomicBool>> { None }
+fn set_render_ready(&mut self, _ready: Arc<AtomicBool>) {}
 ```
 
 ### Change 2: Hoist loop-invariant computations
@@ -92,7 +97,7 @@ let default_fg = screen.fgcolor();
 let default_bg = screen.bgcolor();
 ```
 
-Update `resolve_colors` to accept pre-computed defaults:
+Update `resolve_colors`:
 
 ```rust
 fn resolve_colors(
@@ -106,17 +111,9 @@ fn resolve_colors(
 
 | File | Change |
 |------|--------|
-| `crates/term-wm-pty-engine/src/pty.rs` | Add `render_ready` flag. Modify reader thread to wait on flag instead of parking. Modify `screen()` to signal reader after clone. |
-| `crates/term-wm-pty-engine/src/pane.rs` | Add `render_ready()` accessor to `Pane` trait. |
+| `crates/term-wm-pty-engine/src/pty.rs` | Add `render_ready` flag. Modify reader to use conditional snapshot instead of park/unpark. Signal reader in `screen()`. |
+| `crates/term-wm-pty-engine/src/pane.rs` | Add `set_render_ready()` to `Pane` trait. |
 | `crates/term-wm-ui-components/src/terminal.rs` | Hoist `screen.fgcolor()`/`bgcolor()` out of cell loop. |
-
-## Implementation Steps
-
-1. Add `render_ready: Arc<AtomicBool>` to `Pty` struct
-2. Modify reader thread to wait on `render_ready` instead of parking
-3. Modify `Pty::screen()` to set `render_ready = true` after cloning
-4. Add `render_ready()` to `Pane` trait with default `None`
-5. Hoist `screen.fgcolor()`/`bgcolor()` out of cell loop
 
 ## Verification
 
@@ -129,11 +126,7 @@ cargo run -p term-bench -- --duration 5        # direct: ~60 fps (baseline)
 # Inside term-wm shell:
 cargo run -p term-bench -- --duration 5        # before: ~2 fps, after: ~50+ fps
 
-# CPU usage test:
-# Run 'sleep 100' inside term-wm — verify reader doesn't spin at 100% CPU
-# The reader should yield while waiting for render_ready
+# CPU usage:
+# Run 'sleep 100' — reader should block on read(), 0% CPU
+# Run 'yes' — reader should parse continuously, clone only at 60Hz
 ```
-
-## Risk
-
-Medium. The `render_ready` flag introduces a new synchronization point. The reader thread uses `yield_now()` while waiting, which uses slightly more CPU than `park()` but avoids the serialization bottleneck. If CPU usage is a concern, `park()` with a timeout can be used instead.
