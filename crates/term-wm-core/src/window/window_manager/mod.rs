@@ -742,7 +742,8 @@ impl WindowManager {
                 (MouseCaptureState::DraggingWindow { .. }, MouseEventKind::Moved)
                     if self.drag_snap.is_some() =>
                 {
-                    // Mouse re-entered after release outside terminal
+                    // Mouse re-entered the terminal after being released outside
+                    // during a header drag (no Up event was delivered).
                     self.cancel_drag_snap_timer();
                     self.drag_last_event = None;
                     if let Some(capture) = self.mouse_capture.take()

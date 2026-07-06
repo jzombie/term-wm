@@ -281,6 +281,9 @@ impl MarkdownViewerComponent {
                     flush_current_line(&mut lines, &mut current);
                 }
                 MdEvent::Rule => {
+                    // Insert a placeholder fragment for rules. We'll replace
+                    // placeholders after we've scanned the whole document to
+                    // determine a reasonable width for the separator (two-pass).
                     const RULE_PLACEHOLDER: &str = "\0RULE\0";
                     lines.push(vec![LinkFragment::new(
                         RULE_PLACEHOLDER.to_string(),
