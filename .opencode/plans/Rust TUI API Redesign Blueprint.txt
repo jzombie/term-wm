@@ -1,0 +1,854 @@
+﻿Architectural Redesign Blueprint for term-wm: Eradicating API Friction, Double-Trait Coupling, and Lifecycle Circularity
+Architectural Critique of the Legacy Paradigm
+The architectural design of the legacy term-wm framework 1 exhibits several structural anti-patterns that create severe borrow-checker friction, force manual state synchronization, and increase the cognitive load for systems developers. These friction points stem from high-level, imperative orchestrators, double-trait coupling, and an inverted lifetime and ownership model.
+
+
+
+
+
+
++------------------------------------------------------------+
+|                       Application                          |
++------------------------------------------------------------+
+      |                                              ^
+      | (Forced Dual-Trait Implementation)           |
+      v                                              |
++-------------------------+                           |
+|   WindowManagerHost     |                           |
++-------------------------+                           |
+      |                                              |
+      v                                              |
++-------------------------+                           |
+|     WindowProvider      |                           |
++-------------------------+                           |
+      |                                              |
+      v                                              | (Manual Mapping)
++-------------------------------------------------+   |
+| window_component(key)                           |   |
+|   - Forces manual match { Key => &mut Component } --+
++-------------------------------------------------+
+
+Double-Trait Coupling and the Manual Routing Anti-Pattern
+The legacy framework enforces a strict dual-trait implementation, requiring a developer to implement both WindowManagerHost<Id> 3 and WindowProvider<Id> 4 on a central application state manager (such as App or AppState). The WindowProvider trait dictates that the host must expose two critical methods: enumerate_windows 4 to return a list of active handles, and window_component 4 to return a mutable reference to a trait object representing the window component.
+This coupling introduces a central bottleneck:
+
+
+
+
+
+
+Rust
+fn window_component(&mut self, key: WindowKey) -> Option<&mut dyn Component> {
+   if key == self.trials_key { Some(&mut self.trials_scroll_view) }
+   else if key == self.charts_key { Some(&mut self.charts_scroll_view) }
+   //... manual branching scales O(N) with the number of windows
+}
+
+This pattern forces developers to write tedious, boilerplate-heavy index-based routing blocks. It turns a central orchestrator into a manual dispatcher, breaking encapsulation. Components cannot be treated as self-contained, modular elements because their ownership remains bound to the root application struct while their routing is delegated to key-based matching on every tick.
+Borrow Checker Friction and State Synchronization
+Because the central application state owns both the data (such as database states or background caches) and the UI components, and must also yield mutable references to those components to the window manager via window_component 4, the Rust borrow checker enforces strict aliasing rules. A developer cannot easily pass a mutable reference of the application context down to a component if the window manager is already holding a mutable borrow of that component via the same application state.
+To circumvent this, developers must resort to manual data synchronization, cloning state on every frame tick:
+
+
+
+
+
+
+Rust
+let charts_trials = self.trials.clone();
+self.charts_scroll_view.content.trials = charts_trials;
+
+This dynamic results in high CPU overhead and unnecessary allocations, which directly degrades performance targets tested by term-bench.2 It also breaks the single-source-of-truth principle, leading to potential state-desynchronization bugs where components render stale data.
+The Type Erasure Trap and Lifecycle Circularity
+To support polymorphic window types, components are boxed and type-erased as Box<dyn Component>. However, components that manage long-running tasks—such as pseudo-terminal (PTY) engines 4 or network streams—need to know their own assigned WindowKey to communicate back to the window manager (such as requesting redraws, resizing, or initiating a graceful shutdown sequence).
+This requirement creates a circular dependency:
+1. The component must be created and boxed to be registered.
+2. The window manager registers the component and generates a unique WindowKey for its internal mapping.
+3. The component needs this WindowKey to construct its callback closures before being boxed.
+To solve this lifecycle circularity, the legacy API forces developers to use atomic interior mutability hacks:
+
+
+
+
+
+
+Rust
+let key_holder = Arc::new(Mutex::new(None::<WindowKey>));
+//... build callback utilizing key_holder inside box...
+let key = self.windows.create_window(Box::new(sv));
+*key_holder.lock().unwrap() = Some(key);
+
+This approach introduces runtime coordination overhead (locking a Mutex inside critical rendering paths), leaks memory structures through shared ownership (Arc), and makes asynchronous operations difficult to reason about due to temporal initialization gaps where the key_holder is accessed before the lock is populated.
+Embedded vs. Standalone Fragmentation
+term-wm serves two distinct modalities: Standalone Mode (a fully self-contained window-managed terminal application) and Embedded Mode (a modular layout manager inside a larger Ratatui application).2 In the legacy paradigm, these two modes share too much structural boilerplate.
+A developer who simply wants to embed a dynamic grid of layout nodes into a larger canvas must configure custom layout trees, construct panel overrides, and manage window registration manually.2 This lack of progressive disclosure limits the utility of the library, as there is no easy way to scale from a single drop-in layout widget to a highly customized, multi-layered window management system.
+The Target API Design Blueprint
+To address these architectural issues, this blueprint introduces an ergonomic, idiomatic, and highly extensible Rust API for term-wm. This design removes trait-coupling, utilizes the StatefulWidget pattern 6, solves lifecycle circularity through deferred context-passing, and supports declarative tiling layouts.
+
+
+
+
+
+
++---------------------------------------------------------+
+|                  Ratatui Render Loop                    |
++---------------------------------------------------------+
+                           |
+                           | renders stateful widget
+                           v
++---------------------------------------------------------+
+|                WindowManager (Widget)                   |
++---------------------------------------------------------+
+                           |
+                           | references
+                           v
++---------------------------------------------------------+
+|             WindowManagerState (Registry)               |
+|  - Holds SlotMap<WindowKey, Box<dyn Component>>         |
+|  - Manages Focus and Layout Trees                       |
+|  - Dispatches to self-contained components              |
++---------------------------------------------------------+
+
+A. Progressive Disclosure & Fluent Builders
+To eliminate boilerplate in Standalone Mode, term-wm introduces a fluent builder API. This builder abstracts the complex initialization of the terminal backend, PTY event loops, panel rendering, and system chrome behind a declarative interface.2
+
+
+
+
+
+
+Rust
+use term_wm::prelude::*;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+   // Launch a complete, standalone multiplexer session with sensible defaults
+   // in under 10 lines of code.
+   StandaloneApp::new("term-wm-session")
+      .with_chrome(WmConfig::standalone()) // Enables top panels, overlays, and status bars 
+      .with_default_terminal()              // Spawns a default shell PTY pane
+      .with_command_palette()              // Registers the global search & actions overlay 
+      .with_power_profile(PowerProfile::Adaptive) // Enables power-aware polling rates 
+      .run()?;                             // Runs the PTY-aware event loop blocking call
+
+   Ok(())
+}
+
+This API progressively discloses complexity. A developer can start with the simple code block above and gradually customize its behavior by appending configuration methods (such as adding custom menu overlays, overriding keymaps, or registering background event handlers) without having to rewrite the terminal loop.
+B. Eradicating the Dual-Trait Manual Router Pattern
+To eliminate the double-trait coupling 3, the redesigned architecture shifts the responsibility of window management into a standard Ratatui StatefulWidget.6 The WindowManager struct becomes a lightweight, stateless configuration blueprint, while all active state, focus tracking, and owned components reside inside WindowManagerState.
+
+
+
+
+
+
+Rust
+use ratatui::prelude::*;
+use slotmap::SlotMap;
+
+// Unique identifier for registered windows, using a type-safe SlotMap key
+slotmap::new_key_type! { pub struct WindowKey; }
+
+/// Lightweight blueprint for configuring window layout and style.
+pub struct WindowManager {
+   pub layout_spec: LayoutSpec,
+   pub border_style: Style,
+}
+
+/// The state container holding owned components, avoiding manual trait-routing.
+pub struct WindowManagerState {
+   windows: SlotMap<WindowKey, Box<dyn Component>>,
+   layout_tree: LayoutTree,
+   active_focus: Option<WindowKey>,
+}
+
+impl WindowManagerState {
+   pub fn new() -> Self {
+       Self {
+           windows: SlotMap::with_key(),
+           layout_tree: LayoutTree::new(),
+           active_focus: None,
+       }
+   }
+
+   /// Registers a component directly into the manager, returning its key.
+   pub fn register<C>(&mut self, component: C) -> WindowKey 
+   where
+       C: Component + 'static,
+   {
+       self.windows.insert(Box::new(component))
+   }
+}
+
+// Implement standard Ratatui StatefulWidget to allow easy integration inside external loops 
+impl StatefulWidget for WindowManager {
+   type State = WindowManagerState;
+
+   fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+       // Resolve dynamic tiling layout bounds
+       let layouts = state.layout_tree.compute_rects(area, &state.windows);
+
+       for (key, window_area) in layouts {
+           if let Some(component) = state.windows.get_mut(key) {
+               // Construct a temporary context for safe, read-only app state sharing
+               let ctx = ComponentContext::new(key, state.active_focus == Some(key));
+               
+               // Draw decorative window frame / chrome if specified
+               let inner_area = self.render_window_chrome(buf, window_area, &ctx);
+               
+               // Direct polymorphic rendering without manual index matching
+               component.render(inner_area, buf, &ctx);
+           }
+       }
+   }
+}
+
+This pattern turns the window manager into a standard, composable widget.6 Developers can render WindowManager inside any arbitrary sub-layout or nested panel of a parent Ratatui application, resolving the embedded vs. standalone fragmentation.
+C. Unifying and Streamlining Component Lifecycles
+To resolve the Type Erasure Trap and lifecycle circularity without atomic locks, term-wm introduces a deferred context hook system. This pattern passes context to components when performing operations, rather than storing stateful identifiers inside the components themselves.
+
+
+
+
+
+
+Rust
+use std::sync::mpsc::Sender;
+
+/// Event channel wrapper to safely communicate back to the central event loop.
+#[derive(Clone)]
+pub struct AppContext {
+   event_tx: Sender<AppEvent>,
+}
+
+impl AppContext {
+   pub fn trigger_redraw(&self) {
+       let _ = self.event_tx.send(AppEvent::Redraw);
+   }
+
+   pub fn close_window(&self, key: WindowKey) {
+       let _ = self.event_tx.send(AppEvent::CloseWindow(key));
+   }
+}
+
+/// Transient execution context passed down during event handling and rendering.
+pub struct ComponentContext<'a> {
+   pub key: WindowKey,
+   pub is_focused: bool,
+   pub app: &'a AppContext,
+}
+
+impl<'a> ComponentContext<'a> {
+   pub fn new(key: WindowKey, is_focused: bool, app: &'a AppContext) -> Self {
+       Self { key, is_focused, app }
+   }
+}
+
+/// Unified UI component trait.
+pub trait Component {
+   /// Optional hook invoked immediately after the component is registered.
+   /// This resolves the lifecycle circularity by providing the assigned key and context
+   /// before any frame rendering or event polling occurs.
+   fn on_mount(&mut self, _key: WindowKey, _app: &AppContext) {}
+
+   /// Polished handle_event function utilizing non-allocating actions.
+   fn handle_event(&mut self, event: &crossterm::event::Event, ctx: &ComponentContext) -> EventHandled;
+
+   /// Standard render hook containing contextual awareness.
+   fn render(&mut self, area: Rect, buf: &mut Buffer, ctx: &ComponentContext);
+}
+
+#
+pub enum EventHandled {
+   Consumed,
+   Ignored,
+}
+
+By decoupling registration from execution, the window manager can allocate a type-safe WindowKey from its SlotMap during registration, instantiate a temporary execution context ComponentContext, and invoke on_mount on the newly registered window immediately:
+
+
+
+
+
+
+Rust
+pub fn spawn_window<C>(&mut self, mut component: C, app: &AppContext) -> WindowKey
+where
+   C: Component + 'static,
+{
+   let key = self.windows.insert_with_key(|k| {
+       component.on_mount(k, app);
+       Box::new(component)
+   });
+   self.layout_tree.add_node(key);
+   key
+}
+
+This pattern completely avoids reference cycles, thread-unsafe interior mutability, and temporal initialization gaps.
+D. Layout Trees & Progressive Complexity
+To replace the verbose, imperative layout building (LayoutNode::split(...)), term-wm introduces a declarative layout specification. This system supports both cooperative tiling heuristics (such as Binary Space Partitioning or dynamic column tiling) and explicit constraint overrides.
+
+
+
+
+
+
+Rust
+/// Declarative layout strategies that adapt automatically to new window allocations.
+#
+pub enum LayoutSpec {
+   /// Dynamically splits space vertically or horizontally based on aspect ratio (e.g., BSPWM).
+   BinarySpacePartition,
+   /// Traditional stack-and-master layout (e.g., DWM).
+   StackAndMaster { master_ratio: f32, master_count: u32 },
+   /// Completely unconstrained manual layouts with layering (z-ordering).
+   Floating,
+   /// Absolute percentage or constraint-driven split grids.
+   CustomGrid(Vec<Constraint>),
+}
+
+/// Dynamic Layout Tree that implements layout heuristics.
+pub struct LayoutTree {
+   spec: LayoutSpec,
+   nodes: Vec<WindowKey>,
+}
+
+impl LayoutTree {
+   pub fn new(spec: LayoutSpec) -> Self {
+       Self { spec, nodes: Vec::new() }
+   }
+
+   pub fn add_node(&mut self, key: WindowKey) {
+       self.nodes.push(key);
+   }
+
+   pub fn remove_node(&mut self, key: WindowKey) {
+       self.nodes.retain(|&k| k!= key);
+   }
+
+   /// Computes terminal cell boundary rectangles for each active window node.
+   pub fn compute_rects(&self, total_area: Rect, active_windows: &SlotMap<WindowKey, Box<dyn Component>>) -> Vec<(WindowKey, Rect)> {
+       if self.nodes.is_empty() {
+           return Vec::new();
+       }
+
+       match self.spec {
+           LayoutSpec::BinarySpacePartition => self.compute_bsp_layout(total_area),
+           LayoutSpec::StackAndMaster { master_ratio, master_count } => {
+               self.compute_stack_master(total_area, master_ratio, master_count)
+           }
+           LayoutSpec::Floating => {
+               // Fall back to stored custom sizes or cascade default coordinates
+               self.compute_floating_layout(total_area, active_windows)
+           }
+           LayoutSpec::CustomGrid(ref constraints) => {
+               self.compute_custom_grid(total_area, constraints)
+           }
+       }
+   }
+
+   fn compute_bsp_layout(&self, area: Rect) -> Vec<(WindowKey, Rect)> {
+       let mut results = Vec::new();
+       if self.nodes.is_empty() { return results; }
+
+       // Recursive helper to split partitions dynamically based on cell dimensions
+       fn split_recursive(nodes: &, target: Rect, results: &mut Vec<(WindowKey, Rect)>) {
+           match nodes {
+               => {}
+               [single] => {
+                   results.push((*single, target));
+               }
+               _ => {
+                   let mid = nodes.len() / 2;
+                   // Determine split direction: split horizontally if height is large, vertically otherwise
+                   let split_horizontal = target.height > (target.width / 2);
+                   let sub_rects = if split_horizontal {
+                       let half_height = target.height / 2;
+                       (
+                           Rect::new(target.x, target.y, target.width, half_height),
+                           Rect::new(target.x, target.y + half_height, target.width, target.height - half_height)
+                       )
+                   } else {
+                       let half_width = target.width / 2;
+                       (
+                           Rect::new(target.x, target.y, half_width, target.height),
+                           Rect::new(target.x + half_width, target.y, target.width - half_width, target.height)
+                       )
+                   };
+                   split_recursive(&nodes[..mid], sub_rects.0, results);
+                   split_recursive(&nodes[mid..], sub_rects.1, results);
+               }
+           }
+       }
+
+       split_recursive(&self.nodes, area, &mut results);
+       results
+   }
+   
+   // Stub implementations for compilation validation
+   fn compute_stack_master(&self, _area: Rect, _ratio: f32, _count: u32) -> Vec<(WindowKey, Rect)> { Vec::new() }
+   fn compute_floating_layout(&self, _area: Rect, _windows: &SlotMap<WindowKey, Box<dyn Component>>) -> Vec<(WindowKey, Rect)> { Vec::new() }
+   fn compute_custom_grid(&self, _area: Rect, _constraints: &[Constraint]) -> Vec<(WindowKey, Rect)> { Vec::new() }
+}
+
+E. Handling Third-Party Widgets and Component Control
+To integrate third-party Ratatui widgets 6, the redesign provides a generic adapter structure. This adapter wraps any standard Widget or StatefulWidget and implements our Component trait, ensuring it can be used natively inside our window framework.
+
+
+
+
+
+
+Rust
+/// Generic adapter to transform standard Ratatui widgets into managed term-wm components.
+pub struct WidgetAdapter<W, S> 
+where
+   W: StatefulWidget,
+{
+   widget_factory: Box<dyn Fn() -> W>,
+   state: S,
+}
+
+impl<W, S> WidgetAdapter<W, S>
+where
+   W: StatefulWidget + 'static,
+   S: 'static,
+{
+   pub fn new<F>(factory: F, initial_state: S) -> Self 
+   where
+       F: Fn() -> W + 'static,
+   {
+       Self {
+           widget_factory: Box::new(factory),
+           state: initial_state,
+       }
+   }
+
+   /// Exposes read-only access to inner widget state
+   pub fn state(&self) -> &S {
+       &self.state
+   }
+
+   /// Exposes mutable access to inner widget state
+   pub fn state_mut(&mut self) -> &mut S {
+       &mut self.state
+   }
+}
+
+impl<W, S> Component for WidgetAdapter<W, S>
+where
+   W: StatefulWidget + 'static,
+   S: 'static,
+{
+   fn handle_event(&mut self, event: &crossterm::event::Event, _ctx: &ComponentContext) -> EventHandled {
+       // Here, input events can be routed. For example, mouse events can be translated 
+       // using relative coordinates, or keys can be passed to specific state mechanisms.
+       match event {
+           crossterm::event::Event::Key(_key_event) => {
+               // If the wrapped widget handles events (using third-party extensions [9, 10]), 
+               // dispatch them directly here.
+               EventHandled::Ignored
+           }
+           _ => EventHandled::Ignored,
+       }
+   }
+
+   fn render(&mut self, area: Rect, buf: &mut Buffer, _ctx: &ComponentContext) {
+       let widget = (self.widget_factory)();
+       // Native rendering onto the character grid buffer
+       widget.render(area, buf, &mut self.state);
+   }
+}
+
+Internal Mechanics Shift and Performance Impact
+The structural transformation of term-wm changes internal storage layouts, focus control flow, and input event routing. These shifts eliminate the double-trait runtime overhead 3, optimizing execution loops and performance metrics.
+Mathematical Representation of Power-Aware Event-Loop Sleep Intervals
+To reduce CPU overhead when terminal activity declines, a power-profiling subsystem 2 dynamically calculates the event-loop sleep interval   . Let    represent the byte throughput of active PTY engines 4, and    correspond to the duration since the last keyboard or mouse input. The dynamic sleep interval calculation is modeled as:
+  
+
+Here,    is the base interval required to hit high-performance frame rates (such as    FPS 2),    is the maximum power-saving idle sleep interval, and    are constant scaling factors. Under intense data-flow or user-input events,    scales down to   , ensuring instantaneous rendering and low-latency interaction.
+For dynamic splitting calculations under character-cell constraints, split boundaries must be rounded to integer cell indexes. If a node with width    is split with a target ratio   , the left and right cell boundaries are calculated as:
+  
+
+This integer-cell rounding ensures that layouts align perfectly to terminal character boundaries, preventing visual artifact jitter during real-time resize events.
+Comparative Evaluation of Core Concepts
+
+
+Concept / Core Mechanic
+	Legacy API Design Pattern
+	Redesigned Architectural Pattern
+	Window Component Storage
+	Owned by the outer application state; fetched via index routing on every single render loop tick.4
+	Centrally owned inside the WindowManagerState registry utilizing SlotMap to guarantee safety.
+	Host Coordination
+	Hard coupled through manual implementations of WindowManagerHost and WindowProvider.3
+	Zero trait overhead. Implements standard Ratatui StatefulWidget to integrate into any event loop.6
+	Window ID Referencing
+	Weakly typed abstract identifier keys requiring manual mapping tables.4
+	Safe, high-performance generation of WindowKey using internal slot-indexing mechanics.
+	Input Event Routing
+	Manual imperative parsing, requiring custom coordinate checks in application event loops.2
+	Automated hierarchical hit-testing. Absolute coordinates are translated into relative window-local offsets.
+	Tiling Layout Design
+	Verbose split logic built imperatively using nested tree nodes.
+	Declarative configurations (LayoutSpec) that compute tree coordinates on the fly.
+	Lifecycle Coordination
+	Complex, requiring Arc<Mutex<Option<WindowKey>>> initialization hacks to resolve circularity.2
+	Structured deferred hook invocation (on_mount) during registration before execution starts.
+	Benchmark Profile
+	High allocations and copies due to constant state cloning, degrading the 120 FPS targets.2
+	Zero-copy rendering. Avoids allocations on ticks, ensuring optimal pacing and maximum throughput.2
+	Input Event Routing and Coordinate Mapping Pipeline
+To process mouse clicks and direct keyboard inputs according to the "No-Conflict Esc Super Key" philosophy 2, input routing uses a layered event-propagation pipeline:
+
+
+
+
+
+
++----------------------------------------------------------------+
+|                   crossterm Mouse Event                        |
+|                     (Absolute: X, Y)                           |
++----------------------------------------------------------------+
+                               |
+                               v
++----------------------------------------------------------------+
+|             Hit Test against Computed Layout Rects             |
+|   Matches absolute coordinate with relative component boundary  |
++----------------------------------------------------------------+
+                               |
+                               v
++----------------------------------------------------------------+
+|                  Active Focus Selection                        |
+|   - Updates active_focus key inside WindowManagerState         |
+|   - Re-sorts Z-Index layering (floating)                       |
++----------------------------------------------------------------+
+                               |
+                               v
++----------------------------------------------------------------+
+|               Relative Coordinate Offset Mapping               |
+|   - Modifies Mouse coordinates to local window bounds (0, 0)   |
+|   - Calls target component's handle_event(relative_event)      |
++----------------------------------------------------------------+
+
+1. Calculated Pass Layout Generation: When rendering, StatefulWidget::render computes the layout tree coordinates and stores the calculated bounds map HashMap<WindowKey, Rect> in the WindowManagerState for that frame.
+2. Absolute Hit Testing: When a mouse event occurs, the coordinates (mouse.column, mouse.row) are queried against the stored bounds map of the active frame.
+3. Z-Order Evaluation: If multiple overlapping windows intersect the target coordinate, the hit tester evaluates candidates in reverse z-order (topmost floating window first) to find the correct recipient.
+4. Coordinate Mapping and Offsets: The system translates absolute mouse coordinates into relative coordinates bounded by the component's rect (where the top-left cell of the component is mapped to (0, 0)), and passes the relative event down to the component's handle_event implementation.
+5. Focus Invalidation: Clicking a component's chrome or interior region automatically updates the active_focus reference inside WindowManagerState, triggering a layout update to elevate the focused window in z-index order and adjust boundary borders.
+Step-by-Step Migration Matrix
+To assist developers in transitioning their applications from legacy abstractions to the new design, the following matrices map types and implementation strategies.
+Type and Method Transition Matrix
+
+
+Legacy Type or Method
+	New Type or Method
+	Migration Strategy and Rationale
+	WindowManagerHost<Id>
+	WindowManager
+	Replaced by a composable StatefulWidget to separate window configuration from application state management.
+	WindowProvider<Id>
+	WindowManagerState
+	Replaced by an internal state container that holds owned components directly.
+	enumerate_windows(&mut self)
+	WindowManagerState::windows
+	Handled internally by the SlotMap registry, eliminating boilerplate enumerations.
+	window_component(&mut self, id)
+	WindowManagerState::register
+	Replaced by registering components directly into the state manager during app initialization.
+	LayoutNode::split(...)
+	LayoutSpec
+	Replaced by declarative layout trees that calculate layout constraints automatically on the fly.
+	Arc<Mutex<Option<WindowKey>>>
+	Component::on_mount
+	Replaced by a deferred hook that passes the allocated WindowKey immediately after registration.
+	Migration Reference Examples
+The following examples demonstrate how to refactor legacy implementation styles into the redesigned architecture.
+1. Refactoring Standalone Terminal Multiplexer Session (main.rs)
+Legacy Implementation (Original Boilerplate-Heavy Pattern)
+2
+
+
+
+
+
+
+Rust
+// Legacy: Requires manual loop coordination, terminal initialization, and nested layout splits 
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+   let mut app = LegacyApp::new()?;
+   app.init_terminal()?;
+   
+   // Explicit manual loop management and custom layouts 
+   let layout_root = LayoutNode::split_horizontal(
+       LayoutNode::leaf(app.terminal_one_key),
+       LayoutNode::split_vertical(
+           LayoutNode::leaf(app.terminal_two_key),
+           LayoutNode::leaf(app.debug_log_key)
+       )
+   );
+   app.set_layout(layout_root);
+
+   while app.is_running() {
+       app.draw_frame()?;
+       app.poll_events()?;
+   }
+   app.cleanup_terminal()?;
+   Ok(())
+}
+
+Redesigned Implementation (New Builder-Driven Pattern)
+2
+
+
+
+
+
+
+Rust
+use term_wm::prelude::*;
+
+// Redesigned: Clean, declarative builder patterns hide the terminal loop and power profiling setup 
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+   StandaloneApp::new("term-wm-multiplexer")
+      .with_chrome(WmConfig::standalone()) // Automatically configures status logs and top menus 
+      .with_layout(LayoutSpec::BinarySpacePartition) // Uses automatic dynamic split heuristics
+      .with_default_terminal()             // Spawns primary shell shell process
+      .with_command_palette()             // Integrates global actions overlay 
+      .run()?;                             // Launches low-overhead, power-aware event loop 
+   Ok(())
+}
+
+2. Refactoring Embedded Viewer with Standard Widget (Image Viewer Example)
+Legacy Implementation (Original Double-Trait Pattern)
+2
+
+
+
+
+
+
+Rust
+struct ImageApp {
+   image_viewer: ImageViewerComponent,
+   image_key: WindowKey,
+}
+
+// Forced legacy implementation of both traits to route a single image viewer component 
+impl WindowManagerHost<WindowKey> for ImageApp {
+   fn handle_app_event(&mut self, _event: AppEvent) {}
+}
+
+impl WindowProvider<WindowKey> for ImageApp {
+   fn enumerate_windows(&mut self) -> Vec<WindowKey> {
+       vec![self.image_key]
+   }
+   fn window_component(&mut self, id: WindowKey) -> Option<&mut dyn Component> {
+       if id == self.image_key {
+           Some(&mut self.image_viewer)
+       } else {
+           None
+       }
+   }
+}
+
+Redesigned Implementation (New Embedded Widget Pattern)
+6
+
+
+
+
+
+
+Rust
+use ratatui::widgets::Block;
+use term_wm::prelude::*;
+
+struct EmbeddedImageApp {
+   wm_state: WindowManagerState,
+   app_context: AppContext,
+}
+
+impl EmbeddedImageApp {
+   pub fn new() -> Self {
+       let mut wm_state = WindowManagerState::new();
+       
+       // Directly register the component into the state registry.
+       // No boilerplate trait mapping is needed.
+       let image_viewer = ImageViewerComponent::new("assets/test_pattern.png");
+       wm_state.register(image_viewer);
+
+       Self {
+           wm_state,
+           app_context: AppContext { event_tx: std::sync::mpsc::channel().0 },
+       }
+   }
+
+   /// Renders dynamic frames inside any custom Ratatui layout structure 
+   pub fn render_embedded_ui(&mut self, frame: &mut Frame) {
+       let area = frame.area();
+       
+       // Create custom split regions using standard Ratatui patterns
+       let chunks = Layout::default()
+          .direction(Direction::Vertical)
+          .constraints([Constraint::Length(3), Constraint::Min(0)])
+          .split(area);
+
+       frame.render_widget(Block::new().title("Application Menu Header"), chunks);
+
+       // Instantiate the window manager as a standard stateful widget 
+       let window_manager_widget = WindowManager {
+           layout_spec: LayoutSpec::BinarySpacePartition,
+           border_style: Style::default().fg(Color::Cyan),
+       };
+
+       // Render the window manager using standard stateful widget patterns [7, 8]
+       frame.render_stateful_widget(
+           window_manager_widget,
+           chunks,
+           &mut self.wm_state,
+       );
+   }
+}
+
+3. Refactoring a Complex Dashboard (The Performance Tuner argtuner)
+Legacy Implementation (Original Data-Cloning Pattern)
+2
+
+
+
+
+
+
+Rust
+struct ArgtunerApp {
+   trials_table: TrialsTableComponent,
+   tuning_charts: ChartsComponent,
+   tuning_db: TuningDatabase,
+}
+
+impl ArgtunerApp {
+   fn update_and_render_tick(&mut self) {
+       // Legacy: Forced to clone and synchronize data on every frame tick
+       // to avoid mutable aliasing violations.
+       let updated_trials = self.tuning_db.fetch_latest_runs().clone();
+       self.trials_table.set_data(updated_trials.clone());
+       self.tuning_charts.set_data(updated_trials);
+       
+       // Prepares legacy draw calls afterward...
+   }
+}
+
+Redesigned Implementation (New Context-Sharing Pattern)
+2
+
+
+
+
+
+
+Rust
+use std::sync::Arc;
+use term_wm::prelude::*;
+
+/// Shared, thread-safe database reference.
+pub struct SharedTuningDb {
+   inner: Arc<TuningDatabase>,
+}
+
+pub struct ArgtunerDashboard {
+   wm_state: WindowManagerState,
+   app_context: AppContext,
+   tuning_db: SharedTuningDb,
+}
+
+impl ArgtunerDashboard {
+   pub fn new(db: TuningDatabase) -> Self {
+       let mut wm_state = WindowManagerState::new();
+       let db_shared = SharedTuningDb { inner: Arc::new(db) };
+
+       // Pass the shared reference to components during instantiation.
+       // Components can read from this database directly during their execution context,
+       // eliminating the need to manually copy data on every frame tick.
+       let trials = TrialsTableComponent::new(db_shared.clone());
+       let charts = ChartsComponent::new(db_shared.clone());
+
+       wm_state.register(trials);
+       wm_state.register(charts);
+
+       Self {
+           wm_state,
+           app_context: AppContext { event_tx: std::sync::mpsc::channel().0 },
+           tuning_db: db_shared,
+       }
+   }
+
+   pub fn draw(&mut self, frame: &mut Frame) {
+       // Render the components using the standard StatefulWidget pattern.
+       // This is clean, safe, and avoids all borrow-checker friction.
+       frame.render_stateful_widget(
+           WindowManager {
+               layout_spec: LayoutSpec::StackAndMaster { master_ratio: 0.6, master_count: 1 },
+               border_style: Style::default(),
+           },
+           frame.area(),
+           &mut self.wm_state,
+       );
+   }
+}
+
+pub struct TrialsTableComponent {
+   db: SharedTuningDb,
+}
+
+impl TrialsTableComponent {
+   pub fn new(db: SharedTuningDb) -> Self {
+       Self { db }
+   }
+}
+
+impl Component for TrialsTableComponent {
+   fn handle_event(&mut self, _event: &crossterm::event::Event, _ctx: &ComponentContext) -> EventHandled {
+       EventHandled::Ignored
+   }
+
+   fn render(&mut self, area: Rect, buf: &mut Buffer, _ctx: &ComponentContext) {
+       // Query the shared database directly during render passes.
+       // No redundant clones or state synchronization steps are needed on ticks.
+       let trials_data = self.db.inner.fetch_latest_runs();
+       
+       let mut y_offset = area.y;
+       for trial in trials_data.iter().take(area.height as usize) {
+           let info = format!("Trial ID: {} | Status: {}", trial.id, trial.status);
+           buf.set_string(area.x, y_offset, &info, Style::default());
+           y_offset += 1;
+       }
+   }
+}
+
+// Mock database and structure references for compilation validation
+pub struct TrialInfo { pub id: u32, pub status: String }
+pub struct TuningDatabase;
+impl TuningDatabase {
+   pub fn fetch_latest_runs(&self) -> Vec<TrialInfo> { Vec::new() }
+}
+impl Clone for SharedTuningDb {
+   fn clone(&self) -> Self { Self { inner: self.inner.clone() } }
+}
+
+Architectural Conclusions
+The redesigned architecture of term-wm addresses the core API friction points of the legacy codebase:
+* Separation of Concerns: Replacing WindowManagerHost and WindowProvider 3 with a standard Ratatui StatefulWidget 6 simplifies the API and makes it easy to embed the window manager inside any external render loop.
+* Streamlined Component Ownership: Moving component ownership into WindowManagerState and using a type-safe SlotMap simplifies event dispatching and rendering, eliminating the need for manual routing boilerplates.
+* Safe Lifecycle Coordination: The deferred on_mount context hook resolves lifecycle circularity cleanly, allowing components to access their context and identifiers safely without resorting to interior mutability hacks.
+* Ergonomic and Flexible Layouts: Declarative layout specifications (LayoutSpec) replace imperative split configurations with automatic, cooperative tiling heuristics.
+* Ecosystem Compatibility: The WidgetAdapter wrapper enables native integration of any third-party Ratatui widget 6, bringing the benefits of the term-wm window system to the broader Ratatui ecosystem.
+Works cited
+1. Issues · jzombie/term-wm · GitHub, accessed July 6, 2026, https://github.com/jzombie/term-wm/issues
+2. GitHub - jzombie/term-wm: A cross-platform terminal multiplexer, window manager, and Ratatui component library. Written in Rust., accessed July 6, 2026, https://github.com/jzombie/term-wm
+3. term_wm_core::runner - Rust - Docs.rs, accessed July 6, 2026, https://docs.rs/term-wm-core/latest/term_wm_core/runner/index.html
+4. WindowProvider in term_wm_core::runner - Rust - Docs.rs, accessed July 6, 2026, https://docs.rs/term-wm-core/latest/term_wm_core/runner/trait.WindowProvider.html
+5. term-bench - Rust Package Registry - Crates.io, accessed July 6, 2026, https://crates.io/crates/term-bench
+6. ratatui-core - crates.io: Rust Package Registry, accessed July 6, 2026, https://crates.io/crates/ratatui-core
+7. GitHub - cxreiff/bevy_ratatui_camera: A bevy plugin for rendering your bevy app to the terminal using ratatui., accessed July 6, 2026, https://github.com/cxreiff/bevy_ratatui_camera
+8. tui-scrollview - crates.io: Rust Package Registry, accessed July 6, 2026, https://crates.io/crates/tui-scrollview
