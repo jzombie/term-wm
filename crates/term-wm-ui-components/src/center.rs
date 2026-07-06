@@ -1,14 +1,19 @@
+use std::collections::VecDeque;
+
+use crossterm::event::Event;
 use ratatui::prelude::Rect;
 
+use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext};
 use term_wm_core::ui::UiFrame;
+use term_wm_core::window::WindowKey;
 
 pub struct CenterComponent<C> {
     content: C,
     content_size: (u16, u16),
 }
 
-impl<C: Component> CenterComponent<C> {
+impl<C: Component<TermWmAction>> CenterComponent<C> {
     pub fn new(content: C, width: u16, height: u16) -> Self {
         Self {
             content,
@@ -30,18 +35,36 @@ impl<C: Component> CenterComponent<C> {
     }
 }
 
-impl<C: Component> Component for CenterComponent<C> {
-    fn resize(&mut self, area: Rect, ctx: &ComponentContext) {
+impl<C: Component<TermWmAction>> Component<TermWmAction> for CenterComponent<C> {
+    fn render(
+        &self,
+        frame: &mut UiFrame<'_>,
+        area: Rect,
+        ctx: &ComponentContext,
+        registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
         let inner = self.inner_rect(area);
-        self.content.resize(inner, ctx);
+        self.content.render(frame, inner, ctx, registry);
     }
 
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
-        let inner = self.inner_rect(area);
-        self.content.render(frame, inner, ctx);
+    fn handle_events(
+        &mut self,
+        event: &Event,
+        ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        self.content.handle_events(event, ctx)
     }
 
-    fn handle_event(&mut self, event: &crossterm::event::Event, ctx: &ComponentContext) -> bool {
-        self.content.handle_event(event, ctx)
+    fn update(
+        &mut self,
+        action: TermWmAction,
+        ctx: &ComponentContext,
+        actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+    ) {
+        self.content.update(action, ctx, actions);
+    }
+
+    fn destroy(&mut self) {
+        self.content.destroy();
     }
 }

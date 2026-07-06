@@ -1,17 +1,13 @@
-use std::any::Any;
-use std::time::Duration;
+use std::collections::VecDeque;
 
 use crossterm::event::Event;
 use ratatui::layout::Rect;
 
+pub use crate::actions::EventResult;
+use crate::actions::TermWmAction;
 pub use crate::component_context::ComponentContext;
 use crate::ui::UiFrame;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConfirmAction {
-    Confirm,
-    Cancel,
-}
+use crate::window::WindowKey;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SelectionStatus {
@@ -19,44 +15,160 @@ pub struct SelectionStatus {
     pub dragging: bool,
 }
 
-pub trait Component {
-    fn resize(&mut self, _area: Rect, _ctx: &ComponentContext) {}
+/// Five-phase message-passing component lifecycle.
+///
+/// 1. `init` — one-time setup on mount
+/// 2. `handle_events` — evaluate raw events, return `EventResult<Msg>`
+/// 3. `update` — mutate state exclusively via `Msg` actions
+/// 4. `render(&self)` — pure translation of state to drawing instructions
+/// 5. `destroy` — teardown before unmount
+///
+/// The `Any` bound enables safe downcasting for scenarios where
+/// the concrete component type is known at the call site
+/// (e.g. extracting a PTY child handle from a terminal component).
+pub trait Component<Msg>: std::any::Any {
+    /// Phase 1: Called once when the component is mounted.
+    fn init(&mut self) {}
 
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext);
-
-    fn handle_event(&mut self, _event: &Event, _ctx: &ComponentContext) -> bool {
-        false
+    /// Phase 2: Evaluate raw events, return EventResult.
+    /// Does NOT mutate state.
+    fn handle_events(&mut self, event: &Event, ctx: &ComponentContext) -> EventResult<Msg> {
+        if let Event::Mouse(mouse) = event {
+            if let Some(screen_area) = ctx.screen_area() {
+                let is_inside = mouse.column >= screen_area.x
+                    && mouse.column < screen_area.x.saturating_add(screen_area.width)
+                    && mouse.row >= screen_area.y
+                    && mouse.row < screen_area.y.saturating_add(screen_area.height);
+                if is_inside {
+                    let local = crate::events::LocalMouseEvent {
+                        col: mouse.column.saturating_sub(screen_area.x),
+                        row: mouse.row.saturating_sub(screen_area.y),
+                        kind: mouse.kind,
+                        modifiers: mouse.modifiers,
+                    };
+                    return self.on_mouse(&local, ctx);
+                }
+            }
+            return EventResult::Ignored;
+        }
+        self.on_key(event, ctx)
     }
 
+    fn on_mouse(
+        &mut self,
+        _mouse: &crate::events::LocalMouseEvent,
+        _ctx: &ComponentContext,
+    ) -> EventResult<Msg> {
+        EventResult::Ignored
+    }
+
+    fn on_key(&mut self, _event: &Event, _ctx: &ComponentContext) -> EventResult<Msg> {
+        EventResult::Ignored
+    }
+
+    /// Phase 3: Mutate state in response to an Action.
+    /// Passed by value (the pop_front caller already owns it).
+    /// Can push new actions into the queue via the sink.
+    fn update(
+        &mut self,
+        _action: Msg,
+        _ctx: &ComponentContext,
+        _actions: &mut VecDeque<(crate::window::WindowKey, Msg)>,
+    ) {
+    }
+
+    /// Phase 4: Pure render. Takes &self — no state mutation.
+    ///
+    /// The `registry` parameter allows components to register their clickable
+    /// areas for hit-testing. Scroll containers call `registry.push_clip()`
+    /// before rendering children and `registry.pop_clip()` afterward, which
+    /// automatically clips child registrations to the visible viewport.
+    fn render(
+        &self,
+        frame: &mut UiFrame<'_>,
+        area: Rect,
+        ctx: &ComponentContext,
+        registry: &mut crate::hitbox_registry::HitboxRegistry,
+    );
+
+    /// Phase 5: Teardown. Called before the component is unmounted.
+    fn destroy(&mut self) {}
+
+    // Queries
     fn selection_status(&self) -> SelectionStatus {
         SelectionStatus::default()
     }
-
-    fn selection_text(&mut self) -> Option<String> {
+    fn selection_text(&self) -> Option<String> {
         None
     }
 
-    fn set_selection_enabled(&mut self, _enabled: bool) {}
+    /// Read and clear the pending window title (set by OSC 0/1/2 escape sequences).
+    /// Returns `None` for non-terminal components.
+    fn take_pending_title(&mut self) -> Option<String> {
+        None
+    }
 
+    /// Extract child process and reader handles for the Reaper during teardown.
+    /// Called during close_window, before the component is dropped.
+    /// Default implementation returns None.
+    fn take_teardown_parts(
+        &mut self,
+    ) -> Option<(
+        Box<dyn std::any::Any + Send + Sync>,
+        std::thread::JoinHandle<()>,
+    )> {
+        None
+    }
+
+    // Clipboard
+    fn set_selection_enabled(&mut self, _enabled: bool) {}
     fn paste(&mut self, _text: &str) -> bool {
         false
     }
 }
 
-pub trait Overlay: Component + Any {
-    fn as_any(&self) -> &dyn Any;
-    fn as_any_mut(&mut self) -> &mut dyn Any;
+/// Helper to downcast a `&mut dyn Component<TermWmAction>` to a concrete type.
+/// This works because `Component<TermWmAction>: Any`.
+pub fn component_downcast_mut<T: 'static>(
+    comp: &mut dyn Component<TermWmAction>,
+) -> Option<&mut T> {
+    let any: &mut dyn std::any::Any = comp;
+    any.downcast_mut::<T>()
+}
+
+/// A component that does nothing — used for chrome-only windows.
+#[derive(Debug)]
+pub struct NoopComponent;
+
+impl Component<TermWmAction> for NoopComponent {
+    fn render(
+        &self,
+        _frame: &mut UiFrame<'_>,
+        _area: Rect,
+        _ctx: &ComponentContext,
+        _registry: &mut crate::hitbox_registry::HitboxRegistry,
+    ) {
+    }
+    fn update(
+        &mut self,
+        _action: TermWmAction,
+        _ctx: &ComponentContext,
+        _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+    ) {
+    }
+    fn destroy(&mut self) {}
+}
+
+pub trait Overlay<Msg>: Component<Msg> + std::any::Any {
     fn visible(&self) -> bool {
         true
     }
-    fn set_selection_enabled(&mut self, _enabled: bool) {}
-    fn handle_confirm_event(&mut self, _event: &Event) -> Option<ConfirmAction> {
-        None
-    }
-
     /// Optional terminal-area rect behind which a drop-shadow should be
     /// rendered.  The overlay is drawn on top of the shadow.
     fn shadow_rect(&self, _area: Rect) -> Option<Rect> {
+        None
+    }
+    fn handle_confirm_event(&mut self, _event: &Event) -> Option<crate::actions::ConfirmAction> {
         None
     }
 }
@@ -68,12 +180,12 @@ pub struct MenuItem<R> {
     pub action: R,
 }
 
-pub trait MenuOverlay<R>: Overlay {
+pub trait MenuOverlay<Msg>: Overlay<Msg> {
     fn outline(&mut self);
     fn restore(&mut self);
-    fn set_items(&mut self, items: Vec<MenuItem<R>>);
-    fn set_timeout(&mut self, timeout: Duration);
-    fn selected_action(&self) -> Option<&R>;
+    fn set_items(&mut self, items: Vec<MenuItem<Msg>>);
+    fn set_timeout(&mut self, timeout: std::time::Duration);
+    fn selected_action(&self) -> Option<&Msg>;
     fn set_anchor(&mut self, pos: Option<(u16, u16)>);
     fn set_managed_area(&mut self, area: Rect);
 }
@@ -86,19 +198,36 @@ mod tests {
     use ratatui::prelude::Rect;
 
     struct DummyComp;
-    impl Component for DummyComp {
-        fn render(&mut self, _frame: &mut UiFrame<'_>, _area: Rect, _ctx: &ComponentContext) {}
+    impl Component<()> for DummyComp {
+        fn update(
+            &mut self,
+            _action: (),
+            _ctx: &ComponentContext,
+            _actions: &mut VecDeque<(crate::window::WindowKey, ())>,
+        ) {
+        }
+        fn render(
+            &self,
+            _frame: &mut UiFrame<'_>,
+            _area: Rect,
+            _ctx: &ComponentContext,
+            _registry: &mut crate::hitbox_registry::HitboxRegistry,
+        ) {
+        }
     }
 
     #[test]
-    fn default_handle_event_returns_false() {
+    fn default_handle_events_returns_ignored() {
         let mut d = DummyComp;
-        assert!(!d.handle_event(
-            &Event::Key(crossterm::event::KeyEvent::new(
-                crossterm::event::KeyCode::Char('a'),
-                crossterm::event::KeyModifiers::NONE
-            )),
-            &ComponentContext::default()
-        ));
+        assert!(
+            d.handle_events(
+                &Event::Key(crossterm::event::KeyEvent::new(
+                    crossterm::event::KeyCode::Char('a'),
+                    crossterm::event::KeyModifiers::NONE
+                )),
+                &ComponentContext::default()
+            )
+            .is_ignored()
+        );
     }
 }

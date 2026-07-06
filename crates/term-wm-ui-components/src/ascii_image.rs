@@ -1,9 +1,11 @@
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use resvg::{tiny_skia, usvg};
 
+use term_wm_core::actions::TermWmAction;
 use term_wm_core::components::{Component, ComponentContext};
 use term_wm_core::ui::UiFrame;
 
@@ -29,25 +31,32 @@ pub struct AsciiImageComponent {
     luma: Vec<u8>,
     rgba: Option<Vec<u8>>,
     alpha: Option<Vec<u8>>,
-    cached: Vec<Vec<CachedCell>>,
-    cached_area: Rect,
-    dirty: bool,
+    cached: RefCell<Vec<Vec<CachedCell>>>,
+    cached_area: Cell<Rect>,
+    dirty: Cell<bool>,
     keep_aspect: bool,
     colorize: bool,
     render_mode: RenderMode,
     luma_avg: u8,
 }
 
-impl Component for AsciiImageComponent {
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, _ctx: &ComponentContext) {
+impl Component<TermWmAction> for AsciiImageComponent {
+    fn render(
+        &self,
+        frame: &mut UiFrame<'_>,
+        area: Rect,
+        _ctx: &ComponentContext,
+        _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        if self.dirty || self.cached_area != area {
+        if self.dirty.get() || self.cached_area.get() != area {
             self.rebuild_cache(area);
         }
         let buffer = frame.buffer_mut();
-        for (row, line) in self.cached.iter().enumerate() {
+        let cached = self.cached.borrow();
+        for (row, line) in cached.iter().enumerate() {
             let y = area.y.saturating_add(row as u16);
             if y >= area.y.saturating_add(area.height) {
                 break;
@@ -82,9 +91,9 @@ impl AsciiImageComponent {
             luma: Vec::new(),
             rgba: None,
             alpha: None,
-            cached: Vec::new(),
-            cached_area: Rect::default(),
-            dirty: true,
+            cached: RefCell::new(Vec::new()),
+            cached_area: Cell::new(Rect::default()),
+            dirty: Cell::new(true),
             keep_aspect: true,
             colorize: true,
             render_mode: RenderMode::Braille,
@@ -98,24 +107,24 @@ impl AsciiImageComponent {
         self.luma.clear();
         self.rgba = None;
         self.alpha = None;
-        self.cached.clear();
-        self.dirty = true;
+        self.cached = RefCell::new(Vec::new());
+        self.dirty.set(true);
         self.luma_avg = 0;
     }
 
     pub fn set_keep_aspect(&mut self, keep: bool) {
         self.keep_aspect = keep;
-        self.dirty = true;
+        self.dirty.set(true);
     }
 
     pub fn set_colorize(&mut self, colorize: bool) {
         self.colorize = colorize;
-        self.dirty = true;
+        self.dirty.set(true);
     }
 
     pub fn set_render_mode(&mut self, mode: RenderMode) {
         self.render_mode = mode;
-        self.dirty = true;
+        self.dirty.set(true);
     }
 
     pub fn set_luma8(&mut self, width: u32, height: u32, luma: Vec<u8>) {
@@ -130,7 +139,7 @@ impl AsciiImageComponent {
         self.luma = luma;
         self.rgba = None;
         self.alpha = None;
-        self.dirty = true;
+        self.dirty.set(true);
     }
 
     pub fn set_rgba8(&mut self, width: u32, height: u32, rgba: Vec<u8>) {
@@ -169,7 +178,7 @@ impl AsciiImageComponent {
         self.alpha = Some(alpha);
         self.luma_avg = sum.checked_div(count).unwrap_or(0) as u8;
         self.luma = luma;
-        self.dirty = true;
+        self.dirty.set(true);
     }
 
     pub fn load_svg_from_path<P: AsRef<Path>>(&mut self, path: P) -> Result<(), String> {
@@ -200,10 +209,11 @@ impl AsciiImageComponent {
         Ok(())
     }
 
-    fn rebuild_cache(&mut self, area: Rect) {
-        self.cached.clear();
-        self.cached_area = area;
-        self.dirty = false;
+    fn rebuild_cache(&self, area: Rect) {
+        let mut cached = self.cached.borrow_mut();
+        cached.clear();
+        self.cached_area.set(area);
+        self.dirty.set(false);
         if self.width == 0 || self.height == 0 || self.luma.is_empty() {
             return;
         }
@@ -238,7 +248,7 @@ impl AsciiImageComponent {
             fg: None,
             bg: None,
         };
-        self.cached = vec![vec![blank; area.width as usize]; area.height as usize];
+        *cached = vec![vec![blank; area.width as usize]; area.height as usize];
         let dark_mode = self.luma_avg < 128;
 
         for row in 0..area.height as u32 {
@@ -386,8 +396,7 @@ impl AsciiImageComponent {
                         }
                     }
                 };
-                if let Some(cell) = self
-                    .cached
+                if let Some(cell) = cached
                     .get_mut(row as usize)
                     .and_then(|r| r.get_mut(col as usize))
                 {

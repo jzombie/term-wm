@@ -6,12 +6,14 @@ use crossterm::event::{Event, KeyEvent, MouseEvent};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
+use term_wm::actions::{SystemTask, TermWmAction};
 use term_wm::app_context::AppContext;
 use term_wm::components::MenuOverlay;
 use term_wm::io::{EventSource, RenderTarget};
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_app};
+use term_wm::task_scheduler::TaskScheduler;
 use term_wm::ui::UiFrame;
-use term_wm::window::{WindowKey, WindowManager, WmMenuAction};
+use term_wm::window::{WindowKey, WindowManager};
 use term_wm::wm_config::WmConfig;
 
 #[derive(Debug)]
@@ -108,7 +110,7 @@ fn render_panic_shows_in_debug_log() {
     );
     term_wm_sys_ui_components::install_panic_hook();
 
-    let menu: Box<dyn MenuOverlay<WmMenuAction>> =
+    let menu: Box<dyn MenuOverlay<TermWmAction>> =
         Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
     let mut wm = WindowManager::with_config(
         WmConfig::standalone(),
@@ -117,7 +119,7 @@ fn render_panic_shows_in_debug_log() {
         None::<Box<dyn term_wm::bottom_panel_trait::BottomPanel>>,
         Some(menu),
     );
-    let key = wm.create_window();
+    let key = wm.create_window(Box::new(term_wm::components::NoopComponent));
     wm.set_window_title(key, "test");
 
     let mut app = SparseApp {
@@ -132,17 +134,25 @@ fn render_panic_shows_in_debug_log() {
 
     let panic_msg = "intentional-panic-from-draw";
 
-    let result = run_app(&mut output, &mut driver, &mut app, &focus_regions, |k| k, {
-        move |_frame, app| {
-            app.draws += 1;
-            if app.draws == 1 {
-                panic!("{}", panic_msg);
-            } else if let Some(k) = app.window_key.take() {
-                app.wm.close_window(k);
-                app.should_quit = true;
+    let result = run_app(
+        &mut output,
+        &mut driver,
+        &mut app,
+        &focus_regions,
+        TaskScheduler::<SystemTask>::new(),
+        |k| k,
+        {
+            move |_frame, app| {
+                app.draws += 1;
+                if app.draws == 1 {
+                    panic!("{}", panic_msg);
+                } else if let Some(k) = app.window_key.take() {
+                    app.wm.close_window(k);
+                    app.should_quit = true;
+                }
             }
-        }
-    });
+        },
+    );
 
     assert!(result.is_ok(), "run_app should return Ok after panic");
 

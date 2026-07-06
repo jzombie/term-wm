@@ -1,23 +1,25 @@
+use std::collections::VecDeque;
+
 use crossterm::event::{Event, KeyEventKind};
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
 };
 
-use term_wm_core::{
-    components::{Component, ComponentContext, MenuItem},
-    keybindings::{Action, KeyBindings},
-    ui::{UiFrame, safe_set_string},
-};
+use term_wm_core::actions::{EventResult, TermWmAction};
+use term_wm_core::components::{Component, ComponentContext, MenuItem};
+use term_wm_core::keybindings::KeyBindings;
+use term_wm_core::ui::{UiFrame, safe_set_string};
+use term_wm_core::window::WindowKey;
 
 #[derive(Debug)]
-pub struct MenuComponent<R> {
-    items: Vec<MenuItem<R>>,
+pub struct MenuComponent {
+    items: Vec<MenuItem<TermWmAction>>,
     selected: usize,
     nav_keys: KeyBindings,
 }
 
-impl<R> MenuComponent<R> {
+impl MenuComponent {
     pub fn new() -> Self {
         Self {
             items: Vec::new(),
@@ -26,12 +28,12 @@ impl<R> MenuComponent<R> {
         }
     }
 
-    pub fn set_items(&mut self, items: Vec<MenuItem<R>>) {
+    pub fn set_items(&mut self, items: Vec<MenuItem<TermWmAction>>) {
         self.items = items;
         self.selected = self.selected.min(self.items.len().saturating_sub(1));
     }
 
-    pub fn items(&self) -> &[MenuItem<R>] {
+    pub fn items(&self) -> &[MenuItem<TermWmAction>] {
         &self.items
     }
 
@@ -43,37 +45,33 @@ impl<R> MenuComponent<R> {
         self.selected = index.min(self.items.len().saturating_sub(1));
     }
 
-    pub fn selected_action(&self) -> Option<&R> {
+    pub fn selected_action(&self) -> Option<&TermWmAction> {
         self.items.get(self.selected).map(|item| &item.action)
     }
 
-    pub fn handle_key_event(&mut self, event: &Event) -> bool {
+    pub fn handle_key_event(&mut self, event: &Event) -> EventResult<TermWmAction> {
         let Event::Key(key) = event else {
-            return false;
+            return EventResult::Ignored;
         };
         if key.kind != KeyEventKind::Press {
-            return false;
+            return EventResult::Ignored;
         }
         let total = self.items.len();
         if total == 0 {
-            return false;
+            return EventResult::Ignored;
         }
-        if self.nav_keys.matches(Action::MenuUp, key)
-            || self.nav_keys.matches(Action::MenuPrev, key)
+        if self.nav_keys.matches(TermWmAction::MenuUp, key)
+            || self.nav_keys.matches(TermWmAction::MenuPrev, key)
         {
-            self.selected = if self.selected == 0 {
-                total - 1
-            } else {
-                self.selected - 1
-            };
-            true
-        } else if self.nav_keys.matches(Action::MenuDown, key)
-            || self.nav_keys.matches(Action::MenuNext, key)
+            EventResult::Action(TermWmAction::MenuUp)
+        } else if self.nav_keys.matches(TermWmAction::MenuDown, key)
+            || self.nav_keys.matches(TermWmAction::MenuNext, key)
         {
-            self.selected = (self.selected + 1) % total;
-            true
+            EventResult::Action(TermWmAction::MenuDown)
+        } else if self.nav_keys.matches(TermWmAction::MenuSelect, key) {
+            EventResult::Action(TermWmAction::MenuSelect)
         } else {
-            false
+            EventResult::Ignored
         }
     }
 
@@ -84,11 +82,11 @@ impl<R> MenuComponent<R> {
         if key.kind != KeyEventKind::Press {
             return false;
         }
-        self.nav_keys.matches(Action::MenuUp, key)
-            || self.nav_keys.matches(Action::MenuDown, key)
-            || self.nav_keys.matches(Action::MenuSelect, key)
-            || self.nav_keys.matches(Action::MenuNext, key)
-            || self.nav_keys.matches(Action::MenuPrev, key)
+        self.nav_keys.matches(TermWmAction::MenuUp, key)
+            || self.nav_keys.matches(TermWmAction::MenuDown, key)
+            || self.nav_keys.matches(TermWmAction::MenuSelect, key)
+            || self.nav_keys.matches(TermWmAction::MenuNext, key)
+            || self.nav_keys.matches(TermWmAction::MenuPrev, key)
     }
 
     pub fn render_items(
@@ -165,7 +163,7 @@ impl<R> MenuComponent<R> {
             let marker = if is_selected {
                 ">"
             } else if is_hovered {
-                "▸"
+                "\u{25b8}"
             } else {
                 " "
             };
@@ -180,17 +178,54 @@ impl<R> MenuComponent<R> {
     }
 }
 
-impl<R> Component for MenuComponent<R> {
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
+impl Component<TermWmAction> for MenuComponent {
+    fn render(
+        &self,
+        frame: &mut UiFrame<'_>,
+        area: Rect,
+        ctx: &ComponentContext,
+        _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
         self.render_items(frame, area, None, &ctx.config().theme);
     }
 
-    fn handle_event(&mut self, event: &Event, _ctx: &ComponentContext) -> bool {
+    fn handle_events(
+        &mut self,
+        event: &Event,
+        _ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
         self.handle_key_event(event)
+    }
+
+    fn update(
+        &mut self,
+        action: TermWmAction,
+        _ctx: &ComponentContext,
+        _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+    ) {
+        match action {
+            TermWmAction::MenuUp | TermWmAction::MenuPrev => {
+                let total = self.items.len();
+                if total > 0 {
+                    self.selected = if self.selected == 0 {
+                        total - 1
+                    } else {
+                        self.selected - 1
+                    };
+                }
+            }
+            TermWmAction::MenuDown | TermWmAction::MenuNext => {
+                let total = self.items.len();
+                if total > 0 {
+                    self.selected = (self.selected + 1) % total;
+                }
+            }
+            _ => {}
+        }
     }
 }
 
-impl<R: std::fmt::Debug> Default for MenuComponent<R> {
+impl Default for MenuComponent {
     fn default() -> Self {
         Self::new()
     }
@@ -208,111 +243,119 @@ mod tests {
         Event::Key(k)
     }
 
+    fn process(menu: &mut MenuComponent, event: &Event) {
+        let result = menu.handle_events(event, &ComponentContext::new(false));
+        if let EventResult::Action(action) = result {
+            menu.update(action, &ComponentContext::new(false), &mut VecDeque::new());
+        }
+    }
+
     #[test]
     fn menu_navigation_cycles_selection() {
-        let mut menu: MenuComponent<&str> = MenuComponent::new();
+        let mut menu = MenuComponent::new();
         menu.set_items(vec![
             MenuItem {
                 icon: None,
                 label: "First",
-                action: "first",
+                action: TermWmAction::Quit,
             },
             MenuItem {
                 icon: None,
                 label: "Second",
-                action: "second",
+                action: TermWmAction::NewWindow,
             },
             MenuItem {
                 icon: None,
                 label: "Third",
-                action: "third",
+                action: TermWmAction::OpenHelp,
             },
         ]);
         assert_eq!(menu.selected(), 0);
 
-        menu.handle_key_event(&key_event(KeyCode::Down));
+        process(&mut menu, &key_event(KeyCode::Down));
         assert_eq!(menu.selected(), 1);
 
-        menu.handle_key_event(&key_event(KeyCode::Down));
+        process(&mut menu, &key_event(KeyCode::Down));
         assert_eq!(menu.selected(), 2);
 
-        menu.handle_key_event(&key_event(KeyCode::Down));
+        process(&mut menu, &key_event(KeyCode::Down));
         assert_eq!(menu.selected(), 0);
 
-        menu.handle_key_event(&key_event(KeyCode::Up));
+        process(&mut menu, &key_event(KeyCode::Up));
         assert_eq!(menu.selected(), 2);
 
-        menu.handle_key_event(&key_event(KeyCode::Up));
+        process(&mut menu, &key_event(KeyCode::Up));
         assert_eq!(menu.selected(), 1);
     }
 
     #[test]
     fn menu_jk_navigation() {
-        let mut menu: MenuComponent<&str> = MenuComponent::new();
+        let mut menu = MenuComponent::new();
         menu.set_items(vec![
             MenuItem {
                 icon: None,
                 label: "One",
-                action: "one",
+                action: TermWmAction::Quit,
             },
             MenuItem {
                 icon: None,
                 label: "Two",
-                action: "two",
+                action: TermWmAction::NewWindow,
             },
         ]);
         assert_eq!(menu.selected(), 0);
 
         // j = MenuNext
-        menu.handle_key_event(&key_event(KeyCode::Char('j')));
+        process(&mut menu, &key_event(KeyCode::Char('j')));
         assert_eq!(menu.selected(), 1);
 
         // k = MenuPrev
-        menu.handle_key_event(&key_event(KeyCode::Char('k')));
+        process(&mut menu, &key_event(KeyCode::Char('k')));
         assert_eq!(menu.selected(), 0);
     }
 
     #[test]
     fn selected_action_returns_correct_action() {
-        let mut menu: MenuComponent<&str> = MenuComponent::new();
+        let mut menu = MenuComponent::new();
         menu.set_items(vec![
             MenuItem {
                 icon: None,
                 label: "Zero",
-                action: "zero",
+                action: TermWmAction::Quit,
             },
             MenuItem {
                 icon: None,
                 label: "One",
-                action: "one",
+                action: TermWmAction::NewWindow,
             },
         ]);
-        assert_eq!(menu.selected_action(), Some(&"zero"));
+        assert_eq!(menu.selected_action(), Some(&TermWmAction::Quit));
         menu.set_selected(1);
-        assert_eq!(menu.selected_action(), Some(&"one"));
+        assert_eq!(menu.selected_action(), Some(&TermWmAction::NewWindow));
     }
 
     #[test]
     fn empty_menu_does_nothing() {
-        let mut menu: MenuComponent<&str> = MenuComponent::new();
+        let mut menu = MenuComponent::new();
         assert_eq!(menu.selected_action(), None);
-        menu.handle_key_event(&key_event(KeyCode::Down));
+        let result = menu.handle_key_event(&key_event(KeyCode::Down));
+        assert!(result.is_ignored());
         assert_eq!(menu.selected(), 0);
     }
 
     #[test]
     fn render_does_not_panic() {
-        let mut menu: MenuComponent<&str> = MenuComponent::new();
+        let mut menu = MenuComponent::new();
         menu.set_items(vec![
             MenuItem {
                 icon: None,
                 label: "Item A",
-                action: "a",
+                action: TermWmAction::Quit,
             },
             MenuItem {
-                icon: Some("✓"),
+                icon: Some("\u{2713}"),
                 label: "Item B",
-                action: "b",
+                action: TermWmAction::NewWindow,
             },
         ]);
         let area = Rect {
@@ -324,6 +367,11 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let mut frame = UiFrame::from_parts(area, &mut buf);
         let ctx = ComponentContext::new(true);
-        menu.render(&mut frame, area, &ctx);
+        menu.render(
+            &mut frame,
+            area,
+            &ctx,
+            &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+        );
     }
 }

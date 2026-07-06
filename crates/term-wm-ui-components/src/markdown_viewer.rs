@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::fmt;
 use std::str;
 
@@ -10,13 +11,14 @@ use ratatui::style::{Color, Modifier, Style};
 use std::sync::Arc;
 
 use crate::text_renderer::TextRendererComponent;
+use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext};
 use term_wm_core::ui::UiFrame;
 use term_wm_core::utils::linkifier::{LinkFragment, LinkHandler, Linkifier};
+use term_wm_core::window::WindowKey;
 
 pub struct MarkdownViewerComponent {
     text: TextRendererComponent,
-    last_render_area: Rect,
     link_handler: Option<LinkHandler>,
     linkifier: Linkifier,
     anchors: HashMap<String, usize>,
@@ -30,29 +32,44 @@ impl fmt::Debug for MarkdownViewerComponent {
     }
 }
 
-impl Component for MarkdownViewerComponent {
-    fn resize(&mut self, area: Rect, ctx: &ComponentContext) {
-        self.last_render_area = area;
-        self.text.resize(area, ctx);
+impl Component<TermWmAction> for MarkdownViewerComponent {
+    fn render(
+        &self,
+        frame: &mut UiFrame<'_>,
+        area: Rect,
+        ctx: &ComponentContext,
+        registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
+        self.render_content(frame, area, ctx, registry);
     }
 
-    fn render(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
-        self.render_content(frame, area, ctx);
-    }
-
-    fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
+    fn handle_events(
+        &mut self,
+        event: &Event,
+        ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
         match event {
             Event::Mouse(_) => self.handle_pointer_event(event, ctx),
             Event::Key(key) => self.handle_key_event(key, ctx),
-            _ => false,
+            _ => EventResult::Ignored,
         }
     }
+
+    fn update(
+        &mut self,
+        _action: TermWmAction,
+        _ctx: &ComponentContext,
+        _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+    ) {
+    }
+
+    fn destroy(&mut self) {}
 
     fn selection_status(&self) -> term_wm_core::components::SelectionStatus {
         self.text.selection_status()
     }
 
-    fn selection_text(&mut self) -> Option<String> {
+    fn selection_text(&self) -> Option<String> {
         self.text.selection_text()
     }
 }
@@ -61,7 +78,6 @@ impl MarkdownViewerComponent {
     pub fn new() -> Self {
         Self {
             text: TextRendererComponent::new(),
-            last_render_area: Rect::default(),
             link_handler: None,
             linkifier: Linkifier::new(),
             anchors: HashMap::new(),
@@ -300,8 +316,12 @@ impl MarkdownViewerComponent {
         self.text.rendered_lines()
     }
 
-    pub fn handle_pointer_event(&mut self, event: &Event, ctx: &ComponentContext) -> bool {
-        let area = self.last_render_area;
+    pub fn handle_pointer_event(
+        &mut self,
+        event: &Event,
+        ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        let area = ctx.screen_area().unwrap_or_default();
         self.handle_pointer_event_in_area(event, area, ctx)
     }
 
@@ -310,7 +330,7 @@ impl MarkdownViewerComponent {
         event: &Event,
         area: Rect,
         ctx: &ComponentContext,
-    ) -> bool {
+    ) -> EventResult<TermWmAction> {
         use crossterm::event::MouseEventKind;
         if let Event::Mouse(mouse) = event
             && matches!(mouse.kind, MouseEventKind::Down(_))
@@ -320,7 +340,7 @@ impl MarkdownViewerComponent {
                 && let Some(&line_idx) = self.anchors.get(anchor)
             {
                 self.text.jump_to_logical_line(line_idx, area);
-                return true;
+                return EventResult::Consumed;
             }
 
             if self
@@ -329,10 +349,10 @@ impl MarkdownViewerComponent {
                 .map(|handler| handler(url.as_str()))
                 .unwrap_or(false)
             {
-                return true;
+                return EventResult::Consumed;
             }
         }
-        self.text.handle_event(event, ctx)
+        self.text.handle_events(event, ctx)
     }
 
     pub fn go_home(&mut self) {
@@ -351,13 +371,18 @@ impl MarkdownViewerComponent {
         &mut self,
         key: &crossterm::event::KeyEvent,
         ctx: &ComponentContext,
-    ) -> bool {
-        self.text.handle_event(&Event::Key(*key), ctx)
+    ) -> EventResult<TermWmAction> {
+        self.text.handle_events(&Event::Key(*key), ctx)
     }
 
-    pub fn render_content(&mut self, frame: &mut UiFrame<'_>, area: Rect, ctx: &ComponentContext) {
-        self.last_render_area = area;
-        self.text.render(frame, area, ctx);
+    pub fn render_content(
+        &self,
+        frame: &mut UiFrame<'_>,
+        area: Rect,
+        ctx: &ComponentContext,
+        registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
+        self.text.render(frame, area, ctx, registry);
     }
 }
 
@@ -445,7 +470,7 @@ mod markdown_tests {
         use ratatui::buffer::Buffer;
         use ratatui::layout::Rect;
 
-        let mut scroll = ScrollViewComponent::new(sample_viewer());
+        let scroll = ScrollViewComponent::new(sample_viewer());
         let ctx = ComponentContext::new(true);
 
         let area = Rect {
@@ -457,14 +482,24 @@ mod markdown_tests {
         let mut scratch = Buffer::empty(area);
         {
             let mut frame = term_wm_core::ui::UiFrame::from_parts(area, &mut scratch);
-            scroll.render(&mut frame, area, &ctx);
+            scroll.render(
+                &mut frame,
+                area,
+                &ctx,
+                &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+            );
         }
 
         let mut buffer = Buffer::empty(area);
         {
-            scroll.content.go_end();
+            scroll.content.borrow_mut().go_end();
             let mut frame = term_wm_core::ui::UiFrame::from_parts(area, &mut buffer);
-            scroll.render(&mut frame, area, &ctx);
+            scroll.render(
+                &mut frame,
+                area,
+                &ctx,
+                &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+            );
         }
 
         let mut rows: Vec<String> = Vec::with_capacity(area.height as usize);
@@ -497,7 +532,7 @@ mod markdown_tests {
         use ratatui::buffer::Buffer;
         use ratatui::layout::Rect;
 
-        let mut scroll = ScrollViewComponent::new(sample_viewer());
+        let scroll = ScrollViewComponent::new(sample_viewer());
 
         // choose a narrow viewport so a scrollbar will be required
         let area = Rect {
@@ -510,10 +545,15 @@ mod markdown_tests {
         let mut with_scroll = Buffer::empty(area);
         {
             let mut frame = term_wm_core::ui::UiFrame::from_parts(area, &mut with_scroll);
-            scroll.render(&mut frame, area, &ComponentContext::new(true));
+            scroll.render(
+                &mut frame,
+                area,
+                &ComponentContext::new(true),
+                &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+            );
         }
 
-        let viewport = scroll.viewport_area;
+        let viewport = scroll.compute_layout(area);
         assert_eq!(
             viewport.width + 1,
             area.width,
@@ -604,7 +644,12 @@ mod markdown_tests {
         let mut buffer = ratatui::buffer::Buffer::empty(area);
         {
             let mut frame = term_wm_core::ui::UiFrame::from_parts(area, &mut buffer);
-            scroll.render(&mut frame, area, &ComponentContext::new(true));
+            scroll.render(
+                &mut frame,
+                area,
+                &ComponentContext::new(true),
+                &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+            );
         }
 
         let mouse_event = Event::Mouse(MouseEvent {
@@ -616,9 +661,11 @@ mod markdown_tests {
 
         assert_eq!(scroll.viewport_handle().info().offset_y, 0);
 
-        let handled = scroll.handle_event(&mouse_event, &ComponentContext::new(true));
-
-        assert!(handled, "Event should be handled");
+        let ctx = ComponentContext::new(true).with_screen_area(area);
+        let result = scroll.handle_events(&mouse_event, &ctx);
+        if let term_wm_core::actions::EventResult::Action(action) = result {
+            scroll.update(action, &ComponentContext::new(true), &mut VecDeque::new());
+        }
 
         let offset = scroll.viewport_handle().info().offset_y;
 
@@ -646,7 +693,7 @@ mod markdown_tests {
 
         let mut mv = MarkdownViewerComponent::new();
         mv.set_markdown(md, &term_wm_core::theme::NOIR);
-        let mut scroll = ScrollViewComponent::new(mv);
+        let scroll = ScrollViewComponent::new(mv);
 
         let area = Rect {
             x: 0,
@@ -658,7 +705,12 @@ mod markdown_tests {
         let mut buffer = Buffer::empty(area);
         {
             let mut frame = term_wm_core::ui::UiFrame::from_parts(area, &mut buffer);
-            scroll.render(&mut frame, area, &ComponentContext::new(true));
+            scroll.render(
+                &mut frame,
+                area,
+                &ComponentContext::new(true),
+                &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+            );
         }
 
         // Find the row that contains the rule glyph and ensure it only

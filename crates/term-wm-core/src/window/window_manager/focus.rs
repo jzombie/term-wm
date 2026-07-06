@@ -1,7 +1,7 @@
 use crossterm::event::{Event, MouseEventKind};
 
 use super::WindowManager;
-use crate::layout::rect_contains;
+use crate::actions::{EventResult, TermWmAction};
 use crate::window::WindowKey;
 
 impl WindowManager {
@@ -25,50 +25,20 @@ impl WindowManager {
         Some((window_key, localized))
     }
 
-    pub fn dispatch_focused_event<F>(&mut self, event: &Event, mut on_app: F) -> bool
-    where
-        F: FnMut(WindowKey, &Event) -> bool,
-    {
-        // In direct mode, mouse events over the content area bypass chrome
-        // and go straight to the terminal component, unless a header or
-        // resize drag is in progress, in which case the cursor entering
-        // the content area should not cancel the drag.
-        if let Event::Mouse(mouse) = event {
-            let focused = self.focused_window();
-            let in_content = self.config.chrome_enabled
-                && rect_contains(self.region_for_key(focused), mouse.column, mouse.row);
-            if !(in_content
-                && self.direct_mode(focused)
-                && self.drag_header.is_none()
-                && self.drag_resize.is_none())
-                && self.handle_managed_event(event)
-            {
-                return true;
-            }
-        }
-
-        // Hover-to-scroll: route scroll events to the window under the cursor
-        // without changing keyboard focus. This lets you scroll any visible
-        // window while keeping keyboard input directed at the active window.
-        if let Event::Mouse(mouse) = event
-            && matches!(
-                mouse.kind,
-                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
-            )
-            && let Some(hovered) =
-                self.hit_test_region_topmost(mouse.column, mouse.row, &self.managed_draw_order)
-            && hovered != self.focused_window()
-            && let Some(localized) = self.localize_event_content(hovered, event)
-        {
-            let adjusted = self.adjust_event_for_window(hovered, &localized);
-            return on_app(hovered, &adjusted);
-        }
-
-        let Some((window_key, localized)) = self.focused_window_event(event) else {
-            return false;
-        };
+    /// Route an event to the focused window's component, returning EventResult.
+    /// Returns None if no focused window could be determined.
+    ///
+    /// NOTE: Mouse events are dispatched entirely through `dispatch_mouse()`.
+    /// This function handles keyboard events for WM-stored components.
+    pub fn dispatch_focused_event(
+        &mut self,
+        event: &Event,
+    ) -> Option<(WindowKey, EventResult<TermWmAction>)> {
+        let (window_key, localized) = self.focused_window_event(event)?;
         let adjusted = self.adjust_event_for_window(window_key, &localized);
-        on_app(window_key, &adjusted)
+        let ctx = self.component_context_for(true, window_key);
+        self.component_for_key_mut(window_key)
+            .map(|c| (window_key, c.handle_events(&adjusted, &ctx)))
     }
 
     pub fn focus_app_window(&mut self, key: WindowKey) {
@@ -157,10 +127,10 @@ impl WindowManager {
                     return false;
                 }
                 let kb = self.keybindings();
-                if kb.matches(crate::keybindings::Action::FocusNext, key) {
+                if kb.matches(TermWmAction::FocusNext, key) {
                     self.advance_focus(true);
                     true
-                } else if kb.matches(crate::keybindings::Action::FocusPrev, key) {
+                } else if kb.matches(TermWmAction::FocusPrev, key) {
                     self.advance_focus(false);
                     true
                 } else {

@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use crossterm::event::{Event, MouseEventKind};
 use ratatui::{
     layout::Rect,
@@ -5,10 +7,12 @@ use ratatui::{
 };
 
 use term_wm_core::{
+    actions::{EventResult, TermWmAction},
     components::{Component, ComponentContext},
     layout::rect_contains,
     top_panel_trait::TopPanel as TopPanelTrait,
     ui::{UiFrame, safe_set_string, truncate_to_width},
+    window::WindowKey,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -535,12 +539,35 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> TopPanelTrait<R> for WmTopPanelCompon
     }
 }
 
-impl<R: Copy + Eq + Ord + std::fmt::Debug + 'static> Component for WmTopPanelComponent<R> {
-    fn render(&mut self, _frame: &mut UiFrame<'_>, _area: Rect, _ctx: &ComponentContext) {}
-
-    fn handle_event(&mut self, _event: &Event, _ctx: &ComponentContext) -> bool {
-        false
+impl<R: Copy + Eq + Ord + std::fmt::Debug + 'static> Component<TermWmAction>
+    for WmTopPanelComponent<R>
+{
+    fn render(
+        &self,
+        _frame: &mut UiFrame<'_>,
+        _area: Rect,
+        _ctx: &ComponentContext,
+        _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
     }
+
+    fn handle_events(
+        &mut self,
+        _event: &Event,
+        _ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        EventResult::Ignored
+    }
+
+    fn update(
+        &mut self,
+        _action: TermWmAction,
+        _ctx: &ComponentContext,
+        _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+    ) {
+    }
+
+    fn destroy(&mut self) {}
 }
 
 impl<R: Copy + Eq + Ord + std::fmt::Debug> Default for WmTopPanelComponent<R> {
