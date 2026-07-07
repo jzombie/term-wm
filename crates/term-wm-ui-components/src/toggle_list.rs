@@ -259,4 +259,89 @@ mod tests {
         );
         assert_eq!(t.selected(), 4);
     }
+
+    #[test]
+    fn handle_event_page_up_down() {
+        let mut t = ToggleListComponent::new("s");
+        t.set_items(make_items(20));
+        let ctx = ComponentContext::new(true);
+        dispatch(
+            &mut t,
+            &Event::Key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)),
+            &ctx,
+        );
+        assert_eq!(t.selected(), 5);
+        dispatch(
+            &mut t,
+            &Event::Key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE)),
+            &ctx,
+        );
+        assert_eq!(t.selected(), 0);
+    }
+
+    #[test]
+    fn handle_event_toggle_selection() {
+        let mut t = ToggleListComponent::new("s");
+        t.set_items(make_items(3));
+        let ctx = ComponentContext::new(true);
+        assert!(t.items()[0].checked); // even index = checked
+        dispatch(
+            &mut t,
+            &Event::Key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE)),
+            &ctx,
+        );
+        assert!(!t.items()[0].checked);
+        dispatch(
+            &mut t,
+            &Event::Key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE)),
+            &ctx,
+        );
+        assert!(t.items()[0].checked);
+    }
+
+    #[test]
+    fn handle_event_unrecognized_key_ignored() {
+        let mut t = ToggleListComponent::new("s");
+        t.set_items(make_items(3));
+        let ctx = ComponentContext::new(true);
+        let result = t.handle_events(
+            &Event::Key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE)),
+            &ctx,
+        );
+        assert!(result.is_ignored());
+    }
+
+    #[test]
+    fn render_empty_list() {
+        let t = ToggleListComponent::new("empty");
+        let mut buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 40, 10));
+        let mut frame = UiFrame::from_parts(Rect::new(0, 0, 40, 10), &mut buffer);
+        let ctx = ComponentContext::new(true);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        t.render(&mut frame, Rect::new(0, 0, 40, 10), &ctx, &mut registry);
+    }
+
+    #[test]
+    fn set_items_clamps_selected() {
+        let mut t = ToggleListComponent::new("s");
+        t.set_items(make_items(5));
+        t.set_selected(4);
+        assert_eq!(t.selected(), 4);
+        t.set_items(make_items(2));
+        assert_eq!(t.selected(), 1);
+    }
+
+    #[test]
+    fn toggle_selected_empty_returns_false() {
+        let mut t = ToggleListComponent::new("s");
+        assert!(!t.toggle_selected());
+    }
+
+    #[test]
+    fn items_mut_allows_mutation() {
+        let mut t = ToggleListComponent::new("s");
+        t.set_items(make_items(2));
+        t.items_mut()[0].label = "changed".to_string();
+        assert_eq!(t.items()[0].label, "changed");
+    }
 }
