@@ -13,7 +13,9 @@ use term_wm::io::{
 use term_wm::runner::{WindowManagerHost, run_window_app};
 use term_wm::window::{OverlayId, WindowKey, WindowManager};
 use term_wm::wm_config::WmConfig;
-use term_wm::{PtyStatus, ScrollKeyMode, ScrollViewComponent, TerminalComponent, default_shell_command};
+use term_wm::{
+    PtyStatus, ScrollKeyMode, ScrollViewComponent, TerminalComponent, default_shell_command,
+};
 use term_wm_sys_ui_components::wm_debug_log::{
     WmDebugLogComponent, install_panic_hook, set_global_debug_log,
 };

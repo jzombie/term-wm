@@ -1,6 +1,5 @@
 // TODO: Look into https://crates.io/crates/tui-logger
 
-use std::cell::Cell;
 use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -180,9 +179,6 @@ impl Write for DebugLogWriter {
 pub struct WmDebugLogComponent {
     handle: DebugLogHandle,
     scroll_view: ScrollViewComponent<TextRendererComponent>,
-    follow_tail: Cell<bool>,
-    last_total: Cell<usize>,
-    last_view: Cell<usize>,
 }
 
 impl Component<TermWmAction> for WmDebugLogComponent {
@@ -201,10 +197,6 @@ impl Component<TermWmAction> for WmDebugLogComponent {
         } else {
             Vec::new()
         };
-        let total = lines.len();
-        let view = area.height as usize;
-        self.last_total.set(total);
-        self.last_view.set(view);
 
         let text = Text::from(lines.into_iter().map(Line::from).collect::<Vec<_>>());
         {
@@ -212,12 +204,6 @@ impl Component<TermWmAction> for WmDebugLogComponent {
             content.set_text(text);
             content.set_wrap(false);
         }
-        if self.follow_tail.get() {
-            self.scroll_view
-                .viewport_handle()
-                .scroll_vertical_to(usize::MAX);
-        }
-        self.follow_tail.set(self.is_at_bottom());
 
         self.scroll_view.render(frame, area, ctx, registry);
     }
@@ -237,7 +223,6 @@ impl Component<TermWmAction> for WmDebugLogComponent {
         actions: &mut VecDeque<(WindowKey, TermWmAction)>,
     ) {
         self.scroll_view.update(action, ctx, actions);
-        self.follow_tail.set(self.is_at_bottom());
     }
 
     fn destroy(&mut self) {}
@@ -258,13 +243,12 @@ impl WmDebugLogComponent {
         };
         let mut renderer = TextRendererComponent::new();
         renderer.set_wrap(false);
+        let mut scroll_view = ScrollViewComponent::new(renderer);
+        scroll_view.set_sticky_bottom(true);
         (
             Self {
                 handle: handle.clone(),
-                scroll_view: ScrollViewComponent::new(renderer),
-                follow_tail: Cell::new(true),
-                last_total: Cell::new(0),
-                last_view: Cell::new(0),
+                scroll_view,
             },
             handle,
         )
@@ -272,18 +256,6 @@ impl WmDebugLogComponent {
 
     pub fn new_default() -> (Self, DebugLogHandle) {
         Self::new(DEFAULT_MAX_LINES)
-    }
-
-    fn is_at_bottom(&self) -> bool {
-        if self.last_view.get() == 0 {
-            true
-        } else {
-            self.renderer_offset() >= self.last_total.get().saturating_sub(self.last_view.get())
-        }
-    }
-
-    fn renderer_offset(&self) -> usize {
-        self.scroll_view.viewport_handle().info().offset_y
     }
 
     pub fn set_selection_enabled(&mut self, enabled: bool) {
@@ -354,11 +326,9 @@ mod tests {
             );
         }
         let ctx = ComponentContext::new(true);
-        let max_off = comp.last_total.get().saturating_sub(comp.last_view.get());
-        comp.scroll_view
-            .viewport_handle()
-            .scroll_vertical_to(max_off);
-        comp.follow_tail.set(true);
+        let vh = comp.scroll_view.scroll_handle();
+        let info = vh.info();
+        let max_off = info.offset_y; // after render, sticky_bottom snaps to bottom
 
         // PageUp: handle_events returns ScrollView action, update processes it
         let page_up = Event::Key(crossterm::event::KeyEvent::new(
@@ -369,10 +339,10 @@ mod tests {
         if let term_wm_core::actions::EventResult::Action(action) = page_up_result {
             comp.update(action, &ctx, &mut VecDeque::new());
         }
-        assert!(comp.renderer_offset() < max_off);
+        assert!(vh.info().offset_y < max_off);
 
         // ScrollDown mouse event: handle_events returns ScrollView action, update processes it
-        let before = comp.renderer_offset();
+        let before = vh.info().offset_y;
         let scroll_down = Event::Mouse(MouseEvent {
             kind: MouseEventKind::ScrollDown,
             column: 0,
@@ -383,6 +353,6 @@ mod tests {
         if let term_wm_core::actions::EventResult::Action(action) = scroll_result {
             comp.update(action, &ctx, &mut VecDeque::new());
         }
-        assert!(comp.renderer_offset() >= before);
+        assert!(vh.info().offset_y >= before);
     }
 }

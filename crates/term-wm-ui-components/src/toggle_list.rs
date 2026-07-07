@@ -50,7 +50,7 @@ impl Component<TermWmAction> for ToggleListComponent {
 
         let total_count = self.items.len();
         // Assuming single line items
-        if let Some(handle) = ctx.viewport_handle() {
+        if let Some(handle) = ctx.scroll_handle() {
             handle.set_content_size(inner.width as usize, total_count + 2);
             handle.ensure_vertical_visible(self.selected + 1, self.selected + 2);
         }
