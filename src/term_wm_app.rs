@@ -6,7 +6,7 @@ use term_wm_core::app_context::AppContext;
 use term_wm_core::components::{Component, component_downcast_mut};
 use term_wm_core::config::AppBuilder;
 use term_wm_core::io::{ConsoleEventSource, ConsoleRenderTarget, EventSource, RenderTarget};
-use term_wm_core::runner::{WindowManagerHost, WindowProvider, run_window_app};
+use term_wm_core::runner::{WindowManagerHost, run_window_app};
 use term_wm_core::window::{WindowKey, WindowManager};
 use term_wm_core::wm_config::WmConfig;
 
@@ -112,6 +112,8 @@ impl TermWmApp {
         C: Component<TermWmAction> + 'static,
     {
         let key = self.wm.spawn(component);
+        self.wm
+            .transition_window(key, term_wm_core::window::WindowState::Mapped);
         self.windows.push(key);
         key
     }
@@ -120,6 +122,8 @@ impl TermWmApp {
     /// Calls `on_mount` on the component after registration, matching `register`.
     pub fn register_boxed(&mut self, component: Box<dyn Component<TermWmAction>>) -> WindowKey {
         let key = self.wm.spawn_boxed(component);
+        self.wm
+            .transition_window(key, term_wm_core::window::WindowState::Mapped);
         self.windows.push(key);
         key
     }
@@ -169,21 +173,8 @@ impl WindowManagerHost for TermWmApp {
     fn quit_requested(&self) -> bool {
         self.should_quit
     }
-}
-
-impl WindowProvider for TermWmApp {
-    fn enumerate_windows(&mut self) -> Vec<WindowKey> {
-        // Prune dead keys — WindowManager is the authoritative owner.
-        // Uses O(1) has_window check, no dynamic dispatch.
-        self.windows.retain(|&key| self.wm.has_window(key));
-        self.windows.clone()
-    }
 
     fn empty_window_message(&self) -> &str {
         &self.empty_message
-    }
-
-    fn window_component(&mut self, key: WindowKey) -> Option<&mut dyn Component<TermWmAction>> {
-        self.wm.component_for_key_mut(key)
     }
 }

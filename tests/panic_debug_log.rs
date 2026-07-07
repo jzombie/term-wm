@@ -10,7 +10,7 @@ use term_wm::actions::SystemTask;
 use term_wm::app_context::AppContext;
 use term_wm::config::AppBuilder;
 use term_wm::io::{EventSource, RenderTarget};
-use term_wm::runner::{WindowManagerHost, WindowProvider, run_app};
+use term_wm::runner::{WindowManagerHost, run_app};
 use term_wm::task_scheduler::TaskScheduler;
 use term_wm::ui::UiFrame;
 use term_wm::window::{WindowKey, WindowManager};
@@ -90,16 +90,6 @@ impl WindowManagerHost for SparseApp {
     }
 }
 
-impl WindowProvider for SparseApp {
-    fn enumerate_windows(&mut self) -> Vec<WindowKey> {
-        if self.should_quit {
-            vec![]
-        } else {
-            self.window_key.map(|k| vec![k]).unwrap_or_default()
-        }
-    }
-}
-
 #[test]
 fn render_panic_shows_in_debug_log() {
     let (_comp, handle) = term_wm_sys_ui_components::WmDebugLogComponent::new(2000);
@@ -127,7 +117,6 @@ fn render_panic_shows_in_debug_log() {
     };
     let mut output = TestOutput::new();
     let mut driver = ImmediateDriver;
-    let focus_regions: Vec<WindowKey> = vec![];
 
     let panic_msg = "intentional-panic-from-draw";
 
@@ -135,7 +124,6 @@ fn render_panic_shows_in_debug_log() {
         &mut output,
         &mut driver,
         &mut app,
-        &focus_regions,
         TaskScheduler::<SystemTask>::new(),
         |k| k,
         {

@@ -4,15 +4,13 @@ use std::sync::{Arc, OnceLock};
 use clap::Parser;
 use crossbeam_channel::Sender;
 
-use term_wm::actions::TermWmAction;
 use term_wm::app_context::AppContext;
-use term_wm::components::Component;
 use term_wm::config::AppBuilder;
 use term_wm::io::{
     ConsoleRenderTarget, RenderTarget,
     unified_event_source::{UnifiedEvent, UnifiedEventSource},
 };
-use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
+use term_wm::runner::{WindowManagerHost, run_window_app};
 use term_wm::window::{OverlayId, WindowKey, WindowManager};
 use term_wm::wm_config::WmConfig;
 use term_wm::{PtyStatus, ScrollViewComponent, TerminalComponent, default_shell_command};
@@ -68,6 +66,7 @@ fn main() -> io::Result<()> {
 }
 
 struct App {
+    // TODO: Rename `windows` to `wm`
     windows: WindowManager,
     pty_wakeup_tx: Sender<UnifiedEvent>,
     debug_key: Option<WindowKey>,
@@ -133,6 +132,8 @@ impl App {
             component.set_selection_enabled(app.windows.clipboard_enabled());
             set_global_debug_log(handle);
             let debug_key = app.windows.set_system_window(Box::new(component));
+            app.windows
+                .transition_window(debug_key, term_wm::window::WindowState::Unmapped);
             app.debug_key = Some(debug_key);
             app.windows.set_window_title(debug_key, "Debug Log");
             install_panic_hook();
@@ -208,6 +209,8 @@ impl App {
         let mut sv = ScrollViewComponent::new(pane);
         sv.set_keyboard_enabled(false);
         let key = self.windows.create_window(Box::new(sv));
+        self.windows
+            .transition_window(key, term_wm::window::WindowState::Mapped);
 
         // The key is now known — store it so the callback can use it.
         let _ = key_holder.set(key);
@@ -303,6 +306,8 @@ impl WindowManagerHost for App {
         let mut sv = ScrollViewComponent::new(pane);
         sv.set_keyboard_enabled(false);
         let key = self.windows.create_window(Box::new(sv));
+        self.windows
+            .transition_window(key, term_wm::window::WindowState::Mapped);
 
         // The key is now known — store it so the callback can use it.
         let _ = key_holder.set(key);
@@ -343,33 +348,8 @@ impl WindowManagerHost for App {
             }
         }
     }
-}
-
-impl WindowProvider for App {
-    fn enumerate_windows(&mut self) -> Vec<WindowKey> {
-        let mut keys = self.windows.all_window_keys();
-        // Filter out system windows that aren't visible
-        keys.retain(|&k| {
-            if self.debug_key == Some(k) {
-                self.debug_visible
-            } else {
-                true
-            }
-        });
-        keys
-    }
 
     fn empty_window_message(&self) -> &str {
         "all shells exited"
-    }
-
-    fn window_component(&mut self, key: WindowKey) -> Option<&mut dyn Component<TermWmAction>> {
-        self.windows.component_for_key_mut(key)
-    }
-
-    fn window_pane_title(&mut self, key: WindowKey) -> Option<String> {
-        self.windows
-            .component_for_key_mut(key)
-            .and_then(|comp| comp.take_pending_title())
     }
 }

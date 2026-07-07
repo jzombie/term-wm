@@ -8,7 +8,9 @@ use ratatui::style::{Modifier, Style};
 use std::collections::VecDeque;
 
 use crate::actions::{ConfirmAction, EventResult, SystemTask, TermWmAction};
-use crate::components::{Component, SelectionStatus};
+#[cfg(test)]
+use crate::components::Component;
+use crate::components::SelectionStatus;
 use crate::debug_event_flags;
 use crate::event_loop::{ControlFlow, EventLoop};
 use crate::events::crossterm_event_to_wm;
@@ -50,43 +52,30 @@ pub trait WindowManagerHost {
     fn quit_requested(&self) -> bool {
         false
     }
-}
-
-pub trait WindowProvider: WindowManagerHost {
-    fn enumerate_windows(&mut self) -> Vec<WindowKey>;
 
     fn empty_window_message(&self) -> &str {
         "No windows"
     }
 
-    fn layout_for_windows(&mut self, windows: &[WindowKey]) -> Option<TilingLayout<WindowKey>> {
+    fn layout_for_windows(
+        &mut self,
+        windows: &[WindowKey],
+    ) -> Option<TilingLayout<WindowKey>> {
         auto_layout_for_windows(windows)
-    }
-
-    fn window_component(&mut self, _key: WindowKey) -> Option<&mut dyn Component<TermWmAction>> {
-        None
-    }
-
-    fn window_pane_title(&mut self, _key: WindowKey) -> Option<String> {
-        None
     }
 
     fn handle_app_event(&mut self, _event: &Event) -> bool {
         false
     }
-
-    fn focus_regions(&mut self) -> Vec<WindowKey> {
-        self.enumerate_windows()
-    }
 }
 
-fn drain_action_queue<A: WindowProvider>(
+fn drain_action_queue<A: WindowManagerHost>(
     app: &mut A,
     queue: &mut VecDeque<(WindowKey, TermWmAction)>,
 ) {
     while let Some((key, action)) = queue.pop_front() {
         let ctx = app.windows().component_context_for(true, key);
-        if let Some(comp) = app.window_component(key) {
+        if let Some(comp) = app.windows().component_for_key_mut(key) {
             comp.update(action, &ctx, queue);
         }
     }
@@ -94,7 +83,7 @@ fn drain_action_queue<A: WindowProvider>(
 
 fn handle_focused_app_event<A>(event: &Event, app: &mut A) -> bool
 where
-    A: WindowProvider,
+    A: WindowManagerHost,
 {
     // Clear hover state when the terminal loses focus so stale
     // hover highlights do not persist on menus or buttons.
@@ -138,7 +127,7 @@ where
         .adjust_event_for_window(focus_id, &localized_evt);
 
     // Phase 2 Dispatch: Mutably borrow app for the component
-    let result = if let Some(comp) = app.window_component(focus_id) {
+    let result = if let Some(comp) = app.windows().component_for_key_mut(focus_id) {
         comp.handle_events(&adjusted_evt, &ctx)
     } else {
         return false;
@@ -161,7 +150,6 @@ pub fn run_app<O, D, A, FDraw, FMap>(
     output: &mut O,
     driver: &mut D,
     app: &mut A,
-    focus_regions: &[WindowKey],
     system_scheduler: TaskScheduler<SystemTask>,
     _map_region: FMap,
     mut draw: FDraw,
@@ -169,7 +157,7 @@ pub fn run_app<O, D, A, FDraw, FMap>(
 where
     O: RenderTarget,
     D: EventSource,
-    A: WindowProvider,
+    A: WindowManagerHost,
     FDraw: for<'frame> FnMut(UiFrame<'frame>, &mut A),
     FMap: Fn(WindowKey) -> WindowKey + Copy,
 {
@@ -406,7 +394,7 @@ where
                     }
                     // Focus routing in WM mode (Tab/Shift+Tab)
                     // Fold menu to outline so user can see the window they focused.
-                    if app.windows().handle_focus_event(&evt, focus_regions) {
+                    if app.windows().handle_focus_event(&evt) {
                         if matches!(&evt, Event::Key(_)) {
                             app.windows().fold_menu();
                         } else {
@@ -510,7 +498,7 @@ where
                 }
                 if !wm_mode
                     && matches!(evt, Event::Key(_))
-                    && app.windows().handle_focus_event(&evt, focus_regions)
+                    && app.windows().handle_focus_event(&evt)
                 {
                     update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Continue);
@@ -583,7 +571,7 @@ pub fn run_window_app<O, D, A>(output: &mut O, driver: &mut D, app: &mut A) -> i
 where
     O: RenderTarget,
     D: EventSource,
-    A: WindowProvider,
+    A: WindowManagerHost,
 {
     // Create the system-level task scheduler and pass a handle to the WindowManager
     // so it can register/cancel timers (super-passthrough, drag-snap) directly.
@@ -592,12 +580,10 @@ where
     app.windows().set_system_task_handle(system_handle);
 
     let mut draw_state = WindowDrawState::new();
-    let focus_regions: Vec<WindowKey> = app.focus_regions();
     run_app(
         output,
         driver,
         app,
-        &focus_regions,
         system_scheduler,
         |key| key,
         move |frame, app| {
@@ -621,12 +607,13 @@ fn selection_snapshot_from(
 
 fn update_selection_snapshot<A>(app: &mut A)
 where
-    A: WindowProvider,
+    A: WindowManagerHost,
 {
     let was_dragging = app.windows().selection_dragging();
     let focus = app.windows().focused_window();
     let (status, text) = app
-        .window_component(focus)
+        .windows()
+        .component_for_key_mut(focus)
         .map(|c| selection_snapshot_from(c.selection_status(), c.selection_text()))
         .unwrap_or_default();
     app.windows()
@@ -664,10 +651,10 @@ impl WindowDrawState {
 
 fn draw_window_app<A>(frame: &mut UiFrame<'_>, app: &mut A, state: &mut WindowDrawState)
 where
-    A: WindowProvider,
+    A: WindowManagerHost,
 {
     let area = frame.area();
-    let windows = app.enumerate_windows();
+    let windows = app.windows().mapped_windows();
     let windows_changed = state.update(&windows);
 
     if windows_changed {
@@ -696,7 +683,7 @@ where
         app.windows().set_focus_order(focus_order);
     }
     for &key in &windows {
-        if let Some(title) = app.window_pane_title(key) {
+        if let Some(title) = app.windows().window_pane_title(key) {
             app.windows().set_window_title(key, title);
         }
     }
@@ -757,10 +744,7 @@ where
                             .windows()
                             .component_context_for(window.focused, window.key)
                             .with_screen_area(screen_inner);
-                        if let Some(component) = app.window_component(window.key) {
-                            component.render(subframe, window.surface.inner, &ctx, registry);
-                        } else if let Some(component) = app.windows().component_for_key(window.key)
-                        {
+                        if let Some(component) = app.windows().component_for_key_mut(window.key) {
                             component.render(subframe, window.surface.inner, &ctx, registry);
                         }
                     },
@@ -916,16 +900,10 @@ mod tests {
 
         struct FakeApp {
             wm: WindowManager,
-            key: WindowKey,
         }
         impl WindowManagerHost for FakeApp {
             fn windows(&mut self) -> &mut WindowManager {
                 &mut self.wm
-            }
-        }
-        impl WindowProvider for FakeApp {
-            fn enumerate_windows(&mut self) -> Vec<WindowKey> {
-                vec![self.key]
             }
         }
 
@@ -938,11 +916,12 @@ mod tests {
             None,
         );
         let key = wm.create_window(Box::new(crate::components::NoopComponent));
+        wm.transition_window(key, crate::window::WindowState::Mapped);
 
-        let mut app = FakeApp { wm, key };
-        assert!(!app.enumerate_windows().is_empty());
+        let mut app = FakeApp { wm };
+        assert!(!app.windows().mapped_windows().is_empty());
 
-        let quit_if_no_windows = app.enumerate_windows().is_empty();
+        let quit_if_no_windows = app.windows().mapped_windows().is_empty();
         assert!(
             !quit_if_no_windows,
             "Runner would quit even though app reports windows"
@@ -993,17 +972,6 @@ mod tests {
                 &mut self.wm
             }
         }
-        impl WindowProvider for FakeApp {
-            fn enumerate_windows(&mut self) -> Vec<WindowKey> {
-                self.wm.all_window_keys()
-            }
-            fn window_component(
-                &mut self,
-                key: WindowKey,
-            ) -> Option<&mut dyn Component<TermWmAction>> {
-                self.wm.component_for_key_mut(key)
-            }
-        }
 
         let mut app = FakeApp {
             wm: WindowManager::with_config(
@@ -1019,6 +987,8 @@ mod tests {
         let key = app.wm.create_window(Box::new(KeyRecorder {
             received_key: false,
         }));
+        app.wm
+            .transition_window(key, crate::window::WindowState::Mapped);
         app.wm.regions.set(
             key,
             ratatui::layout::Rect {
@@ -1098,17 +1068,6 @@ mod tests {
                 &mut self.wm
             }
         }
-        impl WindowProvider for FakeApp {
-            fn enumerate_windows(&mut self) -> Vec<WindowKey> {
-                self.wm.all_window_keys()
-            }
-            fn window_component(
-                &mut self,
-                key: WindowKey,
-            ) -> Option<&mut dyn Component<TermWmAction>> {
-                self.wm.component_for_key_mut(key)
-            }
-        }
 
         let mut app = FakeApp {
             wm: WindowManager::with_config(
@@ -1123,6 +1082,8 @@ mod tests {
         let key = app.wm.create_window(Box::new(KeyRecorder {
             received_key: false,
         }));
+        app.wm
+            .transition_window(key, crate::window::WindowState::Mapped);
         app.wm.regions.set(
             key,
             ratatui::layout::Rect {

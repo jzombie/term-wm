@@ -1508,6 +1508,21 @@ impl WindowManager {
         self.windows.len()
     }
 
+    /// Return keys of all windows in `WindowState::Mapped`.
+    pub fn mapped_windows(&self) -> Vec<WindowKey> {
+        self.windows
+            .iter()
+            .filter(|(_, w)| w.state == WindowState::Mapped)
+            .map(|(key, _)| key)
+            .collect()
+    }
+
+    /// Pull the pending pane title from a window's component, if any.
+    pub fn window_pane_title(&mut self, key: WindowKey) -> Option<String> {
+        self.component_for_key_mut(key)
+            .and_then(|c| c.take_pending_title())
+    }
+
     pub fn open_overlay(&mut self, id: OverlayId, overlay: Option<Box<dyn Overlay<TermWmAction>>>) {
         if let Some(o) = overlay {
             self.overlays.insert(id, o);
