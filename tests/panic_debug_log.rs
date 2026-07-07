@@ -8,11 +8,11 @@ use ratatui::backend::TestBackend;
 
 use term_wm::actions::SystemTask;
 use term_wm::app_context::AppContext;
+use term_wm::config::AppBuilder;
 use term_wm::io::{EventSource, RenderTarget};
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_app};
 use term_wm::task_scheduler::TaskScheduler;
 use term_wm::ui::UiFrame;
-use term_wm::config::AppBuilder;
 use term_wm::window::{WindowKey, WindowManager};
 
 #[derive(Debug)]
