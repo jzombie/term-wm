@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use ratatui::layout::Rect;
+use term_wm::config::AppBuilder;
 
 #[test]
 fn default_shell_nonempty() {
@@ -12,26 +13,24 @@ fn default_shell_nonempty() {
 #[test]
 fn mouse_capture_flow_through_window_manager() {
     let ctx = Arc::new(term_wm::AppContext::new("test", "0.0.0"));
-    let top_panel: Box<
-        dyn term_wm_core::top_panel_trait::TopPanel<term_wm_core::window::WindowKey>,
-    > = Box::new(term_wm_sys_ui_components::WmTopPanelComponent::new(
-        &ctx.app_name,
-    ));
-    let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> =
+    let top: Box<dyn term_wm_core::components::WmComponent> = Box::new(
+        term_wm_sys_ui_components::WmTopPanelComponent::new(&ctx.app_name),
+    );
+    let bottom: Box<dyn term_wm_core::components::WmComponent> =
         Box::new(term_wm_sys_ui_components::WmBottomPanelComponent::new(
             &ctx.app_name,
             &ctx.app_version,
             None,
         ));
-    let menu: Box<dyn term_wm_core::components::MenuOverlay<term_wm_core::actions::TermWmAction>> =
+    let menu: Box<dyn term_wm_core::components::WmComponent> =
         Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
-    let mut wm: term_wm::window::WindowManager = term_wm::window::WindowManager::with_config(
-        term_wm::wm_config::WmConfig::standalone(),
-        ctx,
-        Some(top_panel),
-        Some(bottom_panel),
-        Some(menu),
-    );
+    let mut wm: term_wm::window::WindowManager = AppBuilder::bare()
+        .app_ctx(ctx)
+        .top_panel(top)
+        .bottom_panel(bottom)
+        .command_menu(menu)
+        .build()
+        .expect("test build");
     // default starts enabled (from config)
     assert!(wm.mouse_capture_enabled());
     // setting the same value shouldn't mark change
@@ -46,7 +45,7 @@ fn mouse_capture_flow_through_window_manager() {
 
 #[test]
 fn top_panel_split_area_basic() {
-    let mut p = term_wm_sys_ui_components::WmTopPanelComponent::<u8>::new("test");
+    let mut p = term_wm_sys_ui_components::WmTopPanelComponent::new("test");
     let area = Rect {
         x: 0,
         y: 0,

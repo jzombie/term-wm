@@ -11,12 +11,12 @@ use crossterm::{
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
+    Frame, Terminal,
     backend::CrosstermBackend,
     buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
     widgets::Paragraph,
-    Frame, Terminal,
 };
 
 const GLYPHS: [&str; 10] = [".", ",", ":", "-", ";", "+", "*", "x", "#", "@"];

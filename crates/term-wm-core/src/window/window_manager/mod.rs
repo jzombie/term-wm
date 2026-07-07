@@ -18,8 +18,10 @@ use super::decorator::WindowDecorator;
 use super::entry::{Window, WindowState};
 use crate::actions::{SystemTask, TermWmAction};
 use crate::app_context::AppContext;
-use crate::bottom_panel_trait::BottomPanel;
-use crate::components::{Component, ComponentContext, MenuItem, MenuOverlay, Overlay};
+use crate::components::{
+    Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse, MenuItem,
+    Overlay, TopPanelState, WmComponent,
+};
 use crate::hitbox_registry::{HitTarget, HitboxRegistry};
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
@@ -27,7 +29,6 @@ use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLa
 use crate::power_profile::PowerProfile;
 use crate::reaper::Reaper;
 use crate::task_scheduler::{TaskHandle, TaskId};
-use crate::top_panel_trait::TopPanel;
 use crate::ui::UiFrame;
 use crate::wm_config::{HintVisibility, WmConfig};
 use term_wm_layout_engine::FocusRing;
@@ -158,9 +159,12 @@ pub struct WindowManager {
     pub(crate) managed_area: Rect,
     pub(crate) hitbox_registry: HitboxRegistry,
     app_ctx: Arc<AppContext>,
-    top_panel: Option<Box<dyn TopPanel<WindowKey>>>,
-    bottom_panel: Option<Box<dyn BottomPanel>>,
-    command_menu: Option<Box<dyn MenuOverlay<crate::actions::TermWmAction>>>,
+    top_component: Option<Box<dyn WmComponent>>,
+    bottom_component: Option<Box<dyn WmComponent>>,
+    command_menu_component: Option<Box<dyn WmComponent>>,
+    supported_menu_actions: Vec<TermWmAction>,
+    top_claimed: Rect,
+    bottom_claimed: Rect,
     // Replaces drag_header + drag_resize
     pub(crate) mouse_capture: Option<MouseCaptureState>,
     pub(crate) last_header_click: Option<(WindowKey, Instant)>,
@@ -483,13 +487,27 @@ impl WindowManager {
         }
     }
 
-    pub fn with_config(
+    pub(crate) fn with_config(
         config: WmConfig,
         app_ctx: Arc<AppContext>,
-        top_panel: Option<Box<dyn TopPanel<WindowKey>>>,
-        bottom_panel: Option<Box<dyn BottomPanel>>,
-        command_menu: Option<Box<dyn MenuOverlay<TermWmAction>>>,
+        top_component: Option<Box<dyn WmComponent>>,
+        bottom_component: Option<Box<dyn WmComponent>>,
+        command_menu_component: Option<Box<dyn WmComponent>>,
+        supported_menu_actions: Option<Vec<TermWmAction>>,
     ) -> Self {
+        let supported_menu_actions = supported_menu_actions.unwrap_or_else(|| {
+            vec![
+                TermWmAction::CloseMenu,
+                TermWmAction::ToggleMouseCapture,
+                TermWmAction::ToggleClipboardMode,
+                TermWmAction::ToggleWindowSelection,
+                TermWmAction::BringFloatingFront,
+                TermWmAction::NewWindow,
+                TermWmAction::ToggleDebugWindow,
+                TermWmAction::Help,
+                TermWmAction::ExitUi,
+            ]
+        });
         let mouse_capture_enabled = config.mouse_capture_enabled;
         let clipboard = Some(crate::clipboard::Clipboard::new());
         let floating_resize_offscreen = config.floating_resize_offscreen;
@@ -510,9 +528,12 @@ impl WindowManager {
             managed_area: Rect::default(),
             hitbox_registry: HitboxRegistry::new(),
             app_ctx,
-            top_panel,
-            bottom_panel,
-            command_menu,
+            top_component,
+            bottom_component,
+            command_menu_component,
+            supported_menu_actions,
+            top_claimed: Rect::default(),
+            bottom_claimed: Rect::default(),
             mouse_capture: None,
             last_header_click: None,
             hover: None,
@@ -667,12 +688,12 @@ impl WindowManager {
     }
 
     pub fn begin_frame(&mut self) {
-        if let Some(p) = &mut self.top_panel {
+        if let Some(p) = &mut self.top_component {
             p.begin_frame();
         }
-        if let Some(p) = &mut self.bottom_panel {
+        if let Some(p) = &mut self.bottom_component {
             p.begin_frame();
-            p.set_power_profile(self.power_profile);
+            p.process_action(&ComponentAction::SetPowerProfile(self.power_profile));
         }
         if !self.config.wm_command_menu_enabled {
             self.clear_capture();
@@ -1101,15 +1122,10 @@ impl WindowManager {
                 false
             }
             HitTarget::BottomPanel => {
-                let crossterm_event =
-                    crossterm::event::Event::Mouse(crossterm::event::MouseEvent {
-                        kind: *kind,
-                        column: col,
-                        row,
-                        modifiers: *modifiers,
-                    });
-                if let Some(p) = &self.bottom_panel
-                    && let Some(action) = p.hit_test_hint(&crossterm_event)
+                let ctx = self.component_context(false);
+                if let Some(p) = &mut self.bottom_component
+                    && let crate::actions::EventResult::Action(action) =
+                        p.handle_event(&crossterm_event, &ctx)
                     && let Some(combo) = self.keybindings().first_combo(action)
                 {
                     self.synthetic_event = Some(Event::Key(crossterm::event::KeyEvent {
@@ -1118,10 +1134,9 @@ impl WindowManager {
                         kind: crossterm::event::KeyEventKind::Press,
                         state: crossterm::event::KeyEventState::NONE,
                     }));
-                    true
-                } else {
-                    false
+                    return true;
                 }
+                false
             }
             HitTarget::Overlay(id) => {
                 let ctx = self.component_context_for(false, slotmap::DefaultKey::default());
@@ -1176,52 +1191,60 @@ impl WindowManager {
     /// Handle clicks on top-panel icons (menu, mouse capture, selection, etc.).
     /// Returns true if the click was consumed.
     fn handle_panel_click(&mut self, col: u16, row: u16) -> bool {
-        let Some(p) = &self.top_panel else {
-            return false;
-        };
-        if !crate::layout::rect_contains(p.area(), col, row) {
+        if self.top_component.is_none() {
             return false;
         }
-        // Build a synthetic MouseEvent for panel hit-test methods that inspect event kind
+        if !crate::layout::rect_contains(self.top_claimed, col, row) {
+            return false;
+        }
+        // Use handle_event which routes through all hit-test methods
         let down_event = crossterm::event::Event::Mouse(crossterm::event::MouseEvent {
             kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
             column: col,
             row,
             modifiers: crossterm::event::KeyModifiers::NONE,
         });
-        if p.menu_icon_contains_point(col, row) {
-        if self.command_menu_visible() {
-                self.close_command_menu();
-            } else {
-                self.open_command_menu();
-            }
-            return true;
+        let ctx = self.component_context(false);
+        let Some(p) = self.top_component.as_mut() else {
+            return false;
+        };
+        match p.handle_event(&down_event, &ctx) {
+            crate::actions::EventResult::Action(action) => match action {
+                TermWmAction::WmToggleOverlay => {
+                    if self.command_menu_visible() {
+                        self.close_command_menu();
+                    } else {
+                        self.open_command_menu();
+                    }
+                    true
+                }
+                TermWmAction::ToggleMouseCapture => {
+                    self.toggle_mouse_capture();
+                    true
+                }
+                TermWmAction::ToggleWindowSelection => {
+                    self.toggle_window_selection();
+                    true
+                }
+                TermWmAction::ToggleClipboardMode => {
+                    self.toggle_clipboard_enabled();
+                    true
+                }
+                TermWmAction::CopySelection => {
+                    self.copy_selection_to_clipboard();
+                    true
+                }
+                TermWmAction::FocusWindow(key) => {
+                    if self.window_state(key) == Some(WindowState::Iconic) {
+                        self.transition_window(key, WindowState::Mapped);
+                    }
+                    self.focus_window_key(key);
+                    true
+                }
+                _ => false,
+            },
+            _ => false,
         }
-        if p.hit_test_mouse_capture(&down_event) {
-            self.toggle_mouse_capture();
-            return true;
-        }
-        if p.hit_test_selection(&down_event) {
-            self.toggle_window_selection();
-            return true;
-        }
-        if p.hit_test_clipboard(&down_event) {
-            self.toggle_clipboard_enabled();
-            return true;
-        }
-        if p.hit_test_copy(&down_event) {
-            self.copy_selection_to_clipboard();
-            return true;
-        }
-        if let Some(key) = p.hit_test_window(&down_event) {
-            use crate::window::entry::WindowState;
-            if self.window_state(key) == Some(WindowState::Iconic) {
-                self.transition_window(key, WindowState::Mapped);
-            }
-            self.focus_window_key(key);
-            return true;
-        }
-        false
     }
 
     pub fn arm_capture(&mut self, timeout: Duration) {
@@ -1248,8 +1271,8 @@ impl WindowManager {
                 handle.cancel(id);
             }
         }
-        if let Some(menu) = &mut self.command_menu {
-            menu.restore();
+        if let Some(menu) = &mut self.command_menu_component {
+            menu.process_action(&ComponentAction::Restore);
         }
     }
 
@@ -1485,6 +1508,21 @@ impl WindowManager {
         self.windows.len()
     }
 
+    /// Return keys of all windows in `WindowState::Mapped`.
+    pub fn mapped_windows(&self) -> Vec<WindowKey> {
+        self.windows
+            .iter()
+            .filter(|(_, w)| w.state == WindowState::Mapped)
+            .map(|(key, _)| key)
+            .collect()
+    }
+
+    /// Pull the pending pane title from a window's component, if any.
+    pub fn window_pane_title(&mut self, key: WindowKey) -> Option<String> {
+        self.component_for_key_mut(key)
+            .and_then(|c| c.take_pending_title())
+    }
+
     pub fn open_overlay(&mut self, id: OverlayId, overlay: Option<Box<dyn Overlay<TermWmAction>>>) {
         if let Some(o) = overlay {
             self.overlays.insert(id, o);
@@ -1496,19 +1534,17 @@ impl WindowManager {
     }
 
     fn panel_active(&self) -> bool {
-        self.config.panel_enabled
-            && self.top_panel.as_ref().is_some_and(|p| p.visible())
-            && self.top_panel.as_ref().map_or(0, |p| p.height()) > 0
+        self.config.panel_enabled && self.top_component.as_ref().is_some_and(|p| p.visible())
     }
 
     /// Register panel hitboxes (top and bottom) into the draw-time registry.
     /// Called before the window loop so panels are at the lowest Z-order.
     pub fn register_panel_hitboxes(&self, registry: &mut HitboxRegistry) {
-        if let Some(p) = &self.top_panel {
-            registry.register(HitTarget::TopPanel, p.area());
+        if self.top_component.is_some() && !self.top_claimed.is_empty() {
+            registry.register(HitTarget::TopPanel, self.top_claimed);
         }
-        if let Some(p) = &self.bottom_panel {
-            registry.register(HitTarget::BottomPanel, p.area());
+        if self.bottom_component.is_some() && !self.bottom_claimed.is_empty() {
+            registry.register(HitTarget::BottomPanel, self.bottom_claimed);
         }
     }
 
@@ -1718,33 +1754,35 @@ impl WindowManager {
         let selection_dragging = self.selection_dragging();
         let selection_copied = self.selection_copied();
         let wm_overlay_visible = self.command_menu_visible();
-        let label_for = &move |key| {
-            titles_map
-                .get(&key)
-                .cloned()
-                .unwrap_or_else(|| format!("{:?}", key))
-        };
-        if let Some(p) = &mut self.top_panel {
-            p.render(
-                frame,
-                panel_active,
-                focus_current,
-                &display,
-                status_line.as_deref(),
-                mouse_capture_enabled,
-                clipboard_enabled,
-                window_selection_enabled,
-                selection_active,
-                selection_dragging,
-                selection_copy_available,
-                selection_copied,
-                wm_overlay_visible,
-                label_for,
-                &self.config.theme,
-            );
+
+        if let Some(p) = &mut self.top_component {
+            p.process_action(&ComponentAction::SetPanelActive(panel_active));
+            p.process_action(&ComponentAction::SetWindowLabels(titles_map));
+            p.process_action(&ComponentAction::SetTopPanelState(Box::new(
+                TopPanelState {
+                    focus_current: Some(focus_current),
+                    display_order: display,
+                    status_line,
+                    mouse_capture_enabled,
+                    clipboard_enabled,
+                    window_selection_enabled,
+                    selection_active,
+                    selection_dragging,
+                    selection_copy_available,
+                    selection_copied,
+                    menu_open: wm_overlay_visible,
+                },
+            )));
         }
-        if let Some(p) = &mut self.bottom_panel {
-            p.render(frame, panel_active, &self.config.theme);
+        let top_area = self.top_claimed;
+        let top_ctx = self.component_context(false);
+        if let Some(p) = &mut self.top_component {
+            p.render(frame, top_area, &top_ctx, &mut self.hitbox_registry);
+        }
+        let bottom_area = self.bottom_claimed;
+        let bottom_ctx = self.component_context(panel_active);
+        if let Some(p) = &mut self.bottom_component {
+            p.render(frame, bottom_area, &bottom_ctx, &mut self.hitbox_registry);
         }
     }
 
@@ -1755,10 +1793,10 @@ impl WindowManager {
         z_total: usize,
         registry: &mut crate::hitbox_registry::HitboxRegistry,
     ) {
-        use std::time::Duration;
         use ratatui::layout::Alignment;
         use ratatui::style::{Color, Style};
         use ratatui::widgets::Paragraph;
+        use std::time::Duration;
 
         use crate::layout::{FloatingPane, rect_contains, render_handles_masked};
         use crate::window::FloatRectSpec;
@@ -1903,27 +1941,30 @@ impl WindowManager {
 
         let mut oi = z_base;
         if self.command_menu_visible() {
-            let menu_items = wm_menu_items(
+            let mut menu_items = wm_menu_items(
                 self.mouse_capture_enabled(),
                 self.clipboard_enabled(),
                 self.window_selection_enabled(),
             );
-            let anchor = self
-                .top_panel
-                .as_ref()
-                .and_then(|p| p.menu_icon_rect())
-                .map(|r| (r.x, r.y.saturating_add(r.height)));
+            menu_items.retain(|item| self.supported_menu_actions.contains(&item.action));
+            let anchor = self.top_component.as_ref().and_then(|p| {
+                if let ComponentResponse::Rect(r) = p.query(&ComponentQuery::MenuIconRect) {
+                    r.map(|r| (r.x, r.y.saturating_add(r.height)))
+                } else {
+                    None
+                }
+            });
             let menu_ctx = self
                 .component_context(false)
                 .with_overlay(true)
                 .with_hover_pos(self.hover)
                 .with_keybindings(std::sync::Arc::new(self.keybindings().clone()));
-            if let Some(menu) = &mut self.command_menu {
-                menu.set_items(menu_items);
-                menu.set_anchor(anchor);
-                menu.set_managed_area(self.managed_area);
-                let comp: &mut dyn Component<TermWmAction> = &mut **menu;
-                comp.render(frame, frame.area(), &menu_ctx, registry);
+            if let Some(menu) = &mut self.command_menu_component {
+                menu.process_action(&ComponentAction::SetMenuItems(menu_items));
+                menu.process_action(&ComponentAction::SetMenuAnchor(anchor));
+                menu.process_action(&ComponentAction::SetManagedArea(self.managed_area));
+                let area = frame.area();
+                menu.render(frame, area, &menu_ctx, registry);
             }
             oi += 1;
         }
@@ -2199,6 +2240,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let key = wm.create_window(Box::new(crate::components::NoopComponent));
         let node = LayoutNode::leaf(key);
@@ -2228,6 +2270,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -2280,6 +2323,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_floating_resize_offscreen(true);
@@ -2319,6 +2363,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_floating_resize_offscreen(true);
@@ -2355,6 +2400,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.register_managed_layout(ratatui::layout::Rect {
@@ -2386,6 +2432,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -2447,6 +2494,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         let target_rect = ratatui::layout::Rect {
@@ -2491,6 +2539,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -2550,6 +2599,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_floating_resize_offscreen(true);
@@ -2590,6 +2640,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -2720,6 +2771,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let debug_key = wm.set_system_window(Box::new(DummyComponent));
         wm.set_panel_visible(false);
@@ -2799,6 +2851,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -2864,6 +2917,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         let full = Rect {
@@ -2902,6 +2956,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -2952,6 +3007,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
 
@@ -2992,6 +3048,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3037,6 +3094,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.focus_app_window(keys[0]);
@@ -3049,6 +3107,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3072,6 +3131,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         let key = keys[42];
@@ -3089,6 +3149,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3110,6 +3171,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3201,6 +3263,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -3256,6 +3319,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let _keys = make_keys(&mut wm, 100);
         assert!(wm.drag_snap_remaining().is_none());
@@ -3269,6 +3333,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let _keys = make_keys(&mut wm, 100);
         assert!(wm.drag_snap_remaining().is_none());
@@ -3279,6 +3344,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3305,6 +3371,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.mouse_capture = Some(MouseCaptureState::DraggingWindow {
@@ -3326,6 +3393,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         wm.apply_drag_snap_if_pending();
         // The method should not panic when there is no drag in progress.
@@ -3341,6 +3409,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3415,6 +3484,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let _keys = make_keys(&mut wm, 100);
         assert_eq!(wm.power_profile, PowerProfile::PowerSaver);
@@ -3432,6 +3502,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3476,6 +3547,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3548,6 +3620,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3661,6 +3734,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -3726,6 +3800,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3845,6 +3920,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let key = wm.create_window(Box::new(crate::components::NoopComponent));
         assert_eq!(wm.window_state(key), Some(WindowState::Realized));
@@ -3875,6 +3951,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -3899,6 +3976,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -3919,6 +3997,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3963,6 +4042,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -3997,6 +4077,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -4058,6 +4139,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -4094,6 +4176,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -4158,6 +4241,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -4253,6 +4337,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -4360,6 +4445,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         wm.set_panel_visible(false);
 
@@ -4415,6 +4501,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -4587,6 +4674,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,

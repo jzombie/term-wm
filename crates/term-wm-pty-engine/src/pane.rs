@@ -132,7 +132,8 @@ impl Pane for crate::Pty {
     fn clear_dirty_and_notify(&self) {
         let (lock, cvar) = &*self.dirty_cond;
         let _guard = lock.lock().unwrap();
-        self.dirty.store(false, std::sync::atomic::Ordering::Release);
+        self.dirty
+            .store(false, std::sync::atomic::Ordering::Release);
         cvar.notify_one();
     }
 }
