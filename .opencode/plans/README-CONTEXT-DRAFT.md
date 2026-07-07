@@ -1,5 +1,5 @@
-[] Include examples how to share data between components.
-
+- [] Include examples how to share data between components.
+- [] Alternative operating system interface.
 ---
 
 **term-wm** is a blazingly fast, cross-platform terminal multiplexer, window manager, and Ratatui component library written entirely in Rust. It is designed to bring a "Retro-Modern" aesthetic to your workflow by seamlessly translating advanced graphical desktop metaphors—such as **floating windows, dynamic tiling, drag-and-drop resizing, and overlapping layers**—directly into the standard terminal character grid. 
