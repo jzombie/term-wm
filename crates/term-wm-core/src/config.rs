@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::actions::TermWmAction;
 use crate::app_context::AppContext;
 use crate::components::WmComponent;
 use crate::keybindings::KeyBindings;
@@ -36,6 +37,7 @@ pub struct AppBuilder {
     top_panel: Option<Box<dyn WmComponent>>,
     bottom_panel: Option<Box<dyn WmComponent>>,
     command_menu: Option<Box<dyn WmComponent>>,
+    supported_menu_actions: Option<Vec<TermWmAction>>,
 }
 
 impl AppBuilder {
@@ -48,6 +50,7 @@ impl AppBuilder {
             top_panel: None,
             bottom_panel: None,
             command_menu: None,
+            supported_menu_actions: None,
         }
     }
 
@@ -96,6 +99,11 @@ impl AppBuilder {
         self
     }
 
+    pub fn supported_menu_actions(mut self, actions: Vec<TermWmAction>) -> Self {
+        self.supported_menu_actions = Some(actions);
+        self
+    }
+
     pub fn mouse_capture(mut self, enabled: bool) -> Self {
         self.config.mouse_capture_enabled = enabled;
         self
@@ -126,6 +134,7 @@ impl AppBuilder {
             self.top_panel,
             self.bottom_panel,
             self.command_menu,
+            self.supported_menu_actions,
         ))
     }
 }

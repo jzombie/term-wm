@@ -50,6 +50,14 @@ impl TermWmApp {
                 hostname.as_deref(),
             )))
             .command_menu(Box::new(WmMenuOverlay::new()))
+            .supported_menu_actions(vec![
+                TermWmAction::CloseMenu,
+                TermWmAction::ToggleMouseCapture,
+                TermWmAction::ToggleClipboardMode,
+                TermWmAction::ToggleWindowSelection,
+                TermWmAction::BringFloatingFront,
+                TermWmAction::ExitUi,
+            ])
             .build()
             .expect("standalone build");
         Self::from_wm(wm)

@@ -162,6 +162,7 @@ pub struct WindowManager {
     top_component: Option<Box<dyn WmComponent>>,
     bottom_component: Option<Box<dyn WmComponent>>,
     command_menu_component: Option<Box<dyn WmComponent>>,
+    supported_menu_actions: Vec<TermWmAction>,
     top_claimed: Rect,
     bottom_claimed: Rect,
     // Replaces drag_header + drag_resize
@@ -492,7 +493,21 @@ impl WindowManager {
         top_component: Option<Box<dyn WmComponent>>,
         bottom_component: Option<Box<dyn WmComponent>>,
         command_menu_component: Option<Box<dyn WmComponent>>,
+        supported_menu_actions: Option<Vec<TermWmAction>>,
     ) -> Self {
+        let supported_menu_actions = supported_menu_actions.unwrap_or_else(|| {
+            vec![
+                TermWmAction::CloseMenu,
+                TermWmAction::ToggleMouseCapture,
+                TermWmAction::ToggleClipboardMode,
+                TermWmAction::ToggleWindowSelection,
+                TermWmAction::BringFloatingFront,
+                TermWmAction::NewWindow,
+                TermWmAction::ToggleDebugWindow,
+                TermWmAction::Help,
+                TermWmAction::ExitUi,
+            ]
+        });
         let mouse_capture_enabled = config.mouse_capture_enabled;
         let clipboard = Some(crate::clipboard::Clipboard::new());
         let floating_resize_offscreen = config.floating_resize_offscreen;
@@ -516,6 +531,7 @@ impl WindowManager {
             top_component,
             bottom_component,
             command_menu_component,
+            supported_menu_actions,
             top_claimed: Rect::default(),
             bottom_claimed: Rect::default(),
             mouse_capture: None,
@@ -1910,11 +1926,12 @@ impl WindowManager {
 
         let mut oi = z_base;
         if self.command_menu_visible() {
-            let menu_items = wm_menu_items(
+            let mut menu_items = wm_menu_items(
                 self.mouse_capture_enabled(),
                 self.clipboard_enabled(),
                 self.window_selection_enabled(),
             );
+            menu_items.retain(|item| self.supported_menu_actions.contains(&item.action));
             let anchor = self.top_component.as_ref().and_then(|p| {
                 if let ComponentResponse::Rect(r) = p.query(&ComponentQuery::MenuIconRect) {
                     r.map(|r| (r.x, r.y.saturating_add(r.height)))
