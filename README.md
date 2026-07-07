@@ -5,7 +5,7 @@
 
 **WORK IN PROGRESS. API SUBJECT TO CHANGE.**
 
-A cross-platform terminal multiplexer, window manager, and [Ratatui](https://crates.io/crates/ratatui) framework with an message-passing component model, event loop, and runtime.
+A cross-platform terminal multiplexer, window manager, and [Ratatui](https://crates.io/crates/ratatui) framework with a message-passing component model, event loop, and runtime.
 
 It is controllable via mouse and keyboard and works the same over SSH, Mac, Linux, and Windows.
 
