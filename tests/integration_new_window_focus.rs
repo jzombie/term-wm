@@ -22,6 +22,7 @@ fn new_window_is_focused() {
         Some(top),
         Some(bottom),
         Some(menu),
+        None,
     );
 
     let key = wm.create_window(Box::new(term_wm::components::NoopComponent));

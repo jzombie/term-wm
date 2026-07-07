@@ -1585,6 +1585,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         wm.set_panel_visible(false);
 
@@ -1678,6 +1679,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             term_wm_core::wm_config::WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,

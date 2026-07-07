@@ -117,6 +117,7 @@ fn render_panic_shows_in_debug_log() {
         None,
         None,
         Some(menu),
+        None,
     );
     let key = wm.create_window(Box::new(term_wm::components::NoopComponent));
     wm.set_window_title(key, "test");

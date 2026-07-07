@@ -902,6 +902,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let key = wm.create_window(Box::new(crate::components::NoopComponent));
         let one = vec![key];
@@ -934,6 +935,7 @@ mod tests {
             None,
             None,
             Some(Box::new(TestMenu)),
+            None,
         );
         let key = wm.create_window(Box::new(crate::components::NoopComponent));
 
@@ -1010,6 +1012,7 @@ mod tests {
                 None,
                 None,
                 Some(Box::new(TestMenu)),
+                None,
             ),
         };
         // Store the KeyRecorder directly in the WindowManager — no sidecar.
@@ -1114,6 +1117,7 @@ mod tests {
                 None,
                 None,
                 Some(Box::new(TestMenu)),
+                None,
             ),
         };
         let key = app.wm.create_window(Box::new(KeyRecorder {
@@ -1234,6 +1238,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         (0..n)
             .map(|_| wm.create_window(Box::new(crate::components::NoopComponent)))
@@ -1291,6 +1296,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let k1 = wm.create_window(Box::new(crate::components::NoopComponent));
         let k2 = wm.create_window(Box::new(crate::components::NoopComponent));
@@ -1313,6 +1319,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let k1 = wm.create_window(Box::new(crate::components::NoopComponent));
         let k2 = wm.create_window(Box::new(crate::components::NoopComponent));
@@ -1329,6 +1336,7 @@ mod tests {
         let mut wm = crate::window::WindowManager::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
