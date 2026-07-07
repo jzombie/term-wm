@@ -117,9 +117,12 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     // Wait for initial output
     for _ in 0..20 {
         pane.drain_pushes();
-        if !pane.screen().contents_formatted().is_empty() {
+        let parser = pane.shared_parser();
+        let parser = parser.lock().unwrap();
+        if !parser.screen().contents_formatted().is_empty() {
             break;
         }
+        drop(parser);
         std::thread::sleep(Duration::from_millis(50));
     }
 
@@ -136,7 +139,9 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
 
     // Initial full screen render
     {
-        let screen = pane.screen();
+        let parser = pane.shared_parser();
+        let parser = parser.lock().unwrap();
+        let screen = parser.screen();
         let data = screen.contents_formatted();
         out.write_all(&data)?;
         out.flush()?;
@@ -151,7 +156,11 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         pane.drain_pushes();
 
         // Detect screen changes
-        let current_content = pane.screen().contents_formatted();
+        let current_content = {
+            let parser = pane.shared_parser();
+            let parser = parser.lock().unwrap();
+            parser.screen().contents_formatted()
+        };
         let has_new_data = prev_content.as_deref() != Some(&current_content);
 
         // Process OSC 52 clipboard data
@@ -184,8 +193,11 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                     true
                 }
                 Event::Mouse(ref mouse) => {
-                    let mouse_active =
-                        pane.screen().mouse_protocol_mode() != MouseProtocolMode::None;
+                    let mouse_active = {
+                        let parser = pane.shared_parser();
+                        let parser = parser.lock().unwrap();
+                        parser.screen().mouse_protocol_mode() != MouseProtocolMode::None
+                    };
                     if mouse_active {
                         let bytes = mouse_event_to_bytes(mouse, MouseProtocolEncoding::Sgr);
                         if !bytes.is_empty() {
@@ -213,7 +225,9 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
 
         // Diff-based incremental render
         if has_new_data || prev_content.is_none() {
-            let screen = pane.screen();
+            let parser = pane.shared_parser();
+            let parser = parser.lock().unwrap();
+            let screen = parser.screen();
             let (rows, cols) = screen.size();
 
             let diff = match &prev_content {
