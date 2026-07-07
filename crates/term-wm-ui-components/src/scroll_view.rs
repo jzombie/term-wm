@@ -7,7 +7,7 @@ use ratatui::prelude::Rect;
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use term_wm_core::actions::{EventResult, TermWmAction};
-use term_wm_core::component_context::{ScrollHandle, ScrollBounds};
+use term_wm_core::component_context::{ScrollBounds, ScrollHandle};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::ui::UiFrame;
 use term_wm_core::window::WindowKey;

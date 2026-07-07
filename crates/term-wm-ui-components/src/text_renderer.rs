@@ -11,7 +11,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use term_wm_core::actions::{EventResult, TermWmAction};
-use term_wm_core::component_context::{ScrollViewport, ScrollHandle};
+use term_wm_core::component_context::{ScrollHandle, ScrollViewport};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::events::LocalMouseEvent;
 use term_wm_core::ui::UiFrame;
