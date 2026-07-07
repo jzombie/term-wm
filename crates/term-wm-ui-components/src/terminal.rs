@@ -1577,7 +1577,7 @@ mod tests {
         let (term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
         let mut sv = crate::scroll_view::ScrollViewComponent::new(term);
         sv.set_selection_enabled(true);
-        sv.set_keyboard_enabled(false);
+        sv.set_keyboard_mode(crate::scroll_view::ScrollKeyMode::PaginationOnly);
 
         let mut wm = AppBuilder::bare()
             .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
@@ -1670,7 +1670,7 @@ mod tests {
         let (term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
         let mut sv = crate::scroll_view::ScrollViewComponent::new(term);
         sv.set_selection_enabled(true);
-        sv.set_keyboard_enabled(false);
+        sv.set_keyboard_mode(crate::scroll_view::ScrollKeyMode::PaginationOnly);
 
         let mut wm = AppBuilder::bare()
             .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))

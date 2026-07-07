@@ -162,13 +162,26 @@ fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
 
 // --- ScrollView Component Wrapper ---
 
+/// Controls which keyboard scroll events the `ScrollViewComponent` intercepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollKeyMode {
+    /// No keyboard scroll interception — all keys fall through to the child.
+    None,
+    /// Only PageUp/PageDown/Home/End are intercepted for scrolling.
+    /// Up/Down/arrow keys fall through to the child (terminal shell history).
+    PaginationOnly,
+    /// Full keyboard scroll: Up/Down/PageUp/PageDown/Home/End.
+    /// Used by help overlay, keybindings overlay, debug log.
+    Full,
+}
+
 #[derive(Debug)]
 pub struct ScrollViewComponent<C> {
     pub content: RefCell<C>,
     shared_state: Rc<RefCell<ViewportSharedState>>,
     v_drag: ScrollbarDrag,
     h_drag: ScrollbarDrag,
-    keyboard_enabled: bool,
+    keyboard_mode: ScrollKeyMode,
 }
 
 impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
@@ -178,12 +191,12 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
             shared_state: Rc::new(RefCell::new(ViewportSharedState::default())),
             v_drag: ScrollbarDrag::new(),
             h_drag: ScrollbarDrag::new(),
-            keyboard_enabled: true,
+            keyboard_mode: ScrollKeyMode::Full,
         }
     }
 
-    pub fn set_keyboard_enabled(&mut self, enabled: bool) {
-        self.keyboard_enabled = enabled;
+    pub fn set_keyboard_mode(&mut self, mode: ScrollKeyMode) {
+        self.keyboard_mode = mode;
     }
 
     pub fn viewport_handle(&self) -> ViewportHandle {
@@ -306,34 +319,32 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
         let info = handle.info();
         let child_ctx = ctx.with_viewport(info, Some(handle));
 
-        if self.keyboard_enabled
+        if self.keyboard_mode != ScrollKeyMode::None
             && ctx.focused()
+            && !ctx.direct_mode()
             && let Event::Key(key) = event
             && key.kind == crossterm::event::KeyEventKind::Press
         {
-            use crossterm::event::KeyCode;
-            match key.code {
-                KeyCode::Up => {
-                    return EventResult::Action(TermWmAction::ScrollView(-1));
-                }
-                KeyCode::Down => {
-                    return EventResult::Action(TermWmAction::ScrollView(1));
-                }
-                KeyCode::PageUp => {
-                    let height = self.shared_state.borrow().height as isize;
-                    return EventResult::Action(TermWmAction::ScrollView(-height));
-                }
-                KeyCode::PageDown => {
-                    let height = self.shared_state.borrow().height as isize;
-                    return EventResult::Action(TermWmAction::ScrollView(height));
-                }
-                KeyCode::Home => {
-                    return EventResult::Action(TermWmAction::ScrollToTop);
-                }
-                KeyCode::End => {
-                    return EventResult::Action(TermWmAction::ScrollToBottom);
-                }
-                _ => {}
+            let is_full = self.keyboard_mode == ScrollKeyMode::Full;
+            let kb = &ctx.config().keybindings;
+
+            // Pagination-level scrolling (active in PaginationOnly and Full)
+            if kb.matches(TermWmAction::ScrollPageUp, key) {
+                let height = self.shared_state.borrow().height as isize;
+                return EventResult::Action(TermWmAction::ScrollView(-height));
+            } else if kb.matches(TermWmAction::ScrollPageDown, key) {
+                let height = self.shared_state.borrow().height as isize;
+                return EventResult::Action(TermWmAction::ScrollView(height));
+            } else if kb.matches(TermWmAction::ScrollHome, key) {
+                return EventResult::Action(TermWmAction::ScrollToTop);
+            } else if kb.matches(TermWmAction::ScrollEnd, key) {
+                return EventResult::Action(TermWmAction::ScrollToBottom);
+            }
+            // Line-level scrolling (only in Full mode)
+            else if is_full && kb.matches(TermWmAction::ScrollUp, key) {
+                return EventResult::Action(TermWmAction::ScrollView(-1));
+            } else if is_full && kb.matches(TermWmAction::ScrollDown, key) {
+                return EventResult::Action(TermWmAction::ScrollView(1));
             }
         }
 
@@ -685,6 +696,9 @@ mod tests {
             ) {
                 self.received_scroll = true;
             }
+            if matches!(event, Event::Key(_)) {
+                self.received_scroll = true;
+            }
             EventResult::Ignored
         }
     }
@@ -816,6 +830,171 @@ mod tests {
         assert!(
             !consumed_normal.is_consumed(),
             "non-scroll click should not be consumed in normal mode either"
+        );
+    }
+
+    #[test]
+    fn scroll_view_pagination_mode_intercepts_pageup_pagedown() {
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+        sv.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
+
+        let ctx = ComponentContext::new(true);
+        let page_up = Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::PageUp,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        let result = sv.handle_events(&page_up, &ctx);
+        assert!(
+            matches!(result, EventResult::Action(TermWmAction::ScrollView(_))),
+            "PaginationOnly must intercept PageUp"
+        );
+
+        sv.content.borrow_mut().received_scroll = false;
+        let page_down = Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::PageDown,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        let result = sv.handle_events(&page_down, &ctx);
+        assert!(
+            matches!(result, EventResult::Action(TermWmAction::ScrollView(_))),
+            "PaginationOnly must intercept PageDown"
+        );
+    }
+
+    #[test]
+    fn scroll_view_pagination_mode_passes_up_down() {
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+        sv.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
+
+        let ctx = ComponentContext::new(true);
+        let up = Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Up,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        let result = sv.handle_events(&up, &ctx);
+        assert!(
+            result.is_ignored(),
+            "PaginationOnly must NOT intercept Up — should fall through to child"
+        );
+        assert!(
+            sv.content.borrow().received_scroll,
+            "Up must reach the child component"
+        );
+    }
+
+    #[test]
+    fn scroll_view_full_mode_intercepts_all_scroll_keys() {
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+        sv.set_keyboard_mode(ScrollKeyMode::Full);
+
+        let ctx = ComponentContext::new(true);
+
+        let up = Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Up,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        let result = sv.handle_events(&up, &ctx);
+        assert!(
+            matches!(result, EventResult::Action(TermWmAction::ScrollView(-1))),
+            "Full mode must intercept Up"
+        );
+
+        sv.content.borrow_mut().received_scroll = false;
+        let home = Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Home,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        let result = sv.handle_events(&home, &ctx);
+        assert!(
+            matches!(result, EventResult::Action(TermWmAction::ScrollToTop)),
+            "Full mode must intercept Home"
+        );
+    }
+
+    #[test]
+    fn scroll_view_modifier_chords_pass_through() {
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+        sv.set_keyboard_mode(ScrollKeyMode::Full);
+
+        let ctx = ComponentContext::new(true);
+
+        // Ctrl+Up should NOT be intercepted (default keybinding has NONE modifier)
+        let ctrl_up = Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Up,
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
+        let result = sv.handle_events(&ctrl_up, &ctx);
+        assert!(
+            result.is_ignored(),
+            "Ctrl+Up must fall through — modifier mismatch"
+        );
+
+        sv.content.borrow_mut().received_scroll = false;
+        // Shift+PageUp should NOT be intercepted (default binding has NONE modifier)
+        let shift_pgup = Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::PageUp,
+            crossterm::event::KeyModifiers::SHIFT,
+        ));
+        let result = sv.handle_events(&shift_pgup, &ctx);
+        assert!(
+            result.is_ignored(),
+            "Shift+PageUp must fall through — modifier mismatch"
+        );
+    }
+
+    #[test]
+    fn scroll_view_direct_mode_passes_all_keys() {
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+        sv.set_keyboard_mode(ScrollKeyMode::Full);
+
+        let ctx = ComponentContext::new(true).with_direct_mode(true);
+
+        let page_up = Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::PageUp,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        let result = sv.handle_events(&page_up, &ctx);
+        assert!(
+            result.is_ignored(),
+            "direct mode must pass all keys through"
+        );
+        assert!(
+            sv.content.borrow().received_scroll,
+            "key must reach child in direct mode"
+        );
+    }
+
+    #[test]
+    fn scroll_view_none_mode_passes_all_keys() {
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+        sv.set_keyboard_mode(ScrollKeyMode::None);
+
+        let ctx = ComponentContext::new(true);
+
+        let page_up = Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::PageUp,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        let result = sv.handle_events(&page_up, &ctx);
+        assert!(
+            result.is_ignored(),
+            "None mode must pass all keys through"
+        );
+        assert!(
+            sv.content.borrow().received_scroll,
+            "key must reach child in None mode"
         );
     }
 }

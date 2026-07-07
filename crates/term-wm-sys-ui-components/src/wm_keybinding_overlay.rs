@@ -12,7 +12,9 @@ use term_wm_core::components::{Component, ComponentContext, Overlay};
 use term_wm_core::keybindings::{Category, KeyBindings};
 use term_wm_core::ui::UiFrame;
 use term_wm_core::window::WindowKey;
-use term_wm_ui_components::{DialogOverlayComponent, ListComponent, ScrollViewComponent};
+use term_wm_ui_components::{
+    DialogOverlayComponent, ListComponent, ScrollKeyMode, ScrollViewComponent,
+};
 
 pub struct WmKeybindingOverlayComponent {
     dialog: DialogOverlayComponent,
@@ -38,7 +40,7 @@ impl WmKeybindingOverlayComponent {
             app_ctx: Arc::clone(app_ctx),
         };
         overlay.build_entries();
-        overlay.content.set_keyboard_enabled(true);
+        overlay.content.set_keyboard_mode(ScrollKeyMode::Full);
         overlay
     }
 

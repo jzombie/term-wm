@@ -20,7 +20,8 @@ pub use list::ListComponent;
 pub use markdown_viewer::MarkdownViewerComponent;
 pub use menu::MenuComponent;
 pub use scroll_view::{
-    ScrollViewComponent, ScrollbarAxis, ScrollbarDrag, render_scrollbar, render_scrollbar_oriented,
+    ScrollKeyMode, ScrollViewComponent, ScrollbarAxis, ScrollbarDrag, render_scrollbar,
+    render_scrollbar_oriented,
 };
 
 pub use svg_image::SvgImageComponent;
