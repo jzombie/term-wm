@@ -11,7 +11,10 @@ use ratatui::{
 
 use term_wm_core::{
     actions::{EventResult, TermWmAction},
-    components::{Component, ComponentContext, MenuItem, MenuOverlay, Overlay},
+    components::{
+        Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse,
+        MenuItem, MenuOverlay, Overlay, WmComponent,
+    },
     layout::rect_contains,
     ui::UiFrame,
     window::WindowKey,
@@ -319,6 +322,119 @@ impl MenuOverlay<TermWmAction> for WmMenuOverlay {
 
     fn set_managed_area(&mut self, area: Rect) {
         self.managed_area = area;
+    }
+}
+
+impl WmComponent for WmMenuOverlay {
+    fn consume_area(&mut self, available: Rect) -> (Rect, Rect) {
+        // Overlays render on top, claim no area
+        (Rect::default(), available)
+    }
+
+    fn render(
+        &mut self,
+        frame: &mut UiFrame<'_>,
+        _area: Rect,
+        ctx: &ComponentContext,
+        _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
+        self.auto_restore();
+        if self.outlined.get() {
+            self.render_outline(frame);
+        } else {
+            self.render_dropdown(frame, ctx);
+        }
+    }
+
+    fn handle_event(
+        &mut self,
+        event: &Event,
+        ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        self.auto_restore();
+        self.last_action = None;
+
+        if let Event::Mouse(mouse) = event
+            && matches!(mouse.kind, MouseEventKind::Down(_))
+        {
+            if let Some(idx) = self.hit_test_item(mouse.column, mouse.row) {
+                self.menu.set_selected(idx);
+                self.restore();
+                self.last_action = self.menu.selected_action().cloned();
+                return EventResult::Consumed;
+            }
+            return EventResult::Ignored;
+        }
+
+        let Event::Key(key) = event else {
+            return EventResult::Ignored;
+        };
+        if key.kind != crossterm::event::KeyEventKind::Press {
+            return EventResult::Ignored;
+        }
+
+        let total = self.menu.items().len();
+        if total == 0 {
+            return EventResult::Ignored;
+        }
+
+        let kb = ctx.keybindings().unwrap_or_default();
+        if kb.matches(TermWmAction::MenuUp, key) || kb.matches(TermWmAction::MenuPrev, key) {
+            let current = self.menu.selected();
+            self.menu
+                .set_selected(if current == 0 { total - 1 } else { current - 1 });
+            self.restore();
+            EventResult::Consumed
+        } else if kb.matches(TermWmAction::MenuDown, key) || kb.matches(TermWmAction::MenuNext, key)
+        {
+            let current = self.menu.selected();
+            self.menu.set_selected((current + 1) % total);
+            self.restore();
+            EventResult::Consumed
+        } else if kb.matches(TermWmAction::MenuSelect, key) {
+            self.last_action = self.menu.selected_action().cloned();
+            EventResult::Consumed
+        } else {
+            EventResult::Ignored
+        }
+    }
+
+    fn process_action(&mut self, action: &ComponentAction) {
+        match action {
+            ComponentAction::Restore => self.restore(),
+            ComponentAction::Outline => self.outline(),
+            ComponentAction::SetMenuItems(items) => self.set_items(items.clone()),
+            ComponentAction::SetMenuAnchor(pos) => self.set_anchor(*pos),
+            ComponentAction::SetManagedArea(area) => self.set_managed_area(*area),
+            ComponentAction::ToggleVisibility => {
+                if self.outlined.get() {
+                    self.restore();
+                } else {
+                    self.outline();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn query(&self, query: &ComponentQuery) -> ComponentResponse {
+        match query {
+            ComponentQuery::SelectedAction => {
+                ComponentResponse::Action(self.last_action.clone())
+            }
+            _ => ComponentResponse::None,
+        }
+    }
+
+    fn hit_test(&self, x: u16, y: u16) -> bool {
+        if let Some(bounds) = self.menu_bounds_cache.get() {
+            return rect_contains(bounds, x, y);
+        }
+        false
+    }
+
+    fn visible(&self) -> bool {
+        !self.outlined.get()
     }
 }
 

@@ -8,7 +8,10 @@ use ratatui::{
 
 use term_wm_core::{
     actions::{EventResult, TermWmAction},
-    components::{Component, ComponentContext},
+    components::{
+        Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse,
+        WmComponent,
+    },
     layout::rect_contains,
     top_panel_trait::TopPanel as TopPanelTrait,
     ui::{UiFrame, safe_set_string, truncate_to_width},
@@ -73,6 +76,19 @@ pub struct WmTopPanelComponent<R: Copy + Eq + Ord> {
     list: WindowList<R>,
     notifications: NotificationArea,
     app_name: String,
+    // WmComponent render state (pushed via process_action before render)
+    active: bool,
+    focus_current: Option<R>,
+    display_order: Vec<R>,
+    status_line: Option<String>,
+    mouse_capture_enabled: bool,
+    clipboard_enabled: bool,
+    window_selection_enabled: bool,
+    selection_active: bool,
+    selection_dragging: bool,
+    selection_copy_available: bool,
+    selection_copied: bool,
+    menu_open: bool,
 }
 
 impl<R: Copy + Eq + Ord + std::fmt::Debug> WmTopPanelComponent<R> {
@@ -85,6 +101,18 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> WmTopPanelComponent<R> {
             list: WindowList::new(),
             notifications: NotificationArea::new(),
             app_name: app_name.to_string(),
+            active: false,
+            focus_current: None,
+            display_order: Vec::new(),
+            status_line: None,
+            mouse_capture_enabled: false,
+            clipboard_enabled: false,
+            window_selection_enabled: false,
+            selection_active: false,
+            selection_dragging: false,
+            selection_copy_available: false,
+            selection_copied: false,
+            menu_open: false,
         }
     }
 
@@ -536,6 +564,105 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> TopPanelTrait<R> for WmTopPanelCompon
 
     fn hit_test_menu(&self, event: &Event) -> bool {
         self.hit_test_menu(event)
+    }
+}
+
+impl<R: Copy + Eq + Ord + std::fmt::Debug + 'static> WmComponent for WmTopPanelComponent<R> {
+    fn consume_area(&mut self, available: Rect) -> (Rect, Rect) {
+        self.split_area(self.active, available)
+    }
+
+    fn render(
+        &mut self,
+        frame: &mut UiFrame<'_>,
+        area: Rect,
+        ctx: &ComponentContext,
+        _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
+        if !self.active {
+            return;
+        }
+        let theme = ctx.config().theme;
+        let app_name = ctx.app_name().to_string();
+        if app_name != self.app_name {
+            self.app_name = app_name;
+        }
+        let label_for = |id: R| format!("{id:?}");
+        self.area = area;
+        if let Some(focus) = self.focus_current {
+            let display_order = self.display_order.clone();
+            let status_line = self.status_line.clone();
+            let mc = self.mouse_capture_enabled;
+            let cb = self.clipboard_enabled;
+            let ws = self.window_selection_enabled;
+            let sa = self.selection_active;
+            let sd = self.selection_dragging;
+            let sca = self.selection_copy_available;
+            let sc = self.selection_copied;
+            let mo = self.menu_open;
+            self.render(
+                frame,
+                self.active,
+                focus,
+                &display_order,
+                status_line.as_deref(),
+                mc,
+                cb,
+                ws,
+                sa,
+                sd,
+                sca,
+                sc,
+                mo,
+                label_for,
+                &theme,
+            );
+        }
+    }
+
+    fn process_action(&mut self, action: &ComponentAction) {
+        match action {
+            ComponentAction::ToggleVisibility => {
+                self.set_visible(!self.visible);
+            }
+            ComponentAction::SetHintVisibility(hv) => {
+                use term_wm_core::wm_config::HintVisibility;
+                match hv {
+                    HintVisibility::Always => self.set_visible(true),
+                    HintVisibility::Never => self.set_visible(false),
+                    HintVisibility::OnDemand => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn query(&self, query: &ComponentQuery) -> ComponentResponse {
+        match query {
+            ComponentQuery::MenuIconRect => {
+                ComponentResponse::Rect(self.menu_rect)
+            }
+            _ => ComponentResponse::None,
+        }
+    }
+
+    fn hit_test(&self, x: u16, y: u16) -> bool {
+        if !self.area.is_empty() && rect_contains(self.area, x, y) {
+            return true;
+        }
+        false
+    }
+
+    fn begin_frame(&mut self) {
+        self.begin_frame();
+    }
+
+    fn visible(&self) -> bool {
+        self.visible
+    }
+
+    fn set_visible(&mut self, visible: bool) {
+        self.visible = visible;
     }
 }
 

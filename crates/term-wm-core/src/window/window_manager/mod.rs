@@ -19,7 +19,9 @@ use super::entry::{Window, WindowState};
 use crate::actions::{SystemTask, TermWmAction};
 use crate::app_context::AppContext;
 use crate::bottom_panel_trait::BottomPanel;
-use crate::components::{Component, ComponentContext, MenuItem, MenuOverlay, Overlay};
+use crate::components::{
+    Component, ComponentContext, MenuItem, MenuOverlay, Overlay, WmComponent,
+};
 use crate::hitbox_registry::{HitTarget, HitboxRegistry};
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
@@ -161,6 +163,17 @@ pub struct WindowManager {
     top_panel: Option<Box<dyn TopPanel<WindowKey>>>,
     bottom_panel: Option<Box<dyn BottomPanel>>,
     command_menu: Option<Box<dyn MenuOverlay<crate::actions::TermWmAction>>>,
+    // Unified WmComponent-based chrome (used by AppBuilder)
+    #[allow(dead_code)]
+    top_component: Option<Box<dyn WmComponent>>,
+    #[allow(dead_code)]
+    bottom_component: Option<Box<dyn WmComponent>>,
+    #[allow(dead_code)]
+    command_menu_component: Option<Box<dyn WmComponent>>,
+    #[allow(dead_code)]
+    top_claimed: Rect,
+    #[allow(dead_code)]
+    bottom_claimed: Rect,
     // Replaces drag_header + drag_resize
     pub(crate) mouse_capture: Option<MouseCaptureState>,
     pub(crate) last_header_click: Option<(WindowKey, Instant)>,
@@ -513,6 +526,11 @@ impl WindowManager {
             top_panel,
             bottom_panel,
             command_menu,
+            top_component: None,
+            bottom_component: None,
+            command_menu_component: None,
+            top_claimed: Rect::default(),
+            bottom_claimed: Rect::default(),
             mouse_capture: None,
             last_header_click: None,
             hover: None,

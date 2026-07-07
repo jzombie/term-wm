@@ -1,4 +1,4 @@
-pub use crate::AppContext;
+pub use term_wm_core::AppContext;
 pub use crate::actions::TermWmAction;
 pub use crate::components::{Component, ComponentContext, EventResult, component_downcast_mut};
 pub use crate::term_wm_app::TermWmApp;

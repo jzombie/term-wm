@@ -6,13 +6,17 @@ use ratatui::{layout::Rect, style::Style};
 use term_wm_core::{
     actions::{EventResult, TermWmAction},
     bottom_panel_trait::BottomPanel as BottomPanelTrait,
-    components::{Component, ComponentContext},
+    components::{
+        Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse,
+        WmComponent,
+    },
     layout::rect_contains,
     power_profile::PowerProfile,
     ui::{UiFrame, safe_set_string, truncate_to_width},
     window::WindowKey,
 };
 
+#[derive(Debug)]
 pub struct WmBottomPanelComponent {
     area: Rect,
     app_name: String,
@@ -290,6 +294,53 @@ impl BottomPanelTrait for WmBottomPanelComponent {
 
     fn set_power_profile(&mut self, profile: PowerProfile) {
         self.set_power_profile(profile);
+    }
+}
+
+impl WmComponent for WmBottomPanelComponent {
+    fn consume_area(&mut self, available: Rect) -> (Rect, Rect) {
+        self.split_bottom_area(available, 1)
+    }
+
+    fn render(
+        &mut self,
+        frame: &mut UiFrame<'_>,
+        area: Rect,
+        ctx: &ComponentContext,
+        _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
+        let theme = &ctx.config().theme;
+        self.area = area;
+        self.render_bottom_impl(frame, true, theme);
+    }
+
+    fn process_action(&mut self, action: &ComponentAction) {
+        match action {
+            ComponentAction::SetKeybindingHints(hints) => {
+                self.set_keybinding_hints(hints.clone());
+            }
+            ComponentAction::SetPowerProfile(profile) => {
+                self.set_power_profile(*profile);
+            }
+            _ => {}
+        }
+    }
+
+    fn query(&self, query: &ComponentQuery) -> ComponentResponse {
+        match query {
+            ComponentQuery::KeybindingHints => {
+                ComponentResponse::Hints(self.keybinding_hints.to_vec())
+            }
+            _ => ComponentResponse::None,
+        }
+    }
+
+    fn hit_test(&self, x: u16, y: u16) -> bool {
+        rect_contains(self.area, x, y)
+    }
+
+    fn begin_frame(&mut self) {
+        self.begin_frame();
     }
 }
 

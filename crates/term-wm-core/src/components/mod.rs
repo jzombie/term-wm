@@ -6,8 +6,10 @@ use ratatui::layout::Rect;
 pub use crate::actions::EventResult;
 use crate::actions::TermWmAction;
 pub use crate::component_context::ComponentContext;
+use crate::power_profile::PowerProfile;
 use crate::ui::UiFrame;
 use crate::window::WindowKey;
+use crate::wm_config::HintVisibility;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SelectionStatus {
@@ -183,6 +185,93 @@ pub struct MenuItem<R> {
     pub icon: Option<&'static str>,
     pub label: &'static str,
     pub action: R,
+}
+
+/// Actions the engine broadcasts to components.
+#[derive(Debug, Clone)]
+pub enum ComponentAction {
+    Restore,
+    Outline,
+    SetMenuItems(Vec<MenuItem<TermWmAction>>),
+    SetMenuAnchor(Option<(u16, u16)>),
+    SetManagedArea(Rect),
+    SetKeybindingHints(Vec<(TermWmAction, Vec<String>)>),
+    SetPowerProfile(PowerProfile),
+    SetHintVisibility(HintVisibility),
+    ToggleVisibility,
+}
+
+/// Queries the engine can ask components.
+#[derive(Debug)]
+pub enum ComponentQuery {
+    SelectedAction,
+    KeybindingHints,
+    MenuIconRect,
+}
+
+/// Responses from component queries.
+#[derive(Debug)]
+pub enum ComponentResponse {
+    None,
+    Action(Option<TermWmAction>),
+    Hints(Vec<(TermWmAction, Vec<String>)>),
+    Rect(Option<Rect>),
+}
+
+/// Unified WM chrome component trait.
+///
+/// Replaces the position-specific `TopPanel`, `BottomPanel`, and `MenuOverlay`
+/// traits. A component's position (top, bottom, overlay) is determined by where
+/// it is injected in the layout graph, not by its trait definition.
+pub trait WmComponent: std::fmt::Debug {
+    /// Carve out the component's required space from the available area.
+    /// Returns (claimed_rect, remaining_rect).
+    /// Default: claims nothing, passes through full area.
+    fn consume_area(&mut self, available: Rect) -> (Rect, Rect) {
+        (Rect::default(), available)
+    }
+
+    /// Render the component into the claimed area.
+    fn render(
+        &mut self,
+        frame: &mut UiFrame<'_>,
+        area: Rect,
+        ctx: &ComponentContext,
+        registry: &mut crate::hitbox_registry::HitboxRegistry,
+    );
+
+    /// Handle an event before it reaches the window graph.
+    fn handle_event(
+        &mut self,
+        _event: &Event,
+        _ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        EventResult::Ignored
+    }
+
+    /// Process a system-level action broadcasted by the window manager.
+    fn process_action(&mut self, _action: &ComponentAction) {}
+
+    /// Query the component for a result after processing.
+    fn query(&self, _query: &ComponentQuery) -> ComponentResponse {
+        ComponentResponse::None
+    }
+
+    /// Mouse hit-test. Returns true if (x, y) is within this component.
+    fn hit_test(&self, _x: u16, _y: u16) -> bool {
+        false
+    }
+
+    /// Begin a new frame (clear per-frame state).
+    fn begin_frame(&mut self) {}
+
+    /// Visible flag (layout engine skips invisible components).
+    fn visible(&self) -> bool {
+        true
+    }
+
+    /// Set visible flag.
+    fn set_visible(&mut self, _visible: bool) {}
 }
 
 pub trait MenuOverlay<Msg>: Overlay<Msg> {

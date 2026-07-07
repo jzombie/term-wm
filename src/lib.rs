@@ -6,47 +6,77 @@ pub mod tracing_sub;
 pub mod widget_adapter;
 pub use widget_adapter::{WidgetAdapter, StatefulWidgetAdapter};
 
-use term_wm_core::config::WmBuilder;
-use term_wm_core::window::{WindowKey, WindowManager};
+use std::sync::Arc;
+
+use term_wm_core::config::{AppBuilder, Standalone};
+use term_wm_core::window::WindowManager;
+
+/// Create a standalone `AppBuilder` pre-loaded with default system chrome.
+///
+/// Feature-gated on `sys-ui`: when disabled, use `AppBuilder::bare_standalone()`
+/// and inject components via IoC.
+#[cfg(feature = "sys-ui")]
+pub fn standalone_builder() -> AppBuilder<Standalone> {
+    use term_wm_sys_ui_components::{
+        WmBottomPanelComponent, WmMenuOverlay, WmTopPanelComponent,
+    };
+
+    AppBuilder::bare_standalone()
+        .top_panel(Box::new(WmTopPanelComponent::<
+            term_wm_core::window::WindowKey,
+        >::new("")))
+        .bottom_panel(Box::new(WmBottomPanelComponent::new("", "", None)))
+        .command_menu(Box::new(WmMenuOverlay::new()))
+}
 
 pub trait WindowManagerExt: Sized {
-    fn new_standalone(app_ctx: term_wm_core::app_context::AppContext) -> Self;
-    fn new_embedded(app_ctx: term_wm_core::app_context::AppContext) -> Self;
+    fn new_standalone(app_ctx: AppContext) -> Self;
+    fn new_bare_standalone(app_ctx: AppContext) -> Self;
+    fn new_embedded(app_ctx: AppContext) -> Self;
 }
 
 impl WindowManagerExt for WindowManager {
-    fn new_standalone(app_ctx: term_wm_core::app_context::AppContext) -> Self {
-        let hostname = app_ctx.hostname.as_deref();
-        let top_panel: Box<dyn term_wm_core::top_panel_trait::TopPanel<WindowKey>> = Box::new(
-            term_wm_sys_ui_components::WmTopPanelComponent::new(&app_ctx.app_name),
-        );
-        let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> =
-            Box::new(term_wm_sys_ui_components::WmBottomPanelComponent::new(
-                &app_ctx.app_name,
-                &app_ctx.app_version,
-                hostname,
-            ));
-        let menu: Box<
-            dyn term_wm_core::components::MenuOverlay<term_wm_core::actions::TermWmAction>,
-        > = Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
-        WmBuilder::standalone()
-            .app_ctx(std::sync::Arc::new(app_ctx))
-            .build(Some(top_panel), Some(bottom_panel), Some(menu))
+    #[cfg(feature = "sys-ui")]
+    fn new_standalone(app_ctx: AppContext) -> Self {
+        let app_name = app_ctx.app_name.clone();
+        let app_version = app_ctx.app_version.clone();
+        let hostname = app_ctx.hostname.clone();
+
+        use term_wm_sys_ui_components::{
+            WmBottomPanelComponent, WmMenuOverlay, WmTopPanelComponent,
+        };
+
+        AppBuilder::bare_standalone()
+            .app_ctx(Arc::new(app_ctx))
+            .top_panel(Box::new(WmTopPanelComponent::<
+                term_wm_core::window::WindowKey,
+            >::new(&app_name)))
+            .bottom_panel(Box::new(WmBottomPanelComponent::new(
+                &app_name,
+                &app_version,
+                hostname.as_deref(),
+            )))
+            .command_menu(Box::new(WmMenuOverlay::new()))
+            .build()
+            .expect("standalone build")
     }
 
-    fn new_embedded(app_ctx: term_wm_core::app_context::AppContext) -> Self {
-        let hostname = app_ctx.hostname.as_deref();
-        let top_panel: Box<dyn term_wm_core::top_panel_trait::TopPanel<WindowKey>> = Box::new(
-            term_wm_sys_ui_components::WmTopPanelComponent::new(&app_ctx.app_name),
-        );
-        let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> =
-            Box::new(term_wm_sys_ui_components::WmBottomPanelComponent::new(
-                &app_ctx.app_name,
-                &app_ctx.app_version,
-                hostname,
-            ));
-        WmBuilder::embedded()
-            .app_ctx(std::sync::Arc::new(app_ctx))
-            .build(Some(top_panel), Some(bottom_panel), None)
+    #[cfg(not(feature = "sys-ui"))]
+    fn new_standalone(app_ctx: AppContext) -> Self {
+        Self::new_bare_standalone(app_ctx)
+    }
+
+    fn new_bare_standalone(app_ctx: AppContext) -> Self {
+        AppBuilder::bare_standalone()
+            .app_ctx(Arc::new(app_ctx))
+            .build()
+            .expect("bare standalone build")
+    }
+
+    fn new_embedded(app_ctx: AppContext) -> Self {
+        AppBuilder::embedded()
+            .app_ctx(Arc::new(app_ctx))
+            .build()
+            .expect("embedded build")
     }
 }
