@@ -14,6 +14,7 @@ use term_wm::io::{
 };
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_window_app};
 use term_wm::window::{OverlayId, WindowKey, WindowManager};
+use term_wm::wm_config::WmConfig;
 use term_wm::{PtyStatus, ScrollViewComponent, TerminalComponent, default_shell_command};
 use term_wm_sys_ui_components::wm_debug_log::{
     WmDebugLogComponent, install_panic_hook, set_global_debug_log,
@@ -96,12 +97,13 @@ impl App {
         raw_menu.set_timeout(std::time::Duration::from_millis(500));
 
         let wm = if embedded {
-            AppBuilder::embedded()
+            AppBuilder::bare()
+                .config(WmConfig::minimal())
                 .app_ctx(Arc::clone(&app_ctx))
                 .build()
                 .expect("embedded build")
         } else {
-            AppBuilder::bare_standalone()
+            AppBuilder::bare()
                 .app_ctx(Arc::clone(&app_ctx))
                 .top_panel(Box::new(
                     term_wm_sys_ui_components::WmTopPanelComponent::new(&app_name),

@@ -62,7 +62,7 @@ pub fn validate_keybindings(kb: &KeyBindings) -> KeyBindings {
 /// Configuration for a `WindowManager`.
 ///
 /// Each feature flag is independently toggleable. Preset constructors
-/// (`standalone`, `embedded`) provide sensible defaults for common use cases.
+/// (`standalone`, `minimal`) provide sensible defaults for common use cases.
 ///
 /// Fields marked "initial" set the starting value for a runtime-toggleable
 /// feature — changes made at runtime apply immediately.
@@ -146,9 +146,9 @@ impl WmConfig {
         }
     }
 
-    /// Embedded mode preset: no chrome, no floating windows, no command menu.
+    /// Minimal preset: no chrome, no floating windows, no command menu.
     /// Bottom keybinding hints are rendered by the panel in inactive mode.
-    pub fn embedded() -> Self {
+    pub fn minimal() -> Self {
         Self {
             chrome_enabled: false,
             floating_windows_enabled: false,
@@ -163,7 +163,7 @@ impl WmConfig {
             keyboard_focus_enabled: true,
             mouse_focus_click_enabled: true,
             decorator: Some(Arc::new(DefaultDecorator::without_buttons())),
-            keybindings: validate_keybindings(&KeyBindings::embedded()),
+            keybindings: validate_keybindings(&KeyBindings::minimal()),
             hint_visibility: HintVisibility::Always,
             menu_outline_timeout: Duration::ZERO,
             drag_snap_timeout: None,

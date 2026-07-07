@@ -8,6 +8,7 @@ use term_wm_core::io::{ConsoleEventSource, ConsoleRenderTarget, EventSource, Ren
 use term_wm_core::runner::{WindowManagerHost, WindowProvider, run_window_app};
 use term_wm_core::actions::TermWmAction;
 use term_wm_core::window::{WindowKey, WindowManager};
+use term_wm_core::wm_config::WmConfig;
 
 /// A self-contained window manager app that eliminates dual-trait boilerplate.
 ///
@@ -40,7 +41,7 @@ impl TermWmApp {
             WmBottomPanelComponent, WmMenuOverlay, WmTopPanelComponent,
         };
 
-        let wm = AppBuilder::bare_standalone()
+        let wm = AppBuilder::bare()
             .app_ctx(Arc::new(app_ctx))
             .top_panel(Box::new(WmTopPanelComponent::new(&app_name)))
             .bottom_panel(Box::new(WmBottomPanelComponent::new(
@@ -62,7 +63,7 @@ impl TermWmApp {
 
     /// Create a bare standalone app without system chrome.
     pub fn bare(app_ctx: AppContext) -> Self {
-        let wm = AppBuilder::bare_standalone()
+        let wm = AppBuilder::bare()
             .app_ctx(Arc::new(app_ctx))
             .build()
             .expect("bare standalone build");
@@ -72,7 +73,8 @@ impl TermWmApp {
     /// Create an embedded app without command menu, suitable for
     /// embedding in an existing Ratatui application.
     pub fn embedded(app_ctx: AppContext) -> Self {
-        let wm = AppBuilder::embedded()
+        let wm = AppBuilder::bare()
+            .config(WmConfig::minimal())
             .app_ctx(Arc::new(app_ctx))
             .build()
             .expect("embedded build");
