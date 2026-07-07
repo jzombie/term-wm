@@ -200,7 +200,17 @@ impl WindowManager {
                 }
             }
         }
-        let active = self.panel_active();
+        // Compute whether the panel should be active from config + visibility,
+        // BEFORE calling consume_area (which needs this state to claim space).
+        let panel_active = self.config.panel_enabled
+            && self
+                .top_component
+                .as_ref()
+                .is_some_and(|p| p.visible());
+        // Push active state to the component so consume_area claims the right space
+        if let Some(p) = &mut self.top_component {
+            p.process_action(&crate::components::ComponentAction::SetPanelActive(panel_active));
+        }
         let has_hints = if let Some(p) = self.bottom_component.as_ref() {
             if let crate::components::ComponentResponse::Hints(h) =
                 p.query(&crate::components::ComponentQuery::KeybindingHints)
@@ -212,7 +222,7 @@ impl WindowManager {
         } else {
             false
         };
-        let bottom_h = if has_hints || active { 1u16 } else { 0 };
+        let bottom_h = if has_hints || panel_active { 1u16 } else { 0 };
         let (top_rect, after_top) = if let Some(p) = &mut self.top_component {
             let (claimed, rest) = p.consume_area(area);
             (claimed, rest)

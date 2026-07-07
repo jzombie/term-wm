@@ -344,11 +344,7 @@ impl WmComponent for WmMenuOverlay {
         }
     }
 
-    fn handle_event(
-        &mut self,
-        event: &Event,
-        ctx: &ComponentContext,
-    ) -> EventResult<TermWmAction> {
+    fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> EventResult<TermWmAction> {
         self.auto_restore();
         self.last_action = None;
 
@@ -417,9 +413,7 @@ impl WmComponent for WmMenuOverlay {
 
     fn query(&self, query: &ComponentQuery) -> ComponentResponse {
         match query {
-            ComponentQuery::SelectedAction => {
-                ComponentResponse::Action(self.last_action.clone())
-            }
+            ComponentQuery::SelectedAction => ComponentResponse::Action(self.last_action.clone()),
             _ => ComponentResponse::None,
         }
     }
@@ -439,11 +433,11 @@ impl WmComponent for WmMenuOverlay {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use term_wm_core::components::MenuItem;
     use crossterm::event::{
         KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton, MouseEvent,
         MouseEventKind,
     };
+    use term_wm_core::components::MenuItem;
     fn key_event(code: KeyCode) -> Event {
         Event::Key(KeyEvent {
             code,

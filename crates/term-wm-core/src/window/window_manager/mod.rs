@@ -1498,7 +1498,6 @@ impl WindowManager {
     fn panel_active(&self) -> bool {
         self.config.panel_enabled
             && self.top_component.as_ref().is_some_and(|p| p.visible())
-            && self.top_claimed.height > 0
     }
 
     /// Register panel hitboxes (top and bottom) into the draw-time registry.
