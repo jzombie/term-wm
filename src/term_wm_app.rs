@@ -1,12 +1,12 @@
 use std::io;
 use std::sync::Arc;
 
+use term_wm_core::actions::TermWmAction;
 use term_wm_core::app_context::AppContext;
 use term_wm_core::components::{Component, component_downcast_mut};
 use term_wm_core::config::AppBuilder;
 use term_wm_core::io::{ConsoleEventSource, ConsoleRenderTarget, EventSource, RenderTarget};
 use term_wm_core::runner::{WindowManagerHost, WindowProvider, run_window_app};
-use term_wm_core::actions::TermWmAction;
 use term_wm_core::window::{WindowKey, WindowManager};
 use term_wm_core::wm_config::WmConfig;
 

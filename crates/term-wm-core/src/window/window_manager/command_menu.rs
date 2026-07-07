@@ -49,8 +49,7 @@ impl WindowManager {
         {
             // Check if click is on the top panel's menu icon
             if let Some(p) = &self.top_component
-                && let ComponentResponse::Rect(Some(rect)) =
-                    p.query(&ComponentQuery::MenuIconRect)
+                && let ComponentResponse::Rect(Some(rect)) = p.query(&ComponentQuery::MenuIconRect)
                 && crate::layout::rect_contains(rect, mouse.column, mouse.row)
             {
                 return None; // handled by chrome overlay toggle
@@ -68,8 +67,7 @@ impl WindowManager {
             EventResult::Ignored => {}
         }
 
-        if let ComponentResponse::Action(Some(action)) =
-            menu.query(&ComponentQuery::SelectedAction)
+        if let ComponentResponse::Action(Some(action)) = menu.query(&ComponentQuery::SelectedAction)
         {
             return Some(action);
         }

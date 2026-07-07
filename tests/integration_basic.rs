@@ -15,13 +15,12 @@ fn mouse_capture_flow_through_window_manager() {
     let top: Box<dyn term_wm_core::components::WmComponent> = Box::new(
         term_wm_sys_ui_components::WmTopPanelComponent::new(&ctx.app_name),
     );
-    let bottom: Box<dyn term_wm_core::components::WmComponent> = Box::new(
-        term_wm_sys_ui_components::WmBottomPanelComponent::new(
+    let bottom: Box<dyn term_wm_core::components::WmComponent> =
+        Box::new(term_wm_sys_ui_components::WmBottomPanelComponent::new(
             &ctx.app_name,
             &ctx.app_version,
             None,
-        ),
-    );
+        ));
     let menu: Box<dyn term_wm_core::components::WmComponent> =
         Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
     let mut wm: term_wm::window::WindowManager = term_wm::window::WindowManager::with_config(

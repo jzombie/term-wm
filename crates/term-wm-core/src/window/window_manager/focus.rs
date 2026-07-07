@@ -141,7 +141,9 @@ impl WindowManager {
                 self.hover = Some((mouse.column, mouse.row));
                 match mouse.kind {
                     MouseEventKind::Down(_) => {
-                        if self.config.wm_command_menu_enabled && !self.managed_draw_order.is_empty() {
+                        if self.config.wm_command_menu_enabled
+                            && !self.managed_draw_order.is_empty()
+                        {
                             let hit = self.hit_test_region_topmost(
                                 mouse.column,
                                 mouse.row,

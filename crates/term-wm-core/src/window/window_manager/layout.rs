@@ -183,33 +183,38 @@ impl WindowManager {
                         .keybindings()
                         .bottom_hints_for_layer(crate::constants::MAX_BOTTOM_HINTS, active_layer);
                     if let Some(p) = &mut self.bottom_component {
-                        p.process_action(&crate::components::ComponentAction::SetKeybindingHints(hints));
+                        p.process_action(&crate::components::ComponentAction::SetKeybindingHints(
+                            hints,
+                        ));
                     }
                 } else {
                     let hints = self
                         .keybindings()
                         .bottom_hints(crate::constants::MAX_BOTTOM_HINTS);
                     if let Some(p) = &mut self.bottom_component {
-                        p.process_action(&crate::components::ComponentAction::SetKeybindingHints(hints));
+                        p.process_action(&crate::components::ComponentAction::SetKeybindingHints(
+                            hints,
+                        ));
                     }
                 }
             }
             _ => {
                 if let Some(p) = &mut self.bottom_component {
-                    p.process_action(&crate::components::ComponentAction::SetKeybindingHints(Vec::new()));
+                    p.process_action(&crate::components::ComponentAction::SetKeybindingHints(
+                        Vec::new(),
+                    ));
                 }
             }
         }
         // Compute whether the panel should be active from config + visibility,
         // BEFORE calling consume_area (which needs this state to claim space).
-        let panel_active = self.config.panel_enabled
-            && self
-                .top_component
-                .as_ref()
-                .is_some_and(|p| p.visible());
+        let panel_active =
+            self.config.panel_enabled && self.top_component.as_ref().is_some_and(|p| p.visible());
         // Push active state to the component so consume_area claims the right space
         if let Some(p) = &mut self.top_component {
-            p.process_action(&crate::components::ComponentAction::SetPanelActive(panel_active));
+            p.process_action(&crate::components::ComponentAction::SetPanelActive(
+                panel_active,
+            ));
         }
         let has_hints = if let Some(p) = self.bottom_component.as_ref() {
             if let crate::components::ComponentResponse::Hints(h) =
@@ -233,7 +238,10 @@ impl WindowManager {
         let (bottom_rect, managed_area) = if let Some(p) = &mut self.bottom_component {
             let bottom = Rect {
                 x: after_top.x,
-                y: after_top.y.saturating_add(after_top.height).saturating_sub(bottom_h),
+                y: after_top
+                    .y
+                    .saturating_add(after_top.height)
+                    .saturating_sub(bottom_h),
                 width: after_top.width,
                 height: bottom_h,
             };

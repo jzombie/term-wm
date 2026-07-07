@@ -4,4 +4,4 @@ pub mod prelude;
 pub mod term_wm_app;
 pub mod tracing_sub;
 pub mod widget_adapter;
-pub use widget_adapter::{WidgetAdapter, StatefulWidgetAdapter};
+pub use widget_adapter::{StatefulWidgetAdapter, WidgetAdapter};

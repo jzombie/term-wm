@@ -1503,8 +1503,7 @@ impl WindowManager {
     }
 
     fn panel_active(&self) -> bool {
-        self.config.panel_enabled
-            && self.top_component.as_ref().is_some_and(|p| p.visible())
+        self.config.panel_enabled && self.top_component.as_ref().is_some_and(|p| p.visible())
     }
 
     /// Register panel hitboxes (top and bottom) into the draw-time registry.
@@ -1728,19 +1727,21 @@ impl WindowManager {
         if let Some(p) = &mut self.top_component {
             p.process_action(&ComponentAction::SetPanelActive(panel_active));
             p.process_action(&ComponentAction::SetWindowLabels(titles_map));
-            p.process_action(&ComponentAction::SetTopPanelState(Box::new(TopPanelState {
-                focus_current: Some(focus_current),
-                display_order: display,
-                status_line,
-                mouse_capture_enabled,
-                clipboard_enabled,
-                window_selection_enabled,
-                selection_active,
-                selection_dragging,
-                selection_copy_available,
-                selection_copied,
-                menu_open: wm_overlay_visible,
-            })));
+            p.process_action(&ComponentAction::SetTopPanelState(Box::new(
+                TopPanelState {
+                    focus_current: Some(focus_current),
+                    display_order: display,
+                    status_line,
+                    mouse_capture_enabled,
+                    clipboard_enabled,
+                    window_selection_enabled,
+                    selection_active,
+                    selection_dragging,
+                    selection_copy_available,
+                    selection_copied,
+                    menu_open: wm_overlay_visible,
+                },
+            )));
         }
         let top_area = self.top_claimed;
         let top_ctx = self.component_context(false);
@@ -1761,10 +1762,10 @@ impl WindowManager {
         z_total: usize,
         registry: &mut crate::hitbox_registry::HitboxRegistry,
     ) {
-        use std::time::Duration;
         use ratatui::layout::Alignment;
         use ratatui::style::{Color, Style};
         use ratatui::widgets::Paragraph;
+        use std::time::Duration;
 
         use crate::layout::{FloatingPane, rect_contains, render_handles_masked};
         use crate::window::FloatRectSpec;

@@ -8,13 +8,12 @@ fn new_window_is_focused() {
     let top: Box<dyn term_wm_core::components::WmComponent> = Box::new(
         term_wm_sys_ui_components::WmTopPanelComponent::new(&ctx.app_name),
     );
-    let bottom: Box<dyn term_wm_core::components::WmComponent> = Box::new(
-        term_wm_sys_ui_components::WmBottomPanelComponent::new(
+    let bottom: Box<dyn term_wm_core::components::WmComponent> =
+        Box::new(term_wm_sys_ui_components::WmBottomPanelComponent::new(
             &ctx.app_name,
             &ctx.app_version,
             None,
-        ),
-    );
+        ));
     let menu: Box<dyn term_wm_core::components::WmComponent> =
         Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
     let mut wm = WindowManager::with_config(

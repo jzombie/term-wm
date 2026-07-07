@@ -4,8 +4,8 @@ use crate::app_context::AppContext;
 use crate::components::WmComponent;
 use crate::keybindings::KeyBindings;
 use crate::theme::Theme;
-use crate::window::decorator::WindowDecorator;
 use crate::window::WindowManager;
+use crate::window::decorator::WindowDecorator;
 use crate::wm_config::{HintVisibility, WmConfig};
 
 /// Error type for [`AppBuilder::build`].

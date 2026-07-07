@@ -48,7 +48,11 @@ pub struct TerminalComponent {
 }
 
 impl Component<TermWmAction> for TerminalComponent {
-    fn on_mount(&mut self, key: term_wm_core::window::WindowKey, _app: &term_wm_core::app_context::AppContext) {
+    fn on_mount(
+        &mut self,
+        key: term_wm_core::window::WindowKey,
+        _app: &term_wm_core::app_context::AppContext,
+    ) {
         self.window_key = Some(key);
     }
 
