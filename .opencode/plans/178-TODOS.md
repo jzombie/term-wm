@@ -9,6 +9,7 @@
 - [X] Behavior regression where menu items show "hovered" state even if mouse is outside of menu area.
 - [] New TODOs in main.rs for deduping and centralizing new window handling
 - [] Fix perf issues when running term-bench.py; modify term-bench.py to output stats to optional file path so that they can be read in for perf verification
+- [] Extremely simple API and README examples, showing how custom Ratatui components can easily be turned into Windows.
 - [] Four-tiered testing
   - Tier 1: State Machine and Logic Unit Tests — Test core architecture (layout routing, window tree, business logic) decoupled from terminal hardware. Mock event streams and time to test debounce/timeout mechanics deterministically without `std::thread::sleep`. Targets data corruption, input routing failures, state machine errors.
   - Tier 2: Layout Snapshot Testing — Verify zero-copy render_screen cell-blitting draws correctly (no overlapping borders, mangled margins). Use ratatui's TestBackend with insta snapshot crate, outputting to .snap files. Visually audit diffs on code changes to catch regressions.
