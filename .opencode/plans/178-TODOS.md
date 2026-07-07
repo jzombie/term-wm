@@ -12,6 +12,7 @@
   - [] Monitor terminal resolution in term-bench (FPS is affected by how many regions it has to draw)
   - [] Modify term-bench to output stats to optional file path so that they can be read in for perf verification; PERF VERIFICATION *MUST* TRACK TERMINAL RESOLUTION, INCLUDING POTENTIAL RESIZE CHANGES
 - [IN PROGRESS] Extremely simple API and README examples, showing how custom Ratatui components can easily be turned into Windows.
+- [] The core should not render to the screen, ever.
 - [] Four-tiered testing
   - Tier 1: State Machine and Logic Unit Tests — Test core architecture (layout routing, window tree, business logic) decoupled from terminal hardware. Mock event streams and time to test debounce/timeout mechanics deterministically without `std::thread::sleep`. Targets data corruption, input routing failures, state machine errors.
   - Tier 2: Layout Snapshot Testing — Verify zero-copy render_screen cell-blitting draws correctly (no overlapping borders, mangled margins). Use ratatui's TestBackend with insta snapshot crate, outputting to .snap files. Visually audit diffs on code changes to catch regressions.
