@@ -6,15 +6,14 @@ use crossterm::event::{Event, KeyEvent, MouseEvent};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
-use term_wm::actions::{SystemTask, TermWmAction};
+use term_wm::actions::SystemTask;
 use term_wm::app_context::AppContext;
-use term_wm::components::MenuOverlay;
+use term_wm::config::AppBuilder;
 use term_wm::io::{EventSource, RenderTarget};
-use term_wm::runner::{WindowManagerHost, WindowProvider, run_app};
+use term_wm::runner::{WindowManagerHost, run_app};
 use term_wm::task_scheduler::TaskScheduler;
 use term_wm::ui::UiFrame;
 use term_wm::window::{WindowKey, WindowManager};
-use term_wm::wm_config::WmConfig;
 
 #[derive(Debug)]
 struct TestOutput {
@@ -83,21 +82,11 @@ struct SparseApp {
 }
 
 impl WindowManagerHost for SparseApp {
-    fn windows(&mut self) -> &mut WindowManager {
+    fn wm(&mut self) -> &mut WindowManager {
         &mut self.wm
     }
     fn quit_requested(&self) -> bool {
         self.should_quit
-    }
-}
-
-impl WindowProvider for SparseApp {
-    fn enumerate_windows(&mut self) -> Vec<WindowKey> {
-        if self.should_quit {
-            vec![]
-        } else {
-            self.window_key.map(|k| vec![k]).unwrap_or_default()
-        }
     }
 }
 
@@ -110,15 +99,13 @@ fn render_panic_shows_in_debug_log() {
     );
     term_wm_sys_ui_components::install_panic_hook();
 
-    let menu: Box<dyn MenuOverlay<TermWmAction>> =
+    let menu: Box<dyn term_wm_core::components::WmComponent> =
         Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
-    let mut wm = WindowManager::with_config(
-        WmConfig::standalone(),
-        Arc::new(AppContext::new("test", "0.0.0")),
-        None::<Box<dyn term_wm::top_panel_trait::TopPanel<WindowKey>>>,
-        None::<Box<dyn term_wm::bottom_panel_trait::BottomPanel>>,
-        Some(menu),
-    );
+    let mut wm = AppBuilder::bare()
+        .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
+        .command_menu(menu)
+        .build()
+        .expect("test build");
     let key = wm.create_window(Box::new(term_wm::components::NoopComponent));
     wm.set_window_title(key, "test");
 
@@ -130,7 +117,6 @@ fn render_panic_shows_in_debug_log() {
     };
     let mut output = TestOutput::new();
     let mut driver = ImmediateDriver;
-    let focus_regions: Vec<WindowKey> = vec![];
 
     let panic_msg = "intentional-panic-from-draw";
 
@@ -138,7 +124,6 @@ fn render_panic_shows_in_debug_log() {
         &mut output,
         &mut driver,
         &mut app,
-        &focus_regions,
         TaskScheduler::<SystemTask>::new(),
         |k| k,
         {

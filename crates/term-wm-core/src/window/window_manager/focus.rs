@@ -120,7 +120,7 @@ impl WindowManager {
         }
     }
 
-    pub fn handle_focus_event(&mut self, event: &Event, hit_targets: &[WindowKey]) -> bool {
+    pub fn handle_focus_event(&mut self, event: &Event) -> bool {
         match event {
             Event::Key(key) => {
                 if !self.keyboard_focus_enabled() {
@@ -141,7 +141,9 @@ impl WindowManager {
                 self.hover = Some((mouse.column, mouse.row));
                 match mouse.kind {
                     MouseEventKind::Down(_) => {
-                        if self.config.wm_overlay_enabled && !self.managed_draw_order.is_empty() {
+                        if self.config.wm_command_menu_enabled
+                            && !self.managed_draw_order.is_empty()
+                        {
                             let hit = self.hit_test_region_topmost(
                                 mouse.column,
                                 mouse.row,
@@ -154,10 +156,11 @@ impl WindowManager {
                             }
                             return false;
                         }
-                        let hit = self.hit_test_region(mouse.column, mouse.row, hit_targets);
+                        let hit =
+                            self.hit_test_region(mouse.column, mouse.row, &self.managed_draw_order);
                         if let Some(hit) = hit {
                             self.focus.set_current(hit);
-                            if self.config.wm_overlay_enabled {
+                            if self.config.wm_command_menu_enabled {
                                 self.bring_floating_to_front_key(hit);
                             }
                             true

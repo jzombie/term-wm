@@ -11,7 +11,10 @@ use ratatui::{
 
 use term_wm_core::{
     actions::{EventResult, TermWmAction},
-    components::{Component, ComponentContext, MenuItem, MenuOverlay, Overlay},
+    components::{
+        Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse, MenuItem,
+        Overlay, WmComponent,
+    },
     layout::rect_contains,
     ui::UiFrame,
     window::WindowKey,
@@ -75,6 +78,36 @@ impl WmMenuOverlay {
             self.outlined.set(false);
             self.outlined_at.borrow_mut().take();
         }
+    }
+
+    pub fn outline(&self) {
+        self.outlined.set(true);
+        self.outlined_at.replace(Some(Instant::now()));
+    }
+
+    pub fn restore(&self) {
+        self.outlined.set(false);
+        self.outlined_at.take();
+    }
+
+    pub fn set_items(&mut self, items: Vec<MenuItem<TermWmAction>>) {
+        self.menu.set_items(items);
+    }
+
+    pub fn set_anchor(&mut self, pos: Option<(u16, u16)>) {
+        self.anchor = pos;
+    }
+
+    pub fn set_managed_area(&mut self, area: Rect) {
+        self.managed_area = area;
+    }
+
+    pub fn selected_action(&self) -> Option<&TermWmAction> {
+        self.last_action.as_ref()
+    }
+
+    pub fn set_timeout(&mut self, timeout: Duration) {
+        self.outline_timeout = timeout;
     }
 
     fn render_dropdown(&self, frame: &mut UiFrame<'_>, ctx: &ComponentContext) {
@@ -290,35 +323,110 @@ impl Overlay<TermWmAction> for WmMenuOverlay {
     }
 }
 
-impl MenuOverlay<TermWmAction> for WmMenuOverlay {
-    fn outline(&mut self) {
-        self.outlined.set(true);
-        self.outlined_at.replace(Some(Instant::now()));
+impl WmComponent for WmMenuOverlay {
+    fn consume_area(&mut self, available: Rect) -> (Rect, Rect) {
+        // Overlays render on top, claim no area
+        (Rect::default(), available)
     }
 
-    fn restore(&mut self) {
-        self.outlined.set(false);
-        self.outlined_at.take();
+    fn render(
+        &mut self,
+        frame: &mut UiFrame<'_>,
+        _area: Rect,
+        ctx: &ComponentContext,
+        _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
+        self.auto_restore();
+        if self.outlined.get() {
+            self.render_outline(frame);
+        } else {
+            self.render_dropdown(frame, ctx);
+        }
     }
 
-    fn set_items(&mut self, items: Vec<MenuItem<TermWmAction>>) {
-        self.menu.set_items(items);
+    fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> EventResult<TermWmAction> {
+        self.auto_restore();
+        self.last_action = None;
+
+        if let Event::Mouse(mouse) = event
+            && matches!(mouse.kind, MouseEventKind::Down(_))
+        {
+            if let Some(idx) = self.hit_test_item(mouse.column, mouse.row) {
+                self.menu.set_selected(idx);
+                self.restore();
+                self.last_action = self.menu.selected_action().cloned();
+                return EventResult::Consumed;
+            }
+            return EventResult::Ignored;
+        }
+
+        let Event::Key(key) = event else {
+            return EventResult::Ignored;
+        };
+        if key.kind != crossterm::event::KeyEventKind::Press {
+            return EventResult::Ignored;
+        }
+
+        let total = self.menu.items().len();
+        if total == 0 {
+            return EventResult::Ignored;
+        }
+
+        let kb = ctx.keybindings().unwrap_or_default();
+        if kb.matches(TermWmAction::MenuUp, key) || kb.matches(TermWmAction::MenuPrev, key) {
+            let current = self.menu.selected();
+            self.menu
+                .set_selected(if current == 0 { total - 1 } else { current - 1 });
+            self.restore();
+            EventResult::Consumed
+        } else if kb.matches(TermWmAction::MenuDown, key) || kb.matches(TermWmAction::MenuNext, key)
+        {
+            let current = self.menu.selected();
+            self.menu.set_selected((current + 1) % total);
+            self.restore();
+            EventResult::Consumed
+        } else if kb.matches(TermWmAction::MenuSelect, key) {
+            self.last_action = self.menu.selected_action().cloned();
+            EventResult::Consumed
+        } else {
+            EventResult::Ignored
+        }
     }
 
-    fn set_timeout(&mut self, timeout: Duration) {
-        self.outline_timeout = timeout;
+    fn process_action(&mut self, action: &ComponentAction) {
+        match action {
+            ComponentAction::Restore => self.restore(),
+            ComponentAction::Outline => self.outline(),
+            ComponentAction::SetMenuItems(items) => self.set_items(items.clone()),
+            ComponentAction::SetMenuAnchor(pos) => self.set_anchor(*pos),
+            ComponentAction::SetManagedArea(area) => self.set_managed_area(*area),
+            ComponentAction::ToggleVisibility => {
+                if self.outlined.get() {
+                    self.restore();
+                } else {
+                    self.outline();
+                }
+            }
+            _ => {}
+        }
     }
 
-    fn selected_action(&self) -> Option<&TermWmAction> {
-        self.last_action.as_ref()
+    fn query(&self, query: &ComponentQuery) -> ComponentResponse {
+        match query {
+            ComponentQuery::SelectedAction => ComponentResponse::Action(self.last_action.clone()),
+            _ => ComponentResponse::None,
+        }
     }
 
-    fn set_anchor(&mut self, pos: Option<(u16, u16)>) {
-        self.anchor = pos;
+    fn hit_test(&self, x: u16, y: u16) -> bool {
+        if let Some(bounds) = self.menu_bounds_cache.get() {
+            return rect_contains(bounds, x, y);
+        }
+        false
     }
 
-    fn set_managed_area(&mut self, area: Rect) {
-        self.managed_area = area;
+    fn visible(&self) -> bool {
+        !self.outlined.get()
     }
 }
 
@@ -329,6 +437,7 @@ mod tests {
         KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton, MouseEvent,
         MouseEventKind,
     };
+    use term_wm_core::components::MenuItem;
     fn key_event(code: KeyCode) -> Event {
         Event::Key(KeyEvent {
             code,
@@ -610,6 +719,12 @@ mod tests {
             width: 80,
             height: 24,
         });
+
+        // auto_restore() fires on every render() and clears the outline when
+        // the timeout has expired.  The default timeout is Duration::ZERO, which
+        // means the outline would be cleared on the very first render before we
+        // can observe it.  Set a non-zero timeout so the outline persists across
+        // the render calls this test compares.
         overlay.set_timeout(Duration::from_secs(60));
 
         let area = Rect {

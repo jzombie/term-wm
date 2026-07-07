@@ -44,9 +44,18 @@ pub struct TerminalComponent {
     selection_enabled: bool,
     last_scrollback: Cell<usize>,
     last_max_scrollback: Cell<usize>,
+    window_key: Option<term_wm_core::window::WindowKey>,
 }
 
 impl Component<TermWmAction> for TerminalComponent {
+    fn on_mount(
+        &mut self,
+        key: term_wm_core::window::WindowKey,
+        _app: &term_wm_core::app_context::AppContext,
+    ) {
+        self.window_key = Some(key);
+    }
+
     fn handle_events(
         &mut self,
         event: &Event,
@@ -90,7 +99,9 @@ impl Component<TermWmAction> for TerminalComponent {
                     return EventResult::Ignored;
                 }
                 let mut pane = self.pane.borrow_mut();
-                let screen = pane.screen();
+                let parser_arc = pane.shared_parser();
+                let parser = parser_arc.lock().unwrap();
+                let screen = parser.screen();
                 let encoding = screen.mouse_protocol_encoding();
 
                 match encoding {
@@ -263,6 +274,7 @@ impl TerminalComponent {
             selection_enabled: false,
             last_scrollback: Cell::new(0),
             last_max_scrollback: Cell::new(0),
+            window_key: None,
         }
     }
 
@@ -285,6 +297,7 @@ impl TerminalComponent {
             selection_enabled: false,
             last_scrollback: Cell::new(0),
             last_max_scrollback: Cell::new(0),
+            window_key: None,
         };
         Ok(comp)
     }
@@ -375,7 +388,7 @@ impl TerminalComponent {
 
         // Synchronize scroll state with the shared Viewport
         if !pane.alternate_screen()
-            && let Some(handle) = ctx.viewport_handle()
+            && let Some(handle) = ctx.scroll_handle()
         {
             let used = pane.max_scrollback();
             let view_height = area.height as usize;
@@ -429,8 +442,15 @@ impl TerminalComponent {
         let start_col = visible.x.saturating_sub(area.x);
         let start_row = visible.y.saturating_sub(area.y);
 
+        // Call sync_screen() to handle DSR, foreground polling.
+        pane.sync_screen();
+
+        // Lock the shared parser once for both link overlay and cell rendering.
+        let parser_arc = pane.shared_parser();
+        let parser = parser_arc.lock().unwrap();
+        let screen = parser.screen();
+
         let bytes_seen = pane.bytes_received();
-        let screen = pane.screen();
         let signature = OverlaySignature::new(
             bytes_seen,
             scrollback_value,
@@ -471,6 +491,10 @@ impl TerminalComponent {
             );
         }
 
+        // Hoist loop-invariant color defaults
+        let default_fg = screen.fgcolor();
+        let default_bg = screen.bgcolor();
+
         let focused = ctx.focused();
         for row in start_row..start_row + visible.height {
             for col in start_col..start_col + visible.width {
@@ -481,7 +505,7 @@ impl TerminalComponent {
 
                 if let Some(cell) = screen.cell(row, col) {
                     let mut symbol = cell.contents().chars().next().unwrap_or(' ');
-                    let (fg, bg) = resolve_colors(cell, screen);
+                    let (fg, bg) = resolve_colors_with_defaults(cell, default_fg, default_bg);
                     let mut style = Style::default();
                     if let Some(fg) = fg {
                         style = style.fg(fg);
@@ -539,6 +563,10 @@ impl TerminalComponent {
                 }
             }
         }
+
+        // Clear dirty and notify reader thread via Condvar.
+        // This is the primary mechanism for I/O burst budget backpressure.
+        pane.clear_dirty_and_notify();
 
         if focused && !screen.hide_cursor() && show_cursor {
             let (row, col) = screen.cursor_position();
@@ -639,7 +667,9 @@ impl TerminalComponent {
     fn selection_text_for_range(&self, range: SelectionRange) -> Option<String> {
         let mut pane = self.pane.borrow_mut();
         let row_base = pane.max_scrollback().saturating_sub(pane.scrollback());
-        let screen = pane.screen();
+        let parser_arc = pane.shared_parser();
+        let parser = parser_arc.lock().unwrap();
+        let screen = parser.screen();
         let (rows, cols) = screen.size();
         if rows == 0 || cols == 0 {
             return None;
@@ -783,9 +813,25 @@ impl SelectionHost for RenderDragHost<'_> {
     }
 }
 
+#[allow(dead_code)]
 fn resolve_colors(cell: &vt100::Cell, screen: &vt100::Screen) -> (Option<TColor>, Option<TColor>) {
     let mut fg = resolve_color(cell.fgcolor(), screen.fgcolor());
     let bg = resolve_color(cell.bgcolor(), screen.bgcolor());
+    if cell.bold() {
+        fg = brighten_indexed(fg);
+    }
+    (fg, bg)
+}
+
+/// Like `resolve_colors` but takes pre-computed default fg/bg colors
+/// to avoid redundant `screen.fgcolor()`/`bgcolor()` calls per cell.
+fn resolve_colors_with_defaults(
+    cell: &vt100::Cell,
+    default_fg: vt100::Color,
+    default_bg: vt100::Color,
+) -> (Option<TColor>, Option<TColor>) {
+    let mut fg = resolve_color(cell.fgcolor(), default_fg);
+    let bg = resolve_color(cell.bgcolor(), default_bg);
     if cell.bold() {
         fg = brighten_indexed(fg);
     }
@@ -825,7 +871,7 @@ fn brighten_indexed(color: Option<TColor>) -> Option<TColor> {
 /// real PTY process.
 #[cfg(test)]
 struct TestPane {
-    parser: vt100::Parser,
+    parser: std::sync::Arc<std::sync::Mutex<vt100::Parser>>,
     current_scrollback: usize,
     max_sb: usize,
     alt_screen: bool,
@@ -836,7 +882,7 @@ struct TestPane {
 impl TestPane {
     fn new(max_sb: usize) -> Self {
         Self {
-            parser: vt100::Parser::new(24, 80, max_sb),
+            parser: std::sync::Arc::new(std::sync::Mutex::new(vt100::Parser::new(24, 80, max_sb))),
             current_scrollback: 0,
             max_sb,
             alt_screen: false,
@@ -849,11 +895,13 @@ impl TestPane {
     }
 
     fn write_to_parser(&mut self, bytes: &[u8]) {
-        self.parser.process(bytes);
+        let mut parser = self.parser.lock().unwrap();
+        parser.process(bytes);
     }
 
     fn set_parser_size(&mut self, rows: u16, cols: u16) {
-        self.parser.screen_mut().set_size(rows, cols);
+        let mut parser = self.parser.lock().unwrap();
+        parser.screen_mut().set_size(rows, cols);
     }
 
     #[allow(dead_code)]
@@ -888,8 +936,8 @@ impl Pane for TestPane {
         Ok(())
     }
 
-    fn screen(&mut self) -> &vt100::Screen {
-        self.parser.screen()
+    fn shared_parser(&mut self) -> std::sync::Arc<std::sync::Mutex<vt100::Parser>> {
+        self.parser.clone()
     }
 
     fn max_scrollback(&mut self) -> usize {
@@ -931,12 +979,12 @@ mod tests {
     use ratatui::buffer::Buffer;
     use std::cell::RefCell;
     use std::rc::Rc;
-    use term_wm_core::component_context::ViewportHandle;
+    use term_wm_core::component_context::ScrollHandle;
     use term_wm_core::ui::UiFrame;
 
-    fn make_ctx(view_offset: usize, handle: ViewportHandle) -> ComponentContext {
+    fn make_ctx(view_offset: usize, handle: ScrollHandle) -> ComponentContext {
         ComponentContext::default().with_viewport(
-            term_wm_core::component_context::ViewportContext {
+            term_wm_core::component_context::ScrollViewport {
                 offset_x: 0,
                 offset_y: view_offset,
                 width: 80,
@@ -947,11 +995,11 @@ mod tests {
     }
 
     fn make_handle() -> (
-        ViewportHandle,
-        Rc<RefCell<term_wm_core::component_context::ViewportSharedState>>,
+        ScrollHandle,
+        Rc<RefCell<term_wm_core::component_context::ScrollBounds>>,
     ) {
         let shared = Rc::new(RefCell::new(
-            term_wm_core::component_context::ViewportSharedState {
+            term_wm_core::component_context::ScrollBounds {
                 offset_x: 0,
                 offset_y: 0,
                 width: 80,
@@ -960,11 +1008,12 @@ mod tests {
                 content_height: 24,
                 pending_offset_x: None,
                 pending_offset_y: None,
+                sticky_bottom: false,
             },
         ));
         (
-            ViewportHandle {
-                shared: shared.clone(),
+            ScrollHandle {
+                scroll: shared.clone(),
             },
             shared,
         )
@@ -974,7 +1023,7 @@ mod tests {
         term: &mut TerminalComponent,
         view_offset: usize,
     ) -> (
-        Rc<RefCell<term_wm_core::component_context::ViewportSharedState>>,
+        Rc<RefCell<term_wm_core::component_context::ScrollBounds>>,
         usize,
     ) {
         let (handle, shared) = make_handle();
@@ -999,10 +1048,10 @@ mod tests {
 
     fn run_sync_with_handle(
         term: &mut TerminalComponent,
-        shared: &Rc<RefCell<term_wm_core::component_context::ViewportSharedState>>,
+        shared: &Rc<RefCell<term_wm_core::component_context::ScrollBounds>>,
     ) -> usize {
-        let handle = ViewportHandle {
-            shared: shared.clone(),
+        let handle = ScrollHandle {
+            scroll: shared.clone(),
         };
         let view_offset = shared.borrow().offset_y;
         let area = Rect {
@@ -1524,20 +1573,17 @@ mod tests {
         use std::sync::Arc;
         use term_wm_core::app_context::AppContext;
         use term_wm_core::components::Component;
-        use term_wm_core::window::WindowManager;
+        use term_wm_core::config::AppBuilder;
 
         let (term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
         let mut sv = crate::scroll_view::ScrollViewComponent::new(term);
         sv.set_selection_enabled(true);
-        sv.set_keyboard_enabled(false);
+        sv.set_keyboard_mode(crate::scroll_view::ScrollKeyMode::PaginationOnly);
 
-        let mut wm = WindowManager::with_config(
-            term_wm_core::wm_config::WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            None,
-            None,
-        );
+        let mut wm = AppBuilder::bare()
+            .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
+            .build()
+            .expect("test build");
         wm.set_panel_visible(false);
 
         let key = wm.create_window(Box::new(sv));
@@ -1620,20 +1666,17 @@ mod tests {
         use std::sync::Arc;
         use term_wm_core::app_context::AppContext;
         use term_wm_core::components::Component;
-        use term_wm_core::window::WindowManager;
+        use term_wm_core::config::AppBuilder;
 
         let (term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
         let mut sv = crate::scroll_view::ScrollViewComponent::new(term);
         sv.set_selection_enabled(true);
-        sv.set_keyboard_enabled(false);
+        sv.set_keyboard_mode(crate::scroll_view::ScrollKeyMode::PaginationOnly);
 
-        let mut wm = WindowManager::with_config(
-            term_wm_core::wm_config::WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            None,
-            None,
-        );
+        let mut wm = AppBuilder::bare()
+            .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
+            .build()
+            .expect("test build");
         wm.set_panel_visible(false);
 
         let key = wm.create_window(Box::new(sv));

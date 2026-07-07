@@ -13,7 +13,9 @@ use term_wm_core::components::{Component, ComponentContext, Overlay, SelectionSt
 use term_wm_core::keybindings::KeyBindings;
 use term_wm_core::ui::UiFrame;
 use term_wm_core::window::WindowKey;
-use term_wm_ui_components::{DialogOverlayComponent, MarkdownViewerComponent, ScrollViewComponent};
+use term_wm_ui_components::{
+    DialogOverlayComponent, MarkdownViewerComponent, ScrollKeyMode, ScrollViewComponent,
+};
 
 const HELP_CONTENT_BYTES: &[u8] =
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/help.md"));
@@ -194,7 +196,7 @@ impl WmHelpOverlayComponent {
                 let _ = webbrowser::open(url);
                 true
             });
-        overlay.content.set_keyboard_enabled(true);
+        overlay.content.set_keyboard_mode(ScrollKeyMode::Full);
         overlay
     }
 
@@ -211,8 +213,8 @@ impl WmHelpOverlayComponent {
         self.dialog.visible()
     }
 
-    pub fn set_keyboard_enabled(&mut self, enabled: bool) {
-        self.content.set_keyboard_enabled(enabled);
+    pub fn set_keyboard_mode(&mut self, mode: ScrollKeyMode) {
+        self.content.set_keyboard_mode(mode);
     }
 
     pub fn set_selection_enabled(&mut self, enabled: bool) {

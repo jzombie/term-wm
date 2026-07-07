@@ -114,8 +114,8 @@ impl KeyBindings {
         Self::default()
     }
 
-    /// Embedded-mode defaults: excludes Windows and Menu category actions.
-    pub fn embedded() -> Self {
+    /// Minimal defaults: excludes Windows and Menu category actions.
+    pub fn minimal() -> Self {
         let mut kb = Self::default();
         kb.map.retain(|action, _| {
             let cat = action.category();

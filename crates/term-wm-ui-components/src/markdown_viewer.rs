@@ -281,9 +281,6 @@ impl MarkdownViewerComponent {
                     flush_current_line(&mut lines, &mut current);
                 }
                 MdEvent::Rule => {
-                    // Insert a placeholder fragment for rules. We'll replace
-                    // placeholders after we've scanned the whole document to
-                    // determine a reasonable width for the separator (two-pass).
                     const RULE_PLACEHOLDER: &str = "\0RULE\0";
                     lines.push(vec![LinkFragment::new(
                         RULE_PLACEHOLDER.to_string(),
@@ -659,7 +656,7 @@ mod markdown_tests {
             modifiers: KeyModifiers::empty(),
         });
 
-        assert_eq!(scroll.viewport_handle().info().offset_y, 0);
+        assert_eq!(scroll.scroll_handle().info().offset_y, 0);
 
         let ctx = ComponentContext::new(true).with_screen_area(area);
         let result = scroll.handle_events(&mouse_event, &ctx);
@@ -667,7 +664,7 @@ mod markdown_tests {
             scroll.update(action, &ComponentContext::new(true), &mut VecDeque::new());
         }
 
-        let offset = scroll.viewport_handle().info().offset_y;
+        let offset = scroll.scroll_handle().info().offset_y;
 
         assert!(
             offset > 0,

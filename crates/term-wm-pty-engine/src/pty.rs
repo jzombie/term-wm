@@ -1,12 +1,10 @@
 use std::io::{Read, Write};
 use std::sync::{
-    Arc, Mutex,
+    Arc, Condvar, Mutex,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
-
-use arc_swap::ArcSwap;
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
@@ -54,18 +52,15 @@ pub struct Pty {
     foreground_title: Arc<Mutex<Option<String>>>,
     last_fg_pid: u32,
     last_fg_check: Instant,
-    /// Parsed screen shared by the reader thread via lock-free ArcSwap.
-    /// The reader writes by atomically swapping a new Arc, the main thread
-    /// reads in O(1) without clone or lock contention.
-    shared_screen: Arc<ArcSwap<vt100::Screen>>,
-    /// Set by the reader thread when a new screen is available.
-    dirty: Arc<AtomicBool>,
-    /// Lock-free cached reference loaded from ArcSwap on the read path.
-    /// No clone — just an atomic refcount increment.
-    screen_arc: Option<Arc<vt100::Screen>>,
-    /// Main-thread local cache for mutable operations (scrollback
-    /// adjustments, max_scrollback). Synced from screen_arc on demand.
-    cached_screen: vt100::Screen,
+    /// Parsed screen shared between the reader thread and the main thread.
+    /// The reader parses bytes into this parser in-place. The main thread
+    /// locks it to read cells directly — zero clones.
+    pub(crate) shared_parser: Arc<Mutex<vt100::Parser>>,
+    /// Set by the reader thread when new content has been parsed.
+    pub(crate) dirty: Arc<AtomicBool>,
+    /// Condvar for I/O burst budget: reader waits here when budget exceeded
+    /// and the UI hasn't rendered yet.
+    pub(crate) dirty_cond: Arc<(Mutex<()>, Condvar)>,
     size: PtySize,
     pty_size: PtySize,
     scrollback_len: usize,
@@ -132,15 +127,15 @@ impl Pty {
 
         let pending_title = Arc::new(Mutex::new(None));
         let foreground_title = Arc::new(Mutex::new(None));
-        let initial = vt100::Parser::new(size.rows, size.cols, scrollback_len);
-        let initial_screen_clone = initial.screen().clone();
-        let shared_screen = Arc::new(ArcSwap::new(Arc::new(initial_screen_clone)));
+        let initial_parser = vt100::Parser::new(size.rows, size.cols, scrollback_len);
+        let shared_parser = Arc::new(Mutex::new(initial_parser));
         let dirty = Arc::new(AtomicBool::new(false));
+        let dirty_cond = Arc::new((Mutex::new(()), Condvar::new()));
         let pending_resize = Arc::new(Mutex::new(None::<PtySize>));
         let shutdown = Arc::new(AtomicBool::new(false));
-        let reader_screen = Arc::clone(&shared_screen);
+        let reader_parser = Arc::clone(&shared_parser);
         let reader_dirty = Arc::clone(&dirty);
-        let reader_shutdown = Arc::clone(&shutdown);
+        let reader_dirty_cond = Arc::clone(&dirty_cond);
         let reader_pending_resize = Arc::clone(&pending_resize);
         let reader_pending_title = Arc::clone(&pending_title);
         let reader_handle = thread::spawn(move || {
@@ -150,16 +145,14 @@ impl Pty {
                 bytes_received: reader_bytes,
                 last_bytes: reader_last,
                 dsr_requested: reader_dsr,
-                shared_screen: reader_screen,
+                shared_parser: reader_parser,
                 dirty: reader_dirty,
+                dirty_cond: reader_dirty_cond,
                 pending_resize: reader_pending_resize,
                 pending_title: reader_pending_title,
                 status_cb: reader_status_cb,
                 scrollback_len,
-                rows: size.rows,
-                cols: size.cols,
                 osc52_text: None,
-                shutdown: reader_shutdown,
             })
         });
         Ok(Self {
@@ -173,10 +166,9 @@ impl Pty {
             foreground_title,
             last_fg_pid: 0,
             last_fg_check: Instant::now(),
-            shared_screen,
+            shared_parser,
             dirty,
-            screen_arc: None,
-            cached_screen: initial.screen().clone(),
+            dirty_cond,
             size,
             pty_size: size,
             scrollback_len,
@@ -308,7 +300,9 @@ impl Pty {
     }
 
     pub fn screen_lines(&mut self) -> Vec<String> {
-        let screen = self.screen();
+        self.screen(); // sync dirty state
+        let parser = self.shared_parser.lock().unwrap();
+        let screen = parser.screen();
         let contents = screen.contents();
         let mut lines: Vec<String> = contents.lines().map(|line| line.to_string()).collect();
         if lines.len() < self.size.rows as usize {
@@ -358,34 +352,20 @@ impl Pty {
         self.size
     }
 
-    /// Return a reference to the cached parsed screen.
-    /// If the reader thread has published new content, performs a
-    /// lock-free load from ArcSwap (no clone, no mutex contention).
-    /// Also handles periodic foreground title polling and DSR responses.
-    /// Always returns a reference to `cached_screen`, which reflects both
-    /// new screen data (synced from ArcSwap on dirty) and any mutations
-    /// made via `screen_mut()` (e.g., `set_scrollback`).
-    pub fn screen(&mut self) -> &vt100::Screen {
+    /// Sync dirty state and handle DSR/foreground polling.
+    /// The caller should then lock `shared_parser()` directly for cell access.
+    pub fn screen(&mut self) {
         self.poll_foreground();
         if self.dirty.swap(false, Ordering::Acquire) {
-            // Lock-free load — atomic refcount increment, no clone.
-            let fresh = self.shared_screen.load_full();
-            self.cached_screen = (*fresh).clone();
-            self.screen_arc = Some(fresh);
-
-            // Unpark the reader thread so it can read the next batch.
-            if let Some(reader) = &self.reader {
-                reader.thread().unpark();
-            }
-
             // Send DSR response if requested by the reader thread.
             if self.dsr_requested.swap(false, Ordering::Relaxed) {
-                let (row, col) = self.cached_screen.cursor_position();
+                let parser = self.shared_parser.lock().unwrap();
+                let (row, col) = parser.screen().cursor_position();
+                drop(parser);
                 let response = format!("\x1b[{};{}R", row.saturating_add(1), col.saturating_add(1));
                 let _ = self.write_bytes(response.as_bytes());
             }
         }
-        &self.cached_screen
     }
 
     pub fn bytes_received(&self) -> usize {
@@ -401,19 +381,16 @@ impl Pty {
         bytes_to_debug_text(&bytes, 32)
     }
 
-    pub fn screen_mut(&mut self) -> &mut vt100::Screen {
-        // `screen()` already syncs `cached_screen` from ArcSwap on dirty.
-        self.screen();
-        &mut self.cached_screen
-    }
-
     pub fn scrollback(&mut self) -> usize {
-        self.screen().scrollback()
+        self.screen(); // sync dirty state
+        let parser = self.shared_parser.lock().unwrap();
+        parser.screen().scrollback()
     }
 
     pub fn set_scrollback(&mut self, rows: usize) {
         let max = self.scrollback_len;
-        self.screen_mut().set_scrollback(rows.min(max));
+        let mut parser = self.shared_parser.lock().unwrap();
+        parser.screen_mut().set_scrollback(rows.min(max));
     }
 
     pub fn scrollback_len(&self) -> usize {
@@ -425,7 +402,8 @@ impl Pty {
         if max_sb == 0 {
             return 0;
         }
-        let screen = self.screen_mut();
+        let mut parser = self.shared_parser.lock().unwrap();
+        let screen = parser.screen_mut();
         let current = screen.scrollback();
         screen.set_scrollback(max_sb);
         let max = screen.scrollback();
@@ -434,7 +412,9 @@ impl Pty {
     }
 
     pub fn alternate_screen(&mut self) -> bool {
-        self.screen().alternate_screen()
+        self.screen(); // sync dirty state
+        let parser = self.shared_parser.lock().unwrap();
+        parser.screen().alternate_screen()
     }
 
     fn apply_resize(&mut self, size: PtySize) {
@@ -461,21 +441,16 @@ struct ParserReadLoopArgs {
     bytes_received: Arc<AtomicUsize>,
     last_bytes: Arc<Mutex<Vec<u8>>>,
     dsr_requested: Arc<AtomicBool>,
-    shared_screen: Arc<ArcSwap<vt100::Screen>>,
+    shared_parser: Arc<Mutex<vt100::Parser>>,
     dirty: Arc<AtomicBool>,
+    dirty_cond: Arc<(std::sync::Mutex<()>, Condvar)>,
     pending_resize: Arc<Mutex<Option<PtySize>>>,
     pending_title: Arc<Mutex<Option<String>>>,
     status_cb: StatusCallback,
     scrollback_len: usize,
-    rows: u16,
-    cols: u16,
     /// Test-only hook: when `Some`, the extracted OSC 52 text is written here
     /// in addition to the real clipboard, so tests can assert the value.
     osc52_text: Option<Arc<Mutex<Option<String>>>>,
-    /// When true, the reader should exit its loop as soon as possible.
-    /// Set by into_parts() and Drop to prevent the parked reader from
-    /// becoming a zombie thread.
-    shutdown: Arc<AtomicBool>,
 }
 
 fn parser_read_loop(args: ParserReadLoopArgs) {
@@ -485,21 +460,20 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
         bytes_received,
         last_bytes,
         dsr_requested,
-        shared_screen,
+        shared_parser,
         dirty,
+        dirty_cond,
         pending_resize,
         pending_title,
         status_cb,
         scrollback_len,
-        rows,
-        cols,
         osc52_text,
-        shutdown,
     } = args;
-    let mut parser = vt100::Parser::new(rows, cols, scrollback_len);
     let mut history: Vec<u8> = Vec::new();
     let mut buf = [0u8; PTY_READ_BUF_SIZE];
     let mut osc52 = Osc52Extractor::new();
+    let mut bytes_since_render = 0usize;
+    const IO_BURST_BUDGET: usize = 256 * 1024; // 256 KB
     loop {
         // Check for pending resize from main thread
         if let Ok(mut resize_opt) = pending_resize.lock()
@@ -507,7 +481,8 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
         {
             let mut new_parser = vt100::Parser::new(size.rows, size.cols, scrollback_len);
             new_parser.process(&history);
-            parser = new_parser;
+            let mut shared = shared_parser.lock().unwrap();
+            *shared = new_parser;
         }
 
         match reader.read(&mut buf) {
@@ -523,6 +498,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
             }
             Ok(n) => {
                 bytes_received.fetch_add(n, Ordering::Relaxed);
+                bytes_since_render += n;
                 let combined = if history.is_empty() {
                     buf[..n].to_vec()
                 } else {
@@ -557,7 +533,12 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     history.drain(0..cut_index);
                 }
 
-                parser.process(&buf[..n]);
+                // Process bytes directly into the shared parser.
+                {
+                    let mut shared = shared_parser.lock().unwrap();
+                    shared.process(&buf[..n]);
+                }
+
                 if let Some(title) = extract_osc_title(&buf[..n])
                     && let Ok(mut guard) = pending_title.lock()
                 {
@@ -573,29 +554,36 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     }
                 }
 
-                // Publish parsed screen to main thread via lock-free ArcSwap
-                let new_screen = Arc::new(parser.screen().clone());
-                shared_screen.store(new_screen);
-                dirty.store(true, Ordering::Release);
-
-                // Notify main thread — new data is available.
-                if let Ok(guard) = status_cb.lock()
-                    && let Some(ref cb) = *guard
-                {
-                    cb(crate::PtyStatus::Wakeup);
+                // Edge-triggered wakeup: only notify on false→true transition.
+                // Prevents flooding the IPC channel with thousands of redundant
+                // PtyWakeup messages per second at unthrottled ingestion speeds.
+                if !dirty.swap(true, Ordering::AcqRel) {
+                    if let Ok(guard) = status_cb.lock()
+                        && let Some(ref cb) = *guard
+                    {
+                        cb(crate::PtyStatus::Wakeup);
+                    }
+                    // Reset budget because a new render cycle has begun
+                    bytes_since_render = 0;
                 }
 
-                // Park until main thread consumes this screen.
-                // Only one PtyWakeup per pane is ever in the bounded channel
-                // (capacity 256), so PtyWakeup loss is mathematically impossible.
-                // No deadlock safety net needed.
-                while dirty.load(Ordering::Acquire) && !shutdown.load(Ordering::Acquire) {
-                    thread::park();
+                // I/O burst budget: when the reader has ingested more than
+                // IO_BURST_BUDGET bytes without a render, wait on the Condvar
+                // until the UI thread clears dirty. This prevents a single
+                // reader thread from consuming 100% CPU on infinite streams.
+                if bytes_since_render >= IO_BURST_BUDGET {
+                    let (lock, cvar) = &*dirty_cond;
+                    let mut guard = lock.lock().unwrap();
+                    while dirty.load(Ordering::Acquire) {
+                        guard = cvar.wait(guard).unwrap();
+                    }
+                    bytes_since_render = 0;
                 }
 
-                if shutdown.load(Ordering::Acquire) {
-                    break;
-                }
+                // Loop back to read() — no parking, no cloning, no render_ready check.
+                // Lock contention is expected under load: the reader will block
+                // on the mutex while the main thread holds it during render.
+                // This is intentional mechanical backpressure.
             }
             Err(_) => {
                 if let Ok(guard) = status_cb.lock()
@@ -752,8 +740,6 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use arc_swap::ArcSwap;
-
     // ── bytes_to_debug_text ──────────────────────────────────────────
 
     #[test]
@@ -820,20 +806,14 @@ mod tests {
             bytes_received: Arc::new(AtomicUsize::new(0)),
             last_bytes: Arc::new(Mutex::new(Vec::new())),
             dsr_requested: Arc::new(AtomicBool::new(false)),
-            shared_screen: Arc::new(ArcSwap::new(Arc::new(
-                vt100::Parser::new(24, 80, 0).screen().clone(),
-            ))),
+            shared_parser: Arc::new(Mutex::new(vt100::Parser::new(24, 80, 0))),
             dirty: Arc::new(AtomicBool::new(false)),
+            dirty_cond: Arc::new((Mutex::new(()), Condvar::new())),
             pending_resize: Arc::new(Mutex::new(None)),
             pending_title: Arc::new(Mutex::new(None)),
             status_cb: Arc::new(Mutex::new(None)),
             scrollback_len: 0,
-            rows: 24,
-            cols: 80,
             osc52_text: None,
-            // Pre-set shutdown so direct parser_read_loop calls don't
-            // park forever after processing a batch.
-            shutdown: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -963,15 +943,15 @@ mod tests {
         );
     }
 
-    // ── screen / screen_mut / into_parts / Drop ─────────────────────
+    // ── screen / set_scrollback / into_parts / Drop ─────────────────
     //
-    // These tests exercise the ArcSwap-based screen sharing path (screen()
-    // with dirty=true), the screen_mut() clone-from-Arc path, the into_parts()
+    // These tests exercise the shared-parser screen sharing path (sync
+    // with dirty=true), the set_scrollback mutation path, the into_parts()
     // shutdown signaling, and the Drop impl.  They use a real Pty spawned
     // with `cat` so the reader thread is alive.
 
     #[test]
-    fn screen_loads_from_arcswap_when_dirty() {
+    fn screen_loads_from_shared_parser_when_dirty() {
         let cmd = CommandBuilder::new("cat");
         let size = PtySize {
             rows: 24,
@@ -981,25 +961,25 @@ mod tests {
         };
         let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
 
-        // Initially dirty is false → screen() returns cached_screen.
-        // screen_arc should be None — checked after borrow is released.
-        {
-            let _s = pty.screen();
-        }
-        assert!(pty.screen_arc.is_none(), "screen_arc starts as None");
+        // Initially dirty is false — sync clears it.
+        pty.screen();
 
-        // Simulate reader thread publishing a new screen.
+        // Simulate reader thread publishing a new screen via shared parser.
         let mut new_parser = vt100::Parser::new(24, 80, 100);
         new_parser.process(b"hello world");
-        let new_screen = Arc::new(new_parser.screen().clone());
-        pty.shared_screen.store(new_screen);
+        {
+            let mut shared = pty.shared_parser.lock().unwrap();
+            *shared = new_parser;
+        }
         pty.dirty.store(true, Ordering::Release);
 
-        // screen() should load from ArcSwap, set screen_arc, clear dirty.
+        // screen() should clear dirty.
+        pty.screen();
+
+        // Verify content is from the new screen by reading directly from the parser.
         {
-            let s = pty.screen();
-            // Verify content is from the new screen
-            if let Some(cell) = s.cell(0, 0) {
+            let parser = pty.shared_parser.lock().unwrap();
+            if let Some(cell) = parser.screen().cell(0, 0) {
                 let contents = cell.contents();
                 assert!(
                     contents.contains('h'),
@@ -1007,11 +987,6 @@ mod tests {
                 );
             }
         }
-        // After screen's borrow is released we can check internal state.
-        assert!(
-            pty.screen_arc.is_some(),
-            "screen_arc must be set after loading from ArcSwap"
-        );
 
         assert!(!pty.dirty.load(Ordering::Acquire), "dirty must be cleared");
 
@@ -1022,7 +997,7 @@ mod tests {
     }
 
     #[test]
-    fn screen_mut_syncs_from_screen_arc() {
+    fn screen_syncs_from_shared_parser() {
         let cmd = CommandBuilder::new("cat");
         let size = PtySize {
             rows: 24,
@@ -1032,20 +1007,25 @@ mod tests {
         };
         let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
 
-        // Publish a new screen via ArcSwap.
+        // Publish a new screen via shared parser.
         let mut new_parser = vt100::Parser::new(24, 80, 100);
         new_parser.process(b"content");
-        pty.shared_screen
-            .store(Arc::new(new_parser.screen().clone()));
+        {
+            let mut shared = pty.shared_parser.lock().unwrap();
+            *shared = new_parser;
+        }
         pty.dirty.store(true, Ordering::Release);
 
-        // screen_mut() calls screen() → loads ArcSwap into screen_arc,
-        // then clones from screen_arc into cached_screen.
-        let screen = pty.screen_mut();
-        // Verify content from the new screen is accessible.
-        let cell = screen.cell(0, 0);
-        assert!(cell.is_some(), "expected a cell at (0,0)");
-        assert_eq!(cell.unwrap().contents(), "c");
+        // Sync dirty state.
+        pty.screen();
+
+        // Verify content from the new screen is accessible via the shared parser.
+        {
+            let parser = pty.shared_parser.lock().unwrap();
+            let cell = parser.screen().cell(0, 0);
+            assert!(cell.is_some(), "expected a cell at (0,0)");
+            assert_eq!(cell.unwrap().contents(), "c");
+        }
 
         // Clean up.
         if let Some(child) = pty.child.as_mut() {
@@ -1055,9 +1035,8 @@ mod tests {
 
     #[test]
     fn set_scrollback_mutation_visible_through_scrollback_and_screen() {
-        // Regression test: Pty::screen() must return &cached_screen (which
-        // reflects mutations like set_scrollback), not &screen_arc (the raw
-        // ArcSwap snapshot which is never mutated).
+        // Regression test: set_scrollback must mutate the shared parser's screen,
+        // and scrollback() must read from the same parser.
         //
         // Generate enough output (30 lines in a 24-row terminal) to fill the
         // scrollback buffer so that set_scrollback(N) isn't clamped to 0.
@@ -1070,8 +1049,8 @@ mod tests {
         };
         let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
 
-        // Consume any initial dirty so cached_screen is synced from screen_arc.
-        let _s = pty.screen();
+        // Consume any initial dirty.
+        pty.screen();
 
         // Publish a screen with enough content to fill scrollback.
         // 30 lines in a 24-row terminal → 6 lines in the scrollback buffer.
@@ -1081,18 +1060,19 @@ mod tests {
         }
         let mut parser = vt100::Parser::new(24, 80, 100);
         parser.process(&lines);
-        pty.shared_screen.store(Arc::new(parser.screen().clone()));
+        {
+            let mut shared = pty.shared_parser.lock().unwrap();
+            *shared = parser;
+        }
         pty.dirty.store(true, Ordering::Release);
 
-        // Load into cached_screen.
-        let _s = pty.screen();
+        // Sync.
+        pty.screen();
 
         // Start at bottom (scrollback == 0).
         assert_eq!(pty.scrollback(), 0);
 
-        // ── The core of the bug ─────────────────────────────────────
-        // set_scrollback mutates cached_screen via screen_mut().
-        // screen() MUST return &cached_screen so the mutation is visible.
+        // set_scrollback mutates the shared parser's screen directly.
         let sb_available = pty.max_scrollback();
         assert!(
             sb_available >= 3,
@@ -1100,46 +1080,40 @@ mod tests {
         );
         pty.set_scrollback(3);
 
-        // scrollback() → screen() → must see the mutation.
+        // scrollback() reads from the shared parser — must see the mutation.
         assert_eq!(
             pty.scrollback(),
             3,
             "scrollback() must reflect set_scrollback"
         );
 
-        // screen().scrollback() → must also see the mutation.
-        assert_eq!(
-            pty.screen().scrollback(),
-            3,
-            "screen().scrollback() must reflect set_scrollback"
-        );
-
-        // Verify the raw ArcSwap snapshot was NOT mutated (sanity check
-        // that we're truly testing cached_screen vs screen_arc).
-        if let Some(ref screen_arc) = pty.screen_arc {
+        // Verify the shared parser's screen reflects the mutation.
+        {
+            let shared = pty.shared_parser.lock().unwrap();
             assert_eq!(
-                screen_arc.scrollback(),
-                0,
-                "the ArcSwap snapshot must remain untouched by set_scrollback"
+                shared.screen().scrollback(),
+                3,
+                "shared parser's screen must reflect set_scrollback"
             );
         }
 
-        // ── Mutation survives subsequent clean screen() calls ──────
-        // Calling screen() again (dirty=false) must not clobber the mutation.
-        let _s = pty.screen();
+        // Mutation survives subsequent sync calls.
+        pty.screen();
         assert_eq!(
             pty.scrollback(),
             3,
             "mutation must survive repeated screen() calls without new data"
         );
 
-        // ── New ArcSwap data replaces the mutation (expected) ──────
-        // When a new screen arrives via ArcSwap, the new scrollback wins.
+        // New shared parser data replaces the mutation (expected).
         let mut parser2 = vt100::Parser::new(24, 80, 100);
         parser2.process(b"fresh output");
-        pty.shared_screen.store(Arc::new(parser2.screen().clone()));
+        {
+            let mut shared = pty.shared_parser.lock().unwrap();
+            *shared = parser2;
+        }
         pty.dirty.store(true, Ordering::Release);
-        let _s = pty.screen();
+        pty.screen();
 
         assert_eq!(
             pty.scrollback(),
@@ -1154,9 +1128,9 @@ mod tests {
     }
 
     #[test]
-    fn screen_mut_then_screen_see_consistent_scrollback() {
-        // screen_mut() and screen() both go through cached_screen.
-        // Any mutation via screen_mut() must be visible through screen().
+    fn set_scrollback_and_scrollback_consistent() {
+        // set_scrollback() and scrollback() both operate on the shared parser.
+        // Mutations via set_scrollback must be visible through scrollback().
         let cmd = CommandBuilder::new("cat");
         let size = PtySize {
             rows: 24,
@@ -1166,8 +1140,8 @@ mod tests {
         };
         let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
 
-        // Sync cached_screen.
-        let _s = pty.screen();
+        // Sync.
+        pty.screen();
 
         // Publish and load a screen with scrollback content (30 lines).
         let mut lines = Vec::new();
@@ -1176,32 +1150,35 @@ mod tests {
         }
         let mut parser = vt100::Parser::new(24, 80, 100);
         parser.process(&lines);
-        pty.shared_screen.store(Arc::new(parser.screen().clone()));
+        {
+            let mut shared = pty.shared_parser.lock().unwrap();
+            *shared = parser;
+        }
         pty.dirty.store(true, Ordering::Release);
-        let _s = pty.screen();
+        pty.screen();
 
         assert!(
             pty.max_scrollback() >= 3,
             "need enough scrollback for this test"
         );
 
-        // Mutate via screen_mut() directly.
-        pty.screen_mut().set_scrollback(3);
+        // Mutate via set_scrollback.
+        pty.set_scrollback(3);
 
-        // screen() must see the same scrollback.
+        // scrollback() must see the mutation.
         assert_eq!(
-            pty.screen().scrollback(),
+            pty.scrollback(),
             3,
-            "screen() must see mutation made via screen_mut()"
+            "scrollback() must see mutation made via set_scrollback"
         );
 
-        // Mutate via set_scrollback() which uses screen_mut() internally.
+        // Mutate again.
         pty.set_scrollback(5);
 
         assert_eq!(
-            pty.screen().scrollback(),
+            pty.scrollback(),
             5,
-            "screen() must see mutation made via set_scrollback"
+            "scrollback() must see mutation made via set_scrollback"
         );
 
         // Clean up.

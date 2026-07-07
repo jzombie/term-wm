@@ -7,7 +7,7 @@ use crate::window::WindowKey;
 
 impl WindowManager {
     pub(super) fn focus_window_at(&mut self, column: u16, row: u16) -> bool {
-        if !self.config.wm_overlay_enabled || self.managed_draw_order.is_empty() {
+        if !self.config.wm_command_menu_enabled || self.managed_draw_order.is_empty() {
             return false;
         }
         let Some(hit) = self.hit_test_region_topmost(column, row, &self.managed_draw_order) else {

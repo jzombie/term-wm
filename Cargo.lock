@@ -109,15 +109,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arc-swap"
-version = "1.9.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c049c0be4daef0b145cb3555416b3b8ef5b7888a38aea1a3a155801fe7b0810b"
-dependencies = [
- "rustversion",
-]
-
-[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2470,7 +2461,7 @@ dependencies = [
 
 [[package]]
 name = "term-bench"
-version = "0.8.8-alpha"
+version = "0.8.9-alpha"
 dependencies = [
  "clap",
  "crossterm",
@@ -2480,7 +2471,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm"
-version = "0.8.8-alpha"
+version = "0.8.9-alpha"
 dependencies = [
  "clap",
  "crossbeam-channel",
@@ -2500,7 +2491,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-core"
-version = "0.8.8-alpha"
+version = "0.8.9-alpha"
 dependencies = [
  "console",
  "crossbeam-channel",
@@ -2518,17 +2509,16 @@ dependencies = [
 
 [[package]]
 name = "term-wm-layout-engine"
-version = "0.8.8-alpha"
+version = "0.8.9-alpha"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "term-wm-pty-engine"
-version = "0.8.8-alpha"
+version = "0.8.9-alpha"
 dependencies = [
  "arboard",
- "arc-swap",
  "base64",
  "crossterm",
  "ctrlc",
@@ -2540,7 +2530,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-sys-ui-components"
-version = "0.8.8-alpha"
+version = "0.8.9-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -2551,7 +2541,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-components"
-version = "0.8.8-alpha"
+version = "0.8.9-alpha"
 dependencies = [
  "crossterm",
  "indoc",

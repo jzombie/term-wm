@@ -7,7 +7,7 @@ use ratatui::prelude::Rect;
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use term_wm_core::actions::{EventResult, TermWmAction};
-use term_wm_core::component_context::{ViewportHandle, ViewportSharedState};
+use term_wm_core::component_context::{ScrollBounds, ScrollHandle};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::ui::UiFrame;
 use term_wm_core::window::WindowKey;
@@ -162,45 +162,61 @@ fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
 
 // --- ScrollView Component Wrapper ---
 
+/// Controls which keyboard scroll events the `ScrollViewComponent` intercepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollKeyMode {
+    /// No keyboard scroll interception — all keys fall through to the child.
+    None,
+    /// Only PageUp/PageDown/Home/End are intercepted for scrolling.
+    /// Up/Down/arrow keys fall through to the child (terminal shell history).
+    PaginationOnly,
+    /// Full keyboard scroll: Up/Down/PageUp/PageDown/Home/End.
+    /// Used by help overlay, keybindings overlay, debug log.
+    Full,
+}
+
 #[derive(Debug)]
 pub struct ScrollViewComponent<C> {
     pub content: RefCell<C>,
-    shared_state: Rc<RefCell<ViewportSharedState>>,
+    scroll_state: Rc<RefCell<ScrollBounds>>,
     v_drag: ScrollbarDrag,
     h_drag: ScrollbarDrag,
-    keyboard_enabled: bool,
+    keyboard_mode: ScrollKeyMode,
 }
 
 impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
     pub fn new(content: C) -> Self {
         Self {
             content: RefCell::new(content),
-            shared_state: Rc::new(RefCell::new(ViewportSharedState::default())),
+            scroll_state: Rc::new(RefCell::new(ScrollBounds::default())),
             v_drag: ScrollbarDrag::new(),
             h_drag: ScrollbarDrag::new(),
-            keyboard_enabled: true,
+            keyboard_mode: ScrollKeyMode::Full,
         }
     }
 
-    pub fn set_keyboard_enabled(&mut self, enabled: bool) {
-        self.keyboard_enabled = enabled;
+    pub fn set_keyboard_mode(&mut self, mode: ScrollKeyMode) {
+        self.keyboard_mode = mode;
     }
 
-    pub fn viewport_handle(&self) -> ViewportHandle {
-        ViewportHandle {
-            shared: self.shared_state.clone(),
+    pub fn set_sticky_bottom(&mut self, sticky: bool) {
+        self.scroll_state.borrow_mut().sticky_bottom = sticky;
+    }
+
+    pub fn scroll_handle(&self) -> ScrollHandle {
+        ScrollHandle {
+            scroll: self.scroll_state.clone(),
         }
     }
 
     pub(crate) fn compute_layout(&self, area: Rect) -> Rect {
         // Simple reservation strategy:
         // Use previous frame's content size to decide on scrollbars.
-        let state = self.shared_state.borrow();
+        let state = self.scroll_state.borrow();
         let content_w = state.content_width;
         let content_h = state.content_height;
         drop(state);
 
-        // If we don't know content size yet, give full area.
         if content_w == 0 && content_h == 0 {
             return area;
         }
@@ -230,7 +246,7 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
         let Event::Mouse(mouse) = event else {
             return EventResult::Ignored;
         };
-        let state = self.shared_state.borrow();
+        let state = self.scroll_state.borrow();
         let content_h = state.content_height;
         let view_h = state.height;
         let content_w = state.content_width;
@@ -254,7 +270,7 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
                 self.v_drag
                     .handle_mouse(mouse, sb_area, content_h, view_h, ScrollbarAxis::Vertical)
             {
-                let mut st = self.shared_state.borrow_mut();
+                let mut st = self.scroll_state.borrow_mut();
                 st.offset_y = new_off;
                 st.pending_offset_y = Some(new_off);
                 return EventResult::Consumed;
@@ -275,7 +291,7 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
                 view_w,
                 ScrollbarAxis::Horizontal,
             ) {
-                let mut st = self.shared_state.borrow_mut();
+                let mut st = self.scroll_state.borrow_mut();
                 st.offset_x = new_off;
                 st.pending_offset_x = Some(new_off);
                 return EventResult::Consumed;
@@ -296,45 +312,43 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
             }
         }
 
-        let handle = self.viewport_handle();
+        let handle = self.scroll_handle();
         let info = handle.info();
         let child_ctx = ctx.with_viewport(info, Some(handle));
         self.content.borrow_mut().handle_events(event, &child_ctx)
     }
 
     fn on_key(&mut self, event: &Event, ctx: &ComponentContext) -> EventResult<TermWmAction> {
-        let handle = self.viewport_handle();
+        let handle = self.scroll_handle();
         let info = handle.info();
         let child_ctx = ctx.with_viewport(info, Some(handle));
 
-        if self.keyboard_enabled
+        if self.keyboard_mode != ScrollKeyMode::None
             && ctx.focused()
+            && !ctx.direct_mode()
             && let Event::Key(key) = event
             && key.kind == crossterm::event::KeyEventKind::Press
         {
-            use crossterm::event::KeyCode;
-            match key.code {
-                KeyCode::Up => {
-                    return EventResult::Action(TermWmAction::ScrollView(-1));
-                }
-                KeyCode::Down => {
-                    return EventResult::Action(TermWmAction::ScrollView(1));
-                }
-                KeyCode::PageUp => {
-                    let height = self.shared_state.borrow().height as isize;
-                    return EventResult::Action(TermWmAction::ScrollView(-height));
-                }
-                KeyCode::PageDown => {
-                    let height = self.shared_state.borrow().height as isize;
-                    return EventResult::Action(TermWmAction::ScrollView(height));
-                }
-                KeyCode::Home => {
-                    return EventResult::Action(TermWmAction::ScrollToTop);
-                }
-                KeyCode::End => {
-                    return EventResult::Action(TermWmAction::ScrollToBottom);
-                }
-                _ => {}
+            let is_full = self.keyboard_mode == ScrollKeyMode::Full;
+            let kb = &ctx.config().keybindings;
+
+            // Pagination-level scrolling (active in PaginationOnly and Full)
+            if kb.matches(TermWmAction::ScrollPageUp, key) {
+                let height = self.scroll_state.borrow().height as isize;
+                return EventResult::Action(TermWmAction::ScrollView(-height));
+            } else if kb.matches(TermWmAction::ScrollPageDown, key) {
+                let height = self.scroll_state.borrow().height as isize;
+                return EventResult::Action(TermWmAction::ScrollView(height));
+            } else if kb.matches(TermWmAction::ScrollHome, key) {
+                return EventResult::Action(TermWmAction::ScrollToTop);
+            } else if kb.matches(TermWmAction::ScrollEnd, key) {
+                return EventResult::Action(TermWmAction::ScrollToBottom);
+            }
+            // Line-level scrolling (only in Full mode)
+            else if is_full && kb.matches(TermWmAction::ScrollUp, key) {
+                return EventResult::Action(TermWmAction::ScrollView(-1));
+            } else if is_full && kb.matches(TermWmAction::ScrollDown, key) {
+                return EventResult::Action(TermWmAction::ScrollView(1));
             }
         }
 
@@ -358,12 +372,10 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
         let mut attempt = 0;
 
         loop {
-            // 1. Compute layout (potentially reserving space for scrollbars)
             let inner_area = self.compute_layout(area);
 
-            // 2. Update Shared State for this frame's Viewport properties
             {
-                let mut state = self.shared_state.borrow_mut();
+                let mut state = self.scroll_state.borrow_mut();
                 state.width = inner_area.width as usize;
                 state.height = inner_area.height as usize;
 
@@ -381,7 +393,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
                 }
             }
 
-            let handle = self.viewport_handle();
+            let handle = self.scroll_handle();
             let info = handle.info();
             let child_ctx = ctx.with_viewport(info, Some(handle));
 
@@ -392,12 +404,15 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
                 .render(frame, inner_area, &child_ctx, registry);
             registry.pop_clip();
 
-            let state = self.shared_state.borrow();
+            let state = self.scroll_state.borrow();
             let content_w = state.content_width;
             let content_h = state.content_height;
             let off_x = state.offset_x;
             let off_y = state.offset_y;
             drop(state);
+
+            // Detect if the child's measurement triggered a sticky auto-scroll
+            let offset_changed = off_x != info.offset_x || off_y != info.offset_y;
 
             let needs_vertical = inner_area.height > 0 && content_h > inner_area.height as usize;
             let has_vertical_reserved = inner_area.width < area.width;
@@ -412,12 +427,13 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
                 (needs_horizontal && !has_horizontal_reserved && area.height > 0)
                     || drop_horizontal;
 
-            if (retry_vertical || retry_horizontal) && attempt + 1 < max_attempts {
+            // Trigger a re-render in the exact same frame if offsets snapped
+            if (retry_vertical || retry_horizontal || offset_changed) && attempt + 1 < max_attempts
+            {
                 attempt += 1;
                 continue;
             }
 
-            // 5. Render Scrollbars with finalized layout (skip in direct mode)
             if !ctx.direct_mode() {
                 if needs_vertical {
                     let sb_area = Rect {
@@ -478,7 +494,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
     ) {
         match action {
             TermWmAction::ScrollView(delta) => {
-                let mut st = self.shared_state.borrow_mut();
+                let mut st = self.scroll_state.borrow_mut();
                 if delta < 0 {
                     st.offset_y = st.offset_y.saturating_sub(delta.unsigned_abs());
                 } else {
@@ -488,18 +504,18 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
                 st.pending_offset_y = Some(st.offset_y);
             }
             TermWmAction::ScrollToTop => {
-                let mut st = self.shared_state.borrow_mut();
+                let mut st = self.scroll_state.borrow_mut();
                 st.offset_y = 0;
                 st.pending_offset_y = Some(0);
             }
             TermWmAction::ScrollToBottom => {
-                let mut st = self.shared_state.borrow_mut();
+                let mut st = self.scroll_state.borrow_mut();
                 st.offset_y = st.content_height.saturating_sub(st.height);
                 st.pending_offset_y = Some(st.offset_y);
             }
             _ => {
-                // 3. Create context with ViewportHandle
-                let handle = self.viewport_handle();
+                // 3. Create context with ScrollHandle
+                let handle = self.scroll_handle();
                 let info = handle.info();
                 let child_ctx = ctx.with_viewport(info, Some(handle));
                 self.content
@@ -689,6 +705,9 @@ mod tests {
             ) {
                 self.received_scroll = true;
             }
+            if matches!(event, Event::Key(_)) {
+                self.received_scroll = true;
+            }
             EventResult::Ignored
         }
     }
@@ -820,6 +839,260 @@ mod tests {
         assert!(
             !consumed_normal.is_consumed(),
             "non-scroll click should not be consumed in normal mode either"
+        );
+    }
+
+    #[test]
+    fn scroll_view_pagination_mode_intercepts_pageup_pagedown() {
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+        sv.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
+
+        let ctx = ComponentContext::new(true);
+        let page_up = Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::PageUp,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        let result = sv.handle_events(&page_up, &ctx);
+        assert!(
+            matches!(result, EventResult::Action(TermWmAction::ScrollView(_))),
+            "PaginationOnly must intercept PageUp"
+        );
+
+        sv.content.borrow_mut().received_scroll = false;
+        let page_down = Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::PageDown,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        let result = sv.handle_events(&page_down, &ctx);
+        assert!(
+            matches!(result, EventResult::Action(TermWmAction::ScrollView(_))),
+            "PaginationOnly must intercept PageDown"
+        );
+    }
+
+    #[test]
+    fn scroll_view_pagination_mode_passes_up_down() {
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+        sv.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
+
+        let ctx = ComponentContext::new(true);
+        let up = Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Up,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        let result = sv.handle_events(&up, &ctx);
+        assert!(
+            result.is_ignored(),
+            "PaginationOnly must NOT intercept Up — should fall through to child"
+        );
+        assert!(
+            sv.content.borrow().received_scroll,
+            "Up must reach the child component"
+        );
+    }
+
+    #[test]
+    fn scroll_view_full_mode_intercepts_all_scroll_keys() {
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+        sv.set_keyboard_mode(ScrollKeyMode::Full);
+
+        let ctx = ComponentContext::new(true);
+
+        let up = Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Up,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        let result = sv.handle_events(&up, &ctx);
+        assert!(
+            matches!(result, EventResult::Action(TermWmAction::ScrollView(-1))),
+            "Full mode must intercept Up"
+        );
+
+        sv.content.borrow_mut().received_scroll = false;
+        let home = Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Home,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        let result = sv.handle_events(&home, &ctx);
+        assert!(
+            matches!(result, EventResult::Action(TermWmAction::ScrollToTop)),
+            "Full mode must intercept Home"
+        );
+    }
+
+    #[test]
+    fn scroll_view_modifier_chords_pass_through() {
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+        sv.set_keyboard_mode(ScrollKeyMode::Full);
+
+        let ctx = ComponentContext::new(true);
+
+        // Ctrl+Up should NOT be intercepted (default keybinding has NONE modifier)
+        let ctrl_up = Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Up,
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
+        let result = sv.handle_events(&ctrl_up, &ctx);
+        assert!(
+            result.is_ignored(),
+            "Ctrl+Up must fall through — modifier mismatch"
+        );
+
+        sv.content.borrow_mut().received_scroll = false;
+        // Shift+PageUp should NOT be intercepted (default binding has NONE modifier)
+        let shift_pgup = Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::PageUp,
+            crossterm::event::KeyModifiers::SHIFT,
+        ));
+        let result = sv.handle_events(&shift_pgup, &ctx);
+        assert!(
+            result.is_ignored(),
+            "Shift+PageUp must fall through — modifier mismatch"
+        );
+    }
+
+    #[test]
+    fn scroll_view_direct_mode_passes_all_keys() {
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+        sv.set_keyboard_mode(ScrollKeyMode::Full);
+
+        let ctx = ComponentContext::new(true).with_direct_mode(true);
+
+        let page_up = Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::PageUp,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        let result = sv.handle_events(&page_up, &ctx);
+        assert!(
+            result.is_ignored(),
+            "direct mode must pass all keys through"
+        );
+        assert!(
+            sv.content.borrow().received_scroll,
+            "key must reach child in direct mode"
+        );
+    }
+
+    #[test]
+    fn scroll_view_none_mode_passes_all_keys() {
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+        sv.set_keyboard_mode(ScrollKeyMode::None);
+
+        let ctx = ComponentContext::new(true);
+
+        let page_up = Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::PageUp,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        let result = sv.handle_events(&page_up, &ctx);
+        assert!(result.is_ignored(), "None mode must pass all keys through");
+        assert!(
+            sv.content.borrow().received_scroll,
+            "key must reach child in None mode"
+        );
+    }
+
+    #[test]
+    fn sticky_bottom_snaps_when_at_bottom() {
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+        sv.set_sticky_bottom(true);
+
+        let handle = sv.scroll_handle();
+
+        // Simulate viewport dimensions (normally set by the render loop)
+        {
+            let mut st = sv.scroll_state.borrow_mut();
+            st.width = 80;
+            st.height = 10;
+        }
+
+        // Set initial content: 100 lines, viewport shows 10
+        handle.set_content_size(80, 100);
+        // Scroll to the bottom (offset 90 = 100 - 10)
+        handle.scroll_vertical_to(usize::MAX);
+        assert_eq!(handle.info().offset_y, 90, "should be at bottom");
+
+        // Content grows to 110 lines — sticky_bottom should snap to new bottom
+        handle.set_content_size(80, 110);
+        assert_eq!(
+            handle.info().offset_y,
+            100,
+            "should snap to new bottom (110 - 10 = 100)"
+        );
+    }
+
+    #[test]
+    fn sticky_bottom_stays_when_scrolled_up() {
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+        sv.set_sticky_bottom(true);
+
+        let handle = sv.scroll_handle();
+
+        // Simulate viewport dimensions
+        {
+            let mut st = sv.scroll_state.borrow_mut();
+            st.width = 80;
+            st.height = 10;
+        }
+
+        // Set initial content: 100 lines, viewport shows 10
+        handle.set_content_size(80, 100);
+        // Scroll to offset 50 (middle)
+        handle.scroll_vertical_to(50);
+        assert_eq!(handle.info().offset_y, 50, "should be at offset 50");
+
+        // Content grows to 110 lines — sticky_bottom should NOT move us
+        handle.set_content_size(80, 110);
+        assert_eq!(
+            handle.info().offset_y,
+            50,
+            "should stay at offset 50 when not at bottom"
+        );
+    }
+
+    #[test]
+    fn sticky_bottom_disabled_no_snap() {
+        let sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+        // sticky_bottom defaults to false
+        let handle = sv.scroll_handle();
+
+        // Simulate viewport dimensions
+        {
+            let mut st = sv.scroll_state.borrow_mut();
+            st.width = 80;
+            st.height = 10;
+        }
+
+        // Set initial content: 100 lines, viewport shows 10
+        handle.set_content_size(80, 100);
+        // Scroll to the bottom
+        handle.scroll_vertical_to(usize::MAX);
+        assert_eq!(handle.info().offset_y, 90, "should be at bottom");
+
+        // Content grows — with sticky_bottom disabled, offset should NOT change
+        handle.set_content_size(80, 110);
+        assert_eq!(
+            handle.info().offset_y,
+            90,
+            "should stay at old bottom when sticky_bottom is false"
         );
     }
 }

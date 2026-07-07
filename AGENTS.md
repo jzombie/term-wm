@@ -75,8 +75,8 @@ Pane Trait for Testability
 - Use `term.set_last_scrollback(n)` and `term.set_last_max_scrollback(n)` (no-op outside tests) to prime terminal state before exercising sync.
 
 Scroll Sync Testing
-- All scroll-sync logic lives in `render_screen` in `terminal.rs`. It is tested via `TerminalComponent::render()` with a real `ViewportHandle` + `UiFrame`.
-- Test helpers: `make_handle()` creates a `(ViewportHandle, Rc<RefCell<ViewportSharedState>>)` pair. `run_sync(term, view_offset)` does one render pass. `run_sync_with_handle(term, &shared)` reuses an existing handle across renders.
+- All scroll-sync logic lives in `render_screen` in `terminal.rs`. It is tested via `TerminalComponent::render()` with a real `ScrollHandle` + `UiFrame`.
+- Test helpers: `make_handle()` creates a `(ScrollHandle, Rc<RefCell<ScrollBounds>>)` pair. `run_sync(term, view_offset)` does one render pass. `run_sync_with_handle(term, &shared)` reuses an existing handle across renders.
 - Coverage must include: each branch of the `if current_sb == 0` / `else if` / `else` chain, edge cases (`saturating_sub` underflow, zero content), alternate screen skip, and the two-render sequence.
 
 Property Testing with proptest

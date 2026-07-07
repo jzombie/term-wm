@@ -5,6 +5,8 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::{Layer, layer::Context};
 
 use term_wm_core::debug_event_flags::trigger_error_pending;
+
+#[cfg(feature = "sys-ui")]
 use term_wm_sys_ui_components::wm_debug_log::{DebugLogWriter, global_debug_log};
 
 struct ErrorNotifyLayer;
@@ -25,20 +27,23 @@ pub struct DelegatingWriter {
 }
 
 enum DelegatingInner {
+    #[cfg(feature = "sys-ui")]
     Debug(DebugLogWriter),
     Stderr(io::Stderr),
 }
 
 impl DelegatingWriter {
     fn new() -> Self {
-        if let Some(handle) = global_debug_log() {
-            DelegatingWriter {
-                inner: DelegatingInner::Debug(handle.writer()),
+        #[cfg(feature = "sys-ui")]
+        {
+            if let Some(handle) = global_debug_log() {
+                return DelegatingWriter {
+                    inner: DelegatingInner::Debug(handle.writer()),
+                };
             }
-        } else {
-            DelegatingWriter {
-                inner: DelegatingInner::Stderr(io::stderr()),
-            }
+        }
+        DelegatingWriter {
+            inner: DelegatingInner::Stderr(io::stderr()),
         }
     }
 }
@@ -46,6 +51,7 @@ impl DelegatingWriter {
 impl Write for DelegatingWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match &mut self.inner {
+            #[cfg(feature = "sys-ui")]
             DelegatingInner::Debug(w) => w.write(buf),
             DelegatingInner::Stderr(s) => s.write(buf),
         }
@@ -53,6 +59,7 @@ impl Write for DelegatingWriter {
 
     fn flush(&mut self) -> io::Result<()> {
         match &mut self.inner {
+            #[cfg(feature = "sys-ui")]
             DelegatingInner::Debug(w) => w.flush(),
             DelegatingInner::Stderr(s) => s.flush(),
         }
