@@ -656,7 +656,7 @@ mod markdown_tests {
             modifiers: KeyModifiers::empty(),
         });
 
-        assert_eq!(scroll.viewport_handle().info().offset_y, 0);
+        assert_eq!(scroll.scroll_handle().info().offset_y, 0);
 
         let ctx = ComponentContext::new(true).with_screen_area(area);
         let result = scroll.handle_events(&mouse_event, &ctx);
@@ -664,7 +664,7 @@ mod markdown_tests {
             scroll.update(action, &ComponentContext::new(true), &mut VecDeque::new());
         }
 
-        let offset = scroll.viewport_handle().info().offset_y;
+        let offset = scroll.scroll_handle().info().offset_y;
 
         assert!(
             offset > 0,

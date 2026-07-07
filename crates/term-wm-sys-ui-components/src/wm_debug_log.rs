@@ -326,7 +326,7 @@ mod tests {
             );
         }
         let ctx = ComponentContext::new(true);
-        let vh = comp.scroll_view.viewport_handle();
+        let vh = comp.scroll_view.scroll_handle();
         let info = vh.info();
         let max_off = info.offset_y; // after render, sticky_bottom snaps to bottom
 

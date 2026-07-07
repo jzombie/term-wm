@@ -11,7 +11,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use term_wm_core::actions::{EventResult, TermWmAction};
-use term_wm_core::component_context::{ViewportContext, ViewportHandle};
+use term_wm_core::component_context::{ScrollViewport, ScrollHandle};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::events::LocalMouseEvent;
 use term_wm_core::ui::UiFrame;
@@ -28,8 +28,8 @@ pub struct TextRendererComponent {
     link_map: Vec<Vec<Option<String>>>,
     selection: RefCell<SelectionController>,
     selection_enabled: bool,
-    viewport_handle: RefCell<Option<ViewportHandle>>,
-    viewport_cache: Cell<ViewportContext>,
+    scroll_handle: RefCell<Option<ScrollHandle>>,
+    viewport_cache: Cell<ScrollViewport>,
     content_width: Cell<usize>,
     content_height: Cell<usize>,
 }
@@ -55,8 +55,8 @@ impl Component<TermWmAction> for TextRendererComponent {
 
         let screen_area = ctx.screen_area().unwrap_or(area);
         self.viewport_cache.set(ctx.viewport());
-        if let Some(handle) = ctx.viewport_handle() {
-            self.viewport_handle.replace(Some(handle));
+        if let Some(handle) = ctx.scroll_handle() {
+            self.scroll_handle.replace(Some(handle));
         }
 
         let viewport_cache = self.viewport_cache.get();
@@ -83,7 +83,7 @@ impl Component<TermWmAction> for TextRendererComponent {
         self.content_height.set(content_height);
         self.content_width.set(content_width);
 
-        if let Some(handle) = self.viewport_handle.borrow().as_ref() {
+        if let Some(handle) = self.scroll_handle.borrow().as_ref() {
             handle.set_content_size(content_width, content_height);
         }
 
@@ -180,8 +180,8 @@ impl Component<TermWmAction> for TextRendererComponent {
         ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
         self.viewport_cache.set(ctx.viewport());
-        if let Some(handle) = ctx.viewport_handle() {
-            self.viewport_handle.replace(Some(handle));
+        if let Some(handle) = ctx.scroll_handle() {
+            self.scroll_handle.replace(Some(handle));
         }
         // Reconstruct screen-space MouseEvent for handle_selection_mouse
         let screen_area = ctx.screen_area().unwrap_or_default();
@@ -248,8 +248,8 @@ impl TextRendererComponent {
             link_map: Vec::new(),
             selection: RefCell::new(SelectionController::new()),
             selection_enabled: false,
-            viewport_handle: RefCell::new(None),
-            viewport_cache: Cell::new(ViewportContext::default()),
+            scroll_handle: RefCell::new(None),
+            viewport_cache: Cell::new(ScrollViewport::default()),
             content_width: Cell::new(0),
             content_height: Cell::new(0),
         }
@@ -281,7 +281,7 @@ impl TextRendererComponent {
 
     pub fn jump_to_logical_line(&mut self, line_idx: usize, area: Rect) {
         if self.text.lines.is_empty() || area.width == 0 {
-            if let Some(handle) = self.viewport_handle.borrow().as_ref() {
+            if let Some(handle) = self.scroll_handle.borrow().as_ref() {
                 handle.scroll_vertical_to(0);
             }
             return;
@@ -304,13 +304,13 @@ impl TextRendererComponent {
                 offset += 1;
             }
         }
-        if let Some(handle) = self.viewport_handle.borrow().as_ref() {
+        if let Some(handle) = self.scroll_handle.borrow().as_ref() {
             handle.scroll_vertical_to(offset);
         }
     }
 
     pub fn scroll_vertical_to(&mut self, offset: usize) {
-        if let Some(handle) = self.viewport_handle.borrow().as_ref() {
+        if let Some(handle) = self.scroll_handle.borrow().as_ref() {
             handle.scroll_vertical_to(offset);
         }
     }
@@ -601,7 +601,7 @@ impl TextRendererComponent {
     }
 
     pub fn reset(&mut self) {
-        if let Some(handle) = self.viewport_handle.borrow().as_ref() {
+        if let Some(handle) = self.scroll_handle.borrow().as_ref() {
             handle.scroll_vertical_to(0);
             handle.scroll_horizontal_to(0);
         }
@@ -626,7 +626,7 @@ impl SelectionViewport for TextRendererComponent {
         if delta == 0 {
             return;
         }
-        if let Some(handle) = self.viewport_handle.borrow().as_ref() {
+        if let Some(handle) = self.scroll_handle.borrow().as_ref() {
             handle.scroll_vertical_by(delta);
         }
     }
@@ -635,7 +635,7 @@ impl SelectionViewport for TextRendererComponent {
         if delta == 0 {
             return;
         }
-        if let Some(handle) = self.viewport_handle.borrow().as_ref() {
+        if let Some(handle) = self.scroll_handle.borrow().as_ref() {
             handle.scroll_horizontal_by(delta);
         }
     }
@@ -738,7 +738,7 @@ mod tests {
             );
         }
 
-        scroll_view.viewport_handle().scroll_horizontal_to(25);
+        scroll_view.scroll_handle().scroll_horizontal_to(25);
         let ctx = ComponentContext::new(true).with_screen_area(area);
         let down = Event::Mouse(MouseEvent {
             column: 10,
@@ -747,7 +747,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         scroll_view.handle_events(&down, &ctx);
-        let before = scroll_view.viewport_handle().info().offset_x;
+        let before = scroll_view.scroll_handle().info().offset_x;
         assert!(before > 0);
 
         let drag = Event::Mouse(MouseEvent {
@@ -757,7 +757,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         scroll_view.handle_events(&drag, &ctx);
-        let after = scroll_view.viewport_handle().info().offset_x;
+        let after = scroll_view.scroll_handle().info().offset_x;
         assert!(
             after < before,
             "expected horizontal auto-scroll towards origin"

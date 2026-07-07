@@ -7,7 +7,7 @@ use ratatui::prelude::Rect;
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use term_wm_core::actions::{EventResult, TermWmAction};
-use term_wm_core::component_context::{ViewportHandle, ViewportSharedState};
+use term_wm_core::component_context::{ScrollHandle, ScrollBounds};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::ui::UiFrame;
 use term_wm_core::window::WindowKey;
@@ -178,7 +178,7 @@ pub enum ScrollKeyMode {
 #[derive(Debug)]
 pub struct ScrollViewComponent<C> {
     pub content: RefCell<C>,
-    shared_state: Rc<RefCell<ViewportSharedState>>,
+    scroll_state: Rc<RefCell<ScrollBounds>>,
     v_drag: ScrollbarDrag,
     h_drag: ScrollbarDrag,
     keyboard_mode: ScrollKeyMode,
@@ -188,7 +188,7 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
     pub fn new(content: C) -> Self {
         Self {
             content: RefCell::new(content),
-            shared_state: Rc::new(RefCell::new(ViewportSharedState::default())),
+            scroll_state: Rc::new(RefCell::new(ScrollBounds::default())),
             v_drag: ScrollbarDrag::new(),
             h_drag: ScrollbarDrag::new(),
             keyboard_mode: ScrollKeyMode::Full,
@@ -200,19 +200,19 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
     }
 
     pub fn set_sticky_bottom(&mut self, sticky: bool) {
-        self.shared_state.borrow_mut().sticky_bottom = sticky;
+        self.scroll_state.borrow_mut().sticky_bottom = sticky;
     }
 
-    pub fn viewport_handle(&self) -> ViewportHandle {
-        ViewportHandle {
-            shared: self.shared_state.clone(),
+    pub fn scroll_handle(&self) -> ScrollHandle {
+        ScrollHandle {
+            scroll: self.scroll_state.clone(),
         }
     }
 
     pub(crate) fn compute_layout(&self, area: Rect) -> Rect {
         // Simple reservation strategy:
         // Use previous frame's content size to decide on scrollbars.
-        let state = self.shared_state.borrow();
+        let state = self.scroll_state.borrow();
         let content_w = state.content_width;
         let content_h = state.content_height;
         drop(state);
@@ -246,7 +246,7 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
         let Event::Mouse(mouse) = event else {
             return EventResult::Ignored;
         };
-        let state = self.shared_state.borrow();
+        let state = self.scroll_state.borrow();
         let content_h = state.content_height;
         let view_h = state.height;
         let content_w = state.content_width;
@@ -270,7 +270,7 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
                 self.v_drag
                     .handle_mouse(mouse, sb_area, content_h, view_h, ScrollbarAxis::Vertical)
             {
-                let mut st = self.shared_state.borrow_mut();
+                let mut st = self.scroll_state.borrow_mut();
                 st.offset_y = new_off;
                 st.pending_offset_y = Some(new_off);
                 return EventResult::Consumed;
@@ -291,7 +291,7 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
                 view_w,
                 ScrollbarAxis::Horizontal,
             ) {
-                let mut st = self.shared_state.borrow_mut();
+                let mut st = self.scroll_state.borrow_mut();
                 st.offset_x = new_off;
                 st.pending_offset_x = Some(new_off);
                 return EventResult::Consumed;
@@ -312,14 +312,14 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
             }
         }
 
-        let handle = self.viewport_handle();
+        let handle = self.scroll_handle();
         let info = handle.info();
         let child_ctx = ctx.with_viewport(info, Some(handle));
         self.content.borrow_mut().handle_events(event, &child_ctx)
     }
 
     fn on_key(&mut self, event: &Event, ctx: &ComponentContext) -> EventResult<TermWmAction> {
-        let handle = self.viewport_handle();
+        let handle = self.scroll_handle();
         let info = handle.info();
         let child_ctx = ctx.with_viewport(info, Some(handle));
 
@@ -334,10 +334,10 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
 
             // Pagination-level scrolling (active in PaginationOnly and Full)
             if kb.matches(TermWmAction::ScrollPageUp, key) {
-                let height = self.shared_state.borrow().height as isize;
+                let height = self.scroll_state.borrow().height as isize;
                 return EventResult::Action(TermWmAction::ScrollView(-height));
             } else if kb.matches(TermWmAction::ScrollPageDown, key) {
-                let height = self.shared_state.borrow().height as isize;
+                let height = self.scroll_state.borrow().height as isize;
                 return EventResult::Action(TermWmAction::ScrollView(height));
             } else if kb.matches(TermWmAction::ScrollHome, key) {
                 return EventResult::Action(TermWmAction::ScrollToTop);
@@ -375,7 +375,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
             let inner_area = self.compute_layout(area);
 
             {
-                let mut state = self.shared_state.borrow_mut();
+                let mut state = self.scroll_state.borrow_mut();
                 state.width = inner_area.width as usize;
                 state.height = inner_area.height as usize;
 
@@ -393,7 +393,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
                 }
             }
 
-            let handle = self.viewport_handle();
+            let handle = self.scroll_handle();
             let info = handle.info();
             let child_ctx = ctx.with_viewport(info, Some(handle));
 
@@ -404,7 +404,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
                 .render(frame, inner_area, &child_ctx, registry);
             registry.pop_clip();
 
-            let state = self.shared_state.borrow();
+            let state = self.scroll_state.borrow();
             let content_w = state.content_width;
             let content_h = state.content_height;
             let off_x = state.offset_x;
@@ -494,7 +494,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
     ) {
         match action {
             TermWmAction::ScrollView(delta) => {
-                let mut st = self.shared_state.borrow_mut();
+                let mut st = self.scroll_state.borrow_mut();
                 if delta < 0 {
                     st.offset_y = st.offset_y.saturating_sub(delta.unsigned_abs());
                 } else {
@@ -504,18 +504,18 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
                 st.pending_offset_y = Some(st.offset_y);
             }
             TermWmAction::ScrollToTop => {
-                let mut st = self.shared_state.borrow_mut();
+                let mut st = self.scroll_state.borrow_mut();
                 st.offset_y = 0;
                 st.pending_offset_y = Some(0);
             }
             TermWmAction::ScrollToBottom => {
-                let mut st = self.shared_state.borrow_mut();
+                let mut st = self.scroll_state.borrow_mut();
                 st.offset_y = st.content_height.saturating_sub(st.height);
                 st.pending_offset_y = Some(st.offset_y);
             }
             _ => {
-                // 3. Create context with ViewportHandle
-                let handle = self.viewport_handle();
+                // 3. Create context with ScrollHandle
+                let handle = self.scroll_handle();
                 let info = handle.info();
                 let child_ctx = ctx.with_viewport(info, Some(handle));
                 self.content
@@ -1011,11 +1011,11 @@ mod tests {
         });
         sv.set_sticky_bottom(true);
 
-        let handle = sv.viewport_handle();
+        let handle = sv.scroll_handle();
 
         // Simulate viewport dimensions (normally set by the render loop)
         {
-            let mut st = sv.shared_state.borrow_mut();
+            let mut st = sv.scroll_state.borrow_mut();
             st.width = 80;
             st.height = 10;
         }
@@ -1042,11 +1042,11 @@ mod tests {
         });
         sv.set_sticky_bottom(true);
 
-        let handle = sv.viewport_handle();
+        let handle = sv.scroll_handle();
 
         // Simulate viewport dimensions
         {
-            let mut st = sv.shared_state.borrow_mut();
+            let mut st = sv.scroll_state.borrow_mut();
             st.width = 80;
             st.height = 10;
         }
@@ -1072,11 +1072,11 @@ mod tests {
             received_scroll: false,
         });
         // sticky_bottom defaults to false
-        let handle = sv.viewport_handle();
+        let handle = sv.scroll_handle();
 
         // Simulate viewport dimensions
         {
-            let mut st = sv.shared_state.borrow_mut();
+            let mut st = sv.scroll_state.borrow_mut();
             st.width = 80;
             st.height = 10;
         }

@@ -388,7 +388,7 @@ impl TerminalComponent {
 
         // Synchronize scroll state with the shared Viewport
         if !pane.alternate_screen()
-            && let Some(handle) = ctx.viewport_handle()
+            && let Some(handle) = ctx.scroll_handle()
         {
             let used = pane.max_scrollback();
             let view_height = area.height as usize;
@@ -979,12 +979,12 @@ mod tests {
     use ratatui::buffer::Buffer;
     use std::cell::RefCell;
     use std::rc::Rc;
-    use term_wm_core::component_context::ViewportHandle;
+    use term_wm_core::component_context::ScrollHandle;
     use term_wm_core::ui::UiFrame;
 
-    fn make_ctx(view_offset: usize, handle: ViewportHandle) -> ComponentContext {
+    fn make_ctx(view_offset: usize, handle: ScrollHandle) -> ComponentContext {
         ComponentContext::default().with_viewport(
-            term_wm_core::component_context::ViewportContext {
+            term_wm_core::component_context::ScrollViewport {
                 offset_x: 0,
                 offset_y: view_offset,
                 width: 80,
@@ -995,11 +995,11 @@ mod tests {
     }
 
     fn make_handle() -> (
-        ViewportHandle,
-        Rc<RefCell<term_wm_core::component_context::ViewportSharedState>>,
+        ScrollHandle,
+        Rc<RefCell<term_wm_core::component_context::ScrollBounds>>,
     ) {
         let shared = Rc::new(RefCell::new(
-            term_wm_core::component_context::ViewportSharedState {
+            term_wm_core::component_context::ScrollBounds {
                 offset_x: 0,
                 offset_y: 0,
                 width: 80,
@@ -1012,8 +1012,8 @@ mod tests {
             },
         ));
         (
-            ViewportHandle {
-                shared: shared.clone(),
+            ScrollHandle {
+                scroll: shared.clone(),
             },
             shared,
         )
@@ -1023,7 +1023,7 @@ mod tests {
         term: &mut TerminalComponent,
         view_offset: usize,
     ) -> (
-        Rc<RefCell<term_wm_core::component_context::ViewportSharedState>>,
+        Rc<RefCell<term_wm_core::component_context::ScrollBounds>>,
         usize,
     ) {
         let (handle, shared) = make_handle();
@@ -1048,10 +1048,10 @@ mod tests {
 
     fn run_sync_with_handle(
         term: &mut TerminalComponent,
-        shared: &Rc<RefCell<term_wm_core::component_context::ViewportSharedState>>,
+        shared: &Rc<RefCell<term_wm_core::component_context::ScrollBounds>>,
     ) -> usize {
-        let handle = ViewportHandle {
-            shared: shared.clone(),
+        let handle = ScrollHandle {
+            scroll: shared.clone(),
         };
         let view_offset = shared.borrow().offset_y;
         let area = Rect {
