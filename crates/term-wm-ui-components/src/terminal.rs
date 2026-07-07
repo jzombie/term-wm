@@ -1572,21 +1572,17 @@ mod tests {
         use std::sync::Arc;
         use term_wm_core::app_context::AppContext;
         use term_wm_core::components::Component;
-        use term_wm_core::window::WindowManager;
+        use term_wm_core::config::AppBuilder;
 
         let (term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
         let mut sv = crate::scroll_view::ScrollViewComponent::new(term);
         sv.set_selection_enabled(true);
         sv.set_keyboard_enabled(false);
 
-        let mut wm = WindowManager::with_config(
-            term_wm_core::wm_config::WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            None,
-            None,
-            None,
-        );
+        let mut wm = AppBuilder::bare()
+            .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
+            .build()
+            .expect("test build");
         wm.set_panel_visible(false);
 
         let key = wm.create_window(Box::new(sv));
@@ -1669,21 +1665,17 @@ mod tests {
         use std::sync::Arc;
         use term_wm_core::app_context::AppContext;
         use term_wm_core::components::Component;
-        use term_wm_core::window::WindowManager;
+        use term_wm_core::config::AppBuilder;
 
         let (term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
         let mut sv = crate::scroll_view::ScrollViewComponent::new(term);
         sv.set_selection_enabled(true);
         sv.set_keyboard_enabled(false);
 
-        let mut wm = WindowManager::with_config(
-            term_wm_core::wm_config::WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            None,
-            None,
-            None,
-        );
+        let mut wm = AppBuilder::bare()
+            .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
+            .build()
+            .expect("test build");
         wm.set_panel_visible(false);
 
         let key = wm.create_window(Box::new(sv));

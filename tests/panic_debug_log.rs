@@ -12,8 +12,8 @@ use term_wm::io::{EventSource, RenderTarget};
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_app};
 use term_wm::task_scheduler::TaskScheduler;
 use term_wm::ui::UiFrame;
+use term_wm::config::AppBuilder;
 use term_wm::window::{WindowKey, WindowManager};
-use term_wm::wm_config::WmConfig;
 
 #[derive(Debug)]
 struct TestOutput {
@@ -111,14 +111,11 @@ fn render_panic_shows_in_debug_log() {
 
     let menu: Box<dyn term_wm_core::components::WmComponent> =
         Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
-    let mut wm = WindowManager::with_config(
-        WmConfig::standalone(),
-        Arc::new(AppContext::new("test", "0.0.0")),
-        None,
-        None,
-        Some(menu),
-        None,
-    );
+    let mut wm = AppBuilder::bare()
+        .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
+        .command_menu(menu)
+        .build()
+        .expect("test build");
     let key = wm.create_window(Box::new(term_wm::components::NoopComponent));
     wm.set_window_title(key, "test");
 

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use ratatui::layout::Rect;
+use term_wm::config::AppBuilder;
 
 #[test]
 fn default_shell_nonempty() {
@@ -23,14 +24,13 @@ fn mouse_capture_flow_through_window_manager() {
         ));
     let menu: Box<dyn term_wm_core::components::WmComponent> =
         Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
-    let mut wm: term_wm::window::WindowManager = term_wm::window::WindowManager::with_config(
-        term_wm::wm_config::WmConfig::standalone(),
-        ctx,
-        Some(top),
-        Some(bottom),
-        Some(menu),
-        None,
-    );
+    let mut wm: term_wm::window::WindowManager = AppBuilder::bare()
+        .app_ctx(ctx)
+        .top_panel(top)
+        .bottom_panel(bottom)
+        .command_menu(menu)
+        .build()
+        .expect("test build");
     // default starts enabled (from config)
     assert!(wm.mouse_capture_enabled());
     // setting the same value shouldn't mark change
