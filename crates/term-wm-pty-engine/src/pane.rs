@@ -40,6 +40,9 @@ pub trait Pane {
     fn take_dirty(&self) -> bool {
         false
     }
+    /// Clear the dirty flag and notify the reader thread via Condvar.
+    /// This is the primary mechanism for I/O burst budget backpressure.
+    fn clear_dirty_and_notify(&self) {}
     /// Sync dirty state and handle DSR/foreground polling.
     /// Call before locking the parser for cell access.
     fn sync_screen(&mut self) {}
@@ -124,5 +127,12 @@ impl Pane for crate::Pty {
 
     fn take_dirty(&self) -> bool {
         self.dirty.swap(false, std::sync::atomic::Ordering::AcqRel)
+    }
+
+    fn clear_dirty_and_notify(&self) {
+        let (lock, cvar) = &*self.dirty_cond;
+        let _guard = lock.lock().unwrap();
+        self.dirty.store(false, std::sync::atomic::Ordering::Release);
+        cvar.notify_one();
     }
 }

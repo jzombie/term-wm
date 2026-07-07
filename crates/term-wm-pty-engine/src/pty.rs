@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 use std::sync::{
-    Arc, Mutex,
+    Arc, Condvar, Mutex,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::thread::{self, JoinHandle};
@@ -58,6 +58,9 @@ pub struct Pty {
     pub(crate) shared_parser: Arc<Mutex<vt100::Parser>>,
     /// Set by the reader thread when new content has been parsed.
     pub(crate) dirty: Arc<AtomicBool>,
+    /// Condvar for I/O burst budget: reader waits here when budget exceeded
+    /// and the UI hasn't rendered yet.
+    pub(crate) dirty_cond: Arc<(Mutex<()>, Condvar)>,
     size: PtySize,
     pty_size: PtySize,
     scrollback_len: usize,
@@ -127,10 +130,12 @@ impl Pty {
         let initial_parser = vt100::Parser::new(size.rows, size.cols, scrollback_len);
         let shared_parser = Arc::new(Mutex::new(initial_parser));
         let dirty = Arc::new(AtomicBool::new(false));
+        let dirty_cond = Arc::new((Mutex::new(()), Condvar::new()));
         let pending_resize = Arc::new(Mutex::new(None::<PtySize>));
         let shutdown = Arc::new(AtomicBool::new(false));
         let reader_parser = Arc::clone(&shared_parser);
         let reader_dirty = Arc::clone(&dirty);
+        let reader_dirty_cond = Arc::clone(&dirty_cond);
         let reader_pending_resize = Arc::clone(&pending_resize);
         let reader_pending_title = Arc::clone(&pending_title);
         let reader_handle = thread::spawn(move || {
@@ -142,6 +147,7 @@ impl Pty {
                 dsr_requested: reader_dsr,
                 shared_parser: reader_parser,
                 dirty: reader_dirty,
+                dirty_cond: reader_dirty_cond,
                 pending_resize: reader_pending_resize,
                 pending_title: reader_pending_title,
                 status_cb: reader_status_cb,
@@ -162,6 +168,7 @@ impl Pty {
             last_fg_check: Instant::now(),
             shared_parser,
             dirty,
+            dirty_cond,
             size,
             pty_size: size,
             scrollback_len,
@@ -436,6 +443,7 @@ struct ParserReadLoopArgs {
     dsr_requested: Arc<AtomicBool>,
     shared_parser: Arc<Mutex<vt100::Parser>>,
     dirty: Arc<AtomicBool>,
+    dirty_cond: Arc<(std::sync::Mutex<()>, Condvar)>,
     pending_resize: Arc<Mutex<Option<PtySize>>>,
     pending_title: Arc<Mutex<Option<String>>>,
     status_cb: StatusCallback,
@@ -454,6 +462,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
         dsr_requested,
         shared_parser,
         dirty,
+        dirty_cond,
         pending_resize,
         pending_title,
         status_cb,
@@ -463,6 +472,8 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
     let mut history: Vec<u8> = Vec::new();
     let mut buf = [0u8; PTY_READ_BUF_SIZE];
     let mut osc52 = Osc52Extractor::new();
+    let mut bytes_since_render = 0usize;
+    const IO_BURST_BUDGET: usize = 256 * 1024; // 256 KB
     loop {
         // Check for pending resize from main thread
         if let Ok(mut resize_opt) = pending_resize.lock()
@@ -487,6 +498,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
             }
             Ok(n) => {
                 bytes_received.fetch_add(n, Ordering::Relaxed);
+                bytes_since_render += n;
                 let combined = if history.is_empty() {
                     buf[..n].to_vec()
                 } else {
@@ -545,11 +557,27 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 // Edge-triggered wakeup: only notify on false→true transition.
                 // Prevents flooding the IPC channel with thousands of redundant
                 // PtyWakeup messages per second at unthrottled ingestion speeds.
-                if !dirty.swap(true, Ordering::AcqRel)
-                    && let Ok(guard) = status_cb.lock()
-                    && let Some(ref cb) = *guard
-                {
-                    cb(crate::PtyStatus::Wakeup);
+                if !dirty.swap(true, Ordering::AcqRel) {
+                    if let Ok(guard) = status_cb.lock()
+                        && let Some(ref cb) = *guard
+                    {
+                        cb(crate::PtyStatus::Wakeup);
+                    }
+                    // Reset budget because a new render cycle has begun
+                    bytes_since_render = 0;
+                }
+
+                // I/O burst budget: when the reader has ingested more than
+                // IO_BURST_BUDGET bytes without a render, wait on the Condvar
+                // until the UI thread clears dirty. This prevents a single
+                // reader thread from consuming 100% CPU on infinite streams.
+                if bytes_since_render >= IO_BURST_BUDGET {
+                    let (lock, cvar) = &*dirty_cond;
+                    let mut guard = lock.lock().unwrap();
+                    while dirty.load(Ordering::Acquire) {
+                        guard = cvar.wait(guard).unwrap();
+                    }
+                    bytes_since_render = 0;
                 }
 
                 // Loop back to read() — no parking, no cloning, no render_ready check.
@@ -780,6 +808,7 @@ mod tests {
             dsr_requested: Arc::new(AtomicBool::new(false)),
             shared_parser: Arc::new(Mutex::new(vt100::Parser::new(24, 80, 0))),
             dirty: Arc::new(AtomicBool::new(false)),
+            dirty_cond: Arc::new((Mutex::new(()), Condvar::new())),
             pending_resize: Arc::new(Mutex::new(None)),
             pending_title: Arc::new(Mutex::new(None)),
             status_cb: Arc::new(Mutex::new(None)),

@@ -560,8 +560,9 @@ impl TerminalComponent {
             }
         }
 
-        // Reset dirty flag using the same mutable borrow — no second borrow_mut
-        pane.take_dirty();
+        // Clear dirty and notify reader thread via Condvar.
+        // This is the primary mechanism for I/O burst budget backpressure.
+        pane.clear_dirty_and_notify();
 
         if focused && !screen.hide_cursor() && show_cursor {
             let (row, col) = screen.cursor_position();
