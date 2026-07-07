@@ -726,6 +726,13 @@ mod tests {
             height: 24,
         });
 
+        // auto_restore() fires on every render() and clears the outline when
+        // the timeout has expired.  The default timeout is Duration::ZERO, which
+        // means the outline would be cleared on the very first render before we
+        // can observe it.  Set a non-zero timeout so the outline persists across
+        // the render calls this test compares.
+        overlay.set_timeout(Duration::from_secs(60));
+
         let area = Rect {
             x: 0,
             y: 0,
