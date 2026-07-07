@@ -11,12 +11,12 @@ use crossterm::{
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
-    Frame, Terminal,
     backend::CrosstermBackend,
     buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
     widgets::Paragraph,
+    Frame, Terminal,
 };
 
 const GLYPHS: [&str; 10] = [".", ",", ":", "-", ";", "+", "*", "x", "#", "@"];
@@ -40,10 +40,6 @@ struct BenchCli {
     /// Target frames per second. Used to pace rendering so comparisons are repeatable.
     #[arg(short = 'f', long = "fps", value_name = "FPS", default_value_t = 60.0)]
     target_fps: f64,
-
-    /// Wrap noise rendering in a term-wm window manager.
-    #[arg(long)]
-    wm: bool,
 }
 
 impl BenchCli {
@@ -83,11 +79,6 @@ impl TryFrom<&BenchCli> for BenchConfig {
 fn main() -> io::Result<()> {
     let args = BenchCli::parse();
 
-    #[cfg(feature = "wm")]
-    if args.wm {
-        return run_with_wm(&args);
-    }
-
     let config = BenchConfig::try_from(&args)
         .map_err(|msg| io::Error::new(io::ErrorKind::InvalidInput, msg))?;
 
@@ -118,35 +109,6 @@ fn main() -> io::Result<()> {
     println!("{}", stats.final_report(&config));
 
     Ok(())
-}
-
-#[cfg(feature = "wm")]
-fn run_with_wm(args: &BenchCli) -> io::Result<()> {
-    use term_wm::AppContext;
-    use term_wm::term_wm_app::TermWmApp;
-    use term_wm::WidgetAdapter;
-
-    let mut app = TermWmApp::new(AppContext::new("term-bench", env!("CARGO_PKG_VERSION")));
-
-    let _config = BenchConfig::try_from(args)
-        .map_err(|msg| io::Error::new(io::ErrorKind::InvalidInput, msg))?;
-
-    app.register(WidgetAdapter::new(|frame: &mut term_wm::ui::UiFrame<'_>, area: ratatui::layout::Rect, _ctx| {
-        let mut noise = NoiseField::seeded_from_clock();
-        let tick = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-
-        let buffer = frame.buffer_mut();
-        noise.fill(buffer, area, tick);
-    }));
-
-    app.run()
 }
 
 type BenchTerminal = Terminal<CrosstermBackend<Stdout>>;
@@ -508,7 +470,6 @@ mod tests {
         let cli = BenchCli {
             duration_seconds: 5.0,
             target_fps: 30.0,
-            wm: false,
         };
         let cfg = BenchConfig::try_from(&cli).expect("valid config");
         assert_eq!(cfg.target_fps, 30.0);
@@ -518,7 +479,6 @@ mod tests {
         let bad = BenchCli {
             duration_seconds: 0.1,
             target_fps: 60.0,
-            wm: false,
         };
         assert!(BenchConfig::try_from(&bad).is_err());
 
@@ -526,7 +486,6 @@ mod tests {
         let bad2 = BenchCli {
             duration_seconds: 2.0,
             target_fps: 1000.0,
-            wm: false,
         };
         assert!(BenchConfig::try_from(&bad2).is_err());
     }
@@ -552,7 +511,6 @@ mod tests {
         let cli = BenchCli {
             duration_seconds: 1.0,
             target_fps: 60.0,
-            wm: false,
         };
         let cfg = BenchConfig::try_from(&cli).unwrap();
         let report = stats.final_report(&cfg);
@@ -647,7 +605,6 @@ mod tests {
         let cli = BenchCli {
             duration_seconds: 2.0,
             target_fps: 60.0,
-            wm: false,
         };
         let cfg = BenchConfig::try_from(&cli).unwrap();
         let v = build_overlay_lines(&stats, &cfg);
