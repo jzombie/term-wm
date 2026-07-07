@@ -133,6 +133,11 @@ impl TermWmApp {
         &mut self.wm
     }
 
+    /// Set the display title for a registered window.
+    pub fn set_window_title(&mut self, key: WindowKey, title: impl Into<String>) {
+        self.wm.set_window_title(key, title);
+    }
+
     /// Get a mutable reference to a registered component by key.
     pub fn component_mut<T: 'static>(&mut self, key: WindowKey) -> Option<&mut T> {
         self.wm

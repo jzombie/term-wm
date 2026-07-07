@@ -19,11 +19,13 @@ fn main() -> io::Result<()> {
     left.set_keep_aspect(true);
     left.set_colorize(true);
     let left_key = app.register(left);
+    app.set_window_title(left_key, "Left Image");
 
     let mut right = SvgImageComponent::new();
     right.set_keep_aspect(true);
     right.set_colorize(true);
     let right_key = app.register(right);
+    app.set_window_title(right_key, "Right Image");
 
     if let Some(img) = app.component_mut::<SvgImageComponent>(left_key) {
         img.load_from_path(&paths[0])?;
