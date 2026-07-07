@@ -95,7 +95,9 @@ impl Component<TermWmAction> for TerminalComponent {
                     return EventResult::Ignored;
                 }
                 let mut pane = self.pane.borrow_mut();
-                let screen = pane.screen();
+                let parser_arc = pane.shared_parser();
+                let parser = parser_arc.lock().unwrap();
+                let screen = parser.screen();
                 let encoding = screen.mouse_protocol_encoding();
 
                 match encoding {
@@ -436,8 +438,15 @@ impl TerminalComponent {
         let start_col = visible.x.saturating_sub(area.x);
         let start_row = visible.y.saturating_sub(area.y);
 
+        // Call sync_screen() to handle DSR, foreground polling.
+        pane.sync_screen();
+
+        // Lock the shared parser once for both link overlay and cell rendering.
+        let parser_arc = pane.shared_parser();
+        let parser = parser_arc.lock().unwrap();
+        let screen = parser.screen();
+
         let bytes_seen = pane.bytes_received();
-        let screen = pane.screen();
         let signature = OverlaySignature::new(
             bytes_seen,
             scrollback_value,
@@ -478,6 +487,10 @@ impl TerminalComponent {
             );
         }
 
+        // Hoist loop-invariant color defaults
+        let default_fg = screen.fgcolor();
+        let default_bg = screen.bgcolor();
+
         let focused = ctx.focused();
         for row in start_row..start_row + visible.height {
             for col in start_col..start_col + visible.width {
@@ -488,7 +501,7 @@ impl TerminalComponent {
 
                 if let Some(cell) = screen.cell(row, col) {
                     let mut symbol = cell.contents().chars().next().unwrap_or(' ');
-                    let (fg, bg) = resolve_colors(cell, screen);
+                    let (fg, bg) = resolve_colors_with_defaults(cell, default_fg, default_bg);
                     let mut style = Style::default();
                     if let Some(fg) = fg {
                         style = style.fg(fg);
@@ -546,6 +559,9 @@ impl TerminalComponent {
                 }
             }
         }
+
+        // Reset dirty flag using the same mutable borrow — no second borrow_mut
+        pane.take_dirty();
 
         if focused && !screen.hide_cursor() && show_cursor {
             let (row, col) = screen.cursor_position();
@@ -646,7 +662,9 @@ impl TerminalComponent {
     fn selection_text_for_range(&self, range: SelectionRange) -> Option<String> {
         let mut pane = self.pane.borrow_mut();
         let row_base = pane.max_scrollback().saturating_sub(pane.scrollback());
-        let screen = pane.screen();
+        let parser_arc = pane.shared_parser();
+        let parser = parser_arc.lock().unwrap();
+        let screen = parser.screen();
         let (rows, cols) = screen.size();
         if rows == 0 || cols == 0 {
             return None;
@@ -790,9 +808,25 @@ impl SelectionHost for RenderDragHost<'_> {
     }
 }
 
+#[allow(dead_code)]
 fn resolve_colors(cell: &vt100::Cell, screen: &vt100::Screen) -> (Option<TColor>, Option<TColor>) {
     let mut fg = resolve_color(cell.fgcolor(), screen.fgcolor());
     let bg = resolve_color(cell.bgcolor(), screen.bgcolor());
+    if cell.bold() {
+        fg = brighten_indexed(fg);
+    }
+    (fg, bg)
+}
+
+/// Like `resolve_colors` but takes pre-computed default fg/bg colors
+/// to avoid redundant `screen.fgcolor()`/`bgcolor()` calls per cell.
+fn resolve_colors_with_defaults(
+    cell: &vt100::Cell,
+    default_fg: vt100::Color,
+    default_bg: vt100::Color,
+) -> (Option<TColor>, Option<TColor>) {
+    let mut fg = resolve_color(cell.fgcolor(), default_fg);
+    let bg = resolve_color(cell.bgcolor(), default_bg);
     if cell.bold() {
         fg = brighten_indexed(fg);
     }
@@ -832,7 +866,7 @@ fn brighten_indexed(color: Option<TColor>) -> Option<TColor> {
 /// real PTY process.
 #[cfg(test)]
 struct TestPane {
-    parser: vt100::Parser,
+    parser: std::sync::Arc<std::sync::Mutex<vt100::Parser>>,
     current_scrollback: usize,
     max_sb: usize,
     alt_screen: bool,
@@ -843,7 +877,7 @@ struct TestPane {
 impl TestPane {
     fn new(max_sb: usize) -> Self {
         Self {
-            parser: vt100::Parser::new(24, 80, max_sb),
+            parser: std::sync::Arc::new(std::sync::Mutex::new(vt100::Parser::new(24, 80, max_sb))),
             current_scrollback: 0,
             max_sb,
             alt_screen: false,
@@ -856,11 +890,13 @@ impl TestPane {
     }
 
     fn write_to_parser(&mut self, bytes: &[u8]) {
-        self.parser.process(bytes);
+        let mut parser = self.parser.lock().unwrap();
+        parser.process(bytes);
     }
 
     fn set_parser_size(&mut self, rows: u16, cols: u16) {
-        self.parser.screen_mut().set_size(rows, cols);
+        let mut parser = self.parser.lock().unwrap();
+        parser.screen_mut().set_size(rows, cols);
     }
 
     #[allow(dead_code)]
@@ -895,8 +931,8 @@ impl Pane for TestPane {
         Ok(())
     }
 
-    fn screen(&mut self) -> &vt100::Screen {
-        self.parser.screen()
+    fn shared_parser(&mut self) -> std::sync::Arc<std::sync::Mutex<vt100::Parser>> {
+        self.parser.clone()
     }
 
     fn max_scrollback(&mut self) -> usize {

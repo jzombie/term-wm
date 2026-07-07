@@ -1,4 +1,5 @@
 use std::io;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use portable_pty::{Child, ExitStatus, PtySize};
@@ -12,7 +13,6 @@ pub trait Pane {
     fn scrollback(&mut self) -> usize;
     fn set_scrollback(&mut self, rows: usize);
     fn write_bytes(&mut self, input: &[u8]) -> io::Result<()>;
-    fn screen(&mut self) -> &vt100::Screen;
     fn max_scrollback(&mut self) -> usize;
     fn scrollback_len(&self) -> usize;
     fn take_exit_status(&mut self) -> Option<ExitStatus>;
@@ -32,6 +32,17 @@ pub trait Pane {
     fn take_parts(&mut self) -> Option<(Box<dyn Child + Send + Sync>, JoinHandle<()>)> {
         None
     }
+    /// Access the shared parser for zero-copy rendering.
+    fn shared_parser(&mut self) -> Arc<Mutex<vt100::Parser>> {
+        Arc::new(Mutex::new(vt100::Parser::new(24, 80, 0)))
+    }
+    /// Reset the dirty flag. Returns true if dirty was set.
+    fn take_dirty(&self) -> bool {
+        false
+    }
+    /// Sync dirty state and handle DSR/foreground polling.
+    /// Call before locking the parser for cell access.
+    fn sync_screen(&mut self) {}
 }
 
 impl Pane for crate::Pty {
@@ -59,8 +70,8 @@ impl Pane for crate::Pty {
         self.write_bytes(input)
     }
 
-    fn screen(&mut self) -> &vt100::Screen {
-        self.screen()
+    fn sync_screen(&mut self) {
+        crate::Pty::screen(self);
     }
 
     fn max_scrollback(&mut self) -> usize {
@@ -105,5 +116,13 @@ impl Pane for crate::Pty {
 
     fn set_status_callback(&mut self, cb: Option<Box<dyn Fn(PtyStatus) + Send + Sync>>) {
         crate::Pty::set_status_callback(self, cb)
+    }
+
+    fn shared_parser(&mut self) -> Arc<Mutex<vt100::Parser>> {
+        self.shared_parser.clone()
+    }
+
+    fn take_dirty(&self) -> bool {
+        self.dirty.swap(false, std::sync::atomic::Ordering::AcqRel)
     }
 }

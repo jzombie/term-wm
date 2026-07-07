@@ -2,3 +2,4 @@
 target/
 lcov.info
 *.save
+samply.json

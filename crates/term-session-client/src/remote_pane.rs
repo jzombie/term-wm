@@ -1,5 +1,6 @@
 use std::cell::Cell;
 use std::io;
+use std::sync::{Arc, Mutex};
 
 use muxio_rpc_service::error::RpcServiceError;
 use muxio_tokio_rpc_ipc_client::RpcIpcClient;
@@ -16,7 +17,7 @@ pub struct RemotePane {
     pub id: u64,
     client: std::sync::Arc<RpcIpcClient>,
     rt: Handle,
-    parser: vt100::Parser,
+    parser: Arc<Mutex<vt100::Parser>>,
     exited: Cell<bool>,
     push_rx: mpsc::UnboundedReceiver<Vec<u8>>,
     input_writer: InputWriter,
@@ -36,7 +37,7 @@ impl RemotePane {
             id,
             client,
             rt,
-            parser: vt100::Parser::new(rows, cols, 0),
+            parser: Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0))),
             exited: Cell::new(false),
             push_rx,
             input_writer,
@@ -47,7 +48,8 @@ impl RemotePane {
         loop {
             match self.push_rx.try_recv() {
                 Ok(data) => {
-                    self.parser.process(&data);
+                    let mut parser = self.parser.lock().unwrap();
+                    parser.process(&data);
                 }
                 Err(TryRecvError::Disconnected) => {
                     self.exited.set(true);
@@ -73,7 +75,10 @@ impl Pane for RemotePane {
             use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
             ResizePty::call(&*self.client, (self.id, size.cols, size.rows)).await
         });
-        self.parser.screen_mut().set_size(size.rows, size.cols);
+        {
+            let mut parser = self.parser.lock().unwrap();
+            parser.screen_mut().set_size(size.rows, size.cols);
+        }
         result.map_err(Self::rpc_to_pty)
     }
 
@@ -82,7 +87,8 @@ impl Pane for RemotePane {
     }
 
     fn alternate_screen(&mut self) -> bool {
-        self.parser.screen().alternate_screen()
+        let parser = self.parser.lock().unwrap();
+        parser.screen().alternate_screen()
     }
 
     fn scrollback(&mut self) -> usize {
@@ -95,12 +101,12 @@ impl Pane for RemotePane {
         0
     }
 
-    fn screen(&mut self) -> &vt100::Screen {
-        self.parser.screen()
-    }
-
     fn write_bytes(&mut self, input: &[u8]) -> io::Result<()> {
         (self.input_writer)(input)
+    }
+
+    fn shared_parser(&mut self) -> Arc<Mutex<vt100::Parser>> {
+        self.parser.clone()
     }
 
     fn max_scrollback(&mut self) -> usize {
