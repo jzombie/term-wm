@@ -199,6 +199,25 @@ pub enum ComponentAction {
     SetPowerProfile(PowerProfile),
     SetHintVisibility(HintVisibility),
     ToggleVisibility,
+    SetPanelActive(bool),
+    SetTopPanelState(Box<TopPanelState>),
+    SetWindowLabels(std::collections::BTreeMap<crate::window::WindowKey, String>),
+}
+
+/// Render-time state pushed to the top panel before each frame.
+#[derive(Debug, Clone)]
+pub struct TopPanelState {
+    pub focus_current: Option<crate::window::WindowKey>,
+    pub display_order: Vec<crate::window::WindowKey>,
+    pub status_line: Option<String>,
+    pub mouse_capture_enabled: bool,
+    pub clipboard_enabled: bool,
+    pub window_selection_enabled: bool,
+    pub selection_active: bool,
+    pub selection_dragging: bool,
+    pub selection_copy_available: bool,
+    pub selection_copied: bool,
+    pub menu_open: bool,
 }
 
 /// Queries the engine can ask components.
@@ -272,16 +291,6 @@ pub trait WmComponent: std::fmt::Debug {
 
     /// Set visible flag.
     fn set_visible(&mut self, _visible: bool) {}
-}
-
-pub trait MenuOverlay<Msg>: Overlay<Msg> {
-    fn outline(&mut self);
-    fn restore(&mut self);
-    fn set_items(&mut self, items: Vec<MenuItem<Msg>>);
-    fn set_timeout(&mut self, timeout: std::time::Duration);
-    fn selected_action(&self) -> Option<&Msg>;
-    fn set_anchor(&mut self, pos: Option<(u16, u16)>);
-    fn set_managed_area(&mut self, area: Rect);
 }
 
 #[cfg(test)]

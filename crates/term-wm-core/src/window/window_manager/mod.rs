@@ -18,9 +18,9 @@ use super::decorator::WindowDecorator;
 use super::entry::{Window, WindowState};
 use crate::actions::{SystemTask, TermWmAction};
 use crate::app_context::AppContext;
-use crate::bottom_panel_trait::BottomPanel;
 use crate::components::{
-    Component, ComponentContext, MenuItem, MenuOverlay, Overlay, WmComponent,
+    Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse, MenuItem,
+    Overlay, TopPanelState, WmComponent,
 };
 use crate::hitbox_registry::{HitTarget, HitboxRegistry};
 use crate::keybindings::KeyBindings;
@@ -29,7 +29,6 @@ use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLa
 use crate::power_profile::PowerProfile;
 use crate::reaper::Reaper;
 use crate::task_scheduler::{TaskHandle, TaskId};
-use crate::top_panel_trait::TopPanel;
 use crate::ui::UiFrame;
 use crate::wm_config::{HintVisibility, WmConfig};
 use term_wm_layout_engine::FocusRing;
@@ -160,19 +159,10 @@ pub struct WindowManager {
     pub(crate) managed_area: Rect,
     pub(crate) hitbox_registry: HitboxRegistry,
     app_ctx: Arc<AppContext>,
-    top_panel: Option<Box<dyn TopPanel<WindowKey>>>,
-    bottom_panel: Option<Box<dyn BottomPanel>>,
-    command_menu: Option<Box<dyn MenuOverlay<crate::actions::TermWmAction>>>,
-    // Unified WmComponent-based chrome (used by AppBuilder)
-    #[allow(dead_code)]
     top_component: Option<Box<dyn WmComponent>>,
-    #[allow(dead_code)]
     bottom_component: Option<Box<dyn WmComponent>>,
-    #[allow(dead_code)]
     command_menu_component: Option<Box<dyn WmComponent>>,
-    #[allow(dead_code)]
     top_claimed: Rect,
-    #[allow(dead_code)]
     bottom_claimed: Rect,
     // Replaces drag_header + drag_resize
     pub(crate) mouse_capture: Option<MouseCaptureState>,
@@ -499,9 +489,9 @@ impl WindowManager {
     pub fn with_config(
         config: WmConfig,
         app_ctx: Arc<AppContext>,
-        top_panel: Option<Box<dyn TopPanel<WindowKey>>>,
-        bottom_panel: Option<Box<dyn BottomPanel>>,
-        command_menu: Option<Box<dyn MenuOverlay<TermWmAction>>>,
+        top_component: Option<Box<dyn WmComponent>>,
+        bottom_component: Option<Box<dyn WmComponent>>,
+        command_menu_component: Option<Box<dyn WmComponent>>,
     ) -> Self {
         let mouse_capture_enabled = config.mouse_capture_enabled;
         let clipboard = Some(crate::clipboard::Clipboard::new());
@@ -523,12 +513,9 @@ impl WindowManager {
             managed_area: Rect::default(),
             hitbox_registry: HitboxRegistry::new(),
             app_ctx,
-            top_panel,
-            bottom_panel,
-            command_menu,
-            top_component: None,
-            bottom_component: None,
-            command_menu_component: None,
+            top_component,
+            bottom_component,
+            command_menu_component,
             top_claimed: Rect::default(),
             bottom_claimed: Rect::default(),
             mouse_capture: None,
@@ -685,12 +672,12 @@ impl WindowManager {
     }
 
     pub fn begin_frame(&mut self) {
-        if let Some(p) = &mut self.top_panel {
+        if let Some(p) = &mut self.top_component {
             p.begin_frame();
         }
-        if let Some(p) = &mut self.bottom_panel {
+        if let Some(p) = &mut self.bottom_component {
             p.begin_frame();
-            p.set_power_profile(self.power_profile);
+            p.process_action(&ComponentAction::SetPowerProfile(self.power_profile));
         }
         if !self.config.wm_command_menu_enabled {
             self.clear_capture();
@@ -1119,15 +1106,9 @@ impl WindowManager {
                 false
             }
             HitTarget::BottomPanel => {
-                let crossterm_event =
-                    crossterm::event::Event::Mouse(crossterm::event::MouseEvent {
-                        kind: *kind,
-                        column: col,
-                        row,
-                        modifiers: *modifiers,
-                    });
-                if let Some(p) = &self.bottom_panel
-                    && let Some(action) = p.hit_test_hint(&crossterm_event)
+                if let Some(p) = &self.bottom_component
+                    && let ComponentResponse::Action(Some(action)) =
+                        p.query(&ComponentQuery::SelectedAction)
                     && let Some(combo) = self.keybindings().first_combo(action)
                 {
                     self.synthetic_event = Some(Event::Key(crossterm::event::KeyEvent {
@@ -1194,52 +1175,53 @@ impl WindowManager {
     /// Handle clicks on top-panel icons (menu, mouse capture, selection, etc.).
     /// Returns true if the click was consumed.
     fn handle_panel_click(&mut self, col: u16, row: u16) -> bool {
-        let Some(p) = &self.top_panel else {
-            return false;
-        };
-        if !crate::layout::rect_contains(p.area(), col, row) {
+        if self.top_component.is_none() {
             return false;
         }
-        // Build a synthetic MouseEvent for panel hit-test methods that inspect event kind
+        if !crate::layout::rect_contains(self.top_claimed, col, row) {
+            return false;
+        }
+        // Use handle_event which routes through all hit-test methods
         let down_event = crossterm::event::Event::Mouse(crossterm::event::MouseEvent {
             kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
             column: col,
             row,
             modifiers: crossterm::event::KeyModifiers::NONE,
         });
-        if p.menu_icon_contains_point(col, row) {
-        if self.command_menu_visible() {
-                self.close_command_menu();
-            } else {
-                self.open_command_menu();
-            }
-            return true;
+        let ctx = self.component_context(false);
+        let Some(p) = self.top_component.as_mut() else {
+            return false;
+        };
+        match p.handle_event(&down_event, &ctx) {
+            crate::actions::EventResult::Action(action) => match action {
+                TermWmAction::WmToggleOverlay => {
+                    if self.command_menu_visible() {
+                        self.close_command_menu();
+                    } else {
+                        self.open_command_menu();
+                    }
+                    true
+                }
+                TermWmAction::ToggleMouseCapture => {
+                    self.toggle_mouse_capture();
+                    true
+                }
+                TermWmAction::ToggleWindowSelection => {
+                    self.toggle_window_selection();
+                    true
+                }
+                TermWmAction::ToggleClipboardMode => {
+                    self.toggle_clipboard_enabled();
+                    true
+                }
+                TermWmAction::CopySelection => {
+                    self.copy_selection_to_clipboard();
+                    true
+                }
+                _ => false,
+            },
+            _ => false,
         }
-        if p.hit_test_mouse_capture(&down_event) {
-            self.toggle_mouse_capture();
-            return true;
-        }
-        if p.hit_test_selection(&down_event) {
-            self.toggle_window_selection();
-            return true;
-        }
-        if p.hit_test_clipboard(&down_event) {
-            self.toggle_clipboard_enabled();
-            return true;
-        }
-        if p.hit_test_copy(&down_event) {
-            self.copy_selection_to_clipboard();
-            return true;
-        }
-        if let Some(key) = p.hit_test_window(&down_event) {
-            use crate::window::entry::WindowState;
-            if self.window_state(key) == Some(WindowState::Iconic) {
-                self.transition_window(key, WindowState::Mapped);
-            }
-            self.focus_window_key(key);
-            return true;
-        }
-        false
     }
 
     pub fn arm_capture(&mut self, timeout: Duration) {
@@ -1266,8 +1248,8 @@ impl WindowManager {
                 handle.cancel(id);
             }
         }
-        if let Some(menu) = &mut self.command_menu {
-            menu.restore();
+        if let Some(menu) = &mut self.command_menu_component {
+            menu.process_action(&ComponentAction::Restore);
         }
     }
 
@@ -1515,18 +1497,18 @@ impl WindowManager {
 
     fn panel_active(&self) -> bool {
         self.config.panel_enabled
-            && self.top_panel.as_ref().is_some_and(|p| p.visible())
-            && self.top_panel.as_ref().map_or(0, |p| p.height()) > 0
+            && self.top_component.as_ref().is_some_and(|p| p.visible())
+            && self.top_claimed.height > 0
     }
 
     /// Register panel hitboxes (top and bottom) into the draw-time registry.
     /// Called before the window loop so panels are at the lowest Z-order.
     pub fn register_panel_hitboxes(&self, registry: &mut HitboxRegistry) {
-        if let Some(p) = &self.top_panel {
-            registry.register(HitTarget::TopPanel, p.area());
+        if self.top_component.is_some() && !self.top_claimed.is_empty() {
+            registry.register(HitTarget::TopPanel, self.top_claimed);
         }
-        if let Some(p) = &self.bottom_panel {
-            registry.register(HitTarget::BottomPanel, p.area());
+        if self.bottom_component.is_some() && !self.bottom_claimed.is_empty() {
+            registry.register(HitTarget::BottomPanel, self.bottom_claimed);
         }
     }
 
@@ -1736,19 +1718,14 @@ impl WindowManager {
         let selection_dragging = self.selection_dragging();
         let selection_copied = self.selection_copied();
         let wm_overlay_visible = self.command_menu_visible();
-        let label_for = &move |key| {
-            titles_map
-                .get(&key)
-                .cloned()
-                .unwrap_or_else(|| format!("{:?}", key))
-        };
-        if let Some(p) = &mut self.top_panel {
-            p.render(
-                frame,
-                panel_active,
-                focus_current,
-                &display,
-                status_line.as_deref(),
+
+        if let Some(p) = &mut self.top_component {
+            p.process_action(&ComponentAction::SetPanelActive(panel_active));
+            p.process_action(&ComponentAction::SetWindowLabels(titles_map));
+            p.process_action(&ComponentAction::SetTopPanelState(Box::new(TopPanelState {
+                focus_current: Some(focus_current),
+                display_order: display,
+                status_line,
                 mouse_capture_enabled,
                 clipboard_enabled,
                 window_selection_enabled,
@@ -1756,13 +1733,18 @@ impl WindowManager {
                 selection_dragging,
                 selection_copy_available,
                 selection_copied,
-                wm_overlay_visible,
-                label_for,
-                &self.config.theme,
-            );
+                menu_open: wm_overlay_visible,
+            })));
         }
-        if let Some(p) = &mut self.bottom_panel {
-            p.render(frame, panel_active, &self.config.theme);
+        let top_area = self.top_claimed;
+        let top_ctx = self.component_context(false);
+        if let Some(p) = &mut self.top_component {
+            p.render(frame, top_area, &top_ctx, &mut self.hitbox_registry);
+        }
+        let bottom_area = self.bottom_claimed;
+        let bottom_ctx = self.component_context(panel_active);
+        if let Some(p) = &mut self.bottom_component {
+            p.render(frame, bottom_area, &bottom_ctx, &mut self.hitbox_registry);
         }
     }
 
@@ -1926,22 +1908,24 @@ impl WindowManager {
                 self.clipboard_enabled(),
                 self.window_selection_enabled(),
             );
-            let anchor = self
-                .top_panel
-                .as_ref()
-                .and_then(|p| p.menu_icon_rect())
-                .map(|r| (r.x, r.y.saturating_add(r.height)));
+            let anchor = self.top_component.as_ref().and_then(|p| {
+                if let ComponentResponse::Rect(r) = p.query(&ComponentQuery::MenuIconRect) {
+                    r.map(|r| (r.x, r.y.saturating_add(r.height)))
+                } else {
+                    None
+                }
+            });
             let menu_ctx = self
                 .component_context(false)
                 .with_overlay(true)
                 .with_hover_pos(self.hover)
                 .with_keybindings(std::sync::Arc::new(self.keybindings().clone()));
-            if let Some(menu) = &mut self.command_menu {
-                menu.set_items(menu_items);
-                menu.set_anchor(anchor);
-                menu.set_managed_area(self.managed_area);
-                let comp: &mut dyn Component<TermWmAction> = &mut **menu;
-                comp.render(frame, frame.area(), &menu_ctx, registry);
+            if let Some(menu) = &mut self.command_menu_component {
+                menu.process_action(&ComponentAction::SetMenuItems(menu_items));
+                menu.process_action(&ComponentAction::SetMenuAnchor(anchor));
+                menu.process_action(&ComponentAction::SetManagedArea(self.managed_area));
+                let area = frame.area();
+                menu.render(frame, area, &menu_ctx, registry);
             }
             oi += 1;
         }

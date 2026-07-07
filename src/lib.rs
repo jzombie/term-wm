@@ -22,9 +22,7 @@ pub fn standalone_builder() -> AppBuilder<Standalone> {
     };
 
     AppBuilder::bare_standalone()
-        .top_panel(Box::new(WmTopPanelComponent::<
-            term_wm_core::window::WindowKey,
-        >::new("")))
+        .top_panel(Box::new(WmTopPanelComponent::new("")))
         .bottom_panel(Box::new(WmBottomPanelComponent::new("", "", None)))
         .command_menu(Box::new(WmMenuOverlay::new()))
 }
@@ -48,9 +46,7 @@ impl WindowManagerExt for WindowManager {
 
         AppBuilder::bare_standalone()
             .app_ctx(Arc::new(app_ctx))
-            .top_panel(Box::new(WmTopPanelComponent::<
-                term_wm_core::window::WindowKey,
-            >::new(&app_name)))
+            .top_panel(Box::new(WmTopPanelComponent::new(&app_name)))
             .bottom_panel(Box::new(WmBottomPanelComponent::new(
                 &app_name,
                 &app_version,

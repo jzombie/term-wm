@@ -6,7 +6,7 @@ use crossbeam_channel::Sender;
 
 use term_wm::actions::TermWmAction;
 use term_wm::app_context::AppContext;
-use term_wm::components::{Component, MenuOverlay};
+use term_wm::components::Component;
 use term_wm::config::AppBuilder;
 use term_wm::io::{
     ConsoleRenderTarget, RenderTarget,
@@ -104,9 +104,7 @@ impl App {
             AppBuilder::bare_standalone()
                 .app_ctx(Arc::clone(&app_ctx))
                 .top_panel(Box::new(
-                    term_wm_sys_ui_components::WmTopPanelComponent::<
-                        term_wm_core::window::WindowKey,
-                    >::new(&app_name),
+                    term_wm_sys_ui_components::WmTopPanelComponent::new(&app_name),
                 ))
                 .bottom_panel(Box::new(
                     term_wm_sys_ui_components::WmBottomPanelComponent::new(

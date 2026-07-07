@@ -5,7 +5,6 @@ use ratatui::{layout::Rect, style::Style};
 
 use term_wm_core::{
     actions::{EventResult, TermWmAction},
-    bottom_panel_trait::BottomPanel as BottomPanelTrait,
     components::{
         Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse,
         WmComponent,
@@ -255,45 +254,6 @@ impl WmBottomPanelComponent {
             }
         }
         None
-    }
-}
-
-impl BottomPanelTrait for WmBottomPanelComponent {
-    fn begin_frame(&mut self) {
-        self.begin_frame()
-    }
-
-    fn area(&self) -> Rect {
-        self.area()
-    }
-
-    fn set_keybinding_hints(&mut self, hints: Vec<(TermWmAction, Vec<String>)>) {
-        self.set_keybinding_hints(hints);
-    }
-
-    fn keybinding_hints(&self) -> &[(TermWmAction, Vec<String>)] {
-        self.keybinding_hints()
-    }
-
-    fn split_bottom_area(&mut self, area: Rect, height: u16) -> (Rect, Rect) {
-        self.split_bottom_area(area, height)
-    }
-
-    fn render(
-        &mut self,
-        frame: &mut UiFrame<'_>,
-        active: bool,
-        theme: &term_wm_core::theme::Theme,
-    ) {
-        self.render(frame, active, theme);
-    }
-
-    fn hit_test_hint(&self, event: &Event) -> Option<TermWmAction> {
-        self.hit_test_hint(event)
-    }
-
-    fn set_power_profile(&mut self, profile: PowerProfile) {
-        self.set_power_profile(profile);
     }
 }
 

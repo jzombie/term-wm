@@ -42,9 +42,7 @@ impl TermWmApp {
 
         let wm = AppBuilder::bare_standalone()
             .app_ctx(Arc::new(app_ctx))
-            .top_panel(Box::new(WmTopPanelComponent::<
-                term_wm_core::window::WindowKey,
-            >::new(&app_name)))
+            .top_panel(Box::new(WmTopPanelComponent::new(&app_name)))
             .bottom_panel(Box::new(WmBottomPanelComponent::new(
                 &app_name,
                 &app_version,

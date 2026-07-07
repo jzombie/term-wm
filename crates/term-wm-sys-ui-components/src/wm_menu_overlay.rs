@@ -12,8 +12,8 @@ use ratatui::{
 use term_wm_core::{
     actions::{EventResult, TermWmAction},
     components::{
-        Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse,
-        MenuItem, MenuOverlay, Overlay, WmComponent,
+        Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse, MenuItem,
+        Overlay, WmComponent,
     },
     layout::rect_contains,
     ui::UiFrame,
@@ -78,6 +78,36 @@ impl WmMenuOverlay {
             self.outlined.set(false);
             self.outlined_at.borrow_mut().take();
         }
+    }
+
+    pub fn outline(&self) {
+        self.outlined.set(true);
+        self.outlined_at.replace(Some(Instant::now()));
+    }
+
+    pub fn restore(&self) {
+        self.outlined.set(false);
+        self.outlined_at.take();
+    }
+
+    pub fn set_items(&mut self, items: Vec<MenuItem<TermWmAction>>) {
+        self.menu.set_items(items);
+    }
+
+    pub fn set_anchor(&mut self, pos: Option<(u16, u16)>) {
+        self.anchor = pos;
+    }
+
+    pub fn set_managed_area(&mut self, area: Rect) {
+        self.managed_area = area;
+    }
+
+    pub fn selected_action(&self) -> Option<&TermWmAction> {
+        self.last_action.as_ref()
+    }
+
+    pub fn set_timeout(&mut self, timeout: Duration) {
+        self.outline_timeout = timeout;
     }
 
     fn render_dropdown(&self, frame: &mut UiFrame<'_>, ctx: &ComponentContext) {
@@ -293,38 +323,6 @@ impl Overlay<TermWmAction> for WmMenuOverlay {
     }
 }
 
-impl MenuOverlay<TermWmAction> for WmMenuOverlay {
-    fn outline(&mut self) {
-        self.outlined.set(true);
-        self.outlined_at.replace(Some(Instant::now()));
-    }
-
-    fn restore(&mut self) {
-        self.outlined.set(false);
-        self.outlined_at.take();
-    }
-
-    fn set_items(&mut self, items: Vec<MenuItem<TermWmAction>>) {
-        self.menu.set_items(items);
-    }
-
-    fn set_timeout(&mut self, timeout: Duration) {
-        self.outline_timeout = timeout;
-    }
-
-    fn selected_action(&self) -> Option<&TermWmAction> {
-        self.last_action.as_ref()
-    }
-
-    fn set_anchor(&mut self, pos: Option<(u16, u16)>) {
-        self.anchor = pos;
-    }
-
-    fn set_managed_area(&mut self, area: Rect) {
-        self.managed_area = area;
-    }
-}
-
 impl WmComponent for WmMenuOverlay {
     fn consume_area(&mut self, available: Rect) -> (Rect, Rect) {
         // Overlays render on top, claim no area
@@ -441,6 +439,7 @@ impl WmComponent for WmMenuOverlay {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use term_wm_core::components::MenuItem;
     use crossterm::event::{
         KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton, MouseEvent,
         MouseEventKind,
@@ -726,7 +725,6 @@ mod tests {
             width: 80,
             height: 24,
         });
-        overlay.set_timeout(Duration::from_secs(60));
 
         let area = Rect {
             x: 0,

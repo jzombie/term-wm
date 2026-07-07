@@ -6,9 +6,8 @@ use crossterm::event::{Event, KeyEvent, MouseEvent};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
-use term_wm::actions::{SystemTask, TermWmAction};
+use term_wm::actions::SystemTask;
 use term_wm::app_context::AppContext;
-use term_wm::components::MenuOverlay;
 use term_wm::io::{EventSource, RenderTarget};
 use term_wm::runner::{WindowManagerHost, WindowProvider, run_app};
 use term_wm::task_scheduler::TaskScheduler;
@@ -110,13 +109,13 @@ fn render_panic_shows_in_debug_log() {
     );
     term_wm_sys_ui_components::install_panic_hook();
 
-    let menu: Box<dyn MenuOverlay<TermWmAction>> =
+    let menu: Box<dyn term_wm_core::components::WmComponent> =
         Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
     let mut wm = WindowManager::with_config(
         WmConfig::standalone(),
         Arc::new(AppContext::new("test", "0.0.0")),
-        None::<Box<dyn term_wm::top_panel_trait::TopPanel<WindowKey>>>,
-        None::<Box<dyn term_wm::bottom_panel_trait::BottomPanel>>,
+        None,
+        None,
         Some(menu),
     );
     let key = wm.create_window(Box::new(term_wm::components::NoopComponent));

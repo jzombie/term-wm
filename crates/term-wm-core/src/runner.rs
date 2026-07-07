@@ -1387,15 +1387,14 @@ mod tests {
             false
         }
     }
-    impl crate::components::MenuOverlay<TermWmAction> for TestMenu {
-        fn outline(&mut self) {}
-        fn restore(&mut self) {}
-        fn set_items(&mut self, _items: Vec<crate::components::MenuItem<TermWmAction>>) {}
-        fn set_timeout(&mut self, _timeout: std::time::Duration) {}
-        fn selected_action(&self) -> Option<&TermWmAction> {
-            None
+    impl crate::components::WmComponent for TestMenu {
+        fn render(
+            &mut self,
+            _frame: &mut crate::ui::UiFrame<'_>,
+            _area: ratatui::prelude::Rect,
+            _ctx: &crate::components::ComponentContext,
+            _registry: &mut crate::hitbox_registry::HitboxRegistry,
+        ) {
         }
-        fn set_anchor(&mut self, _pos: Option<(u16, u16)>) {}
-        fn set_managed_area(&mut self, _area: ratatui::prelude::Rect) {}
     }
 }
