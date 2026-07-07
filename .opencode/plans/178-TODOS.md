@@ -17,6 +17,7 @@
 - [] Double-click should select entire string by default for copying, if using non-direct mode.
 - [X] Pg Down/Up should trigger scrollview in terminal shells, in non-direct mode. This is already handled in the help overlay, so curious why the functionality isn't uniform.
 - [] Autoscroll isn't working in debug log.
+- [] Can component states be set by a setter/getter instead of direct Cell interaction?
 - [] When closing/reopening the menu, it should default the selected list item to the top.
 - [] Better window physics, including showing tiled/floating state in window headers [See audio file "Digital physics for terminal window managers" via NotebookLM]
 - [] Four-tiered testing
