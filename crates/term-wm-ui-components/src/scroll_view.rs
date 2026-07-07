@@ -199,6 +199,10 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
         self.keyboard_mode = mode;
     }
 
+    pub fn set_sticky_bottom(&mut self, sticky: bool) {
+        self.shared_state.borrow_mut().sticky_bottom = sticky;
+    }
+
     pub fn viewport_handle(&self) -> ViewportHandle {
         ViewportHandle {
             shared: self.shared_state.clone(),
@@ -407,6 +411,9 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
             let off_y = state.offset_y;
             drop(state);
 
+            // Detect if the child's measurement triggered a sticky auto-scroll
+            let offset_changed = off_x != info.offset_x || off_y != info.offset_y;
+
             let needs_vertical = inner_area.height > 0 && content_h > inner_area.height as usize;
             let has_vertical_reserved = inner_area.width < area.width;
             let needs_horizontal = inner_area.width > 0 && content_w > inner_area.width as usize;
@@ -420,7 +427,8 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
                 (needs_horizontal && !has_horizontal_reserved && area.height > 0)
                     || drop_horizontal;
 
-            if (retry_vertical || retry_horizontal) && attempt + 1 < max_attempts {
+            // Trigger a re-render in the exact same frame if offsets snapped
+            if (retry_vertical || retry_horizontal || offset_changed) && attempt + 1 < max_attempts {
                 attempt += 1;
                 continue;
             }
@@ -995,6 +1003,98 @@ mod tests {
         assert!(
             sv.content.borrow().received_scroll,
             "key must reach child in None mode"
+        );
+    }
+
+    #[test]
+    fn sticky_bottom_snaps_when_at_bottom() {
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+        sv.set_sticky_bottom(true);
+
+        let handle = sv.viewport_handle();
+
+        // Simulate viewport dimensions (normally set by the render loop)
+        {
+            let mut st = sv.shared_state.borrow_mut();
+            st.width = 80;
+            st.height = 10;
+        }
+
+        // Set initial content: 100 lines, viewport shows 10
+        handle.set_content_size(80, 100);
+        // Scroll to the bottom (offset 90 = 100 - 10)
+        handle.scroll_vertical_to(usize::MAX);
+        assert_eq!(handle.info().offset_y, 90, "should be at bottom");
+
+        // Content grows to 110 lines — sticky_bottom should snap to new bottom
+        handle.set_content_size(80, 110);
+        assert_eq!(
+            handle.info().offset_y,
+            100,
+            "should snap to new bottom (110 - 10 = 100)"
+        );
+    }
+
+    #[test]
+    fn sticky_bottom_stays_when_scrolled_up() {
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+        sv.set_sticky_bottom(true);
+
+        let handle = sv.viewport_handle();
+
+        // Simulate viewport dimensions
+        {
+            let mut st = sv.shared_state.borrow_mut();
+            st.width = 80;
+            st.height = 10;
+        }
+
+        // Set initial content: 100 lines, viewport shows 10
+        handle.set_content_size(80, 100);
+        // Scroll to offset 50 (middle)
+        handle.scroll_vertical_to(50);
+        assert_eq!(handle.info().offset_y, 50, "should be at offset 50");
+
+        // Content grows to 110 lines — sticky_bottom should NOT move us
+        handle.set_content_size(80, 110);
+        assert_eq!(
+            handle.info().offset_y,
+            50,
+            "should stay at offset 50 when not at bottom"
+        );
+    }
+
+    #[test]
+    fn sticky_bottom_disabled_no_snap() {
+        let sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+        // sticky_bottom defaults to false
+        let handle = sv.viewport_handle();
+
+        // Simulate viewport dimensions
+        {
+            let mut st = sv.shared_state.borrow_mut();
+            st.width = 80;
+            st.height = 10;
+        }
+
+        // Set initial content: 100 lines, viewport shows 10
+        handle.set_content_size(80, 100);
+        // Scroll to the bottom
+        handle.scroll_vertical_to(usize::MAX);
+        assert_eq!(handle.info().offset_y, 90, "should be at bottom");
+
+        // Content grows — with sticky_bottom disabled, offset should NOT change
+        handle.set_content_size(80, 110);
+        assert_eq!(
+            handle.info().offset_y,
+            90,
+            "should stay at old bottom when sticky_bottom is false"
         );
     }
 }

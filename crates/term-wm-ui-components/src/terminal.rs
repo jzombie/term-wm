@@ -1008,6 +1008,7 @@ mod tests {
                 content_height: 24,
                 pending_offset_x: None,
                 pending_offset_y: None,
+                sticky_bottom: false,
             },
         ));
         (

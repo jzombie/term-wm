@@ -70,6 +70,7 @@ pub struct ViewportSharedState {
     pub content_height: usize,
     pub pending_offset_x: Option<usize>,
     pub pending_offset_y: Option<usize>,
+    pub sticky_bottom: bool,
 }
 
 impl ViewportSharedState {
@@ -95,8 +96,22 @@ impl ViewportHandle {
 
     pub fn set_content_size(&self, width: usize, height: usize) {
         let mut inner = self.shared.borrow_mut();
+
+        // Check if we were at the bottom BEFORE updating content dimensions
+        let old_max_y = inner.max_offset_y();
+        let was_at_bottom = inner.offset_y >= old_max_y;
+
         inner.content_width = width;
         inner.content_height = height;
+
+        // If sticky mode is on and we were at the bottom, snap to the new bottom
+        if inner.sticky_bottom && was_at_bottom {
+            let new_max_y = inner.max_offset_y();
+            if new_max_y > inner.offset_y {
+                inner.offset_y = new_max_y;
+                inner.pending_offset_y = Some(new_max_y);
+            }
+        }
     }
 
     pub fn scroll_vertical_to(&self, offset: usize) {
