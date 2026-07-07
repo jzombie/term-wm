@@ -526,7 +526,6 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     let mut shared = shared_parser.lock().unwrap();
                     shared.process(&buf[..n]);
                 }
-                dirty.store(true, Ordering::Release);
 
                 if let Some(title) = extract_osc_title(&buf[..n])
                     && let Ok(mut guard) = pending_title.lock()
@@ -543,8 +542,11 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     }
                 }
 
-                // Notify main thread — new data is available.
-                if let Ok(guard) = status_cb.lock()
+                // Edge-triggered wakeup: only notify on false→true transition.
+                // Prevents flooding the IPC channel with thousands of redundant
+                // PtyWakeup messages per second at unthrottled ingestion speeds.
+                if !dirty.swap(true, Ordering::AcqRel)
+                    && let Ok(guard) = status_cb.lock()
                     && let Some(ref cb) = *guard
                 {
                     cb(crate::PtyStatus::Wakeup);
