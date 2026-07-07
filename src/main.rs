@@ -238,7 +238,7 @@ impl App {
 }
 
 impl WindowManagerHost for App {
-    fn windows(&mut self) -> &mut WindowManager {
+    fn wm(&mut self) -> &mut WindowManager {
         &mut self.wm
     }
 

@@ -82,7 +82,7 @@ struct SparseApp {
 }
 
 impl WindowManagerHost for SparseApp {
-    fn windows(&mut self) -> &mut WindowManager {
+    fn wm(&mut self) -> &mut WindowManager {
         &mut self.wm
     }
     fn quit_requested(&self) -> bool {

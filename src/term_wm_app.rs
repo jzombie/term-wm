@@ -24,7 +24,7 @@ use term_wm_core::wm_config::WmConfig;
 /// ```
 pub struct TermWmApp {
     wm: WindowManager,
-    windows: Vec<WindowKey>,
+    window_keys: Vec<WindowKey>,
     should_quit: bool,
     empty_message: String,
 }
@@ -93,7 +93,7 @@ impl TermWmApp {
     pub fn from_wm(wm: WindowManager) -> Self {
         Self {
             wm,
-            windows: Vec::new(),
+            window_keys: Vec::new(),
             should_quit: false,
             empty_message: "No windows".to_string(),
         }
@@ -114,7 +114,7 @@ impl TermWmApp {
         let key = self.wm.spawn(component);
         self.wm
             .transition_window(key, term_wm_core::window::WindowState::Mapped);
-        self.windows.push(key);
+        self.window_keys.push(key);
         key
     }
 
@@ -124,7 +124,7 @@ impl TermWmApp {
         let key = self.wm.spawn_boxed(component);
         self.wm
             .transition_window(key, term_wm_core::window::WindowState::Mapped);
-        self.windows.push(key);
+        self.window_keys.push(key);
         key
     }
 
@@ -166,7 +166,7 @@ impl TermWmApp {
 }
 
 impl WindowManagerHost for TermWmApp {
-    fn windows(&mut self) -> &mut WindowManager {
+    fn wm(&mut self) -> &mut WindowManager {
         &mut self.wm
     }
 
