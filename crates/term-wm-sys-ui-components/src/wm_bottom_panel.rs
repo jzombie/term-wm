@@ -302,6 +302,17 @@ impl WmComponent for WmBottomPanelComponent {
     fn begin_frame(&mut self) {
         self.begin_frame();
     }
+
+    fn handle_event(
+        &mut self,
+        event: &Event,
+        _ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        if let Some(action) = self.hit_test_hint(event) {
+            return EventResult::Action(action);
+        }
+        EventResult::Ignored
+    }
 }
 
 impl Component<TermWmAction> for WmBottomPanelComponent {

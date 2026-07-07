@@ -608,8 +608,8 @@ impl WmComponent for WmTopPanelComponent {
         if self.hit_test_copy(event) {
             return EventResult::Action(TermWmAction::CopySelection);
         }
-        if let Some(_key) = self.hit_test_window(event) {
-            return EventResult::Action(TermWmAction::CycleNextWindow);
+        if let Some(key) = self.hit_test_window(event) {
+            return EventResult::Action(TermWmAction::FocusWindow(key));
         }
         EventResult::Ignored
     }

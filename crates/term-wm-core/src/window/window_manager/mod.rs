@@ -1106,9 +1106,10 @@ impl WindowManager {
                 false
             }
             HitTarget::BottomPanel => {
-                if let Some(p) = &self.bottom_component
-                    && let ComponentResponse::Action(Some(action)) =
-                        p.query(&ComponentQuery::SelectedAction)
+                let ctx = self.component_context(false);
+                if let Some(p) = &mut self.bottom_component
+                    && let crate::actions::EventResult::Action(action) =
+                        p.handle_event(&crossterm_event, &ctx)
                     && let Some(combo) = self.keybindings().first_combo(action)
                 {
                     self.synthetic_event = Some(Event::Key(crossterm::event::KeyEvent {
@@ -1117,10 +1118,9 @@ impl WindowManager {
                         kind: crossterm::event::KeyEventKind::Press,
                         state: crossterm::event::KeyEventState::NONE,
                     }));
-                    true
-                } else {
-                    false
+                    return true;
                 }
+                false
             }
             HitTarget::Overlay(id) => {
                 let ctx = self.component_context_for(false, slotmap::DefaultKey::default());
@@ -1216,6 +1216,13 @@ impl WindowManager {
                 }
                 TermWmAction::CopySelection => {
                     self.copy_selection_to_clipboard();
+                    true
+                }
+                TermWmAction::FocusWindow(key) => {
+                    if self.window_state(key) == Some(WindowState::Iconic) {
+                        self.transition_window(key, WindowState::Mapped);
+                    }
+                    self.focus_window_key(key);
                     true
                 }
                 _ => false,
