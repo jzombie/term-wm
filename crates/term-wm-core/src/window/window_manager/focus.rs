@@ -156,11 +156,8 @@ impl WindowManager {
                             }
                             return false;
                         }
-                        let hit = self.hit_test_region(
-                            mouse.column,
-                            mouse.row,
-                            &self.managed_draw_order,
-                        );
+                        let hit =
+                            self.hit_test_region(mouse.column, mouse.row, &self.managed_draw_order);
                         if let Some(hit) = hit {
                             self.focus.set_current(hit);
                             if self.config.wm_command_menu_enabled {
