@@ -33,8 +33,8 @@ pub struct ComponentContext {
     overlay: bool,
     direct_mode: bool,
     window_key: Option<WindowKey>,
-    viewport: ViewportContext,
-    viewport_handle: Option<ViewportHandle>,
+    viewport: ScrollViewport,
+    scroll_handle: Option<ScrollHandle>,
     app_ctx: Arc<AppContext>,
     hover_pos: Option<(u16, u16)>,
     keybindings: Option<Arc<KeyBindings>>,
@@ -48,7 +48,7 @@ pub struct ComponentContext {
 /// Viewport metadata describing how the component is projected into a
 /// potentially scrolling parent container.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ViewportContext {
+pub struct ScrollViewport {
     pub offset_x: usize,
     pub offset_y: usize,
     pub width: usize,
@@ -56,12 +56,12 @@ pub struct ViewportContext {
 }
 
 #[derive(Debug, Clone)]
-pub struct ViewportHandle {
-    pub shared: Rc<RefCell<ViewportSharedState>>,
+pub struct ScrollHandle {
+    pub scroll: Rc<RefCell<ScrollBounds>>,
 }
 
 #[derive(Debug, Default)]
-pub struct ViewportSharedState {
+pub struct ScrollBounds {
     pub offset_x: usize,
     pub offset_y: usize,
     pub width: usize,
@@ -70,9 +70,10 @@ pub struct ViewportSharedState {
     pub content_height: usize,
     pub pending_offset_x: Option<usize>,
     pub pending_offset_y: Option<usize>,
+    pub sticky_bottom: bool,
 }
 
-impl ViewportSharedState {
+impl ScrollBounds {
     pub fn max_offset_x(&self) -> usize {
         self.content_width.saturating_sub(self.width)
     }
@@ -82,10 +83,10 @@ impl ViewportSharedState {
     }
 }
 
-impl ViewportHandle {
-    pub fn info(&self) -> ViewportContext {
-        let inner = self.shared.borrow();
-        ViewportContext {
+impl ScrollHandle {
+    pub fn info(&self) -> ScrollViewport {
+        let inner = self.scroll.borrow();
+        ScrollViewport {
             offset_x: inner.offset_x,
             offset_y: inner.offset_y,
             width: inner.width,
@@ -94,13 +95,27 @@ impl ViewportHandle {
     }
 
     pub fn set_content_size(&self, width: usize, height: usize) {
-        let mut inner = self.shared.borrow_mut();
+        let mut inner = self.scroll.borrow_mut();
+
+        // Check if we were at the bottom BEFORE updating content dimensions
+        let old_max_y = inner.max_offset_y();
+        let was_at_bottom = inner.offset_y >= old_max_y;
+
         inner.content_width = width;
         inner.content_height = height;
+
+        // If sticky mode is on and we were at the bottom, snap to the new bottom
+        if inner.sticky_bottom && was_at_bottom {
+            let new_max_y = inner.max_offset_y();
+            if new_max_y > inner.offset_y {
+                inner.offset_y = new_max_y;
+                inner.pending_offset_y = Some(new_max_y);
+            }
+        }
     }
 
     pub fn scroll_vertical_to(&self, offset: usize) {
-        let mut inner = self.shared.borrow_mut();
+        let mut inner = self.scroll.borrow_mut();
         let max = inner.max_offset_y();
         let clamped = offset.min(max);
         inner.offset_y = clamped;
@@ -108,7 +123,7 @@ impl ViewportHandle {
     }
 
     pub fn scroll_vertical_by(&self, delta: isize) {
-        let mut inner = self.shared.borrow_mut();
+        let mut inner = self.scroll.borrow_mut();
         let max = inner.max_offset_y();
         let current = inner.offset_y as isize;
         let next = (current + delta).clamp(0, max as isize) as usize;
@@ -120,7 +135,7 @@ impl ViewportHandle {
         if start >= end {
             return;
         }
-        let mut inner = self.shared.borrow_mut();
+        let mut inner = self.scroll.borrow_mut();
         let height = inner.height;
         if height == 0 {
             return;
@@ -139,7 +154,7 @@ impl ViewportHandle {
     }
 
     pub fn scroll_horizontal_to(&self, offset: usize) {
-        let mut inner = self.shared.borrow_mut();
+        let mut inner = self.scroll.borrow_mut();
         let max = inner.max_offset_x();
         let clamped = offset.min(max);
         inner.offset_x = clamped;
@@ -147,7 +162,7 @@ impl ViewportHandle {
     }
 
     pub fn scroll_horizontal_by(&self, delta: isize) {
-        let mut inner = self.shared.borrow_mut();
+        let mut inner = self.scroll.borrow_mut();
         let max = inner.max_offset_x();
         let current = inner.offset_x as isize;
         let next = (current + delta).clamp(0, max as isize) as usize;
@@ -159,7 +174,7 @@ impl ViewportHandle {
         if start >= end {
             return;
         }
-        let mut inner = self.shared.borrow_mut();
+        let mut inner = self.scroll.borrow_mut();
         let width = inner.width;
         if width == 0 {
             return;
@@ -192,13 +207,13 @@ impl ComponentContext {
             overlay: false,
             direct_mode: false,
             window_key: None,
-            viewport: ViewportContext {
+            viewport: ScrollViewport {
                 offset_x: 0,
                 offset_y: 0,
                 width: 0,
                 height: 0,
             },
-            viewport_handle: None,
+            scroll_handle: None,
             app_ctx: Arc::new(AppContext::new("", "")),
             hover_pos: None,
             keybindings: None,
@@ -225,13 +240,13 @@ impl ComponentContext {
     }
 
     /// Returns the viewport offset for this component.
-    pub const fn viewport(&self) -> ViewportContext {
+    pub const fn viewport(&self) -> ScrollViewport {
         self.viewport
     }
 
     /// Returns a handle that allows requesting viewport adjustments, if available.
-    pub fn viewport_handle(&self) -> Option<ViewportHandle> {
-        self.viewport_handle.clone()
+    pub fn scroll_handle(&self) -> Option<ScrollHandle> {
+        self.scroll_handle.clone()
     }
 
     /// Returns the application name carried by this context.
@@ -309,10 +324,10 @@ impl ComponentContext {
     }
 
     /// Return a new `ComponentContext` with updated viewport metadata.
-    pub fn with_viewport(&self, viewport: ViewportContext, handle: Option<ViewportHandle>) -> Self {
+    pub fn with_viewport(&self, viewport: ScrollViewport, handle: Option<ScrollHandle>) -> Self {
         let mut ctx = self.clone();
         ctx.viewport = viewport;
-        ctx.viewport_handle = handle;
+        ctx.scroll_handle = handle;
         ctx
     }
 

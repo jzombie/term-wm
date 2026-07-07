@@ -2,6 +2,8 @@ use std::fmt;
 
 use crossterm::event::Event;
 
+use crate::window::WindowKey;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ConfirmAction {
     Confirm,
@@ -23,6 +25,7 @@ pub enum TermWmAction {
     CloseHelp,
     CycleNextWindow,
     CyclePrevWindow,
+    FocusWindow(WindowKey),
     OpenHelp,
     OpenKeybindings,
     FocusNext,
@@ -144,7 +147,8 @@ impl TermWmAction {
             TermWmAction::CycleNextWindow
             | TermWmAction::CyclePrevWindow
             | TermWmAction::FocusNext
-            | TermWmAction::FocusPrev => Category::Navigation,
+            | TermWmAction::FocusPrev
+            | TermWmAction::FocusWindow(_) => Category::Navigation,
 
             TermWmAction::WmToggleOverlay
             | TermWmAction::NewWindow
@@ -220,6 +224,7 @@ impl fmt::Display for TermWmAction {
             TermWmAction::CloseHelp => "Close help / dialog",
             TermWmAction::CycleNextWindow => "Cycle next window",
             TermWmAction::CyclePrevWindow => "Cycle previous window",
+            TermWmAction::FocusWindow(_) => "Focus window",
             TermWmAction::OpenHelp => "Open help",
             TermWmAction::OpenKeybindings => "Open keybindings",
             TermWmAction::FocusNext => "Focus next",

@@ -21,7 +21,7 @@ resolver = "2"
 
 [workspace.package]
 authors = ["Jeremy Harris <jeremy.harris@zenosmosis.com>"]
-version = "0.8.8-alpha"
+version = "0.8.9-alpha"
 edition = "2024"
 repository = "https://github.com/jzombie/term-wm"
 license = "MIT OR Apache-2.0"
@@ -50,17 +50,26 @@ resvg = "0.47.0"
 shell-words = "1.1.1"
 strum = { version = "0.28", features = ["derive"] }
 tempfile = "3.24.0"
-term-wm-core = { path = "crates/term-wm-core", version = "0.8.8-alpha" }
-term-wm-layout-engine = { path = "crates/term-wm-layout-engine", version = "0.8.8-alpha" }
-term-wm-pty-engine = { path = "crates/term-wm-pty-engine", version = "0.8.8-alpha" }
-term-wm-sys-ui-components = { path = "crates/term-wm-sys-ui-components", version = "0.8.8-alpha" }
-term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.8.8-alpha" }
+term-wm = { path = ".", version = "0.8.9-alpha" }
+term-wm-core = { path = "crates/term-wm-core", version = "0.8.9-alpha" }
+term-wm-layout-engine = { path = "crates/term-wm-layout-engine", version = "0.8.9-alpha" }
+term-wm-pty-engine = { path = "crates/term-wm-pty-engine", version = "0.8.9-alpha" }
+term-wm-sys-ui-components = { path = "crates/term-wm-sys-ui-components", version = "0.8.9-alpha" }
+term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.8.9-alpha" }
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 vt100 = "0.16.2"
 webbrowser = "1.2.1"
+
+[[bin]]
+name = "term-wm"
+required-features = ["sys-ui"]
+
+[features]
+default = ["sys-ui"]
+sys-ui = ["dep:term-wm-sys-ui-components"]
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
@@ -71,7 +80,7 @@ line-ending = { workspace = true }
 portable-pty = { workspace = true }
 ratatui = { workspace = true }
 term-wm-core = { workspace = true }
-term-wm-sys-ui-components = { workspace = true }
+term-wm-sys-ui-components = { workspace = true, optional = true }
 term-wm-ui-components = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

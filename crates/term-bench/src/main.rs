@@ -78,6 +78,7 @@ impl TryFrom<&BenchCli> for BenchConfig {
 
 fn main() -> io::Result<()> {
     let args = BenchCli::parse();
+
     let config = BenchConfig::try_from(&args)
         .map_err(|msg| io::Error::new(io::ErrorKind::InvalidInput, msg))?;
 

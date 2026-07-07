@@ -12,7 +12,9 @@ use term_wm_core::components::{Component, ComponentContext, Overlay};
 use term_wm_core::keybindings::{Category, KeyBindings};
 use term_wm_core::ui::UiFrame;
 use term_wm_core::window::WindowKey;
-use term_wm_ui_components::{DialogOverlayComponent, ListComponent, ScrollViewComponent};
+use term_wm_ui_components::{
+    DialogOverlayComponent, ListComponent, ScrollKeyMode, ScrollViewComponent,
+};
 
 pub struct WmKeybindingOverlayComponent {
     dialog: DialogOverlayComponent,
@@ -38,7 +40,7 @@ impl WmKeybindingOverlayComponent {
             app_ctx: Arc::clone(app_ctx),
         };
         overlay.build_entries();
-        overlay.content.set_keyboard_enabled(true);
+        overlay.content.set_keyboard_mode(ScrollKeyMode::Full);
         overlay
     }
 
@@ -170,5 +172,85 @@ impl Component<TermWmAction> for WmKeybindingOverlayComponent {
 impl Overlay<TermWmAction> for WmKeybindingOverlayComponent {
     fn visible(&self) -> bool {
         self.dialog.visible()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    fn make_overlay() -> WmKeybindingOverlayComponent {
+        let app_ctx = Arc::new(AppContext::new("test", "0.0.0"));
+        let kb = KeyBindings::default();
+        WmKeybindingOverlayComponent::new(&app_ctx, kb)
+    }
+
+    #[test]
+    fn keybinding_overlay_initially_hidden() {
+        let overlay = make_overlay();
+        assert!(!overlay.visible());
+    }
+
+    #[test]
+    fn keybinding_overlay_show_hides() {
+        let mut overlay = make_overlay();
+        overlay.show();
+        assert!(overlay.visible());
+        overlay.close();
+        assert!(!overlay.visible());
+    }
+
+    #[test]
+    fn keybinding_overlay_render_when_hidden_is_noop() {
+        let overlay = make_overlay();
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 80, 24));
+        let mut frame = UiFrame::from_parts(Rect::new(0, 0, 80, 24), &mut buffer);
+        let ctx = ComponentContext::new(true);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        overlay.render(&mut frame, Rect::new(0, 0, 80, 24), &ctx, &mut registry);
+    }
+
+    #[test]
+    fn keybinding_overlay_handle_events_when_hidden_returns_ignored() {
+        let mut overlay = make_overlay();
+        let ctx = ComponentContext::new(true);
+        let key = Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        let result = overlay.handle_events(&key, &ctx);
+        assert!(result.is_ignored());
+    }
+
+    #[test]
+    fn keybinding_overlay_close_on_esc() {
+        let mut overlay = make_overlay();
+        overlay.show();
+        assert!(overlay.visible());
+        let ctx = ComponentContext::new(true);
+        let key = Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        let result = overlay.handle_events(&key, &ctx);
+        assert!(result.is_consumed());
+        assert!(!overlay.visible());
+    }
+
+    #[test]
+    fn keybinding_overlay_debug_fmt() {
+        let overlay = make_overlay();
+        let fmt = format!("{:?}", overlay);
+        assert!(fmt.contains("WmKeybindingOverlayComponent"));
+    }
+
+    #[test]
+    fn keybinding_overlay_build_entries_populates_content() {
+        let mut overlay = make_overlay();
+        overlay.show();
+        let text = overlay.content.content.borrow();
+        // The list should have entries from default keybindings
+        assert!(!text.items().is_empty());
     }
 }

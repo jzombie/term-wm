@@ -47,7 +47,7 @@ impl Component<TermWmAction> for ListComponent {
 
         // Report content size including the border rows/cols so the scrollbar can
         // reach the last item while the list is rendered inside the border.
-        if let Some(handle) = ctx.viewport_handle() {
+        if let Some(handle) = ctx.scroll_handle() {
             handle.set_content_size(max_width + 2, total_height + 2);
             // Ensure selection is visible within our logic
             // Map item index `selected` to virtual coordinate `selected + 1` (skip top border).
