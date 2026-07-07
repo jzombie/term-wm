@@ -66,8 +66,7 @@ fn main() -> io::Result<()> {
 }
 
 struct App {
-    // TODO: Rename `windows` to `wm`
-    windows: WindowManager,
+    wm: WindowManager,
     pty_wakeup_tx: Sender<UnifiedEvent>,
     debug_key: Option<WindowKey>,
     debug_visible: bool,
@@ -120,7 +119,7 @@ impl App {
         };
 
         let mut app = Self {
-            windows: wm,
+            wm,
             pty_wakeup_tx,
             debug_key: None,
             debug_visible: false,
@@ -129,13 +128,13 @@ impl App {
         // Initialize debug log system window
         {
             let (mut component, handle) = WmDebugLogComponent::new_default();
-            component.set_selection_enabled(app.windows.clipboard_enabled());
+            component.set_selection_enabled(app.wm.clipboard_enabled());
             set_global_debug_log(handle);
-            let debug_key = app.windows.set_system_window(Box::new(component));
-            app.windows
+            let debug_key = app.wm.set_system_window(Box::new(component));
+            app.wm
                 .transition_window(debug_key, term_wm::window::WindowState::Unmapped);
             app.debug_key = Some(debug_key);
-            app.windows.set_window_title(debug_key, "Debug Log");
+            app.wm.set_window_title(debug_key, "Debug Log");
             install_panic_hook();
             term_wm::tracing_sub::init_default();
         }
@@ -208,16 +207,16 @@ impl App {
         })));
         let mut sv = ScrollViewComponent::new(pane);
         sv.set_keyboard_enabled(false);
-        let key = self.windows.create_window(Box::new(sv));
-        self.windows
+        let key = self.wm.create_window(Box::new(sv));
+        self.wm
             .transition_window(key, term_wm::window::WindowState::Mapped);
 
         // The key is now known — store it so the callback can use it.
         let _ = key_holder.set(key);
 
         // Enable selection for the new terminal.
-        let clipboard_enabled = self.windows.clipboard_enabled();
-        if let Some(comp) = self.windows.component_for_key_mut(key) {
+        let clipboard_enabled = self.wm.clipboard_enabled();
+        if let Some(comp) = self.wm.component_for_key_mut(key) {
             comp.set_selection_enabled(clipboard_enabled);
         }
 
@@ -225,40 +224,39 @@ impl App {
         if let Some(line) = command_to_send {
             let mut line = line;
             line.push_str(line_ending::LineEnding::from_current_platform().as_str());
-            if let Some(comp) = self.windows.component_for_key_mut(key) {
+            if let Some(comp) = self.wm.component_for_key_mut(key) {
                 let _ = comp.paste(&line);
             }
         }
 
-        self.windows.set_focus(key);
-        self.windows.tile_window(key);
-        self.windows
-            .set_window_title(key, format!("Shell {}", self.windows.window_count()));
+        self.wm.set_focus(key);
+        self.wm.tile_window(key);
+        self.wm
+            .set_window_title(key, format!("Shell {}", self.wm.window_count()));
         Ok(())
     }
 }
 
 impl WindowManagerHost for App {
     fn windows(&mut self) -> &mut WindowManager {
-        &mut self.windows
+        &mut self.wm
     }
 
     fn open_help_overlay(&mut self) {
         use term_wm_sys_ui_components::wm_help_overlay::WmHelpOverlayComponent;
-        let kb = self.windows.keybindings().clone();
-        let mut h = WmHelpOverlayComponent::new(self.windows.app_ctx(), kb);
+        let kb = self.wm.keybindings().clone();
+        let mut h = WmHelpOverlayComponent::new(self.wm.app_ctx(), kb);
         h.show();
-        h.set_selection_enabled(self.windows.clipboard_enabled());
-        self.windows
-            .open_overlay(OverlayId::Help, Some(Box::new(h)));
+        h.set_selection_enabled(self.wm.clipboard_enabled());
+        self.wm.open_overlay(OverlayId::Help, Some(Box::new(h)));
     }
 
     fn open_keybindings_overlay(&mut self) {
         use term_wm_sys_ui_components::wm_keybinding_overlay::WmKeybindingOverlayComponent;
-        let kb = self.windows.keybindings().clone();
-        let mut o = WmKeybindingOverlayComponent::new(self.windows.app_ctx(), kb);
+        let kb = self.wm.keybindings().clone();
+        let mut o = WmKeybindingOverlayComponent::new(self.wm.app_ctx(), kb);
         o.show();
-        self.windows
+        self.wm
             .open_overlay(OverlayId::Keybindings, Some(Box::new(o)));
     }
 
@@ -269,14 +267,14 @@ impl WindowManagerHost for App {
             "Exit App",
             "Exit the application?\nUnsaved changes will be lost.",
         );
-        self.windows
+        self.wm
             .open_overlay(OverlayId::ExitConfirm, Some(Box::new(confirm)));
     }
 
     fn on_panic(&mut self) {
         self.debug_visible = true;
         if let Some(key) = self.debug_key {
-            self.windows
+            self.wm
                 .transition_window(key, term_wm::window::WindowState::Mapped);
         }
     }
@@ -289,7 +287,7 @@ impl WindowManagerHost for App {
             } else {
                 term_wm::window::WindowState::Unmapped
             };
-            self.windows.transition_window(key, state);
+            self.wm.transition_window(key, state);
         }
     }
 
@@ -317,37 +315,37 @@ impl WindowManagerHost for App {
         })));
         let mut sv = ScrollViewComponent::new(pane);
         sv.set_keyboard_enabled(false);
-        let key = self.windows.create_window(Box::new(sv));
-        self.windows
+        let key = self.wm.create_window(Box::new(sv));
+        self.wm
             .transition_window(key, term_wm::window::WindowState::Mapped);
 
         // The key is now known — store it so the callback can use it.
         let _ = key_holder.set(key);
 
         // Enable selection for the new terminal.
-        let clipboard_enabled = self.windows.clipboard_enabled();
-        if let Some(comp) = self.windows.component_for_key_mut(key) {
+        let clipboard_enabled = self.wm.clipboard_enabled();
+        if let Some(comp) = self.wm.component_for_key_mut(key) {
             comp.set_selection_enabled(clipboard_enabled);
         }
 
-        self.windows.set_focus(key);
-        self.windows.tile_window(key);
-        self.windows
-            .set_window_title(key, format!("Shell {}", self.windows.window_count()));
+        self.wm.set_focus(key);
+        self.wm.tile_window(key);
+        self.wm
+            .set_window_title(key, format!("Shell {}", self.wm.window_count()));
         Ok(())
     }
 
     fn wm_close_window(&mut self, key: WindowKey) -> io::Result<()> {
         if self.debug_key == Some(key) {
             self.debug_visible = false;
-            self.windows
+            self.wm
                 .transition_window(key, term_wm::window::WindowState::Unmapped);
             return Ok(());
         }
         // Call destroy on the component (kills child process).
         // The component will be dropped after this, and the OS will
         // clean up the child process. See also: Reaper for async reaping.
-        if let Some(comp) = self.windows.component_for_key_mut(key) {
+        if let Some(comp) = self.wm.component_for_key_mut(key) {
             comp.destroy();
         }
         Ok(())
@@ -356,8 +354,8 @@ impl WindowManagerHost for App {
     fn set_clipboard_enabled(&mut self, _enabled: bool) {}
 
     fn set_window_selection_enabled(&mut self, enabled: bool) {
-        for key in self.windows.all_window_keys() {
-            if let Some(comp) = self.windows.component_for_key_mut(key) {
+        for key in self.wm.all_window_keys() {
+            if let Some(comp) = self.wm.component_for_key_mut(key) {
                 comp.set_selection_enabled(enabled);
             }
         }
