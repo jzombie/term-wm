@@ -428,7 +428,8 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
                     || drop_horizontal;
 
             // Trigger a re-render in the exact same frame if offsets snapped
-            if (retry_vertical || retry_horizontal || offset_changed) && attempt + 1 < max_attempts {
+            if (retry_vertical || retry_horizontal || offset_changed) && attempt + 1 < max_attempts
+            {
                 attempt += 1;
                 continue;
             }
@@ -996,10 +997,7 @@ mod tests {
             crossterm::event::KeyModifiers::NONE,
         ));
         let result = sv.handle_events(&page_up, &ctx);
-        assert!(
-            result.is_ignored(),
-            "None mode must pass all keys through"
-        );
+        assert!(result.is_ignored(), "None mode must pass all keys through");
         assert!(
             sv.content.borrow().received_scroll,
             "key must reach child in None mode"

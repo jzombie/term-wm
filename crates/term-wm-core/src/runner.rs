@@ -33,8 +33,7 @@ pub trait WindowManagerHost {
     fn set_clipboard_enabled(&mut self, _enabled: bool) {}
     fn set_window_selection_enabled(&mut self, _enabled: bool) {}
     fn open_help_overlay(&mut self) {
-        self.wm()
-            .open_overlay(crate::window::OverlayId::Help, None);
+        self.wm().open_overlay(crate::window::OverlayId::Help, None);
     }
     fn open_keybindings_overlay(&mut self) {
         self.wm()
@@ -119,9 +118,7 @@ where
     let Some((_, localized_evt)) = app.wm().focused_window_event(event) else {
         return false;
     };
-    let adjusted_evt = app
-        .wm()
-        .adjust_event_for_window(focus_id, &localized_evt);
+    let adjusted_evt = app.wm().adjust_event_for_window(focus_id, &localized_evt);
 
     // Phase 2 Dispatch: Mutably borrow app for the component
     let result = if let Some(comp) = app.wm().component_for_key_mut(focus_id) {
@@ -493,10 +490,7 @@ where
                     update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Continue);
                 }
-                if !wm_mode
-                    && matches!(evt, Event::Key(_))
-                    && app.wm().handle_focus_event(&evt)
-                {
+                if !wm_mode && matches!(evt, Event::Key(_)) && app.wm().handle_focus_event(&evt) {
                     update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Continue);
                 }
@@ -692,8 +686,7 @@ where
     let total = num_windows + app.wm().visible_overlay_count();
 
     // Register panel hitboxes BEFORE the window loop (lowest Z-order).
-    app.wm()
-        .register_panel_hitboxes(&mut state.hitbox_registry);
+    app.wm().register_panel_hitboxes(&mut state.hitbox_registry);
 
     // Register tiling split handle hitboxes below windows (floating windows
     // correctly occlude them; tiled windows and handles are disjoint).
