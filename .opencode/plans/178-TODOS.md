@@ -8,3 +8,8 @@
 - [X] Restore missing tests.  Several tests were deleted.  You can find them by doing a diff against main.
 - [X] Behavior regression where menu items show "hovered" state even if mouse is outside of menu area.
 - [] New TODOs in main.rs for deduping and centralizing new window handling
+- [] Four-tiered testing
+  - Tier 1: State Machine and Logic Unit Tests — Test core architecture (layout routing, window tree, business logic) decoupled from terminal hardware. Mock event streams and time to test debounce/timeout mechanics deterministically without `std::thread::sleep`. Targets data corruption, input routing failures, state machine errors.
+  - Tier 2: Layout Snapshot Testing — Verify zero-copy render_screen cell-blitting draws correctly (no overlapping borders, mangled margins). Use ratatui's TestBackend with insta snapshot crate, outputting to .snap files. Visually audit diffs on code changes to catch regressions.
+  - Tier 3: PTY Integration Testing — Validate term-wm-pty-engine in a real OS-level PTY using ratatui-testlib or ptytest. Verify raw mode negotiation, SIGWINCH handling, ANSI/OSC escape sequence emission. Assert virtual terminal emulator memory grid state instead of parsing raw output.
+  - Tier 4: Containerized End-to-End Simulation — Stress-test mutex-locking and thread un-parking under severe load. Docker environments or headless Wayland compositors (wlr-test) in CI. Test over real network boundaries (automated SSH) and simulated hardware inputs. Discover race conditions, IPC crashes, thread deadlocks.
