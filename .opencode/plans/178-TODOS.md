@@ -12,6 +12,7 @@
   - [] Monitor terminal resolution in term-bench (FPS is affected by how many regions it has to draw)
   - [] Modify term-bench to output stats to optional file path so that they can be read in for perf verification; PERF VERIFICATION *MUST* TRACK TERMINAL RESOLUTION, INCLUDING POTENTIAL RESIZE CHANGES
 - [IN PROGRESS] Extremely simple API and README examples, showing how custom Ratatui components can easily be turned into Windows.
+- [] Include README in lib.rs for Rust docs
 - [] The core should not render to the screen, ever.
 - [] Double-click should select entire string by default for copying, if using non-direct mode.
 - [] Pg Down/Up should trigger scrollview in terminal shells, in non-direct mode. This is already handled in the help overlay, so curious why the functionality isn't uniform.
