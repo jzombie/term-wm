@@ -275,10 +275,22 @@ impl WindowManagerHost for App {
 
     fn on_panic(&mut self) {
         self.debug_visible = true;
+        if let Some(key) = self.debug_key {
+            self.windows
+                .transition_window(key, term_wm::window::WindowState::Mapped);
+        }
     }
 
     fn toggle_debug_window(&mut self) {
         self.debug_visible = !self.debug_visible;
+        if let Some(key) = self.debug_key {
+            let state = if self.debug_visible {
+                term_wm::window::WindowState::Mapped
+            } else {
+                term_wm::window::WindowState::Unmapped
+            };
+            self.windows.transition_window(key, state);
+        }
     }
 
     fn wm_new_window(&mut self) -> io::Result<()> {
@@ -328,6 +340,8 @@ impl WindowManagerHost for App {
     fn wm_close_window(&mut self, key: WindowKey) -> io::Result<()> {
         if self.debug_key == Some(key) {
             self.debug_visible = false;
+            self.windows
+                .transition_window(key, term_wm::window::WindowState::Unmapped);
             return Ok(());
         }
         // Call destroy on the component (kills child process).
