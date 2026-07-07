@@ -2821,7 +2821,6 @@ dependencies = [
  "crossterm",
  "indoc",
  "ratatui",
- "term-wm",
 ]
 
 [[package]]
