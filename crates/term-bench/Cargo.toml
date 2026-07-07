@@ -13,7 +13,7 @@ clap = { workspace = true, features = ["derive"] }
 crossterm = { workspace = true }
 indoc = { workspace = true }
 ratatui = { workspace = true }
-term-wm = { path = "../..", optional = true }
+term-wm = { workspace = true, optional = true }
 
 [features]
 wm = ["term-wm"]
