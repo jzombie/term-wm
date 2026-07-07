@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 use crossterm::event::{Event, MouseEventKind};
 use ratatui::{
@@ -8,25 +8,27 @@ use ratatui::{
 
 use term_wm_core::{
     actions::{EventResult, TermWmAction},
-    components::{Component, ComponentContext},
+    components::{
+        Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse,
+        WmComponent,
+    },
     layout::rect_contains,
-    top_panel_trait::TopPanel as TopPanelTrait,
     ui::{UiFrame, safe_set_string, truncate_to_width},
     window::WindowKey,
 };
 
 #[derive(Debug, Clone, Copy)]
-struct PanelWindowHit<R: Copy + Eq + Ord> {
-    id: R,
+struct PanelWindowHit {
+    id: WindowKey,
     rect: Rect,
 }
 
 #[derive(Debug)]
-struct WindowList<R: Copy + Eq + Ord> {
-    window_hits: Vec<PanelWindowHit<R>>,
+struct WindowList {
+    window_hits: Vec<PanelWindowHit>,
 }
 
-impl<R: Copy + Eq + Ord> WindowList<R> {
+impl WindowList {
     fn new() -> Self {
         Self {
             window_hits: Vec::new(),
@@ -65,17 +67,31 @@ impl NotificationArea {
 }
 
 #[derive(Debug)]
-pub struct WmTopPanelComponent<R: Copy + Eq + Ord> {
+pub struct WmTopPanelComponent {
     visible: bool,
     height: u16,
     area: Rect,
     menu_rect: Option<Rect>,
-    list: WindowList<R>,
+    list: WindowList,
     notifications: NotificationArea,
     app_name: String,
+    // WmComponent render state (pushed via process_action before render)
+    active: bool,
+    focus_current: Option<WindowKey>,
+    display_order: Vec<WindowKey>,
+    status_line: Option<String>,
+    mouse_capture_enabled: bool,
+    clipboard_enabled: bool,
+    window_selection_enabled: bool,
+    selection_active: bool,
+    selection_dragging: bool,
+    selection_copy_available: bool,
+    selection_copied: bool,
+    menu_open: bool,
+    window_labels: BTreeMap<WindowKey, String>,
 }
 
-impl<R: Copy + Eq + Ord + std::fmt::Debug> WmTopPanelComponent<R> {
+impl WmTopPanelComponent {
     pub fn new(app_name: &str) -> Self {
         Self {
             visible: true,
@@ -85,6 +101,19 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> WmTopPanelComponent<R> {
             list: WindowList::new(),
             notifications: NotificationArea::new(),
             app_name: app_name.to_string(),
+            active: false,
+            focus_current: None,
+            display_order: Vec::new(),
+            status_line: None,
+            mouse_capture_enabled: false,
+            clipboard_enabled: false,
+            window_selection_enabled: false,
+            selection_active: false,
+            selection_dragging: false,
+            selection_copy_available: false,
+            selection_copied: false,
+            menu_open: false,
+            window_labels: BTreeMap::new(),
         }
     }
 
@@ -149,12 +178,12 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> WmTopPanelComponent<R> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn render<F>(
+    pub fn render_inner(
         &mut self,
         frame: &mut UiFrame<'_>,
         active: bool,
-        focus_current: R,
-        display_order: &[R],
+        focus_current: WindowKey,
+        display_order: &[WindowKey],
         status_line: Option<&str>,
         mouse_capture_enabled: bool,
         clipboard_enabled: bool,
@@ -164,11 +193,8 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> WmTopPanelComponent<R> {
         selection_copy_available: bool,
         selection_copied: bool,
         menu_open: bool,
-        label_for: F,
         theme: &term_wm_core::theme::Theme,
-    ) where
-        F: Fn(R) -> String,
-    {
+    ) {
         if !active {
             return;
         }
@@ -222,7 +248,11 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> WmTopPanelComponent<R> {
         } else {
             for id in display_order.iter().copied() {
                 let focused = id == focus_current;
-                let mut label = label_for(id);
+                let mut label = self
+                    .window_labels
+                    .get(&id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("{id:?}"));
                 let max_label = max_x.saturating_sub(x).saturating_sub(2) as usize;
                 if label.chars().count() > max_label {
                     label = truncate_to_width(&label, max_label);
@@ -424,7 +454,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> WmTopPanelComponent<R> {
         false
     }
 
-    pub fn hit_test_window(&self, event: &Event) -> Option<R> {
+    pub fn hit_test_window(&self, event: &Event) -> Option<WindowKey> {
         let Event::Mouse(mouse) = event else {
             return None;
         };
@@ -439,109 +469,153 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug> WmTopPanelComponent<R> {
     }
 }
 
-impl<R: Copy + Eq + Ord + std::fmt::Debug> TopPanelTrait<R> for WmTopPanelComponent<R> {
-    fn begin_frame(&mut self) {
-        self.begin_frame()
+impl WmComponent for WmTopPanelComponent {
+    fn consume_area(&mut self, available: Rect) -> (Rect, Rect) {
+        self.split_area(self.active, available)
     }
 
-    fn visible(&self) -> bool {
-        self.visible()
-    }
-
-    fn height(&self) -> u16 {
-        self.height()
-    }
-
-    fn area(&self) -> Rect {
-        self.area()
-    }
-
-    fn set_visible(&mut self, visible: bool) {
-        self.set_visible(visible);
-    }
-
-    fn set_height(&mut self, height: u16) {
-        self.set_height(height);
-    }
-
-    fn split_area(&mut self, active: bool, area: Rect) -> (Rect, Rect) {
-        self.split_area(active, area)
-    }
-
-    #[allow(clippy::too_many_arguments)]
     fn render(
         &mut self,
         frame: &mut UiFrame<'_>,
-        active: bool,
-        focus_current: R,
-        display_order: &[R],
-        status_line: Option<&str>,
-        mouse_capture_enabled: bool,
-        clipboard_enabled: bool,
-        window_selection_enabled: bool,
-        selection_active: bool,
-        selection_dragging: bool,
-        selection_copy_available: bool,
-        selection_copied: bool,
-        menu_open: bool,
-        label_for: &dyn Fn(R) -> String,
-        theme: &term_wm_core::theme::Theme,
+        area: Rect,
+        ctx: &ComponentContext,
+        _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
-        self.render(
-            frame,
-            active,
-            focus_current,
-            display_order,
-            status_line,
-            mouse_capture_enabled,
-            clipboard_enabled,
-            window_selection_enabled,
-            selection_active,
-            selection_dragging,
-            selection_copy_available,
-            selection_copied,
-            menu_open,
-            label_for,
-            theme,
-        );
+        if !self.active {
+            return;
+        }
+        let theme = ctx.config().theme;
+        let app_name = ctx.app_name().to_string();
+        if app_name != self.app_name {
+            self.app_name = app_name;
+        }
+        self.area = area;
+        if let Some(focus) = self.focus_current {
+            let display_order = self.display_order.clone();
+            let status_line = self.status_line.clone();
+            let mc = self.mouse_capture_enabled;
+            let cb = self.clipboard_enabled;
+            let ws = self.window_selection_enabled;
+            let sa = self.selection_active;
+            let sd = self.selection_dragging;
+            let sca = self.selection_copy_available;
+            let sc = self.selection_copied;
+            let mo = self.menu_open;
+            self.render_inner(
+                frame,
+                self.active,
+                focus,
+                &display_order,
+                status_line.as_deref(),
+                mc,
+                cb,
+                ws,
+                sa,
+                sd,
+                sca,
+                sc,
+                mo,
+                &theme,
+            );
+        }
     }
 
-    fn menu_icon_rect(&self) -> Option<Rect> {
-        self.menu_icon_rect()
+    fn process_action(&mut self, action: &ComponentAction) {
+        match action {
+            ComponentAction::ToggleVisibility => {
+                self.set_visible(!self.visible);
+            }
+            ComponentAction::SetHintVisibility(hv) => {
+                use term_wm_core::wm_config::HintVisibility;
+                match hv {
+                    HintVisibility::Always => self.set_visible(true),
+                    HintVisibility::Never => self.set_visible(false),
+                    HintVisibility::OnDemand => {}
+                }
+            }
+            ComponentAction::SetPanelActive(active) => {
+                self.active = *active;
+            }
+            ComponentAction::SetTopPanelState(state) => {
+                self.focus_current = state.focus_current;
+                self.display_order = state.display_order.clone();
+                self.status_line = state.status_line.clone();
+                self.mouse_capture_enabled = state.mouse_capture_enabled;
+                self.clipboard_enabled = state.clipboard_enabled;
+                self.window_selection_enabled = state.window_selection_enabled;
+                self.selection_active = state.selection_active;
+                self.selection_dragging = state.selection_dragging;
+                self.selection_copy_available = state.selection_copy_available;
+                self.selection_copied = state.selection_copied;
+                self.menu_open = state.menu_open;
+            }
+            ComponentAction::SetWindowLabels(labels) => {
+                self.window_labels = labels.clone();
+            }
+            _ => {}
+        }
     }
 
-    fn menu_icon_contains_point(&self, column: u16, row: u16) -> bool {
-        self.menu_icon_contains_point(column, row)
+    fn query(&self, query: &ComponentQuery) -> ComponentResponse {
+        match query {
+            ComponentQuery::MenuIconRect => ComponentResponse::Rect(self.menu_rect),
+            _ => ComponentResponse::None,
+        }
     }
 
-    fn hit_test_mouse_capture(&self, event: &Event) -> bool {
-        self.hit_test_mouse_capture(event)
+    fn hit_test(&self, x: u16, y: u16) -> bool {
+        if !self.area.is_empty() && rect_contains(self.area, x, y) {
+            return true;
+        }
+        false
     }
 
-    fn hit_test_selection(&self, event: &Event) -> bool {
-        self.hit_test_selection(event)
+    fn begin_frame(&mut self) {
+        self.begin_frame();
     }
 
-    fn hit_test_clipboard(&self, event: &Event) -> bool {
-        self.hit_test_clipboard(event)
+    fn visible(&self) -> bool {
+        self.visible
     }
 
-    fn hit_test_copy(&self, event: &Event) -> bool {
-        self.hit_test_copy(event)
+    fn set_visible(&mut self, visible: bool) {
+        self.visible = visible;
     }
 
-    fn hit_test_window(&self, event: &Event) -> Option<R> {
-        self.hit_test_window(event)
-    }
-
-    fn hit_test_menu(&self, event: &Event) -> bool {
-        self.hit_test_menu(event)
+    fn handle_event(
+        &mut self,
+        event: &Event,
+        _ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        let Event::Mouse(mouse) = event else {
+            return EventResult::Ignored;
+        };
+        if !matches!(mouse.kind, MouseEventKind::Down(_)) {
+            return EventResult::Ignored;
+        }
+        if self.menu_icon_contains_point(mouse.column, mouse.row) {
+            return EventResult::Action(TermWmAction::WmToggleOverlay);
+        }
+        if self.hit_test_mouse_capture(event) {
+            return EventResult::Action(TermWmAction::ToggleMouseCapture);
+        }
+        if self.hit_test_selection(event) {
+            return EventResult::Action(TermWmAction::ToggleWindowSelection);
+        }
+        if self.hit_test_clipboard(event) {
+            return EventResult::Action(TermWmAction::ToggleClipboardMode);
+        }
+        if self.hit_test_copy(event) {
+            return EventResult::Action(TermWmAction::CopySelection);
+        }
+        if let Some(key) = self.hit_test_window(event) {
+            return EventResult::Action(TermWmAction::FocusWindow(key));
+        }
+        EventResult::Ignored
     }
 }
 
-impl<R: Copy + Eq + Ord + std::fmt::Debug + 'static> Component<TermWmAction>
-    for WmTopPanelComponent<R>
-{
+impl Component<TermWmAction> for WmTopPanelComponent {
     fn render(
         &self,
         _frame: &mut UiFrame<'_>,
@@ -570,7 +644,7 @@ impl<R: Copy + Eq + Ord + std::fmt::Debug + 'static> Component<TermWmAction>
     fn destroy(&mut self) {}
 }
 
-impl<R: Copy + Eq + Ord + std::fmt::Debug> Default for WmTopPanelComponent<R> {
+impl Default for WmTopPanelComponent {
     fn default() -> Self {
         Self::new("unknown")
     }
@@ -583,7 +657,7 @@ mod tests {
 
     #[test]
     fn top_panel_basic_methods_and_split_area() {
-        let mut p: WmTopPanelComponent<usize> = WmTopPanelComponent::new("test-app");
+        let mut p = WmTopPanelComponent::new("test-app");
         assert!(p.visible());
         p.set_visible(false);
         assert!(!p.visible());
@@ -611,7 +685,7 @@ mod tests {
 
     #[test]
     fn top_panel_split_area_inactive() {
-        let mut p: WmTopPanelComponent<usize> = WmTopPanelComponent::new("test");
+        let mut p = WmTopPanelComponent::new("test");
         let area = Rect {
             x: 0,
             y: 0,

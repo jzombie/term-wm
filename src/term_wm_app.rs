@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use term_wm_core::app_context::AppContext;
 use term_wm_core::components::{Component, component_downcast_mut};
-use term_wm_core::config::WmBuilder;
+use term_wm_core::config::AppBuilder;
 use term_wm_core::io::{ConsoleEventSource, ConsoleRenderTarget, EventSource, RenderTarget};
 use term_wm_core::runner::{WindowManagerHost, WindowProvider, run_window_app};
 use term_wm_core::actions::TermWmAction;
@@ -30,42 +30,52 @@ pub struct TermWmApp {
 
 impl TermWmApp {
     /// Create a new standalone app with all system chrome (panels, menu).
+    #[cfg(feature = "sys-ui")]
     pub fn new(app_ctx: AppContext) -> Self {
-        let hostname = app_ctx.hostname.as_deref();
-        let top_panel: Box<dyn term_wm_core::top_panel_trait::TopPanel<WindowKey>> = Box::new(
-            term_wm_sys_ui_components::WmTopPanelComponent::new(&app_ctx.app_name),
-        );
-        let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> =
-            Box::new(term_wm_sys_ui_components::WmBottomPanelComponent::new(
-                &app_ctx.app_name,
-                &app_ctx.app_version,
-                hostname,
-            ));
-        let menu: Box<
-            dyn term_wm_core::components::MenuOverlay<term_wm_core::actions::TermWmAction>,
-        > = Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
-        let wm = WmBuilder::standalone()
+        let app_name = app_ctx.app_name.clone();
+        let app_version = app_ctx.app_version.clone();
+        let hostname = app_ctx.hostname.clone();
+
+        use term_wm_sys_ui_components::{
+            WmBottomPanelComponent, WmMenuOverlay, WmTopPanelComponent,
+        };
+
+        let wm = AppBuilder::bare_standalone()
             .app_ctx(Arc::new(app_ctx))
-            .build(Some(top_panel), Some(bottom_panel), Some(menu));
+            .top_panel(Box::new(WmTopPanelComponent::new(&app_name)))
+            .bottom_panel(Box::new(WmBottomPanelComponent::new(
+                &app_name,
+                &app_version,
+                hostname.as_deref(),
+            )))
+            .command_menu(Box::new(WmMenuOverlay::new()))
+            .build()
+            .expect("standalone build");
+        Self::from_wm(wm)
+    }
+
+    /// Create a bare standalone app without system chrome.
+    #[cfg(not(feature = "sys-ui"))]
+    pub fn new(app_ctx: AppContext) -> Self {
+        Self::bare(app_ctx)
+    }
+
+    /// Create a bare standalone app without system chrome.
+    pub fn bare(app_ctx: AppContext) -> Self {
+        let wm = AppBuilder::bare_standalone()
+            .app_ctx(Arc::new(app_ctx))
+            .build()
+            .expect("bare standalone build");
         Self::from_wm(wm)
     }
 
     /// Create an embedded app without command menu, suitable for
     /// embedding in an existing Ratatui application.
     pub fn embedded(app_ctx: AppContext) -> Self {
-        let hostname = app_ctx.hostname.as_deref();
-        let top_panel: Box<dyn term_wm_core::top_panel_trait::TopPanel<WindowKey>> = Box::new(
-            term_wm_sys_ui_components::WmTopPanelComponent::new(&app_ctx.app_name),
-        );
-        let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> =
-            Box::new(term_wm_sys_ui_components::WmBottomPanelComponent::new(
-                &app_ctx.app_name,
-                &app_ctx.app_version,
-                hostname,
-            ));
-        let wm = WmBuilder::embedded()
+        let wm = AppBuilder::embedded()
             .app_ctx(Arc::new(app_ctx))
-            .build(Some(top_panel), Some(bottom_panel), None);
+            .build()
+            .expect("embedded build");
         Self::from_wm(wm)
     }
 

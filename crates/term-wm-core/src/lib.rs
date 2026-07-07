@@ -1,7 +1,6 @@
 pub mod actions;
 pub mod app_context;
 pub use app_context::AppContext;
-pub mod bottom_panel_trait;
 pub mod component_context;
 pub mod components;
 pub mod constants;
@@ -26,7 +25,6 @@ pub use term_wm_pty_engine::title;
 pub mod config;
 pub mod runner;
 pub mod theme;
-pub mod top_panel_trait;
 pub mod ui;
 pub mod utils;
 pub mod window;

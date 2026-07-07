@@ -160,24 +160,17 @@ impl WindowManager {
     }
 
     pub fn set_panel_visible(&mut self, visible: bool) {
-        if let Some(p) = &mut self.top_panel {
+        if let Some(p) = &mut self.top_component {
             p.set_visible(visible);
         }
     }
 
-    pub fn set_panel_height(&mut self, height: u16) {
-        if let Some(p) = &mut self.top_panel {
-            p.set_height(height);
-        }
+    pub fn set_panel_height(&mut self, _height: u16) {
+        // Height is determined by the component's consume_area; no-op here
     }
 
     pub fn register_managed_layout(&mut self, area: Rect) {
         self.last_frame_area = area;
-        // Compute hints before layout so split_area can reserve space for them.
-        // Show Global-layer hints (WmToggleOverlay only) when command menu closed,
-        // WmMode hints when command menu is open.
-        // In embedded mode (wm_command_menu_enabled = false) there is no command menu
-        // distinction, so show all hints unconditionally.
         let active_layer = if self.config.wm_command_menu_enabled && self.command_menu_visible() {
             ActionLayer::WmMode
         } else {
@@ -189,43 +182,73 @@ impl WindowManager {
                     let hints = self
                         .keybindings()
                         .bottom_hints_for_layer(crate::constants::MAX_BOTTOM_HINTS, active_layer);
-                    if let Some(p) = &mut self.bottom_panel {
-                        p.set_keybinding_hints(hints);
+                    if let Some(p) = &mut self.bottom_component {
+                        p.process_action(&crate::components::ComponentAction::SetKeybindingHints(hints));
                     }
                 } else {
-                    // Embedded mode: no overlay, all actions are always dispatchable.
                     let hints = self
                         .keybindings()
                         .bottom_hints(crate::constants::MAX_BOTTOM_HINTS);
-                    if let Some(p) = &mut self.bottom_panel {
-                        p.set_keybinding_hints(hints);
+                    if let Some(p) = &mut self.bottom_component {
+                        p.process_action(&crate::components::ComponentAction::SetKeybindingHints(hints));
                     }
                 }
             }
             _ => {
-                if let Some(p) = &mut self.bottom_panel {
-                    p.set_keybinding_hints(Vec::new());
+                if let Some(p) = &mut self.bottom_component {
+                    p.process_action(&crate::components::ComponentAction::SetKeybindingHints(Vec::new()));
                 }
             }
         }
-        let active = self.panel_active();
-        let has_hints = self
-            .bottom_panel
-            .as_ref()
-            .is_some_and(|p| !p.keybinding_hints().is_empty());
-        let bottom_h = if has_hints || active { 1u16 } else { 0 };
-        let after_top = if let Some(p) = &mut self.top_panel {
-            let (_, after) = p.split_area(active, area);
-            after
+        // Compute whether the panel should be active from config + visibility,
+        // BEFORE calling consume_area (which needs this state to claim space).
+        let panel_active = self.config.panel_enabled
+            && self
+                .top_component
+                .as_ref()
+                .is_some_and(|p| p.visible());
+        // Push active state to the component so consume_area claims the right space
+        if let Some(p) = &mut self.top_component {
+            p.process_action(&crate::components::ComponentAction::SetPanelActive(panel_active));
+        }
+        let has_hints = if let Some(p) = self.bottom_component.as_ref() {
+            if let crate::components::ComponentResponse::Hints(h) =
+                p.query(&crate::components::ComponentQuery::KeybindingHints)
+            {
+                !h.is_empty()
+            } else {
+                false
+            }
         } else {
-            area
+            false
         };
-        let managed_area = if let Some(p) = &mut self.bottom_panel {
-            let (_, managed) = p.split_bottom_area(after_top, bottom_h);
-            managed
+        let bottom_h = if has_hints || panel_active { 1u16 } else { 0 };
+        let (top_rect, after_top) = if let Some(p) = &mut self.top_component {
+            let (claimed, rest) = p.consume_area(area);
+            (claimed, rest)
         } else {
-            after_top
+            (Rect::default(), area)
         };
+        self.top_claimed = top_rect;
+        let (bottom_rect, managed_area) = if let Some(p) = &mut self.bottom_component {
+            let bottom = Rect {
+                x: after_top.x,
+                y: after_top.y.saturating_add(after_top.height).saturating_sub(bottom_h),
+                width: after_top.width,
+                height: bottom_h,
+            };
+            let managed = Rect {
+                x: after_top.x,
+                y: after_top.y,
+                width: after_top.width,
+                height: after_top.height.saturating_sub(bottom_h),
+            };
+            p.consume_area(bottom);
+            (bottom, managed)
+        } else {
+            (Rect::default(), after_top)
+        };
+        self.bottom_claimed = bottom_rect;
         let prev_managed = self.managed_area;
         self.managed_area = managed_area;
         if prev_managed.width > 0 && prev_managed.height > 0 {

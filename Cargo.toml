@@ -85,13 +85,21 @@ line-ending = { workspace = true }
 portable-pty = { workspace = true }
 ratatui = { workspace = true }
 term-wm-core = { workspace = true }
-term-wm-sys-ui-components = { workspace = true }
+term-wm-sys-ui-components = { workspace = true, optional = true }
 term-wm-ui-components = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 webbrowser = { workspace = true }
 
+[features]
+default = ["sys-ui"]
+sys-ui = ["dep:term-wm-sys-ui-components"]
+
 [build-dependencies]
 indoc = { workspace = true }
+
+[[bin]]
+name = "term-wm"
+required-features = ["sys-ui"]
 
 [dev-dependencies]

@@ -6,8 +6,8 @@ use crossbeam_channel::Sender;
 
 use term_wm::actions::TermWmAction;
 use term_wm::app_context::AppContext;
-use term_wm::components::{Component, MenuOverlay};
-use term_wm::config::WmBuilder;
+use term_wm::components::Component;
+use term_wm::config::AppBuilder;
 use term_wm::io::{
     ConsoleRenderTarget, RenderTarget,
     unified_event_source::{UnifiedEvent, UnifiedEventSource},
@@ -89,34 +89,37 @@ impl App {
             ),
         );
         let hostname = app_ctx.hostname.as_deref();
-        let top_panel: Box<dyn term_wm_core::top_panel_trait::TopPanel<WindowKey>> = Box::new(
-            term_wm_sys_ui_components::WmTopPanelComponent::new(&app_ctx.app_name),
-        );
-        let bottom_panel: Box<dyn term_wm_core::bottom_panel_trait::BottomPanel> =
-            Box::new(term_wm_sys_ui_components::WmBottomPanelComponent::new(
-                &app_ctx.app_name,
-                &app_ctx.app_version,
-                hostname,
-            ));
-        let builder = if embedded {
-            WmBuilder::embedded()
-        } else {
-            WmBuilder::standalone()
-        };
-        let config = builder.config().clone();
+        let app_name = app_ctx.app_name.clone();
+        let app_version = app_ctx.app_version.clone();
+
         let mut raw_menu = term_wm_sys_ui_components::WmMenuOverlay::new();
-        raw_menu.set_timeout(config.menu_outline_timeout);
-        let menu_overlay: Box<dyn MenuOverlay<term_wm_core::actions::TermWmAction>> = if embedded {
-            Box::new(term_wm_sys_ui_components::WmMenuOverlay::new())
+        raw_menu.set_timeout(std::time::Duration::from_millis(500));
+
+        let wm = if embedded {
+            AppBuilder::embedded()
+                .app_ctx(Arc::clone(&app_ctx))
+                .build()
+                .expect("embedded build")
         } else {
-            Box::new(raw_menu)
+            AppBuilder::bare_standalone()
+                .app_ctx(Arc::clone(&app_ctx))
+                .top_panel(Box::new(
+                    term_wm_sys_ui_components::WmTopPanelComponent::new(&app_name),
+                ))
+                .bottom_panel(Box::new(
+                    term_wm_sys_ui_components::WmBottomPanelComponent::new(
+                        &app_name,
+                        &app_version,
+                        hostname,
+                    ),
+                ))
+                .command_menu(Box::new(raw_menu))
+                .build()
+                .expect("standalone build")
         };
+
         let mut app = Self {
-            windows: builder.app_ctx(Arc::clone(&app_ctx)).build(
-                Some(top_panel),
-                Some(bottom_panel),
-                Some(menu_overlay),
-            ),
+            windows: wm,
             pty_wakeup_tx,
             debug_key: None,
             debug_visible: false,
