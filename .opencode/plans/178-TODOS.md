@@ -14,6 +14,7 @@
 - [IN PROGRESS] Extremely simple API and README examples, showing how custom Ratatui components can easily be turned into Windows.
 - [X] Autoscroll isn't working in debug log.
 - [] Include README in lib.rs for Rust docs
+- [] README overhaul [See "The term-wm blueprint for engineering authority" audio in NotebookLM]
 - [] The core should not render to the screen, ever [See "The Rust No Render Policy" audio file or "Decoupling TUI Core and Rendering" Google Doc]; completely headless
 - [] Double-click should select entire string by default for copying, if using non-direct mode.
 - [X] Pg Down/Up should trigger scrollview in terminal shells, in non-direct mode. This is already handled in the help overlay, so curious why the functionality isn't uniform.
