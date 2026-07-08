@@ -1,6 +1,7 @@
 use std::io;
 
 use crate::events::{Event, KeyKind, MouseEventKind};
+use term_wm_render::RenderTarget;
 
 use std::collections::VecDeque;
 
@@ -12,7 +13,7 @@ use crate::debug_event_flags;
 use crate::event_loop::{ControlFlow, EventLoop};
 use crate::events::core_event_to_wm;
 use crate::hitbox_registry::HitboxRegistry;
-use crate::io::{EventSource, RenderTarget};
+use crate::io::EventSource;
 use crate::layout::{LayoutNode, TilingLayout};
 use crate::task_scheduler::TaskScheduler;
 use crate::window::{WindowKey, WindowManager};
