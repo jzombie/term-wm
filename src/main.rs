@@ -7,7 +7,7 @@ use crossbeam_channel::Sender;
 use term_wm::app_context::AppContext;
 use term_wm::config::AppBuilder;
 use term_wm::io::RenderTarget;
-use term_wm::runner::{WindowManagerHost, run_window_app};
+use term_wm::runner::{WindowManagerHost, run_with_defaults};
 use term_wm::unified_event_source::{UnifiedEvent, UnifiedEventSource};
 use term_wm::window::{OverlayId, WindowKey, WindowManager};
 use term_wm::wm_config::WmConfig;
@@ -61,7 +61,7 @@ fn main() -> io::Result<()> {
     let mut output = ConsoleRenderTarget::new()?;
     output.enter()?;
 
-    let result = run_window_app(&mut output, &mut event_source, &mut app);
+    let result = run_with_defaults(&mut output, &mut event_source, &mut app);
 
     output.exit()?;
 

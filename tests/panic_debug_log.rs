@@ -12,7 +12,7 @@ use term_wm::actions::SystemTask;
 use term_wm::app_context::AppContext;
 use term_wm::config::AppBuilder;
 use term_wm::io::{EventSource, RenderTarget};
-use term_wm::runner::{WindowManagerHost, run_app};
+use term_wm::runner::{WindowManagerHost, run_event_loop};
 use term_wm::task_scheduler::TaskScheduler;
 use term_wm::window::{WindowKey, WindowManager};
 
@@ -136,7 +136,7 @@ fn render_panic_shows_in_debug_log() {
 
     let panic_msg = "intentional-panic-from-draw";
 
-    let result = run_app(
+    let result = run_event_loop(
         &mut output,
         &mut driver,
         &mut app,
@@ -155,7 +155,10 @@ fn render_panic_shows_in_debug_log() {
         },
     );
 
-    assert!(result.is_ok(), "run_app should return Ok after panic");
+    assert!(
+        result.is_ok(),
+        "run_event_loop should return Ok after panic"
+    );
 
     let lines = handle.lines();
     let joined = lines.join("\n");
