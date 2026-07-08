@@ -4,14 +4,13 @@ use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use crossterm::event::Event;
-use ratatui::layout::Rect;
 use ratatui::text::{Line, Text};
+use term_wm_core::events::Event;
+use term_wm_layout_engine::LayoutRect;
 
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::debug_event_flags;
-use term_wm_core::ui::UiFrame;
 use term_wm_core::utils::ansi::strip_ansi_escapes;
 use term_wm_core::window::WindowKey;
 use term_wm_ui_components::{ScrollViewComponent, TextRendererComponent};
@@ -183,9 +182,9 @@ pub struct WmDebugLogComponent {
 
 impl Component<TermWmAction> for WmDebugLogComponent {
     fn render(
-        &self,
-        frame: &mut UiFrame<'_>,
-        area: Rect,
+        &mut self,
+        backend: &mut dyn term_wm_render::RenderBackend,
+        area: LayoutRect,
         ctx: &ComponentContext,
         registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
@@ -205,7 +204,7 @@ impl Component<TermWmAction> for WmDebugLogComponent {
             content.set_wrap(false);
         }
 
-        self.scroll_view.render(frame, area, ctx, registry);
+        self.scroll_view.render(backend, area, ctx, registry);
     }
 
     fn handle_events(
@@ -269,10 +268,9 @@ impl WmDebugLogComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{Event, KeyCode, MouseEvent, MouseEventKind};
-    use ratatui::{buffer::Buffer, prelude::Rect};
     use std::io::Write;
-    use term_wm_core::ui::UiFrame;
+    use term_wm_core::events::{Event, KeyCode, MouseEvent, MouseEventKind};
+    use term_wm_layout_engine::LayoutRect;
 
     #[test]
     fn debug_log_handle_and_buffer_limits() {
@@ -308,18 +306,19 @@ mod tests {
         for i in 0..20 {
             handle.push(format!("line{i}"));
         }
-        let area = Rect {
+        let area = LayoutRect {
             x: 0,
             y: 0,
             width: 10,
             height: 5,
         };
-        let mut buffer = Buffer::empty(area);
+        let ratatui_area = term_wm_ui_components::helpers::layout_rect_to_rect(area);
+        let buf = ratatui::buffer::Buffer::empty(ratatui_area);
+        let mut backend = term_wm_console::RatatuiBackend::new(buf, ratatui_area);
         {
-            let mut frame = UiFrame::from_parts(area, &mut buffer);
             Component::render(
-                &comp,
-                &mut frame,
+                &mut comp,
+                &mut backend,
                 area,
                 &ComponentContext::new(true),
                 &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
@@ -331,10 +330,11 @@ mod tests {
         let max_off = info.offset_y; // after render, sticky_bottom snaps to bottom
 
         // PageUp: handle_events returns ScrollView action, update processes it
-        let page_up = Event::Key(crossterm::event::KeyEvent::new(
-            KeyCode::PageUp,
-            crossterm::event::KeyModifiers::NONE,
-        ));
+        let page_up = Event::Key(term_wm_core::events::KeyEvent {
+            code: KeyCode::PageUp,
+            modifiers: term_wm_core::events::KeyModifiers::NONE,
+            kind: term_wm_core::events::KeyKind::Press,
+        });
         let page_up_result = comp.handle_events(&page_up, &ctx);
         if let term_wm_core::actions::EventResult::Action(action) = page_up_result {
             comp.update(action, &ctx, &mut VecDeque::new());
@@ -347,7 +347,7 @@ mod tests {
             kind: MouseEventKind::ScrollDown,
             column: 0,
             row: 0,
-            modifiers: crossterm::event::KeyModifiers::NONE,
+            modifiers: term_wm_core::events::KeyModifiers::NONE,
         });
         let scroll_result = comp.handle_events(&scroll_down, &ctx);
         if let term_wm_core::actions::EventResult::Action(action) = scroll_result {

@@ -1,7 +1,5 @@
-use ratatui::prelude::Rect;
-use ratatui::style::{Color, Modifier, Style};
-
-use crate::ui::UiFrame;
+use crate::theme::Color;
+use term_wm_layout_engine::LayoutRect;
 
 // ── Window decoration layout constants ──────────────────────────
 
@@ -21,7 +19,7 @@ pub const BOTTOM_BORDER_HEIGHT: u16 = 1;
 pub const HEADER_HEIGHT: u16 = 1;
 
 /// Spacing between adjacent window buttons in the header.
-const HEADER_BUTTON_GAP: u16 = 2;
+pub const HEADER_BUTTON_GAP: u16 = 2;
 
 /// Content area x = window_rect.x + LEFT_BORDER_WIDTH.
 pub const CONTENT_X_OFFSET: u16 = LEFT_BORDER_WIDTH;
@@ -36,7 +34,7 @@ pub const CONTENT_WIDTH_SHRINK: u16 = LEFT_BORDER_WIDTH + RIGHT_BORDER_WIDTH;
 pub const CONTENT_HEIGHT_SHRINK: u16 = TOP_BORDER_HEIGHT + HEADER_HEIGHT + BOTTOM_BORDER_HEIGHT;
 
 /// Adjustment to convert a width/height to a 0-based rightmost/bottommost coordinate.
-const EDGE_INDEX_ADJUST: u16 = 1;
+pub const EDGE_INDEX_ADJUST: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HeaderAction {
@@ -51,18 +49,50 @@ pub enum HeaderAction {
 pub struct WindowRenderCtx<'a> {
     pub title: &'a str,
     pub focused: bool,
+    pub floating: bool,
     pub direct_mode: bool,
     pub hover_pos: Option<(u16, u16)>,
     pub theme: crate::theme::Theme,
 }
 
-pub trait WindowDecorator: std::fmt::Debug + Send + Sync {
-    fn render_window(&self, frame: &mut UiFrame<'_>, rect: Rect, ctx: WindowRenderCtx<'_>);
+/// Pure data describing how a button should look — no rendering types.
+#[derive(Debug, Clone)]
+pub struct ButtonRenderInfo {
+    pub symbol: &'static str,
+    pub fg: Color,
+    pub bg: Color,
+    pub bold: bool,
+}
 
-    fn hit_test(&self, window_rect: Rect, x: u16, y: u16) -> HeaderAction;
+/// Pure data describing the header render state — no rendering types.
+#[derive(Debug, Clone)]
+pub struct HeaderRenderInfo {
+    pub bg: Color,
+    pub fg: Color,
+    pub bold: bool,
+}
+
+/// Pure data describing a border segment.
+#[derive(Debug, Clone)]
+pub struct BorderRenderInfo {
+    pub symbol: &'static str,
+    pub fg: Color,
+}
+
+pub trait WindowDecorator: std::fmt::Debug + Send + Sync {
+    /// Render the window chrome (borders, title bar, buttons).
+    /// This method is called by UI crates; core does not implement rendering.
+    fn render_window(
+        &self,
+        backend: &mut dyn term_wm_render::RenderBackend,
+        rect: LayoutRect,
+        ctx: WindowRenderCtx<'_>,
+    );
+
+    fn hit_test(&self, window_rect: LayoutRect, x: u16, y: u16) -> HeaderAction;
 
     /// Returns the content area inside the decorations, relative to `window_rect`.
-    fn content_area(&self, window_rect: Rect) -> Rect;
+    fn content_area(&self, window_rect: LayoutRect) -> LayoutRect;
 }
 
 #[derive(Debug)]
@@ -88,7 +118,7 @@ impl Default for DefaultDecorator {
     }
 }
 
-fn header_buttons(outer_right: u16) -> [(u16, HeaderAction, &'static str); 4] {
+pub fn header_buttons(outer_right: u16) -> [(u16, HeaderAction, &'static str); 4] {
     let close_x = outer_right.saturating_sub(HEADER_BUTTON_GAP);
     let max_x = close_x.saturating_sub(HEADER_BUTTON_GAP);
     let min_x = max_x.saturating_sub(HEADER_BUTTON_GAP);
@@ -102,17 +132,16 @@ fn header_buttons(outer_right: u16) -> [(u16, HeaderAction, &'static str); 4] {
 }
 
 impl WindowDecorator for DefaultDecorator {
-    fn hit_test(&self, rect: Rect, x: u16, y: u16) -> HeaderAction {
+    fn hit_test(&self, rect: LayoutRect, x: u16, y: u16) -> HeaderAction {
         if !self.show_buttons {
             return HeaderAction::Drag;
         }
 
-        let outer_left = rect.x;
-        let outer_right = rect
-            .x
+        let outer_left = rect.x as u16;
+        let outer_right = (rect.x as u16)
             .saturating_add(rect.width)
             .saturating_sub(EDGE_INDEX_ADJUST);
-        let header_y = rect.y.saturating_add(TOP_BORDER_HEIGHT);
+        let header_y = (rect.y as u16).saturating_add(TOP_BORDER_HEIGHT);
 
         if y != header_y {
             return HeaderAction::None;
@@ -129,154 +158,20 @@ impl WindowDecorator for DefaultDecorator {
         HeaderAction::Drag
     }
 
-    fn render_window(&self, frame: &mut UiFrame<'_>, rect: Rect, ctx: WindowRenderCtx<'_>) {
-        let WindowRenderCtx {
-            title,
-            focused,
-            direct_mode,
-            hover_pos,
-            theme,
-        } = ctx;
-        let buffer = frame.buffer_mut();
-
-        let focused_header_style = Style::default()
-            .bg(theme.decorator_header_bg)
-            .fg(theme.decorator_header_fg)
-            .add_modifier(Modifier::BOLD);
-        let normal_header_style = Style::default()
-            .bg(theme.panel_bg)
-            .fg(theme.decorator_header_fg);
-        let border_style = if focused {
-            Style::default()
-                .fg(theme.decorator_border_active)
-                .bg(Color::Reset)
-        } else {
-            Style::default().fg(theme.decorator_border).bg(Color::Reset)
-        };
-
-        let header_style = if focused {
-            focused_header_style
-        } else {
-            normal_header_style
-        };
-        let header_bg = if focused {
-            theme.decorator_header_bg
-        } else {
-            theme.panel_bg
-        };
-
-        let outer_left = rect.x;
-        let outer_top = rect.y;
-        let outer_right = rect
-            .x
-            .saturating_add(rect.width)
-            .saturating_sub(EDGE_INDEX_ADJUST);
-        let outer_bottom = rect
-            .y
-            .saturating_add(rect.height)
-            .saturating_sub(EDGE_INDEX_ADJUST);
-        let header_y = rect.y.saturating_add(TOP_BORDER_HEIGHT);
-
-        // Header Background & Title
-        for x in outer_left.saturating_add(LEFT_BORDER_WIDTH)..outer_right {
-            if let Some(cell) = buffer.cell_mut((x, header_y)) {
-                cell.set_symbol(" ");
-                cell.set_style(header_style);
-            }
-        }
-        let title_len = title.len() as u16;
-        let header_width = outer_right
-            .saturating_sub(outer_left)
-            .saturating_sub(RIGHT_BORDER_WIDTH);
-        if title_len <= header_width {
-            let start_x =
-                outer_left.saturating_add(LEFT_BORDER_WIDTH) + (header_width - title_len) / 2;
-            for (idx, ch) in title.chars().enumerate() {
-                let x = start_x + idx as u16;
-                if let Some(cell) = buffer.cell_mut((x, header_y)) {
-                    cell.set_symbol(&ch.to_string());
-                    cell.set_style(header_style);
-                }
-            }
-        }
-        if self.show_buttons {
-            let contrast_fg = theme.menu_selected_fg;
-            for (bx, action, sym) in header_buttons(outer_right) {
-                if let Some(cell) = buffer.cell_mut((bx, header_y)) {
-                    cell.set_symbol(sym);
-                    let stoplight_fg = match action {
-                        HeaderAction::Close => theme.error,
-                        HeaderAction::Minimize => theme.warning,
-                        HeaderAction::Maximize => theme.accent,
-                        _ => theme.decorator_header_fg,
-                    };
-                    let is_hovered = hover_pos == Some((bx, header_y));
-                    let style = if is_hovered {
-                        let (hover_bg, hover_fg) = match action {
-                            HeaderAction::Close => (theme.error, contrast_fg),
-                            HeaderAction::Minimize => (theme.warning, contrast_fg),
-                            HeaderAction::Maximize => (theme.accent, contrast_fg),
-                            _ => (theme.accent_alt, contrast_fg),
-                        };
-                        Style::default()
-                            .bg(hover_bg)
-                            .fg(hover_fg)
-                            .add_modifier(Modifier::BOLD)
-                    } else if action == HeaderAction::ToggleDirectMode && direct_mode && focused {
-                        Style::default()
-                            .bg(theme.decorator_header_fg)
-                            .fg(theme.decorator_header_bg)
-                    } else {
-                        Style::default().bg(header_bg).fg(stoplight_fg)
-                    };
-                    cell.set_style(style);
-                }
-            }
-        }
-
-        // Borders
-        for x in outer_left..=outer_right {
-            if let Some(cell) = buffer.cell_mut((x, outer_top)) {
-                let sym = if x == outer_left {
-                    "┌"
-                } else if x == outer_right {
-                    "┐"
-                } else {
-                    "─"
-                };
-                cell.set_symbol(sym);
-                cell.set_style(border_style);
-            }
-        }
-        for x in outer_left..=outer_right {
-            if let Some(cell) = buffer.cell_mut((x, outer_bottom)) {
-                let sym = if x == outer_left {
-                    "└"
-                } else if x == outer_right {
-                    "┘"
-                } else {
-                    "─"
-                };
-                cell.set_symbol(sym);
-                cell.set_style(border_style);
-            }
-        }
-        for y in outer_top.saturating_add(TOP_BORDER_HEIGHT)..outer_bottom {
-            if let Some(cell) = buffer.cell_mut((outer_left, y)) {
-                cell.set_symbol("│");
-                cell.set_style(border_style);
-            }
-            if let Some(cell) = buffer.cell_mut((outer_right, y)) {
-                cell.set_symbol("│");
-                cell.set_style(border_style);
-            }
-        }
+    fn render_window(
+        &self,
+        _backend: &mut dyn term_wm_render::RenderBackend,
+        _rect: LayoutRect,
+        _ctx: WindowRenderCtx<'_>,
+    ) {
+        // Rendering is implemented in UI crates, not core.
+        // This is a stub that will be replaced by the concrete decorator implementation.
     }
 
-    fn content_area(&self, window_rect: Rect) -> Rect {
-        Rect {
-            x: window_rect.x.saturating_add(CONTENT_X_OFFSET),
-            y: window_rect.y.saturating_add(CONTENT_Y_OFFSET),
+    fn content_area(&self, window_rect: LayoutRect) -> LayoutRect {
+        LayoutRect {
+            x: window_rect.x.saturating_add(i32::from(CONTENT_X_OFFSET)),
+            y: window_rect.y.saturating_add(i32::from(CONTENT_Y_OFFSET)),
             width: window_rect.width.saturating_sub(CONTENT_WIDTH_SHRINK),
             height: window_rect.height.saturating_sub(CONTENT_HEIGHT_SHRINK),
         }
@@ -297,7 +192,7 @@ mod tests {
     #[test]
     fn hit_test_returns_expected_actions() {
         let dec = DefaultDecorator::new();
-        let rect = Rect {
+        let rect = LayoutRect {
             x: 10,
             y: 5,
             width: 10,
@@ -314,7 +209,7 @@ mod tests {
         assert_eq!(dec.hit_test(rect, 19, header_y), HeaderAction::None);
 
         // buttons: compute positions (right-to-left: close, maximize, minimize, direct)
-        let outer_right = rect.x + rect.width - 1;
+        let outer_right = (rect.x as u16) + rect.width - 1;
         let close_x = outer_right.saturating_sub(HEADER_BUTTON_GAP);
         let max_x = close_x.saturating_sub(HEADER_BUTTON_GAP);
         let min_x = max_x.saturating_sub(HEADER_BUTTON_GAP);
@@ -329,6 +224,9 @@ mod tests {
         );
 
         // area between buttons -> drag
-        assert_eq!(dec.hit_test(rect, rect.x + 2, header_y), HeaderAction::Drag);
+        assert_eq!(
+            dec.hit_test(rect, (rect.x as u16) + 2, header_y),
+            HeaderAction::Drag
+        );
     }
 }

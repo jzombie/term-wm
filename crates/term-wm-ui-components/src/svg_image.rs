@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::ascii_image::AsciiImageComponent;
 use term_wm_core::actions::TermWmAction;
 use term_wm_core::components::{Component, ComponentContext};
-use term_wm_core::ui::UiFrame;
+use term_wm_layout_engine::LayoutRect;
 
 enum Pnm {
     Luma {
@@ -26,13 +26,13 @@ pub struct SvgImageComponent {
 
 impl Component<TermWmAction> for SvgImageComponent {
     fn render(
-        &self,
-        frame: &mut UiFrame<'_>,
-        area: ratatui::layout::Rect,
+        &mut self,
+        backend: &mut dyn term_wm_render::RenderBackend,
+        area: LayoutRect,
         ctx: &ComponentContext,
         registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
-        self.inner.render(frame, area, ctx, registry)
+        self.inner.render(backend, area, ctx, registry)
     }
 }
 

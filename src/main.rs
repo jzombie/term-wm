@@ -6,16 +6,17 @@ use crossbeam_channel::Sender;
 
 use term_wm::app_context::AppContext;
 use term_wm::config::AppBuilder;
-use term_wm::io::{
-    ConsoleRenderTarget, RenderTarget,
-    unified_event_source::{UnifiedEvent, UnifiedEventSource},
-};
+use term_wm::io::RenderTarget;
 use term_wm::runner::{WindowManagerHost, run_window_app};
+use term_wm::unified_event_source::{UnifiedEvent, UnifiedEventSource};
 use term_wm::window::{OverlayId, WindowKey, WindowManager};
 use term_wm::wm_config::WmConfig;
 use term_wm::{
     PtyStatus, ScrollKeyMode, ScrollViewComponent, TerminalComponent, default_shell_command,
 };
+use term_wm_console::console_render_target::ConsoleRenderTarget;
+use term_wm_console::draw_plan_renderer::DrawPlanRenderer;
+use term_wm_core::engine::CoreEngine;
 use term_wm_sys_ui_components::wm_debug_log::{
     WmDebugLogComponent, install_panic_hook, set_global_debug_log,
 };
@@ -69,6 +70,8 @@ fn main() -> io::Result<()> {
 
 struct App {
     wm: WindowManager,
+    engine: CoreEngine,
+    draw_renderer: DrawPlanRenderer,
     pty_wakeup_tx: Sender<UnifiedEvent>,
     debug_key: Option<WindowKey>,
     debug_visible: bool,
@@ -122,6 +125,8 @@ impl App {
 
         let mut app = Self {
             wm,
+            engine: CoreEngine::new(),
+            draw_renderer: DrawPlanRenderer::new(),
             pty_wakeup_tx,
             debug_key: None,
             debug_visible: false,
@@ -365,5 +370,14 @@ impl WindowManagerHost for App {
 
     fn empty_window_message(&self) -> &str {
         "all shells exited"
+    }
+
+    fn render(&mut self, backend: &mut dyn term_wm_render::RenderBackend) {
+        term_wm::render_app(
+            backend,
+            &mut self.wm,
+            &mut self.engine,
+            &mut self.draw_renderer,
+        );
     }
 }

@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use ratatui::style::Color;
+use crate::theme::Color;
 
 use crate::theme::Theme;
 

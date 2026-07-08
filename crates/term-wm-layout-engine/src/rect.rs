@@ -4,7 +4,7 @@ use core::fmt;
 ///
 /// Used throughout the engine to represent both screen-space regions and
 /// floating-window geometry where off-screen coordinates are valid.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct LayoutRect {
     pub x: i32,
     pub y: i32,
@@ -21,16 +21,49 @@ impl LayoutRect {
         )
     }
 
-    pub fn contains(&self, col: u16, row: u16) -> bool {
+    /// Check if the rectangle has zero area.
+    pub fn is_empty(&self) -> bool {
+        self.width == 0 || self.height == 0
+    }
+
+    /// Compute the intersection of two rectangles.
+    pub fn intersection(&self, other: LayoutRect) -> LayoutRect {
+        let x1 = self.x.max(other.x);
+        let y1 = self.y.max(other.y);
+        let self_right = self.x.saturating_add(i32::from(self.width));
+        let other_right = other.x.saturating_add(i32::from(other.width));
+        let self_bottom = self.y.saturating_add(i32::from(self.height));
+        let other_bottom = other.y.saturating_add(i32::from(other.height));
+        let x2 = self_right.min(other_right);
+        let y2 = self_bottom.min(other_bottom);
+        if x2 <= x1 || y2 <= y1 {
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            }
+        } else {
+            LayoutRect {
+                x: x1,
+                y: y1,
+                width: (x2 - x1) as u16,
+                height: (y2 - y1) as u16,
+            }
+        }
+    }
+
+    /// Check if a point is inside the rectangle.
+    /// Generic over coordinate type - accepts both i32 and u16.
+    pub fn contains<T: Into<i32>>(&self, col: T, row: T) -> bool {
         if self.width == 0 || self.height == 0 {
             return false;
         }
+        let col = col.into();
+        let row = row.into();
         let max_x = self.x.saturating_add(i32::from(self.width));
         let max_y = self.y.saturating_add(i32::from(self.height));
-        i32::from(col) >= self.x
-            && i32::from(col) < max_x
-            && i32::from(row) >= self.y
-            && i32::from(row) < max_y
+        col >= self.x && col < max_x && row >= self.y && row < max_y
     }
 
     pub fn clamp(self, bounds: LayoutRect) -> LayoutRect {
@@ -72,13 +105,25 @@ impl LayoutRect {
 }
 
 /// Convenience wrapper around [`LayoutRect::contains`].
-pub fn rect_contains(rect: &LayoutRect, col: u16, row: u16) -> bool {
+/// Generic over coordinate type.
+pub fn rect_contains<T: Into<i32>>(rect: &LayoutRect, col: T, row: T) -> bool {
     rect.contains(col, row)
 }
 
 /// Shrink a rectangle by the given margins on each side.
 /// The resulting width/height saturate at zero.
-pub fn inset(rect: LayoutRect, left: u16, right: u16, top: u16, bottom: u16) -> LayoutRect {
+/// Generic over margin types.
+pub fn inset<T: Into<u16> + Copy>(
+    rect: LayoutRect,
+    left: T,
+    right: T,
+    top: T,
+    bottom: T,
+) -> LayoutRect {
+    let left: u16 = left.into();
+    let right: u16 = right.into();
+    let top: u16 = top.into();
+    let bottom: u16 = bottom.into();
     LayoutRect {
         x: rect.x.saturating_add(i32::from(left)),
         y: rect.y.saturating_add(i32::from(top)),
@@ -89,13 +134,14 @@ pub fn inset(rect: LayoutRect, left: u16, right: u16, top: u16, bottom: u16) -> 
 
 /// Offset a rectangle by `gap * index` along the given orientation.
 /// Used when placing children in a split with inter-child gaps.
-pub fn gap_insert(
+/// Generic over gap type.
+pub fn gap_insert<T: Into<u16>>(
     rect: LayoutRect,
-    gap: u16,
+    gap: T,
     index: usize,
     orientation: Orientation,
 ) -> LayoutRect {
-    let offset = gap.saturating_mul(index as u16);
+    let offset = gap.into().saturating_mul(index as u16);
     match orientation {
         Orientation::Horizontal => LayoutRect {
             x: rect.x.saturating_add(i32::from(offset)),
@@ -302,7 +348,7 @@ mod tests {
 
     #[test]
     fn inset_shrinks_rect() {
-        let result = inset(r(10, 10, 100, 50), 5, 5, 2, 2);
+        let result = inset(r(10, 10, 100, 50), 5u16, 5u16, 2u16, 2u16);
         assert_eq!(result.x, 15);
         assert_eq!(result.y, 12);
         assert_eq!(result.width, 90);
@@ -311,14 +357,14 @@ mod tests {
 
     #[test]
     fn gap_insert_horizontal() {
-        let result = gap_insert(r(0, 0, 80, 24), 2, 1, Orientation::Horizontal);
+        let result = gap_insert(r(0, 0, 80, 24), 2u16, 1, Orientation::Horizontal);
         assert_eq!(result.x, 2);
         assert_eq!(result.y, 0);
     }
 
     #[test]
     fn gap_insert_vertical() {
-        let result = gap_insert(r(0, 0, 80, 24), 2, 1, Orientation::Vertical);
+        let result = gap_insert(r(0, 0, 80, 24), 2u16, 1, Orientation::Vertical);
         assert_eq!(result.x, 0);
         assert_eq!(result.y, 2);
     }

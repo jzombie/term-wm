@@ -6,8 +6,11 @@ use crossterm::{execute, terminal};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-use super::RenderTarget;
-use crate::ui::UiFrame;
+use ratatui::buffer::Buffer;
+
+use crate::RatatuiBackend;
+use crate::RenderBackend;
+use term_wm_core::io::RenderTarget;
 
 pub struct ConsoleRenderTarget {
     terminal: Terminal<CrosstermBackend<Stdout>>,
@@ -27,8 +30,6 @@ impl ConsoleRenderTarget {
 }
 
 impl RenderTarget for ConsoleRenderTarget {
-    type Backend = CrosstermBackend<Stdout>;
-
     fn enter(&mut self) -> io::Result<()> {
         if self.entered {
             return Ok(());
@@ -45,6 +46,7 @@ impl RenderTarget for ConsoleRenderTarget {
             return Ok(());
         }
         execute!(self.terminal.backend_mut(), DisableMouseCapture)?;
+        // TODO: Refactor this constant
         // Give the terminal emulator time to process DisableMouseCapture
         // before we disable raw mode (which re-enables echo). Without this
         // delay, the terminal emulator might still send mouse events that
@@ -60,12 +62,15 @@ impl RenderTarget for ConsoleRenderTarget {
 
     fn draw<F>(&mut self, f: F) -> io::Result<()>
     where
-        F: FnOnce(UiFrame<'_>),
+        F: FnOnce(&mut dyn RenderBackend),
     {
         self.terminal
             .draw(move |frame| {
-                let wrapper = UiFrame::new(frame);
-                f(wrapper);
+                let area = frame.area();
+                let buffer = std::mem::replace(frame.buffer_mut(), Buffer::empty(area));
+                let mut backend = RatatuiBackend::new(buffer, area);
+                f(&mut backend);
+                *frame.buffer_mut() = backend.buffer;
             })
             .map(|_| ())
             .map_err(|err| io::Error::other(err.to_string()))

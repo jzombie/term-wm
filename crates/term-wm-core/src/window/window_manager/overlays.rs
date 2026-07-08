@@ -1,4 +1,4 @@
-use crossterm::event::Event;
+use crate::events::Event;
 
 use super::WindowManager;
 use crate::actions::{ConfirmAction, EventResult, TermWmAction};

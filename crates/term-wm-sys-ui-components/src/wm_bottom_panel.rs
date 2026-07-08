@@ -1,7 +1,6 @@
-use std::collections::VecDeque;
-
-use crossterm::event::{Event, MouseEventKind};
-use ratatui::{layout::Rect, style::Style};
+use ratatui::style::Style;
+use term_wm_core::events::{Event, MouseEventKind};
+use term_wm_layout_engine::LayoutRect;
 
 use term_wm_core::{
     actions::{EventResult, TermWmAction},
@@ -11,25 +10,25 @@ use term_wm_core::{
     },
     layout::rect_contains,
     power_profile::PowerProfile,
-    ui::{UiFrame, safe_set_string, truncate_to_width},
-    window::WindowKey,
+    utils::truncate_to_width,
 };
+use term_wm_ui_components::helpers::{color_to_ratatui, layout_rect_to_rect, safe_set_string};
 
 #[derive(Debug)]
 pub struct WmBottomPanelComponent {
-    area: Rect,
+    area: LayoutRect,
     app_name: String,
     app_version: String,
     hostname: Option<String>,
     keybinding_hints: Vec<(TermWmAction, Vec<String>)>,
-    hint_rects: Vec<(Rect, TermWmAction)>,
+    hint_rects: Vec<(LayoutRect, TermWmAction)>,
     power_profile: PowerProfile,
 }
 
 impl WmBottomPanelComponent {
     pub fn new(app_name: &str, app_version: &str, hostname: Option<&str>) -> Self {
         Self {
-            area: Rect::default(),
+            area: LayoutRect::default(),
             app_name: app_name.to_string(),
             app_version: app_version.to_string(),
             hostname: hostname.map(|h| h.to_string()),
@@ -43,7 +42,7 @@ impl WmBottomPanelComponent {
         self.hint_rects.clear();
     }
 
-    pub fn area(&self) -> Rect {
+    pub fn area(&self) -> LayoutRect {
         self.area
     }
 
@@ -63,15 +62,18 @@ impl WmBottomPanelComponent {
         self.power_profile = profile;
     }
 
-    pub fn split_bottom_area(&mut self, area: Rect, height: u16) -> (Rect, Rect) {
-        let bottom = Rect {
+    pub fn split_bottom_area(&mut self, area: LayoutRect, height: u16) -> (LayoutRect, LayoutRect) {
+        let bottom = LayoutRect {
             x: area.x,
-            y: area.y.saturating_add(area.height).saturating_sub(height),
+            y: area
+                .y
+                .saturating_add(i32::from(area.height))
+                .saturating_sub(i32::from(height)),
             width: area.width,
             height,
         };
         let managed_height = area.height.saturating_sub(height);
-        let managed = Rect {
+        let managed = LayoutRect {
             x: area.x,
             y: area.y,
             width: area.width,
@@ -83,20 +85,20 @@ impl WmBottomPanelComponent {
 
     pub fn render(
         &mut self,
-        frame: &mut UiFrame<'_>,
+        backend: &mut dyn term_wm_render::RenderBackend,
         active: bool,
         theme: &term_wm_core::theme::Theme,
     ) {
         if active {
-            self.render_bottom_impl(frame, true, theme);
+            self.render_bottom_impl(backend, true, theme);
         } else if !self.keybinding_hints.is_empty() {
-            self.render_bottom_impl(frame, false, theme);
+            self.render_bottom_impl(backend, false, theme);
         }
     }
 
     fn render_bottom_impl(
         &mut self,
-        frame: &mut UiFrame<'_>,
+        backend: &mut dyn term_wm_render::RenderBackend,
         show_info: bool,
         theme: &term_wm_core::theme::Theme,
     ) {
@@ -104,8 +106,10 @@ impl WmBottomPanelComponent {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        let buffer = frame.buffer_mut();
-        let bounds = area.intersection(buffer.area);
+        let ratatui_backend = term_wm_ui_components::helpers::downcast_ratatui(backend);
+        let buffer = &mut ratatui_backend.buffer;
+        let ratatui_area = layout_rect_to_rect(area);
+        let bounds = ratatui_area.intersection(buffer.area);
         if bounds.width == 0 || bounds.height == 0 {
             return;
         }
@@ -113,15 +117,15 @@ impl WmBottomPanelComponent {
             for xx in bounds.x..bounds.x.saturating_add(bounds.width) {
                 if let Some(cell) = buffer.cell_mut((xx, yy)) {
                     let mut st = cell.style();
-                    st.bg = Some(theme.bottom_panel_bg);
-                    st.fg = Some(theme.bottom_panel_fg);
+                    st.bg = Some(color_to_ratatui(theme.bottom_panel_bg));
+                    st.fg = Some(color_to_ratatui(theme.bottom_panel_fg));
                     cell.set_style(st);
                 }
             }
         }
         let style = Style::default()
-            .fg(theme.bottom_panel_fg)
-            .bg(theme.bottom_panel_bg);
+            .fg(color_to_ratatui(theme.bottom_panel_fg))
+            .bg(color_to_ratatui(theme.bottom_panel_bg));
 
         // Reserve rightmost cell for the profile indicator
         let indicator_reserved = 1u16;
@@ -133,7 +137,9 @@ impl WmBottomPanelComponent {
                 .hostname
                 .clone()
                 .unwrap_or_else(|| "unknown-host".to_string());
-            Some(format!("{pkg_label} · {platform} · {hostname}"))
+            Some(format!(
+                "{pkg_label} \u{00b7} {platform} \u{00b7} {hostname}"
+            ))
         } else {
             None
         };
@@ -154,8 +160,8 @@ impl WmBottomPanelComponent {
 
         if !self.keybinding_hints.is_empty() {
             let combo_style = Style::default()
-                .fg(theme.menu_selected_fg)
-                .bg(theme.menu_selected_bg)
+                .fg(color_to_ratatui(theme.menu_selected_fg))
+                .bg(color_to_ratatui(theme.menu_selected_bg))
                 .add_modifier(ratatui::style::Modifier::BOLD);
             let mut cursor_x = bounds.x;
             self.hint_rects.clear();
@@ -174,10 +180,10 @@ impl WmBottomPanelComponent {
                 let available_w = max_hint_x.saturating_sub(cursor_x);
                 if cursor_x == bounds.x && entry_width > available_w {
                     let text = truncate_to_width(&entry, available_w as usize);
-                    safe_set_string(buffer, bounds, cursor_x, area.y, &text, style);
+                    safe_set_string(buffer, bounds, cursor_x, area.y as u16, &text, style);
                     self.hint_rects.push((
-                        Rect {
-                            x: cursor_x,
+                        LayoutRect {
+                            x: i32::from(cursor_x),
                             y: area.y,
                             width: available_w,
                             height: 1,
@@ -188,8 +194,8 @@ impl WmBottomPanelComponent {
                 }
 
                 self.hint_rects.push((
-                    Rect {
-                        x: cursor_x,
+                    LayoutRect {
+                        x: i32::from(cursor_x),
                         y: area.y,
                         width: entry_width,
                         height: 1,
@@ -197,14 +203,28 @@ impl WmBottomPanelComponent {
                     action.clone(),
                 ));
 
-                safe_set_string(buffer, bounds, cursor_x, area.y, &combo_str, combo_style);
+                safe_set_string(
+                    buffer,
+                    bounds,
+                    cursor_x,
+                    area.y as u16,
+                    &combo_str,
+                    combo_style,
+                );
                 cursor_x = cursor_x.saturating_add(combo_str.chars().count() as u16);
-                let desc = format!(" {}", action);
-                safe_set_string(buffer, bounds, cursor_x, area.y, &desc, style);
+                let desc = format!(" {action}");
+                safe_set_string(buffer, bounds, cursor_x, area.y as u16, &desc, style);
                 cursor_x = cursor_x.saturating_add(desc.chars().count() as u16);
 
                 if cursor_x < max_hint_x {
-                    safe_set_string(buffer, bounds, cursor_x, area.y, "|", Style::default());
+                    safe_set_string(
+                        buffer,
+                        bounds,
+                        cursor_x,
+                        area.y as u16,
+                        "|",
+                        Style::default(),
+                    );
                     cursor_x = cursor_x.saturating_add(1);
                 }
             }
@@ -226,16 +246,23 @@ impl WmBottomPanelComponent {
                     .saturating_sub(indicator_reserved)
                     .saturating_sub(text_width)
             };
-            safe_set_string(buffer, bounds, start_x.max(bounds.x), area.y, &text, style);
+            safe_set_string(
+                buffer,
+                bounds,
+                start_x.max(bounds.x),
+                area.y as u16,
+                &text,
+                style,
+            );
         }
 
         // Draw profile indicator in the reserved rightmost cell
         let ind_x = bounds.x.saturating_add(bounds.width).saturating_sub(1);
         if ind_x >= bounds.x
-            && let Some(cell) = buffer.cell_mut((ind_x, area.y))
+            && let Some(cell) = buffer.cell_mut((ind_x, area.y as u16))
         {
             let mut st = cell.style();
-            st.bg = Some(self.power_profile.indicator_color(theme));
+            st.bg = Some(color_to_ratatui(self.power_profile.indicator_color(theme)));
             cell.set_style(st);
             cell.set_symbol(" ");
         }
@@ -245,7 +272,7 @@ impl WmBottomPanelComponent {
         let Event::Mouse(mouse) = event else {
             return None;
         };
-        if !matches!(mouse.kind, MouseEventKind::Down(_)) {
+        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
             return None;
         }
         for (rect, action) in &self.hint_rects {
@@ -257,21 +284,34 @@ impl WmBottomPanelComponent {
     }
 }
 
-impl WmComponent for WmBottomPanelComponent {
-    fn consume_area(&mut self, available: Rect) -> (Rect, Rect) {
-        self.split_bottom_area(available, 1)
-    }
-
+impl Component<TermWmAction> for WmBottomPanelComponent {
     fn render(
         &mut self,
-        frame: &mut UiFrame<'_>,
-        area: Rect,
+        backend: &mut dyn term_wm_render::RenderBackend,
+        area: LayoutRect,
         ctx: &ComponentContext,
         _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
         let theme = &ctx.config().theme;
         self.area = area;
-        self.render_bottom_impl(frame, true, theme);
+        self.render_bottom_impl(backend, true, theme);
+    }
+
+    fn handle_events(
+        &mut self,
+        event: &Event,
+        _ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        if let Some(action) = self.hit_test_hint(event) {
+            return EventResult::Action(action);
+        }
+        EventResult::Ignored
+    }
+}
+
+impl WmComponent for WmBottomPanelComponent {
+    fn consume_area(&mut self, available: LayoutRect) -> (LayoutRect, LayoutRect) {
+        self.split_bottom_area(available, 1)
     }
 
     fn process_action(&mut self, action: &ComponentAction) {
@@ -302,46 +342,6 @@ impl WmComponent for WmBottomPanelComponent {
     fn begin_frame(&mut self) {
         self.begin_frame();
     }
-
-    fn handle_event(
-        &mut self,
-        event: &Event,
-        _ctx: &ComponentContext,
-    ) -> EventResult<TermWmAction> {
-        if let Some(action) = self.hit_test_hint(event) {
-            return EventResult::Action(action);
-        }
-        EventResult::Ignored
-    }
-}
-
-impl Component<TermWmAction> for WmBottomPanelComponent {
-    fn render(
-        &self,
-        _frame: &mut UiFrame<'_>,
-        _area: Rect,
-        _ctx: &ComponentContext,
-        _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
-    ) {
-    }
-
-    fn handle_events(
-        &mut self,
-        _event: &Event,
-        _ctx: &ComponentContext,
-    ) -> EventResult<TermWmAction> {
-        EventResult::Ignored
-    }
-
-    fn update(
-        &mut self,
-        _action: TermWmAction,
-        _ctx: &ComponentContext,
-        _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
-    ) {
-    }
-
-    fn destroy(&mut self) {}
 }
 
 impl Default for WmBottomPanelComponent {
@@ -360,21 +360,25 @@ mod tests {
         let mut p = WmBottomPanelComponent::new("app", "1.0", Some("my-machine"));
         assert_eq!(p.hostname, Some("my-machine".to_string()));
 
-        let area = Rect {
+        let area = LayoutRect {
             x: 0,
             y: 0,
             width: 80,
             height: 1,
         };
         p.area = area;
-        let mut buf = Buffer::empty(area);
-        let mut ui = UiFrame::from_parts(area, &mut buf);
+        let ratatui_area = layout_rect_to_rect(area);
+        let buf = Buffer::empty(ratatui_area);
+        let mut backend = term_wm_console::RatatuiBackend::new(buf, ratatui_area);
 
-        p.render_bottom_impl(&mut ui, true, &term_wm_core::theme::NOIR);
+        p.render_bottom_impl(&mut backend, true, &term_wm_core::theme::NOIR);
 
         let mut rendered = String::new();
-        for xx in area.x..area.x.saturating_add(area.width) {
-            let cell = buf.cell((xx, area.y)).expect("cell present");
+        for xx in ratatui_area.x..ratatui_area.x.saturating_add(ratatui_area.width) {
+            let cell = backend
+                .buffer
+                .cell((xx, ratatui_area.y))
+                .expect("cell present");
             rendered.push_str(cell.symbol());
         }
         assert!(
@@ -386,35 +390,45 @@ mod tests {
     #[test]
     fn bottom_panel_fills_background_and_right_aligns_text() {
         let mut p = WmBottomPanelComponent::new("test", "0.0.1", Some("h"));
-        let area = Rect {
+        let area = LayoutRect {
             x: 0,
             y: 0,
             width: 30,
             height: 1,
         };
         p.area = area;
-        let mut buf = Buffer::empty(area);
-        let mut ui = UiFrame::from_parts(area, &mut buf);
+        let ratatui_area = layout_rect_to_rect(area);
+        let buf = Buffer::empty(ratatui_area);
+        let mut backend = term_wm_console::RatatuiBackend::new(buf, ratatui_area);
 
-        p.render_bottom_impl(&mut ui, true, &term_wm_core::theme::NOIR);
+        p.render_bottom_impl(&mut backend, true, &term_wm_core::theme::NOIR);
 
         // All cells except the rightmost indicator cell have panel bg
-        let last_x = area.x.saturating_add(area.width).saturating_sub(1);
-        for xx in area.x..last_x {
-            let cell = buf.cell_mut((xx, area.y)).expect("cell present");
+        let last_x = ratatui_area
+            .x
+            .saturating_add(ratatui_area.width)
+            .saturating_sub(1);
+        for xx in ratatui_area.x..last_x {
+            let cell = backend
+                .buffer
+                .cell_mut((xx, ratatui_area.y))
+                .expect("cell present");
             assert_eq!(
                 cell.style().bg,
-                Some(term_wm_core::theme::NOIR.bottom_panel_bg)
+                Some(color_to_ratatui(term_wm_core::theme::NOIR.bottom_panel_bg))
             );
             assert_eq!(
                 cell.style().fg,
-                Some(term_wm_core::theme::NOIR.bottom_panel_fg)
+                Some(color_to_ratatui(term_wm_core::theme::NOIR.bottom_panel_fg))
             );
         }
 
         let mut found = false;
-        for dx in (0..area.width).rev() {
-            let cell = buf.cell((area.x + dx, area.y)).expect("cell present");
+        for dx in (0..ratatui_area.width).rev() {
+            let cell = backend
+                .buffer
+                .cell((ratatui_area.x + dx, ratatui_area.y))
+                .expect("cell present");
             if !cell.symbol().trim().is_empty() {
                 found = true;
                 break;
@@ -426,21 +440,25 @@ mod tests {
     #[test]
     fn bottom_panel_includes_app_name_and_version() {
         let mut p = WmBottomPanelComponent::new("my-app", "2.0.0", Some("my-host"));
-        let area = Rect {
+        let area = LayoutRect {
             x: 0,
             y: 0,
             width: 80,
             height: 1,
         };
         p.area = area;
-        let mut buf = Buffer::empty(area);
-        let mut ui = UiFrame::from_parts(area, &mut buf);
+        let ratatui_area = layout_rect_to_rect(area);
+        let buf = Buffer::empty(ratatui_area);
+        let mut backend = term_wm_console::RatatuiBackend::new(buf, ratatui_area);
 
-        p.render_bottom_impl(&mut ui, true, &term_wm_core::theme::NOIR);
+        p.render_bottom_impl(&mut backend, true, &term_wm_core::theme::NOIR);
 
         let mut rendered = String::new();
-        for xx in area.x..area.x.saturating_add(area.width) {
-            let cell = buf.cell((xx, area.y)).expect("cell present");
+        for xx in ratatui_area.x..ratatui_area.x.saturating_add(ratatui_area.width) {
+            let cell = backend
+                .buffer
+                .cell((xx, ratatui_area.y))
+                .expect("cell present");
             rendered.push_str(cell.symbol());
         }
         assert!(rendered.contains("my-app"));

@@ -2,12 +2,11 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{Event, KeyEventKind, MouseEventKind};
-use ratatui::{
-    layout::Rect,
-    style::{Modifier, Style},
-    widgets::{Block, Borders},
-};
+use ratatui::style::{Modifier, Style};
+use ratatui::widgets::Widget as _;
+use ratatui::widgets::{Block, Borders};
+use term_wm_core::events::{Event, KeyKind, MouseEventKind};
+use term_wm_layout_engine::LayoutRect;
 
 use term_wm_core::{
     actions::{EventResult, TermWmAction},
@@ -16,9 +15,9 @@ use term_wm_core::{
         Overlay, WmComponent,
     },
     layout::rect_contains,
-    ui::UiFrame,
     window::WindowKey,
 };
+use term_wm_ui_components::helpers::{color_to_ratatui, layout_rect_to_rect};
 
 use term_wm_ui_components::DialogOverlayComponent;
 use term_wm_ui_components::menu::MenuComponent;
@@ -28,10 +27,10 @@ pub struct WmMenuOverlay {
     outlined: Cell<bool>,
     outlined_at: RefCell<Option<Instant>>,
     outline_timeout: Duration,
-    menu_bounds_cache: Cell<Option<Rect>>,
-    item_hits: std::cell::RefCell<Vec<(usize, Rect)>>,
+    menu_bounds_cache: Cell<Option<LayoutRect>>,
+    item_hits: std::cell::RefCell<Vec<(usize, LayoutRect)>>,
     anchor: Option<(u16, u16)>,
-    managed_area: Rect,
+    managed_area: LayoutRect,
     last_action: Option<TermWmAction>,
 }
 
@@ -61,7 +60,7 @@ impl WmMenuOverlay {
             menu_bounds_cache: Cell::new(None),
             item_hits: std::cell::RefCell::new(Vec::new()),
             anchor: None,
-            managed_area: Rect::default(),
+            managed_area: LayoutRect::default(),
             last_action: None,
         }
     }
@@ -98,7 +97,7 @@ impl WmMenuOverlay {
         self.anchor = pos;
     }
 
-    pub fn set_managed_area(&mut self, area: Rect) {
+    pub fn set_managed_area(&mut self, area: LayoutRect) {
         self.managed_area = area;
     }
 
@@ -110,7 +109,11 @@ impl WmMenuOverlay {
         self.outline_timeout = timeout;
     }
 
-    fn render_dropdown(&self, frame: &mut UiFrame<'_>, ctx: &ComponentContext) {
+    fn render_dropdown(
+        &self,
+        backend: &mut dyn term_wm_render::RenderBackend,
+        ctx: &ComponentContext,
+    ) {
         let item_count = self.menu.items().len();
         if item_count == 0 {
             return;
@@ -118,7 +121,8 @@ impl WmMenuOverlay {
         let Some(anchor) = self.anchor else {
             return;
         };
-        let bounds = frame.area();
+        let bounds_layout = self.managed_area;
+        let bounds = layout_rect_to_rect(bounds_layout);
         let start_x = anchor.0;
         let start_y = anchor.1;
         if start_x < bounds.x || start_x >= bounds.x.saturating_add(bounds.width) {
@@ -149,62 +153,77 @@ impl WmMenuOverlay {
             .max(1);
         let height = (item_count as u16).saturating_add(2).min(max_height);
 
-        let drop_rect = Rect {
-            x: start_x,
-            y: start_y,
+        let drop_rect_layout = LayoutRect {
+            x: i32::from(start_x),
+            y: i32::from(start_y),
             width,
             height,
         };
 
-        self.menu_bounds_cache.set(Some(drop_rect));
+        self.menu_bounds_cache.set(Some(drop_rect_layout));
 
-        self.render_backdrop(frame, self.managed_area, drop_rect);
+        self.render_backdrop(backend, self.managed_area, drop_rect_layout);
 
-        let buffer = frame.buffer_mut();
-        let clip = drop_rect.intersection(buffer.area);
-        if clip.width == 0 || clip.height == 0 {
-            return;
+        let drop_rect = layout_rect_to_rect(drop_rect_layout);
+        {
+            let ratatui_backend = term_wm_ui_components::helpers::downcast_ratatui(backend);
+            let buffer = &ratatui_backend.buffer;
+            let clip = drop_rect.intersection(buffer.area);
+            if clip.width == 0 || clip.height == 0 {
+                return;
+            }
+
+            let hovered_idx = ctx.hover_pos().and_then(|(mx, my)| {
+                (my >= drop_rect.y.saturating_add(1)
+                    && my
+                        < drop_rect
+                            .y
+                            .saturating_add((item_count as u16).saturating_add(1))
+                    && mx >= drop_rect.x
+                    && mx < drop_rect.x.saturating_add(drop_rect.width))
+                .then(|| (my.saturating_sub(drop_rect.y).saturating_sub(1)) as usize)
+                .filter(|&idx| idx < item_count)
+            });
+            self.menu.render_items(
+                &mut ratatui_backend.buffer,
+                drop_rect,
+                hovered_idx,
+                &ctx.config().theme,
+            );
         }
 
-        let hovered_idx = ctx.hover_pos().and_then(|(mx, my)| {
-            (my >= drop_rect.y.saturating_add(1)
-                && my
-                    < drop_rect
-                        .y
-                        .saturating_add((item_count as u16).saturating_add(1))
-                && mx >= drop_rect.x
-                && mx < drop_rect.x.saturating_add(drop_rect.width))
-            .then(|| (my.saturating_sub(drop_rect.y).saturating_sub(1)) as usize)
-            .filter(|&idx| idx < item_count)
-        });
-        self.menu
-            .render_items(frame, drop_rect, hovered_idx, &ctx.config().theme);
-
-        let mut hits = self.item_hits.borrow_mut();
-        hits.clear();
-        for idx in 0..item_count.min((drop_rect.height.saturating_sub(1)) as usize) {
-            let y = drop_rect.y.saturating_add(idx as u16 + 1);
-            if y < clip.y || y >= clip.y.saturating_add(clip.height) {
-                break;
+        {
+            let ratatui_backend = term_wm_ui_components::helpers::downcast_ratatui(backend);
+            let buffer = &ratatui_backend.buffer;
+            let clip = drop_rect.intersection(buffer.area);
+            let mut hits = self.item_hits.borrow_mut();
+            hits.clear();
+            for idx in 0..item_count.min((drop_rect.height.saturating_sub(1)) as usize) {
+                let y = drop_rect.y.saturating_add(idx as u16 + 1);
+                if y < clip.y || y >= clip.y.saturating_add(clip.height) {
+                    break;
+                }
+                hits.push((
+                    idx,
+                    LayoutRect {
+                        x: i32::from(drop_rect.x),
+                        y: i32::from(y),
+                        width: drop_rect.width,
+                        height: 1,
+                    },
+                ));
             }
-            hits.push((
-                idx,
-                Rect {
-                    x: drop_rect.x,
-                    y,
-                    width: drop_rect.width,
-                    height: 1,
-                },
-            ));
         }
     }
 
-    fn render_outline(&self, frame: &mut UiFrame<'_>) {
+    fn render_outline(&self, backend: &mut dyn term_wm_render::RenderBackend) {
         let Some(menu_bounds) = self.menu_bounds_cache.get() else {
             return;
         };
-        let buffer = frame.buffer_mut();
-        let clip = menu_bounds.intersection(buffer.area);
+        let ratatui_backend = term_wm_ui_components::helpers::downcast_ratatui(backend);
+        let buffer = &mut ratatui_backend.buffer;
+        let ratatui_menu_bounds = layout_rect_to_rect(menu_bounds);
+        let clip = ratatui_menu_bounds.intersection(buffer.area);
         if clip.width > 0 && clip.height > 0 {
             let dim_style = Style::default().add_modifier(Modifier::DIM);
             for y in clip.y..clip.y.saturating_add(clip.height) {
@@ -217,15 +236,20 @@ impl WmMenuOverlay {
         }
         let block = Block::default().borders(Borders::ALL).border_style(
             Style::default()
-                .fg(term_wm_core::theme::NOIR.menu_fg)
+                .fg(color_to_ratatui(term_wm_core::theme::NOIR.menu_fg))
                 .add_modifier(Modifier::DIM),
         );
-        frame.render_widget(block, menu_bounds);
+        block.render(ratatui_menu_bounds, buffer);
     }
 
-    fn render_backdrop(&self, frame: &mut UiFrame<'_>, bounds: Rect, exclude: Rect) {
+    fn render_backdrop(
+        &self,
+        backend: &mut dyn term_wm_render::RenderBackend,
+        bounds: LayoutRect,
+        exclude: LayoutRect,
+    ) {
         let dialog = DialogOverlayComponent::default();
-        dialog.render_backdrop(frame, bounds, Some(exclude));
+        dialog.render_backdrop(backend, bounds, Some(exclude));
     }
 
     fn hit_test_item(&self, column: u16, row: u16) -> Option<usize> {
@@ -239,17 +263,17 @@ impl WmMenuOverlay {
 
 impl Component<TermWmAction> for WmMenuOverlay {
     fn render(
-        &self,
-        frame: &mut UiFrame<'_>,
-        _area: Rect,
+        &mut self,
+        backend: &mut dyn term_wm_render::RenderBackend,
+        _area: LayoutRect,
         ctx: &ComponentContext,
         _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
         self.auto_restore();
         if self.outlined.get() {
-            self.render_outline(frame);
+            self.render_outline(backend);
         } else {
-            self.render_dropdown(frame, ctx);
+            self.render_dropdown(backend, ctx);
         }
     }
 
@@ -262,7 +286,7 @@ impl Component<TermWmAction> for WmMenuOverlay {
         self.last_action = None;
 
         if let Event::Mouse(mouse) = event
-            && matches!(mouse.kind, MouseEventKind::Down(_))
+            && matches!(mouse.kind, MouseEventKind::Press(_))
         {
             if let Some(idx) = self.hit_test_item(mouse.column, mouse.row) {
                 self.menu.set_selected(idx);
@@ -276,7 +300,7 @@ impl Component<TermWmAction> for WmMenuOverlay {
         let Event::Key(key) = event else {
             return EventResult::Ignored;
         };
-        if key.kind != KeyEventKind::Press {
+        if key.kind != KeyKind::Press {
             return EventResult::Ignored;
         }
 
@@ -324,73 +348,9 @@ impl Overlay<TermWmAction> for WmMenuOverlay {
 }
 
 impl WmComponent for WmMenuOverlay {
-    fn consume_area(&mut self, available: Rect) -> (Rect, Rect) {
+    fn consume_area(&mut self, available: LayoutRect) -> (LayoutRect, LayoutRect) {
         // Overlays render on top, claim no area
-        (Rect::default(), available)
-    }
-
-    fn render(
-        &mut self,
-        frame: &mut UiFrame<'_>,
-        _area: Rect,
-        ctx: &ComponentContext,
-        _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
-    ) {
-        self.auto_restore();
-        if self.outlined.get() {
-            self.render_outline(frame);
-        } else {
-            self.render_dropdown(frame, ctx);
-        }
-    }
-
-    fn handle_event(&mut self, event: &Event, ctx: &ComponentContext) -> EventResult<TermWmAction> {
-        self.auto_restore();
-        self.last_action = None;
-
-        if let Event::Mouse(mouse) = event
-            && matches!(mouse.kind, MouseEventKind::Down(_))
-        {
-            if let Some(idx) = self.hit_test_item(mouse.column, mouse.row) {
-                self.menu.set_selected(idx);
-                self.restore();
-                self.last_action = self.menu.selected_action().cloned();
-                return EventResult::Consumed;
-            }
-            return EventResult::Ignored;
-        }
-
-        let Event::Key(key) = event else {
-            return EventResult::Ignored;
-        };
-        if key.kind != crossterm::event::KeyEventKind::Press {
-            return EventResult::Ignored;
-        }
-
-        let total = self.menu.items().len();
-        if total == 0 {
-            return EventResult::Ignored;
-        }
-
-        let kb = ctx.keybindings().unwrap_or_default();
-        if kb.matches(TermWmAction::MenuUp, key) || kb.matches(TermWmAction::MenuPrev, key) {
-            let current = self.menu.selected();
-            self.menu
-                .set_selected(if current == 0 { total - 1 } else { current - 1 });
-            self.restore();
-            EventResult::Consumed
-        } else if kb.matches(TermWmAction::MenuDown, key) || kb.matches(TermWmAction::MenuNext, key)
-        {
-            let current = self.menu.selected();
-            self.menu.set_selected((current + 1) % total);
-            self.restore();
-            EventResult::Consumed
-        } else if kb.matches(TermWmAction::MenuSelect, key) {
-            self.last_action = self.menu.selected_action().cloned();
-            EventResult::Consumed
-        } else {
-            EventResult::Ignored
-        }
+        (LayoutRect::default(), available)
     }
 
     fn process_action(&mut self, action: &ComponentAction) {
@@ -433,23 +393,21 @@ impl WmComponent for WmMenuOverlay {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{
-        KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton, MouseEvent,
-        MouseEventKind,
-    };
     use term_wm_core::components::MenuItem;
+    use term_wm_core::events::{
+        KeyCode, KeyEvent, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
     fn key_event(code: KeyCode) -> Event {
         Event::Key(KeyEvent {
             code,
             modifiers: KeyModifiers::NONE,
-            kind: KeyEventKind::Press,
-            state: KeyEventState::NONE,
+            kind: KeyKind::Press,
         })
     }
 
     fn mouse_click(col: u16, row: u16) -> Event {
         Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
+            kind: MouseEventKind::Press(MouseButton::Left),
             column: col,
             row,
             modifiers: KeyModifiers::NONE,
@@ -507,15 +465,24 @@ mod tests {
         let ctx = ComponentContext::new(true);
         overlay.set_items(make_items());
         overlay.set_anchor(Some((0, 0)));
+        overlay.set_managed_area(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
 
-        let area = Rect {
+        let area = LayoutRect {
             x: 0,
             y: 0,
             width: 80,
             height: 24,
         };
+        let ratatui_area = layout_rect_to_rect(area);
+        let buf = ratatui::buffer::Buffer::empty(ratatui_area);
+        let mut backend = term_wm_console::RatatuiBackend::new(buf, ratatui_area);
         overlay.render(
-            &mut UiFrame::from_parts(area, &mut ratatui::buffer::Buffer::empty(area)),
+            &mut backend,
             area,
             &ctx,
             &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
@@ -583,21 +550,24 @@ mod tests {
         let ctx = ComponentContext::new(true);
         overlay.set_items(make_items());
         overlay.set_anchor(Some((0, 1)));
-        overlay.set_managed_area(Rect {
+        overlay.set_managed_area(LayoutRect {
             x: 0,
             y: 1,
             width: 80,
             height: 24,
         });
 
-        let area = Rect {
+        let area = LayoutRect {
             x: 0,
             y: 0,
             width: 80,
             height: 25,
         };
+        let ratatui_area = layout_rect_to_rect(area);
+        let buf = ratatui::buffer::Buffer::empty(ratatui_area);
+        let mut backend = term_wm_console::RatatuiBackend::new(buf, ratatui_area);
         overlay.render(
-            &mut UiFrame::from_parts(area, &mut ratatui::buffer::Buffer::empty(area)),
+            &mut backend,
             area,
             &ctx,
             &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
@@ -622,21 +592,24 @@ mod tests {
         let ctx = ComponentContext::new(true);
         overlay.set_items(make_items());
         overlay.set_anchor(Some((0, 1)));
-        overlay.set_managed_area(Rect {
+        overlay.set_managed_area(LayoutRect {
             x: 0,
             y: 1,
             width: 80,
             height: 24,
         });
 
-        let area = Rect {
+        let area = LayoutRect {
             x: 0,
             y: 0,
             width: 80,
             height: 25,
         };
+        let ratatui_area = layout_rect_to_rect(area);
+        let buf = ratatui::buffer::Buffer::empty(ratatui_area);
+        let mut backend = term_wm_console::RatatuiBackend::new(buf, ratatui_area);
         overlay.render(
-            &mut UiFrame::from_parts(area, &mut ratatui::buffer::Buffer::empty(area)),
+            &mut backend,
             area,
             &ctx,
             &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
@@ -654,29 +627,31 @@ mod tests {
         let mut overlay = WmMenuOverlay::new();
         overlay.set_items(make_items());
         overlay.set_anchor(Some((0, 1)));
-        overlay.set_managed_area(Rect {
+        overlay.set_managed_area(LayoutRect {
             x: 0,
             y: 1,
             width: 80,
             height: 24,
         });
 
-        let area = Rect {
+        let area = LayoutRect {
             x: 0,
             y: 0,
             width: 80,
             height: 25,
         };
-        let mut buf = ratatui::buffer::Buffer::empty(area);
+        let ratatui_area = layout_rect_to_rect(area);
+        let mut buf = ratatui::buffer::Buffer::empty(ratatui_area);
         {
-            let mut frame = UiFrame::from_parts(area, &mut buf);
+            let mut backend = term_wm_console::RatatuiBackend::new(buf, ratatui_area);
             let ctx = ComponentContext::new(true);
             overlay.render(
-                &mut frame,
+                &mut backend,
                 area,
                 &ctx,
                 &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
             );
+            buf = backend.buffer;
         }
         let cell = buf.cell((5, 2)).expect("first item text cell");
         assert!(cell.symbol().contains("A"), "dropdown should render items");
@@ -687,22 +662,24 @@ mod tests {
         let mut overlay = WmMenuOverlay::new();
         overlay.set_anchor(Some((0, 1)));
 
-        let area = Rect {
+        let area = LayoutRect {
             x: 0,
             y: 0,
             width: 80,
             height: 25,
         };
-        let mut buf = ratatui::buffer::Buffer::empty(area);
+        let ratatui_area = layout_rect_to_rect(area);
+        let mut buf = ratatui::buffer::Buffer::empty(ratatui_area);
         {
-            let mut frame = UiFrame::from_parts(area, &mut buf);
+            let mut backend = term_wm_console::RatatuiBackend::new(buf, ratatui_area);
             let ctx = ComponentContext::new(true);
             overlay.render(
-                &mut frame,
+                &mut backend,
                 area,
                 &ctx,
                 &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
             );
+            buf = backend.buffer;
         }
         let cell = buf.cell((0, 1)).expect("cell below anchor");
         assert_eq!(cell.symbol(), " ", "should be empty when no items");
@@ -713,21 +690,16 @@ mod tests {
         let mut overlay = WmMenuOverlay::new();
         overlay.set_items(make_items());
         overlay.set_anchor(Some((0, 1)));
-        overlay.set_managed_area(Rect {
+        overlay.set_managed_area(LayoutRect {
             x: 0,
             y: 1,
             width: 80,
             height: 24,
         });
 
-        // auto_restore() fires on every render() and clears the outline when
-        // the timeout has expired.  The default timeout is Duration::ZERO, which
-        // means the outline would be cleared on the very first render before we
-        // can observe it.  Set a non-zero timeout so the outline persists across
-        // the render calls this test compares.
         overlay.set_timeout(Duration::from_secs(60));
 
-        let area = Rect {
+        let area = LayoutRect {
             x: 0,
             y: 0,
             width: 80,
@@ -735,42 +707,46 @@ mod tests {
         };
         let ctx = ComponentContext::new(true);
 
-        let mut buf = ratatui::buffer::Buffer::empty(area);
+        let ratatui_area = layout_rect_to_rect(area);
+        let mut buf = ratatui::buffer::Buffer::empty(ratatui_area);
         {
-            let mut frame = UiFrame::from_parts(area, &mut buf);
+            let mut backend = term_wm_console::RatatuiBackend::new(buf, ratatui_area);
             overlay.render(
-                &mut frame,
+                &mut backend,
                 area,
                 &ctx,
                 &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
             );
+            buf = backend.buffer;
         }
         let normal = buf.cell((1, 2)).map(|c| c.symbol().to_string());
 
         overlay.outline();
-        let mut buf2 = ratatui::buffer::Buffer::empty(area);
+        let mut buf2 = ratatui::buffer::Buffer::empty(ratatui_area);
         {
-            let mut frame2 = UiFrame::from_parts(area, &mut buf2);
+            let mut backend2 = term_wm_console::RatatuiBackend::new(buf2, ratatui_area);
             overlay.render(
-                &mut frame2,
+                &mut backend2,
                 area,
                 &ctx,
                 &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
             );
+            buf2 = backend2.buffer;
         }
         let outlined = buf2.cell((1, 2)).map(|c| c.symbol().to_string());
         assert_ne!(normal, outlined, "outline mode should change rendering");
 
         overlay.restore();
-        let mut buf3 = ratatui::buffer::Buffer::empty(area);
+        let mut buf3 = ratatui::buffer::Buffer::empty(ratatui_area);
         {
-            let mut frame3 = UiFrame::from_parts(area, &mut buf3);
+            let mut backend3 = term_wm_console::RatatuiBackend::new(buf3, ratatui_area);
             overlay.render(
-                &mut frame3,
+                &mut backend3,
                 area,
                 &ctx,
                 &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
             );
+            buf3 = backend3.buffer;
         }
         let restored = buf3.cell((1, 2)).map(|c| c.symbol().to_string());
         assert_eq!(normal, restored, "restore should revert to dropdown");

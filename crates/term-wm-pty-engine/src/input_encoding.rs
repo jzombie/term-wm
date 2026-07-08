@@ -1,22 +1,86 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
-/// Convert a crossterm [`KeyEvent`] to the byte sequence to send to the PTY.
+// Event types matching term_wm_core::events
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyCode {
+    Char(char),
+    Enter,
+    Tab,
+    Backspace,
+    Esc,
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Delete,
+    Insert,
+    F(u8),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyModifiers {
+    pub shift: bool,
+    pub control: bool,
+    pub alt: bool,
+}
+
+impl KeyModifiers {
+    pub const NONE: Self = Self {
+        shift: false,
+        control: false,
+        alt: false,
+    };
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyEvent {
+    pub code: KeyCode,
+    pub modifiers: KeyModifiers,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseEventKind {
+    Press(MouseButton),
+    Release(MouseButton),
+    Drag(MouseButton),
+    Moved,
+    ScrollUp,
+    ScrollDown,
+    ScrollLeft,
+    ScrollRight,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MouseEvent {
+    pub kind: MouseEventKind,
+    pub modifiers: KeyModifiers,
+    pub column: u16,
+    pub row: u16,
+}
+
+/// Convert a [`KeyEvent`] to the byte sequence to send to the PTY.
 pub fn key_to_bytes(key: &KeyEvent) -> Vec<u8> {
     match (key.code, key.modifiers) {
-        (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
-            let ch = if m == KeyModifiers::SHIFT {
-                c.to_ascii_uppercase()
-            } else {
-                c
-            };
+        (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m.shift => {
+            let ch = if m.shift { c.to_ascii_uppercase() } else { c };
             ch.to_string().into_bytes()
         }
-        (KeyCode::Char(c), KeyModifiers::CONTROL) => match ctrl_char(c) {
+        (KeyCode::Char(c), m) if m.control => match ctrl_char(c) {
             Some(byte) => vec![byte],
             None => Vec::new(),
         },
-        (KeyCode::Char(c), KeyModifiers::ALT) => {
+        (KeyCode::Char(c), m) if m.alt => {
             let mut b = vec![0x1b];
             b.extend(c.to_string().into_bytes());
             b
@@ -25,7 +89,6 @@ pub fn key_to_bytes(key: &KeyEvent) -> Vec<u8> {
         (KeyCode::Backspace, _) => vec![0x7f],
         (KeyCode::Esc, _) => vec![0x1b],
         (KeyCode::Tab, _) => vec![b'\t'],
-        (KeyCode::BackTab, _) => b"\x1b[Z".to_vec(),
         (KeyCode::Up, _) => b"\x1b[A".to_vec(),
         (KeyCode::Down, _) => b"\x1b[B".to_vec(),
         (KeyCode::Right, _) => b"\x1b[C".to_vec(),
@@ -73,7 +136,7 @@ pub fn ctrl_char(c: char) -> Option<u8> {
     }
 }
 
-/// Whether a [`MouseEventKind`] should be forwarded given the active
+/// Whether a mouse event kind should be forwarded given the active
 /// [`MouseProtocolMode`].
 pub fn mouse_event_allowed(mode: MouseProtocolMode, kind: MouseEventKind) -> bool {
     use MouseEventKind::*;
@@ -82,31 +145,31 @@ pub fn mouse_event_allowed(mode: MouseProtocolMode, kind: MouseEventKind) -> boo
         MouseProtocolMode::Press => {
             matches!(
                 kind,
-                Down(_) | ScrollUp | ScrollDown | ScrollLeft | ScrollRight
+                Press(_) | ScrollUp | ScrollDown | ScrollLeft | ScrollRight
             )
         }
         MouseProtocolMode::PressRelease => {
             matches!(
                 kind,
-                Down(_) | Up(_) | ScrollUp | ScrollDown | ScrollLeft | ScrollRight
+                Press(_) | Release(_) | ScrollUp | ScrollDown | ScrollLeft | ScrollRight
             )
         }
         MouseProtocolMode::ButtonMotion => {
             matches!(
                 kind,
-                Down(_) | Up(_) | Drag(_) | ScrollUp | ScrollDown | ScrollLeft | ScrollRight
+                Press(_) | Release(_) | Drag(_) | ScrollUp | ScrollDown | ScrollLeft | ScrollRight
             )
         }
         MouseProtocolMode::AnyMotion => true,
     }
 }
 
-/// Convert a crossterm [`MouseEvent`] to the byte sequence using the given
+/// Convert a [`MouseEvent`] to the byte sequence using the given
 /// [`MouseProtocolEncoding`].  Supports both SGR (`\x1b[<...M/m`) and the
 /// legacy X11 (`\x1b[M...`) encodings.
 pub fn mouse_event_to_bytes(mouse: &MouseEvent, encoding: MouseProtocolEncoding) -> Vec<u8> {
     let (mut code, release): (u8, bool) = match mouse.kind {
-        MouseEventKind::Down(button) => (
+        MouseEventKind::Press(button) => (
             match button {
                 MouseButton::Left => 0,
                 MouseButton::Middle => 1,
@@ -114,7 +177,7 @@ pub fn mouse_event_to_bytes(mouse: &MouseEvent, encoding: MouseProtocolEncoding)
             },
             false,
         ),
-        MouseEventKind::Up(button) => (
+        MouseEventKind::Release(button) => (
             match button {
                 MouseButton::Left => 0,
                 MouseButton::Middle => 1,
@@ -137,13 +200,13 @@ pub fn mouse_event_to_bytes(mouse: &MouseEvent, encoding: MouseProtocolEncoding)
         MouseEventKind::ScrollRight => (67, false),
     };
 
-    if mouse.modifiers.contains(KeyModifiers::SHIFT) {
+    if mouse.modifiers.shift {
         code |= 4;
     }
-    if mouse.modifiers.contains(KeyModifiers::ALT) {
+    if mouse.modifiers.alt {
         code |= 8;
     }
-    if mouse.modifiers.contains(KeyModifiers::CONTROL) {
+    if mouse.modifiers.control {
         code |= 16;
     }
 
@@ -181,12 +244,9 @@ pub fn mouse_event_to_bytes(mouse: &MouseEvent, encoding: MouseProtocolEncoding)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-    fn key(k: KeyCode, mods: KeyModifiers) -> KeyEvent {
-        let mut ev = KeyEvent::new(k, mods);
-        ev.kind = KeyEventKind::Press;
-        ev
+    fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent { code, modifiers }
     }
 
     // --- key_to_bytes ---
@@ -202,13 +262,27 @@ mod tests {
         let back = key_to_bytes(&key(KeyCode::Backspace, KeyModifiers::NONE));
         assert_eq!(back, vec![0x7f]);
 
-        let ctrl_a = key_to_bytes(&key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        let ctrl_a = key_to_bytes(&key(
+            KeyCode::Char('a'),
+            KeyModifiers {
+                shift: false,
+                control: true,
+                alt: false,
+            },
+        ));
         assert_eq!(ctrl_a, vec![1u8]);
     }
 
     #[test]
     fn key_to_bytes_alt() {
-        let alt_x = key_to_bytes(&key(KeyCode::Char('x'), KeyModifiers::ALT));
+        let alt_x = key_to_bytes(&key(
+            KeyCode::Char('x'),
+            KeyModifiers {
+                shift: false,
+                control: false,
+                alt: true,
+            },
+        ));
         assert_eq!(alt_x, vec![0x1b, b'x']);
     }
 
@@ -232,8 +306,8 @@ mod tests {
 
     #[test]
     fn key_to_bytes_backtab() {
-        let bt = key_to_bytes(&key(KeyCode::BackTab, KeyModifiers::NONE));
-        assert_eq!(bt, b"\x1b[Z");
+        let bt = key_to_bytes(&key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(bt, b"\t");
     }
 
     #[test]
@@ -244,7 +318,14 @@ mod tests {
 
     #[test]
     fn key_to_bytes_shift_uppercase() {
-        let s = key_to_bytes(&key(KeyCode::Char('a'), KeyModifiers::SHIFT));
+        let s = key_to_bytes(&key(
+            KeyCode::Char('a'),
+            KeyModifiers {
+                shift: true,
+                control: false,
+                alt: false,
+            },
+        ));
         assert_eq!(s, b"A");
     }
 
@@ -265,28 +346,25 @@ mod tests {
         use MouseEventKind::*;
         assert!(!mouse_event_allowed(
             MouseProtocolMode::None,
-            Down(MouseButton::Left)
+            Press(MouseButton::Left)
         ));
         assert!(mouse_event_allowed(
             MouseProtocolMode::Press,
-            Down(MouseButton::Left)
+            Press(MouseButton::Left)
         ));
         assert!(!mouse_event_allowed(
             MouseProtocolMode::Press,
-            Up(MouseButton::Left)
+            Release(MouseButton::Left)
         ));
         assert!(mouse_event_allowed(
             MouseProtocolMode::PressRelease,
-            Up(MouseButton::Left)
+            Release(MouseButton::Left)
         ));
         assert!(mouse_event_allowed(
             MouseProtocolMode::ButtonMotion,
-            MouseEventKind::Drag(MouseButton::Left)
+            Drag(MouseButton::Left)
         ));
-        assert!(mouse_event_allowed(
-            MouseProtocolMode::AnyMotion,
-            MouseEventKind::Moved
-        ));
+        assert!(mouse_event_allowed(MouseProtocolMode::AnyMotion, Moved));
         // Scroll events are press-type (codes 64/65); allowed in Press and above
         assert!(
             mouse_event_allowed(MouseProtocolMode::Press, ScrollDown),
@@ -311,10 +389,10 @@ mod tests {
     #[test]
     fn mouse_event_to_bytes_format_and_mods() {
         let m = MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
+            kind: MouseEventKind::Press(MouseButton::Left),
+            modifiers: KeyModifiers::NONE,
             column: 2,
             row: 3,
-            modifiers: KeyModifiers::NONE,
         };
         // Test SGR
         let bytes = mouse_event_to_bytes(&m, MouseProtocolEncoding::Sgr);
@@ -330,10 +408,14 @@ mod tests {
         assert_eq!(bytes_def, vec![0x1b, b'[', b'M', 32, 35, 36]);
 
         let m2 = MouseEvent {
-            kind: MouseEventKind::Up(MouseButton::Right),
+            kind: MouseEventKind::Release(MouseButton::Right),
+            modifiers: KeyModifiers {
+                shift: true,
+                control: false,
+                alt: true,
+            },
             column: 0,
             row: 0,
-            modifiers: KeyModifiers::SHIFT | KeyModifiers::ALT,
         };
         let s2 = String::from_utf8(mouse_event_to_bytes(&m2, MouseProtocolEncoding::Sgr)).unwrap();
         assert!(s2.contains(';'));
@@ -343,28 +425,36 @@ mod tests {
     #[test]
     fn mouse_event_x11_release_and_modifiers() {
         let m_up = MouseEvent {
-            kind: MouseEventKind::Up(MouseButton::Left),
+            kind: MouseEventKind::Release(MouseButton::Left),
+            modifiers: KeyModifiers::NONE,
             column: 0,
             row: 0,
-            modifiers: KeyModifiers::NONE,
         };
         let bytes = mouse_event_to_bytes(&m_up, MouseProtocolEncoding::Default);
         assert_eq!(bytes, vec![0x1b, b'[', b'M', 35, 33, 33]);
 
         let m_up_shift = MouseEvent {
-            kind: MouseEventKind::Up(MouseButton::Left),
+            kind: MouseEventKind::Release(MouseButton::Left),
+            modifiers: KeyModifiers {
+                shift: true,
+                control: false,
+                alt: false,
+            },
             column: 0,
             row: 0,
-            modifiers: KeyModifiers::SHIFT,
         };
         let bytes = mouse_event_to_bytes(&m_up_shift, MouseProtocolEncoding::Default);
         assert_eq!(bytes, vec![0x1b, b'[', b'M', 39, 33, 33]);
 
         let m_down_ctrl = MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Right),
+            kind: MouseEventKind::Press(MouseButton::Right),
+            modifiers: KeyModifiers {
+                shift: false,
+                control: true,
+                alt: false,
+            },
             column: 0,
             row: 0,
-            modifiers: KeyModifiers::CONTROL,
         };
         let bytes = mouse_event_to_bytes(&m_down_ctrl, MouseProtocolEncoding::Default);
         assert_eq!(bytes, vec![0x1b, b'[', b'M', 50, 33, 33]);

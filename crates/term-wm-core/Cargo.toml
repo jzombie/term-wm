@@ -7,16 +7,19 @@ authors.workspace = true
 repository.workspace = true
 license.workspace = true
 
+[features]
+default = ["pty"]
+pty = ["portable-pty"]
+
 [dependencies]
 console = { workspace = true }
 crossbeam-channel = { workspace = true }
-crossterm = { workspace = true }
 linkify = { workspace = true }
-portable-pty = { workspace = true }
-ratatui = { workspace = true }
+portable-pty = { workspace = true, optional = true }
 slotmap = "1.1"
 smallvec = "1.15"
 strum = { workspace = true, features = ["derive"] }
 term-wm-layout-engine = { workspace = true }
 term-wm-pty-engine = { workspace = true }
+term-wm-render = { workspace = true }
 tracing = { workspace = true }

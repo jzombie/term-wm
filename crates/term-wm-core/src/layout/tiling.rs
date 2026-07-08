@@ -1,9 +1,8 @@
-use ratatui::prelude::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use crate::Rect;
+use crate::layout::{Constraint, Direction, Layout};
+use term_wm_layout_engine::LayoutRect;
 
 use super::{FloatingPane, RegionMap, gap_size, rect_contains};
-use crate::theme::Theme;
-use crate::ui::UiFrame;
 
 #[derive(Debug, Clone)]
 pub enum LayoutNode<Id: Copy + Eq + Ord> {
@@ -141,9 +140,15 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
 
     pub fn hit_test_handle(&self, area: Rect, column: u16, row: u16) -> Option<SplitHandle> {
         let (_, handles) = self.layout_with_handles(area);
-        handles
-            .into_iter()
-            .find(|handle| rect_contains(handle.rect, column, row))
+        handles.into_iter().find(|handle| {
+            let lr = LayoutRect {
+                x: handle.rect.x,
+                y: handle.rect.y,
+                width: handle.rect.width,
+                height: handle.rect.height,
+            };
+            rect_contains(lr, column, row)
+        })
     }
 
     pub fn apply_drag(
@@ -430,20 +435,14 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
         self.root.hit_test_handle(area, column, row)
     }
 
-    pub fn render_handles(&self, frame: &mut UiFrame<'_>, area: Rect, theme: &Theme) {
-        let handles = self.handles(area);
-        let hovered = self.hovered_handle(area);
-        render_handles(frame, &handles, hovered.as_ref(), theme);
-    }
-
-    pub fn handle_event(&mut self, event: &crossterm::event::Event, area: Rect) -> bool {
-        use crossterm::event::MouseEventKind;
-        let crossterm::event::Event::Mouse(mouse) = event else {
+    pub fn handle_event(&mut self, event: &crate::events::Event, area: Rect) -> bool {
+        use crate::events::MouseEventKind;
+        let crate::events::Event::Mouse(mouse) = event else {
             return false;
         };
         self.hover = Some((mouse.column, mouse.row));
         match mouse.kind {
-            MouseEventKind::Down(_) => {
+            MouseEventKind::Press(_) => {
                 if let Some(handle) = self.root.hit_test_handle(area, mouse.column, mouse.row) {
                     self.drag = Some(DragState {
                         path: handle.path,
@@ -473,7 +472,7 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
                 }
             }
             MouseEventKind::Moved => {}
-            MouseEventKind::Up(_) if self.drag.is_some() => {
+            MouseEventKind::Release(_) if self.drag.is_some() => {
                 self.drag = None;
                 return true;
             }
@@ -560,11 +559,11 @@ fn split_rects_with_gaps(
         let offset = gap.saturating_mul(idx as u16);
         let shifted = match direction {
             Direction::Horizontal => Rect {
-                x: rect.x.saturating_add(offset),
+                x: rect.x.saturating_add(i32::from(offset)),
                 ..rect
             },
             Direction::Vertical => Rect {
-                y: rect.y.saturating_add(offset),
+                y: rect.y.saturating_add(i32::from(offset)),
                 ..rect
             },
         };
@@ -574,14 +573,14 @@ fn split_rects_with_gaps(
     for rect in rects.iter().take(child_count.saturating_sub(1)) {
         let rect = match direction {
             Direction::Horizontal => Rect {
-                x: rect.x.saturating_add(rect.width),
+                x: rect.x.saturating_add(i32::from(rect.width)),
                 y: area.y,
                 width: gap,
                 height: area.height,
             },
             Direction::Vertical => Rect {
                 x: area.x,
-                y: rect.y.saturating_add(rect.height),
+                y: rect.y.saturating_add(i32::from(rect.height)),
                 width: area.width,
                 height: gap,
             },
@@ -668,7 +667,7 @@ fn build_rects_from_sizes(direction: Direction, area: Rect, sizes: &[u16]) -> Ve
                     width: *size,
                     height: area.height,
                 };
-                cursor_x = cursor_x.saturating_add(*size);
+                cursor_x = cursor_x.saturating_add(i32::from(*size));
                 rect
             }
             Direction::Vertical => {
@@ -678,7 +677,7 @@ fn build_rects_from_sizes(direction: Direction, area: Rect, sizes: &[u16]) -> Ve
                     width: area.width,
                     height: *size,
                 };
-                cursor_y = cursor_y.saturating_add(*size);
+                cursor_y = cursor_y.saturating_add(i32::from(*size));
                 rect
             }
         };
@@ -734,166 +733,10 @@ fn split_at_path_mut<'a, Id: Copy + Eq + Ord>(
     Some(current)
 }
 
-pub fn render_handles(
-    frame: &mut UiFrame<'_>,
-    handles: &[SplitHandle],
-    hovered: Option<&SplitHandle>,
-    theme: &Theme,
-) {
-    render_handles_masked(frame, handles, hovered, |_, _| false, theme);
-}
-
-pub fn render_handles_masked<F>(
-    frame: &mut UiFrame<'_>,
-    handles: &[SplitHandle],
-    hovered: Option<&SplitHandle>,
-    is_obscured: F,
-    theme: &Theme,
-) where
-    F: Fn(u16, u16) -> bool,
-{
-    let buffer = frame.buffer_mut();
-    let hover_rect = hovered.map(|handle| handle.rect);
-    for handle in handles {
-        if handle.rect.width == 0 || handle.rect.height == 0 {
-            continue;
-        }
-        let is_hovered = hover_rect == Some(handle.rect);
-        let style = if is_hovered {
-            Style::default()
-                .fg(theme.menu_selected_bg)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.decorator_border_active)
-        };
-        let clip = handle.rect.intersection(buffer.area);
-        if clip.width > 0 && clip.height > 0 {
-            for y in clip.y..clip.y.saturating_add(clip.height) {
-                for x in clip.x..clip.x.saturating_add(clip.width) {
-                    if is_obscured(x, y) {
-                        continue;
-                    }
-                    if let Some(cell) = buffer.cell_mut((x, y)) {
-                        cell.reset();
-                        cell.set_symbol("·");
-                        cell.set_style(style);
-                    }
-                }
-            }
-        }
-        match handle.direction {
-            Direction::Horizontal => {
-                let x = handle.rect.x + handle.rect.width / 2;
-                let y_center = handle.rect.y + handle.rect.height / 2;
-                for offset in 0..3 {
-                    let y = y_center.saturating_sub(1).saturating_add(offset);
-                    if y < handle.rect.y || y >= handle.rect.y.saturating_add(handle.rect.height) {
-                        continue;
-                    }
-                    if is_obscured(x, y) {
-                        continue;
-                    }
-                    if let Some(cell) = buffer.cell_mut((x, y)) {
-                        cell.set_symbol(if is_hovered { "O" } else { "o" });
-                        cell.set_style(style);
-                    }
-                }
-            }
-            Direction::Vertical => {
-                let y = handle.rect.y + handle.rect.height / 2;
-                let x_center = handle.rect.x + handle.rect.width / 2;
-                for offset in 0..3 {
-                    let x = x_center.saturating_sub(1).saturating_add(offset);
-                    if x < handle.rect.x || x >= handle.rect.x.saturating_add(handle.rect.width) {
-                        continue;
-                    }
-                    if is_obscured(x, y) {
-                        continue;
-                    }
-                    if let Some(cell) = buffer.cell_mut((x, y)) {
-                        cell.set_symbol(if is_hovered { "O" } else { "o" });
-                        cell.set_style(style);
-                    }
-                }
-            }
-        }
-        if is_hovered {
-            let border_style = Style::default()
-                .fg(theme.accent_alt)
-                .add_modifier(Modifier::BOLD);
-            let max_x = handle
-                .rect
-                .x
-                .saturating_add(handle.rect.width.saturating_sub(1));
-            let max_y = handle
-                .rect
-                .y
-                .saturating_add(handle.rect.height.saturating_sub(1));
-            for x in handle.rect.x..=max_x {
-                if is_obscured(x, handle.rect.y) {
-                    continue;
-                }
-                if let Some(cell) = buffer.cell_mut((x, handle.rect.y)) {
-                    cell.set_symbol("-");
-                    cell.set_style(border_style);
-                }
-                if is_obscured(x, max_y) {
-                    continue;
-                }
-                if let Some(cell) = buffer.cell_mut((x, max_y)) {
-                    cell.set_symbol("-");
-                    cell.set_style(border_style);
-                }
-            }
-            for y in handle.rect.y..=max_y {
-                if is_obscured(handle.rect.x, y) {
-                    continue;
-                }
-                if let Some(cell) = buffer.cell_mut((handle.rect.x, y)) {
-                    cell.set_symbol("|");
-                    cell.set_style(border_style);
-                }
-                if is_obscured(max_x, y) {
-                    continue;
-                }
-                if let Some(cell) = buffer.cell_mut((max_x, y)) {
-                    cell.set_symbol("|");
-                    cell.set_style(border_style);
-                }
-            }
-            if !is_obscured(handle.rect.x, handle.rect.y)
-                && let Some(cell) = buffer.cell_mut((handle.rect.x, handle.rect.y))
-            {
-                cell.set_symbol("+");
-                cell.set_style(border_style);
-            }
-            if !is_obscured(max_x, handle.rect.y)
-                && let Some(cell) = buffer.cell_mut((max_x, handle.rect.y))
-            {
-                cell.set_symbol("+");
-                cell.set_style(border_style);
-            }
-            if !is_obscured(handle.rect.x, max_y)
-                && let Some(cell) = buffer.cell_mut((handle.rect.x, max_y))
-            {
-                cell.set_symbol("+");
-                cell.set_style(border_style);
-            }
-            if !is_obscured(max_x, max_y)
-                && let Some(cell) = buffer.cell_mut((max_x, max_y))
-            {
-                cell.set_symbol("+");
-                cell.set_style(border_style);
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::prelude::{Direction, Rect};
-
+    use crate::layout::Direction;
     #[test]
     fn build_rects_from_sizes_horizontal() {
         let area = Rect {
@@ -1000,8 +843,8 @@ mod tests {
         assert!(handle.rect.width > 0);
         assert_eq!(handle.rect.height, 24);
         // hit_test_handle at the gap center should find it
-        let center_col = handle.rect.x + handle.rect.width / 2;
-        let center_row = handle.rect.y + handle.rect.height / 2;
+        let center_col = (handle.rect.x + i32::from(handle.rect.width) / 2) as u16;
+        let center_row = (handle.rect.y + i32::from(handle.rect.height) / 2) as u16;
         let found = node.hit_test_handle(area, center_col, center_row);
         assert!(found.is_some(), "hit_test_handle must find the gap");
         assert_eq!(found.unwrap().direction, Direction::Horizontal);
@@ -1027,33 +870,33 @@ mod tests {
         let handles = layout.handles(area);
         assert_eq!(handles.len(), 1);
         let gap = &handles[0].rect;
-        let gap_col = gap.x + gap.width / 2;
-        let gap_row = gap.y + gap.height / 2;
+        let gap_col = (gap.x + i32::from(gap.width) / 2) as u16;
+        let gap_row = (gap.y + i32::from(gap.height) / 2) as u16;
 
         // Down at the gap
-        let down = crossterm::event::Event::Mouse(crossterm::event::MouseEvent {
-            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        let down = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
             column: gap_col,
             row: gap_row,
-            modifiers: crossterm::event::KeyModifiers::NONE,
+            modifiers: crate::events::KeyModifiers::NONE,
         });
         assert!(layout.handle_event(&down, area), "Down must hit the handle");
 
         // Drag right by 10 columns
-        let drag = crossterm::event::Event::Mouse(crossterm::event::MouseEvent {
-            kind: crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+        let drag = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Drag(crate::events::MouseButton::Left),
             column: gap_col + 10,
             row: gap_row,
-            modifiers: crossterm::event::KeyModifiers::NONE,
+            modifiers: crate::events::KeyModifiers::NONE,
         });
         assert!(layout.handle_event(&drag, area), "Drag must adjust split");
 
         // Up to release
-        let up = crossterm::event::Event::Mouse(crossterm::event::MouseEvent {
-            kind: crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left),
+        let up = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Release(crate::events::MouseButton::Left),
             column: gap_col + 10,
             row: gap_row,
-            modifiers: crossterm::event::KeyModifiers::NONE,
+            modifiers: crate::events::KeyModifiers::NONE,
         });
         assert!(layout.handle_event(&up, area), "Up must clear drag state");
 

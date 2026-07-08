@@ -1,14 +1,15 @@
 use std::collections::VecDeque;
 
-use crossterm::event::Event;
-use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem};
+use term_wm_core::events::Event;
 
+use crate::helpers::{color_to_ratatui, layout_rect_to_rect};
+use ratatui::widgets::Widget;
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext};
-use term_wm_core::ui::UiFrame;
 use term_wm_core::window::WindowKey;
+use term_wm_layout_engine::LayoutRect;
 
 #[derive(Clone)]
 pub struct ToggleItem {
@@ -25,24 +26,26 @@ pub struct ToggleListComponent {
 
 impl Component<TermWmAction> for ToggleListComponent {
     fn render(
-        &self,
-        frame: &mut UiFrame<'_>,
-        area: Rect,
+        &mut self,
+        backend: &mut dyn term_wm_render::RenderBackend,
+        area: LayoutRect,
         ctx: &ComponentContext,
         _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
+        let area = layout_rect_to_rect(area);
+        let backend = crate::helpers::downcast_ratatui(backend);
         let block = if ctx.focused() {
             Block::default()
                 .borders(Borders::ALL)
                 .title(format!("{} (focus)", self.title))
-                .border_style(Style::default().fg(ctx.config().theme.success))
+                .border_style(Style::default().fg(color_to_ratatui(ctx.config().theme.success)))
         } else {
             Block::default()
                 .borders(Borders::ALL)
                 .title(self.title.as_str())
         };
         let inner = block.inner(area);
-        frame.render_widget(block, area);
+        block.render(area, &mut backend.buffer);
 
         if inner.width == 0 || inner.height == 0 {
             return;
@@ -76,7 +79,7 @@ impl Component<TermWmAction> for ToggleListComponent {
             .collect::<Vec<_>>();
 
         let list = List::new(items);
-        frame.render_widget(list, inner);
+        list.render(inner, &mut backend.buffer);
     }
 
     fn handle_events(
@@ -197,10 +200,11 @@ impl ToggleListComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::layout::Rect;
     use std::collections::VecDeque;
     use term_wm_core::actions::EventResult;
     use term_wm_core::components::Component;
+    use term_wm_core::events::{Event, KeyCode, KeyEvent, KeyKind, KeyModifiers};
 
     fn make_items(n: usize) -> Vec<ToggleItem> {
         (0..n)
@@ -242,19 +246,31 @@ mod tests {
         let ctx = ComponentContext::new(true);
         dispatch(
             &mut t,
-            &Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            &Event::Key(KeyEvent::new(
+                KeyCode::Down,
+                KeyModifiers::NONE,
+                KeyKind::Press,
+            )),
             &ctx,
         );
         assert_eq!(t.selected(), 1);
         dispatch(
             &mut t,
-            &Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE)),
+            &Event::Key(KeyEvent::new(
+                KeyCode::Home,
+                KeyModifiers::NONE,
+                KeyKind::Press,
+            )),
             &ctx,
         );
         assert_eq!(t.selected(), 0);
         dispatch(
             &mut t,
-            &Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)),
+            &Event::Key(KeyEvent::new(
+                KeyCode::End,
+                KeyModifiers::NONE,
+                KeyKind::Press,
+            )),
             &ctx,
         );
         assert_eq!(t.selected(), 4);
@@ -267,13 +283,21 @@ mod tests {
         let ctx = ComponentContext::new(true);
         dispatch(
             &mut t,
-            &Event::Key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)),
+            &Event::Key(KeyEvent::new(
+                KeyCode::PageDown,
+                KeyModifiers::NONE,
+                KeyKind::Press,
+            )),
             &ctx,
         );
         assert_eq!(t.selected(), 5);
         dispatch(
             &mut t,
-            &Event::Key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE)),
+            &Event::Key(KeyEvent::new(
+                KeyCode::PageUp,
+                KeyModifiers::NONE,
+                KeyKind::Press,
+            )),
             &ctx,
         );
         assert_eq!(t.selected(), 0);
@@ -287,13 +311,21 @@ mod tests {
         assert!(t.items()[0].checked); // even index = checked
         dispatch(
             &mut t,
-            &Event::Key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE)),
+            &Event::Key(KeyEvent::new(
+                KeyCode::Char(' '),
+                KeyModifiers::NONE,
+                KeyKind::Press,
+            )),
             &ctx,
         );
         assert!(!t.items()[0].checked);
         dispatch(
             &mut t,
-            &Event::Key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE)),
+            &Event::Key(KeyEvent::new(
+                KeyCode::Char(' '),
+                KeyModifiers::NONE,
+                KeyKind::Press,
+            )),
             &ctx,
         );
         assert!(t.items()[0].checked);
@@ -305,7 +337,11 @@ mod tests {
         t.set_items(make_items(3));
         let ctx = ComponentContext::new(true);
         let result = t.handle_events(
-            &Event::Key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE)),
+            &Event::Key(KeyEvent::new(
+                KeyCode::Char('z'),
+                KeyModifiers::NONE,
+                KeyKind::Press,
+            )),
             &ctx,
         );
         assert!(result.is_ignored());
@@ -313,12 +349,22 @@ mod tests {
 
     #[test]
     fn render_empty_list() {
-        let t = ToggleListComponent::new("empty");
-        let mut buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 40, 10));
-        let mut frame = UiFrame::from_parts(Rect::new(0, 0, 40, 10), &mut buffer);
+        let mut t = ToggleListComponent::new("empty");
+        let buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 40, 10));
+        let mut backend = term_wm_console::RatatuiBackend::new(buffer, Rect::new(0, 0, 40, 10));
         let ctx = ComponentContext::new(true);
         let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
-        t.render(&mut frame, Rect::new(0, 0, 40, 10), &ctx, &mut registry);
+        t.render(
+            &mut backend,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 10,
+            },
+            &ctx,
+            &mut registry,
+        );
     }
 
     #[test]

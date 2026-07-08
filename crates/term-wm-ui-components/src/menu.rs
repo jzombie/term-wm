@@ -1,16 +1,15 @@
 use std::collections::VecDeque;
 
-use crossterm::event::{Event, KeyEventKind};
-use ratatui::{
-    layout::Rect,
-    style::{Modifier, Style},
-};
+use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
+use term_wm_core::events::{Event, KeyKind};
 
+use crate::helpers::{color_to_ratatui, layout_rect_to_rect, safe_set_string};
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext, MenuItem};
 use term_wm_core::keybindings::KeyBindings;
-use term_wm_core::ui::{UiFrame, safe_set_string};
 use term_wm_core::window::WindowKey;
+use term_wm_layout_engine::LayoutRect;
 
 #[derive(Debug)]
 pub struct MenuComponent {
@@ -53,7 +52,7 @@ impl MenuComponent {
         let Event::Key(key) = event else {
             return EventResult::Ignored;
         };
-        if key.kind != KeyEventKind::Press {
+        if key.kind != KeyKind::Press {
             return EventResult::Ignored;
         }
         let total = self.items.len();
@@ -79,7 +78,7 @@ impl MenuComponent {
         let Event::Key(key) = event else {
             return false;
         };
-        if key.kind != KeyEventKind::Press {
+        if key.kind != KeyKind::Press {
             return false;
         }
         self.nav_keys.matches(TermWmAction::MenuUp, key)
@@ -91,7 +90,7 @@ impl MenuComponent {
 
     pub fn render_items(
         &self,
-        frame: &mut UiFrame<'_>,
+        buffer: &mut ratatui::buffer::Buffer,
         area: Rect,
         hovered_idx: Option<usize>,
         theme: &term_wm_core::theme::Theme,
@@ -99,18 +98,21 @@ impl MenuComponent {
         if self.items.is_empty() || area.width < 3 || area.height < 3 {
             return;
         }
-        let buffer = frame.buffer_mut();
         let bounds = area.intersection(buffer.area);
         if bounds.width == 0 || bounds.height == 0 {
             return;
         }
 
-        let menu_style = Style::default().bg(theme.menu_bg).fg(theme.menu_fg);
+        let menu_style = Style::default()
+            .bg(color_to_ratatui(theme.menu_bg))
+            .fg(color_to_ratatui(theme.menu_fg));
         let selected_style = Style::default()
-            .bg(theme.menu_selected_bg)
-            .fg(theme.menu_selected_fg)
+            .bg(color_to_ratatui(theme.menu_selected_bg))
+            .fg(color_to_ratatui(theme.menu_selected_fg))
             .add_modifier(Modifier::BOLD);
-        let hovered_style = Style::default().bg(theme.panel_active_bg).fg(theme.menu_fg);
+        let hovered_style = Style::default()
+            .bg(color_to_ratatui(theme.panel_active_bg))
+            .fg(color_to_ratatui(theme.menu_fg));
 
         let inner_x = area.x.saturating_add(1);
         let inner_width = area.width.saturating_sub(2).max(1);
@@ -180,13 +182,15 @@ impl MenuComponent {
 
 impl Component<TermWmAction> for MenuComponent {
     fn render(
-        &self,
-        frame: &mut UiFrame<'_>,
-        area: Rect,
+        &mut self,
+        backend: &mut dyn term_wm_render::RenderBackend,
+        area: LayoutRect,
         ctx: &ComponentContext,
         _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
-        self.render_items(frame, area, None, &ctx.config().theme);
+        let area = layout_rect_to_rect(area);
+        let backend = crate::helpers::downcast_ratatui(backend);
+        self.render_items(&mut backend.buffer, area, None, &ctx.config().theme);
     }
 
     fn handle_events(
@@ -234,13 +238,11 @@ impl Default for MenuComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
     use ratatui::buffer::Buffer;
+    use term_wm_core::events::{Event, KeyCode, KeyEvent, KeyKind, KeyModifiers};
 
     fn key_event(code: KeyCode) -> Event {
-        let mut k = KeyEvent::new(code, KeyModifiers::NONE);
-        k.kind = KeyEventKind::Press;
-        Event::Key(k)
+        Event::Key(KeyEvent::new(code, KeyModifiers::NONE, KeyKind::Press))
     }
 
     fn process(menu: &mut MenuComponent, event: &Event) {
@@ -364,12 +366,17 @@ mod tests {
             width: 30,
             height: 10,
         };
-        let mut buf = Buffer::empty(area);
-        let mut frame = UiFrame::from_parts(area, &mut buf);
+        let buf = Buffer::empty(area);
+        let mut backend = term_wm_console::RatatuiBackend::new(buf, area);
         let ctx = ComponentContext::new(true);
         menu.render(
-            &mut frame,
-            area,
+            &mut backend,
+            LayoutRect {
+                x: area.x as i32,
+                y: area.y as i32,
+                width: area.width,
+                height: area.height,
+            },
             &ctx,
             &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
         );

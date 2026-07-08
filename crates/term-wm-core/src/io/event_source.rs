@@ -1,7 +1,7 @@
-use ::crossterm::event::{Event, KeyEvent, MouseEvent};
 use std::io;
 use std::time::Duration;
 
+use crate::events::{Event, KeyEvent, MouseEvent};
 use crate::power_profile::PowerProfile;
 
 pub trait EventSource {
@@ -87,7 +87,7 @@ impl<T: EventSource + ?Sized> EventSource for &mut T {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    use crate::events::{KeyCode, KeyKind, KeyModifiers};
     use std::time::Duration;
 
     struct Dummy;
@@ -97,14 +97,19 @@ mod tests {
         }
 
         fn read(&mut self) -> std::io::Result<Event> {
-            Ok(Event::Key(KeyEvent::new(
-                KeyCode::Char('x'),
-                KeyModifiers::NONE,
-            )))
+            Ok(Event::Key(KeyEvent {
+                code: KeyCode::Char('x'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyKind::Press,
+            }))
         }
 
         fn next_key(&mut self) -> std::io::Result<KeyEvent> {
-            Ok(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE))
+            Ok(KeyEvent {
+                code: KeyCode::Char('x'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyKind::Press,
+            })
         }
 
         fn next_mouse(&mut self) -> std::io::Result<MouseEvent> {

@@ -8,13 +8,12 @@
 
 use std::time::{Duration, Instant};
 
+use crate::Rect;
 use crate::constants::{
     EDGE_PAD_HORIZONTAL, EDGE_PAD_VERTICAL, TEXT_SELECTION_DRAG_IDLE_TIMEOUT_BASE,
     TEXT_SELECTION_DRAG_IDLE_TIMEOUT_HORIZONTAL, TEXT_SELECTION_DRAG_IDLE_TIMEOUT_VERTICAL,
 };
-use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-use ratatui::layout::Rect;
-
+use crate::events::{MouseButton, MouseEvent, MouseEventKind};
 /// Logical coordinates inside a text surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LogicalPosition {
@@ -305,7 +304,7 @@ pub fn handle_selection_mouse<H: SelectionHost>(
         return false;
     }
     match mouse.kind {
-        MouseEventKind::Down(MouseButton::Left) => {
+        MouseEventKind::Press(MouseButton::Left) => {
             if rect_contains(area, mouse.column, mouse.row)
                 && let Some(pos) = host.logical_position_from_point(area, mouse.column, mouse.row)
             {
@@ -338,7 +337,7 @@ pub fn handle_selection_mouse<H: SelectionHost>(
             }
             true
         }
-        MouseEventKind::Up(MouseButton::Left) => {
+        MouseEventKind::Release(MouseButton::Left) => {
             if host.selection_controller().is_dragging() {
                 let controller = host.selection_controller();
                 controller.set_button_down(false);
@@ -406,12 +405,17 @@ fn auto_scroll_selection<V: SelectionViewport>(
     let mut scrolled = false;
 
     let top = area.y;
-    let bottom_edge = area.y.saturating_add(area.height).saturating_sub(1);
-    let mut scroll_up_dist = 0;
-    if row < top {
-        scroll_up_dist = top.saturating_sub(row);
-    } else if row <= top.saturating_add(EDGE_PAD_VERTICAL) {
-        scroll_up_dist = top.saturating_add(EDGE_PAD_VERTICAL).saturating_sub(row);
+    let bottom_edge = area
+        .y
+        .saturating_add(i32::from(area.height))
+        .saturating_sub(1);
+    let mut scroll_up_dist: u16 = 0;
+    if i32::from(row) < top {
+        scroll_up_dist = top.saturating_sub(i32::from(row)) as u16;
+    } else if i32::from(row) <= top.saturating_add(i32::from(EDGE_PAD_VERTICAL)) {
+        scroll_up_dist = top
+            .saturating_add(i32::from(EDGE_PAD_VERTICAL))
+            .saturating_sub(i32::from(row)) as u16;
     }
     if scroll_up_dist > 0 && offset_y > 0 {
         let delta = edge_scroll_step(scroll_up_dist, 2, 12);
@@ -421,13 +425,15 @@ fn auto_scroll_selection<V: SelectionViewport>(
         }
     }
 
-    let mut scroll_down_dist = 0;
-    if row > bottom_edge {
-        scroll_down_dist = row.saturating_sub(bottom_edge);
-    } else if row.saturating_add(EDGE_PAD_VERTICAL) >= bottom_edge
-        && row >= bottom_edge.saturating_sub(EDGE_PAD_VERTICAL)
+    let mut scroll_down_dist: u16 = 0;
+    if i32::from(row) > bottom_edge {
+        scroll_down_dist = i32::from(row).saturating_sub(bottom_edge) as u16;
+    } else if i32::from(row).saturating_add(i32::from(EDGE_PAD_VERTICAL)) >= bottom_edge
+        && i32::from(row) >= bottom_edge.saturating_sub(i32::from(EDGE_PAD_VERTICAL))
     {
-        scroll_down_dist = row.saturating_sub(bottom_edge.saturating_sub(EDGE_PAD_VERTICAL));
+        scroll_down_dist = i32::from(row)
+            .saturating_sub(bottom_edge.saturating_sub(i32::from(EDGE_PAD_VERTICAL)))
+            as u16;
     }
     if scroll_down_dist > 0 && offset_y < max_off_y {
         let delta = edge_scroll_step(scroll_down_dist, 2, 12);
@@ -438,15 +444,18 @@ fn auto_scroll_selection<V: SelectionViewport>(
     }
 
     let left = area.x;
-    let right_edge = area.x.saturating_add(area.width).saturating_sub(1);
+    let right_edge = area
+        .x
+        .saturating_add(i32::from(area.width))
+        .saturating_sub(1);
 
-    let mut scroll_left_dist = 0;
-    if column < left {
-        scroll_left_dist = left.saturating_sub(column);
-    } else if column <= left.saturating_add(EDGE_PAD_HORIZONTAL) {
+    let mut scroll_left_dist: u16 = 0;
+    if i32::from(column) < left {
+        scroll_left_dist = left.saturating_sub(i32::from(column)) as u16;
+    } else if i32::from(column) <= left.saturating_add(i32::from(EDGE_PAD_HORIZONTAL)) {
         scroll_left_dist = left
-            .saturating_add(EDGE_PAD_HORIZONTAL)
-            .saturating_sub(column);
+            .saturating_add(i32::from(EDGE_PAD_HORIZONTAL))
+            .saturating_sub(i32::from(column)) as u16;
     }
     if scroll_left_dist > 0 && offset_x > 0 {
         let delta = edge_scroll_step(scroll_left_dist, 1, 80);
@@ -456,13 +465,15 @@ fn auto_scroll_selection<V: SelectionViewport>(
         }
     }
 
-    let mut scroll_right_dist = 0;
-    if column > right_edge {
-        scroll_right_dist = column.saturating_sub(right_edge);
-    } else if column.saturating_add(EDGE_PAD_HORIZONTAL) >= right_edge
-        && column >= right_edge.saturating_sub(EDGE_PAD_HORIZONTAL)
+    let mut scroll_right_dist: u16 = 0;
+    if i32::from(column) > right_edge {
+        scroll_right_dist = i32::from(column).saturating_sub(right_edge) as u16;
+    } else if i32::from(column).saturating_add(i32::from(EDGE_PAD_HORIZONTAL)) >= right_edge
+        && i32::from(column) >= right_edge.saturating_sub(i32::from(EDGE_PAD_HORIZONTAL))
     {
-        scroll_right_dist = column.saturating_sub(right_edge.saturating_sub(EDGE_PAD_HORIZONTAL));
+        scroll_right_dist = i32::from(column)
+            .saturating_sub(right_edge.saturating_sub(i32::from(EDGE_PAD_HORIZONTAL)))
+            as u16;
     }
     if scroll_right_dist > 0 && offset_x < max_off_x {
         let delta = edge_scroll_step(scroll_right_dist, 1, 80);
@@ -535,8 +546,10 @@ fn drag_idle_timeout(area: Rect, column: u16, row: u16) -> Duration {
     if area.width == 0 || area.height == 0 {
         return TEXT_SELECTION_DRAG_IDLE_TIMEOUT_BASE;
     }
-    let horiz_outside = column < area.x || column >= area.x.saturating_add(area.width);
-    let vert_outside = row < area.y || row >= area.y.saturating_add(area.height);
+    let col = i32::from(column);
+    let row_i = i32::from(row);
+    let horiz_outside = col < area.x || col >= area.x.saturating_add(i32::from(area.width));
+    let vert_outside = row_i < area.y || row_i >= area.y.saturating_add(i32::from(area.height));
 
     let mut timeout = TEXT_SELECTION_DRAG_IDLE_TIMEOUT_BASE;
     if vert_outside {
@@ -564,15 +577,18 @@ fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
     if rect.width == 0 || rect.height == 0 {
         return false;
     }
-    let max_x = rect.x.saturating_add(rect.width);
-    let max_y = rect.y.saturating_add(rect.height);
-    column >= rect.x && column < max_x && row >= rect.y && row < max_y
+    let max_x = rect.x.saturating_add(i32::from(rect.width));
+    let max_y = rect.y.saturating_add(i32::from(rect.height));
+    i32::from(column) >= rect.x
+        && i32::from(column) < max_x
+        && i32::from(row) >= rect.y
+        && i32::from(row) < max_y
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::KeyModifiers;
+    use crate::events::KeyModifiers;
 
     #[derive(Debug)]
     struct TestHost {
@@ -623,8 +639,8 @@ mod tests {
             column: u16,
             row: u16,
         ) -> Option<LogicalPosition> {
-            let col = column.saturating_sub(area.x) as usize;
-            let row = row.saturating_sub(area.y) as usize;
+            let col = column.saturating_sub(area.x as u16) as usize;
+            let row = row.saturating_sub(area.y as u16) as usize;
             Some(LogicalPosition::new(row, col))
         }
 
@@ -695,13 +711,23 @@ mod tests {
 
     #[test]
     fn mouse_up_clears_button_state() {
-        let mut host = TestHost::new(Rect::new(0, 0, 10, 5));
-        let area = Rect::new(0, 0, 10, 5);
+        let mut host = TestHost::new(Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 5,
+        });
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 5,
+        };
         // Down records position but doesn't consume — clicks pass through
         assert!(!handle_selection_mouse(
             &mut host,
             true,
-            &mouse(1, 1, MouseEventKind::Down(MouseButton::Left)),
+            &mouse(1, 1, MouseEventKind::Press(MouseButton::Left)),
             area,
         ));
         assert!(!host.controller().is_dragging());
@@ -721,7 +747,7 @@ mod tests {
         assert!(handle_selection_mouse(
             &mut host,
             true,
-            &mouse(3, 1, MouseEventKind::Up(MouseButton::Left)),
+            &mouse(3, 1, MouseEventKind::Release(MouseButton::Left)),
             area,
         ));
         assert!(!host.controller().is_dragging());
@@ -730,13 +756,23 @@ mod tests {
 
     #[test]
     fn moved_event_treats_drag_as_complete() {
-        let mut host = TestHost::new(Rect::new(0, 0, 10, 5));
-        let area = Rect::new(0, 0, 10, 5);
+        let mut host = TestHost::new(Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 5,
+        });
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 5,
+        };
         // Down records anchor but doesn't consume
         handle_selection_mouse(
             &mut host,
             true,
-            &mouse(2, 2, MouseEventKind::Down(MouseButton::Left)),
+            &mouse(2, 2, MouseEventKind::Press(MouseButton::Left)),
             area,
         );
         assert!(host.controller().button_down());
@@ -763,13 +799,23 @@ mod tests {
 
     #[test]
     fn maintain_stops_when_button_released() {
-        let mut host = TestHost::new(Rect::new(0, 0, 10, 5));
-        let area = Rect::new(0, 0, 10, 5);
+        let mut host = TestHost::new(Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 5,
+        });
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 5,
+        };
         // Down + Drag to activate selection
         handle_selection_mouse(
             &mut host,
             true,
-            &mouse(1, 1, MouseEventKind::Down(MouseButton::Left)),
+            &mouse(1, 1, MouseEventKind::Press(MouseButton::Left)),
             area,
         );
         assert!(handle_selection_mouse(
@@ -789,13 +835,23 @@ mod tests {
 
     #[test]
     fn maintain_scrolls_when_button_down() {
-        let mut host = TestHost::new(Rect::new(5, 5, 10, 5));
-        let area = Rect::new(5, 5, 10, 5);
+        let mut host = TestHost::new(Rect {
+            x: 5,
+            y: 5,
+            width: 10,
+            height: 5,
+        });
+        let area = Rect {
+            x: 5,
+            y: 5,
+            width: 10,
+            height: 5,
+        };
         // Down + Drag to activate selection
         handle_selection_mouse(
             &mut host,
             true,
-            &mouse(6, 6, MouseEventKind::Down(MouseButton::Left)),
+            &mouse(6, 6, MouseEventKind::Press(MouseButton::Left)),
             area,
         );
         assert!(handle_selection_mouse(

@@ -11,5 +11,10 @@ license.workspace = true
 crossterm = { workspace = true }
 ratatui = { workspace = true }
 term-wm-core = { workspace = true }
+term-wm-layout-engine = { workspace = true }
+term-wm-render = { workspace = true }
 term-wm-ui-components = { workspace = true }
 webbrowser = { workspace = true }
+
+[dev-dependencies]
+term-wm-console = { workspace = true }

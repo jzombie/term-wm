@@ -1,4 +1,4 @@
-use crossterm::event::{Event, MouseEventKind};
+use crate::events::{Event, MouseEventKind};
 
 use super::WindowManager;
 use crate::actions::{EventResult, TermWmAction};
@@ -45,7 +45,7 @@ impl WindowManager {
         }
 
         if let Event::Mouse(mouse) = event
-            && matches!(mouse.kind, MouseEventKind::Down(_))
+            && matches!(mouse.kind, MouseEventKind::Press(_))
         {
             // Check if click is on the top panel's menu icon
             if let Some(p) = &self.top_component
@@ -61,7 +61,7 @@ impl WindowManager {
             return None;
         };
 
-        match menu.handle_event(event, &ctx) {
+        match menu.handle_events(event, &ctx) {
             EventResult::Action(action) => return Some(action),
             EventResult::Consumed => {}
             EventResult::Ignored => {}
@@ -73,7 +73,7 @@ impl WindowManager {
         }
 
         if let Event::Mouse(mouse) = event
-            && matches!(mouse.kind, MouseEventKind::Down(_))
+            && matches!(mouse.kind, MouseEventKind::Press(_))
         {
             return None; // handled by chrome layer
         }

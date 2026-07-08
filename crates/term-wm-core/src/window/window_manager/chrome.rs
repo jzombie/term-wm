@@ -24,8 +24,8 @@ impl WindowManager {
     pub fn toggle_maximize(&mut self, key: WindowKey) {
         use crate::window::FloatRectSpec;
         let full = FloatRectSpec::Absolute(crate::window::FloatRect {
-            x: self.managed_area.x as i32,
-            y: self.managed_area.y as i32,
+            x: self.managed_area.x,
+            y: self.managed_area.y,
             width: self.managed_area.width,
             height: self.managed_area.height,
         });
@@ -43,8 +43,8 @@ impl WindowManager {
         }
         let prev_rect = if let Some(rect) = self.regions.get(key) {
             FloatRectSpec::Absolute(crate::window::FloatRect {
-                x: rect.x as i32,
-                y: rect.y as i32,
+                x: rect.x,
+                y: rect.y,
                 width: rect.width,
                 height: rect.height,
             })
@@ -69,15 +69,25 @@ impl WindowManager {
         self.transition_window(key, WindowState::Mapped);
     }
 
+    /// Close a window: transition to Unmapped, destroy the component
+    /// (kills child PTY processes), and remove from the SlotMap.
+    ///
+    /// System windows (debug log, etc.) are kept in the SlotMap so the
+    /// WM can re-show them later.  Their key is queued to `closed_windows`
+    /// so the app can perform any additional cleanup in `wm_close_window`.
     pub fn close_window(&mut self, key: WindowKey) {
         tracing::debug!(window_key = ?key, "closing window");
         self.transition_window(key, WindowState::Unmapped);
-        self.closed_windows.push(key);
 
-        // Remove from SlotMap unless it's a system window (debug log, etc.)
-        // that the WindowManager owns and can show again later.
         let is_system = self.windows.get(key).is_some_and(|w| w.is_system_window);
-        if !is_system {
+        if is_system {
+            self.closed_windows.push(key);
+        } else {
+            // Destroy the component (kills child PTY processes) then
+            // remove from SlotMap — all in one call, no API chaining.
+            if let Some(w) = self.windows.get_mut(key) {
+                w.component.destroy();
+            }
             self.windows.remove(key);
         }
     }
