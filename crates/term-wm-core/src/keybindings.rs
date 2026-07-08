@@ -104,6 +104,7 @@ impl Default for KeyBindings {
             ScrollUp: [ (KeyCode::Up, KeyModifiers::NONE) ],
             ScrollDown: [ (KeyCode::Down, KeyModifiers::NONE) ],
             ToggleSelection: [ (KeyCode::Char(' '), KeyModifiers::NONE) ],
+            ToggleFloat: [ (KeyCode::Char(' '), KeyModifiers { shift: false, control: false, alt: true }) ],
         }
     }
 }

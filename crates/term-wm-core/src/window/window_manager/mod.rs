@@ -43,6 +43,10 @@ use term_wm_layout_engine::{LayoutRect, apply_resize_drag_signed};
 pub(crate) enum MouseCaptureState {
     DraggingWindow {
         key: WindowKey,
+        /// Column at press time, used for deadzone-based detach guard.
+        anchor_x: u16,
+        /// Row at press time, used for deadzone-based detach guard.
+        anchor_y: u16,
         initial_x: i32,
         initial_y: i32,
         start_x: u16,
@@ -642,6 +646,34 @@ impl WindowManager {
         self.layout_dirty = false;
     }
 
+    /// Toggle a window between floating and tiled state.
+    pub fn toggle_float(&mut self, key: WindowKey) {
+        if self.is_window_floating(key) {
+            // Floating → re-insert into tiled layout
+            assert!(
+                !self.layout_contains(key),
+                "floating window must not be in layout"
+            );
+            self.clear_floating_rect(key);
+            if self.managed_layout.is_some() {
+                self.tile_window_key(key);
+            } else {
+                self.managed_layout = Some(crate::layout::TilingLayout::new(
+                    crate::layout::LayoutNode::leaf(key),
+                ));
+            }
+            self.register_managed_layout(self.managed_area);
+            self.mark_layout_dirty();
+        } else {
+            // Tiled → detach and float at current rect
+            let rect = self.full_region(key);
+            self.detach_from_tiling_layout(key);
+            self.set_floating_rect(key, Some(crate::window::FloatRectSpec::Absolute(rect)));
+            self.bring_floating_to_front_key(key);
+            self.mark_layout_dirty();
+        }
+    }
+
     /// Remove a key from the focus ring's order (called after closing a window).
     fn remove_from_focus_ring(&mut self, key: WindowKey) {
         let order: Vec<WindowKey> = self
@@ -930,6 +962,8 @@ impl WindowManager {
                 (
                     MouseCaptureState::DraggingWindow {
                         key,
+                        anchor_x,
+                        anchor_y,
                         initial_x,
                         initial_y,
                         start_x,
@@ -940,6 +974,13 @@ impl WindowManager {
                     },
                     MouseEventKind::Drag(_),
                 ) => {
+                    // Deadzone guard: ignore micro-nudges within 2 cells of press
+                    // position to prevent accidental detach from tiling layout.
+                    let dx = col.abs_diff(anchor_x);
+                    let dy = row.abs_diff(anchor_y);
+                    if dx + dy <= 2 {
+                        return true;
+                    }
                     self.drag_last_event = Some(Instant::now());
                     self.reset_drag_snap_timer();
                     if self.is_window_floating(key) {
@@ -1277,6 +1318,8 @@ impl WindowManager {
                             };
                         self.mouse_capture = Some(MouseCaptureState::DraggingWindow {
                             key,
+                            anchor_x: col,
+                            anchor_y: row,
                             initial_x,
                             initial_y,
                             start_x: col,
@@ -2890,6 +2933,8 @@ mod tests {
         // Simulate abandoned drag (mouse released outside terminal).
         wm.mouse_capture = Some(MouseCaptureState::DraggingWindow {
             key,
+            anchor_x: 15,
+            anchor_y: 10,
             initial_x: 10,
             initial_y: 5,
             start_x: 15,
@@ -3368,6 +3413,8 @@ mod tests {
         let keys = make_keys(&mut wm, 100);
         wm.mouse_capture = Some(MouseCaptureState::DraggingWindow {
             key: keys[1],
+            anchor_x: 0,
+            anchor_y: 0,
             initial_x: 0,
             initial_y: 0,
             start_x: 0,
@@ -3395,6 +3442,29 @@ mod tests {
         let keys = make_keys(&mut wm, 100);
         wm.mouse_capture = Some(MouseCaptureState::DraggingWindow {
             key: keys[1],
+            anchor_x: 0,
+            anchor_y: 0,
+            initial_x: 0,
+            initial_y: 0,
+            start_x: 0,
+            start_y: 0,
+            prev_col: 0,
+            prev_row: 0,
+            prev_time_ns: 0,
+        });
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+            None,
+        );
+        let keys = make_keys(&mut wm, 100);
+        wm.mouse_capture = Some(MouseCaptureState::DraggingWindow {
+            key: keys[1],
+            anchor_x: 0,
+            anchor_y: 0,
             initial_x: 0,
             initial_y: 0,
             start_x: 0,
@@ -3472,6 +3542,8 @@ mod tests {
 
         wm.mouse_capture = Some(MouseCaptureState::DraggingWindow {
             key,
+            anchor_x: 15,
+            anchor_y: 10,
             initial_x: 10,
             initial_y: 5,
             start_x: 15,
