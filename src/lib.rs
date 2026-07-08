@@ -260,10 +260,11 @@ pub fn render_app(
                     const GRACE: std::time::Duration = std::time::Duration::from_millis(500);
                     let timeout = wm.config().drag_snap_timeout.unwrap();
                     if timeout.saturating_sub(remaining) >= GRACE {
+                        let action = wm.snap_preview_action_label().unwrap_or("snap");
                         let text = if remaining == std::time::Duration::ZERO {
-                            "Mouse left — snapping...".to_string()
+                            format!("Mouse left — {}...", action)
                         } else {
-                            format!("Mouse left — snapping in {}s", remaining.as_secs().max(1))
+                            format!("Mouse left — {} in {}s", action, remaining.as_secs().max(1))
                         };
                         let text_len = text.len() as u16;
                         let text_x = rat_snap.x + (rat_snap.width.saturating_sub(text_len)) / 2;

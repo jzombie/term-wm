@@ -853,6 +853,17 @@ impl WindowManager {
         }
     }
 
+    /// Return a human-readable label for the current snap preview action.
+    pub fn snap_preview_action_label(&self) -> Option<&'static str> {
+        self.snap_preview.as_ref().map(|s| match s {
+            SnapPreviewState::Maximize => "maximize",
+            SnapPreviewState::Edge(_) => "snap to edge",
+            SnapPreviewState::Corner(_) => "snap to corner",
+            SnapPreviewState::TiledInsert(_, _) => "tile",
+            SnapPreviewState::VoidInsert(_) => "fill void",
+        })
+    }
+
     /// Return floating pane info for rendering (key + rect).
     pub fn floating_panes(&self) -> Vec<(WindowKey, crate::window::FloatRectSpec)> {
         self.windows
