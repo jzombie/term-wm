@@ -1,7 +1,7 @@
 use crate::Rect;
-use term_wm_layout_engine::{EdgeResistance, LayoutRect, detect_quadrant};
+use term_wm_layout_engine::{EdgeResistance, LayoutRect, detect_corner_snap, detect_quadrant};
 
-use super::WindowManager;
+use super::{SnapPreviewState, WindowManager};
 use crate::layout::InsertPosition;
 use crate::window::WindowKey;
 
@@ -64,6 +64,7 @@ impl WindowManager {
         start_mouse_y: u16,
         initial_x: i32,
         initial_y: i32,
+        velocity_exceeded: bool,
     ) {
         let panel_active = self.panel_active();
         let bounds = self.managed_area;
@@ -81,6 +82,11 @@ impl WindowManager {
             y = bounds_y;
         }
 
+        let now_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+
         let mut resistance = EdgeResistance::default_tui();
         let bounds_layout = LayoutRect {
             x: bounds.x,
@@ -88,7 +94,20 @@ impl WindowManager {
             width: bounds.width,
             height: bounds.height,
         };
-        let x = resistance.apply_x(x, bounds_layout);
+
+        // Skip magnetic snapping if velocity threshold exceeded
+        let x = if velocity_exceeded {
+            x
+        } else {
+            resistance.apply_x(x, bounds_layout, now_ns)
+        };
+
+        let y = if velocity_exceeded {
+            y
+        } else {
+            let mut resistance = EdgeResistance::default_tui();
+            resistance.apply_y(y, bounds_layout, now_ns)
+        };
 
         self.set_floating_rect(
             key,
@@ -104,6 +123,13 @@ impl WindowManager {
         self.mark_layout_dirty();
     }
 
+    /// Update the snap preview state during a drag operation.
+    ///
+    /// Spatial priority order (smallest region first):
+    /// 1. Corner snap (TopLeft/TopRight/BottomLeft/BottomRight)
+    /// 2. Sacred top edge maximize (y=0, deferred to release)
+    /// 3. Edge snap (Left/Right/Top/Bottom half-screen)
+    /// 4. Tiled insert (quadrant-based)
     pub(super) fn update_snap_preview(
         &mut self,
         dragging_key: WindowKey,
@@ -111,8 +137,40 @@ impl WindowManager {
         mouse_y: u16,
     ) {
         self.drag_snap = None;
+        self.snap_preview = None;
         let area = self.managed_area;
 
+        // Priority 1: Corner snap (smallest spatial region)
+        let managed_layout_rect = LayoutRect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: area.height,
+        };
+        if let Some(corner_pos) = detect_corner_snap(mouse_x, mouse_y, managed_layout_rect, 2) {
+            let engine_preview = term_wm_layout_engine::corner_preview_rect(
+                managed_layout_rect,
+                corner_pos,
+            );
+            let preview = Rect {
+                x: engine_preview.x,
+                y: engine_preview.y,
+                width: engine_preview.width,
+                height: engine_preview.height,
+            };
+            self.drag_snap = Some((None, corner_pos, preview));
+            self.snap_preview = Some(SnapPreviewState::Corner(corner_pos));
+            return;
+        }
+
+        // Priority 2: Sacred top edge — full-screen maximize (deferred to release)
+        if mouse_y == 0 {
+            self.drag_snap = None;
+            self.snap_preview = Some(SnapPreviewState::Maximize);
+            return;
+        }
+
+        // Priority 3 & 4: Edge snap / tiled insert
         let target = self.z_order.iter().rev().find_map(|&key| {
             if key == dragging_key {
                 return None;
@@ -153,20 +211,14 @@ impl WindowManager {
             };
 
             self.drag_snap = Some((Some(target_key), pos, preview));
+            self.snap_preview = Some(SnapPreviewState::TiledInsert(target_key, pos));
             return;
         }
 
-        let managed_layout = LayoutRect {
-            x: area.x,
-            y: area.y,
-            width: area.width,
-            height: area.height,
-        };
-
-        let position = term_wm_layout_engine::detect_edge_snap(mouse_x, mouse_y, managed_layout, 2);
+        let position = term_wm_layout_engine::detect_edge_snap(mouse_x, mouse_y, managed_layout_rect, 2);
 
         if let Some(pos) = position {
-            let engine_preview = term_wm_layout_engine::edge_preview_rect(managed_layout, pos);
+            let engine_preview = term_wm_layout_engine::edge_preview_rect(managed_layout_rect, pos);
             let mut preview = Rect {
                 x: engine_preview.x,
                 y: engine_preview.y,
@@ -179,6 +231,7 @@ impl WindowManager {
             }
 
             self.drag_snap = Some((None, pos, preview));
+            self.snap_preview = Some(SnapPreviewState::Edge(pos));
         }
     }
 

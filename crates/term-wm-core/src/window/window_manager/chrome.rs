@@ -31,16 +31,25 @@ impl WindowManager {
         });
         if let Some(current) = self.floating_rect(key) {
             if current == full {
+                // Unmaximize: restore previous geometry
                 if let Some(prev) = self.take_prev_floating_rect(key) {
                     self.set_floating_rect(key, Some(prev));
                 }
+                if let Some(w) = self.windows.get_mut(key) {
+                    w.is_maximized = false;
+                }
             } else {
+                // Maximize: save current and expand
                 self.set_prev_floating_rect(key, Some(current));
                 self.set_floating_rect(key, Some(full));
+                if let Some(w) = self.windows.get_mut(key) {
+                    w.is_maximized = true;
+                }
             }
             self.bring_floating_to_front_key(key);
             return;
         }
+        // Tiled window → detach and maximize
         let prev_rect = if let Some(rect) = self.regions.get(key) {
             FloatRectSpec::Absolute(crate::window::FloatRect {
                 x: rect.x,
@@ -58,6 +67,9 @@ impl WindowManager {
         };
         self.set_prev_floating_rect(key, Some(prev_rect));
         self.set_floating_rect(key, Some(full));
+        if let Some(w) = self.windows.get_mut(key) {
+            w.is_maximized = true;
+        }
         self.bring_floating_to_front_key(key);
     }
 

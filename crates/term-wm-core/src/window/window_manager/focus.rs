@@ -81,6 +81,9 @@ impl WindowManager {
             } else {
                 self.clear_floating_rect(key);
             }
+            if let Some(w) = self.windows.get_mut(key) {
+                w.is_maximized = false;
+            }
         }
     }
 

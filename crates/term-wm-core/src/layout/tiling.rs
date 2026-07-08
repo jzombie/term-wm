@@ -285,6 +285,16 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                         Direction::Vertical,
                         vec![LayoutNode::leaf(*current), LayoutNode::leaf(insert)],
                     ),
+                    InsertPosition::TopLeft
+                    | InsertPosition::TopRight => (
+                        Direction::Vertical,
+                        vec![LayoutNode::leaf(insert), LayoutNode::leaf(*current)],
+                    ),
+                    InsertPosition::BottomLeft
+                    | InsertPosition::BottomRight => (
+                        Direction::Vertical,
+                        vec![LayoutNode::leaf(*current), LayoutNode::leaf(insert)],
+                    ),
                 };
                 *self = LayoutNode::Split {
                     direction,
@@ -408,6 +418,16 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
                 vec![LayoutNode::leaf(insert), self.root.clone()],
             ),
             InsertPosition::Bottom => (
+                Direction::Vertical,
+                vec![self.root.clone(), LayoutNode::leaf(insert)],
+            ),
+            InsertPosition::TopLeft
+            | InsertPosition::TopRight => (
+                Direction::Vertical,
+                vec![LayoutNode::leaf(insert), self.root.clone()],
+            ),
+            InsertPosition::BottomLeft
+            | InsertPosition::BottomRight => (
                 Direction::Vertical,
                 vec![self.root.clone(), LayoutNode::leaf(insert)],
             ),

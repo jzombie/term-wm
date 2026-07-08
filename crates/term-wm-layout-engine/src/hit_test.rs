@@ -14,11 +14,14 @@ pub fn hit_test_leaf<Id: Copy + Eq + Ord>(
     None
 }
 
-/// Determine which cardinal quadrant of `target` the cursor falls in.
+/// Determine which diagonal quadrant of `target` the cursor falls in.
 ///
-/// Uses integer cross-product logic (no floating-point) to classify:
-/// East/West when `|dx| > |dy|`, North/South when `|dy| > |dx|`,
-/// with a tie-breaker of East for `dx >= 0`.
+/// Uses dimension-scaled cross-product (no floating-point, no sqrt) to
+/// account for the target's aspect ratio.  The comparison
+/// `|dx| * height > |dy| * width` is equivalent to checking whether the
+/// angle from center to cursor is shallower than the true geometric
+/// diagonal `(±height/±width)`, producing equal-area triangular quadrants
+/// regardless of the rectangle's shape.
 pub fn detect_quadrant(cursor_col: u16, cursor_row: u16, target: &LayoutRect) -> Quadrant {
     let (cx, cy) = target.center();
 
@@ -31,25 +34,26 @@ pub fn detect_quadrant(cursor_col: u16, cursor_row: u16, target: &LayoutRect) ->
 
     let adx = dx.unsigned_abs();
     let ady = dy.unsigned_abs();
+    let w = u32::from(target.width);
+    let h = u32::from(target.height);
 
-    if adx > ady {
-        if dx > 0 {
-            Quadrant::East
-        } else {
-            Quadrant::West
-        }
-    } else if ady > adx {
-        if dy > 0 {
-            Quadrant::South
-        } else {
-            Quadrant::North
-        }
-    } else {
-        // |dx| == |dy| or both zero — East if dx >= 0, West otherwise
+    // Scale by the opposite dimension: the true diagonal of a rectangle
+    // has slope ±(height/width), so |dx|*h > |dy|*w means the cursor is
+    // in the East/West diagonal quadrant.
+    let scaled_dx = adx.saturating_mul(h);
+    let scaled_dy = ady.saturating_mul(w);
+
+    if scaled_dx > scaled_dy || (scaled_dx == scaled_dy && dx >= 0) {
         if dx >= 0 {
             Quadrant::East
         } else {
             Quadrant::West
+        }
+    } else {
+        if dy < 0 {
+            Quadrant::North
+        } else {
+            Quadrant::South
         }
     }
 }
@@ -129,5 +133,39 @@ mod tests {
     #[test]
     fn quadrant_on_center_defaults_to_east() {
         assert_eq!(detect_quadrant(50, 50, &rect()), Quadrant::East);
+    }
+
+    #[test]
+    fn quadrant_non_square_wide_target() {
+        // 100x20 pane: center at (50, 10)
+        // True diagonal slope from center to top-right corner = 10/50 = 1/5
+        // A cursor at (80, 5): dx=30, dy=-5 → scaled_dx=30*20=600, scaled_dy=5*100=500 → 600>500 → East
+        let wide = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 20,
+        };
+        assert_eq!(detect_quadrant(80, 5, &wide), Quadrant::East);
+        // Cursor at (60, 2): dx=10, dy=-8 → scaled_dx=200, scaled_dy=800 → 200<800 → North
+        assert_eq!(detect_quadrant(60, 2, &wide), Quadrant::North);
+        // Cursor at (55, 0): dx=5, dy=-10 → scaled_dx=100, scaled_dy=1000 → North
+        assert_eq!(detect_quadrant(55, 0, &wide), Quadrant::North);
+    }
+
+    #[test]
+    fn quadrant_non_square_tall_target() {
+        // 20x60 pane: center at (10, 30)
+        // True diagonal slope = 60/20 = 3
+        let tall = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 60,
+        };
+        // Cursor at (18, 5): dx=8, dy=-25 → scaled_dx=8*60=480, scaled_dy=25*20=500 → 480<500 → North
+        assert_eq!(detect_quadrant(18, 5, &tall), Quadrant::North);
+        // Cursor at (19, 10): dx=9, dy=-20 → scaled_dx=540, scaled_dy=400 → East
+        assert_eq!(detect_quadrant(19, 10, &tall), Quadrant::East);
     }
 }
