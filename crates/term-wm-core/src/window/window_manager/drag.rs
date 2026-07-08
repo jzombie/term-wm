@@ -193,7 +193,7 @@ impl WindowManager {
 
         // Priority 2: Sacred top edge — full-screen maximize (deferred to release)
         if mouse_y == 0 {
-            self.drag_snap = None;
+            self.drag_snap = Some((None, InsertPosition::Top, area));
             self.snap_preview = Some(SnapPreviewState::Maximize);
             return;
         }

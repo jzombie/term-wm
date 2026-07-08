@@ -464,6 +464,9 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
             }
         }
         let mut root = self.root.clone();
+        // Cull stale leaf before re-insertion — the window may still be in
+        // the tree (detach_to_floating does not remove it).
+        root.remove_leaf(insert);
         let success = match target {
             Some(t) => root.insert_leaf(t, insert, position),
             None => false,

@@ -42,10 +42,6 @@ impl WindowManager {
     }
 
     pub fn focus_app_window(&mut self, key: WindowKey) {
-        let prev = *self.focus.current();
-        if prev != key {
-            self.unmaximize_window(prev);
-        }
         self.focus.set_current(key);
         self.bring_to_front_key(key);
         self.managed_draw_order = self.z_order.clone();
@@ -53,38 +49,12 @@ impl WindowManager {
     }
 
     pub fn focus_window_key(&mut self, key: WindowKey) {
-        // If another window was maximized (full-screen floating), restore it
-        // so the newly-focused window isn't hidden behind it.
-        let prev = *self.focus.current();
-        if prev != key {
-            self.unmaximize_window(prev);
-        }
+        // Focus shifts must not mutate geometry — maximized floating windows
+        // retain their size regardless of Z-order changes.
         self.focus.set_current(key);
         self.bring_to_front_key(key);
         self.managed_draw_order = self.z_order.clone();
         self.mark_layout_dirty();
-    }
-
-    pub(super) fn unmaximize_window(&mut self, key: WindowKey) {
-        use crate::window::FloatRectSpec;
-        let full = FloatRectSpec::Absolute(crate::window::FloatRect {
-            x: self.managed_area.x,
-            y: self.managed_area.y,
-            width: self.managed_area.width,
-            height: self.managed_area.height,
-        });
-        if let Some(current) = self.floating_rect(key)
-            && current == full
-        {
-            if let Some(prev) = self.take_prev_floating_rect(key) {
-                self.set_floating_rect(key, Some(prev));
-            } else {
-                self.clear_floating_rect(key);
-            }
-            if let Some(w) = self.windows.get_mut(key) {
-                w.is_maximized = false;
-            }
-        }
     }
 
     pub(super) fn rebuild_focus_ring(&mut self, active_keys: &[WindowKey]) {
