@@ -1906,8 +1906,16 @@ impl WindowManager {
         {
             self.drag_last_event = None;
             self.drag_timer_id = None;
-            self.apply_snap(key);
+            if self.snap_preview == Some(SnapPreviewState::Maximize) {
+                self.toggle_maximize(key);
+            } else if self.drag_snap.is_some() {
+                self.apply_snap(key);
+            }
         }
+        // Unconditional flush — prevents stale ghost previews
+        self.drag_snap = None;
+        self.snap_preview = None;
+        self.snap_projection_cache = None;
     }
 
     pub fn super_passthrough_active(&self) -> bool {
