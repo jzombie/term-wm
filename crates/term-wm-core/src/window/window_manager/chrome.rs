@@ -65,6 +65,10 @@ impl WindowManager {
                 height: 100,
             }
         };
+
+        // Purge from tiling tree before expanding to floating full-screen
+        self.detach_from_tiling_layout(key);
+
         self.set_prev_floating_rect(key, Some(prev_rect));
         self.set_floating_rect(key, Some(full));
         if let Some(w) = self.windows.get_mut(key) {

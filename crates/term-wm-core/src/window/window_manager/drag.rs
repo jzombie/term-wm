@@ -28,6 +28,9 @@ impl WindowManager {
             return false;
         }
 
+        // Purge the window from the tiling tree before marking it floating
+        self.detach_from_tiling_layout(key);
+
         let width = rect.width.max(1);
         let height = rect.height.max(1);
         let x = rect.x;
