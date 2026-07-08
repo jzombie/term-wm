@@ -241,4 +241,216 @@ mod tests {
         dispatch(&mut list, &key_event(KeyCode::PageUp), &ctx);
         assert!(list.selected() < 20);
     }
+
+    #[test]
+    fn add_item_and_selected_item() {
+        let mut list = ListComponent::new("t");
+        assert!(list.items().is_empty());
+        assert!(list.selected_item().is_none());
+        list.add_item("first".into());
+        list.add_item("second".into());
+        assert_eq!(list.items().len(), 2);
+        assert_eq!(list.selected(), 0);
+        assert_eq!(list.selected_item().unwrap(), "first");
+    }
+
+    #[test]
+    fn move_selection_clamps() {
+        let mut list = ListComponent::new("t");
+        list.set_items(vec!["a".into(), "b".into(), "c".into()]);
+        list.move_selection(100);
+        assert_eq!(list.selected(), 2);
+        list.move_selection(-100);
+        assert_eq!(list.selected(), 0);
+    }
+
+    #[test]
+    fn set_items_resets_selection() {
+        let mut list = ListComponent::new("t");
+        list.set_items(vec!["a".into(), "b".into(), "c".into()]);
+        let ctx = ComponentContext::new(true);
+        dispatch(&mut list, &key_event(KeyCode::Down), &ctx);
+        assert_eq!(list.selected(), 1);
+        list.set_items(vec!["x".into()]);
+        assert_eq!(list.selected(), 0);
+    }
+
+    #[test]
+    fn render_focused_and_unfocused() {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 10,
+        };
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: area.x as u16,
+            y: area.y as u16,
+            width: area.width,
+            height: area.height,
+        });
+        {
+            let mut backend = term_wm_console::RatatuiBackend::new(
+                buffer,
+                ratatui::prelude::Rect {
+                    x: area.x as u16,
+                    y: area.y as u16,
+                    width: area.width,
+                    height: area.height,
+                },
+            );
+            let mut list = ListComponent::new("test");
+            list.set_items(vec!["item1".into(), "item2".into()]);
+            let ctx = ComponentContext::new(true);
+            let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+            list.render(&mut backend, area, &ctx, &mut registry);
+        }
+        {
+            let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+                x: area.x as u16,
+                y: area.y as u16,
+                width: area.width,
+                height: area.height,
+            });
+            let mut backend = term_wm_console::RatatuiBackend::new(
+                buffer,
+                ratatui::prelude::Rect {
+                    x: area.x as u16,
+                    y: area.y as u16,
+                    width: area.width,
+                    height: area.height,
+                },
+            );
+            let mut list = ListComponent::new("test");
+            list.set_items(vec!["item1".into(), "item2".into()]);
+            let ctx = ComponentContext::new(false);
+            let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+            list.render(&mut backend, area, &ctx, &mut registry);
+        }
+    }
+
+    #[test]
+    fn render_empty_list() {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 10,
+        };
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: area.x as u16,
+            y: area.y as u16,
+            width: area.width,
+            height: area.height,
+        });
+        let mut backend = term_wm_console::RatatuiBackend::new(
+            buffer,
+            ratatui::prelude::Rect {
+                x: area.x as u16,
+                y: area.y as u16,
+                width: area.width,
+                height: area.height,
+            },
+        );
+        let mut list = ListComponent::new("empty");
+        let ctx = ComponentContext::new(true);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        list.render(&mut backend, area, &ctx, &mut registry);
+    }
+
+    #[test]
+    fn render_small_area_returns_early() {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 5,
+            height: 2,
+        };
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: area.x as u16,
+            y: area.y as u16,
+            width: area.width,
+            height: area.height,
+        });
+        let mut backend = term_wm_console::RatatuiBackend::new(
+            buffer,
+            ratatui::prelude::Rect {
+                x: area.x as u16,
+                y: area.y as u16,
+                width: area.width,
+                height: area.height,
+            },
+        );
+        let mut list = ListComponent::new("test");
+        list.set_items(vec!["a".into()]);
+        let ctx = ComponentContext::new(true);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        list.render(&mut backend, area, &ctx, &mut registry);
+    }
+
+    #[test]
+    fn mouse_click_selects_item() {
+        let mut list = ListComponent::new("t");
+        list.set_items(vec!["a".into(), "b".into(), "c".into()]);
+        let ctx = ComponentContext::new(true);
+        let mouse = term_wm_core::events::LocalMouseEvent {
+            col: 5,
+            row: 2,
+            kind: term_wm_core::events::MouseEventKind::Press(
+                term_wm_core::events::MouseButton::Left,
+            ),
+            modifiers: term_wm_core::events::KeyModifiers::NONE,
+        };
+        let result = list.on_mouse(&mouse, &ctx);
+        assert!(matches!(result, EventResult::Consumed));
+        assert_eq!(list.selected(), 1);
+    }
+
+    #[test]
+    fn mouse_click_outside_items_ignored() {
+        let mut list = ListComponent::new("t");
+        list.set_items(vec!["a".into(), "b".into()]);
+        let ctx = ComponentContext::new(true);
+        let mouse = term_wm_core::events::LocalMouseEvent {
+            col: 5,
+            row: 10,
+            kind: term_wm_core::events::MouseEventKind::Press(
+                term_wm_core::events::MouseButton::Left,
+            ),
+            modifiers: term_wm_core::events::KeyModifiers::NONE,
+        };
+        let result = list.on_mouse(&mouse, &ctx);
+        assert!(matches!(result, EventResult::Ignored));
+    }
+
+    #[test]
+    fn update_handles_all_actions() {
+        let mut list = ListComponent::new("t");
+        list.set_items((0..10).map(|i| format!("{}", i)).collect());
+        let ctx = ComponentContext::new(true);
+        let mut actions = VecDeque::new();
+        list.update(TermWmAction::MenuUp, &ctx, &mut actions);
+        assert_eq!(list.selected(), 0);
+        list.update(TermWmAction::MenuDown, &ctx, &mut actions);
+        assert_eq!(list.selected(), 1);
+        list.update(TermWmAction::ScrollHome, &ctx, &mut actions);
+        assert_eq!(list.selected(), 0);
+        list.update(TermWmAction::ScrollEnd, &ctx, &mut actions);
+        assert_eq!(list.selected(), 9);
+        list.update(TermWmAction::ScrollPageUp, &ctx, &mut actions);
+        assert_eq!(list.selected(), 4);
+    }
+
+    #[test]
+    fn update_empty_list_no_panic() {
+        let mut list = ListComponent::new("t");
+        let ctx = ComponentContext::new(true);
+        let mut actions = VecDeque::new();
+        list.update(TermWmAction::MenuUp, &ctx, &mut actions);
+        list.update(TermWmAction::MenuDown, &ctx, &mut actions);
+        list.update(TermWmAction::ScrollEnd, &ctx, &mut actions);
+        list.update(TermWmAction::ScrollPageUp, &ctx, &mut actions);
+        list.update(TermWmAction::ScrollPageDown, &ctx, &mut actions);
+        list.update(TermWmAction::ScrollHome, &ctx, &mut actions);
+    }
 }

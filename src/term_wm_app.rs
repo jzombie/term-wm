@@ -10,7 +10,7 @@ use term_wm_core::components::{Component, component_downcast_mut};
 use term_wm_core::config::AppBuilder;
 use term_wm_core::engine::CoreEngine;
 use term_wm_core::io::{EventSource, RenderTarget};
-use term_wm_core::runner::{WindowManagerHost, run_window_app};
+use term_wm_core::runner::{WindowManagerHost, run_with_defaults};
 use term_wm_core::window::{WindowKey, WindowManager};
 use term_wm_core::wm_config::WmConfig;
 
@@ -120,6 +120,16 @@ impl TermWmApp {
         self
     }
 
+    /// Get the message shown when no windows are registered.
+    pub fn empty_message_str(&self) -> &str {
+        &self.empty_message
+    }
+
+    /// Whether a quit has been requested.
+    pub fn quit_requested(&self) -> bool {
+        self.should_quit
+    }
+
     /// Register a component as a window. Returns the WindowKey for later access.
     /// Calls `on_mount` on the component after registration.
     pub fn register<C>(&mut self, component: C) -> WindowKey
@@ -178,6 +188,8 @@ impl TermWmApp {
     }
 
     /// Run with default console I/O (enters/exits terminal automatically).
+    ///
+    /// Calls `run_with` → `run_with_defaults` → `run_event_loop`.
     pub fn run(self) -> io::Result<()> {
         let mut output = ConsoleRenderTarget::new()?;
         output.enter()?;
@@ -188,12 +200,24 @@ impl TermWmApp {
     }
 
     /// Run with custom render target and event source.
+    ///
+    /// Calls `run_with_defaults` → `run_event_loop`.
     pub fn run_with<O: RenderTarget, D: EventSource>(
         mut self,
         output: &mut O,
         driver: &mut D,
     ) -> io::Result<()> {
-        run_window_app(output, driver, &mut self)
+        run_with_defaults(output, driver, &mut self)
+    }
+
+    /// Render the window manager using the shared `render_app` implementation.
+    pub fn render_app(&mut self, backend: &mut dyn term_wm_render::RenderBackend) {
+        crate::render_app(
+            backend,
+            &mut self.wm,
+            &mut self.engine,
+            &mut self.draw_renderer,
+        );
     }
 }
 

@@ -103,10 +103,8 @@ fn translate_button(btn: crossterm::event::MouseButton) -> MouseButton {
 
 /// Reads crossterm input events directly on the main thread.
 ///
-/// Used in tests and embedded mode.  Production uses [`UnifiedEventSource`]
+/// Used in tests and embedded mode.  Production uses the unified event source
 /// which runs input on a background thread and integrates PTY wakeups.
-///
-/// [`UnifiedEventSource`]: super::unified_event_source::UnifiedEventSource
 pub struct ConsoleEventSource {
     normalizer: KeyboardNormalizer,
     event_queue: VecDeque<Event>,

@@ -1,6 +1,7 @@
 use std::io;
 
 use crate::events::{Event, KeyKind, MouseEventKind};
+use term_wm_render::RenderTarget;
 
 use std::collections::VecDeque;
 
@@ -12,7 +13,7 @@ use crate::debug_event_flags;
 use crate::event_loop::{ControlFlow, EventLoop};
 use crate::events::core_event_to_wm;
 use crate::hitbox_registry::HitboxRegistry;
-use crate::io::{EventSource, RenderTarget};
+use crate::io::EventSource;
 use crate::layout::{LayoutNode, TilingLayout};
 use crate::task_scheduler::TaskScheduler;
 use crate::window::{WindowKey, WindowManager};
@@ -138,8 +139,12 @@ where
     }
 }
 
+/// Low-level event loop. Drives rendering and input until the app quits.
+///
+/// Prefer [`run_with_defaults`] for typical usage. Use this directly only when
+/// you need a custom draw closure or region mapping.
 #[allow(clippy::too_many_arguments)]
-pub fn run_app<O, D, A, FDraw, FMap>(
+pub fn run_event_loop<O, D, A, FDraw, FMap>(
     output: &mut O,
     driver: &mut D,
     app: &mut A,
@@ -554,7 +559,21 @@ where
     Ok(())
 }
 
-pub fn run_window_app<O, D, A>(output: &mut O, driver: &mut D, app: &mut A) -> io::Result<()>
+/// Run a window manager app with default draw and region mapping.
+///
+/// This is the standard entry point for event-loop execution. It wires up the
+/// default draw closure (`app.render(backend)`) and passes through to
+/// [`run_event_loop`].
+///
+/// # Hierarchy
+///
+/// ```text
+/// app.run()                         // high-level: sets up console I/O
+///   └─ run_with(output, driver)     // accepts custom I/O backends
+///       └─ run_with_defaults(...)   // ← you are here
+///           └─ run_event_loop(...)  // low-level: the actual loop
+/// ```
+pub fn run_with_defaults<O, D, A>(output: &mut O, driver: &mut D, app: &mut A) -> io::Result<()>
 where
     O: RenderTarget,
     D: EventSource,
@@ -564,7 +583,7 @@ where
     let system_handle = system_scheduler.handle();
     app.wm().set_system_task_handle(system_handle);
 
-    run_app(
+    run_event_loop(
         output,
         driver,
         app,
