@@ -2533,7 +2533,6 @@ version = "0.8.10-alpha"
 dependencies = [
  "arboard",
  "base64",
- "crossterm",
  "ctrlc",
  "libc",
  "portable-pty",
@@ -2544,9 +2543,6 @@ dependencies = [
 [[package]]
 name = "term-wm-render"
 version = "0.8.10-alpha"
-dependencies = [
- "ratatui",
-]
 
 [[package]]
 name = "term-wm-sys-ui-components"
