@@ -227,6 +227,9 @@ pub struct WindowManager {
     pub(crate) drag_snap: Option<(Option<WindowKey>, InsertPosition, Rect)>,
     /// Active snap preview state for ghost window rendering during drag.
     pub(crate) snap_preview: Option<SnapPreviewState>,
+    /// Cache for BSP dry-run projection to avoid deep-cloning the layout
+    /// tree on every drag frame. Keyed by (target, position, area).
+    snap_projection_cache: Option<(Option<WindowKey>, InsertPosition, Rect, Option<Rect>)>,
     drag_last_event: Option<Instant>,
     // No separate component map — components live on the Window struct
     // in the SlotMap.  See `Window.component`.
@@ -599,6 +602,7 @@ impl WindowManager {
             z_order: Vec::new(),
             drag_snap: None,
             snap_preview: None,
+            snap_projection_cache: None,
             drag_last_event: None,
             next_window_seq: 0,
             next_title_seq: 0,
@@ -827,6 +831,15 @@ impl WindowManager {
         &self.drag_snap
     }
 
+    /// Return the target window key for dimming during a tiled-insert snap
+    /// preview, if the preview is currently active.
+    pub fn snap_preview_target_key(&self) -> Option<WindowKey> {
+        match self.snap_preview {
+            Some(SnapPreviewState::TiledInsert(key, _)) => Some(key),
+            _ => None,
+        }
+    }
+
     /// Return floating pane info for rendering (key + rect).
     pub fn floating_panes(&self) -> Vec<(WindowKey, crate::window::FloatRectSpec)> {
         self.windows
@@ -963,6 +976,7 @@ impl WindowManager {
                         }
                     }
                     self.snap_preview = None;
+                    self.snap_projection_cache = None;
                     true
                 }
                 (MouseCaptureState::DraggingWindow { .. }, MouseEventKind::Moved)

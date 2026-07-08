@@ -123,6 +123,29 @@ impl WindowManager {
         self.mark_layout_dirty();
     }
 
+    /// Check the BSP projection cache, and if missing, perform a dry-run
+    /// insert into a cloned layout tree and cache the result.
+    /// Returns the exact `Rect` the inserted leaf would occupy.
+    fn get_projected_preview(
+        &mut self,
+        target_key_opt: Option<WindowKey>,
+        dragging_key: WindowKey,
+        pos: InsertPosition,
+        area: Rect,
+    ) -> Option<Rect> {
+        if let Some((t, p, a, r)) = &self.snap_projection_cache
+            && *t == target_key_opt && *p == pos && *a == area
+        {
+            return *r;
+        }
+        let rect = self
+            .managed_layout
+            .as_ref()
+            .and_then(|layout| layout.project_insert(target_key_opt, dragging_key, pos, area));
+        self.snap_projection_cache = Some((target_key_opt, pos, area, rect));
+        rect
+    }
+
     /// Update the snap preview state during a drag operation.
     ///
     /// Spatial priority order (smallest region first):
@@ -138,6 +161,7 @@ impl WindowManager {
     ) {
         self.drag_snap = None;
         self.snap_preview = None;
+        self.snap_projection_cache = None;
         let area = self.managed_area;
 
         // Priority 1: Corner snap (smallest spatial region)
@@ -148,16 +172,20 @@ impl WindowManager {
             height: area.height,
         };
         if let Some(corner_pos) = detect_corner_snap(mouse_x, mouse_y, managed_layout_rect, 2) {
-            let engine_preview = term_wm_layout_engine::corner_preview_rect(
-                managed_layout_rect,
-                corner_pos,
-            );
-            let preview = Rect {
-                x: engine_preview.x,
-                y: engine_preview.y,
-                width: engine_preview.width,
-                height: engine_preview.height,
-            };
+            let preview = self
+                .get_projected_preview(None, dragging_key, corner_pos, area)
+                .unwrap_or_else(|| {
+                    let ep = term_wm_layout_engine::corner_preview_rect(
+                        managed_layout_rect,
+                        corner_pos,
+                    );
+                    Rect {
+                        x: ep.x,
+                        y: ep.y,
+                        width: ep.width,
+                        height: ep.height,
+                    }
+                });
             self.drag_snap = Some((None, corner_pos, preview));
             self.snap_preview = Some(SnapPreviewState::Corner(corner_pos));
             return;
@@ -202,13 +230,17 @@ impl WindowManager {
                 term_wm_layout_engine::Quadrant::South => InsertPosition::Bottom,
             };
 
-            let engine_preview = term_wm_layout_engine::tiled_preview_rect(target_layout, pos);
-            let preview = Rect {
-                x: engine_preview.x,
-                y: engine_preview.y,
-                width: engine_preview.width,
-                height: engine_preview.height,
-            };
+            let preview = self
+                .get_projected_preview(Some(target_key), dragging_key, pos, area)
+                .unwrap_or_else(|| {
+                    let ep = term_wm_layout_engine::tiled_preview_rect(target_layout, pos);
+                    Rect {
+                        x: ep.x,
+                        y: ep.y,
+                        width: ep.width,
+                        height: ep.height,
+                    }
+                });
 
             self.drag_snap = Some((Some(target_key), pos, preview));
             self.snap_preview = Some(SnapPreviewState::TiledInsert(target_key, pos));
@@ -218,17 +250,23 @@ impl WindowManager {
         let position = term_wm_layout_engine::detect_edge_snap(mouse_x, mouse_y, managed_layout_rect, 2);
 
         if let Some(pos) = position {
-            let engine_preview = term_wm_layout_engine::edge_preview_rect(managed_layout_rect, pos);
-            let mut preview = Rect {
-                x: engine_preview.x,
-                y: engine_preview.y,
-                width: engine_preview.width,
-                height: engine_preview.height,
-            };
+            let preview = self
+                .get_projected_preview(None, dragging_key, pos, area)
+                .unwrap_or_else(|| {
+                    let ep = term_wm_layout_engine::edge_preview_rect(managed_layout_rect, pos);
+                    Rect {
+                        x: ep.x,
+                        y: ep.y,
+                        width: ep.width,
+                        height: ep.height,
+                    }
+                });
 
-            if self.managed_layout.is_none() {
-                preview = area;
-            }
+            let preview = if self.managed_layout.is_none() {
+                area
+            } else {
+                preview
+            };
 
             self.drag_snap = Some((None, pos, preview));
             self.snap_preview = Some(SnapPreviewState::Edge(pos));

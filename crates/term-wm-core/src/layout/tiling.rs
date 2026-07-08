@@ -445,6 +445,70 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
         self.root.layout(area)
     }
 
+    /// Dry-run insert into a cloned layout. Returns the exact `Rect` the
+    /// inserted leaf would occupy after `apply_snap`.
+    /// Returns `None` when a corner snap targets the root (no target window)
+    /// — the BSP tree cannot represent a 25% corner without void nodes.
+    pub fn project_insert(
+        &self,
+        target: Option<Id>,
+        insert: Id,
+        position: InsertPosition,
+        area: Rect,
+    ) -> Option<Rect> {
+        if target.is_none() {
+            match position {
+                InsertPosition::TopLeft | InsertPosition::TopRight
+                | InsertPosition::BottomLeft | InsertPosition::BottomRight => return None,
+                _ => {}
+            }
+        }
+        let mut root = self.root.clone();
+        let success = match target {
+            Some(t) => root.insert_leaf(t, insert, position),
+            None => false,
+        };
+        if !success {
+            let (dir, children) = match position {
+                InsertPosition::Left => (
+                    Direction::Horizontal,
+                    vec![LayoutNode::leaf(insert), root],
+                ),
+                InsertPosition::Right => (
+                    Direction::Horizontal,
+                    vec![root, LayoutNode::leaf(insert)],
+                ),
+                InsertPosition::Top => (
+                    Direction::Vertical,
+                    vec![LayoutNode::leaf(insert), root],
+                ),
+                InsertPosition::Bottom => (
+                    Direction::Vertical,
+                    vec![root, LayoutNode::leaf(insert)],
+                ),
+                InsertPosition::TopLeft | InsertPosition::TopRight => (
+                    Direction::Vertical,
+                    vec![LayoutNode::leaf(insert), root],
+                ),
+                InsertPosition::BottomLeft | InsertPosition::BottomRight => (
+                    Direction::Vertical,
+                    vec![root, LayoutNode::leaf(insert)],
+                ),
+            };
+            root = LayoutNode::Split {
+                direction: dir,
+                children,
+                weights: vec![1.0, 1.0],
+                constraints: Vec::new(),
+                resizable: true,
+            };
+        }
+        root.layout(area)
+            .into_iter()
+            .find(|(id, _)| *id == insert)
+            .map(|(_, r)| r)
+    }
+
     pub fn handles(&self, area: Rect) -> Vec<SplitHandle> {
         let (_, handles) = self.root.layout_with_handles(area);
         handles

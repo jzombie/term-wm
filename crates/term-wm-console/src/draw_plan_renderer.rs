@@ -1097,6 +1097,77 @@ pub fn render_resize_outline(
     }
 }
 
+/// Render a ghost preview rectangle with dashed borders and a light shade fill.
+/// Used during drag operations to show where a window will land when released.
+pub fn render_ghost_preview(buf: &mut Buffer, preview_rect: LayoutRect, theme: &Theme) {
+    use ratatui::style::{Modifier, Style};
+
+    let rect = layout_rect_to_rect(preview_rect);
+    let clip = rect.intersection(buf.area);
+    if clip.width < 2 || clip.height < 2 {
+        return;
+    }
+
+    let style = Style::default()
+        .fg(theme.accent.to_ratatui())
+        .bg(theme.accent.to_ratatui())
+        .add_modifier(Modifier::DIM);
+
+    let left = clip.x;
+    let right = clip.x + clip.width - 1;
+    let top = clip.y;
+    let bottom = clip.y + clip.height - 1;
+
+    // Corners
+    for &(pos, sym) in &[
+        ((left, top), "┌"),
+        ((right, top), "┐"),
+        ((left, bottom), "└"),
+        ((right, bottom), "┘"),
+    ] {
+        if let Some(cell) = buf.cell_mut(pos) {
+            cell.set_symbol(sym);
+            cell.set_style(style);
+        }
+    }
+
+    // Top/bottom edges (horizontal dashes)
+    if clip.width > 2 {
+        for x in (left + 1)..right {
+            for &y in &[top, bottom] {
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.set_symbol("─");
+                    cell.set_style(style);
+                }
+            }
+        }
+    }
+
+    // Left/right edges (vertical dashes)
+    if clip.height > 2 {
+        for y in (top + 1)..bottom {
+            for &x in &[left, right] {
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.set_symbol("│");
+                    cell.set_style(style);
+                }
+            }
+        }
+    }
+
+    // Interior shade fill
+    if clip.width > 2 && clip.height > 2 {
+        for y in (top + 1)..bottom {
+            for x in (left + 1)..right {
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.set_symbol("░");
+                    cell.set_style(style);
+                }
+            }
+        }
+    }
+}
+
 /// Convert core `Color` to ratatui `Color`.
 pub trait ColorConvert {
     fn to_ratatui(self) -> ratatui::style::Color;
