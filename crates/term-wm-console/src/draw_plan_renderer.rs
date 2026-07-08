@@ -1100,19 +1100,14 @@ pub fn render_resize_outline(
 /// Render a ghost preview rectangle with dashed borders and a light shade fill.
 /// Used during drag operations to show where a window will land when released.
 pub fn render_ghost_preview(buf: &mut Buffer, preview_rect: LayoutRect, theme: &Theme) {
-    use ratatui::style::{Modifier, Style};
-
+    use ratatui::style::Modifier;
     let rect = layout_rect_to_rect(preview_rect);
     let clip = rect.intersection(buf.area);
     if clip.width < 2 || clip.height < 2 {
         return;
     }
 
-    let style = Style::default()
-        .fg(theme.accent.to_ratatui())
-        .bg(theme.accent.to_ratatui())
-        .add_modifier(Modifier::DIM);
-
+    let fg_color = theme.accent.to_ratatui();
     let left = clip.x;
     let right = clip.x + clip.width - 1;
     let top = clip.y;
@@ -1127,7 +1122,8 @@ pub fn render_ghost_preview(buf: &mut Buffer, preview_rect: LayoutRect, theme: &
     ] {
         if let Some(cell) = buf.cell_mut(pos) {
             cell.set_symbol(sym);
-            cell.set_style(style);
+            cell.set_fg(fg_color);
+            cell.modifier.insert(Modifier::DIM);
         }
     }
 
@@ -1137,7 +1133,8 @@ pub fn render_ghost_preview(buf: &mut Buffer, preview_rect: LayoutRect, theme: &
             for &y in &[top, bottom] {
                 if let Some(cell) = buf.cell_mut((x, y)) {
                     cell.set_symbol("─");
-                    cell.set_style(style);
+                    cell.set_fg(fg_color);
+                    cell.modifier.insert(Modifier::DIM);
                 }
             }
         }
@@ -1149,19 +1146,21 @@ pub fn render_ghost_preview(buf: &mut Buffer, preview_rect: LayoutRect, theme: &
             for &x in &[left, right] {
                 if let Some(cell) = buf.cell_mut((x, y)) {
                     cell.set_symbol("│");
-                    cell.set_style(style);
+                    cell.set_fg(fg_color);
+                    cell.modifier.insert(Modifier::DIM);
                 }
             }
         }
     }
 
-    // Interior shade fill
+    // Interior shade fill — preserves underlying cell background
     if clip.width > 2 && clip.height > 2 {
         for y in (top + 1)..bottom {
             for x in (left + 1)..right {
                 if let Some(cell) = buf.cell_mut((x, y)) {
                     cell.set_symbol("░");
-                    cell.set_style(style);
+                    cell.set_fg(fg_color);
+                    cell.modifier.insert(Modifier::DIM);
                 }
             }
         }
