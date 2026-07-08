@@ -189,7 +189,7 @@ impl TermWmApp {
 
     /// Run with default console I/O (enters/exits terminal automatically).
     ///
-    /// Calls [`run_with`] → [`run_with_defaults`] → [`run_event_loop`].
+    /// Calls `run_with` → `run_with_defaults` → `run_event_loop`.
     pub fn run(self) -> io::Result<()> {
         let mut output = ConsoleRenderTarget::new()?;
         output.enter()?;
@@ -201,7 +201,7 @@ impl TermWmApp {
 
     /// Run with custom render target and event source.
     ///
-    /// Calls [`run_with_defaults`] → [`run_event_loop`].
+    /// Calls `run_with_defaults` → `run_event_loop`.
     pub fn run_with<O: RenderTarget, D: EventSource>(
         mut self,
         output: &mut O,
