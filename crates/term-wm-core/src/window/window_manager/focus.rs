@@ -57,6 +57,29 @@ impl WindowManager {
         self.mark_layout_dirty();
     }
 
+    #[expect(dead_code)]
+    pub(super) fn unmaximize_window(&mut self, key: WindowKey) {
+        use crate::window::FloatRectSpec;
+        let full = FloatRectSpec::Absolute(crate::window::FloatRect {
+            x: self.managed_area.x,
+            y: self.managed_area.y,
+            width: self.managed_area.width,
+            height: self.managed_area.height,
+        });
+        if let Some(current) = self.floating_rect(key)
+            && current == full
+        {
+            if let Some(prev) = self.take_prev_floating_rect(key) {
+                self.set_floating_rect(key, Some(prev));
+            } else {
+                self.clear_floating_rect(key);
+            }
+            if let Some(w) = self.windows.get_mut(key) {
+                w.is_maximized = false;
+            }
+        }
+    }
+
     pub(super) fn rebuild_focus_ring(&mut self, active_keys: &[WindowKey]) {
         use std::collections::BTreeSet;
         if active_keys.is_empty() {

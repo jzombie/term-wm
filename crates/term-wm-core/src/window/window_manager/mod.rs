@@ -85,6 +85,8 @@ pub(crate) enum SnapPreviewState {
     Edge(InsertPosition),
     /// Tiled insert next to an existing window (quadrant-based).
     TiledInsert(WindowKey, InsertPosition),
+    /// Drop into an empty void placeholder.
+    VoidInsert(Rect),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -229,7 +231,7 @@ pub struct WindowManager {
     pub(crate) snap_preview: Option<SnapPreviewState>,
     /// Cache for BSP dry-run projection to avoid deep-cloning the layout
     /// tree on every drag frame. Keyed by (target, position, area).
-    snap_projection_cache: Option<(Option<WindowKey>, InsertPosition, Rect, Option<Rect>)>,
+    snap_projection_cache: Option<(SnapPreviewState, Rect, Option<Rect>)>,
     drag_last_event: Option<Instant>,
     // No separate component map — components live on the Window struct
     // in the SlotMap.  See `Window.component`.
@@ -2105,6 +2107,7 @@ fn map_layout_node(node: &LayoutNode<WindowKey>) -> LayoutNode<WindowKey> {
             constraints: constraints.clone(),
             resizable: *resizable,
         },
+        LayoutNode::Void => LayoutNode::Void,
     }
 }
 
