@@ -19,7 +19,7 @@
   - [] Should term-wm-layout-engine's `Rect` struct be renamed to `BoundingBox`?
   - [X] [UPDATE: This is acceptable; `Press` and `Release` accurately capture the physical state machines of human-interface device hardware across alternate backends (such as web canvases or standard GUI dispatchers).] Why were mouse events renamed from `Down/Up` to `Press/Release`?
   - [] Any other potential renames?
-  - [] Ensure all sub-crates have consistent Cargo descriptions and READMEs
+  - [X] Ensure all sub-crates have consistent Cargo descriptions and READMEs
   - [] Why is `DrawPlanRenderer` in the main crate when there is a `term-wm-render` crate?  Could feature flags be used to avoid circular deps, if needed? If they cannot be merged, I'm wondering if `term-wm-render` should be renamed to `term-wm-render-bridge` or something.
   - [] Finish moving whole window loop into `DrawPlanRenderer` to take better advantage of scratch buffer.
   - [] Wire up CoreEngine; finish removing all rendering from core
