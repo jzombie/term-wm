@@ -1153,14 +1153,13 @@ pub fn render_ghost_preview(buf: &mut Buffer, preview_rect: LayoutRect, theme: &
         }
     }
 
-    // Interior shade fill — preserves underlying cell background
+    // Interior shade fill — pure background tint, preserves underlying text
     if clip.width > 2 && clip.height > 2 {
+        let preview_bg = theme.accent.to_ratatui();
         for y in (top + 1)..bottom {
             for x in (left + 1)..right {
                 if let Some(cell) = buf.cell_mut((x, y)) {
-                    cell.set_symbol("░");
-                    cell.set_fg(fg_color);
-                    cell.modifier.insert(Modifier::DIM);
+                    cell.set_bg(preview_bg);
                 }
             }
         }
