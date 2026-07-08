@@ -2461,7 +2461,7 @@ dependencies = [
 
 [[package]]
 name = "term-bench"
-version = "0.8.9-alpha"
+version = "0.8.10-alpha"
 dependencies = [
  "clap",
  "crossterm",
@@ -2471,7 +2471,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm"
-version = "0.8.9-alpha"
+version = "0.8.10-alpha"
 dependencies = [
  "clap",
  "crossbeam-channel",
@@ -2481,7 +2481,10 @@ dependencies = [
  "line-ending",
  "portable-pty",
  "ratatui",
+ "term-wm-console",
  "term-wm-core",
+ "term-wm-layout-engine",
+ "term-wm-render",
  "term-wm-sys-ui-components",
  "term-wm-ui-components",
  "tracing",
@@ -2490,37 +2493,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "term-wm-console"
+version = "0.8.10-alpha"
+dependencies = [
+ "crossterm",
+ "ratatui",
+ "term-wm-core",
+ "term-wm-layout-engine",
+ "term-wm-render",
+]
+
+[[package]]
 name = "term-wm-core"
-version = "0.8.9-alpha"
+version = "0.8.10-alpha"
 dependencies = [
  "console",
  "crossbeam-channel",
- "crossterm",
  "linkify",
  "portable-pty",
- "ratatui",
  "slotmap",
  "smallvec",
  "strum",
  "term-wm-layout-engine",
  "term-wm-pty-engine",
+ "term-wm-render",
  "tracing",
 ]
 
 [[package]]
 name = "term-wm-layout-engine"
-version = "0.8.9-alpha"
+version = "0.8.10-alpha"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "term-wm-pty-engine"
-version = "0.8.9-alpha"
+version = "0.8.10-alpha"
 dependencies = [
  "arboard",
  "base64",
- "crossterm",
  "ctrlc",
  "libc",
  "portable-pty",
@@ -2529,19 +2541,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "term-wm-render"
+version = "0.8.10-alpha"
+
+[[package]]
 name = "term-wm-sys-ui-components"
-version = "0.8.9-alpha"
+version = "0.8.10-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
+ "term-wm-console",
  "term-wm-core",
+ "term-wm-layout-engine",
+ "term-wm-render",
  "term-wm-ui-components",
  "webbrowser",
 ]
 
 [[package]]
 name = "term-wm-ui-components"
-version = "0.8.9-alpha"
+version = "0.8.10-alpha"
 dependencies = [
  "crossterm",
  "indoc",
@@ -2552,8 +2571,11 @@ dependencies = [
  "resvg",
  "shell-words",
  "tempfile",
+ "term-wm-console",
  "term-wm-core",
+ "term-wm-layout-engine",
  "term-wm-pty-engine",
+ "term-wm-render",
  "thiserror 2.0.18",
  "tracing",
  "vt100",

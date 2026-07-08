@@ -5,9 +5,10 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use resvg::{tiny_skia, usvg};
 
+use crate::helpers::{layout_rect_to_rect, map_rgb_to_ratatui};
 use term_wm_core::actions::TermWmAction;
 use term_wm_core::components::{Component, ComponentContext};
-use term_wm_core::ui::UiFrame;
+use term_wm_layout_engine::LayoutRect;
 
 const DEFAULT_RAMP: &[char] = &[' ', '.', ':', '-', '=', '+', '*', '#', '%', '@'];
 const MAX_SVG_DIM: u32 = 1024;
@@ -42,19 +43,21 @@ pub struct AsciiImageComponent {
 
 impl Component<TermWmAction> for AsciiImageComponent {
     fn render(
-        &self,
-        frame: &mut UiFrame<'_>,
-        area: Rect,
+        &mut self,
+        backend: &mut dyn term_wm_render::RenderBackend,
+        area: LayoutRect,
         _ctx: &ComponentContext,
         _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
+        let area = layout_rect_to_rect(area);
         if area.width == 0 || area.height == 0 {
             return;
         }
         if self.dirty.get() || self.cached_area.get() != area {
             self.rebuild_cache(area);
         }
-        let buffer = frame.buffer_mut();
+        let backend = crate::helpers::downcast_ratatui(backend);
+        let buffer = &mut backend.buffer;
         let cached = self.cached.borrow();
         for (row, line) in cached.iter().enumerate() {
             let y = area.y.saturating_add(row as u16);
@@ -69,10 +72,10 @@ impl Component<TermWmAction> for AsciiImageComponent {
                 if let Some(buf_cell) = buffer.cell_mut((x, y)) {
                     let mut style = Style::default();
                     if let Some((r, g, b)) = cell.fg {
-                        style = style.fg(term_wm_core::term_color::map_rgb_to_color(r, g, b));
+                        style = style.fg(map_rgb_to_ratatui(r, g, b));
                     }
                     if let Some((r, g, b)) = cell.bg {
-                        style = style.bg(term_wm_core::term_color::map_rgb_to_color(r, g, b));
+                        style = style.bg(map_rgb_to_ratatui(r, g, b));
                     }
                     let mut buf = [0u8; 4];
                     let sym = cell.ch.encode_utf8(&mut buf);

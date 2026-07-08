@@ -1,10 +1,89 @@
+// TODO: Many aspects of this should likely be refactored out of the core, especially which involve rendering
+
 pub mod floating;
 pub mod tiling;
 
 pub use tiling::*;
 
-use ratatui::prelude::{Direction, Rect};
+use crate::Rect;
 use std::collections::BTreeMap;
+
+/// Layout direction — pure data, no rendering dependency.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    #[default]
+    Horizontal,
+    Vertical,
+}
+
+/// Layout constraint — pure data, no rendering dependency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Constraint {
+    Length(u16),
+    Percentage(u16),
+    Ratio(u32, u32),
+    Min(u16),
+    Max(u16),
+}
+
+/// Layout alignment — pure data, no rendering dependency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Alignment {
+    Left,
+    Center,
+    Right,
+}
+
+/// Layout solver — pure data, no rendering dependency.
+#[derive(Debug, Clone, Default)]
+pub struct Layout {
+    direction: Direction,
+    constraints: Vec<Constraint>,
+}
+
+impl Layout {
+    pub fn direction(mut self, direction: Direction) -> Self {
+        self.direction = direction;
+        self
+    }
+
+    pub fn constraints(mut self, constraints: Vec<Constraint>) -> Self {
+        self.constraints = constraints;
+        self
+    }
+
+    pub fn split(self, area: Rect) -> Vec<Rect> {
+        // Simplified layout solver — returns equal-sized splits
+        let count = self.constraints.len() as u16;
+        if count == 0 {
+            return vec![];
+        }
+        match self.direction {
+            Direction::Horizontal => {
+                let width = area.width / count;
+                (0..count)
+                    .map(|i| Rect {
+                        x: area.x + i32::from(i * width),
+                        y: area.y,
+                        width,
+                        height: area.height,
+                    })
+                    .collect()
+            }
+            Direction::Vertical => {
+                let height = area.height / count;
+                (0..count)
+                    .map(|i| Rect {
+                        x: area.x,
+                        y: area.y + i32::from(i * height),
+                        width: area.width,
+                        height,
+                    })
+                    .collect()
+            }
+        }
+    }
+}
 
 pub const HANDLE_THICKNESS: u16 = 3;
 
@@ -63,8 +142,8 @@ impl RectSpec {
             } => {
                 let to_abs = |base: u16, pct: u16| (base as u32 * pct as u32 / 100) as u16;
                 Rect {
-                    x: area.x.saturating_add(to_abs(area.width, x)),
-                    y: area.y.saturating_add(to_abs(area.height, y)),
+                    x: area.x.saturating_add(i32::from(to_abs(area.width, x))),
+                    y: area.y.saturating_add(i32::from(to_abs(area.height, y))),
                     width: to_abs(area.width, width),
                     height: to_abs(area.height, height),
                 }
@@ -125,15 +204,17 @@ pub fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
     if rect.width == 0 || rect.height == 0 {
         return false;
     }
-    let max_x = rect.x.saturating_add(rect.width);
-    let max_y = rect.y.saturating_add(rect.height);
-    column >= rect.x && column < max_x && row >= rect.y && row < max_y
+    let max_x = rect.x.saturating_add(i32::from(rect.width));
+    let max_y = rect.y.saturating_add(i32::from(rect.height));
+    i32::from(column) >= rect.x
+        && i32::from(column) < max_x
+        && i32::from(row) >= rect.y
+        && i32::from(row) < max_y
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::prelude::Rect;
 
     #[test]
     fn handle_thickness_basic() {

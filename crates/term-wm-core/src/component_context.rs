@@ -1,8 +1,8 @@
+// TODO: This has several concerns that might could be placed in the layout crate.
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
-
-use ratatui::prelude::Rect;
 
 use crate::app_context::AppContext;
 use crate::keybindings::KeyBindings;
@@ -42,7 +42,7 @@ pub struct ComponentContext {
     /// The component's bounding area in **screen coordinates** (absolute).
     /// Set during render so that components can convert screen-space mouse
     /// positions to local coordinates via `position.to_local(screen_area)`.
-    screen_area: Option<Rect>,
+    screen_area: Option<term_wm_layout_engine::LayoutRect>,
 }
 
 /// Viewport metadata describing how the component is projected into a
@@ -345,12 +345,12 @@ impl ComponentContext {
     }
 
     /// Returns the component's bounding area in screen coordinates, if set.
-    pub fn screen_area(&self) -> Option<Rect> {
+    pub fn screen_area(&self) -> Option<term_wm_layout_engine::LayoutRect> {
         self.screen_area
     }
 
     /// Return a new `ComponentContext` with a screen-space bounding area.
-    pub fn with_screen_area(&self, area: Rect) -> Self {
+    pub fn with_screen_area(&self, area: term_wm_layout_engine::LayoutRect) -> Self {
         let mut ctx = self.clone();
         ctx.screen_area = Some(area);
         ctx

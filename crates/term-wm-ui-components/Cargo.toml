@@ -16,8 +16,11 @@ pulldown-cmark = { workspace = true }
 ratatui = { workspace = true }
 resvg = { workspace = true }
 shell-words = { workspace = true }
+term-wm-console = { workspace = true }
 term-wm-core = { workspace = true }
+term-wm-layout-engine = { workspace = true }
 term-wm-pty-engine = { workspace = true }
+term-wm-render = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 vt100 = { workspace = true }

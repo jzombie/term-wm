@@ -1,10 +1,5 @@
-use super::{FloatingPane, RegionMap, rect_contains};
-use ratatui::prelude::Rect;
-use ratatui::style::{Modifier, Style};
+use crate::Rect;
 use term_wm_layout_engine::LayoutRect;
-
-use crate::theme::Theme;
-use crate::ui::UiFrame;
 
 pub use term_wm_layout_engine::{FLOATING_MIN_HEIGHT, FLOATING_MIN_WIDTH, ResizeEdge};
 
@@ -52,8 +47,12 @@ pub fn resize_handles_for_region<K: Copy + Eq + Ord>(
     if rect.width == 0 || rect.height == 0 {
         return handles;
     }
-    let right = rect.x.saturating_add(rect.width.saturating_sub(1));
-    let bottom = rect.y.saturating_add(rect.height.saturating_sub(1));
+    let right = rect
+        .x
+        .saturating_add(i32::from(rect.width.saturating_sub(1)));
+    let bottom = rect
+        .y
+        .saturating_add(i32::from(rect.height.saturating_sub(1)));
     let can_left = true;
     let can_top = true;
     let can_right = true;
@@ -168,7 +167,7 @@ pub fn floating_header_for_region<K: Copy + Eq + Ord>(
         return None;
     }
     let header_y = rect.y.saturating_add(1);
-    if header_y >= bounds.y.saturating_add(bounds.height) {
+    if header_y >= bounds.y.saturating_add(i32::from(bounds.height)) {
         return None;
     }
     Some(DragHandle {
@@ -194,8 +193,8 @@ pub fn apply_resize_drag(
     allow_offscreen: bool,
 ) -> Rect {
     let fr = term_wm_layout_engine::apply_resize_drag_signed(
-        start.x as i32,
-        start.y as i32,
+        start.x,
+        start.y,
         start.width,
         start.height,
         edge,
@@ -204,217 +203,18 @@ pub fn apply_resize_drag(
         start_col,
         start_row,
         LayoutRect {
-            x: bounds.x as i32,
-            y: bounds.y as i32,
+            x: bounds.x,
+            y: bounds.y,
             width: bounds.width,
             height: bounds.height,
         },
         allow_offscreen,
     );
     Rect {
-        x: fr.x.max(0) as u16,
-        y: fr.y.max(0) as u16,
+        x: fr.x.max(0),
+        y: fr.y.max(0),
         width: fr.width,
         height: fr.height,
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn render_resize_outline<K: Copy + Eq + Ord>(
-    frame: &mut UiFrame<'_>,
-    hovered: Option<ResizeHandle<K>>,
-    dragging: Option<ResizeDrag<K>>,
-    regions: &RegionMap<K>,
-    bounds: Rect,
-    floating: &[FloatingPane<K>],
-    draw_order: &[K],
-    theme: &Theme,
-) {
-    let target_edge = dragging.map(|d| d.edge).or_else(|| hovered.map(|h| h.edge));
-    let target_key = dragging.map(|d| d.key).or_else(|| hovered.map(|h| h.key));
-    let Some(key) = target_key else { return };
-    let Some(rect) = regions.get(key) else { return };
-    if rect.width < 3 || rect.height < 3 {
-        return;
-    }
-    let buffer = frame.buffer_mut();
-    if !floating.iter().any(|p| p.key == key) {
-        return;
-    }
-
-    let obscuring: Vec<Rect> = if let Some(idx) = draw_order.iter().position(|&x| x == key) {
-        draw_order[idx + 1..]
-            .iter()
-            .filter_map(|&above_key| regions.get(above_key))
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    let is_obscured =
-        |x: u16, y: u16| -> bool { obscuring.iter().any(|r| rect_contains(*r, x, y)) };
-
-    let right = rect.x.saturating_add(rect.width.saturating_sub(1));
-    let bottom = rect.y.saturating_add(rect.height.saturating_sub(1));
-    let style = Style::default()
-        .fg(theme.accent_alt)
-        .add_modifier(Modifier::BOLD);
-
-    if let Some(edge) = target_edge {
-        match edge {
-            ResizeEdge::Top => {
-                if rect.y >= bounds.y && rect.y < bounds.y + bounds.height && rect.width > 2 {
-                    for x in rect.x.saturating_add(1)..=right.saturating_sub(1) {
-                        if x >= bounds.x
-                            && x < bounds.x + bounds.width
-                            && !is_obscured(x, rect.y)
-                            && let Some(cell) = buffer.cell_mut((x, rect.y))
-                        {
-                            cell.set_symbol("═");
-                            cell.set_style(style);
-                        }
-                    }
-                }
-            }
-            ResizeEdge::Bottom => {
-                if bottom >= bounds.y && bottom < bounds.y + bounds.height && rect.width > 2 {
-                    for x in rect.x.saturating_add(1)..=right.saturating_sub(1) {
-                        if x >= bounds.x
-                            && x < bounds.x + bounds.width
-                            && !is_obscured(x, bottom)
-                            && let Some(cell) = buffer.cell_mut((x, bottom))
-                        {
-                            cell.set_symbol("═");
-                            cell.set_style(style);
-                        }
-                    }
-                }
-            }
-            ResizeEdge::Left => {
-                if rect.x >= bounds.x && rect.x < bounds.x + bounds.width && rect.height > 2 {
-                    for y in rect.y.saturating_add(1)..=bottom.saturating_sub(1) {
-                        if y >= bounds.y
-                            && y < bounds.y + bounds.height
-                            && !is_obscured(rect.x, y)
-                            && let Some(cell) = buffer.cell_mut((rect.x, y))
-                        {
-                            cell.set_symbol("║");
-                            cell.set_style(style);
-                        }
-                    }
-                }
-            }
-            ResizeEdge::Right => {
-                if right >= bounds.x && right < bounds.x + bounds.width && rect.height > 2 {
-                    for y in rect.y.saturating_add(1)..=bottom.saturating_sub(1) {
-                        if y >= bounds.y
-                            && y < bounds.y + bounds.height
-                            && !is_obscured(right, y)
-                            && let Some(cell) = buffer.cell_mut((right, y))
-                        {
-                            cell.set_symbol("║");
-                            cell.set_style(style);
-                        }
-                    }
-                }
-            }
-            ResizeEdge::TopLeft => {
-                if rect.x >= bounds.x
-                    && rect.y >= bounds.y
-                    && !is_obscured(rect.x, rect.y)
-                    && let Some(cell) = buffer.cell_mut((rect.x, rect.y))
-                {
-                    cell.set_symbol("╔");
-                    cell.set_style(style);
-                }
-                if rect.y >= bounds.y
-                    && rect.y < bounds.y + bounds.height
-                    && let Some(cell) = buffer.cell_mut((rect.x + 1, rect.y))
-                {
-                    cell.set_symbol("═");
-                    cell.set_style(style);
-                }
-                if rect.x >= bounds.x
-                    && rect.x < bounds.x + bounds.width
-                    && let Some(cell) = buffer.cell_mut((rect.x, rect.y + 1))
-                {
-                    cell.set_symbol("║");
-                    cell.set_style(style);
-                }
-            }
-            ResizeEdge::TopRight => {
-                if right < bounds.x + bounds.width
-                    && rect.y >= bounds.y
-                    && !is_obscured(right, rect.y)
-                    && let Some(cell) = buffer.cell_mut((right, rect.y))
-                {
-                    cell.set_symbol("╗");
-                    cell.set_style(style);
-                }
-                if rect.y >= bounds.y
-                    && rect.y < bounds.y + bounds.height
-                    && let Some(cell) = buffer.cell_mut((right.saturating_sub(1), rect.y))
-                {
-                    cell.set_symbol("═");
-                    cell.set_style(style);
-                }
-                if right >= bounds.x
-                    && right < bounds.x + bounds.width
-                    && let Some(cell) = buffer.cell_mut((right, rect.y.saturating_add(1)))
-                {
-                    cell.set_symbol("║");
-                    cell.set_style(style);
-                }
-            }
-            ResizeEdge::BottomLeft => {
-                if rect.x >= bounds.x
-                    && bottom < bounds.y + bounds.height
-                    && !is_obscured(rect.x, bottom)
-                    && let Some(cell) = buffer.cell_mut((rect.x, bottom))
-                {
-                    cell.set_symbol("╚");
-                    cell.set_style(style);
-                }
-                if bottom >= bounds.y
-                    && bottom < bounds.y + bounds.height
-                    && let Some(cell) = buffer.cell_mut((rect.x.saturating_add(1), bottom))
-                {
-                    cell.set_symbol("═");
-                    cell.set_style(style);
-                }
-                if rect.x >= bounds.x
-                    && rect.x < bounds.x + bounds.width
-                    && let Some(cell) = buffer.cell_mut((rect.x, bottom.saturating_sub(1)))
-                {
-                    cell.set_symbol("║");
-                    cell.set_style(style);
-                }
-            }
-            ResizeEdge::BottomRight => {
-                if right < bounds.x + bounds.width
-                    && bottom < bounds.y + bounds.height
-                    && !is_obscured(right, bottom)
-                    && let Some(cell) = buffer.cell_mut((right, bottom))
-                {
-                    cell.set_symbol("╝");
-                    cell.set_style(style);
-                }
-                if bottom >= bounds.y
-                    && bottom < bounds.y + bounds.height
-                    && let Some(cell) = buffer.cell_mut((right.saturating_sub(1), bottom))
-                {
-                    cell.set_symbol("═");
-                    cell.set_style(style);
-                }
-                if right >= bounds.x
-                    && right < bounds.x + bounds.width
-                    && let Some(cell) = buffer.cell_mut((right, bottom.saturating_sub(1)))
-                {
-                    cell.set_symbol("║");
-                    cell.set_style(style);
-                }
-            }
-        }
     }
 }
 

@@ -1,15 +1,17 @@
 use std::collections::VecDeque;
 
-use crossterm::event::{Event, MouseEventKind};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use term_wm_core::events::{Event, MouseEventKind};
 
+use crate::helpers::{color_to_ratatui, layout_rect_to_rect};
+use ratatui::widgets::Widget;
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext};
 use term_wm_core::layout::rect_contains;
-use term_wm_core::ui::UiFrame;
 use term_wm_core::window::WindowKey;
+use term_wm_layout_engine::LayoutRect;
 
 #[derive(Debug, Clone)]
 pub struct DialogOverlayComponent {
@@ -25,17 +27,19 @@ pub struct DialogOverlayComponent {
 
 impl Component<TermWmAction> for DialogOverlayComponent {
     fn render(
-        &self,
-        frame: &mut UiFrame<'_>,
-        area: Rect,
+        &mut self,
+        backend: &mut dyn term_wm_render::RenderBackend,
+        area: LayoutRect,
         _ctx: &ComponentContext,
         _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
+        let area = layout_rect_to_rect(area);
         if !self.visible || area.width == 0 || area.height == 0 {
             return;
         }
+        let backend = crate::helpers::downcast_ratatui(backend);
         if self.dim_backdrop {
-            let buffer = frame.buffer_mut();
+            let buffer = &mut backend.buffer;
             let dim_style = Style::default().add_modifier(Modifier::DIM);
             for y in area.y..area.y.saturating_add(area.height) {
                 for x in area.x..area.x.saturating_add(area.width) {
@@ -46,7 +50,7 @@ impl Component<TermWmAction> for DialogOverlayComponent {
             }
         }
         let rect = self.rect_for(area);
-        frame.render_widget(Clear, rect);
+        Clear.render(rect, &mut backend.buffer);
         let block = Block::default()
             .title(self.title.as_str())
             .borders(Borders::ALL);
@@ -55,7 +59,7 @@ impl Component<TermWmAction> for DialogOverlayComponent {
             .block(block)
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: true });
-        frame.render_widget(paragraph, rect);
+        paragraph.render(rect, &mut backend.buffer);
     }
 
     fn handle_events(
@@ -63,7 +67,11 @@ impl Component<TermWmAction> for DialogOverlayComponent {
         event: &Event,
         ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
-        if self.handle_click_outside(event, ctx.screen_area().unwrap_or_default()) {
+        let screen_area = ctx
+            .screen_area()
+            .map(layout_rect_to_rect)
+            .unwrap_or_default();
+        if self.handle_click_outside(event, screen_area) {
             EventResult::Consumed
         } else {
             EventResult::Ignored
@@ -89,7 +97,7 @@ impl DialogOverlayComponent {
             visible: false,
             width: 70,
             height: 9,
-            bg: term_wm_core::theme::NOIR.dialog_bg,
+            bg: crate::helpers::color_to_ratatui(term_wm_core::theme::NOIR.dialog_bg),
             dim_backdrop: false,
             auto_close_on_outside_click: false,
         }
@@ -112,11 +120,17 @@ impl DialogOverlayComponent {
         };
         // Treat either button-down or button-up as a click to support
         // terminals that only surface one of the two event kinds.
-        if !matches!(mouse.kind, MouseEventKind::Down(_)) {
+        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
             return false;
         }
         let rect = self.rect_for(area);
-        let outside = !rect_contains(rect, mouse.column, mouse.row);
+        let lr = LayoutRect {
+            x: rect.x as i32,
+            y: rect.y as i32,
+            width: rect.width,
+            height: rect.height,
+        };
+        let outside = !rect_contains(lr, mouse.column, mouse.row);
 
         if outside {
             self.visible = false;
@@ -146,8 +160,8 @@ impl DialogOverlayComponent {
         self.height = height;
     }
 
-    pub fn set_bg(&mut self, bg: Color) {
-        self.bg = bg;
+    pub fn set_bg(&mut self, bg: term_wm_core::theme::Color) {
+        self.bg = color_to_ratatui(bg);
     }
 
     pub fn set_dim_backdrop(&mut self, dim: bool) {
@@ -157,11 +171,19 @@ impl DialogOverlayComponent {
     /// Render only the dim backdrop into the frame buffer. This is useful when
     /// callers want to draw a custom dialog body but still have the backdrop dimmed.
     /// If `exclude` is provided, cells inside that rectangle are skipped.
-    pub fn render_backdrop(&self, frame: &mut UiFrame<'_>, area: Rect, exclude: Option<Rect>) {
+    pub fn render_backdrop(
+        &self,
+        backend: &mut dyn term_wm_render::RenderBackend,
+        area: LayoutRect,
+        exclude: Option<LayoutRect>,
+    ) {
+        let area = layout_rect_to_rect(area);
+        let exclude = exclude.map(layout_rect_to_rect);
         if !self.dim_backdrop || area.width == 0 || area.height == 0 {
             return;
         }
-        let buffer = frame.buffer_mut();
+        let backend = crate::helpers::downcast_ratatui(backend);
+        let buffer = &mut backend.buffer;
         let dim_style = Style::default().add_modifier(Modifier::DIM);
         for y in area.y..area.y.saturating_add(area.height) {
             for x in area.x..area.x.saturating_add(area.width) {
@@ -217,7 +239,7 @@ impl Default for DialogOverlayComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{Event, MouseEvent, MouseEventKind};
+    use term_wm_core::events::{Event, MouseEvent, MouseEventKind};
 
     #[test]
     fn rect_for_clamps_sizes() {
@@ -260,10 +282,10 @@ mod tests {
             height: 24,
         };
         let ev = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            kind: MouseEventKind::Press(term_wm_core::events::MouseButton::Left),
             column: 0,
             row: 0,
-            modifiers: crossterm::event::KeyModifiers::NONE,
+            modifiers: term_wm_core::events::KeyModifiers::NONE,
         });
         let handled = dlg.handle_click_outside(&ev, area);
         assert!(handled);
@@ -285,13 +307,343 @@ mod tests {
         let rect = dlg.rect_for(area);
         // click on center of dialog
         let ev = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            kind: MouseEventKind::Press(term_wm_core::events::MouseButton::Left),
             column: rect.x + rect.width / 2,
             row: rect.y + rect.height / 2,
-            modifiers: crossterm::event::KeyModifiers::NONE,
+            modifiers: term_wm_core::events::KeyModifiers::NONE,
         });
         let handled = dlg.handle_click_outside(&ev, area);
         assert!(!handled);
         assert!(dlg.visible());
+    }
+
+    #[test]
+    fn handle_click_outside_when_not_visible() {
+        let mut dlg = DialogOverlayComponent::new();
+        dlg.set_visible(false);
+        dlg.set_auto_close_on_outside_click(true);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let ev = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(term_wm_core::events::MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: term_wm_core::events::KeyModifiers::NONE,
+        });
+        assert!(!dlg.handle_click_outside(&ev, area));
+    }
+
+    #[test]
+    fn handle_click_outside_auto_close_disabled() {
+        let mut dlg = DialogOverlayComponent::new();
+        dlg.set_visible(true);
+        dlg.set_auto_close_on_outside_click(false);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let ev = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(term_wm_core::events::MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: term_wm_core::events::KeyModifiers::NONE,
+        });
+        assert!(!dlg.handle_click_outside(&ev, area));
+        assert!(dlg.visible());
+    }
+
+    #[test]
+    fn handle_click_outside_non_press_event() {
+        let mut dlg = DialogOverlayComponent::new();
+        dlg.set_visible(true);
+        dlg.set_auto_close_on_outside_click(true);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let ev = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 0,
+            row: 0,
+            modifiers: term_wm_core::events::KeyModifiers::NONE,
+        });
+        assert!(!dlg.handle_click_outside(&ev, area));
+    }
+
+    #[test]
+    fn handle_click_outside_non_mouse_event() {
+        let mut dlg = DialogOverlayComponent::new();
+        dlg.set_visible(true);
+        dlg.set_auto_close_on_outside_click(true);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let ev = Event::Key(term_wm_core::events::KeyEvent::new(
+            term_wm_core::events::KeyCode::Esc,
+            term_wm_core::events::KeyModifiers::NONE,
+            term_wm_core::events::KeyKind::Press,
+        ));
+        assert!(!dlg.handle_click_outside(&ev, area));
+    }
+
+    #[test]
+    fn setters_and_getters() {
+        let mut dlg = DialogOverlayComponent::new();
+        dlg.set_title("My Title");
+        assert_eq!(dlg.title, "My Title");
+        dlg.set_body("My Body");
+        assert_eq!(dlg.body(), "My Body");
+        dlg.set_size(100, 30);
+        assert_eq!(dlg.width, 100);
+        assert_eq!(dlg.height, 30);
+        dlg.set_visible(true);
+        assert!(dlg.visible());
+        dlg.set_bg(term_wm_core::theme::Color::Red);
+        assert_eq!(dlg.bg, Color::Red);
+        dlg.set_dim_backdrop(true);
+        assert!(dlg.dim_backdrop);
+    }
+
+    #[test]
+    fn render_visible() {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let mut backend = term_wm_console::RatatuiBackend::new(
+            buffer,
+            ratatui::prelude::Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let mut dlg = DialogOverlayComponent::new();
+        dlg.set_visible(true);
+        dlg.set_title("Test Dialog");
+        dlg.set_body("Hello");
+        let ctx = ComponentContext::new(true);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        dlg.render(&mut backend, area, &ctx, &mut registry);
+    }
+
+    #[test]
+    fn render_not_visible() {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let mut backend = term_wm_console::RatatuiBackend::new(
+            buffer,
+            ratatui::prelude::Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let mut dlg = DialogOverlayComponent::new();
+        let ctx = ComponentContext::new(true);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        dlg.render(&mut backend, area, &ctx, &mut registry);
+    }
+
+    #[test]
+    fn render_with_dim_backdrop() {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let mut backend = term_wm_console::RatatuiBackend::new(
+            buffer,
+            ratatui::prelude::Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let mut dlg = DialogOverlayComponent::new();
+        dlg.set_visible(true);
+        dlg.set_dim_backdrop(true);
+        let ctx = ComponentContext::new(true);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        dlg.render(&mut backend, area, &ctx, &mut registry);
+    }
+
+    #[test]
+    fn render_backdrop_with_exclude() {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let mut backend = term_wm_console::RatatuiBackend::new(
+            buffer,
+            ratatui::prelude::Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let dlg = DialogOverlayComponent::new();
+        let exclude = Some(LayoutRect {
+            x: 10,
+            y: 5,
+            width: 20,
+            height: 5,
+        });
+        dlg.render_backdrop(&mut backend, area, exclude);
+    }
+
+    #[test]
+    fn render_backdrop_without_exclude() {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let mut backend = term_wm_console::RatatuiBackend::new(
+            buffer,
+            ratatui::prelude::Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let mut dlg = DialogOverlayComponent::new();
+        dlg.set_dim_backdrop(true);
+        dlg.render_backdrop(&mut backend, area, None);
+    }
+
+    #[test]
+    fn render_backdrop_not_dimmed() {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let mut backend = term_wm_console::RatatuiBackend::new(
+            buffer,
+            ratatui::prelude::Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let dlg = DialogOverlayComponent::new();
+        dlg.render_backdrop(&mut backend, area, None);
+    }
+
+    #[test]
+    fn render_small_area() {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 1,
+        };
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 1,
+        });
+        let mut backend = term_wm_console::RatatuiBackend::new(
+            buffer,
+            ratatui::prelude::Rect {
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 1,
+            },
+        );
+        let mut dlg = DialogOverlayComponent::new();
+        dlg.set_visible(true);
+        let ctx = ComponentContext::new(true);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        dlg.render(&mut backend, area, &ctx, &mut registry);
+    }
+
+    #[test]
+    fn update_and_destroy_are_noops() {
+        let mut dlg = DialogOverlayComponent::new();
+        let ctx = ComponentContext::new(true);
+        let mut actions = VecDeque::new();
+        dlg.update(TermWmAction::MenuUp, &ctx, &mut actions);
+        dlg.destroy();
+    }
+
+    #[test]
+    fn handle_events_returns_ignored() {
+        let mut dlg = DialogOverlayComponent::new();
+        let ctx = ComponentContext::new(true);
+        let ev = Event::Key(term_wm_core::events::KeyEvent::new(
+            term_wm_core::events::KeyCode::Esc,
+            term_wm_core::events::KeyModifiers::NONE,
+            term_wm_core::events::KeyKind::Press,
+        ));
+        let result = dlg.handle_events(&ev, &ctx);
+        assert!(matches!(result, EventResult::Ignored));
     }
 }

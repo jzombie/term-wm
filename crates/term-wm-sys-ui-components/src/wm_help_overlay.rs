@@ -3,16 +3,16 @@ use std::collections::VecDeque;
 use std::str;
 use std::sync::Arc;
 
-use crossterm::event::Event;
-use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders, Clear};
+use term_wm_core::events::Event;
+use term_wm_layout_engine::LayoutRect;
 
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::app_context::AppContext;
 use term_wm_core::components::{Component, ComponentContext, Overlay, SelectionStatus};
 use term_wm_core::keybindings::KeyBindings;
-use term_wm_core::ui::UiFrame;
 use term_wm_core::window::WindowKey;
+use term_wm_ui_components::helpers::layout_rect_to_rect;
 use term_wm_ui_components::{
     DialogOverlayComponent, MarkdownViewerComponent, ScrollKeyMode, ScrollViewComponent,
 };
@@ -24,16 +24,16 @@ const HELP_CONTENT_BYTES: &[u8] =
 pub struct WmHelpOverlayComponent {
     dialog: DialogOverlayComponent,
     content: ScrollViewComponent<MarkdownViewerComponent>,
-    area: Cell<Rect>,
+    area: Cell<LayoutRect>,
     keybindings: KeyBindings,
     app_ctx: Arc<AppContext>,
 }
 
 impl Component<TermWmAction> for WmHelpOverlayComponent {
     fn render(
-        &self,
-        frame: &mut UiFrame<'_>,
-        area: Rect,
+        &mut self,
+        backend: &mut dyn term_wm_render::RenderBackend,
+        area: LayoutRect,
         _ctx: &ComponentContext,
         registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
@@ -41,20 +41,26 @@ impl Component<TermWmAction> for WmHelpOverlayComponent {
         if !self.dialog.visible() || area.width == 0 || area.height == 0 {
             return;
         }
-        let title = format!("{} — About / Help", self.app_ctx.app_name);
-        self.dialog.render_backdrop(frame, area, None);
-        let rect = self.dialog.rect_for(area);
-        frame.render_widget(Clear, rect);
-        let block = Block::default().title(title.as_str()).borders(Borders::ALL);
-        let inner = Rect {
-            x: rect.x.saturating_add(1),
-            y: rect.y.saturating_add(1),
+        let title = format!("{} \u{2014} About / Help", self.app_ctx.app_name);
+        self.dialog.render_backdrop(backend, area, None);
+        let ratatui_area = layout_rect_to_rect(area);
+        let rect = self.dialog.rect_for(ratatui_area);
+        {
+            let backend = term_wm_ui_components::helpers::downcast_ratatui(backend);
+            let buffer = &mut backend.buffer;
+            use ratatui::widgets::Widget;
+            Clear.render(rect, buffer);
+            let block = Block::default().title(title.as_str()).borders(Borders::ALL);
+            block.render(rect, buffer);
+        }
+        let inner_layout = LayoutRect {
+            x: i32::from(rect.x).saturating_add(1),
+            y: i32::from(rect.y).saturating_add(1),
             width: rect.width.saturating_sub(2),
             height: rect.height.saturating_sub(2),
         };
-        frame.render_widget(block, rect);
         let ctx = ComponentContext::new(true).with_overlay(true);
-        self.content.render(frame, inner, &ctx, registry);
+        self.content.render(backend, inner_layout, &ctx, registry);
     }
 
     fn handle_events(
@@ -75,15 +81,16 @@ impl Component<TermWmAction> for WmHelpOverlayComponent {
                 }
             }
             Event::Mouse(_) => {
-                if self.dialog.handle_click_outside(event, self.area.get()) {
+                let area = self.area.get();
+                let ratatui_area = layout_rect_to_rect(area);
+                if self.dialog.handle_click_outside(event, ratatui_area) {
                     self.close();
                     return EventResult::Consumed;
                 }
-                let area = self.area.get();
-                let rect = self.dialog.rect_for(area);
-                let inner = ratatui::layout::Rect {
-                    x: rect.x.saturating_add(1),
-                    y: rect.y.saturating_add(1),
+                let rect = self.dialog.rect_for(ratatui_area);
+                let inner = LayoutRect {
+                    x: rect.x.saturating_add(1) as i32,
+                    y: rect.y.saturating_add(1) as i32,
                     width: rect.width.saturating_sub(2),
                     height: rect.height.saturating_sub(2),
                 };
@@ -119,11 +126,18 @@ impl Overlay<TermWmAction> for WmHelpOverlayComponent {
         self.dialog.visible()
     }
 
-    fn shadow_rect(&self, area: Rect) -> Option<Rect> {
+    fn shadow_rect(&self, area: LayoutRect) -> Option<LayoutRect> {
         if !self.dialog.visible() {
             return None;
         }
-        Some(self.dialog.rect_for(area))
+        let ratatui_area = layout_rect_to_rect(area);
+        let rect = self.dialog.rect_for(ratatui_area);
+        Some(LayoutRect {
+            x: rect.x as i32,
+            y: rect.y as i32,
+            width: rect.width,
+            height: rect.height,
+        })
     }
 }
 
@@ -138,7 +152,7 @@ impl WmHelpOverlayComponent {
         let mut overlay = Self {
             dialog,
             content: viewer,
-            area: Cell::new(Rect::default()),
+            area: Cell::new(LayoutRect::default()),
             keybindings,
             app_ctx: Arc::clone(app_ctx),
         };
@@ -157,12 +171,12 @@ impl WmHelpOverlayComponent {
             let menu_nav = {
                 let a = kb.combos_for(TermWmAction::MenuNext).join(" / ");
                 let b = kb.combos_for(TermWmAction::MenuPrev).join(" / ");
-                format!("{} / {}", a, b)
+                format!("{a} / {b}")
             };
             let menu_alt = {
                 let a = kb.combos_for(TermWmAction::MenuUp).join(" / ");
                 let b = kb.combos_for(TermWmAction::MenuDown).join(" / ");
-                format!("{} / {}", a, b)
+                format!("{a} / {b}")
             };
             let select = kb.combos_for(TermWmAction::MenuSelect).join(" / ");
             let super_key = kb.combos_for(TermWmAction::WmToggleOverlay).join(" / ");
@@ -238,8 +252,10 @@ impl Default for WmHelpOverlayComponent {
 mod tests {
     use super::*;
 
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
     use ratatui::layout::Rect;
+    use term_wm_core::events::{
+        KeyCode, KeyEvent, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
 
     #[test]
     fn help_constructs() {
@@ -252,13 +268,14 @@ mod tests {
 
     #[test]
     fn placeholders_are_replaced_in_markdown() {
-        let overlay = WmHelpOverlayComponent::new(
+        let mut overlay = WmHelpOverlayComponent::new(
             &Arc::new(AppContext::new(
                 env!("CARGO_PKG_NAME"),
                 env!("CARGO_PKG_VERSION"),
             )),
             KeyBindings::default(),
         );
+        overlay.show();
         use ratatui::buffer::Buffer;
 
         let area = Rect {
@@ -267,12 +284,19 @@ mod tests {
             width: 80,
             height: 24,
         };
-        let mut buffer = Buffer::empty(area);
+        let buffer = Buffer::empty(area);
+        let mut backend = term_wm_console::RatatuiBackend::new(buffer, area);
         {
-            let mut frame = term_wm_core::ui::UiFrame::from_parts(area, &mut buffer);
-            overlay.content.render(
-                &mut frame,
-                area,
+            let layout_area = LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            };
+            self::Component::render(
+                &mut overlay,
+                &mut backend,
+                layout_area,
                 &ComponentContext::new(true).with_overlay(true),
                 &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
             );
@@ -282,7 +306,7 @@ mod tests {
         for y in 0..area.height {
             let mut row = String::new();
             for x in 0..area.width {
-                if let Some(cell) = buffer.cell((x, y)) {
+                if let Some(cell) = backend.buffer.cell((x, y)) {
                     row.push_str(cell.symbol());
                 }
             }
@@ -325,7 +349,11 @@ mod tests {
             KeyBindings::default(),
         );
         overlay.show();
-        let ev = Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let ev = Event::Key(KeyEvent {
+            code: KeyCode::Esc,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyKind::Press,
+        });
         let result = overlay.handle_events(&ev, &ComponentContext::new(true));
         assert!(!result.is_ignored(), "close key should be handled");
         assert!(!overlay.visible(), "overlay should be closed by key");
@@ -340,7 +368,7 @@ mod tests {
         overlay.dialog.set_auto_close_on_outside_click(true);
         overlay.show();
 
-        let area = Rect {
+        let area = LayoutRect {
             x: 0,
             y: 0,
             width: 80,
@@ -349,10 +377,10 @@ mod tests {
         overlay.area.set(area);
 
         let ev = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            kind: MouseEventKind::Press(MouseButton::Left),
             column: 0,
             row: 0,
-            modifiers: crossterm::event::KeyModifiers::NONE,
+            modifiers: KeyModifiers::NONE,
         });
 
         let result = overlay.handle_events(&ev, &ComponentContext::new(true));

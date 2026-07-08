@@ -25,6 +25,7 @@ const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 ///
 /// The `Reaper` owns these and periodically polls `try_wait()` to reap
 /// them asynchronously, avoiding blocking `Drop`.
+#[cfg(feature = "pty")]
 pub struct ZombieChild {
     child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
     reader_handle: Option<JoinHandle<()>>,
@@ -33,6 +34,7 @@ pub struct ZombieChild {
     killed_at: Option<Instant>,
 }
 
+#[cfg(feature = "pty")]
 impl ZombieChild {
     pub fn new(
         child: Box<dyn portable_pty::Child + Send + Sync>,

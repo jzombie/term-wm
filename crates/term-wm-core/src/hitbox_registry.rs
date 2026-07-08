@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use ratatui::prelude::Rect;
+use term_wm_layout_engine::LayoutRect;
 
 use crate::mouse_coord::MousePosition;
 use crate::window::OverlayId;
@@ -62,7 +62,7 @@ pub enum HitTarget {
 pub struct HitboxEntry {
     pub target: HitTarget,
     /// Absolute screen coordinates (post-clip intersection).
-    pub area: Rect,
+    pub area: LayoutRect,
 }
 
 /// Flat, data-oriented hit-test registry rebuilt every frame.
@@ -80,7 +80,7 @@ pub struct HitboxRegistry {
     /// Active clip rects from scroll containers.  Inline storage avoids
     /// heap allocation for the common case (depth ≤ 5). Falls back to heap
     /// only in pathological nesting > CLIP_STACK_INLINE_CAPACITY levels deep.
-    clip_stack: smallvec::SmallVec<[Rect; CLIP_STACK_INLINE_CAPACITY]>,
+    clip_stack: smallvec::SmallVec<[LayoutRect; CLIP_STACK_INLINE_CAPACITY]>,
 }
 
 impl HitboxRegistry {
@@ -103,10 +103,10 @@ impl HitboxRegistry {
     /// If the intersection yields an empty rect, the entry is skipped entirely.
     /// This means scrolled-off components simply don't appear in the registry
     /// — no `rect_contains` needed at event time.
-    pub fn register(&mut self, target: HitTarget, area: Rect) {
+    pub fn register(&mut self, target: HitTarget, area: LayoutRect) {
         let mut clipped = area;
         for clip in &self.clip_stack {
-            clipped = clipped.intersection(*clip);
+            clipped = clipped.clamp(*clip);
         }
         if clipped.width == 0 || clipped.height == 0 {
             return;
@@ -120,7 +120,7 @@ impl HitboxRegistry {
     /// Push a clip rect (called by `ScrollViewComponent` before rendering
     /// children).  All subsequent `register()` calls will intersect their
     /// area with this rect.  Stacks: `ScrollView → child → grandchild`.
-    pub fn push_clip(&mut self, rect: Rect) {
+    pub fn push_clip(&mut self, rect: LayoutRect) {
         self.clip_stack.push(rect);
     }
 
@@ -141,7 +141,7 @@ impl HitboxRegistry {
     ///
     /// Entries are registered in render order (back-to-front), so iterating
     /// in reverse yields the top-most (last-rendered, highest z-order) match.
-    pub fn hit_test(&self, position: MousePosition) -> Option<(HitTarget, Rect)> {
+    pub fn hit_test(&self, position: MousePosition) -> Option<(HitTarget, LayoutRect)> {
         self.entries
             .iter()
             .rev()
@@ -178,7 +178,7 @@ impl HitboxRegistry {
     /// Used by Phase 1 (ComponentInteraction) capture to inject
     /// `screen_area` into the context when routing events to the
     /// captured component.
-    pub fn component_area(&self, key: WindowKey) -> Option<Rect> {
+    pub fn component_area(&self, key: WindowKey) -> Option<LayoutRect> {
         self.entries
             .iter()
             .rev()
@@ -194,6 +194,14 @@ impl HitboxRegistry {
     pub fn swap_entries(&mut self, other: &mut Self) {
         std::mem::swap(&mut self.entries, &mut other.entries);
         std::mem::swap(&mut self.clip_stack, &mut other.clip_stack);
+    }
+
+    /// Merge all entries from another registry into this one.
+    ///
+    /// Appends entries from `other` to `self`, preserving Z-ordering.
+    /// The source registry is consumed (entries moved, not copied).
+    pub fn merge(&mut self, other: Self) {
+        self.entries.extend(other.entries);
     }
 }
 
@@ -221,7 +229,12 @@ mod tests {
         let mut reg = HitboxRegistry::new();
         reg.register(
             HitTarget::Window(WindowKey::default()),
-            Rect::new(0, 0, 10, 10),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
         );
         assert!(reg.hit_test(screen_pos(5, 5)).is_some());
     }
@@ -231,7 +244,12 @@ mod tests {
         let mut reg = HitboxRegistry::new();
         reg.register(
             HitTarget::Window(WindowKey::default()),
-            Rect::new(0, 0, 10, 10),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
         );
         assert!(reg.hit_test(screen_pos(20, 20)).is_none());
     }
@@ -242,9 +260,25 @@ mod tests {
         let key1 = WindowKey::default();
         let key2 = WindowKey::default();
         // Register back rect first
-        reg.register(HitTarget::Window(key1), Rect::new(0, 0, 20, 20));
+        reg.register(
+            HitTarget::Window(key1),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 20,
+                height: 20,
+            },
+        );
         // Register smaller front rect second
-        reg.register(HitTarget::Window(key2), Rect::new(5, 5, 10, 10));
+        reg.register(
+            HitTarget::Window(key2),
+            LayoutRect {
+                x: 5,
+                y: 5,
+                width: 10,
+                height: 10,
+            },
+        );
 
         // Point inside both rects should hit the front (last-registered)
         let (hit, _rect) = reg.hit_test(screen_pos(7, 7)).unwrap();
@@ -254,11 +288,21 @@ mod tests {
     #[test]
     fn clip_rect_culls_entries() {
         let mut reg = HitboxRegistry::new();
-        reg.push_clip(Rect::new(0, 0, 10, 10));
+        reg.push_clip(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        });
         // Register a rect that is entirely outside the clip
         reg.register(
             HitTarget::Window(WindowKey::default()),
-            Rect::new(20, 20, 5, 5),
+            LayoutRect {
+                x: 20,
+                y: 20,
+                width: 5,
+                height: 5,
+            },
         );
         assert!(reg.is_empty());
         reg.pop_clip();
@@ -267,11 +311,21 @@ mod tests {
     #[test]
     fn clip_rect_intersects_partial_overlap() {
         let mut reg = HitboxRegistry::new();
-        reg.push_clip(Rect::new(0, 0, 10, 10));
+        reg.push_clip(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        });
         // Register a rect that partially overlaps the clip
         reg.register(
             HitTarget::Window(WindowKey::default()),
-            Rect::new(5, 5, 20, 20),
+            LayoutRect {
+                x: 5,
+                y: 5,
+                width: 20,
+                height: 20,
+            },
         );
         assert_eq!(reg.len(), 1);
         // The registered area should be clipped to (5,5,5,5) — the overlap
@@ -285,12 +339,27 @@ mod tests {
     #[test]
     fn nested_clip_stack_culls_fully_occluded() {
         let mut reg = HitboxRegistry::new();
-        reg.push_clip(Rect::new(0, 0, 50, 50));
-        reg.push_clip(Rect::new(10, 10, 20, 20));
+        reg.push_clip(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 50,
+            height: 50,
+        });
+        reg.push_clip(LayoutRect {
+            x: 10,
+            y: 10,
+            width: 20,
+            height: 20,
+        });
         // This rect is inside the first clip but completely outside the second
         reg.register(
             HitTarget::Window(WindowKey::default()),
-            Rect::new(0, 0, 5, 5),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 5,
+                height: 5,
+            },
         );
         assert!(reg.is_empty());
         reg.pop_clip();
@@ -300,12 +369,27 @@ mod tests {
     #[test]
     fn nested_clip_stack_partial_intersection() {
         let mut reg = HitboxRegistry::new();
-        reg.push_clip(Rect::new(0, 0, 50, 50));
-        reg.push_clip(Rect::new(10, 10, 20, 20));
+        reg.push_clip(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 50,
+            height: 50,
+        });
+        reg.push_clip(LayoutRect {
+            x: 10,
+            y: 10,
+            width: 20,
+            height: 20,
+        });
         // This rect partially overlaps the second clip — should be clipped
         reg.register(
             HitTarget::Window(WindowKey::default()),
-            Rect::new(5, 5, 10, 10),
+            LayoutRect {
+                x: 5,
+                y: 5,
+                width: 10,
+                height: 10,
+            },
         );
         assert_eq!(reg.len(), 1);
         // Check that the result is clipped to the inner clip's bounds
@@ -321,10 +405,20 @@ mod tests {
     #[test]
     fn clear_resets_state() {
         let mut reg = HitboxRegistry::new();
-        reg.push_clip(Rect::new(0, 0, 10, 10));
+        reg.push_clip(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        });
         reg.register(
             HitTarget::Window(WindowKey::default()),
-            Rect::new(0, 0, 5, 5),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 5,
+                height: 5,
+            },
         );
         assert_eq!(reg.len(), 1);
         reg.clear();
@@ -337,7 +431,12 @@ mod tests {
         let mut reg = HitboxRegistry::new();
         reg.register(
             HitTarget::Window(WindowKey::default()),
-            Rect::new(0, 0, 10, 10),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
         );
         assert!(reg.build_component_map().is_none());
     }
@@ -347,7 +446,12 @@ mod tests {
         let mut reg = HitboxRegistry::new();
         reg.register(
             HitTarget::Component(WindowKey::default(), 42),
-            Rect::new(0, 0, 10, 10),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
         );
         let map = reg.build_component_map().unwrap();
         assert_eq!(map.len(), 1);

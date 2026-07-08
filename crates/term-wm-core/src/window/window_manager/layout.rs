@@ -1,6 +1,5 @@
-use crossterm::event::{Event, MouseEvent};
-use ratatui::prelude::Rect;
-use ratatui::widgets::Clear;
+use crate::Rect;
+use crate::events::{Event, MouseEvent};
 
 use super::WindowManager;
 use crate::keybindings::ActionLayer;
@@ -45,8 +44,8 @@ impl WindowManager {
         let full = self.full_region_for_key(key);
         let content = self.region_for_key(key);
         (
-            content.x.saturating_sub(full.x),
-            content.y.saturating_sub(full.y),
+            content.x.saturating_sub(full.x) as u16,
+            content.y.saturating_sub(full.y) as u16,
         )
     }
 
@@ -240,8 +239,8 @@ impl WindowManager {
                 x: after_top.x,
                 y: after_top
                     .y
-                    .saturating_add(after_top.height)
-                    .saturating_sub(bottom_h),
+                    .saturating_add(i32::from(after_top.height))
+                    .saturating_sub(i32::from(bottom_h)),
                 width: after_top.width,
                 height: bottom_h,
             };
@@ -261,14 +260,14 @@ impl WindowManager {
         self.managed_area = managed_area;
         if prev_managed.width > 0 && prev_managed.height > 0 {
             let prev_full = FloatRectSpec::Absolute(crate::window::FloatRect {
-                x: prev_managed.x as i32,
-                y: prev_managed.y as i32,
+                x: prev_managed.x,
+                y: prev_managed.y,
                 width: prev_managed.width,
                 height: prev_managed.height,
             });
             let new_full = FloatRectSpec::Absolute(crate::window::FloatRect {
-                x: self.managed_area.x as i32,
-                y: self.managed_area.y as i32,
+                x: self.managed_area.x,
+                y: self.managed_area.y,
                 width: self.managed_area.width,
                 height: self.managed_area.height,
             });
@@ -285,6 +284,13 @@ impl WindowManager {
         if let Some(layout) = self.managed_layout.as_ref() {
             let (regions, handles) = layout.root().layout_with_handles(self.managed_area);
             for (key, rect) in &regions {
+                // Skip stale keys no longer in the SlotMap (e.g. after
+                // finalize_window_removal).  These would otherwise be
+                // re-added to z_order / managed_draw_order and render
+                // with a "DefaultKey(NvM)" fallback title.
+                if self.window(*key).is_none() {
+                    continue;
+                }
                 if self.is_window_floating(*key) {
                     continue;
                 }
@@ -366,6 +372,10 @@ impl WindowManager {
         if self.z_order.last().copied() != Some(focused) {
             self.focus_window_key(focused);
         }
+        // Mark layout as dirty so CoreEngine::project_draw_plan regenerates
+        // the draw plan on the next frame — without this, tiling resizes and
+        // other layout mutations use stale region bounds.
+        self.mark_layout_dirty();
     }
 
     /// Returns the full draw order including both app and system windows.
@@ -396,23 +406,14 @@ impl WindowManager {
         let prev = self
             .window(key)
             .and_then(|w| w.title.as_deref().map(|t| t.to_string()));
-        if prev.as_deref() != Some(&title) {
+        if prev.as_deref() != Some(&title)
+            && let Some(window) = self.windows.get_mut(key)
+        {
             let seq = self.next_title_seq;
             self.next_title_seq += 1;
-            let window = self.window_mut(key);
             window.title = Some(title);
             window.title_set_order = Some(seq);
         }
-    }
-
-    pub fn render_split_handles(&self, frame: &mut crate::ui::UiFrame<'_>) {
-        let hovered = self.hover.and_then(|(col, row)| {
-            self.handles
-                .iter()
-                .find(|h| crate::layout::rect_contains(h.rect, col, row))
-                .cloned()
-        });
-        crate::layout::render_handles(frame, &self.handles, hovered.as_ref(), &self.config.theme);
     }
 
     pub fn set_regions_from_plan(&mut self, plan: &LayoutPlan<WindowKey>, area: Rect) {
@@ -452,16 +453,9 @@ impl WindowManager {
         None
     }
 
-    pub fn clear_window_backgrounds(&self, frame: &mut crate::ui::UiFrame<'_>) {
-        for key in self.regions.ids() {
-            let rect = self.full_region_for_key(key);
-            frame.render_widget(Clear, rect);
-        }
-    }
-
     pub fn window_draw_plan(
         &mut self,
-        _frame: &mut crate::ui::UiFrame<'_>,
+        _frame: &mut dyn term_wm_render::RenderBackend,
     ) -> Vec<super::DrawTask> {
         let mut plan = Vec::new();
         let focused_window = self.focus.current();
@@ -500,6 +494,7 @@ impl WindowManager {
         plan
     }
 
+    #[allow(dead_code)]
     pub(super) fn hover_targets(&self) -> (Option<&SplitHandle>, Option<&ResizeHandle<WindowKey>>) {
         let Some((column, row)) = self.hover else {
             return (None, None);
@@ -518,13 +513,13 @@ impl WindowManager {
         (hovered, hovered_resize)
     }
 
-    pub(super) fn window_dest(&self, key: WindowKey, fallback: Rect) -> crate::window::FloatRect {
+    pub fn window_dest(&self, key: WindowKey, fallback: Rect) -> crate::window::FloatRect {
         if let Some(spec) = self.floating_rect(key) {
             spec.resolve_signed(self.managed_area)
         } else {
             crate::window::FloatRect {
-                x: fallback.x as i32,
-                y: fallback.y as i32,
+                x: fallback.x,
+                y: fallback.y,
                 width: fallback.width,
                 height: fallback.height,
             }
@@ -567,8 +562,8 @@ impl WindowManager {
             let rect_top = fr.y;
             let rect_right = fr.x.saturating_add(fr.width as i32);
             let rect_bottom = fr.y.saturating_add(fr.height as i32);
-            let bounds_left = bounds.x as i32;
-            let bounds_top = bounds.y as i32;
+            let bounds_left = bounds.x;
+            let bounds_top = bounds.y;
             let bounds_right = bounds_left.saturating_add(bounds.width as i32);
             let bounds_bottom = bounds_top.saturating_add(bounds.height as i32);
 
@@ -589,23 +584,25 @@ impl WindowManager {
             };
 
             let max_x = if self.floating_resize_offscreen {
-                (bounds
+                bounds
                     .x
-                    .saturating_add(bounds.width)
-                    .saturating_sub(min_visible_margin.min(width))) as i32
+                    .saturating_add(i32::from(bounds.width))
+                    .saturating_sub(i32::from(min_visible_margin.min(width)))
             } else {
-                bounds.x.saturating_add(bounds.width.saturating_sub(width)) as i32
+                bounds
+                    .x
+                    .saturating_add(i32::from(bounds.width.saturating_sub(width)))
             };
 
             let max_y = if self.floating_resize_offscreen {
-                (bounds
+                bounds
                     .y
-                    .saturating_add(bounds.height)
-                    .saturating_sub(min_visible_margin.min(height))) as i32
+                    .saturating_add(i32::from(bounds.height))
+                    .saturating_sub(i32::from(min_visible_margin.min(height)))
             } else {
                 bounds
                     .y
-                    .saturating_add(bounds.height.saturating_sub(height)) as i32
+                    .saturating_add(i32::from(bounds.height.saturating_sub(height)))
             };
 
             let out_x = rect_right <= bounds_left || rect_left >= bounds_right;
@@ -652,6 +649,12 @@ impl WindowManager {
         if let Some(pos) = self.z_order.iter().position(|&x| x == key) {
             let item = self.z_order.remove(pos);
             self.z_order.push(item);
+        }
+        // Also update managed_draw_order immediately so the visual order
+        // reflects the change before the next register_managed_layout call.
+        if let Some(pos) = self.managed_draw_order.iter().position(|&x| x == key) {
+            let item = self.managed_draw_order.remove(pos);
+            self.managed_draw_order.push(item);
         }
     }
 

@@ -2,18 +2,109 @@ use std::collections::VecDeque;
 use std::io;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{Event, KeyEvent, MouseEvent};
+use term_wm_core::events::{
+    Event, KeyCode, KeyEvent, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
+use term_wm_core::io::EventSource;
+use term_wm_core::power_profile::PowerProfile;
+use term_wm_core::utils::KeyboardNormalizer;
 
-use super::EventSource;
-use crate::power_profile::PowerProfile;
-use crate::utils::KeyboardNormalizer;
+/// Translate a crossterm event to a core-owned event.
+fn translate_crossterm_event(evt: crossterm::event::Event) -> Option<Event> {
+    match evt {
+        crossterm::event::Event::Key(key) => Some(Event::Key(translate_key_event(key))),
+        crossterm::event::Event::Mouse(mouse) => Some(Event::Mouse(translate_mouse_event(mouse))),
+        crossterm::event::Event::Resize(w, h) => Some(Event::Resize(w, h)),
+        crossterm::event::Event::FocusGained => Some(Event::FocusGained),
+        crossterm::event::Event::FocusLost => Some(Event::FocusLost),
+        crossterm::event::Event::Paste(text) => Some(Event::Paste(text)),
+    }
+}
+
+fn translate_key_event(key: crossterm::event::KeyEvent) -> KeyEvent {
+    let mut modifiers = translate_key_modifiers(key.modifiers);
+    // macOS sends BackTab for Shift+Tab — set shift
+    if matches!(key.code, crossterm::event::KeyCode::BackTab) {
+        modifiers.shift = true;
+    }
+    KeyEvent {
+        code: translate_key_code(key.code),
+        modifiers,
+        kind: match key.kind {
+            crossterm::event::KeyEventKind::Press => KeyKind::Press,
+            crossterm::event::KeyEventKind::Repeat => KeyKind::Repeat,
+            crossterm::event::KeyEventKind::Release => KeyKind::Release,
+        },
+    }
+}
+
+fn translate_key_code(code: crossterm::event::KeyCode) -> KeyCode {
+    match code {
+        crossterm::event::KeyCode::Char(c) => KeyCode::Char(c),
+        crossterm::event::KeyCode::Enter => KeyCode::Enter,
+        crossterm::event::KeyCode::Tab => KeyCode::Tab,
+        crossterm::event::KeyCode::BackTab => KeyCode::Tab,
+        crossterm::event::KeyCode::Backspace => KeyCode::Backspace,
+        crossterm::event::KeyCode::Esc => KeyCode::Esc,
+        crossterm::event::KeyCode::Left => KeyCode::Left,
+        crossterm::event::KeyCode::Right => KeyCode::Right,
+        crossterm::event::KeyCode::Up => KeyCode::Up,
+        crossterm::event::KeyCode::Down => KeyCode::Down,
+        crossterm::event::KeyCode::Home => KeyCode::Home,
+        crossterm::event::KeyCode::End => KeyCode::End,
+        crossterm::event::KeyCode::PageUp => KeyCode::PageUp,
+        crossterm::event::KeyCode::PageDown => KeyCode::PageDown,
+        crossterm::event::KeyCode::Delete => KeyCode::Delete,
+        crossterm::event::KeyCode::Insert => KeyCode::Insert,
+        crossterm::event::KeyCode::F(n) => KeyCode::F(n),
+        _ => KeyCode::Esc, // Fallback for unrecognized keys
+    }
+}
+
+fn translate_key_modifiers(mods: crossterm::event::KeyModifiers) -> KeyModifiers {
+    KeyModifiers {
+        shift: mods.contains(crossterm::event::KeyModifiers::SHIFT),
+        control: mods.contains(crossterm::event::KeyModifiers::CONTROL),
+        alt: mods.contains(crossterm::event::KeyModifiers::ALT),
+    }
+}
+
+fn translate_mouse_event(mouse: crossterm::event::MouseEvent) -> MouseEvent {
+    MouseEvent {
+        kind: match mouse.kind {
+            crossterm::event::MouseEventKind::Down(btn) => {
+                MouseEventKind::Press(translate_button(btn))
+            }
+            crossterm::event::MouseEventKind::Up(btn) => {
+                MouseEventKind::Release(translate_button(btn))
+            }
+            crossterm::event::MouseEventKind::Drag(btn) => {
+                MouseEventKind::Drag(translate_button(btn))
+            }
+            crossterm::event::MouseEventKind::Moved => MouseEventKind::Moved,
+            crossterm::event::MouseEventKind::ScrollUp => MouseEventKind::ScrollUp,
+            crossterm::event::MouseEventKind::ScrollDown => MouseEventKind::ScrollDown,
+            crossterm::event::MouseEventKind::ScrollLeft => MouseEventKind::ScrollLeft,
+            crossterm::event::MouseEventKind::ScrollRight => MouseEventKind::ScrollRight,
+        },
+        modifiers: translate_key_modifiers(mouse.modifiers),
+        column: mouse.column,
+        row: mouse.row,
+    }
+}
+
+fn translate_button(btn: crossterm::event::MouseButton) -> MouseButton {
+    match btn {
+        crossterm::event::MouseButton::Left => MouseButton::Left,
+        crossterm::event::MouseButton::Right => MouseButton::Right,
+        crossterm::event::MouseButton::Middle => MouseButton::Middle,
+    }
+}
 
 /// Reads crossterm input events directly on the main thread.
 ///
-/// Used in tests and embedded mode.  Production uses [`UnifiedEventSource`]
+/// Used in tests and embedded mode.  Production uses the unified event source
 /// which runs input on a background thread and integrates PTY wakeups.
-///
-/// [`UnifiedEventSource`]: super::unified_event_source::UnifiedEventSource
 pub struct ConsoleEventSource {
     normalizer: KeyboardNormalizer,
     event_queue: VecDeque<Event>,
@@ -42,7 +133,9 @@ impl ConsoleEventSource {
     fn read_internal(&mut self) -> io::Result<Event> {
         loop {
             let evt = crossterm::event::read()?;
-            if let Some(normalized) = self.normalizer.normalize(evt) {
+            if let Some(translated) = translate_crossterm_event(evt)
+                && let Some(normalized) = self.normalizer.normalize(translated)
+            {
                 return Ok(normalized);
             }
         }
@@ -132,24 +225,24 @@ impl EventSource for ConsoleEventSource {
     }
 
     fn current_profile(&self) -> PowerProfile {
-        crate::power_profile::profile_from_activity(self.last_event_at, self.pending_work)
+        term_wm_core::power_profile::profile_from_activity(self.last_event_at, self.pending_work)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 
     #[test]
     fn next_key_from_queue() {
         let mut d = ConsoleEventSource::new();
-        d.event_queue.push_back(Event::Key(KeyEvent::new(
-            KeyCode::Char('a'),
-            KeyModifiers::NONE,
-        )));
+        d.event_queue.push_back(Event::Key(KeyEvent {
+            code: KeyCode::Char('a'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyKind::Press,
+        }));
         d.event_queue.push_back(Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            kind: MouseEventKind::Press(MouseButton::Left),
             column: 0,
             row: 0,
             modifiers: KeyModifiers::NONE,
@@ -164,7 +257,7 @@ mod tests {
     fn next_mouse_from_queue() {
         let mut d = ConsoleEventSource::new();
         d.event_queue.push_back(Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            kind: MouseEventKind::Press(MouseButton::Left),
             column: 2,
             row: 3,
             modifiers: KeyModifiers::NONE,
@@ -177,10 +270,11 @@ mod tests {
     #[test]
     fn poll_and_read_from_queue() {
         let mut d = ConsoleEventSource::new();
-        d.event_queue.push_back(Event::Key(KeyEvent::new(
-            KeyCode::Char('z'),
-            KeyModifiers::NONE,
-        )));
+        d.event_queue.push_back(Event::Key(KeyEvent {
+            code: KeyCode::Char('z'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyKind::Press,
+        }));
         assert!(d.poll(std::time::Duration::from_millis(0)).unwrap());
         let ev = d.read().unwrap();
         if let Event::Key(k) = ev {
@@ -192,7 +286,7 @@ mod tests {
 
     #[test]
     fn pending_work_elevates_profile_to_streaming() {
-        use crate::power_profile::PowerProfile;
+        use term_wm_core::power_profile::PowerProfile;
         let mut d = ConsoleEventSource::new();
         assert_eq!(
             d.current_profile(),

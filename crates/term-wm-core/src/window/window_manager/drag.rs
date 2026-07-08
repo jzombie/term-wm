@@ -1,4 +1,4 @@
-use ratatui::prelude::Rect;
+use crate::Rect;
 use term_wm_layout_engine::{EdgeResistance, LayoutRect, detect_quadrant};
 
 use super::WindowManager;
@@ -36,14 +36,15 @@ impl WindowManager {
             key,
             Some(crate::window::FloatRectSpec::Absolute(
                 crate::window::FloatRect {
-                    x: x as i32,
-                    y: y as i32,
+                    x,
+                    y,
                     width,
                     height,
                 },
             )),
         );
         self.bring_to_front_key(key);
+        self.mark_layout_dirty();
         true
     }
 
@@ -75,15 +76,15 @@ impl WindowManager {
         let dy = row as i32 - start_mouse_y as i32;
         let x = initial_x + dx;
         let mut y = initial_y + dy;
-        let bounds_y = bounds.y as i32;
+        let bounds_y = bounds.y;
         if panel_active && y < bounds_y {
             y = bounds_y;
         }
 
         let mut resistance = EdgeResistance::default_tui();
         let bounds_layout = LayoutRect {
-            x: bounds.x as i32,
-            y: bounds.y as i32,
+            x: bounds.x,
+            y: bounds.y,
             width: bounds.width,
             height: bounds.height,
         };
@@ -100,6 +101,7 @@ impl WindowManager {
                 },
             )),
         );
+        self.mark_layout_dirty();
     }
 
     pub(super) fn update_snap_preview(
@@ -128,8 +130,8 @@ impl WindowManager {
 
         if let Some((target_key, rect)) = target {
             let target_layout = LayoutRect {
-                x: rect.x as i32,
-                y: rect.y as i32,
+                x: rect.x,
+                y: rect.y,
                 width: rect.width,
                 height: rect.height,
             };
@@ -144,8 +146,8 @@ impl WindowManager {
 
             let engine_preview = term_wm_layout_engine::tiled_preview_rect(target_layout, pos);
             let preview = Rect {
-                x: engine_preview.x as u16,
-                y: engine_preview.y as u16,
+                x: engine_preview.x,
+                y: engine_preview.y,
                 width: engine_preview.width,
                 height: engine_preview.height,
             };
@@ -155,8 +157,8 @@ impl WindowManager {
         }
 
         let managed_layout = LayoutRect {
-            x: area.x as i32,
-            y: area.y as i32,
+            x: area.x,
+            y: area.y,
             width: area.width,
             height: area.height,
         };
@@ -166,8 +168,8 @@ impl WindowManager {
         if let Some(pos) = position {
             let engine_preview = term_wm_layout_engine::edge_preview_rect(managed_layout, pos);
             let mut preview = Rect {
-                x: engine_preview.x as u16,
-                y: engine_preview.y as u16,
+                x: engine_preview.x,
+                y: engine_preview.y,
                 width: engine_preview.width,
                 height: engine_preview.height,
             };
@@ -195,8 +197,8 @@ impl WindowManager {
                         key,
                         Some(crate::window::FloatRectSpec::Absolute(
                             crate::window::FloatRect {
-                                x: preview.x as i32,
-                                y: preview.y as i32,
+                                x: preview.x,
+                                y: preview.y,
                                 width: preview.width,
                                 height: preview.height,
                             },

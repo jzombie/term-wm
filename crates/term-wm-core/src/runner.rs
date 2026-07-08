@@ -1,9 +1,7 @@
 use std::io;
 
-use crossterm::event::{Event, KeyEventKind, MouseEventKind};
-use ratatui::buffer::{Buffer, Cell};
-use ratatui::prelude::Rect;
-use ratatui::style::{Modifier, Style};
+use crate::events::{Event, KeyKind, MouseEventKind};
+use term_wm_render::RenderTarget;
 
 use std::collections::VecDeque;
 
@@ -13,14 +11,12 @@ use crate::components::Component;
 use crate::components::SelectionStatus;
 use crate::debug_event_flags;
 use crate::event_loop::{ControlFlow, EventLoop};
-use crate::events::crossterm_event_to_wm;
-use crate::hitbox_registry::{HitTarget, HitboxRegistry};
-use crate::io::{EventSource, RenderTarget};
+use crate::events::core_event_to_wm;
+use crate::hitbox_registry::HitboxRegistry;
+use crate::io::EventSource;
 use crate::layout::{LayoutNode, TilingLayout};
 use crate::task_scheduler::TaskScheduler;
-use crate::ui::UiFrame;
-use crate::window::decorator::{WindowDecorator, WindowRenderCtx};
-use crate::window::{DrawTask, WindowKey, WindowManager, WindowSurface};
+use crate::window::{WindowKey, WindowManager};
 
 pub trait WindowManagerHost {
     fn wm(&mut self) -> &mut WindowManager;
@@ -60,6 +56,10 @@ pub trait WindowManagerHost {
         auto_layout_for_windows(windows)
     }
 
+    /// Called by the runner each frame to render.
+    /// The default implementation does nothing — apps override this to draw.
+    fn render(&mut self, _backend: &mut dyn term_wm_render::RenderBackend) {}
+
     fn handle_app_event(&mut self, _event: &Event) -> bool {
         false
     }
@@ -92,7 +92,7 @@ where
     // The registry is built during the render pass and provides
     // O(1) hit-testing — no coordinate mutation, no ad-hoc rect_contains.
     if matches!(event, Event::Mouse(_)) {
-        if let Some(wm_event) = crossterm_event_to_wm(event) {
+        if let Some(wm_event) = core_event_to_wm(event) {
             return app.wm().dispatch_mouse(&wm_event);
         }
         return false;
@@ -139,8 +139,12 @@ where
     }
 }
 
+/// Low-level event loop. Drives rendering and input until the app quits.
+///
+/// Prefer [`run_with_defaults`] for typical usage. Use this directly only when
+/// you need a custom draw closure or region mapping.
 #[allow(clippy::too_many_arguments)]
-pub fn run_app<O, D, A, FDraw, FMap>(
+pub fn run_event_loop<O, D, A, FDraw, FMap>(
     output: &mut O,
     driver: &mut D,
     app: &mut A,
@@ -152,7 +156,7 @@ where
     O: RenderTarget,
     D: EventSource,
     A: WindowManagerHost,
-    FDraw: for<'frame> FnMut(UiFrame<'frame>, &mut A),
+    FDraw: for<'frame> FnMut(&'frame mut dyn term_wm_render::RenderBackend, &mut A),
     FMap: Fn(WindowKey) -> WindowKey + Copy,
 {
     let system_handle = system_scheduler.handle();
@@ -188,11 +192,10 @@ where
                 app.wm_close_window(id)?;
             }
             // Process AppExited notifications — close windows whose PTY child
-            // exited.  SlotMap returns None for stale keys (generational
-            // indexing), so close_window safely no-ops on already-removed keys.
+            // exited.  Regular windows are handled entirely by
+            // WindowManager::close_window (destroy + remove from SlotMap).
             for key in driver.take_exited_windows() {
                 app.wm().close_window(key);
-                app.wm_close_window(key)?;
             }
             let mut flush_state_changes = |app: &mut A, flow: ControlFlow| {
                 if let Some(enabled) = app.wm().take_mouse_capture_change() {
@@ -253,7 +256,7 @@ where
                     let focus_id = app.wm().focused_window();
                     if app.wm().direct_mode(focus_id)
                         && !app.wm().command_menu_visible()
-                        && key.kind == KeyEventKind::Press
+                        && key.kind == KeyKind::Press
                     {
                         let is_wm_key = app
                             .wm()
@@ -306,7 +309,7 @@ where
                 let wm_mode = app.wm().config().wm_command_menu_enabled;
                 if wm_mode
                     && let Event::Key(key) = &evt
-                    && key.kind == KeyEventKind::Press
+                    && key.kind == KeyKind::Press
                     && app
                         .wm()
                         .keybindings()
@@ -354,6 +357,8 @@ where
                                 let id = app.wm().focused_window();
                                 app.wm().close_window(id);
                                 app.wm().close_command_menu();
+                                // System windows queued by close_window are
+                                // cleaned up by take_closed_windows below.
                             }
                             TermWmAction::NewWindow => {
                                 app.wm_new_window()?;
@@ -463,7 +468,7 @@ where
                 // the static focus_regions snapshot captured at startup.
                 if app.wm().mouse_focus_click_enabled()
                     && let Event::Mouse(mouse) = &evt
-                    && matches!(mouse.kind, MouseEventKind::Down(_))
+                    && matches!(mouse.kind, MouseEventKind::Press(_))
                 {
                     let targets = app.wm().managed_draw_order_all().to_vec();
                     // managed_draw_order is bottom-to-top; iterate in reverse
@@ -483,7 +488,7 @@ where
                 // In standalone mode without the open overlay, Tab passes through.
                 if !wm_mode
                     && let Event::Key(key) = &evt
-                    && key.kind == KeyEventKind::Press
+                    && key.kind == KeyKind::Press
                     && app.wm().keybindings().matches(TermWmAction::Quit, key)
                 {
                     app.open_exit_confirm();
@@ -524,10 +529,7 @@ where
                 // position, etc. are reset).
                 let did_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     output.draw(|frame| {
-                        let area = frame.area();
-                        if area.width < 2 || area.height < 2 {
-                            return;
-                        }
+                        // TODO: Get area from DrawPlan or terminal size, not from frame
                         draw(frame, app)
                     })
                 }))
@@ -557,29 +559,38 @@ where
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn run_window_app<O, D, A>(output: &mut O, driver: &mut D, app: &mut A) -> io::Result<()>
+/// Run a window manager app with default draw and region mapping.
+///
+/// This is the standard entry point for event-loop execution. It wires up the
+/// default draw closure (`app.render(backend)`) and passes through to
+/// [`run_event_loop`].
+///
+/// # Hierarchy
+///
+/// ```text
+/// app.run()                         // high-level: sets up console I/O
+///   └─ run_with(output, driver)     // accepts custom I/O backends
+///       └─ run_with_defaults(...)   // ← you are here
+///           └─ run_event_loop(...)  // low-level: the actual loop
+/// ```
+pub fn run_with_defaults<O, D, A>(output: &mut O, driver: &mut D, app: &mut A) -> io::Result<()>
 where
     O: RenderTarget,
     D: EventSource,
     A: WindowManagerHost,
 {
-    // Create the system-level task scheduler and pass a handle to the WindowManager
-    // so it can register/cancel timers (super-passthrough, drag-snap) directly.
     let system_scheduler = TaskScheduler::<SystemTask>::new();
     let system_handle = system_scheduler.handle();
     app.wm().set_system_task_handle(system_handle);
 
-    let mut draw_state = WindowDrawState::new();
-    run_app(
+    run_event_loop(
         output,
         driver,
         app,
         system_scheduler,
         |key| key,
-        move |frame, app| {
-            let mut frame = frame;
-            draw_window_app(&mut frame, app, &mut draw_state);
+        |backend, app| {
+            app.render(backend);
         },
     )
 }
@@ -615,17 +626,17 @@ where
 }
 
 #[derive(Default)]
+#[allow(dead_code)]
 struct WindowDrawState {
     known: Vec<WindowKey>,
-    scratch_cells: Vec<Cell>,
     hitbox_registry: HitboxRegistry,
 }
 
+#[allow(dead_code)]
 impl WindowDrawState {
     fn new() -> Self {
         Self {
             known: Vec::new(),
-            scratch_cells: Vec::new(),
             hitbox_registry: HitboxRegistry::new(),
         }
     }
@@ -640,178 +651,7 @@ impl WindowDrawState {
     }
 }
 
-fn draw_window_app<A>(frame: &mut UiFrame<'_>, app: &mut A, state: &mut WindowDrawState)
-where
-    A: WindowManagerHost,
-{
-    let area = frame.area();
-    let windows = app.wm().mapped_windows();
-    let windows_changed = state.update(&windows);
-
-    if windows_changed {
-        if let Some(layout) = app.layout_for_windows(&windows) {
-            app.wm().set_managed_layout(layout);
-        } else if windows.is_empty() {
-            // Force a layout update to reflect empty state, but don't clear system windows
-            // that the WindowManager might inject. passing None usually clears the app layout.
-            app.wm().set_managed_layout_none();
-        }
-    }
-
-    if windows.is_empty() {
-        // If app windows are empty, we might still have system windows.
-        // We render the "empty" message underneath, then let the window manager draw its overlays/system windows on top.
-        let message = app.empty_window_message();
-        if !message.is_empty() {
-            frame
-                .buffer_mut()
-                .set_string(area.x, area.y, message, Style::default());
-        }
-    }
-
-    let focus_order: Vec<WindowKey> = windows.to_vec();
-    if !focus_order.is_empty() {
-        app.wm().set_focus_order(focus_order);
-    }
-    for &key in &windows {
-        if let Some(title) = app.wm().window_pane_title(key) {
-            app.wm().set_window_title(key, title);
-        }
-    }
-    app.wm().register_managed_layout(area);
-    let all_titles: std::collections::BTreeMap<WindowKey, String> =
-        app.wm().window_titles().into_iter().collect();
-    let plan = app.wm().window_draw_plan(frame);
-    let num_windows = plan.len();
-    let total = num_windows + app.wm().visible_overlay_count();
-
-    // Register panel hitboxes BEFORE the window loop (lowest Z-order).
-    app.wm().register_panel_hitboxes(&mut state.hitbox_registry);
-
-    // Register tiling split handle hitboxes below windows (floating windows
-    // correctly occlude them; tiled windows and handles are disjoint).
-    app.wm()
-        .register_layout_handle_hitboxes(&mut state.hitbox_registry);
-
-    for (i, task) in plan.into_iter().enumerate() {
-        let z = WindowManager::compute_z_depth(i, total);
-        match task {
-            DrawTask::App(mut window) => {
-                window.surface.z_depth = z;
-                let (ctx, decorator) = {
-                    let wm = app.wm();
-                    let title = all_titles
-                        .get(&window.key)
-                        .map(String::as_str)
-                        .unwrap_or("");
-                    let ctx = WindowRenderCtx {
-                        title,
-                        focused: window.focused,
-                        direct_mode: wm.direct_mode(window.key),
-                        hover_pos: wm.hover,
-                        theme: wm.config().theme,
-                    };
-                    let decorator = wm.decorator();
-                    (ctx, decorator)
-                };
-                // Register window content hitbox in SCREEN coordinates.
-                let screen_inner = decorator.content_area(Rect {
-                    x: window.surface.dest.x as u16,
-                    y: window.surface.dest.y as u16,
-                    width: window.surface.dest.width,
-                    height: window.surface.dest.height,
-                });
-                state
-                    .hitbox_registry
-                    .register(HitTarget::Window(window.key), screen_inner);
-                composite_window(
-                    frame,
-                    &window.surface,
-                    decorator.as_ref(),
-                    ctx,
-                    |subframe, registry| {
-                        let ctx = app
-                            .wm()
-                            .component_context_for(window.focused, window.key)
-                            .with_screen_area(screen_inner);
-                        if let Some(component) = app.wm().component_for_key_mut(window.key) {
-                            component.render(subframe, window.surface.inner, &ctx, registry);
-                        }
-                    },
-                    &mut state.scratch_cells,
-                    &mut state.hitbox_registry,
-                );
-                // Register chrome hitboxes AFTER content (higher Z-order).
-                app.wm()
-                    .register_window_chrome_hitboxes(window.key, &mut state.hitbox_registry);
-            }
-        }
-    }
-    app.wm().render_panel(frame);
-    app.wm()
-        .render_overlays(frame, num_windows, total, &mut state.hitbox_registry);
-
-    // Swap the draw-time registry into WindowManager for event dispatch.
-    // state.hitbox_registry becomes empty (ready for next frame),
-    // wm.hitbox_registry gets the correctly Z-ordered snapshot.
-    state
-        .hitbox_registry
-        .swap_entries(&mut app.wm().hitbox_registry);
-}
-
-fn composite_window<F>(
-    frame: &mut UiFrame<'_>,
-    surface: &WindowSurface,
-    decorator: &dyn WindowDecorator,
-    mut ctx: WindowRenderCtx<'_>,
-    mut render_content: F,
-    scratch: &mut Vec<Cell>,
-    _registry: &mut HitboxRegistry,
-) where
-    F: FnMut(&mut UiFrame<'_>, &mut HitboxRegistry),
-{
-    if surface.dest.width == 0 || surface.dest.height == 0 {
-        return;
-    }
-    let local_area = Rect {
-        x: 0,
-        y: 0,
-        width: surface.dest.width,
-        height: surface.dest.height,
-    };
-    ctx.hover_pos = ctx.hover_pos.map(|(cx, cy)| {
-        (
-            cx.saturating_sub(surface.dest.x.max(0) as u16),
-            cy.saturating_sub(surface.dest.y.max(0) as u16),
-        )
-    });
-    let focused = ctx.focused;
-    let theme = ctx.theme;
-    let size = local_area.area() as usize;
-    scratch.clear();
-    scratch.resize(size, Cell::default());
-    let mut buffer = Buffer {
-        area: local_area,
-        content: std::mem::take(scratch),
-    };
-    {
-        let mut offscreen = UiFrame::from_parts(local_area, &mut buffer);
-        decorator.render_window(&mut offscreen, local_area, ctx);
-        render_content(&mut offscreen, _registry);
-    }
-    if !focused {
-        for cell in buffer.content.iter_mut() {
-            cell.modifier.insert(Modifier::DIM);
-        }
-    }
-    if surface.draw_shadow {
-        crate::ui::render_drop_shadow(frame, surface.dest, surface.z_depth, &theme);
-    }
-    frame.blit_from_signed(&buffer, surface.dest);
-    *scratch = buffer.content;
-}
-
-fn auto_layout_for_windows(windows: &[WindowKey]) -> Option<TilingLayout<WindowKey>> {
+pub fn auto_layout_for_windows(windows: &[WindowKey]) -> Option<TilingLayout<WindowKey>> {
     use term_wm_layout_engine::{BspNode, LayoutRect, LongestSide, OrientationHeuristic};
 
     if windows.is_empty() {
@@ -863,7 +703,8 @@ fn auto_layout_for_windows(windows: &[WindowKey]) -> Option<TilingLayout<WindowK
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+    use crate::events::{KeyCode, KeyEvent, KeyKind, KeyModifiers};
+    use term_wm_layout_engine::LayoutRect;
 
     #[test]
     fn auto_layout_empty_and_multiple() {
@@ -927,9 +768,9 @@ mod tests {
         }
         impl Component<TermWmAction> for KeyRecorder {
             fn render(
-                &self,
-                _frame: &mut crate::ui::UiFrame<'_>,
-                _area: ratatui::layout::Rect,
+                &mut self,
+                _backend: &mut dyn term_wm_render::RenderBackend,
+                _area: LayoutRect,
                 _ctx: &crate::components::ComponentContext,
                 _registry: &mut crate::hitbox_registry::HitboxRegistry,
             ) {
@@ -981,7 +822,7 @@ mod tests {
             .transition_window(key, crate::window::WindowState::Mapped);
         app.wm.regions.set(
             key,
-            ratatui::layout::Rect {
+            LayoutRect {
                 x: 0,
                 y: 0,
                 width: 80,
@@ -993,8 +834,7 @@ mod tests {
         let evt = Event::Key(KeyEvent {
             code: KeyCode::Char('x'),
             modifiers: KeyModifiers::NONE,
-            kind: KeyEventKind::Press,
-            state: KeyEventState::NONE,
+            kind: KeyKind::Press,
         });
 
         let consumed = handle_focused_app_event(&evt, &mut app);
@@ -1023,9 +863,9 @@ mod tests {
         }
         impl Component<TermWmAction> for KeyRecorder {
             fn render(
-                &self,
-                _frame: &mut crate::ui::UiFrame<'_>,
-                _area: ratatui::layout::Rect,
+                &mut self,
+                _backend: &mut dyn term_wm_render::RenderBackend,
+                _area: LayoutRect,
                 _ctx: &crate::components::ComponentContext,
                 _registry: &mut crate::hitbox_registry::HitboxRegistry,
             ) {
@@ -1076,7 +916,7 @@ mod tests {
             .transition_window(key, crate::window::WindowState::Mapped);
         app.wm.regions.set(
             key,
-            ratatui::layout::Rect {
+            LayoutRect {
                 x: 0,
                 y: 0,
                 width: 80,
@@ -1092,8 +932,7 @@ mod tests {
         let evt = Event::Key(KeyEvent {
             code: KeyCode::Char('x'),
             modifiers: KeyModifiers::NONE,
-            kind: KeyEventKind::Press,
-            state: KeyEventState::NONE,
+            kind: KeyKind::Press,
         });
 
         let consumed = handle_focused_app_event(&evt, &mut app);
@@ -1312,9 +1151,9 @@ mod tests {
     struct TestMenu;
     impl Component<TermWmAction> for TestMenu {
         fn render(
-            &self,
-            _frame: &mut crate::ui::UiFrame<'_>,
-            _area: ratatui::prelude::Rect,
+            &mut self,
+            _backend: &mut dyn term_wm_render::RenderBackend,
+            _area: LayoutRect,
             _ctx: &crate::components::ComponentContext,
             _registry: &mut crate::hitbox_registry::HitboxRegistry,
         ) {
@@ -1346,14 +1185,5 @@ mod tests {
             false
         }
     }
-    impl crate::components::WmComponent for TestMenu {
-        fn render(
-            &mut self,
-            _frame: &mut crate::ui::UiFrame<'_>,
-            _area: ratatui::prelude::Rect,
-            _ctx: &crate::components::ComponentContext,
-            _registry: &mut crate::hitbox_registry::HitboxRegistry,
-        ) {
-        }
-    }
+    impl crate::components::WmComponent for TestMenu {}
 }

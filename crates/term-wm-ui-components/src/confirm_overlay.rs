@@ -1,17 +1,18 @@
-use crossterm::event::{Event, MouseEventKind};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Widget, Wrap};
+use term_wm_core::events::{Event, MouseEventKind};
 
 use std::cell::Cell;
 use std::collections::VecDeque;
 
 use crate::dialog_overlay::DialogOverlayComponent;
+use crate::helpers::{color_to_ratatui, layout_rect_to_rect, safe_set_string};
 use term_wm_core::actions::{ConfirmAction, EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext, Overlay};
 use term_wm_core::layout::rect_contains;
-use term_wm_core::ui::{UiFrame, safe_set_string};
 use term_wm_core::window::WindowKey;
+use term_wm_layout_engine::LayoutRect;
 
 #[derive(Debug)]
 pub struct ConfirmOverlayComponent {
@@ -38,17 +39,29 @@ impl Default for ConfirmOverlayComponent {
 
 impl Component<TermWmAction> for ConfirmOverlayComponent {
     fn render(
-        &self,
-        frame: &mut UiFrame<'_>,
-        area: Rect,
+        &mut self,
+        backend: &mut dyn term_wm_render::RenderBackend,
+        area: LayoutRect,
         ctx: &ComponentContext,
         registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
         if !self.visible || area.width == 0 || area.height == 0 {
             return;
         }
+        let area = layout_rect_to_rect(area);
         let dialog_ctx = ctx.with_overlay(true).with_focus(true);
-        self.dialog.render(frame, area, &dialog_ctx, registry);
+        let backend = crate::helpers::downcast_ratatui(backend);
+        self.dialog.render(
+            backend,
+            LayoutRect {
+                x: area.x as i32,
+                y: area.y as i32,
+                width: area.width,
+                height: area.height,
+            },
+            &dialog_ctx,
+            registry,
+        );
         let rect = self.dialog.rect_for(area);
         if rect.width < 3 || rect.height < 3 {
             return;
@@ -83,11 +96,13 @@ impl Component<TermWmAction> for ConfirmOverlayComponent {
         };
         let paragraph = Paragraph::new(self.body.as_str())
             .alignment(Alignment::Left)
-            .style(Style::default().fg(ctx.config().theme.dialog_fg))
+            .style(Style::default().fg(color_to_ratatui(ctx.config().theme.dialog_fg)))
             .wrap(Wrap { trim: true });
-        frame.render_widget(paragraph, body_rect);
-        let separator_style = Style::default().fg(ctx.config().theme.dialog_separator);
-        let buffer = frame.buffer_mut();
+        paragraph.render(body_rect, &mut backend.buffer);
+        let separator_style =
+            Style::default().fg(color_to_ratatui(ctx.config().theme.dialog_separator));
+        let backend = crate::helpers::downcast_ratatui(backend);
+        let buffer = &mut backend.buffer;
         let bounds = area.intersection(buffer.area);
         if bounds.width == 0 || bounds.height == 0 {
             return;
@@ -101,12 +116,12 @@ impl Component<TermWmAction> for ConfirmOverlayComponent {
         let cancel = "[ Cancel ]";
         let confirm = "[ Exit ]";
         let selected_style = Style::default()
-            .fg(ctx.config().theme.decorator_header_fg)
-            .bg(ctx.config().theme.decorator_header_bg)
+            .fg(color_to_ratatui(ctx.config().theme.decorator_header_fg))
+            .bg(color_to_ratatui(ctx.config().theme.decorator_header_bg))
             .add_modifier(Modifier::BOLD);
         let unselected_style = Style::default()
-            .fg(ctx.config().theme.dialog_fg)
-            .bg(ctx.config().theme.panel_bg);
+            .fg(color_to_ratatui(ctx.config().theme.dialog_fg))
+            .bg(color_to_ratatui(ctx.config().theme.panel_bg));
 
         let (cancel_style, confirm_style) = if self.selected_confirm {
             (unselected_style, selected_style)
@@ -217,19 +232,27 @@ impl ConfirmOverlayComponent {
 impl ConfirmOverlayComponent {
     pub fn handle_confirm_event(&mut self, event: &Event) -> Option<ConfirmAction> {
         match event {
-            Event::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::Down(_)) => {
-                if self
-                    .confirm_rect
-                    .get()
-                    .is_some_and(|rect| rect_contains(rect, mouse.column, mouse.row))
-                {
+            Event::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::Press(_)) => {
+                if self.confirm_rect.get().is_some_and(|rect| {
+                    let lr = LayoutRect {
+                        x: rect.x as i32,
+                        y: rect.y as i32,
+                        width: rect.width,
+                        height: rect.height,
+                    };
+                    rect_contains(lr, mouse.column, mouse.row)
+                }) {
                     return Some(ConfirmAction::Confirm);
                 }
-                if self
-                    .cancel_rect
-                    .get()
-                    .is_some_and(|rect| rect_contains(rect, mouse.column, mouse.row))
-                {
+                if self.cancel_rect.get().is_some_and(|rect| {
+                    let lr = LayoutRect {
+                        x: rect.x as i32,
+                        y: rect.y as i32,
+                        width: rect.width,
+                        height: rect.height,
+                    };
+                    rect_contains(lr, mouse.column, mouse.row)
+                }) {
                     return Some(ConfirmAction::Cancel);
                 }
                 None
@@ -265,20 +288,21 @@ impl ConfirmOverlayComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{
-        Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    use term_wm_core::events::{
+        Event, KeyCode, KeyEvent, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
 
     fn ev_for(action: TermWmAction) -> Event {
-        use crossterm::event::KeyEvent;
+        use term_wm_core::events::KeyEvent;
         use term_wm_core::keybindings::KeyBindings;
         if let Some(combo) = KeyBindings::default().first_combo(action) {
-            Event::Key(KeyEvent::new(combo.code, combo.mods))
+            Event::Key(KeyEvent::new(combo.code, combo.mods, KeyKind::Press))
         } else {
             // fallback: return an arbitrary key that should still be handled
             Event::Key(KeyEvent::new(
-                crossterm::event::KeyCode::Esc,
-                crossterm::event::KeyModifiers::NONE,
+                term_wm_core::events::KeyCode::Esc,
+                term_wm_core::events::KeyModifiers::NONE,
+                KeyKind::Press,
             ))
         }
     }
@@ -323,7 +347,7 @@ mod tests {
         }));
 
         let m = MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
+            kind: MouseEventKind::Press(MouseButton::Left),
             column: 3,
             row: 3,
             modifiers: KeyModifiers::NONE,
@@ -334,7 +358,7 @@ mod tests {
         );
 
         let m2 = MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
+            kind: MouseEventKind::Press(MouseButton::Left),
             column: 0,
             row: 3,
             modifiers: KeyModifiers::NONE,
@@ -347,7 +371,11 @@ mod tests {
         // Tab toggles selection
         o.selected_confirm = true;
         assert_eq!(
-            o.handle_confirm_event(&Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))),
+            o.handle_confirm_event(&Event::Key(KeyEvent::new(
+                KeyCode::Tab,
+                KeyModifiers::NONE,
+                KeyKind::Press
+            ))),
             None
         );
         assert!(!o.selected_confirm);
@@ -357,9 +385,270 @@ mod tests {
         assert_eq!(
             o.handle_confirm_event(&Event::Key(KeyEvent::new(
                 KeyCode::Enter,
-                KeyModifiers::NONE
+                KeyModifiers::NONE,
+                KeyKind::Press,
             ))),
             Some(ConfirmAction::Confirm)
+        );
+    }
+
+    #[test]
+    fn open_and_close() {
+        let mut o = ConfirmOverlayComponent::new();
+        assert!(!o.visible());
+        o.open("Exit?", "Are you sure?");
+        assert!(o.visible());
+        assert_eq!(o.body, "Are you sure?");
+        assert!(o.selected_confirm);
+        o.close();
+        assert!(!o.visible());
+    }
+
+    #[test]
+    fn set_dim_backdrop() {
+        let mut o = ConfirmOverlayComponent::new();
+        o.set_dim_backdrop(true);
+        // No panic, delegates to dialog
+    }
+
+    #[test]
+    fn render_not_visible() {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let mut backend = term_wm_console::RatatuiBackend::new(
+            buffer,
+            ratatui::prelude::Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let mut o = ConfirmOverlayComponent::new();
+        let ctx = ComponentContext::new(true);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        o.render(&mut backend, area, &ctx, &mut registry);
+    }
+
+    #[test]
+    fn render_visible() {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let mut backend = term_wm_console::RatatuiBackend::new(
+            buffer,
+            ratatui::prelude::Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let mut o = ConfirmOverlayComponent::new();
+        o.open("Exit?", "Are you sure?");
+        let ctx = ComponentContext::new(true);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        o.render(&mut backend, area, &ctx, &mut registry);
+    }
+
+    #[test]
+    fn render_small_area() {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 1,
+        };
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 1,
+        });
+        let mut backend = term_wm_console::RatatuiBackend::new(
+            buffer,
+            ratatui::prelude::Rect {
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 1,
+            },
+        );
+        let mut o = ConfirmOverlayComponent::new();
+        o.open("Exit?", "Are you sure?");
+        let ctx = ComponentContext::new(true);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        o.render(&mut backend, area, &ctx, &mut registry);
+    }
+
+    #[test]
+    fn render_medium_area() {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 8,
+        };
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 8,
+        });
+        let mut backend = term_wm_console::RatatuiBackend::new(
+            buffer,
+            ratatui::prelude::Rect {
+                x: 0,
+                y: 0,
+                width: 30,
+                height: 8,
+            },
+        );
+        let mut o = ConfirmOverlayComponent::new();
+        o.open("Exit?", "Are you sure?");
+        let ctx = ComponentContext::new(true);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        o.render(&mut backend, area, &ctx, &mut registry);
+    }
+
+    #[test]
+    fn handle_confirm_event_cancel_left_key() {
+        let mut o = ConfirmOverlayComponent::new();
+        o.open("Exit?", "Are you sure?");
+        o.selected_confirm = true;
+        // Left arrow should select cancel
+        let ev = Event::Key(KeyEvent::new(
+            KeyCode::Left,
+            KeyModifiers::NONE,
+            KeyKind::Press,
+        ));
+        assert_eq!(o.handle_confirm_event(&ev), None);
+        assert!(!o.selected_confirm);
+    }
+
+    #[test]
+    fn handle_confirm_event_cancel_right_key() {
+        let mut o = ConfirmOverlayComponent::new();
+        o.open("Exit?", "Are you sure?");
+        o.selected_confirm = false;
+        // Right arrow should select confirm
+        let ev = Event::Key(KeyEvent::new(
+            KeyCode::Right,
+            KeyModifiers::NONE,
+            KeyKind::Press,
+        ));
+        assert_eq!(o.handle_confirm_event(&ev), None);
+        assert!(o.selected_confirm);
+    }
+
+    #[test]
+    fn handle_confirm_event_enter_cancel_selected() {
+        let mut o = ConfirmOverlayComponent::new();
+        o.open("Exit?", "Are you sure?");
+        o.selected_confirm = false;
+        // Enter with cancel selected should return Cancel
+        let ev = Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+            KeyKind::Press,
+        ));
+        assert_eq!(o.handle_confirm_event(&ev), Some(ConfirmAction::Cancel));
+    }
+
+    #[test]
+    fn handle_confirm_event_escape() {
+        let mut o = ConfirmOverlayComponent::new();
+        o.open("Exit?", "Are you sure?");
+        // Escape should return Cancel
+        let ev = Event::Key(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            KeyKind::Press,
+        ));
+        assert_eq!(o.handle_confirm_event(&ev), Some(ConfirmAction::Cancel));
+    }
+
+    #[test]
+    fn handle_confirm_event_mouse_outside_rects() {
+        let mut o = ConfirmOverlayComponent::new();
+        o.open("Exit?", "Are you sure?");
+        o.confirm_rect.set(Some(ratatui::layout::Rect {
+            x: 2,
+            y: 3,
+            width: 4,
+            height: 1,
+        }));
+        o.cancel_rect.set(Some(ratatui::layout::Rect {
+            x: 0,
+            y: 3,
+            width: 2,
+            height: 1,
+        }));
+        let m = MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            column: 50,
+            row: 50,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert_eq!(o.handle_confirm_event(&Event::Mouse(m)), None);
+    }
+
+    #[test]
+    fn handle_confirm_event_non_mouse_non_key() {
+        let mut o = ConfirmOverlayComponent::new();
+        o.open("Exit?", "Are you sure?");
+        let ev = Event::Resize(80, 24);
+        assert_eq!(o.handle_confirm_event(&ev), None);
+    }
+
+    #[test]
+    fn update_and_destroy_are_noops() {
+        let mut o = ConfirmOverlayComponent::new();
+        let ctx = ComponentContext::new(true);
+        let mut actions = VecDeque::new();
+        o.update(TermWmAction::MenuUp, &ctx, &mut actions);
+        o.destroy();
+    }
+
+    #[test]
+    fn overlay_trait_visible() {
+        let mut o = ConfirmOverlayComponent::new();
+        assert!(!Overlay::<TermWmAction>::visible(&o));
+        o.open("Exit?", "Are you sure?");
+        assert!(Overlay::<TermWmAction>::visible(&o));
+    }
+
+    #[test]
+    fn overlay_trait_handle_confirm_event() {
+        let mut o = ConfirmOverlayComponent::new();
+        o.open("Exit?", "Are you sure?");
+        let ev = Event::Key(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            KeyKind::Press,
+        ));
+        assert_eq!(
+            Overlay::<TermWmAction>::handle_confirm_event(&mut o, &ev),
+            Some(ConfirmAction::Cancel)
         );
     }
 }

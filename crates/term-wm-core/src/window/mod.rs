@@ -2,7 +2,7 @@ pub mod decorator;
 mod entry;
 mod window_manager;
 
-use ratatui::prelude::Rect;
+use crate::Rect;
 use term_wm_layout_engine::{LayoutRect, RectSpec};
 
 /// Slotmap-backed generational key used as the universal window identifier.
@@ -14,7 +14,7 @@ pub use entry::WindowState;
 
 pub use window_manager::{
     DrawTask, OverlayId, ScrollState, SuperPressResult, WindowDrawContext, WindowManager,
-    WindowSurface,
+    WindowSurface, wm_menu_items,
 };
 
 /// Signed floating rectangle (alias for engine `LayoutRect`).
@@ -36,8 +36,8 @@ impl FloatRectSpec {
     pub fn resolve(&self, bounds: Rect) -> Rect {
         let fr = self.resolve_signed(bounds);
         Rect {
-            x: fr.x.max(0) as u16,
-            y: fr.y.max(0) as u16,
+            x: fr.x.max(0),
+            y: fr.y.max(0),
             width: fr.width,
             height: fr.height,
         }
@@ -45,8 +45,8 @@ impl FloatRectSpec {
 
     pub fn resolve_signed(&self, bounds: Rect) -> LayoutRect {
         let lb = LayoutRect {
-            x: bounds.x as i32,
-            y: bounds.y as i32,
+            x: bounds.x,
+            y: bounds.y,
             width: bounds.width,
             height: bounds.height,
         };

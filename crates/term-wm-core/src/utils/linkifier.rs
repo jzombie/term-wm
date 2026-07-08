@@ -28,34 +28,33 @@
 
 use std::{ops::Range, sync::Arc};
 
+use crate::theme::SemanticRole;
 use linkify::{LinkFinder, LinkKind};
-use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span, Text};
 
 /// Map of lines -> columns -> optional URL string used by linkified renderers.
 pub type LinkMap = Vec<Vec<Option<String>>>;
 
 #[derive(Clone, Debug)]
-/// A piece of text with rendering `style` and optional `link` metadata.
+/// A piece of text with a semantic role and optional `link` metadata.
 ///
 /// `LinkFragment` represents a contiguous span emitted by a renderer (e.g.
-/// `MarkdownViewer` or a `ratatui::Span`) which may either be explicitly a
+/// `MarkdownViewer`) which may either be explicitly a
 /// hyperlink (the `link` field) or plain text that should be scanned for
 /// automatic links via the `Linkifier`.
 pub struct LinkFragment {
     /// The textual content of the fragment.
     pub text: String,
-    /// Visual styling to apply when rendering this fragment.
-    pub style: Style,
+    /// Semantic role describing how this fragment should look (rendering is done in UI crates).
+    pub role: SemanticRole,
     /// Optional explicit hyperlink associated with this fragment.
     pub link: Option<String>,
 }
 
 impl LinkFragment {
-    pub fn new(text: impl Into<String>, style: Style, link: Option<String>) -> Self {
+    pub fn new(text: impl Into<String>, role: SemanticRole, link: Option<String>) -> Self {
         Self {
             text: text.into(),
-            style,
+            role,
             link,
         }
     }
@@ -64,10 +63,12 @@ impl LinkFragment {
 #[derive(Debug)]
 /// Result of converting renderable text into link-aware spans.
 ///
-/// `text` is the `ratatui::Text` value ready to render, and `link_map` is a
+/// `lines` contains the pure text lines ready for rendering, and `link_map` is a
 /// parallel structure mapping each cell/spans position to an optional URL.
 pub struct LinkifiedText {
-    pub text: Text<'static>,
+    pub lines: Vec<String>,
+    /// Parallel structure: each line has spans of (text, role) for styled rendering.
+    pub styled_lines: Vec<Vec<(String, SemanticRole)>>,
     pub link_map: LinkMap,
 }
 
@@ -167,47 +168,58 @@ impl Linkifier {
         theme: &crate::theme::Theme,
     ) -> LinkifiedText {
         let mut rendered_lines = Vec::with_capacity(lines.len().max(1));
+        let mut styled_lines = Vec::with_capacity(lines.len().max(1));
         let mut link_map = Vec::with_capacity(lines.len().max(1));
 
         if lines.is_empty() {
-            rendered_lines.push(Line::from(vec![Span::raw("")]));
+            rendered_lines.push(String::new());
+            styled_lines.push(Vec::new());
             link_map.push(vec![None]);
             return LinkifiedText {
-                text: Text::from(rendered_lines),
+                lines: rendered_lines,
+                styled_lines,
                 link_map,
             };
         }
 
         for fragments in lines {
-            let mut spans: Vec<Span<'static>> = Vec::new();
+            let mut line_text = String::new();
+            let mut line_styled: Vec<(String, SemanticRole)> = Vec::new();
             let mut links: Vec<Option<String>> = Vec::new();
             if fragments.is_empty() {
-                spans.push(Span::raw(""));
                 links.push(None);
             } else {
                 for fragment in fragments {
-                    self.process_fragment(fragment, &mut spans, &mut links, theme);
+                    self.process_fragment_styled(
+                        fragment,
+                        &mut line_text,
+                        &mut line_styled,
+                        &mut links,
+                        theme,
+                    );
                 }
             }
-            rendered_lines.push(Line::from(spans));
+            rendered_lines.push(line_text);
+            styled_lines.push(line_styled);
             link_map.push(links);
         }
 
         LinkifiedText {
-            text: Text::from(rendered_lines),
+            lines: rendered_lines,
+            styled_lines,
             link_map,
         }
     }
 
-    pub fn linkify_text(&self, text: Text<'static>, theme: &crate::theme::Theme) -> LinkifiedText {
+    pub fn linkify_text(&self, text: Vec<String>, theme: &crate::theme::Theme) -> LinkifiedText {
         let fragments: Vec<Vec<LinkFragment>> = text
-            .lines
             .into_iter()
             .map(|line| {
-                line.spans
-                    .into_iter()
-                    .map(|span| LinkFragment::new(span.content.to_string(), span.style, None))
-                    .collect()
+                vec![LinkFragment::new(
+                    line,
+                    crate::theme::SemanticRole::Normal,
+                    None,
+                )]
             })
             .collect();
         self.linkify_fragments(fragments, theme)
@@ -235,18 +247,16 @@ impl Linkifier {
         links
     }
 
+    #[allow(dead_code)]
     fn process_fragment(
         &self,
         fragment: LinkFragment,
-        spans: &mut Vec<Span<'static>>,
+        line_text: &mut String,
         links: &mut Vec<Option<String>>,
-        theme: &crate::theme::Theme,
+        _theme: &crate::theme::Theme,
     ) {
         if let Some(link) = fragment.link {
-            spans.push(Span::styled(
-                fragment.text,
-                decorate_link_style(fragment.style, theme),
-            ));
+            line_text.push_str(&fragment.text);
             links.push(Some(link));
             return;
         }
@@ -255,11 +265,34 @@ impl Linkifier {
             if segment.is_empty() {
                 continue;
             }
-            let mut style = fragment.style;
-            if detected_link.is_some() {
-                style = decorate_link_style(style, theme);
+            line_text.push_str(&segment);
+            links.push(detected_link);
+        }
+    }
+
+    /// Like `process_fragment` but also records role information for styled rendering.
+    fn process_fragment_styled(
+        &self,
+        fragment: LinkFragment,
+        line_text: &mut String,
+        styled: &mut Vec<(String, SemanticRole)>,
+        links: &mut Vec<Option<String>>,
+        _theme: &crate::theme::Theme,
+    ) {
+        let role = fragment.role;
+        if let Some(link) = fragment.link {
+            styled.push((fragment.text.clone(), role));
+            line_text.push_str(&fragment.text);
+            links.push(Some(link));
+            return;
+        }
+
+        for (segment, detected_link) in self.split_text_with_auto_links(&fragment.text) {
+            if segment.is_empty() {
+                continue;
             }
-            spans.push(Span::styled(segment, style));
+            styled.push((segment.clone(), role));
+            line_text.push_str(&segment);
             links.push(detected_link);
         }
     }
@@ -286,13 +319,6 @@ impl Linkifier {
 
         parts
     }
-}
-
-pub fn decorate_link_style(mut style: Style, theme: &crate::theme::Theme) -> Style {
-    if theme.link_underline {
-        style = style.add_modifier(Modifier::UNDERLINED);
-    }
-    style.fg(theme.link_color)
 }
 
 impl LinkOverlay {
