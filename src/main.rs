@@ -7,16 +7,15 @@ use crossbeam_channel::Sender;
 use term_wm::app_context::AppContext;
 use term_wm::config::AppBuilder;
 use term_wm::io::RenderTarget;
-use term_wm::runner::{WindowManagerHost, run_with_defaults};
+use term_wm::runner::WindowManagerHost;
+use term_wm::term_wm_app::TermWmApp;
 use term_wm::unified_event_source::{UnifiedEvent, UnifiedEventSource};
-use term_wm::window::{OverlayId, WindowKey, WindowManager};
+use term_wm::window::{OverlayId, WindowKey};
 use term_wm::wm_config::WmConfig;
 use term_wm::{
     PtyStatus, ScrollKeyMode, ScrollViewComponent, TerminalComponent, default_shell_command,
 };
 use term_wm_console::console_render_target::ConsoleRenderTarget;
-use term_wm_console::draw_plan_renderer::DrawPlanRenderer;
-use term_wm_core::engine::CoreEngine;
 use term_wm_sys_ui_components::wm_debug_log::{
     WmDebugLogComponent, install_panic_hook, set_global_debug_log,
 };
@@ -55,26 +54,25 @@ fn main() -> io::Result<()> {
             .map(|c| c.max(1))
             .unwrap_or_else(|| cli.cmds.len().max(1))
     };
+
     let mut event_source = UnifiedEventSource::new()?;
     let pty_wakeup_tx = event_source.pty_wakeup_tx();
     let mut app = App::new_with(cli.cmds, total, cli.embedded, pty_wakeup_tx)?;
+
     let mut output = ConsoleRenderTarget::new()?;
     output.enter()?;
-
-    let result = run_with_defaults(&mut output, &mut event_source, &mut app);
-
+    let result = app.run_with(&mut output, &mut event_source);
     output.exit()?;
-
     result
 }
 
+/// Terminal-focused app that wraps [`TermWmApp`] and adds PTY session
+/// management, debug window, and system overlays.
 struct App {
-    wm: WindowManager,
-    engine: CoreEngine,
-    draw_renderer: DrawPlanRenderer,
-    pty_wakeup_tx: Sender<UnifiedEvent>,
+    inner: TermWmApp,
     debug_key: Option<WindowKey>,
     debug_visible: bool,
+    pty_wakeup_tx: Sender<UnifiedEvent>,
 }
 
 impl App {
@@ -123,30 +121,28 @@ impl App {
                 .expect("standalone build")
         };
 
+        let inner = TermWmApp::from_wm(wm);
         let mut app = Self {
-            wm,
-            engine: CoreEngine::new(),
-            draw_renderer: DrawPlanRenderer::new(),
-            pty_wakeup_tx,
+            inner,
             debug_key: None,
             debug_visible: false,
+            pty_wakeup_tx,
         };
 
         // Initialize debug log system window
         {
             let (mut component, handle) = WmDebugLogComponent::new_default();
-            component.set_selection_enabled(app.wm.clipboard_enabled());
+            component.set_selection_enabled(app.inner.wm().clipboard_enabled());
             set_global_debug_log(handle);
-            let debug_key = app.wm.set_system_window(Box::new(component));
-            app.wm
+            let debug_key = app.inner.wm().set_system_window(Box::new(component));
+            app.inner
+                .wm()
                 .transition_window(debug_key, term_wm::window::WindowState::Unmapped);
             app.debug_key = Some(debug_key);
-            app.wm.set_window_title(debug_key, "Debug Log");
+            app.inner.wm().set_window_title(debug_key, "Debug Log");
             install_panic_hook();
             term_wm::tracing_sub::init_default();
         }
-
-        let mut error_occurred = false;
 
         // If commands provided, open one per command; otherwise open `num_windows`
         // shells using the default shell.
@@ -159,28 +155,29 @@ impl App {
                     let cb = default_shell_command();
                     if let Err(e) = app.spawn_terminal_with_command(cb, Some(cmd)) {
                         tracing::error!("Window spawn error: {}", e);
-                        error_occurred = true;
                     }
                 } else if let Err(e) = app.wm_new_window() {
                     tracing::error!("Window spawn error: {}", e);
-                    error_occurred = true;
                 }
             }
         } else {
             for _ in 0..num_windows {
                 if let Err(e) = app.wm_new_window() {
                     tracing::error!("Window spawn error: {}", e);
-                    error_occurred = true;
                 }
             }
         }
 
-        if error_occurred {
-            // Debug window already created
-        }
-
         app.open_help_overlay();
         Ok(app)
+    }
+
+    fn run_with<O, D>(&mut self, output: &mut O, driver: &mut D) -> io::Result<()>
+    where
+        O: term_wm::io::RenderTarget,
+        D: term_wm::io::EventSource,
+    {
+        term_wm::runner::run_with_defaults(output, driver, self)
     }
 
     // TODO: Extract to a reusable place
@@ -214,16 +211,16 @@ impl App {
         })));
         let mut sv = ScrollViewComponent::new(pane);
         sv.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
-        let key = self.wm.create_window(Box::new(sv));
-        self.wm
-            .transition_window(key, term_wm::window::WindowState::Mapped);
+        let wm = self.inner.wm();
+        let key = wm.create_window(Box::new(sv));
+        wm.transition_window(key, term_wm::window::WindowState::Mapped);
 
         // The key is now known — store it so the callback can use it.
         let _ = key_holder.set(key);
 
         // Enable selection for the new terminal.
-        let clipboard_enabled = self.wm.clipboard_enabled();
-        if let Some(comp) = self.wm.component_for_key_mut(key) {
+        let clipboard_enabled = wm.clipboard_enabled();
+        if let Some(comp) = wm.component_for_key_mut(key) {
             comp.set_selection_enabled(clipboard_enabled);
         }
 
@@ -231,40 +228,40 @@ impl App {
         if let Some(line) = command_to_send {
             let mut line = line;
             line.push_str(line_ending::LineEnding::from_current_platform().as_str());
-            if let Some(comp) = self.wm.component_for_key_mut(key) {
+            if let Some(comp) = wm.component_for_key_mut(key) {
                 let _ = comp.paste(&line);
             }
         }
 
-        self.wm.set_focus(key);
-        self.wm.tile_window(key);
-        self.wm
-            .set_window_title(key, format!("Shell {}", self.wm.window_count()));
+        wm.set_focus(key);
+        wm.tile_window(key);
+        wm.set_window_title(key, format!("Shell {}", wm.window_count()));
         Ok(())
     }
 }
 
 impl WindowManagerHost for App {
-    fn wm(&mut self) -> &mut WindowManager {
-        &mut self.wm
+    fn wm(&mut self) -> &mut term_wm::window::WindowManager {
+        self.inner.wm()
     }
 
     fn open_help_overlay(&mut self) {
         use term_wm_sys_ui_components::wm_help_overlay::WmHelpOverlayComponent;
-        let kb = self.wm.keybindings().clone();
-        let mut h = WmHelpOverlayComponent::new(self.wm.app_ctx(), kb);
+        let wm = self.inner.wm();
+        let kb = wm.keybindings().clone();
+        let mut h = WmHelpOverlayComponent::new(wm.app_ctx(), kb);
         h.show();
-        h.set_selection_enabled(self.wm.clipboard_enabled());
-        self.wm.open_overlay(OverlayId::Help, Some(Box::new(h)));
+        h.set_selection_enabled(wm.clipboard_enabled());
+        wm.open_overlay(OverlayId::Help, Some(Box::new(h)));
     }
 
     fn open_keybindings_overlay(&mut self) {
         use term_wm_sys_ui_components::wm_keybinding_overlay::WmKeybindingOverlayComponent;
-        let kb = self.wm.keybindings().clone();
-        let mut o = WmKeybindingOverlayComponent::new(self.wm.app_ctx(), kb);
+        let wm = self.inner.wm();
+        let kb = wm.keybindings().clone();
+        let mut o = WmKeybindingOverlayComponent::new(wm.app_ctx(), kb);
         o.show();
-        self.wm
-            .open_overlay(OverlayId::Keybindings, Some(Box::new(o)));
+        wm.open_overlay(OverlayId::Keybindings, Some(Box::new(o)));
     }
 
     fn open_exit_confirm(&mut self) {
@@ -274,14 +271,16 @@ impl WindowManagerHost for App {
             "Exit App",
             "Exit the application?\nUnsaved changes will be lost.",
         );
-        self.wm
+        self.inner
+            .wm()
             .open_overlay(OverlayId::ExitConfirm, Some(Box::new(confirm)));
     }
 
     fn on_panic(&mut self) {
         self.debug_visible = true;
         if let Some(key) = self.debug_key {
-            self.wm
+            self.inner
+                .wm()
                 .transition_window(key, term_wm::window::WindowState::Mapped);
         }
     }
@@ -294,7 +293,7 @@ impl WindowManagerHost for App {
             } else {
                 term_wm::window::WindowState::Unmapped
             };
-            self.wm.transition_window(key, state);
+            self.inner.wm().transition_window(key, state);
         }
     }
 
@@ -322,37 +321,37 @@ impl WindowManagerHost for App {
         })));
         let mut sv = ScrollViewComponent::new(pane);
         sv.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
-        let key = self.wm.create_window(Box::new(sv));
-        self.wm
-            .transition_window(key, term_wm::window::WindowState::Mapped);
+        let wm = self.inner.wm();
+        let key = wm.create_window(Box::new(sv));
+        wm.transition_window(key, term_wm::window::WindowState::Mapped);
 
         // The key is now known — store it so the callback can use it.
         let _ = key_holder.set(key);
 
         // Enable selection for the new terminal.
-        let clipboard_enabled = self.wm.clipboard_enabled();
-        if let Some(comp) = self.wm.component_for_key_mut(key) {
+        let clipboard_enabled = wm.clipboard_enabled();
+        if let Some(comp) = wm.component_for_key_mut(key) {
             comp.set_selection_enabled(clipboard_enabled);
         }
 
-        self.wm.set_focus(key);
-        self.wm.tile_window(key);
-        self.wm
-            .set_window_title(key, format!("Shell {}", self.wm.window_count()));
+        wm.set_focus(key);
+        wm.tile_window(key);
+        wm.set_window_title(key, format!("Shell {}", wm.window_count()));
         Ok(())
     }
 
     fn wm_close_window(&mut self, key: WindowKey) -> io::Result<()> {
         if self.debug_key == Some(key) {
             self.debug_visible = false;
-            self.wm
+            self.inner
+                .wm()
                 .transition_window(key, term_wm::window::WindowState::Unmapped);
             return Ok(());
         }
         // Call destroy on the component (kills child process).
         // The component will be dropped after this, and the OS will
         // clean up the child process. See also: Reaper for async reaping.
-        if let Some(comp) = self.wm.component_for_key_mut(key) {
+        if let Some(comp) = self.inner.wm().component_for_key_mut(key) {
             comp.destroy();
         }
         Ok(())
@@ -361,8 +360,8 @@ impl WindowManagerHost for App {
     fn set_clipboard_enabled(&mut self, _enabled: bool) {}
 
     fn set_window_selection_enabled(&mut self, enabled: bool) {
-        for key in self.wm.all_window_keys() {
-            if let Some(comp) = self.wm.component_for_key_mut(key) {
+        for key in self.inner.wm().all_window_keys() {
+            if let Some(comp) = self.inner.wm().component_for_key_mut(key) {
                 comp.set_selection_enabled(enabled);
             }
         }
@@ -373,11 +372,6 @@ impl WindowManagerHost for App {
     }
 
     fn render(&mut self, backend: &mut dyn term_wm_render::RenderBackend) {
-        term_wm::render_app(
-            backend,
-            &mut self.wm,
-            &mut self.engine,
-            &mut self.draw_renderer,
-        );
+        self.inner.render_app(backend);
     }
 }

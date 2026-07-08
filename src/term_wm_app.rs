@@ -120,6 +120,16 @@ impl TermWmApp {
         self
     }
 
+    /// Get the message shown when no windows are registered.
+    pub fn empty_message_str(&self) -> &str {
+        &self.empty_message
+    }
+
+    /// Whether a quit has been requested.
+    pub fn quit_requested(&self) -> bool {
+        self.should_quit
+    }
+
     /// Register a component as a window. Returns the WindowKey for later access.
     /// Calls `on_mount` on the component after registration.
     pub fn register<C>(&mut self, component: C) -> WindowKey
@@ -198,6 +208,16 @@ impl TermWmApp {
         driver: &mut D,
     ) -> io::Result<()> {
         run_with_defaults(output, driver, &mut self)
+    }
+
+    /// Render the window manager using the shared `render_app` implementation.
+    pub fn render_app(&mut self, backend: &mut dyn term_wm_render::RenderBackend) {
+        crate::render_app(
+            backend,
+            &mut self.wm,
+            &mut self.engine,
+            &mut self.draw_renderer,
+        );
     }
 }
 
