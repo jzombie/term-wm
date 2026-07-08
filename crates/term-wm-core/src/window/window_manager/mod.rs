@@ -85,8 +85,8 @@ pub(crate) enum SnapPreviewState {
     Edge(InsertPosition),
     /// Tiled insert next to an existing window (quadrant-based).
     TiledInsert(WindowKey, InsertPosition),
-    /// Drop into an empty void placeholder.
-    VoidInsert(Rect),
+    /// Drop into an empty void placeholder (stores void ID).
+    VoidInsert(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -787,8 +787,19 @@ impl WindowManager {
 
     /// Return the currently hovered tiling split handle, if any.
     pub fn hovered_tiling_handle(&self) -> Option<crate::layout::tiling::SplitHandle> {
-        let area = self.managed_area;
-        self.managed_layout.as_ref()?.hovered_handle(area)
+        let (col, row) = self.hover?;
+        let pos = crate::mouse_coord::MousePosition {
+            column: col as i16,
+            row: row as i16,
+            space: crate::mouse_coord::CoordSpace::Screen,
+        };
+        if let Some((crate::hitbox_registry::HitTarget::LayoutHandle, _)) =
+            self.hitbox_registry.hit_test(pos)
+        {
+            self.managed_layout.as_ref()?.hovered_handle(self.managed_area)
+        } else {
+            None
+        }
     }
 
     /// Return the currently hovered floating resize handle, if any.
@@ -2107,7 +2118,7 @@ fn map_layout_node(node: &LayoutNode<WindowKey>) -> LayoutNode<WindowKey> {
             constraints: constraints.clone(),
             resizable: *resizable,
         },
-        LayoutNode::Void => LayoutNode::Void,
+        LayoutNode::Void(id) => LayoutNode::Void(*id),
     }
 }
 

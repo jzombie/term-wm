@@ -146,9 +146,9 @@ impl WindowManager {
                 self.managed_layout.as_ref()
                     .and_then(|layout| layout.project_insert(Some(target_key), dragging_key, pos, area))
             }
-            SnapPreviewState::VoidInsert(void_rect) => {
+            SnapPreviewState::VoidInsert(void_id) => {
                 self.managed_layout.as_ref()
-                    .and_then(|layout| layout.project_insert_void(dragging_key, void_rect, area))
+                    .and_then(|layout| layout.project_insert_void(dragging_key, void_id, area))
             }
             SnapPreviewState::Maximize => None,
         };
@@ -259,10 +259,10 @@ impl WindowManager {
 
         // Priority 3b: Void region (Snap Assist receptacle)
         if let Some(layout) = &self.managed_layout {
-            let void_rects = layout.void_regions(area);
-            for &void_rect in &void_rects {
+            let void_regions = layout.void_regions(area);
+            for &(void_id, void_rect) in &void_regions {
                 if crate::layout::rect_contains(void_rect, mouse_x, mouse_y) {
-                    let state = SnapPreviewState::VoidInsert(void_rect);
+                    let state = SnapPreviewState::VoidInsert(void_id);
                     let projected = self.get_projected_preview(dragging_key, state, area);
                     let preview = projected.unwrap_or(void_rect);
                     self.drag_snap = Some((None, InsertPosition::Top, preview));
@@ -302,10 +302,13 @@ impl WindowManager {
         use crate::layout::LayoutNode;
         if let Some((target, position, preview)) = self.drag_snap.take() {
             // Void snap: replace the void placeholder in the BSP tree
-            if let Some(SnapPreviewState::VoidInsert(void_rect)) = self.snap_preview {
+            if let Some(SnapPreviewState::VoidInsert(void_id)) = self.snap_preview {
+                if self.is_window_floating(key) {
+                    self.clear_floating_rect(key);
+                }
                 if let Some(layout) = &mut self.managed_layout {
                     layout.root_mut().remove_leaf(key);
-                    layout.root_mut().replace_void_at_rect(self.managed_area, void_rect, LayoutNode::leaf(key));
+                    layout.root_mut().replace_void_by_id(void_id, LayoutNode::leaf(key));
                 }
                 if let Some(pos) = self.z_order.iter().position(|&z_key| z_key == key) {
                     self.z_order.remove(pos);

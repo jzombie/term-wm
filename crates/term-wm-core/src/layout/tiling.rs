@@ -1,13 +1,16 @@
 use crate::Rect;
 use crate::layout::{Constraint, Direction, Layout};
+use core::sync::atomic::{AtomicUsize, Ordering};
 use term_wm_layout_engine::LayoutRect;
+
+static VOID_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 use super::{FloatingPane, RegionMap, gap_size, rect_contains};
 
 #[derive(Debug, Clone)]
 pub enum LayoutNode<Id: Copy + Eq + Ord> {
     Leaf(Id),
-    Void,
+    Void(usize),
     Split {
         direction: Direction,
         children: Vec<LayoutNode<Id>>,
@@ -130,7 +133,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
         ) -> bool {
             match node {
                 LayoutNode::Leaf(id) => predicate(*id),
-                LayoutNode::Void => false,
+                LayoutNode::Void(_) => false,
                 LayoutNode::Split { children, .. } => {
                     children.iter().any(|child| walk(child, predicate))
                 }
@@ -208,7 +211,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
     pub fn remove_leaf(&mut self, id: Id) -> bool {
         match self {
             LayoutNode::Leaf(_) => false,
-            LayoutNode::Void => false,
+            LayoutNode::Void(_) => false,
             LayoutNode::Split {
                 children,
                 weights,
@@ -256,9 +259,14 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
 
                     index += 1;
                 }
-                if removed && children.len() == 1 {
-                    let only = children.remove(0);
-                    *self = only;
+                if removed {
+                    if children.len() == 1 {
+                        let only = children.remove(0);
+                        *self = only;
+                    } else if children.iter().all(|c| matches!(c, LayoutNode::Void(_))) {
+                        *self = LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed));
+                        return true;
+                    }
                 }
                 removed
             }
@@ -311,7 +319,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                     InsertPosition::TopLeft => {
                         let inner = LayoutNode::Split {
                             direction: Direction::Vertical,
-                            children: vec![LayoutNode::leaf(insert), LayoutNode::Void],
+                            children: vec![LayoutNode::leaf(insert), LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed))],
                             weights: vec![1.0, 1.0],
                             constraints: Vec::new(),
                             resizable: true,
@@ -327,7 +335,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                     InsertPosition::TopRight => {
                         let inner = LayoutNode::Split {
                             direction: Direction::Vertical,
-                            children: vec![LayoutNode::leaf(insert), LayoutNode::Void],
+                            children: vec![LayoutNode::leaf(insert), LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed))],
                             weights: vec![1.0, 1.0],
                             constraints: Vec::new(),
                             resizable: true,
@@ -343,7 +351,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                     InsertPosition::BottomLeft => {
                         let inner = LayoutNode::Split {
                             direction: Direction::Vertical,
-                            children: vec![LayoutNode::Void, LayoutNode::leaf(insert)],
+                            children: vec![LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed)), LayoutNode::leaf(insert)],
                             weights: vec![1.0, 1.0],
                             constraints: Vec::new(),
                             resizable: true,
@@ -359,7 +367,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                     InsertPosition::BottomRight => {
                         let inner = LayoutNode::Split {
                             direction: Direction::Vertical,
-                            children: vec![LayoutNode::Void, LayoutNode::leaf(insert)],
+                            children: vec![LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed)), LayoutNode::leaf(insert)],
                             weights: vec![1.0, 1.0],
                             constraints: Vec::new(),
                             resizable: true,
@@ -375,7 +383,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                 }
                 true
             }
-            LayoutNode::Void => false,
+            LayoutNode::Void(_) => false,
             LayoutNode::Split { children, .. } => {
                 for child in children.iter_mut() {
                     if child.insert_leaf(target, insert, position) {
@@ -398,7 +406,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
             LayoutNode::Leaf(id) => {
                 regions.push((*id, area));
             }
-            LayoutNode::Void => {}
+            LayoutNode::Void(_) => {}
             LayoutNode::Split {
                 direction,
                 children,
@@ -435,15 +443,15 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
 }
 
 impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
-    pub fn void_regions(&self, area: Rect) -> Vec<Rect> {
+    pub fn void_regions(&self, area: Rect) -> Vec<(usize, Rect)> {
         let mut rects = Vec::new();
         self.void_regions_recursive(area, &mut rects);
         rects
     }
 
-    fn void_regions_recursive(&self, area: Rect, out: &mut Vec<Rect>) {
+    fn void_regions_recursive(&self, area: Rect, out: &mut Vec<(usize, Rect)>) {
         match self {
-            LayoutNode::Void => out.push(area),
+            LayoutNode::Void(id) => out.push((*id, area)),
             LayoutNode::Split { direction, children, weights, constraints, resizable } => {
                 let (rects, _) = split_rects_with_gaps(*direction, area, weights, constraints, children.len(), *resizable);
                 for (child, sub) in children.iter().zip(rects) {
@@ -454,25 +462,15 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
         }
     }
 
-    pub fn replace_void_at_rect(
-        &mut self,
-        area: Rect,
-        target_rect: Rect,
-        new_leaf: LayoutNode<Id>,
-    ) -> bool {
+    pub fn replace_void_by_id(&mut self, void_id: usize, new_leaf: LayoutNode<Id>) -> bool {
         match self {
-            LayoutNode::Void => {
-                if area == target_rect {
-                    *self = new_leaf;
-                    true
-                } else {
-                    false
-                }
+            LayoutNode::Void(id) if *id == void_id => {
+                *self = new_leaf;
+                true
             }
-            LayoutNode::Split { direction, children, weights, constraints, resizable } => {
-                let (rects, _) = split_rects_with_gaps(*direction, area, weights, constraints, children.len(), *resizable);
-                for (child, sub) in children.iter_mut().zip(rects) {
-                    if child.replace_void_at_rect(sub, target_rect, new_leaf.clone()) {
+            LayoutNode::Split { children, .. } => {
+                for child in children.iter_mut() {
+                    if child.replace_void_by_id(void_id, new_leaf.clone()) {
                         return true;
                     }
                 }
@@ -525,6 +523,10 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
     }
 
     pub fn split_root(&mut self, insert: Id, position: InsertPosition) {
+        if matches!(self.root, LayoutNode::Void(_)) {
+            self.root = LayoutNode::leaf(insert);
+            return;
+        }
         self.root = match position {
             InsertPosition::Left => LayoutNode::Split {
                 direction: Direction::Horizontal,
@@ -557,7 +559,7 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
             InsertPosition::TopLeft => {
                 let inner = LayoutNode::Split {
                     direction: Direction::Vertical,
-                    children: vec![LayoutNode::leaf(insert), LayoutNode::Void],
+                    children: vec![LayoutNode::leaf(insert), LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed))],
                     weights: vec![1.0, 1.0],
                     constraints: Vec::new(),
                     resizable: true,
@@ -573,7 +575,7 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
             InsertPosition::TopRight => {
                 let inner = LayoutNode::Split {
                     direction: Direction::Vertical,
-                    children: vec![LayoutNode::leaf(insert), LayoutNode::Void],
+                    children: vec![LayoutNode::leaf(insert), LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed))],
                     weights: vec![1.0, 1.0],
                     constraints: Vec::new(),
                     resizable: true,
@@ -589,7 +591,7 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
             InsertPosition::BottomLeft => {
                 let inner = LayoutNode::Split {
                     direction: Direction::Vertical,
-                    children: vec![LayoutNode::Void, LayoutNode::leaf(insert)],
+                    children: vec![LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed)), LayoutNode::leaf(insert)],
                     weights: vec![1.0, 1.0],
                     constraints: Vec::new(),
                     resizable: true,
@@ -605,7 +607,7 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
             InsertPosition::BottomRight => {
                 let inner = LayoutNode::Split {
                     direction: Direction::Vertical,
-                    children: vec![LayoutNode::Void, LayoutNode::leaf(insert)],
+                    children: vec![LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed)), LayoutNode::leaf(insert)],
                     weights: vec![1.0, 1.0],
                     constraints: Vec::new(),
                     resizable: true,
@@ -625,28 +627,23 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
         self.root.layout(area)
     }
 
-    pub fn void_regions(&self, area: Rect) -> Vec<Rect> {
+    pub fn void_regions(&self, area: Rect) -> Vec<(usize, Rect)> {
         self.root.void_regions(area)
     }
 
-    pub fn replace_void_at_rect(
-        &mut self,
-        area: Rect,
-        target_rect: Rect,
-        new_leaf: LayoutNode<Id>,
-    ) -> bool {
-        self.root.replace_void_at_rect(area, target_rect, new_leaf)
+    pub fn replace_void_by_id(&mut self, void_id: usize, new_leaf: LayoutNode<Id>) -> bool {
+        self.root.replace_void_by_id(void_id, new_leaf)
     }
 
     pub fn project_insert_void(
         &self,
         insert: Id,
-        void_rect: Rect,
+        void_id: usize,
         area: Rect,
     ) -> Option<Rect> {
         let mut root = self.root.clone();
         root.remove_leaf(insert);
-        if root.replace_void_at_rect(area, void_rect, LayoutNode::leaf(insert)) {
+        if root.replace_void_by_id(void_id, LayoutNode::leaf(insert)) {
             root.layout(area).into_iter()
                 .find(|(id, _)| *id == insert)
                 .map(|(_, r)| r)
@@ -673,39 +670,9 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
             None => false,
         };
         if !success {
-            let (dir, children) = match position {
-                InsertPosition::Left => (
-                    Direction::Horizontal,
-                    vec![LayoutNode::leaf(insert), root],
-                ),
-                InsertPosition::Right => (
-                    Direction::Horizontal,
-                    vec![root, LayoutNode::leaf(insert)],
-                ),
-                InsertPosition::Top => (
-                    Direction::Vertical,
-                    vec![LayoutNode::leaf(insert), root],
-                ),
-                InsertPosition::Bottom => (
-                    Direction::Vertical,
-                    vec![root, LayoutNode::leaf(insert)],
-                ),
-                InsertPosition::TopLeft | InsertPosition::TopRight => (
-                    Direction::Vertical,
-                    vec![LayoutNode::leaf(insert), root],
-                ),
-                InsertPosition::BottomLeft | InsertPosition::BottomRight => (
-                    Direction::Vertical,
-                    vec![root, LayoutNode::leaf(insert)],
-                ),
-            };
-            root = LayoutNode::Split {
-                direction: dir,
-                children,
-                weights: vec![1.0, 1.0],
-                constraints: Vec::new(),
-                resizable: true,
-            };
+            let mut dummy_layout = TilingLayout::new(root);
+            dummy_layout.split_root(insert, position);
+            root = dummy_layout.root().clone();
         }
         root.layout(area)
             .into_iter()
