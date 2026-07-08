@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use ratatui::layout::Rect;
 use term_wm::config::AppBuilder;
+use term_wm_layout_engine::LayoutRect;
 
 #[test]
 fn default_shell_nonempty() {
@@ -46,7 +46,7 @@ fn mouse_capture_flow_through_window_manager() {
 #[test]
 fn top_panel_split_area_basic() {
     let mut p = term_wm_sys_ui_components::WmTopPanelComponent::new("test");
-    let area = Rect {
+    let area = LayoutRect {
         x: 0,
         y: 0,
         width: 12,
@@ -61,7 +61,7 @@ fn top_panel_split_area_basic() {
 fn bottom_panel_split_area_basic() {
     let mut p =
         term_wm_sys_ui_components::WmBottomPanelComponent::new("test", "0.0.0", Some("host"));
-    let area = Rect {
+    let area = LayoutRect {
         x: 0,
         y: 0,
         width: 12,

@@ -1,14 +1,15 @@
 #[cfg(test)]
 mod tests {
-    use ratatui::prelude::{Direction, Rect};
+    use term_wm::layout::Direction;
     use term_wm::layout::tiling::{InsertPosition, LayoutNode};
+    use term_wm_layout_engine::LayoutRect;
 
     #[test]
     fn test_vertical_resize_precision() {
         // This test ensures that 1-pixel resize operations are not lost due to
         // floating point quantization errors (e.g. floor(20.99) -> 20).
 
-        let area = Rect {
+        let area = LayoutRect {
             x: 0,
             y: 0,
             width: 20,

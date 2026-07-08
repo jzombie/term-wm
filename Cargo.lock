@@ -286,9 +286,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.65"
+version = "1.2.66"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e228eec9be7c17ccb640b59b36a5cd805ea2a564a4c5e162c2f659fea30d3b96"
+checksum = "f5d6cac793997bd970000024b2934968efe83b382de4fdcf4fcb46b6ee4ad996"
 dependencies = [
  "find-msvc-tools",
  "shlex",
@@ -2837,6 +2837,7 @@ dependencies = [
  "muxio-tokio-rpc-ipc-client",
  "portable-pty",
  "term-session-muxio-service-definitions",
+ "term-wm-core",
  "term-wm-pty-engine",
  "tokio",
  "tracing",
@@ -2883,7 +2884,10 @@ dependencies = [
  "line-ending",
  "portable-pty",
  "ratatui",
+ "term-wm-console",
  "term-wm-core",
+ "term-wm-layout-engine",
+ "term-wm-render",
  "term-wm-sys-ui-components",
  "term-wm-ui-components",
  "tracing",
@@ -2892,20 +2896,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "term-wm-console"
+version = "0.8.9-alpha"
+dependencies = [
+ "crossterm",
+ "ratatui",
+ "term-wm-core",
+ "term-wm-layout-engine",
+ "term-wm-render",
+]
+
+[[package]]
 name = "term-wm-core"
 version = "0.8.9-alpha"
 dependencies = [
  "console",
  "crossbeam-channel",
- "crossterm",
  "linkify",
  "portable-pty",
- "ratatui",
  "slotmap",
  "smallvec",
  "strum",
  "term-wm-layout-engine",
  "term-wm-pty-engine",
+ "term-wm-render",
  "tracing",
 ]
 
@@ -2931,12 +2945,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "term-wm-render"
+version = "0.8.9-alpha"
+dependencies = [
+ "ratatui",
+]
+
+[[package]]
 name = "term-wm-sys-ui-components"
 version = "0.8.9-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
+ "term-wm-console",
  "term-wm-core",
+ "term-wm-layout-engine",
+ "term-wm-render",
  "term-wm-ui-components",
  "webbrowser",
 ]
@@ -2954,8 +2978,11 @@ dependencies = [
  "resvg",
  "shell-words",
  "tempfile",
+ "term-wm-console",
  "term-wm-core",
+ "term-wm-layout-engine",
  "term-wm-pty-engine",
+ "term-wm-render",
  "thiserror 2.0.18",
  "tracing",
  "vt100",
@@ -3913,9 +3940,9 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xxhash-rust"
-version = "0.8.15"
+version = "0.8.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fdd20c5420375476fbd4394763288da7eb0cc0b8c11deed431a91562af7335d3"
+checksum = "4d93c89cdc2d3a63c3ec48ffe926931bdc069eafa8e4402fe6d8f790c9d1e576"
 
 [[package]]
 name = "yoke"

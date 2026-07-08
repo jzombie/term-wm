@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::events::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 pub use crate::actions::{ActionLayer, Category, TermWmAction};
 
@@ -21,13 +21,13 @@ impl KeyCombo {
 
     pub fn display(&self) -> String {
         let mut parts = Vec::new();
-        if self.mods.contains(KeyModifiers::CONTROL) {
+        if self.mods.control {
             parts.push("Ctrl".to_string());
         }
-        if self.mods.contains(KeyModifiers::SHIFT) {
+        if self.mods.shift {
             parts.push("Shift".to_string());
         }
-        if self.mods.contains(KeyModifiers::ALT) {
+        if self.mods.alt {
             parts.push("Alt".to_string());
         }
         let code = match self.code {
@@ -82,17 +82,17 @@ macro_rules! default_keybindings {
 impl Default for KeyBindings {
     fn default() -> Self {
         default_keybindings! {
-            Quit: [ (KeyCode::Char('q'), KeyModifiers::CONTROL) ],
+            Quit: [ (KeyCode::Char('q'), KeyModifiers { shift: false, control: true, alt: false }) ],
             CloseHelp: [ (KeyCode::Esc, KeyModifiers::NONE), (KeyCode::Enter, KeyModifiers::NONE), (KeyCode::Char('q'), KeyModifiers::NONE) ],
             FocusNext: [ (KeyCode::Tab, KeyModifiers::NONE) ],
-            FocusPrev: [ (KeyCode::BackTab, KeyModifiers::NONE) ],
+            FocusPrev: [ (KeyCode::Tab, KeyModifiers { shift: true, control: false, alt: false }) ],
             WmToggleOverlay: [ (KeyCode::Esc, KeyModifiers::NONE) ],
             MenuUp: [ (KeyCode::Up, KeyModifiers::NONE) ],
             MenuDown: [ (KeyCode::Down, KeyModifiers::NONE) ],
             MenuSelect: [ (KeyCode::Enter, KeyModifiers::NONE) ],
             MenuNext: [ (KeyCode::Char('j'), KeyModifiers::NONE) ],
             MenuPrev: [ (KeyCode::Char('k'), KeyModifiers::NONE) ],
-            ConfirmToggle: [ (KeyCode::Tab, KeyModifiers::NONE), (KeyCode::BackTab, KeyModifiers::NONE) ],
+            ConfirmToggle: [ (KeyCode::Tab, KeyModifiers::NONE), (KeyCode::Tab, KeyModifiers { shift: true, control: false, alt: false }) ],
             ConfirmLeft: [ (KeyCode::Left, KeyModifiers::NONE) ],
             ConfirmRight: [ (KeyCode::Right, KeyModifiers::NONE) ],
             ConfirmAccept: [ (KeyCode::Enter, KeyModifiers::NONE), (KeyCode::Char('y'), KeyModifiers::NONE) ],
@@ -169,8 +169,8 @@ impl KeyBindings {
         None
     }
 
-    pub fn action_for_event(&self, evt: &crossterm::event::Event) -> Option<TermWmAction> {
-        if let crossterm::event::Event::Key(k) = evt {
+    pub fn action_for_event(&self, evt: &Event) -> Option<TermWmAction> {
+        if let Event::Key(k) = evt {
             self.action_for_key(k)
         } else {
             None
@@ -249,12 +249,20 @@ impl KeyBindings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::KeyEvent;
+    use crate::events::KeyKind;
 
     #[test]
     fn defaults_match_quit() {
         let kb = KeyBindings::default();
-        let ev = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
+        let ev = KeyEvent {
+            code: KeyCode::Char('q'),
+            modifiers: KeyModifiers {
+                shift: false,
+                control: true,
+                alt: false,
+            },
+            kind: KeyKind::Press,
+        };
         assert!(kb.matches(TermWmAction::Quit, &ev));
     }
 }

@@ -14,9 +14,11 @@ members = [
     "crates/term-session-client",
     "crates/term-session-muxio-service-definitions",
     "crates/term-session-server",
+    "crates/term-wm-console",
     "crates/term-wm-core",
     "crates/term-wm-layout-engine",
     "crates/term-wm-pty-engine",
+    "crates/term-wm-render",
     "crates/term-wm-sys-ui-components",
     "crates/term-wm-ui-components",
 ]
@@ -64,9 +66,11 @@ term-session-client = { path = "crates/term-session-client", version = "0.8.9-al
 term-session-muxio-service-definitions = { path = "crates/term-session-muxio-service-definitions", version = "0.8.9-alpha" }
 term-session-server = { path = "crates/term-session-server", version = "0.8.9-alpha" }
 term-wm = { path = ".", version = "0.8.9-alpha" }
+term-wm-console = { path = "crates/term-wm-console", version = "0.8.9-alpha" }
 term-wm-core = { path = "crates/term-wm-core", version = "0.8.9-alpha" }
 term-wm-layout-engine = { path = "crates/term-wm-layout-engine", version = "0.8.9-alpha" }
 term-wm-pty-engine = { path = "crates/term-wm-pty-engine", version = "0.8.9-alpha" }
+term-wm-render = { path = "crates/term-wm-render", version = "0.8.9-alpha" }
 term-wm-sys-ui-components = { path = "crates/term-wm-sys-ui-components", version = "0.8.9-alpha" }
 term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.8.9-alpha" }
 thiserror = "2.0.18"
@@ -92,7 +96,10 @@ hostname = { workspace = true }
 line-ending = { workspace = true }
 portable-pty = { workspace = true }
 ratatui = { workspace = true }
+term-wm-console = { workspace = true }
 term-wm-core = { workspace = true }
+term-wm-layout-engine = { workspace = true }
+term-wm-render = { workspace = true }
 term-wm-sys-ui-components = { workspace = true, optional = true }
 term-wm-ui-components = { workspace = true }
 tracing = { workspace = true }
@@ -103,3 +110,4 @@ webbrowser = { workspace = true }
 indoc = { workspace = true }
 
 [dev-dependencies]
+term-wm-render = { workspace = true }

@@ -1,4 +1,5 @@
-use ratatui::prelude::Rect;
+// TODO: Move this module to layout engine
+use term_wm_layout_engine::LayoutRect;
 
 /// A mouse cursor position with an explicit coordinate space tag.
 ///
@@ -31,11 +32,11 @@ impl MousePosition {
     /// scattered across component `handle_events` methods. Because the
     /// hitbox registry already guarantees the component was the hit target,
     /// this is used only for sub-widget coordinate gallity checks.
-    pub fn is_inside(&self, area: Rect) -> bool {
+    pub fn is_inside(&self, area: LayoutRect) -> bool {
         self.column >= area.x as i16
-            && self.column < (area.x.saturating_add(area.width)) as i16
+            && self.column < (area.x.saturating_add(i32::from(area.width))) as i16
             && self.row >= area.y as i16
-            && self.row < (area.y.saturating_add(area.height)) as i16
+            && self.row < (area.y.saturating_add(i32::from(area.height))) as i16
     }
 
     /// Convert this screen-space position to local (area-relative) coordinates.
@@ -46,7 +47,7 @@ impl MousePosition {
     ///
     /// Unlike bare subtraction, this does not underflow or produce
     /// nonsensical values for out-of-bounds positions.
-    pub fn to_local(&self, area: Rect) -> Option<(u16, u16)> {
+    pub fn to_local(&self, area: LayoutRect) -> Option<(u16, u16)> {
         if !self.is_inside(area) {
             return None;
         }
@@ -64,7 +65,12 @@ mod tests {
 
     #[test]
     fn is_inside_returns_true_for_contained_point() {
-        let area = Rect::new(5, 10, 20, 30);
+        let area = LayoutRect {
+            x: 5,
+            y: 10,
+            width: 20,
+            height: 30,
+        };
         let pos = MousePosition {
             column: 10,
             row: 15,
@@ -75,7 +81,12 @@ mod tests {
 
     #[test]
     fn is_inside_returns_false_for_outside_point() {
-        let area = Rect::new(5, 10, 20, 30);
+        let area = LayoutRect {
+            x: 5,
+            y: 10,
+            width: 20,
+            height: 30,
+        };
         let pos = MousePosition {
             column: 100,
             row: 100,
@@ -86,7 +97,12 @@ mod tests {
 
     #[test]
     fn is_inside_handles_edge_boundary() {
-        let area = Rect::new(5, 10, 20, 30);
+        let area = LayoutRect {
+            x: 5,
+            y: 10,
+            width: 20,
+            height: 30,
+        };
         // Just inside
         let pos = MousePosition {
             column: 5,
@@ -112,7 +128,12 @@ mod tests {
 
     #[test]
     fn to_local_returns_correct_offset() {
-        let area = Rect::new(10, 20, 50, 60);
+        let area = LayoutRect {
+            x: 10,
+            y: 20,
+            width: 50,
+            height: 60,
+        };
         let pos = MousePosition {
             column: 25,
             row: 35,
@@ -124,7 +145,12 @@ mod tests {
 
     #[test]
     fn to_local_returns_none_when_outside() {
-        let area = Rect::new(10, 20, 50, 60);
+        let area = LayoutRect {
+            x: 10,
+            y: 20,
+            width: 50,
+            height: 60,
+        };
         let pos = MousePosition {
             column: 5,
             row: 35,
@@ -135,7 +161,12 @@ mod tests {
 
     #[test]
     fn negative_coordinates_dont_underflow() {
-        let area = Rect::new(10, 20, 50, 60);
+        let area = LayoutRect {
+            x: 10,
+            y: 20,
+            width: 50,
+            height: 60,
+        };
         let pos = MousePosition {
             column: -5,
             row: -10,

@@ -1,0 +1,16 @@
+[package]
+name = "term-wm-console"
+description = "Concrete terminal I/O backend with event source, render target, and draw plan for term-wm."
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+crossterm = { workspace = true }
+ratatui = { workspace = true }
+term-wm-core = { workspace = true }
+term-wm-layout-engine = { workspace = true }
+term-wm-render = { workspace = true }

@@ -1,8 +1,14 @@
 - [] Include examples how to share data between components.
-- [] Alternative operating system interface.
+
 ---
 
-**term-wm** is a blazingly fast, cross-platform terminal multiplexer, window manager, and Ratatui component library written entirely in Rust. It is designed to bring a "Retro-Modern" aesthetic to your workflow by seamlessly translating advanced graphical desktop metaphors—such as **floating windows, dynamic tiling, drag-and-drop resizing, and overlapping layers**—directly into the standard terminal character grid. 
+## A retro-modern desktop environment engineered for the terminal
+
+**term-wm** is a blazingly fast, cross-platform terminal multiplexer, window manager, and Ratatui component library written entirely in Rust. It is designed to bring a "Retro-Modern" aesthetic to your workflow by seamlessly translating advanced graphical desktop metaphors—such as **floating windows, dynamic tiling, drag-and-drop resizing, and overlapping layers**—directly into the standard terminal character grid.
+
+By bypassing graphical compositors, it acts as a zero-latency, cross-platform windowing protocol perfectly suited for SSH.
+
+It runs in your preferred terminal emulator—across macOS, Linux, Windows, or SSH—natively multiplexing independent processes into distinctly managed, isolated windows.
 
 Whether you are a power user looking for a better terminal environment or a Rust developer building your own tools, it is built to serve two distinct purposes:
 

@@ -1,4 +1,4 @@
-use crossterm::event::{Event, MouseEventKind};
+use crate::events::{Event, MouseEventKind};
 
 use super::WindowManager;
 use crate::actions::{EventResult, TermWmAction};
@@ -49,6 +49,7 @@ impl WindowManager {
         self.focus.set_current(key);
         self.bring_to_front_key(key);
         self.managed_draw_order = self.z_order.clone();
+        self.mark_layout_dirty();
     }
 
     pub fn focus_window_key(&mut self, key: WindowKey) {
@@ -61,13 +62,14 @@ impl WindowManager {
         self.focus.set_current(key);
         self.bring_to_front_key(key);
         self.managed_draw_order = self.z_order.clone();
+        self.mark_layout_dirty();
     }
 
     pub(super) fn unmaximize_window(&mut self, key: WindowKey) {
         use crate::window::FloatRectSpec;
         let full = FloatRectSpec::Absolute(crate::window::FloatRect {
-            x: self.managed_area.x as i32,
-            y: self.managed_area.y as i32,
+            x: self.managed_area.x,
+            y: self.managed_area.y,
             width: self.managed_area.width,
             height: self.managed_area.height,
         });
@@ -140,7 +142,7 @@ impl WindowManager {
             Event::Mouse(mouse) => {
                 self.hover = Some((mouse.column, mouse.row));
                 match mouse.kind {
-                    MouseEventKind::Down(_) => {
+                    MouseEventKind::Press(_) => {
                         if self.config.wm_command_menu_enabled
                             && !self.managed_draw_order.is_empty()
                         {

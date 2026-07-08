@@ -516,6 +516,12 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 }
                 if let Ok(mut p) = pending.lock() {
                     p.extend_from_slice(&buf[..n]);
+                    // Cap pending to prevent unbounded growth when no
+                    // consumer calls drain_pending() (local terminal mode).
+                    const PENDING_CAP: usize = 1024 * 1024; // 1 MB
+                    if p.len() > PENDING_CAP {
+                        p.clear();
+                    }
                 }
 
                 history.extend_from_slice(&buf[..n]);

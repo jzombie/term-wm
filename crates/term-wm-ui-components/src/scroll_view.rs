@@ -2,15 +2,17 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use crossterm::event::{Event, MouseEvent, MouseEventKind};
 use ratatui::prelude::Rect;
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
+use term_wm_core::events::{Event, MouseEvent, MouseEventKind};
 
+use crate::helpers::layout_rect_to_rect;
+use ratatui::widgets::StatefulWidget;
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::component_context::{ScrollBounds, ScrollHandle};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
-use term_wm_core::ui::UiFrame;
 use term_wm_core::window::WindowKey;
+use term_wm_layout_engine::LayoutRect;
 
 // --- Scroll Logic Helpers (Public API) ---
 
@@ -60,7 +62,7 @@ impl ScrollbarDrag {
         };
 
         match mouse.kind {
-            MouseEventKind::Down(_) if on_scrollbar => {
+            MouseEventKind::Press(_) if on_scrollbar => {
                 self.dragging = true;
                 Some(match axis {
                     ScrollbarAxis::Vertical => {
@@ -77,7 +79,7 @@ impl ScrollbarDrag {
                     scrollbar_offset_from_col(mouse.column, area, total, view)
                 }
             }),
-            MouseEventKind::Up(_) if self.dragging => {
+            MouseEventKind::Release(_) if self.dragging => {
                 self.dragging = false;
                 None
             }
@@ -89,7 +91,7 @@ impl ScrollbarDrag {
 // --- Rendering Helpers ---
 
 pub fn render_scrollbar(
-    frame: &mut UiFrame<'_>,
+    buffer: &mut ratatui::buffer::Buffer,
     area: Rect,
     total: usize,
     view: usize,
@@ -103,11 +105,11 @@ pub fn render_scrollbar(
         .position(offset.min(content_len.saturating_sub(1)))
         .viewport_content_length(view.max(1));
     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
-    frame.render_stateful_widget(scrollbar, area, &mut state);
+    scrollbar.render(area, buffer, &mut state);
 }
 
 pub fn render_scrollbar_oriented(
-    frame: &mut UiFrame<'_>,
+    buffer: &mut ratatui::buffer::Buffer,
     area: Rect,
     total: usize,
     view: usize,
@@ -122,7 +124,7 @@ pub fn render_scrollbar_oriented(
         .position(offset.min(content_len.saturating_sub(1)))
         .viewport_content_length(view.max(1));
     let scrollbar = Scrollbar::new(orientation);
-    frame.render_stateful_widget(scrollbar, area, &mut state);
+    scrollbar.render(area, buffer, &mut state);
 }
 
 // --- Internal Math ---
@@ -255,7 +257,7 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
 
         let va = ctx
             .screen_area()
-            .map(|sa| self.compute_layout(sa))
+            .map(|sa| self.compute_layout(layout_rect_to_rect(sa)))
             .unwrap_or_default();
 
         // Vertical scrollbar: assumes it is immediately to the right of viewport
@@ -327,7 +329,7 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
             && ctx.focused()
             && !ctx.direct_mode()
             && let Event::Key(key) = event
-            && key.kind == crossterm::event::KeyEventKind::Press
+            && key.kind == term_wm_core::events::KeyKind::Press
         {
             let is_full = self.keyboard_mode == ScrollKeyMode::Full;
             let kb = &ctx.config().keybindings;
@@ -358,16 +360,17 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
 
 impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent<C> {
     fn render(
-        &self,
-        frame: &mut UiFrame<'_>,
-        area: Rect,
+        &mut self,
+        backend: &mut dyn term_wm_render::RenderBackend,
+        area: LayoutRect,
         ctx: &ComponentContext,
         registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
+        let area = layout_rect_to_rect(area);
+        let backend = crate::helpers::downcast_ratatui(backend);
         if area.width == 0 || area.height == 0 {
             return;
         }
-
         let max_attempts = 3;
         let mut attempt = 0;
 
@@ -398,10 +401,23 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
             let child_ctx = ctx.with_viewport(info, Some(handle));
 
             // 4. Render Child
-            registry.push_clip(inner_area);
-            self.content
-                .borrow()
-                .render(frame, inner_area, &child_ctx, registry);
+            registry.push_clip(LayoutRect {
+                x: inner_area.x as i32,
+                y: inner_area.y as i32,
+                width: inner_area.width,
+                height: inner_area.height,
+            });
+            self.content.borrow_mut().render(
+                backend,
+                LayoutRect {
+                    x: inner_area.x as i32,
+                    y: inner_area.y as i32,
+                    width: inner_area.width,
+                    height: inner_area.height,
+                },
+                &child_ctx,
+                registry,
+            );
             registry.pop_clip();
 
             let state = self.scroll_state.borrow();
@@ -443,7 +459,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
                         height: inner_area.height,
                     };
                     render_scrollbar_oriented(
-                        frame,
+                        &mut backend.buffer,
                         sb_area,
                         content_h,
                         inner_area.height as usize,
@@ -460,7 +476,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
                         height: 1,
                     };
                     render_scrollbar_oriented(
-                        frame,
+                        &mut backend.buffer,
                         sb_area,
                         content_w,
                         inner_area.width as usize,
@@ -553,8 +569,8 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     use ratatui::prelude::Rect;
+    use term_wm_core::events::{MouseButton, MouseEvent, MouseEventKind};
 
     #[test]
     fn scrollbar_offset_from_row_edges() {
@@ -588,9 +604,9 @@ mod tests {
         let total = 20usize;
         let view = 5usize;
         let scrollbar_x = area.x.saturating_add(area.width.saturating_sub(1));
-        use crossterm::event::KeyModifiers;
+        use term_wm_core::events::KeyModifiers;
         let down = MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
+            kind: MouseEventKind::Press(MouseButton::Left),
             column: scrollbar_x,
             row: area.y + 1,
             modifiers: KeyModifiers::NONE,
@@ -610,7 +626,7 @@ mod tests {
         assert!(drag.dragging);
 
         let up = MouseEvent {
-            kind: MouseEventKind::Up(MouseButton::Left),
+            kind: MouseEventKind::Release(MouseButton::Left),
             column: scrollbar_x,
             row: area.y + 2,
             modifiers: KeyModifiers::NONE,
@@ -632,9 +648,9 @@ mod tests {
         let total = 40usize;
         let view = 6usize;
         let scrollbar_y = area.y.saturating_add(area.height.saturating_sub(1));
-        use crossterm::event::KeyModifiers;
+        use term_wm_core::events::KeyModifiers;
         let down = MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
+            kind: MouseEventKind::Press(MouseButton::Left),
             column: area.x + 2,
             row: scrollbar_y,
             modifiers: KeyModifiers::NONE,
@@ -654,7 +670,7 @@ mod tests {
         assert!(drag.dragging);
 
         let up = MouseEvent {
-            kind: MouseEventKind::Up(MouseButton::Left),
+            kind: MouseEventKind::Release(MouseButton::Left),
             column: area.x + 4,
             row: scrollbar_y,
             modifiers: KeyModifiers::NONE,
@@ -688,9 +704,9 @@ mod tests {
     }
     impl Component<TermWmAction> for EventRecorder {
         fn render(
-            &self,
-            _frame: &mut UiFrame<'_>,
-            _area: Rect,
+            &mut self,
+            _backend: &mut dyn term_wm_render::RenderBackend,
+            _area: LayoutRect,
             _ctx: &ComponentContext,
             _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
         ) {
@@ -718,9 +734,9 @@ mod tests {
     }
     impl Component<TermWmAction> for SelectableRecorder {
         fn render(
-            &self,
-            _frame: &mut UiFrame<'_>,
-            _area: Rect,
+            &mut self,
+            _backend: &mut dyn term_wm_render::RenderBackend,
+            _area: LayoutRect,
             _ctx: &ComponentContext,
             _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
         ) {
@@ -764,7 +780,7 @@ mod tests {
 
     #[test]
     fn scroll_view_consumes_scroll_in_normal_mode() {
-        use crossterm::event::KeyModifiers;
+        use term_wm_core::events::KeyModifiers;
 
         let mut sv = ScrollViewComponent::new(EventRecorder {
             received_scroll: false,
@@ -786,7 +802,7 @@ mod tests {
 
     #[test]
     fn scroll_view_passes_scroll_in_direct_mode() {
-        use crossterm::event::KeyModifiers;
+        use term_wm_core::events::KeyModifiers;
 
         let mut sv = ScrollViewComponent::new(EventRecorder {
             received_scroll: false,
@@ -812,7 +828,7 @@ mod tests {
 
     #[test]
     fn non_scroll_mouse_events_unaffected_by_direct_mode() {
-        use crossterm::event::KeyModifiers;
+        use term_wm_core::events::KeyModifiers;
 
         let mut sv = ScrollViewComponent::new(EventRecorder {
             received_scroll: false,
@@ -822,7 +838,7 @@ mod tests {
         let ctx_normal = ComponentContext::new(true);
 
         let click = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
+            kind: MouseEventKind::Press(MouseButton::Left),
             column: 5,
             row: 5,
             modifiers: KeyModifiers::NONE,
@@ -850,9 +866,10 @@ mod tests {
         sv.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
 
         let ctx = ComponentContext::new(true);
-        let page_up = Event::Key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::PageUp,
-            crossterm::event::KeyModifiers::NONE,
+        let page_up = Event::Key(term_wm_core::events::KeyEvent::new(
+            term_wm_core::events::KeyCode::PageUp,
+            term_wm_core::events::KeyModifiers::NONE,
+            term_wm_core::events::KeyKind::Press,
         ));
         let result = sv.handle_events(&page_up, &ctx);
         assert!(
@@ -861,9 +878,10 @@ mod tests {
         );
 
         sv.content.borrow_mut().received_scroll = false;
-        let page_down = Event::Key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::PageDown,
-            crossterm::event::KeyModifiers::NONE,
+        let page_down = Event::Key(term_wm_core::events::KeyEvent::new(
+            term_wm_core::events::KeyCode::PageDown,
+            term_wm_core::events::KeyModifiers::NONE,
+            term_wm_core::events::KeyKind::Press,
         ));
         let result = sv.handle_events(&page_down, &ctx);
         assert!(
@@ -880,9 +898,10 @@ mod tests {
         sv.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
 
         let ctx = ComponentContext::new(true);
-        let up = Event::Key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Up,
-            crossterm::event::KeyModifiers::NONE,
+        let up = Event::Key(term_wm_core::events::KeyEvent::new(
+            term_wm_core::events::KeyCode::Up,
+            term_wm_core::events::KeyModifiers::NONE,
+            term_wm_core::events::KeyKind::Press,
         ));
         let result = sv.handle_events(&up, &ctx);
         assert!(
@@ -904,9 +923,10 @@ mod tests {
 
         let ctx = ComponentContext::new(true);
 
-        let up = Event::Key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Up,
-            crossterm::event::KeyModifiers::NONE,
+        let up = Event::Key(term_wm_core::events::KeyEvent::new(
+            term_wm_core::events::KeyCode::Up,
+            term_wm_core::events::KeyModifiers::NONE,
+            term_wm_core::events::KeyKind::Press,
         ));
         let result = sv.handle_events(&up, &ctx);
         assert!(
@@ -915,9 +935,10 @@ mod tests {
         );
 
         sv.content.borrow_mut().received_scroll = false;
-        let home = Event::Key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Home,
-            crossterm::event::KeyModifiers::NONE,
+        let home = Event::Key(term_wm_core::events::KeyEvent::new(
+            term_wm_core::events::KeyCode::Home,
+            term_wm_core::events::KeyModifiers::NONE,
+            term_wm_core::events::KeyKind::Press,
         ));
         let result = sv.handle_events(&home, &ctx);
         assert!(
@@ -936,9 +957,14 @@ mod tests {
         let ctx = ComponentContext::new(true);
 
         // Ctrl+Up should NOT be intercepted (default keybinding has NONE modifier)
-        let ctrl_up = Event::Key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Up,
-            crossterm::event::KeyModifiers::CONTROL,
+        let ctrl_up = Event::Key(term_wm_core::events::KeyEvent::new(
+            term_wm_core::events::KeyCode::Up,
+            term_wm_core::events::KeyModifiers {
+                shift: false,
+                control: true,
+                alt: false,
+            },
+            term_wm_core::events::KeyKind::Press,
         ));
         let result = sv.handle_events(&ctrl_up, &ctx);
         assert!(
@@ -948,9 +974,14 @@ mod tests {
 
         sv.content.borrow_mut().received_scroll = false;
         // Shift+PageUp should NOT be intercepted (default binding has NONE modifier)
-        let shift_pgup = Event::Key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::PageUp,
-            crossterm::event::KeyModifiers::SHIFT,
+        let shift_pgup = Event::Key(term_wm_core::events::KeyEvent::new(
+            term_wm_core::events::KeyCode::PageUp,
+            term_wm_core::events::KeyModifiers {
+                shift: true,
+                control: false,
+                alt: false,
+            },
+            term_wm_core::events::KeyKind::Press,
         ));
         let result = sv.handle_events(&shift_pgup, &ctx);
         assert!(
@@ -968,9 +999,10 @@ mod tests {
 
         let ctx = ComponentContext::new(true).with_direct_mode(true);
 
-        let page_up = Event::Key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::PageUp,
-            crossterm::event::KeyModifiers::NONE,
+        let page_up = Event::Key(term_wm_core::events::KeyEvent::new(
+            term_wm_core::events::KeyCode::PageUp,
+            term_wm_core::events::KeyModifiers::NONE,
+            term_wm_core::events::KeyKind::Press,
         ));
         let result = sv.handle_events(&page_up, &ctx);
         assert!(
@@ -992,9 +1024,10 @@ mod tests {
 
         let ctx = ComponentContext::new(true);
 
-        let page_up = Event::Key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::PageUp,
-            crossterm::event::KeyModifiers::NONE,
+        let page_up = Event::Key(term_wm_core::events::KeyEvent::new(
+            term_wm_core::events::KeyCode::PageUp,
+            term_wm_core::events::KeyModifiers::NONE,
+            term_wm_core::events::KeyKind::Press,
         ));
         let result = sv.handle_events(&page_up, &ctx);
         assert!(result.is_ignored(), "None mode must pass all keys through");

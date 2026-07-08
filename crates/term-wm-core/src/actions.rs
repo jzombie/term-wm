@@ -1,7 +1,6 @@
 use std::fmt;
 
-use crossterm::event::Event;
-
+use crate::events::Event;
 use crate::window::WindowKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

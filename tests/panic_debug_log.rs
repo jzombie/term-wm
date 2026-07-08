@@ -2,9 +2,11 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crossterm::event::{Event, KeyEvent, MouseEvent};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect as RatatuiRect;
+use term_wm::events::{Event, KeyEvent, MouseEvent};
 
 use term_wm::actions::SystemTask;
 use term_wm::app_context::AppContext;
@@ -12,7 +14,6 @@ use term_wm::config::AppBuilder;
 use term_wm::io::{EventSource, RenderTarget};
 use term_wm::runner::{WindowManagerHost, run_app};
 use term_wm::task_scheduler::TaskScheduler;
-use term_wm::ui::UiFrame;
 use term_wm::window::{WindowKey, WindowManager};
 
 #[derive(Debug)]
@@ -29,8 +30,6 @@ impl TestOutput {
 }
 
 impl RenderTarget for TestOutput {
-    type Backend = TestBackend;
-
     fn enter(&mut self) -> io::Result<()> {
         Ok(())
     }
@@ -41,12 +40,29 @@ impl RenderTarget for TestOutput {
 
     fn draw<F>(&mut self, f: F) -> io::Result<()>
     where
-        F: FnOnce(UiFrame<'_>),
+        F: FnOnce(&mut dyn term_wm_render::RenderBackend),
     {
         self.terminal
             .draw(move |frame| {
-                let wrapper = UiFrame::new(frame);
-                f(wrapper);
+                let area = frame.area();
+                let buffer = Buffer::empty(area);
+                let mut backend = term_wm_console::RatatuiBackend::new(buffer, area);
+                f(&mut backend);
+                // Copy rendered buffer back to the terminal frame
+                for y in 0..area.height {
+                    for x in 0..area.width {
+                        if let Some(cell) = backend.buffer.cell(RatatuiRect {
+                            x,
+                            y,
+                            width: 1,
+                            height: 1,
+                        }) {
+                            frame
+                                .buffer_mut()
+                                .set_string(x, y, cell.symbol(), cell.style());
+                        }
+                    }
+                }
             })
             .map(|_| ())
             .map_err(|e| io::Error::other(e.to_string()))
@@ -127,7 +143,7 @@ fn render_panic_shows_in_debug_log() {
         TaskScheduler::<SystemTask>::new(),
         |k| k,
         {
-            move |_frame, app| {
+            move |_backend, app| {
                 app.draws += 1;
                 if app.draws == 1 {
                     panic!("{}", panic_msg);

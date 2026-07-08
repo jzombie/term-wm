@@ -15,7 +15,19 @@
 - [X] Autoscroll isn't working in debug log.
 - [] Include README in lib.rs for Rust docs
 - [] README overhaul [See "The term-wm blueprint for engineering authority" audio in NotebookLM]
-- [] The core should not render to the screen, ever [See TODO--1783386930832-shiny-nebula.md, "The Rust No Render Policy" audio file, or "Decoupling TUI Core and Rendering" Google Doc]; completely headless
+- [IN PROGRESS] The core should not render to the screen, ever [See TODO--1783386930832-shiny-nebula.md, "The Rust No Render Policy" audio file, or "Decoupling TUI Core and Rendering" Google Doc]; completely headless
+  - [] Should term-wm-layout-engine's `Rect` struct be renamed to `BoundingBox`?
+  - [X] [UPDATE: This is acceptable; `Press` and `Release` accurately capture the physical state machines of human-interface device hardware across alternate backends (such as web canvases or standard GUI dispatchers).] Why were mouse events renamed from `Down/Up` to `Press/Release`?
+  - [] Any other potential renames?
+  - [] Ensure all sub-crates have consistent Cargo descriptions and READMEs
+  - [] Why is `DrawPlanRenderer` in the main crate when there is a `term-wm-render` crate?  Could feature flags be used to avoid circular deps, if needed? If they cannot be merged, I'm wondering if `term-wm-render` should be renamed to `term-wm-render-bridge` or something.
+  - [] Finish moving whole window loop into `DrawPlanRenderer` to take better advantage of scratch buffer.
+  - [] Wire up CoreEngine; finish removing all rendering from core
+  - [] [LOOK AT IMPACT FOR THESE]
+      1. empty_window_message — default returns "No windows" but nothing renders it; render_app just produces an empty screen
+      2. TermWmApp has dead fields — engine, draw_renderer, known_windows (marked #[allow(dead_code)]) are allocated but never touched
+      3. register vs register_boxed — same body, just spawn vs spawn_boxed; could be one method accepting impl Into<Box<dyn Component>>
+      4. wm_new_window — default no-op, only main.rs bothers to override it; a "New Window" menu item that silently does nothing in most apps
 - [] Double-click should select entire string by default for copying, if using non-direct mode.
 - [X] Pg Down/Up should trigger scrollview in terminal shells, in non-direct mode. This is already handled in the help overlay, so curious why the functionality isn't uniform.
 - [] Can component states be set by a setter/getter instead of direct Cell interaction?

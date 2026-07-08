@@ -1,11 +1,15 @@
 use std::io;
 use std::sync::Arc;
 
+use term_wm_console::console_event_source::ConsoleEventSource;
+use term_wm_console::console_render_target::ConsoleRenderTarget;
+use term_wm_console::draw_plan_renderer::DrawPlanRenderer;
 use term_wm_core::actions::TermWmAction;
 use term_wm_core::app_context::AppContext;
 use term_wm_core::components::{Component, component_downcast_mut};
 use term_wm_core::config::AppBuilder;
-use term_wm_core::io::{ConsoleEventSource, ConsoleRenderTarget, EventSource, RenderTarget};
+use term_wm_core::engine::CoreEngine;
+use term_wm_core::io::{EventSource, RenderTarget};
 use term_wm_core::runner::{WindowManagerHost, run_window_app};
 use term_wm_core::window::{WindowKey, WindowManager};
 use term_wm_core::wm_config::WmConfig;
@@ -27,6 +31,14 @@ pub struct TermWmApp {
     window_keys: Vec<WindowKey>,
     should_quit: bool,
     empty_message: String,
+    /// Core engine for draw plan generation.
+    engine: CoreEngine,
+    /// Draw plan renderer for rendering components.
+    draw_renderer: DrawPlanRenderer,
+    /// Tracks previous window set to avoid recomputing layout every frame.
+    /// TODO: Wire into render pipeline when ready.
+    #[allow(dead_code)]
+    known_windows: Vec<WindowKey>,
 }
 
 impl TermWmApp {
@@ -96,6 +108,9 @@ impl TermWmApp {
             window_keys: Vec::new(),
             should_quit: false,
             empty_message: "No windows".to_string(),
+            engine: CoreEngine::new(),
+            draw_renderer: DrawPlanRenderer::new(),
+            known_windows: Vec::new(),
         }
     }
 
@@ -114,6 +129,7 @@ impl TermWmApp {
         let key = self.wm.spawn(component);
         self.wm
             .transition_window(key, term_wm_core::window::WindowState::Mapped);
+        self.wm.tile_window(key);
         self.window_keys.push(key);
         key
     }
@@ -124,6 +140,7 @@ impl TermWmApp {
         let key = self.wm.spawn_boxed(component);
         self.wm
             .transition_window(key, term_wm_core::window::WindowState::Mapped);
+        self.wm.tile_window(key);
         self.window_keys.push(key);
         key
     }
@@ -131,6 +148,16 @@ impl TermWmApp {
     /// Borrow the WindowManager for configuration or direct access.
     pub fn wm(&mut self) -> &mut WindowManager {
         &mut self.wm
+    }
+
+    /// Borrow the CoreEngine for draw plan generation.
+    pub fn engine(&mut self) -> &mut CoreEngine {
+        &mut self.engine
+    }
+
+    /// Borrow the DrawPlanRenderer for rendering.
+    pub fn draw_renderer(&mut self) -> &mut DrawPlanRenderer {
+        &mut self.draw_renderer
     }
 
     /// Set the display title for a registered window.
@@ -181,5 +208,14 @@ impl WindowManagerHost for TermWmApp {
 
     fn empty_window_message(&self) -> &str {
         &self.empty_message
+    }
+
+    fn render(&mut self, backend: &mut dyn term_wm_render::RenderBackend) {
+        crate::render_app(
+            backend,
+            &mut self.wm,
+            &mut self.engine,
+            &mut self.draw_renderer,
+        );
     }
 }

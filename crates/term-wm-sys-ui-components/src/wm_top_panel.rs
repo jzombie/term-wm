@@ -1,10 +1,8 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 
-use crossterm::event::{Event, MouseEventKind};
-use ratatui::{
-    layout::Rect,
-    style::{Modifier, Style},
-};
+use ratatui::style::{Modifier, Style};
+use term_wm_core::events::{Event, MouseEventKind};
+use term_wm_layout_engine::LayoutRect;
 
 use term_wm_core::{
     actions::{EventResult, TermWmAction},
@@ -13,14 +11,15 @@ use term_wm_core::{
         WmComponent,
     },
     layout::rect_contains,
-    ui::{UiFrame, safe_set_string, truncate_to_width},
+    utils::truncate_to_width,
     window::WindowKey,
 };
+use term_wm_ui_components::helpers::{color_to_ratatui, layout_rect_to_rect, safe_set_string};
 
 #[derive(Debug, Clone, Copy)]
 struct PanelWindowHit {
     id: WindowKey,
-    rect: Rect,
+    rect: LayoutRect,
 }
 
 #[derive(Debug)]
@@ -42,10 +41,10 @@ impl WindowList {
 
 #[derive(Debug)]
 struct NotificationArea {
-    mouse_capture_rect: Option<Rect>,
-    clipboard_rect: Option<Rect>,
-    selection_rect: Option<Rect>,
-    copy_rect: Option<Rect>,
+    mouse_capture_rect: Option<LayoutRect>,
+    clipboard_rect: Option<LayoutRect>,
+    selection_rect: Option<LayoutRect>,
+    copy_rect: Option<LayoutRect>,
 }
 
 impl NotificationArea {
@@ -70,8 +69,8 @@ impl NotificationArea {
 pub struct WmTopPanelComponent {
     visible: bool,
     height: u16,
-    area: Rect,
-    menu_rect: Option<Rect>,
+    area: LayoutRect,
+    menu_rect: Option<LayoutRect>,
     list: WindowList,
     notifications: NotificationArea,
     app_name: String,
@@ -96,7 +95,7 @@ impl WmTopPanelComponent {
         Self {
             visible: true,
             height: 1,
-            area: Rect::default(),
+            area: LayoutRect::default(),
             menu_rect: None,
             list: WindowList::new(),
             notifications: NotificationArea::new(),
@@ -131,7 +130,7 @@ impl WmTopPanelComponent {
         self.height
     }
 
-    pub fn area(&self) -> Rect {
+    pub fn area(&self) -> LayoutRect {
         self.area
     }
 
@@ -143,7 +142,7 @@ impl WmTopPanelComponent {
         self.height = height.max(1);
     }
 
-    pub fn menu_icon_rect(&self) -> Option<Rect> {
+    pub fn menu_icon_rect(&self) -> Option<LayoutRect> {
         self.menu_rect
     }
 
@@ -154,22 +153,22 @@ impl WmTopPanelComponent {
         false
     }
 
-    pub fn split_area(&mut self, active: bool, area: Rect) -> (Rect, Rect) {
+    pub fn split_area(&mut self, active: bool, area: LayoutRect) -> (LayoutRect, LayoutRect) {
         let top_h = if active {
             self.height.min(area.height)
         } else {
             0
         };
-        let panel = Rect {
+        let panel = LayoutRect {
             x: area.x,
             y: area.y,
             width: area.width,
             height: top_h,
         };
         let managed_height = area.height.saturating_sub(top_h);
-        let managed = Rect {
+        let managed = LayoutRect {
             x: area.x,
-            y: area.y.saturating_add(top_h),
+            y: area.y.saturating_add(i32::from(top_h)),
             width: area.width,
             height: managed_height,
         };
@@ -180,7 +179,7 @@ impl WmTopPanelComponent {
     #[allow(clippy::too_many_arguments)]
     pub fn render_inner(
         &mut self,
-        frame: &mut UiFrame<'_>,
+        backend: &mut dyn term_wm_render::RenderBackend,
         active: bool,
         focus_current: WindowKey,
         display_order: &[WindowKey],
@@ -202,8 +201,10 @@ impl WmTopPanelComponent {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        let buffer = frame.buffer_mut();
-        let bounds = area.intersection(buffer.area);
+        let ratatui_backend = term_wm_ui_components::helpers::downcast_ratatui(backend);
+        let buffer = &mut ratatui_backend.buffer;
+        let ratatui_area = layout_rect_to_rect(area);
+        let bounds = ratatui_area.intersection(buffer.area);
         if bounds.width == 0 || bounds.height == 0 {
             return;
         }
@@ -211,40 +212,49 @@ impl WmTopPanelComponent {
             for xx in bounds.x..bounds.x.saturating_add(bounds.width) {
                 if let Some(cell) = buffer.cell_mut((xx, yy)) {
                     let mut st = cell.style();
-                    st.bg = Some(theme.bottom_panel_bg);
-                    st.fg = Some(theme.bottom_panel_fg);
+                    st.bg = Some(color_to_ratatui(theme.bottom_panel_bg));
+                    st.fg = Some(color_to_ratatui(theme.bottom_panel_fg));
                     cell.set_style(st);
                 }
             }
         }
         let mut x = area.x;
         let y = area.y;
-        let max_x = area.x.saturating_add(area.width);
-        let menu_icon = format!("≡ {}", self.app_name);
+        let max_x = area.x.saturating_add(i32::from(area.width));
+        let menu_icon = format!("\u{2261} {}", self.app_name);
         let menu_width = menu_icon.chars().count() as u16;
-        if x.saturating_add(menu_width) <= max_x {
+        if x.saturating_add(i32::from(menu_width)) <= max_x {
             let menu_style = if menu_open {
-                Style::default().bg(theme.menu_bg).fg(theme.menu_fg)
+                Style::default()
+                    .bg(color_to_ratatui(theme.menu_bg))
+                    .fg(color_to_ratatui(theme.menu_fg))
             } else {
                 Style::default()
             };
-            safe_set_string(buffer, bounds, x, y, menu_icon.as_str(), menu_style);
-            self.menu_rect = Some(Rect {
+            safe_set_string(
+                buffer,
+                bounds,
+                x as u16,
+                y as u16,
+                menu_icon.as_str(),
+                menu_style,
+            );
+            self.menu_rect = Some(LayoutRect {
                 x,
                 y,
                 width: menu_width,
                 height: 1,
             });
-            x = x.saturating_add(menu_width);
+            x = x.saturating_add(i32::from(menu_width));
         }
         if x < max_x {
-            safe_set_string(buffer, bounds, x, y, " ", Style::default());
+            safe_set_string(buffer, bounds, x as u16, y as u16, " ", Style::default());
             x = x.saturating_add(1);
         }
         if let Some(status) = status_line {
-            let available = max_x.saturating_sub(x).max(1);
+            let available = (max_x.saturating_sub(x)).max(1);
             let text = truncate_to_width(status, available as usize);
-            safe_set_string(buffer, bounds, x, y, &text, Style::default());
+            safe_set_string(buffer, bounds, x as u16, y as u16, &text, Style::default());
         } else {
             for id in display_order.iter().copied() {
                 let focused = id == focus_current;
@@ -253,34 +263,34 @@ impl WmTopPanelComponent {
                     .get(&id)
                     .cloned()
                     .unwrap_or_else(|| format!("{id:?}"));
-                let max_label = max_x.saturating_sub(x).saturating_sub(2) as usize;
+                let max_label = (max_x.saturating_sub(x).saturating_sub(2)) as usize;
                 if label.chars().count() > max_label {
                     label = truncate_to_width(&label, max_label);
                 }
                 let chunk = format!(" {label} ");
                 let chunk_width = chunk.chars().count() as u16;
-                if x.saturating_add(chunk_width) > max_x {
+                if x.saturating_add(i32::from(chunk_width)) > max_x {
                     break;
                 }
                 let item_style = if focused {
                     Style::default()
-                        .bg(theme.menu_selected_bg)
-                        .fg(theme.menu_selected_fg)
+                        .bg(color_to_ratatui(theme.menu_selected_bg))
+                        .fg(color_to_ratatui(theme.menu_selected_fg))
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(theme.panel_inactive_fg)
+                    Style::default().fg(color_to_ratatui(theme.panel_inactive_fg))
                 };
-                safe_set_string(buffer, bounds, x, y, &chunk, item_style);
+                safe_set_string(buffer, bounds, x as u16, y as u16, &chunk, item_style);
                 self.list.window_hits.push(PanelWindowHit {
                     id,
-                    rect: Rect {
+                    rect: LayoutRect {
                         x,
                         y,
                         width: chunk_width,
                         height: 1,
                     },
                 });
-                x = x.saturating_add(chunk_width);
+                x = x.saturating_add(i32::from(chunk_width));
             }
         }
 
@@ -296,50 +306,57 @@ impl WmTopPanelComponent {
             .saturating_add(copy_width)
             .saturating_add(mouse_width)
             .saturating_add(clip_width);
-        let indicator_x = if total_width >= bounds.width {
-            bounds.x
+        let indicator_x = if i32::from(total_width) >= i32::from(bounds.width) {
+            i32::from(bounds.x)
         } else {
-            max_x.saturating_sub(total_width)
+            max_x.saturating_sub(i32::from(total_width))
         };
         if total_width > 0 && indicator_x < max_x {
             let selection_style = if window_selection_enabled {
                 Style::default()
-                    .fg(theme.success)
+                    .fg(color_to_ratatui(theme.success))
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(theme.panel_inactive_fg)
+                Style::default().fg(color_to_ratatui(theme.panel_inactive_fg))
             };
             let copy_style = if selection_copy_available && clipboard_enabled {
                 let mut style = Style::default()
-                    .fg(theme.success)
+                    .fg(color_to_ratatui(theme.success))
                     .add_modifier(Modifier::BOLD);
                 if selection_copied {
-                    style = style.fg(theme.accent);
+                    style = style.fg(color_to_ratatui(theme.accent));
                 }
                 style
             } else {
-                Style::default().fg(theme.panel_inactive_fg)
+                Style::default().fg(color_to_ratatui(theme.panel_inactive_fg))
             };
             let mouse_style = if mouse_capture_enabled {
                 Style::default()
-                    .fg(theme.success)
+                    .fg(color_to_ratatui(theme.success))
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(theme.panel_inactive_fg)
+                Style::default().fg(color_to_ratatui(theme.panel_inactive_fg))
             };
             let clip_style = if clipboard_enabled {
                 Style::default()
-                    .fg(theme.success)
+                    .fg(color_to_ratatui(theme.success))
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(theme.panel_inactive_fg)
+                Style::default().fg(color_to_ratatui(theme.panel_inactive_fg))
             };
             let mut cursor = indicator_x;
             if selection_width > 0 && cursor < max_x {
-                safe_set_string(buffer, bounds, cursor, y, selection_chunk, selection_style);
-                let width = selection_width.min(max_x.saturating_sub(cursor));
+                safe_set_string(
+                    buffer,
+                    bounds,
+                    cursor as u16,
+                    y as u16,
+                    selection_chunk,
+                    selection_style,
+                );
+                let width = selection_width.min((max_x.saturating_sub(cursor)) as u16);
                 if width > 0 {
-                    self.notifications.selection_rect = Some(Rect {
+                    self.notifications.selection_rect = Some(LayoutRect {
                         x: cursor,
                         y,
                         width,
@@ -347,12 +364,19 @@ impl WmTopPanelComponent {
                     });
                 }
             }
-            cursor = cursor.saturating_add(selection_width);
+            cursor = cursor.saturating_add(i32::from(selection_width));
             if copy_width > 0 && cursor < max_x {
-                safe_set_string(buffer, bounds, cursor, y, copy_chunk, copy_style);
-                let width = copy_width.min(max_x.saturating_sub(cursor));
+                safe_set_string(
+                    buffer,
+                    bounds,
+                    cursor as u16,
+                    y as u16,
+                    copy_chunk,
+                    copy_style,
+                );
+                let width = copy_width.min((max_x.saturating_sub(cursor)) as u16);
                 if width > 0 && selection_copy_available && clipboard_enabled {
-                    self.notifications.copy_rect = Some(Rect {
+                    self.notifications.copy_rect = Some(LayoutRect {
                         x: cursor,
                         y,
                         width,
@@ -360,12 +384,19 @@ impl WmTopPanelComponent {
                     });
                 }
             }
-            cursor = cursor.saturating_add(copy_width);
+            cursor = cursor.saturating_add(i32::from(copy_width));
             if mouse_width > 0 && cursor < max_x {
-                safe_set_string(buffer, bounds, cursor, y, mouse_chunk, mouse_style);
-                let width = mouse_width.min(max_x.saturating_sub(cursor));
+                safe_set_string(
+                    buffer,
+                    bounds,
+                    cursor as u16,
+                    y as u16,
+                    mouse_chunk,
+                    mouse_style,
+                );
+                let width = mouse_width.min((max_x.saturating_sub(cursor)) as u16);
                 if width > 0 {
-                    self.notifications.mouse_capture_rect = Some(Rect {
+                    self.notifications.mouse_capture_rect = Some(LayoutRect {
                         x: cursor,
                         y,
                         width,
@@ -373,12 +404,19 @@ impl WmTopPanelComponent {
                     });
                 }
             }
-            cursor = cursor.saturating_add(mouse_width);
+            cursor = cursor.saturating_add(i32::from(mouse_width));
             if clip_width > 0 && cursor < max_x {
-                safe_set_string(buffer, bounds, cursor, y, clip_chunk, clip_style);
-                let width = clip_width.min(max_x.saturating_sub(cursor));
+                safe_set_string(
+                    buffer,
+                    bounds,
+                    cursor as u16,
+                    y as u16,
+                    clip_chunk,
+                    clip_style,
+                );
+                let width = clip_width.min((max_x.saturating_sub(cursor)) as u16);
                 if width > 0 {
-                    self.notifications.clipboard_rect = Some(Rect {
+                    self.notifications.clipboard_rect = Some(LayoutRect {
                         x: cursor,
                         y,
                         width,
@@ -393,7 +431,7 @@ impl WmTopPanelComponent {
         let Event::Mouse(mouse) = event else {
             return false;
         };
-        if !matches!(mouse.kind, MouseEventKind::Down(_)) {
+        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
             return false;
         }
         if let Some(rect) = self.menu_rect {
@@ -406,7 +444,7 @@ impl WmTopPanelComponent {
         let Event::Mouse(mouse) = event else {
             return false;
         };
-        if !matches!(mouse.kind, MouseEventKind::Down(_)) {
+        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
             return false;
         }
         if let Some(rect) = self.notifications.mouse_capture_rect {
@@ -419,7 +457,7 @@ impl WmTopPanelComponent {
         let Event::Mouse(mouse) = event else {
             return false;
         };
-        if !matches!(mouse.kind, MouseEventKind::Down(_)) {
+        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
             return false;
         }
         if let Some(rect) = self.notifications.clipboard_rect {
@@ -432,7 +470,7 @@ impl WmTopPanelComponent {
         let Event::Mouse(mouse) = event else {
             return false;
         };
-        if !matches!(mouse.kind, MouseEventKind::Down(_)) {
+        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
             return false;
         }
         if let Some(rect) = self.notifications.copy_rect {
@@ -445,7 +483,7 @@ impl WmTopPanelComponent {
         let Event::Mouse(mouse) = event else {
             return false;
         };
-        if !matches!(mouse.kind, MouseEventKind::Down(_)) {
+        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
             return false;
         }
         if let Some(rect) = self.notifications.selection_rect {
@@ -458,7 +496,7 @@ impl WmTopPanelComponent {
         let Event::Mouse(mouse) = event else {
             return None;
         };
-        if !matches!(mouse.kind, MouseEventKind::Down(_)) {
+        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
             return None;
         }
         self.list
@@ -469,15 +507,11 @@ impl WmTopPanelComponent {
     }
 }
 
-impl WmComponent for WmTopPanelComponent {
-    fn consume_area(&mut self, available: Rect) -> (Rect, Rect) {
-        self.split_area(self.active, available)
-    }
-
+impl Component<TermWmAction> for WmTopPanelComponent {
     fn render(
         &mut self,
-        frame: &mut UiFrame<'_>,
-        area: Rect,
+        backend: &mut dyn term_wm_render::RenderBackend,
+        area: LayoutRect,
         ctx: &ComponentContext,
         _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
@@ -502,7 +536,7 @@ impl WmComponent for WmTopPanelComponent {
             let sc = self.selection_copied;
             let mo = self.menu_open;
             self.render_inner(
-                frame,
+                backend,
                 self.active,
                 focus,
                 &display_order,
@@ -518,6 +552,44 @@ impl WmComponent for WmTopPanelComponent {
                 &theme,
             );
         }
+    }
+
+    fn handle_events(
+        &mut self,
+        event: &Event,
+        _ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        let Event::Mouse(mouse) = event else {
+            return EventResult::Ignored;
+        };
+        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
+            return EventResult::Ignored;
+        }
+        if self.menu_icon_contains_point(mouse.column, mouse.row) {
+            return EventResult::Action(TermWmAction::WmToggleOverlay);
+        }
+        if self.hit_test_mouse_capture(event) {
+            return EventResult::Action(TermWmAction::ToggleMouseCapture);
+        }
+        if self.hit_test_selection(event) {
+            return EventResult::Action(TermWmAction::ToggleWindowSelection);
+        }
+        if self.hit_test_clipboard(event) {
+            return EventResult::Action(TermWmAction::ToggleClipboardMode);
+        }
+        if self.hit_test_copy(event) {
+            return EventResult::Action(TermWmAction::CopySelection);
+        }
+        if let Some(key) = self.hit_test_window(event) {
+            return EventResult::Action(TermWmAction::FocusWindow(key));
+        }
+        EventResult::Ignored
+    }
+}
+
+impl WmComponent for WmTopPanelComponent {
+    fn consume_area(&mut self, available: LayoutRect) -> (LayoutRect, LayoutRect) {
+        self.split_area(self.active, available)
     }
 
     fn process_action(&mut self, action: &ComponentAction) {
@@ -581,67 +653,6 @@ impl WmComponent for WmTopPanelComponent {
     fn set_visible(&mut self, visible: bool) {
         self.visible = visible;
     }
-
-    fn handle_event(
-        &mut self,
-        event: &Event,
-        _ctx: &ComponentContext,
-    ) -> EventResult<TermWmAction> {
-        let Event::Mouse(mouse) = event else {
-            return EventResult::Ignored;
-        };
-        if !matches!(mouse.kind, MouseEventKind::Down(_)) {
-            return EventResult::Ignored;
-        }
-        if self.menu_icon_contains_point(mouse.column, mouse.row) {
-            return EventResult::Action(TermWmAction::WmToggleOverlay);
-        }
-        if self.hit_test_mouse_capture(event) {
-            return EventResult::Action(TermWmAction::ToggleMouseCapture);
-        }
-        if self.hit_test_selection(event) {
-            return EventResult::Action(TermWmAction::ToggleWindowSelection);
-        }
-        if self.hit_test_clipboard(event) {
-            return EventResult::Action(TermWmAction::ToggleClipboardMode);
-        }
-        if self.hit_test_copy(event) {
-            return EventResult::Action(TermWmAction::CopySelection);
-        }
-        if let Some(key) = self.hit_test_window(event) {
-            return EventResult::Action(TermWmAction::FocusWindow(key));
-        }
-        EventResult::Ignored
-    }
-}
-
-impl Component<TermWmAction> for WmTopPanelComponent {
-    fn render(
-        &self,
-        _frame: &mut UiFrame<'_>,
-        _area: Rect,
-        _ctx: &ComponentContext,
-        _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
-    ) {
-    }
-
-    fn handle_events(
-        &mut self,
-        _event: &Event,
-        _ctx: &ComponentContext,
-    ) -> EventResult<TermWmAction> {
-        EventResult::Ignored
-    }
-
-    fn update(
-        &mut self,
-        _action: TermWmAction,
-        _ctx: &ComponentContext,
-        _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
-    ) {
-    }
-
-    fn destroy(&mut self) {}
 }
 
 impl Default for WmTopPanelComponent {
@@ -653,7 +664,7 @@ impl Default for WmTopPanelComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{Event, MouseEvent, MouseEventKind};
+    use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
     #[test]
     fn top_panel_basic_methods_and_split_area() {
@@ -663,7 +674,7 @@ mod tests {
         assert!(!p.visible());
         p.set_height(0);
         assert!(p.height() >= 1);
-        let area = Rect {
+        let area = LayoutRect {
             x: 0,
             y: 0,
             width: 10,
@@ -674,10 +685,10 @@ mod tests {
         assert_eq!(managed.width, 10);
 
         let ev = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            kind: MouseEventKind::Press(MouseButton::Left),
             column: 0,
             row: 0,
-            modifiers: crossterm::event::KeyModifiers::NONE,
+            modifiers: KeyModifiers::NONE,
         });
         assert!(!p.hit_test_mouse_capture(&ev));
         assert!(p.hit_test_window(&ev).is_none());
@@ -686,7 +697,7 @@ mod tests {
     #[test]
     fn top_panel_split_area_inactive() {
         let mut p = WmTopPanelComponent::new("test");
-        let area = Rect {
+        let area = LayoutRect {
             x: 0,
             y: 0,
             width: 80,

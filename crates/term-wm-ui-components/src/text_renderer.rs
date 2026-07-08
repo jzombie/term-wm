@@ -3,24 +3,25 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fmt;
 
-use crossterm::event::MouseEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
+use term_wm_core::events::MouseEvent;
 
+use crate::helpers::{color_to_ratatui, layout_rect_to_rect, linkified_to_text};
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::component_context::{ScrollHandle, ScrollViewport};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::events::LocalMouseEvent;
-use term_wm_core::ui::UiFrame;
 use term_wm_core::utils::linkifier::LinkifiedText;
 use term_wm_core::utils::selectable_text::{
     LogicalPosition, SelectionController, SelectionHost, SelectionRange, SelectionViewport,
     handle_selection_mouse,
 };
 use term_wm_core::window::WindowKey;
+use term_wm_layout_engine::LayoutRect;
 
 pub struct TextRendererComponent {
     text: Text<'static>,
@@ -42,23 +43,25 @@ impl fmt::Debug for TextRendererComponent {
 
 impl Component<TermWmAction> for TextRendererComponent {
     fn render(
-        &self,
-        frame: &mut UiFrame<'_>,
-        area: Rect,
+        &mut self,
+        backend: &mut dyn term_wm_render::RenderBackend,
+        area: LayoutRect,
         ctx: &ComponentContext,
         _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
+        let area = layout_rect_to_rect(area);
         self.apply_focus_state(ctx.focused());
         if area.width == 0 || area.height == 0 {
             return;
         }
 
-        let screen_area = ctx.screen_area().unwrap_or(area);
+        let screen_area = ctx.screen_area().map(layout_rect_to_rect).unwrap_or(area);
         self.viewport_cache.set(ctx.viewport());
         if let Some(handle) = ctx.scroll_handle() {
             self.scroll_handle.replace(Some(handle));
         }
 
+        let backend = crate::helpers::downcast_ratatui(backend);
         let viewport_cache = self.viewport_cache.get();
 
         // Calculate Metrics
@@ -90,7 +93,7 @@ impl Component<TermWmAction> for TextRendererComponent {
         let v_off = viewport_cache.offset_y as u16;
         let h_off = viewport_cache.offset_x as u16;
 
-        use term_wm_core::ui::safe_set_string;
+        use crate::helpers::safe_set_string;
 
         const RULE_PLACEHOLDER: &str = "\0RULE\0";
         let usable = usable_width;
@@ -137,7 +140,7 @@ impl Component<TermWmAction> for TextRendererComponent {
                 if start_in_line == 0 && rows_to_render > 0 {
                     let sep = "─".repeat(area.width as usize);
                     safe_set_string(
-                        frame.buffer_mut(),
+                        &mut backend.buffer,
                         area,
                         area.x,
                         y_cursor,
@@ -157,21 +160,22 @@ impl Component<TermWmAction> for TextRendererComponent {
                 paragraph = paragraph.wrap(Wrap { trim: false });
             }
             paragraph = paragraph.scroll((start_in_line as u16, h_off));
-            frame.render_widget(
-                paragraph,
+            paragraph.render(
                 Rect {
                     x: area.x,
                     y: y_cursor,
                     width: area.width,
                     height: rows_to_render as u16,
                 },
+                &mut backend.buffer,
             );
 
             y_cursor = y_cursor.saturating_add(rows_to_render as u16);
             remaining = remaining.saturating_sub(rows_to_render);
             cum_visual += line_vh;
         }
-        self.render_selection_overlay(frame, screen_area, &ctx.config().theme);
+        let backend = crate::helpers::downcast_ratatui(backend);
+        self.render_selection_overlay(&mut backend.buffer, screen_area, &ctx.config().theme);
     }
 
     fn on_mouse(
@@ -184,14 +188,23 @@ impl Component<TermWmAction> for TextRendererComponent {
             self.scroll_handle.replace(Some(handle));
         }
         // Reconstruct screen-space MouseEvent for handle_selection_mouse
-        let screen_area = ctx.screen_area().unwrap_or_default();
+        let screen_area = ctx
+            .screen_area()
+            .map(layout_rect_to_rect)
+            .unwrap_or_default();
         let screen_mouse = MouseEvent {
             column: mouse.col.saturating_add(screen_area.x),
             row: mouse.row.saturating_add(screen_area.y),
             kind: mouse.kind,
             modifiers: mouse.modifiers,
         };
-        if handle_selection_mouse(self, self.selection_enabled, &screen_mouse, screen_area) {
+        let screen_area_lr = LayoutRect {
+            x: screen_area.x as i32,
+            y: screen_area.y as i32,
+            width: screen_area.width,
+            height: screen_area.height,
+        };
+        if handle_selection_mouse(self, self.selection_enabled, &screen_mouse, screen_area_lr) {
             EventResult::Consumed
         } else {
             EventResult::Ignored
@@ -200,7 +213,7 @@ impl Component<TermWmAction> for TextRendererComponent {
 
     fn on_key(
         &mut self,
-        _event: &crossterm::event::Event,
+        _event: &term_wm_core::events::Event,
         _ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
         self.selection.borrow_mut().clear();
@@ -260,9 +273,14 @@ impl TextRendererComponent {
         self.link_map.clear();
     }
 
-    pub fn set_linkified_text(&mut self, linkified: LinkifiedText) {
-        self.text = linkified.text;
-        self.link_map = linkified.link_map;
+    pub fn set_linkified_text(
+        &mut self,
+        linkified: LinkifiedText,
+        theme: &term_wm_core::theme::Theme,
+    ) {
+        let (text, link_map) = linkified_to_text(linkified, theme);
+        self.text = text;
+        self.link_map = link_map;
     }
 
     pub fn set_wrap(&mut self, wrap: bool) {
@@ -365,7 +383,7 @@ impl TextRendererComponent {
 
     fn render_selection_overlay(
         &self,
-        frame: &mut UiFrame<'_>,
+        buffer: &mut ratatui::buffer::Buffer,
         area: Rect,
         theme: &term_wm_core::theme::Theme,
     ) {
@@ -382,7 +400,6 @@ impl TextRendererComponent {
             return;
         };
         let mut bounds = area;
-        let buffer = frame.buffer_mut();
         bounds = bounds.intersection(buffer.area);
         if bounds.width == 0 || bounds.height == 0 {
             return;
@@ -400,7 +417,10 @@ impl TextRendererComponent {
                 if range.contains(pos)
                     && let Some(cell) = buffer.cell_mut((x, y))
                 {
-                    let style = cell.style().bg(theme.selection_bg).fg(theme.selection_fg);
+                    let style = cell
+                        .style()
+                        .bg(color_to_ratatui(theme.selection_bg))
+                        .fg(color_to_ratatui(theme.selection_fg));
                     cell.set_style(style);
                 }
             }
@@ -609,16 +629,17 @@ impl TextRendererComponent {
 }
 
 impl SelectionViewport for TextRendererComponent {
-    fn selection_viewport(&self, area: Rect) -> Rect {
+    fn selection_viewport(&self, area: LayoutRect) -> LayoutRect {
         area
     }
 
     fn logical_position_from_point(
         &mut self,
-        area: Rect,
+        area: LayoutRect,
         column: u16,
         row: u16,
     ) -> Option<LogicalPosition> {
+        let area = layout_rect_to_rect(area);
         self.logical_position_from_point_impl(area, column, row)
     }
 
@@ -684,17 +705,14 @@ impl Default for TextRendererComponent {
 mod tests {
     use super::*;
     use crate::ScrollViewComponent;
-    use crossterm::event::{
-        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
-        MouseEventKind,
+    use ratatui::{buffer::Buffer, text::Text};
+    use term_wm_core::events::{
+        Event, KeyCode, KeyEvent, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
-    use ratatui::{buffer::Buffer, layout::Rect, text::Text};
-    use term_wm_core::ui::UiFrame;
+    use term_wm_layout_engine::LayoutRect;
 
     fn key_event(code: KeyCode) -> KeyEvent {
-        let mut ev = KeyEvent::new(code, KeyModifiers::NONE);
-        ev.kind = KeyEventKind::Press;
-        ev
+        KeyEvent::new(code, KeyModifiers::NONE, KeyKind::Press)
     }
 
     #[test]
@@ -726,12 +744,30 @@ mod tests {
         let long_line = Line::from("0123456789".repeat(20));
         renderer.set_text(Text::from(vec![long_line]));
         let mut scroll_view = ScrollViewComponent::new(renderer);
-        let area = Rect::new(0, 0, 20, 3);
-        let mut buffer = Buffer::empty(area);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 3,
+        };
+        let buffer = Buffer::empty(ratatui::prelude::Rect {
+            x: area.x as u16,
+            y: area.y as u16,
+            width: area.width,
+            height: area.height,
+        });
         {
-            let mut frame = UiFrame::from_parts(area, &mut buffer);
+            let mut backend = term_wm_console::RatatuiBackend::new(
+                buffer,
+                ratatui::prelude::Rect {
+                    x: area.x as u16,
+                    y: area.y as u16,
+                    width: area.width,
+                    height: area.height,
+                },
+            );
             scroll_view.render(
-                &mut frame,
+                &mut backend,
                 area,
                 &ComponentContext::new(true),
                 &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
@@ -743,7 +779,7 @@ mod tests {
         let down = Event::Mouse(MouseEvent {
             column: 10,
             row: 1,
-            kind: MouseEventKind::Down(MouseButton::Left),
+            kind: MouseEventKind::Press(MouseButton::Left),
             modifiers: KeyModifiers::NONE,
         });
         scroll_view.handle_events(&down, &ctx);
@@ -787,24 +823,42 @@ mod tests {
             .collect();
         renderer.set_text(Text::from(lines));
         let mut scroll_view = ScrollViewComponent::new(renderer);
-        let area = Rect::new(0, 0, 20, 5);
-        let mut buffer = ratatui::buffer::Buffer::empty(area);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 5,
+        };
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: area.x as u16,
+            y: area.y as u16,
+            width: area.width,
+            height: area.height,
+        });
         {
-            let mut frame = term_wm_core::ui::UiFrame::from_parts(area, &mut buffer);
+            let mut backend = term_wm_console::RatatuiBackend::new(
+                buffer,
+                ratatui::prelude::Rect {
+                    x: area.x as u16,
+                    y: area.y as u16,
+                    width: area.width,
+                    height: area.height,
+                },
+            );
             scroll_view.render(
-                &mut frame,
+                &mut backend,
                 area,
                 &ComponentContext::new(true),
                 &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
             );
         }
 
-        let scrollbar_x = area.x + area.width.saturating_sub(1);
+        let scrollbar_x = (area.x + i32::from(area.width.saturating_sub(1))) as u16;
         let handled = scroll_view.handle_events(
             &Event::Mouse(MouseEvent {
                 column: scrollbar_x,
-                row: area.y + 1,
-                kind: MouseEventKind::Down(MouseButton::Left),
+                row: (area.y + 1) as u16,
+                kind: MouseEventKind::Press(MouseButton::Left),
                 modifiers: KeyModifiers::NONE,
             }),
             &ComponentContext::new(true).with_screen_area(area),

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use crossterm::QueueableCommand;
 use crossterm::cursor::{Hide, Show};
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event as crossterm_event;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
@@ -18,6 +18,7 @@ use portable_pty::PtySize;
 use term_session_muxio_service_definitions::{
     STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
 };
+use term_wm_core::events::{Event, KeyKind};
 use term_wm_pty_engine::Pane;
 use term_wm_pty_engine::clipboard::{Clipboard, extract_osc52_text};
 use term_wm_pty_engine::input_encoding::{key_to_bytes, mouse_event_to_bytes};
@@ -180,13 +181,187 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         }
 
         // Poll input with a short timeout
-        let had_input = if event::poll(Duration::from_millis(4))? {
-            let evt = event::read()?;
+        let had_input = if crossterm_event::poll(Duration::from_millis(4))? {
+            let crossterm_evt = crossterm_event::read()?;
+            // Convert crossterm event to core-owned event
+            let evt = match crossterm_evt {
+                crossterm_event::Event::Key(key) => Event::Key(term_wm_core::events::KeyEvent {
+                    code: match key.code {
+                        crossterm_event::KeyCode::Char(c) => term_wm_core::events::KeyCode::Char(c),
+                        crossterm_event::KeyCode::Enter => term_wm_core::events::KeyCode::Enter,
+                        crossterm_event::KeyCode::Tab => term_wm_core::events::KeyCode::Tab,
+                        crossterm_event::KeyCode::Backspace => {
+                            term_wm_core::events::KeyCode::Backspace
+                        }
+                        crossterm_event::KeyCode::Esc => term_wm_core::events::KeyCode::Esc,
+                        crossterm_event::KeyCode::Left => term_wm_core::events::KeyCode::Left,
+                        crossterm_event::KeyCode::Right => term_wm_core::events::KeyCode::Right,
+                        crossterm_event::KeyCode::Up => term_wm_core::events::KeyCode::Up,
+                        crossterm_event::KeyCode::Down => term_wm_core::events::KeyCode::Down,
+                        crossterm_event::KeyCode::Home => term_wm_core::events::KeyCode::Home,
+                        crossterm_event::KeyCode::End => term_wm_core::events::KeyCode::End,
+                        crossterm_event::KeyCode::PageUp => term_wm_core::events::KeyCode::PageUp,
+                        crossterm_event::KeyCode::PageDown => {
+                            term_wm_core::events::KeyCode::PageDown
+                        }
+                        crossterm_event::KeyCode::Delete => term_wm_core::events::KeyCode::Delete,
+                        crossterm_event::KeyCode::Insert => term_wm_core::events::KeyCode::Insert,
+                        crossterm_event::KeyCode::F(n) => term_wm_core::events::KeyCode::F(n),
+                        _ => continue,
+                    },
+                    modifiers: term_wm_core::events::KeyModifiers {
+                        shift: key.modifiers.contains(crossterm_event::KeyModifiers::SHIFT),
+                        control: key
+                            .modifiers
+                            .contains(crossterm_event::KeyModifiers::CONTROL),
+                        alt: key.modifiers.contains(crossterm_event::KeyModifiers::ALT),
+                    },
+                    kind: match key.kind {
+                        crossterm_event::KeyEventKind::Press => KeyKind::Press,
+                        crossterm_event::KeyEventKind::Repeat => KeyKind::Repeat,
+                        crossterm_event::KeyEventKind::Release => KeyKind::Release,
+                    },
+                }),
+                crossterm_event::Event::Mouse(mouse) => {
+                    Event::Mouse(term_wm_core::events::MouseEvent {
+                        kind: match mouse.kind {
+                            crossterm_event::MouseEventKind::Down(btn) => {
+                                term_wm_core::events::MouseEventKind::Press(match btn {
+                                    crossterm_event::MouseButton::Left => {
+                                        term_wm_core::events::MouseButton::Left
+                                    }
+                                    crossterm_event::MouseButton::Right => {
+                                        term_wm_core::events::MouseButton::Right
+                                    }
+                                    crossterm_event::MouseButton::Middle => {
+                                        term_wm_core::events::MouseButton::Middle
+                                    }
+                                })
+                            }
+                            crossterm_event::MouseEventKind::Up(btn) => {
+                                term_wm_core::events::MouseEventKind::Release(match btn {
+                                    crossterm_event::MouseButton::Left => {
+                                        term_wm_core::events::MouseButton::Left
+                                    }
+                                    crossterm_event::MouseButton::Right => {
+                                        term_wm_core::events::MouseButton::Right
+                                    }
+                                    crossterm_event::MouseButton::Middle => {
+                                        term_wm_core::events::MouseButton::Middle
+                                    }
+                                })
+                            }
+                            crossterm_event::MouseEventKind::Drag(btn) => {
+                                term_wm_core::events::MouseEventKind::Drag(match btn {
+                                    crossterm_event::MouseButton::Left => {
+                                        term_wm_core::events::MouseButton::Left
+                                    }
+                                    crossterm_event::MouseButton::Right => {
+                                        term_wm_core::events::MouseButton::Right
+                                    }
+                                    crossterm_event::MouseButton::Middle => {
+                                        term_wm_core::events::MouseButton::Middle
+                                    }
+                                })
+                            }
+                            crossterm_event::MouseEventKind::Moved => {
+                                term_wm_core::events::MouseEventKind::Moved
+                            }
+                            crossterm_event::MouseEventKind::ScrollUp => {
+                                term_wm_core::events::MouseEventKind::ScrollUp
+                            }
+                            crossterm_event::MouseEventKind::ScrollDown => {
+                                term_wm_core::events::MouseEventKind::ScrollDown
+                            }
+                            crossterm_event::MouseEventKind::ScrollLeft => {
+                                term_wm_core::events::MouseEventKind::ScrollLeft
+                            }
+                            crossterm_event::MouseEventKind::ScrollRight => {
+                                term_wm_core::events::MouseEventKind::ScrollRight
+                            }
+                        },
+                        modifiers: term_wm_core::events::KeyModifiers {
+                            shift: mouse
+                                .modifiers
+                                .contains(crossterm_event::KeyModifiers::SHIFT),
+                            control: mouse
+                                .modifiers
+                                .contains(crossterm_event::KeyModifiers::CONTROL),
+                            alt: mouse.modifiers.contains(crossterm_event::KeyModifiers::ALT),
+                        },
+                        column: mouse.column,
+                        row: mouse.row,
+                    })
+                }
+                crossterm_event::Event::Resize(w, h) => Event::Resize(w, h),
+                crossterm_event::Event::FocusGained => Event::FocusGained,
+                crossterm_event::Event::FocusLost => Event::FocusLost,
+                crossterm_event::Event::Paste(text) => Event::Paste(text),
+            };
             match evt {
                 Event::Key(ref key)
-                    if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
+                    if key.kind == KeyKind::Press || key.kind == KeyKind::Repeat =>
                 {
-                    let bytes = key_to_bytes(key);
+                    // Convert core-owned KeyEvent to pty-engine KeyEvent
+                    let pty_key = term_wm_pty_engine::input_encoding::KeyEvent {
+                        code: match key.code {
+                            term_wm_core::events::KeyCode::Char(c) => {
+                                term_wm_pty_engine::input_encoding::KeyCode::Char(c)
+                            }
+                            term_wm_core::events::KeyCode::Enter => {
+                                term_wm_pty_engine::input_encoding::KeyCode::Enter
+                            }
+                            term_wm_core::events::KeyCode::Tab => {
+                                term_wm_pty_engine::input_encoding::KeyCode::Tab
+                            }
+                            term_wm_core::events::KeyCode::Backspace => {
+                                term_wm_pty_engine::input_encoding::KeyCode::Backspace
+                            }
+                            term_wm_core::events::KeyCode::Esc => {
+                                term_wm_pty_engine::input_encoding::KeyCode::Esc
+                            }
+                            term_wm_core::events::KeyCode::Left => {
+                                term_wm_pty_engine::input_encoding::KeyCode::Left
+                            }
+                            term_wm_core::events::KeyCode::Right => {
+                                term_wm_pty_engine::input_encoding::KeyCode::Right
+                            }
+                            term_wm_core::events::KeyCode::Up => {
+                                term_wm_pty_engine::input_encoding::KeyCode::Up
+                            }
+                            term_wm_core::events::KeyCode::Down => {
+                                term_wm_pty_engine::input_encoding::KeyCode::Down
+                            }
+                            term_wm_core::events::KeyCode::Home => {
+                                term_wm_pty_engine::input_encoding::KeyCode::Home
+                            }
+                            term_wm_core::events::KeyCode::End => {
+                                term_wm_pty_engine::input_encoding::KeyCode::End
+                            }
+                            term_wm_core::events::KeyCode::PageUp => {
+                                term_wm_pty_engine::input_encoding::KeyCode::PageUp
+                            }
+                            term_wm_core::events::KeyCode::PageDown => {
+                                term_wm_pty_engine::input_encoding::KeyCode::PageDown
+                            }
+                            term_wm_core::events::KeyCode::Delete => {
+                                term_wm_pty_engine::input_encoding::KeyCode::Delete
+                            }
+                            term_wm_core::events::KeyCode::Insert => {
+                                term_wm_pty_engine::input_encoding::KeyCode::Insert
+                            }
+                            term_wm_core::events::KeyCode::F(n) => {
+                                term_wm_pty_engine::input_encoding::KeyCode::F(n)
+                            }
+                            _ => continue,
+                        },
+                        modifiers: term_wm_pty_engine::input_encoding::KeyModifiers {
+                            shift: key.modifiers.shift,
+                            control: key.modifiers.control,
+                            alt: key.modifiers.alt,
+                        },
+                    };
+                    let bytes = key_to_bytes(&pty_key);
                     if !bytes.is_empty() {
                         let _ = pane.write_bytes(&bytes);
                     }
@@ -199,7 +374,39 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                         parser.screen().mouse_protocol_mode() != MouseProtocolMode::None
                     };
                     if mouse_active {
-                        let bytes = mouse_event_to_bytes(mouse, MouseProtocolEncoding::Sgr);
+                        // Convert core-owned MouseEvent to pty-engine MouseEvent
+                        let pty_mouse = term_wm_pty_engine::input_encoding::MouseEvent {
+                            kind: match mouse.kind {
+                                term_wm_core::events::MouseEventKind::Press(btn) => term_wm_pty_engine::input_encoding::MouseEventKind::Press(match btn {
+                                    term_wm_core::events::MouseButton::Left => term_wm_pty_engine::input_encoding::MouseButton::Left,
+                                    term_wm_core::events::MouseButton::Right => term_wm_pty_engine::input_encoding::MouseButton::Right,
+                                    term_wm_core::events::MouseButton::Middle => term_wm_pty_engine::input_encoding::MouseButton::Middle,
+                                }),
+                                term_wm_core::events::MouseEventKind::Release(btn) => term_wm_pty_engine::input_encoding::MouseEventKind::Release(match btn {
+                                    term_wm_core::events::MouseButton::Left => term_wm_pty_engine::input_encoding::MouseButton::Left,
+                                    term_wm_core::events::MouseButton::Right => term_wm_pty_engine::input_encoding::MouseButton::Right,
+                                    term_wm_core::events::MouseButton::Middle => term_wm_pty_engine::input_encoding::MouseButton::Middle,
+                                }),
+                                term_wm_core::events::MouseEventKind::Drag(btn) => term_wm_pty_engine::input_encoding::MouseEventKind::Drag(match btn {
+                                    term_wm_core::events::MouseButton::Left => term_wm_pty_engine::input_encoding::MouseButton::Left,
+                                    term_wm_core::events::MouseButton::Right => term_wm_pty_engine::input_encoding::MouseButton::Right,
+                                    term_wm_core::events::MouseButton::Middle => term_wm_pty_engine::input_encoding::MouseButton::Middle,
+                                }),
+                                term_wm_core::events::MouseEventKind::Moved => term_wm_pty_engine::input_encoding::MouseEventKind::Moved,
+                                term_wm_core::events::MouseEventKind::ScrollUp => term_wm_pty_engine::input_encoding::MouseEventKind::ScrollUp,
+                                term_wm_core::events::MouseEventKind::ScrollDown => term_wm_pty_engine::input_encoding::MouseEventKind::ScrollDown,
+                                term_wm_core::events::MouseEventKind::ScrollLeft => term_wm_pty_engine::input_encoding::MouseEventKind::ScrollLeft,
+                                term_wm_core::events::MouseEventKind::ScrollRight => term_wm_pty_engine::input_encoding::MouseEventKind::ScrollRight,
+                            },
+                            modifiers: term_wm_pty_engine::input_encoding::KeyModifiers {
+                                shift: mouse.modifiers.shift,
+                                control: mouse.modifiers.control,
+                                alt: mouse.modifiers.alt,
+                            },
+                            column: mouse.column,
+                            row: mouse.row,
+                        };
+                        let bytes = mouse_event_to_bytes(&pty_mouse, MouseProtocolEncoding::Sgr);
                         if !bytes.is_empty() {
                             let _ = pane.write_bytes(&bytes);
                         }

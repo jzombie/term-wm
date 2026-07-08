@@ -5,6 +5,8 @@ pub mod component_context;
 pub mod components;
 pub mod constants;
 pub mod debug_event_flags;
+pub mod draw_plan;
+pub mod engine;
 pub mod event_loop;
 pub mod events;
 pub mod hitbox_registry;
@@ -16,16 +18,15 @@ pub mod power_profile;
 pub mod reaper;
 pub mod task_scheduler;
 pub mod term_color;
-pub use term_wm_pty_engine::Pane;
-pub use term_wm_pty_engine::Pty;
-pub use term_wm_pty_engine::PtyResult;
 pub use term_wm_pty_engine::PtyStatus;
 pub use term_wm_pty_engine::clipboard;
-pub use term_wm_pty_engine::title;
 pub mod config;
 pub mod runner;
 pub mod theme;
-pub mod ui;
 pub mod utils;
 pub mod window;
 pub mod wm_config;
+
+/// Core-owned `Rect` — aliases `LayoutRect` from the layout engine.
+/// This replaces `ratatui::layout::Rect` throughout core.
+pub type Rect = term_wm_layout_engine::LayoutRect;

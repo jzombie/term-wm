@@ -1,5 +1,7 @@
 TODO: I don't think that runner.rs or core should be rendering directly, nor have duplicated rendering logic.  Somehow the core needs to be able to signal to the app that we are going to render something, not directly render itself.
 
+**SUPERSEDED BY**: `1783443296979-playful-falcon.md` — Double-Buffered View Model Projection Architecture. This plan addresses the root cause by separating the core engine (which produces IR) from the app layer (which renders). The `render_empty_message()` fix is unnecessary once the core no longer renders directly.
+
 # Center Empty Window Message in Managed Area
 
 ## Problem

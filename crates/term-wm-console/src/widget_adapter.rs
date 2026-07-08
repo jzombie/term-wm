@@ -1,14 +1,15 @@
 use std::cell::RefCell;
 
-use ratatui::layout::Rect;
+use term_wm_layout_engine::LayoutRect;
 
-use crate::actions::TermWmAction;
-use crate::components::{Component, ComponentContext};
-use crate::hitbox_registry::HitboxRegistry;
-use crate::ui::UiFrame;
+use crate::RenderBackend;
+use term_wm_core::actions::TermWmAction;
+use term_wm_core::components::{Component, ComponentContext};
+use term_wm_core::hitbox_registry::HitboxRegistry;
 
-type RenderFn = Box<dyn Fn(&mut UiFrame<'_>, Rect, &ComponentContext)>;
-type StatefulRenderFn<S> = Box<dyn Fn(&mut UiFrame<'_>, Rect, &mut S, &ComponentContext)>;
+type RenderFn = Box<dyn Fn(&mut dyn RenderBackend, LayoutRect, &ComponentContext)>;
+type StatefulRenderFn<S> =
+    Box<dyn Fn(&mut dyn RenderBackend, LayoutRect, &mut S, &ComponentContext)>;
 
 /// Wraps a closure-based renderer as a term-wm Component.
 /// For stateless widgets (Paragraph, Block, Gauge, etc.)
@@ -31,7 +32,7 @@ pub struct WidgetAdapter {
 impl WidgetAdapter {
     pub fn new<F>(render_fn: F) -> Self
     where
-        F: Fn(&mut UiFrame<'_>, Rect, &ComponentContext) + 'static,
+        F: Fn(&mut dyn RenderBackend, LayoutRect, &ComponentContext) + 'static,
     {
         Self {
             render_fn: Box::new(render_fn),
@@ -41,13 +42,13 @@ impl WidgetAdapter {
 
 impl Component<TermWmAction> for WidgetAdapter {
     fn render(
-        &self,
-        frame: &mut UiFrame<'_>,
-        area: Rect,
+        &mut self,
+        backend: &mut dyn RenderBackend,
+        area: LayoutRect,
         ctx: &ComponentContext,
         _registry: &mut HitboxRegistry,
     ) {
-        (self.render_fn)(frame, area, ctx);
+        (self.render_fn)(backend, area, ctx);
     }
 }
 
@@ -78,7 +79,7 @@ pub struct StatefulWidgetAdapter<S> {
 impl<S: 'static> StatefulWidgetAdapter<S> {
     pub fn new<F>(initial_state: S, render_fn: F) -> Self
     where
-        F: Fn(&mut UiFrame<'_>, Rect, &mut S, &ComponentContext) + 'static,
+        F: Fn(&mut dyn RenderBackend, LayoutRect, &mut S, &ComponentContext) + 'static,
     {
         Self {
             state: RefCell::new(initial_state),
@@ -103,13 +104,13 @@ impl<S: 'static> StatefulWidgetAdapter<S> {
 
 impl<S: 'static> Component<TermWmAction> for StatefulWidgetAdapter<S> {
     fn render(
-        &self,
-        frame: &mut UiFrame<'_>,
-        area: Rect,
+        &mut self,
+        backend: &mut dyn RenderBackend,
+        area: LayoutRect,
         ctx: &ComponentContext,
         _registry: &mut HitboxRegistry,
     ) {
         let mut state = self.state.borrow_mut();
-        (self.render_fn)(frame, area, &mut *state, ctx);
+        (self.render_fn)(backend, area, &mut *state, ctx);
     }
 }

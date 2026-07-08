@@ -1,8 +1,7 @@
 use std::io;
 use std::time::Duration;
 
-use crossterm::event::Event;
-
+use crate::events::Event;
 use crate::io::EventSource;
 
 pub enum ControlFlow {
@@ -83,9 +82,9 @@ impl<D: EventSource> EventLoop<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events::{KeyCode, KeyKind, KeyModifiers};
     use crate::io::EventSource;
     use crate::power_profile::PowerProfile;
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
     use std::time::Duration;
 
     struct DummyEventSource {
@@ -106,17 +105,22 @@ mod tests {
         }
 
         fn read(&mut self) -> std::io::Result<Event> {
-            Ok(Event::Key(KeyEvent::new(
-                KeyCode::Char('x'),
-                KeyModifiers::NONE,
-            )))
+            Ok(Event::Key(crate::events::KeyEvent {
+                code: KeyCode::Char('x'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyKind::Press,
+            }))
         }
 
-        fn next_key(&mut self) -> std::io::Result<KeyEvent> {
-            Ok(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE))
+        fn next_key(&mut self) -> std::io::Result<crate::events::KeyEvent> {
+            Ok(crate::events::KeyEvent {
+                code: KeyCode::Char('x'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyKind::Press,
+            })
         }
 
-        fn next_mouse(&mut self) -> std::io::Result<crossterm::event::MouseEvent> {
+        fn next_mouse(&mut self) -> std::io::Result<crate::events::MouseEvent> {
             Err(io::Error::other("not implemented"))
         }
     }
@@ -169,11 +173,11 @@ mod tests {
             panic!("read should not be called when poll returns false");
         }
 
-        fn next_key(&mut self) -> std::io::Result<KeyEvent> {
+        fn next_key(&mut self) -> std::io::Result<crate::events::KeyEvent> {
             panic!("next_key not expected");
         }
 
-        fn next_mouse(&mut self) -> std::io::Result<crossterm::event::MouseEvent> {
+        fn next_mouse(&mut self) -> std::io::Result<crate::events::MouseEvent> {
             Err(io::Error::other("not implemented"))
         }
 

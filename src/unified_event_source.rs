@@ -8,13 +8,15 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, bounded};
-use crossterm::event::{Event, KeyEvent, MouseEvent};
 
-use super::EventSource;
-use super::frame_pacer::FramePacer;
-use crate::power_profile::PowerProfile;
-use crate::utils::KeyboardNormalizer;
-use crate::window::WindowKey;
+use term_wm_core::events::{
+    Event, KeyCode, KeyEvent, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
+use term_wm_core::io::EventSource;
+use term_wm_core::io::frame_pacer::FramePacer;
+use term_wm_core::power_profile::PowerProfile;
+use term_wm_core::utils::KeyboardNormalizer;
+use term_wm_core::window::WindowKey;
 
 /// Capacity of the crossbeam channel between event producers and the event
 /// loop. Generous capacity since wakeup gating (dirty.swap) prevents flooding.
@@ -98,8 +100,11 @@ impl UnifiedEventSource {
                     // Blocking poll with short timeout so we can check shutdown.
                     if crossterm::event::poll(INPUT_THREAD_POLL_INTERVAL).unwrap_or(false) {
                         match crossterm::event::read() {
-                            Ok(event) => {
-                                if input_tx.send(UnifiedEvent::Input(event)).is_err() {
+                            Ok(crossterm_event) => {
+                                // Translate crossterm event to core-owned event
+                                if let Some(core_event) = translate_crossterm_event(crossterm_event)
+                                    && input_tx.send(UnifiedEvent::Input(core_event)).is_err()
+                                {
                                     break; // receiver dropped
                                 }
                             }
@@ -172,6 +177,98 @@ impl UnifiedEventSource {
     /// Take accumulated dirty windows and reset.
     pub fn take_dirty_windows(&mut self) -> HashSet<WindowKey> {
         std::mem::take(&mut self.dirty_windows)
+    }
+}
+
+/// Translate a crossterm event to a core-owned event.
+fn translate_crossterm_event(evt: crossterm::event::Event) -> Option<Event> {
+    match evt {
+        crossterm::event::Event::Key(key) => Some(Event::Key(translate_key_event(key))),
+        crossterm::event::Event::Mouse(mouse) => Some(Event::Mouse(translate_mouse_event(mouse))),
+        crossterm::event::Event::Resize(w, h) => Some(Event::Resize(w, h)),
+        crossterm::event::Event::FocusGained => Some(Event::FocusGained),
+        crossterm::event::Event::FocusLost => Some(Event::FocusLost),
+        crossterm::event::Event::Paste(text) => Some(Event::Paste(text)),
+    }
+}
+
+fn translate_key_event(key: crossterm::event::KeyEvent) -> KeyEvent {
+    let mut modifiers = translate_key_modifiers(key.modifiers);
+    // macOS sends BackTab for Shift+Tab — set shift
+    if matches!(key.code, crossterm::event::KeyCode::BackTab) {
+        modifiers.shift = true;
+    }
+    KeyEvent {
+        code: translate_key_code(key.code),
+        modifiers,
+        kind: match key.kind {
+            crossterm::event::KeyEventKind::Press => KeyKind::Press,
+            crossterm::event::KeyEventKind::Repeat => KeyKind::Repeat,
+            crossterm::event::KeyEventKind::Release => KeyKind::Release,
+        },
+    }
+}
+
+fn translate_key_code(code: crossterm::event::KeyCode) -> KeyCode {
+    match code {
+        crossterm::event::KeyCode::Char(c) => KeyCode::Char(c),
+        crossterm::event::KeyCode::Enter => KeyCode::Enter,
+        crossterm::event::KeyCode::Tab => KeyCode::Tab,
+        crossterm::event::KeyCode::BackTab => KeyCode::Tab,
+        crossterm::event::KeyCode::Backspace => KeyCode::Backspace,
+        crossterm::event::KeyCode::Esc => KeyCode::Esc,
+        crossterm::event::KeyCode::Left => KeyCode::Left,
+        crossterm::event::KeyCode::Right => KeyCode::Right,
+        crossterm::event::KeyCode::Up => KeyCode::Up,
+        crossterm::event::KeyCode::Down => KeyCode::Down,
+        crossterm::event::KeyCode::Home => KeyCode::Home,
+        crossterm::event::KeyCode::End => KeyCode::End,
+        crossterm::event::KeyCode::PageUp => KeyCode::PageUp,
+        crossterm::event::KeyCode::PageDown => KeyCode::PageDown,
+        crossterm::event::KeyCode::Delete => KeyCode::Delete,
+        crossterm::event::KeyCode::Insert => KeyCode::Insert,
+        crossterm::event::KeyCode::F(n) => KeyCode::F(n),
+        _ => KeyCode::Esc, // Fallback for unrecognized keys
+    }
+}
+
+fn translate_key_modifiers(mods: crossterm::event::KeyModifiers) -> KeyModifiers {
+    KeyModifiers {
+        shift: mods.contains(crossterm::event::KeyModifiers::SHIFT),
+        control: mods.contains(crossterm::event::KeyModifiers::CONTROL),
+        alt: mods.contains(crossterm::event::KeyModifiers::ALT),
+    }
+}
+
+fn translate_mouse_event(mouse: crossterm::event::MouseEvent) -> MouseEvent {
+    MouseEvent {
+        kind: match mouse.kind {
+            crossterm::event::MouseEventKind::Down(btn) => {
+                MouseEventKind::Press(translate_button(btn))
+            }
+            crossterm::event::MouseEventKind::Up(btn) => {
+                MouseEventKind::Release(translate_button(btn))
+            }
+            crossterm::event::MouseEventKind::Drag(btn) => {
+                MouseEventKind::Drag(translate_button(btn))
+            }
+            crossterm::event::MouseEventKind::Moved => MouseEventKind::Moved,
+            crossterm::event::MouseEventKind::ScrollUp => MouseEventKind::ScrollUp,
+            crossterm::event::MouseEventKind::ScrollDown => MouseEventKind::ScrollDown,
+            crossterm::event::MouseEventKind::ScrollLeft => MouseEventKind::ScrollLeft,
+            crossterm::event::MouseEventKind::ScrollRight => MouseEventKind::ScrollRight,
+        },
+        modifiers: translate_key_modifiers(mouse.modifiers),
+        column: mouse.column,
+        row: mouse.row,
+    }
+}
+
+fn translate_button(btn: crossterm::event::MouseButton) -> MouseButton {
+    match btn {
+        crossterm::event::MouseButton::Left => MouseButton::Left,
+        crossterm::event::MouseButton::Right => MouseButton::Right,
+        crossterm::event::MouseButton::Middle => MouseButton::Middle,
     }
 }
 
@@ -399,7 +496,7 @@ impl Drop for UnifiedEventSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyCode, KeyModifiers};
+    use crate::events::{KeyCode, KeyKind, KeyModifiers};
 
     /// Input events drained by `drain_pending` must be preserved in
     /// `input_buffer` so `poll()/read()` can process every event.
@@ -427,10 +524,11 @@ mod tests {
 
         // Send 10 input events into the channel
         for i in 0..10u8 {
-            let evt = Event::Key(KeyEvent::new(
-                KeyCode::Char(char::from(b'a' + i)),
-                KeyModifiers::NONE,
-            ));
+            let evt = Event::Key(KeyEvent {
+                code: KeyCode::Char(char::from(b'a' + i)),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyKind::Press,
+            });
             tx.send(UnifiedEvent::Input(evt)).unwrap();
         }
         // Also mix in some PtyWakeups (the reason drain_pending exists)

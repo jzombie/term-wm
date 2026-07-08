@@ -2,16 +2,16 @@ use std::cell::Cell;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
-use crossterm::event::Event;
-use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders, Clear};
+use term_wm_core::events::Event;
+use term_wm_layout_engine::LayoutRect;
 
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::app_context::AppContext;
 use term_wm_core::components::{Component, ComponentContext, Overlay};
 use term_wm_core::keybindings::{Category, KeyBindings};
-use term_wm_core::ui::UiFrame;
 use term_wm_core::window::WindowKey;
+use term_wm_ui_components::helpers::layout_rect_to_rect;
 use term_wm_ui_components::{
     DialogOverlayComponent, ListComponent, ScrollKeyMode, ScrollViewComponent,
 };
@@ -19,7 +19,7 @@ use term_wm_ui_components::{
 pub struct WmKeybindingOverlayComponent {
     dialog: DialogOverlayComponent,
     content: ScrollViewComponent<ListComponent>,
-    area: Cell<Rect>,
+    area: Cell<LayoutRect>,
     keybindings: KeyBindings,
     app_ctx: Arc<AppContext>,
 }
@@ -35,7 +35,7 @@ impl WmKeybindingOverlayComponent {
         let mut overlay = Self {
             dialog,
             content: list,
-            area: Cell::new(Rect::default()),
+            area: Cell::new(LayoutRect::default()),
             keybindings,
             app_ctx: Arc::clone(app_ctx),
         };
@@ -104,29 +104,35 @@ impl std::fmt::Debug for WmKeybindingOverlayComponent {
 
 impl Component<TermWmAction> for WmKeybindingOverlayComponent {
     fn render(
-        &self,
-        frame: &mut UiFrame<'_>,
-        area: Rect,
+        &mut self,
+        backend: &mut dyn term_wm_render::RenderBackend,
+        area: LayoutRect,
         _ctx: &ComponentContext,
         registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
         if !self.dialog.visible() || area.width == 0 || area.height == 0 {
             return;
         }
-        let title = format!("{} — Keybindings", self.app_ctx.app_name);
-        self.dialog.render_backdrop(frame, area, None);
-        let rect = self.dialog.rect_for(area);
-        frame.render_widget(Clear, rect);
-        let block = Block::default().title(title.as_str()).borders(Borders::ALL);
-        let inner = Rect {
-            x: rect.x.saturating_add(1),
-            y: rect.y.saturating_add(1),
+        let title = format!("{} \u{2014} Keybindings", self.app_ctx.app_name);
+        self.dialog.render_backdrop(backend, area, None);
+        let ratatui_area = layout_rect_to_rect(area);
+        let rect = self.dialog.rect_for(ratatui_area);
+        {
+            let backend = term_wm_ui_components::helpers::downcast_ratatui(backend);
+            let buffer = &mut backend.buffer;
+            use ratatui::widgets::Widget;
+            Clear.render(rect, buffer);
+            let block = Block::default().title(title.as_str()).borders(Borders::ALL);
+            block.render(rect, buffer);
+        }
+        let inner_layout = LayoutRect {
+            x: i32::from(rect.x).saturating_add(1),
+            y: i32::from(rect.y).saturating_add(1),
             width: rect.width.saturating_sub(2),
             height: rect.height.saturating_sub(2),
         };
-        frame.render_widget(block, rect);
         let ctx = ComponentContext::new(true).with_overlay(true);
-        self.content.render(frame, inner, &ctx, registry);
+        self.content.render(backend, inner_layout, &ctx, registry);
     }
 
     fn handle_events(
@@ -147,7 +153,9 @@ impl Component<TermWmAction> for WmKeybindingOverlayComponent {
                 }
             }
             Event::Mouse(_) => {
-                if self.dialog.handle_click_outside(event, self.area.get()) {
+                let area = self.area.get();
+                let ratatui_area = layout_rect_to_rect(area);
+                if self.dialog.handle_click_outside(event, ratatui_area) {
                     self.close();
                     return EventResult::Consumed;
                 }
@@ -203,22 +211,34 @@ mod tests {
 
     #[test]
     fn keybinding_overlay_render_when_hidden_is_noop() {
-        let overlay = make_overlay();
-        let mut buffer = Buffer::empty(Rect::new(0, 0, 80, 24));
-        let mut frame = UiFrame::from_parts(Rect::new(0, 0, 80, 24), &mut buffer);
+        let mut overlay = make_overlay();
+        let buffer = Buffer::empty(ratatui::layout::Rect::new(0, 0, 80, 24));
+        let mut backend =
+            term_wm_console::RatatuiBackend::new(buffer, ratatui::layout::Rect::new(0, 0, 80, 24));
         let ctx = ComponentContext::new(true);
         let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
-        overlay.render(&mut frame, Rect::new(0, 0, 80, 24), &ctx, &mut registry);
+        overlay.render(
+            &mut backend,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+            &ctx,
+            &mut registry,
+        );
     }
 
     #[test]
     fn keybinding_overlay_handle_events_when_hidden_returns_ignored() {
         let mut overlay = make_overlay();
         let ctx = ComponentContext::new(true);
-        let key = Event::Key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Esc,
-            crossterm::event::KeyModifiers::NONE,
-        ));
+        let key = Event::Key(term_wm_core::events::KeyEvent {
+            code: term_wm_core::events::KeyCode::Esc,
+            modifiers: term_wm_core::events::KeyModifiers::NONE,
+            kind: term_wm_core::events::KeyKind::Press,
+        });
         let result = overlay.handle_events(&key, &ctx);
         assert!(result.is_ignored());
     }
@@ -229,10 +249,11 @@ mod tests {
         overlay.show();
         assert!(overlay.visible());
         let ctx = ComponentContext::new(true);
-        let key = Event::Key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Esc,
-            crossterm::event::KeyModifiers::NONE,
-        ));
+        let key = Event::Key(term_wm_core::events::KeyEvent {
+            code: term_wm_core::events::KeyCode::Esc,
+            modifiers: term_wm_core::events::KeyModifiers::NONE,
+            kind: term_wm_core::events::KeyKind::Press,
+        });
         let result = overlay.handle_events(&key, &ctx);
         assert!(result.is_consumed());
         assert!(!overlay.visible());

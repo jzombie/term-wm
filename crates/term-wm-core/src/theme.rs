@@ -1,4 +1,60 @@
-use ratatui::style::Color;
+/// Simple color type owned by core (no ratatui dependency).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Color {
+    Black,
+    Red,
+    Green,
+    Yellow,
+    Blue,
+    Magenta,
+    Cyan,
+    White,
+    Gray,
+    DarkGray,
+    LightRed,
+    LightGreen,
+    LightYellow,
+    LightBlue,
+    LightMagenta,
+    LightCyan,
+    Rgb(u8, u8, u8),
+    Indexed(u8),
+}
+
+/// Semantic role — pure data description of how text should look,
+/// divorced from any terminal rendering concept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SemanticRole {
+    Normal,
+    Highlight,
+    Error,
+    Warning,
+    Success,
+    Muted,
+    Disabled,
+    Link,
+    Bold,
+    Italic,
+    Underlined,
+    Dimmed,
+}
+
+/// Pure data representation of text with a semantic role.
+/// The UI crates convert this to Ratatui's `Span`/`Line` during rendering.
+#[derive(Debug, Clone)]
+pub struct ThemedText {
+    pub content: String,
+    pub role: SemanticRole,
+}
+
+impl ThemedText {
+    pub fn new(content: impl Into<String>, role: SemanticRole) -> Self {
+        Self {
+            content: content.into(),
+            role,
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Semantic roles — the compiler-enforced exhaustive list of every color
@@ -242,7 +298,7 @@ pub fn contrast_ratio(a: Color, b: Color) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::style::Color;
+    use crate::theme::Color;
     use strum::IntoEnumIterator;
 
     // ------------------------------------------------------------------

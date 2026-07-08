@@ -1,13 +1,14 @@
+// TODO: Refactor; it looks like "components" are in the core
+
 use std::collections::VecDeque;
 
-use crossterm::event::Event;
-use ratatui::layout::Rect;
+use term_wm_layout_engine::LayoutRect;
 
 pub use crate::actions::EventResult;
 use crate::actions::TermWmAction;
 pub use crate::component_context::ComponentContext;
+use crate::events::Event;
 use crate::power_profile::PowerProfile;
-use crate::ui::UiFrame;
 use crate::window::WindowKey;
 use crate::wm_config::HintVisibility;
 
@@ -42,14 +43,16 @@ pub trait Component<Msg>: std::any::Any {
     fn handle_events(&mut self, event: &Event, ctx: &ComponentContext) -> EventResult<Msg> {
         if let Event::Mouse(mouse) = event {
             if let Some(screen_area) = ctx.screen_area() {
-                let is_inside = mouse.column >= screen_area.x
-                    && mouse.column < screen_area.x.saturating_add(screen_area.width)
-                    && mouse.row >= screen_area.y
-                    && mouse.row < screen_area.y.saturating_add(screen_area.height);
+                let is_inside = i32::from(mouse.column) >= screen_area.x
+                    && i32::from(mouse.column)
+                        < screen_area.x.saturating_add(i32::from(screen_area.width))
+                    && i32::from(mouse.row) >= screen_area.y
+                    && i32::from(mouse.row)
+                        < screen_area.y.saturating_add(i32::from(screen_area.height));
                 if is_inside {
                     let local = crate::events::LocalMouseEvent {
-                        col: mouse.column.saturating_sub(screen_area.x),
-                        row: mouse.row.saturating_sub(screen_area.y),
+                        col: mouse.column.saturating_sub(screen_area.x.max(0) as u16),
+                        row: mouse.row.saturating_sub(screen_area.y.max(0) as u16),
                         kind: mouse.kind,
                         modifiers: mouse.modifiers,
                     };
@@ -84,16 +87,16 @@ pub trait Component<Msg>: std::any::Any {
     ) {
     }
 
-    /// Phase 4: Pure render. Takes &self — no state mutation.
+    /// Phase 4: Render the component.
     ///
     /// The `registry` parameter allows components to register their clickable
     /// areas for hit-testing. Scroll containers call `registry.push_clip()`
-    /// before rendering children and `registry.pop_clip()` afterward, which
+    /// before rendering children and `pop_clip()` afterward, which
     /// automatically clips child registrations to the visible viewport.
     fn render(
-        &self,
-        frame: &mut UiFrame<'_>,
-        area: Rect,
+        &mut self,
+        backend: &mut dyn term_wm_render::RenderBackend,
+        area: LayoutRect,
         ctx: &ComponentContext,
         registry: &mut crate::hitbox_registry::HitboxRegistry,
     );
@@ -149,9 +152,9 @@ pub struct NoopComponent;
 
 impl Component<TermWmAction> for NoopComponent {
     fn render(
-        &self,
-        _frame: &mut UiFrame<'_>,
-        _area: Rect,
+        &mut self,
+        _backend: &mut dyn term_wm_render::RenderBackend,
+        _area: LayoutRect,
         _ctx: &ComponentContext,
         _registry: &mut crate::hitbox_registry::HitboxRegistry,
     ) {
@@ -172,7 +175,7 @@ pub trait Overlay<Msg>: Component<Msg> + std::any::Any {
     }
     /// Optional terminal-area rect behind which a drop-shadow should be
     /// rendered.  The overlay is drawn on top of the shadow.
-    fn shadow_rect(&self, _area: Rect) -> Option<Rect> {
+    fn shadow_rect(&self, _area: LayoutRect) -> Option<LayoutRect> {
         None
     }
     fn handle_confirm_event(&mut self, _event: &Event) -> Option<crate::actions::ConfirmAction> {
@@ -194,7 +197,7 @@ pub enum ComponentAction {
     Outline,
     SetMenuItems(Vec<MenuItem<TermWmAction>>),
     SetMenuAnchor(Option<(u16, u16)>),
-    SetManagedArea(Rect),
+    SetManagedArea(LayoutRect),
     SetKeybindingHints(Vec<(TermWmAction, Vec<String>)>),
     SetPowerProfile(PowerProfile),
     SetHintVisibility(HintVisibility),
@@ -234,7 +237,7 @@ pub enum ComponentResponse {
     None,
     Action(Option<TermWmAction>),
     Hints(Vec<(TermWmAction, Vec<String>)>),
-    Rect(Option<Rect>),
+    Rect(Option<LayoutRect>),
 }
 
 /// Unified WM chrome component trait.
@@ -242,30 +245,20 @@ pub enum ComponentResponse {
 /// Replaces the position-specific `TopPanel`, `BottomPanel`, and `MenuOverlay`
 /// traits. A component's position (top, bottom, overlay) is determined by where
 /// it is injected in the layout graph, not by its trait definition.
-pub trait WmComponent: std::fmt::Debug {
+pub trait WmComponent: std::fmt::Debug + Component<TermWmAction> {
     /// Carve out the component's required space from the available area.
     /// Returns (claimed_rect, remaining_rect).
     /// Default: claims nothing, passes through full area.
-    fn consume_area(&mut self, available: Rect) -> (Rect, Rect) {
-        (Rect::default(), available)
-    }
-
-    /// Render the component into the claimed area.
-    fn render(
-        &mut self,
-        frame: &mut UiFrame<'_>,
-        area: Rect,
-        ctx: &ComponentContext,
-        registry: &mut crate::hitbox_registry::HitboxRegistry,
-    );
-
-    /// Handle an event before it reaches the window graph.
-    fn handle_event(
-        &mut self,
-        _event: &Event,
-        _ctx: &ComponentContext,
-    ) -> EventResult<TermWmAction> {
-        EventResult::Ignored
+    fn consume_area(&mut self, available: LayoutRect) -> (LayoutRect, LayoutRect) {
+        (
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            },
+            available,
+        )
     }
 
     /// Process a system-level action broadcasted by the window manager.
@@ -296,9 +289,8 @@ pub trait WmComponent: std::fmt::Debug {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::UiFrame;
-    use crossterm::event::Event;
-    use ratatui::prelude::Rect;
+    use crate::events::Event;
+    use term_wm_layout_engine::LayoutRect;
 
     struct DummyComp;
     impl Component<()> for DummyComp {
@@ -310,9 +302,9 @@ mod tests {
         ) {
         }
         fn render(
-            &self,
-            _frame: &mut UiFrame<'_>,
-            _area: Rect,
+            &mut self,
+            _backend: &mut dyn term_wm_render::RenderBackend,
+            _area: LayoutRect,
             _ctx: &ComponentContext,
             _registry: &mut crate::hitbox_registry::HitboxRegistry,
         ) {
@@ -321,13 +313,16 @@ mod tests {
 
     #[test]
     fn default_handle_events_returns_ignored() {
+        use crate::events::{KeyCode, KeyKind, KeyModifiers};
+
         let mut d = DummyComp;
         assert!(
             d.handle_events(
-                &Event::Key(crossterm::event::KeyEvent::new(
-                    crossterm::event::KeyCode::Char('a'),
-                    crossterm::event::KeyModifiers::NONE
-                )),
+                &Event::Key(crate::events::KeyEvent {
+                    code: KeyCode::Char('a'),
+                    modifiers: KeyModifiers::NONE,
+                    kind: KeyKind::Press,
+                }),
                 &ComponentContext::default()
             )
             .is_ignored()

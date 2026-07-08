@@ -2,6 +2,7 @@ pub mod ascii_image;
 pub mod center;
 pub mod confirm_overlay;
 pub mod dialog_overlay;
+pub mod helpers;
 pub mod list;
 pub mod markdown_viewer;
 pub mod menu;

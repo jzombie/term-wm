@@ -1,4 +1,4 @@
-use ratatui::style::Color;
+use crate::theme::Color;
 
 /// Linear RGB interpolation between two colors.
 /// `t = 0.0` returns `a`, `t = 1.0` returns `b`.
@@ -99,7 +99,7 @@ fn color_distance_sq(r1: u8, g1: u8, b1: u8, r2: u8, g2: u8, b2: u8) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::style::Color;
+    use crate::theme::Color;
 
     #[test]
     fn to_6cube_and_back_roundtrip() {
