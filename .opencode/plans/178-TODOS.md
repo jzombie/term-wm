@@ -38,3 +38,4 @@
   - Tier 2: Layout Snapshot Testing — Verify zero-copy render_screen cell-blitting draws correctly (no overlapping borders, mangled margins). Use ratatui's TestBackend with insta snapshot crate, outputting to .snap files. Visually audit diffs on code changes to catch regressions.
   - Tier 3: PTY Integration Testing — Validate term-wm-pty-engine in a real OS-level PTY using ratatui-testlib or ptytest. Verify raw mode negotiation, SIGWINCH handling, ANSI/OSC escape sequence emission. Assert virtual terminal emulator memory grid state instead of parsing raw output.
   - Tier 4: Containerized End-to-End Simulation — Stress-test mutex-locking and thread un-parking under severe load. Docker environments or headless Wayland compositors (wlr-test) in CI. Test over real network boundaries (automated SSH) and simulated hardware inputs. Discover race conditions, IPC crashes, thread deadlocks.
+- [] Why are hit tests so decoupled from components?  Why not make them callbacks?

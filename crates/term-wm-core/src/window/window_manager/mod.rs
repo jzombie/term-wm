@@ -47,6 +47,12 @@ pub(crate) enum MouseCaptureState {
         initial_y: i32,
         start_x: u16,
         start_y: u16,
+        /// Previous mouse column for velocity calculation.
+        prev_col: u16,
+        /// Previous mouse row for velocity calculation.
+        prev_row: u16,
+        /// Raw nanosecond timestamp of the previous drag event.
+        prev_time_ns: u64,
     },
     ResizingWindow {
         key: WindowKey,
@@ -65,6 +71,22 @@ pub(crate) enum MouseCaptureState {
     /// A Press hit a tiling layout split handle — Drag/Release events route to
     /// `TilingLayout::handle_event()` for split-ratio adjustment.
     LayoutHandle,
+}
+
+/// Preview state for ghost window rendering during drag operations.
+/// Evaluated in spatial priority order (smallest region first).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SnapPreviewState {
+    /// Corner quarter-screen snap (TopLeft/TopRight/BottomLeft/BottomRight).
+    Corner(InsertPosition),
+    /// Sacred top edge — full-screen maximize on release (preview only during drag).
+    Maximize,
+    /// Edge snap to left/right/bottom half-screen.
+    Edge(InsertPosition),
+    /// Tiled insert next to an existing window (quadrant-based).
+    TiledInsert(WindowKey, InsertPosition),
+    /// Drop into an empty void placeholder (stores void ID).
+    VoidInsert(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -205,6 +227,11 @@ pub struct WindowManager {
     floating_resize_offscreen: bool,
     pub(crate) z_order: Vec<WindowKey>,
     pub(crate) drag_snap: Option<(Option<WindowKey>, InsertPosition, Rect)>,
+    /// Active snap preview state for ghost window rendering during drag.
+    pub(crate) snap_preview: Option<SnapPreviewState>,
+    /// Cache for BSP dry-run projection to avoid deep-cloning the layout
+    /// tree on every drag frame. Keyed by (target, position, area).
+    snap_projection_cache: Option<(SnapPreviewState, Rect, Option<Rect>)>,
     drag_last_event: Option<Instant>,
     // No separate component map — components live on the Window struct
     // in the SlotMap.  See `Window.component`.
@@ -576,6 +603,8 @@ impl WindowManager {
             floating_resize_offscreen,
             z_order: Vec::new(),
             drag_snap: None,
+            snap_preview: None,
+            snap_projection_cache: None,
             drag_last_event: None,
             next_window_seq: 0,
             next_title_seq: 0,
@@ -758,8 +787,19 @@ impl WindowManager {
 
     /// Return the currently hovered tiling split handle, if any.
     pub fn hovered_tiling_handle(&self) -> Option<crate::layout::tiling::SplitHandle> {
-        let area = self.managed_area;
-        self.managed_layout.as_ref()?.hovered_handle(area)
+        let (col, row) = self.hover?;
+        let pos = crate::mouse_coord::MousePosition {
+            column: col as i16,
+            row: row as i16,
+            space: crate::mouse_coord::CoordSpace::Screen,
+        };
+        if let Some((crate::hitbox_registry::HitTarget::LayoutHandle, _)) =
+            self.hitbox_registry.hit_test(pos)
+        {
+            self.managed_layout.as_ref()?.hovered_handle(self.managed_area)
+        } else {
+            None
+        }
     }
 
     /// Return the currently hovered floating resize handle, if any.
@@ -802,6 +842,26 @@ impl WindowManager {
         &self,
     ) -> &Option<(Option<WindowKey>, crate::layout::InsertPosition, Rect)> {
         &self.drag_snap
+    }
+
+    /// Return the target window key for dimming during a tiled-insert snap
+    /// preview, if the preview is currently active.
+    pub fn snap_preview_target_key(&self) -> Option<WindowKey> {
+        match self.snap_preview {
+            Some(SnapPreviewState::TiledInsert(key, _)) => Some(key),
+            _ => None,
+        }
+    }
+
+    /// Return a human-readable label for the current snap preview action.
+    pub fn snap_preview_action_label(&self) -> Option<&'static str> {
+        self.snap_preview.as_ref().map(|s| match s {
+            SnapPreviewState::Maximize => "maximize",
+            SnapPreviewState::Edge(_) => "snap to edge",
+            SnapPreviewState::Corner(_) => "snap to corner",
+            SnapPreviewState::TiledInsert(_, _) => "tile",
+            SnapPreviewState::VoidInsert(_) => "fill void",
+        })
     }
 
     /// Return floating pane info for rendering (key + rect).
@@ -874,19 +934,53 @@ impl WindowManager {
                         initial_y,
                         start_x,
                         start_y,
+                        prev_col,
+                        prev_row,
+                        prev_time_ns,
                     },
                     MouseEventKind::Drag(_),
                 ) => {
                     self.drag_last_event = Some(Instant::now());
                     self.reset_drag_snap_timer();
                     if self.is_window_floating(key) {
-                        self.move_floating(key, col, row, start_x, start_y, initial_x, initial_y);
-                        let dx = col.abs_diff(start_x);
-                        let dy = row.abs_diff(start_y);
-                        if dx + dy > 2 {
+                        // Compute velocity using cross-multiplication (no sqrt, pure integer)
+                        let dx = col.abs_diff(prev_col);
+                        let dy = row.abs_diff(prev_row);
+                        let now_ns = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_nanos() as u64)
+                            .unwrap_or(prev_time_ns);
+                        let dt_ns = now_ns.saturating_sub(prev_time_ns);
+                        let dist_sq = u32::from(dx).saturating_mul(u32::from(dx))
+                            .saturating_add(u32::from(dy).saturating_mul(u32::from(dy)));
+                        // Threshold: 10 cells per 100ms → cross-multiply
+                        let threshold_cells_sq = 10u64.saturating_mul(10);
+                        let threshold_time_sq = 100_000_000u64.saturating_mul(100_000_000);
+                        let velocity_exceeded = u64::from(dist_sq)
+                            .saturating_mul(threshold_time_sq)
+                            > threshold_cells_sq.saturating_mul(dt_ns.saturating_mul(dt_ns));
+                        self.move_floating(
+                            key, col, row, start_x, start_y, initial_x, initial_y,
+                            velocity_exceeded,
+                        );
+                        let dx_total = col.abs_diff(start_x);
+                        let dy_total = row.abs_diff(start_y);
+                        if dx_total + dy_total > 2 {
                             self.update_snap_preview(key, col, row);
                         } else {
                             self.drag_snap = None;
+                        }
+                        // Update velocity tracking fields
+                        if let Some(MouseCaptureState::DraggingWindow {
+                            ref mut prev_col,
+                            ref mut prev_row,
+                            ref mut prev_time_ns,
+                            ..
+                        }) = self.mouse_capture
+                        {
+                            *prev_col = col;
+                            *prev_row = row;
+                            *prev_time_ns = now_ns;
                         }
                     }
                     true
@@ -896,10 +990,17 @@ impl WindowManager {
                     self.drag_last_event = None;
                     if let Some(capture) = self.mouse_capture.take()
                         && let MouseCaptureState::DraggingWindow { key, .. } = capture
-                        && self.drag_snap.is_some()
                     {
-                        self.apply_snap(key);
+                        // Sacred top edge: commit maximize on release (preview-only during drag)
+                        if self.snap_preview == Some(SnapPreviewState::Maximize) {
+                            self.toggle_maximize(key);
+                            self.snap_preview = None;
+                        } else if self.drag_snap.is_some() {
+                            self.apply_snap(key);
+                        }
                     }
+                    self.snap_preview = None;
+                    self.snap_projection_cache = None;
                     true
                 }
                 (MouseCaptureState::DraggingWindow { .. }, MouseEventKind::Moved)
@@ -1180,6 +1281,12 @@ impl WindowManager {
                             initial_y,
                             start_x: col,
                             start_y: row,
+                            prev_col: col,
+                            prev_row: row,
+                            prev_time_ns: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_nanos() as u64)
+                                .unwrap_or(0),
                         });
                         self.drag_last_event = Some(Instant::now());
                         self.arm_drag_snap_timer();
@@ -1810,8 +1917,16 @@ impl WindowManager {
         {
             self.drag_last_event = None;
             self.drag_timer_id = None;
-            self.apply_snap(key);
+            if self.snap_preview == Some(SnapPreviewState::Maximize) {
+                self.toggle_maximize(key);
+            } else if self.drag_snap.is_some() {
+                self.apply_snap(key);
+            }
         }
+        // Unconditional flush — prevents stale ghost previews
+        self.drag_snap = None;
+        self.snap_preview = None;
+        self.snap_projection_cache = None;
     }
 
     pub fn super_passthrough_active(&self) -> bool {
@@ -2022,6 +2137,7 @@ fn map_layout_node(node: &LayoutNode<WindowKey>) -> LayoutNode<WindowKey> {
             constraints: constraints.clone(),
             resizable: *resizable,
         },
+        LayoutNode::Void(id) => LayoutNode::Void(*id),
     }
 }
 
@@ -2778,6 +2894,9 @@ mod tests {
             initial_y: 5,
             start_x: 15,
             start_y: 10,
+            prev_col: 15,
+            prev_row: 10,
+            prev_time_ns: 0,
         });
         wm.drag_snap = Some((
             None,
@@ -3253,6 +3372,9 @@ mod tests {
             initial_y: 0,
             start_x: 0,
             start_y: 0,
+            prev_col: 0,
+            prev_row: 0,
+            prev_time_ns: 0,
         });
         wm.drag_last_event = Some(Instant::now());
         let remaining = wm.drag_snap_remaining();
@@ -3277,6 +3399,9 @@ mod tests {
             initial_y: 0,
             start_x: 0,
             start_y: 0,
+            prev_col: 0,
+            prev_row: 0,
+            prev_time_ns: 0,
         });
         wm.drag_last_event = Some(Instant::now() - STALE_EVENT_OFFSET);
         assert_eq!(wm.drag_snap_remaining(), Some(Duration::ZERO));
@@ -3351,6 +3476,9 @@ mod tests {
             initial_y: 5,
             start_x: 15,
             start_y: 10,
+            prev_col: 15,
+            prev_row: 10,
+            prev_time_ns: 0,
         });
         wm.drag_snap = Some((
             Some(window_key),

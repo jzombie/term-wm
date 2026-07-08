@@ -37,8 +37,8 @@ pub use rect::{
 pub use region_map::RegionMap;
 pub use scroll::ScrollState;
 pub use snap::{
-    EdgeResistance, InsertPosition, SnapPreview, SnapTarget, detect_edge_snap, edge_preview_rect,
-    tiled_preview_rect,
+    EdgeResistance, InsertPosition, SnapPreview, SnapTarget, corner_preview_rect,
+    detect_corner_snap, detect_edge_snap, edge_preview_rect, tiled_preview_rect,
 };
 pub use split::{
     build_rects_from_sizes, gap_size, handle_thickness, split_rect_bsp, split_rects_nary,

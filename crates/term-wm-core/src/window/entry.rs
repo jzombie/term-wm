@@ -32,6 +32,9 @@ pub struct Window {
     /// System windows are kept in the SlotMap after close so they can
     /// be shown again later (debug log, help overlay, etc.).
     pub is_system_window: bool,
+    /// Decoupled maximization state flag.  Set when the window is maximized,
+    /// cleared when restored.  Must NOT be derived from geometry comparison.
+    pub is_maximized: bool,
     /// The renderable component. Every window has one.
     /// For chrome-only windows, use `NoopComponent`.
     pub component: Box<dyn Component<TermWmAction>>,
@@ -48,6 +51,7 @@ impl Window {
             creation_order,
             direct_mode: false,
             is_system_window: false,
+            is_maximized: false,
             component,
         }
     }
