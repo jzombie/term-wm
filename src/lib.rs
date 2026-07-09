@@ -171,6 +171,11 @@ pub fn render_app(
                 entries.push((HitTarget::ChromeHeader(h.key, HeaderAction::Drag), h.rect));
             }
         }
+        // Tiling split handles last — highest priority at split boundaries,
+        // so they intercept clicks that would otherwise hit a Window region.
+        for handle in wm.tiling_handles() {
+            entries.push((HitTarget::LayoutHandle, handle.rect));
+        }
         entries
     };
     for (target, rect) in chrome_entries {

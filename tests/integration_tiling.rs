@@ -426,6 +426,42 @@ mod void_node_lifecycle {
         }
         assert_eq!(regions.len(), 2);
     }
+
+    #[test]
+    fn clear_leaf_converts_single_leaf_to_void() {
+        let mut root = LayoutNode::leaf(42usize);
+        assert!(
+            root.clear_leaf(42),
+            "clear_leaf must return true when id matches"
+        );
+        assert!(has_void(&root), "Leaf must become Void after clear_leaf");
+        let regions = root.layout(AREA);
+        assert!(regions.is_empty(), "Void produces no regions");
+
+        // Non-matching id must be a no-op
+        let mut root2 = LayoutNode::leaf(99usize);
+        assert!(
+            !root2.clear_leaf(42),
+            "clear_leaf must return false when id does not match"
+        );
+        assert!(
+            matches!(root2, LayoutNode::Leaf(99)),
+            "Leaf must be preserved when id does not match"
+        );
+    }
+
+    #[test]
+    fn remove_leaf_on_split_then_clear_leaf_on_remaining() {
+        // Simulate: two side-by-side windows [1, 2], remove one,
+        // then clear_leaf the remaining before re-inserting the removed one.
+        let mut root = LayoutNode::leaf(1usize);
+        root.insert_leaf(1, 2, InsertPosition::Right);
+        root.remove_leaf(1);
+        root.cleanup_after_removal();
+        // Tree is now Leaf(2)
+        assert!(root.clear_leaf(2), "clear_leaf on remaining leaf");
+        assert!(has_void(&root), "tree is now Void");
+    }
 }
 
 // ─── Module 4: Spatial Isolation ─────────────────────────────────────
@@ -583,6 +619,33 @@ mod drag_snap_pipeline {
         (wm, CoreEngine::new(), DrawPlanRenderer::new(), keys)
     }
 
+    /// Like `setup` but with `resizable: true` so split handles are produced.
+    fn setup_with_resizable() -> (WindowManager, CoreEngine, DrawPlanRenderer, [WindowKey; 2]) {
+        let mut config = WmConfig::standalone();
+        config.chrome_enabled = false;
+        let mut wm = WindowManager::with_config(
+            config,
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+            None,
+        );
+        wm.set_panel_visible(false);
+        let k0 = wm.create_window(Box::new(NoopComponent));
+        let k1 = wm.create_window(Box::new(NoopComponent));
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(k0), LayoutNode::Leaf(k1)],
+            weights: vec![1.0, 1.0],
+            constraints: vec![],
+            resizable: true,
+        };
+        wm.set_managed_layout(TilingLayout::new(split));
+        wm.register_managed_layout(AREA);
+        (wm, CoreEngine::new(), DrawPlanRenderer::new(), [k0, k1])
+    }
+
     fn advance_frame(
         wm: &mut WindowManager,
         engine: &mut CoreEngine,
@@ -726,6 +789,42 @@ mod drag_snap_pipeline {
         assert_eq!(r.y, AREA.y, "maximized y");
         assert_eq!(r.width, AREA.width, "maximized width");
         assert_eq!(r.height, AREA.height, "maximized height");
+    }
+
+    #[test]
+    fn double_click_header_toggles_maximize() {
+        let (mut wm, mut engine, mut renderer, keys) = setup();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+        assert!(!wm.is_window_floating(keys[0]), "starts tiled");
+
+        let header = header_rect(&wm, keys[0]);
+        let col = header.x as u16;
+        let row = header.y as u16;
+
+        // First click: Press + Release at same position (no drag)
+        let down = make_mouse(MouseEventKind::Press(MouseButton::Left), col, row);
+        wm.dispatch_mouse(&down);
+        let up = make_mouse(MouseEventKind::Release(MouseButton::Left), col, row);
+        wm.dispatch_mouse(&up);
+
+        // Second click within the 500ms double-click window
+        let down2 = make_mouse(MouseEventKind::Press(MouseButton::Left), col, row);
+        wm.dispatch_mouse(&down2);
+
+        // Double-click must trigger toggle_maximize on a tiled window.
+        // Maximized windows have floating_rect set but is_maximized flag true,
+        // so is_window_floating returns false — check via floating_panes + is_maximized.
+        let panes = wm.floating_panes();
+        let (_, spec) = panes
+            .iter()
+            .find(|(k, _)| *k == keys[0])
+            .expect("window in floating panes");
+        if let FloatRectSpec::Absolute(rect) = spec {
+            assert_eq!(rect.width, AREA.width, "maximized width");
+            assert_eq!(rect.height, AREA.height, "maximized height");
+        } else {
+            panic!("expected absolute float rect");
+        }
     }
 
     #[test]
@@ -976,6 +1075,189 @@ mod drag_snap_pipeline {
         assert!(
             !rects_overlap(r3, r_sibling),
             "phase 3: windows must not overlap"
+        );
+    }
+
+    #[test]
+    fn regr_sole_leaf_maximize_cycle_shows_ghost_on_right_side() {
+        // https://github.com/anomalyco/term-wm/issues/NNN
+        //
+        // 1. start with two side-by-side panes
+        let (mut wm, mut engine, mut renderer, keys) = setup();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        // 2. double-click the right pane to maximize it, then double-click it
+        //    again to restore it — the right pane becomes floating and the left
+        //    pane becomes the sole leaf in the tiling tree.
+        let right_header = header_rect(&wm, keys[1]);
+        let col = right_header.x as u16;
+        let row = right_header.y as u16;
+
+        let press1 = make_mouse(MouseEventKind::Press(MouseButton::Left), col, row);
+        wm.dispatch_mouse(&press1);
+        let release1 = make_mouse(MouseEventKind::Release(MouseButton::Left), col, row);
+        wm.dispatch_mouse(&release1);
+        let press2 = make_mouse(MouseEventKind::Press(MouseButton::Left), col, row);
+        wm.dispatch_mouse(&press2);
+
+        let panes = wm.floating_panes();
+        let (_, spec) = panes
+            .iter()
+            .find(|(k, _)| *k == keys[1])
+            .expect("right pane maximized");
+        if let FloatRectSpec::Absolute(rect) = spec {
+            assert_eq!(rect.width, AREA.width, "maximized: full width");
+            assert_eq!(rect.height, AREA.height, "maximized: full height");
+        } else {
+            panic!("expected absolute float rect");
+        }
+
+        let release2 = make_mouse(MouseEventKind::Release(MouseButton::Left), col, row);
+        wm.dispatch_mouse(&release2);
+        let press3 = make_mouse(MouseEventKind::Press(MouseButton::Left), col, row);
+        wm.dispatch_mouse(&press3);
+        let release3 = make_mouse(MouseEventKind::Release(MouseButton::Left), col, row);
+        wm.dispatch_mouse(&release3);
+        assert!(
+            wm.floating_panes().iter().any(|(k, _)| *k == keys[1]),
+            "right pane must be floating after restore"
+        );
+
+        // Re-render to refresh hitboxes
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        // 3. drag the left pane to the right side of the screen.
+        //    The ghost overlay must appear on the RIGHT half — not the left
+        //    (which was the bug: split_root created duplicate entries from a
+        //    sole leaf, and project_insert returned the first match).
+        let left_header = header_rect(&wm, keys[0]);
+        let press_left = make_mouse(
+            MouseEventKind::Press(MouseButton::Left),
+            left_header.x as u16,
+            left_header.y as u16,
+        );
+        wm.dispatch_mouse(&press_left);
+
+        let right_edge = (AREA.x + i32::from(AREA.width) - 1) as u16;
+        let mid_y = 12u16;
+        let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), right_edge, mid_y);
+        wm.dispatch_mouse(&drag);
+
+        let snap_rect = wm.drag_snap_rect().expect("drag snap must be set");
+        assert!(
+            snap_rect.x >= AREA.x + i32::from(AREA.width / 2),
+            "ghost x={} must be on right half",
+            snap_rect.x
+        );
+
+        let release_left = make_mouse(
+            MouseEventKind::Release(MouseButton::Left),
+            right_edge,
+            mid_y,
+        );
+        wm.dispatch_mouse(&release_left);
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        let r0 = wm.region(keys[0]);
+        assert!(
+            r0.x >= AREA.x + i32::from(AREA.width / 2),
+            "pane must land on right half, got x={}",
+            r0.x
+        );
+    }
+
+    #[test]
+    fn split_handle_drag_works_after_render_pipeline_populates_hitboxes() {
+        // Regression: render_app registered Window hitboxes with region.bounds
+        // (full chrome-inclusive rect) AFTER LayoutHandle, causing the Window
+        // to override the handle at the split boundary.  LayoutHandle must
+        // take priority so mouse events route to the layout engine, not the
+        // terminal component.
+        //
+        // Uses resizable: true so that split handles are produced.
+        let (mut wm, mut engine, mut renderer, keys) = setup_with_resizable();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        // Find the gap position from the WM state
+        let gap = &wm.tiling_handles()[0].rect;
+        let gap_col = (gap.x + i32::from(gap.width) / 2) as u16;
+        let gap_row = (gap.y + i32::from(gap.height) / 2) as u16;
+
+        // Press on the handle — must set LayoutHandle capture (dispatch returns true)
+        let down = make_mouse(MouseEventKind::Press(MouseButton::Left), gap_col, gap_row);
+        assert!(
+            wm.dispatch_mouse(&down),
+            "Press on split handle must be consumed"
+        );
+
+        // Drag right by 5 columns — layout must adjust
+        let drag = make_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            gap_col + 5,
+            gap_row,
+        );
+        assert!(
+            wm.dispatch_mouse(&drag),
+            "Drag on split handle must be consumed"
+        );
+
+        // Release
+        let up = make_mouse(
+            MouseEventKind::Release(MouseButton::Left),
+            gap_col + 5,
+            gap_row,
+        );
+        wm.dispatch_mouse(&up);
+
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        // The left window must have grown wider
+        let r0 = wm.region(keys[0]);
+        let r1 = wm.region(keys[1]);
+        assert!(
+            r0.width > r1.width,
+            "left window must be wider after dragging handle right"
+        );
+    }
+
+    #[test]
+    fn close_all_windows_then_tile_new_does_not_phantom() {
+        // Regression: closing all windows left a Void in the tree.
+        // Opening a new window via tile_window would call split_root on Void,
+        // creating Horizontal[Void, leaf] with a resize handle (the phantom).
+        let (mut wm, mut engine, mut renderer, keys) = setup();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        // Close both windows
+        wm.close_window(keys[0]);
+        wm.close_window(keys[1]);
+
+        // Open two new windows via tile_window (production path)
+        let k0 = wm.create_window(Box::new(NoopComponent));
+        assert!(wm.tile_window(k0), "first new window must tile");
+        let k1 = wm.create_window(Box::new(NoopComponent));
+        assert!(wm.tile_window(k1), "second new window must tile");
+
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        // Both new windows must have valid regions, no phantom split handles
+        let r0 = wm.region(k0);
+        let r1 = wm.region(k1);
+        assert!(
+            r0.width > 0 && r0.height > 0,
+            "window 0 must have valid region"
+        );
+        assert!(
+            r1.width > 0 && r1.height > 0,
+            "window 1 must have valid region"
+        );
+        assert!(!rects_overlap(r0, r1), "windows must not overlap");
+        let total_w = r0.width.saturating_add(r1.width);
+        assert!(
+            total_w == AREA.width || total_w == AREA.width.wrapping_sub(1),
+            "windows must fill width: {} vs {}",
+            total_w,
+            AREA.width
         );
     }
 }

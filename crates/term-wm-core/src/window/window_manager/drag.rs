@@ -330,6 +330,10 @@ impl WindowManager {
                 if should_retile {
                     layout.root_mut().remove_leaf(key);
                     layout.root_mut().cleanup_after_removal();
+                    // If the tree was a single leaf matching key, remove_leaf
+                    // cannot remove it (Leaf nodes return false).  Clear it
+                    // explicitly so split_root doesn't create duplicates.
+                    layout.root_mut().clear_leaf(key);
                 } else {
                     self.bring_to_front_key(key);
                     return;
@@ -393,7 +397,11 @@ impl WindowManager {
             self.focus_window_key(key);
             return true;
         }
-        if self.managed_layout.is_none() {
+        let is_void = self
+            .managed_layout
+            .as_ref()
+            .is_some_and(|l| matches!(l.root(), crate::layout::LayoutNode::Void(_)));
+        if self.managed_layout.is_none() || is_void {
             self.managed_layout = Some(crate::layout::TilingLayout::new(LayoutNode::leaf(key)));
             self.focus_window_key(key);
             return true;
