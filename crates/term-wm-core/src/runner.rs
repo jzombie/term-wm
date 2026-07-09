@@ -200,7 +200,7 @@ where
             for key in driver.take_exited_windows() {
                 app.wm().close_window(key);
             }
-            let mut flush_state_changes = |app: &mut A, flow: ControlFlow| {
+            let mut flush_state_changes = |app: &mut A, flow: ControlFlow, consume_dirty: bool| {
                 if let Some(enabled) = app.wm().take_mouse_capture_change() {
                     let _ = driver.set_mouse_capture(enabled);
                 }
@@ -213,8 +213,16 @@ where
                 if let Some(profile) = profile_tracker.poll(driver.current_profile()) {
                     app.wm().set_power_profile(profile);
                 }
+                if consume_dirty {
+                    // Consume accumulated dirty-window keys so the power
+                    // profile can drop back to PowerSaver when idle.  Only
+                    // call after a successful render — on panics the dirty
+                    // set is preserved so the next frame picks it up.
+                    driver.take_dirty_windows();
+                }
                 Ok(flow)
             };
+            let mut did_panic = false;
             if let Some(evt) = event {
                 // Synthesized key event from bottom-panel hint click takes priority
                 let evt = app.wm().take_synthetic_event().unwrap_or(evt);
@@ -240,13 +248,13 @@ where
                         }
                     }
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue);
+                    return flush_state_changes(app, ControlFlow::Continue, false);
                 }
 
                 if app.wm().help_overlay_visible() {
                     let _ = app.wm().handle_help_event(&evt);
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue);
+                    return flush_state_changes(app, ControlFlow::Continue, false);
                 }
 
                 // If keyboard capture is disabled for the focused window, key events
@@ -269,19 +277,19 @@ where
                             crate::window::SuperPressResult::DoubleSuper => {
                                 app.wm().open_command_menu_no_passthrough();
                                 update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue);
+                                return flush_state_changes(app, ControlFlow::Continue, false);
                             }
                             crate::window::SuperPressResult::Pending => {
                                 // First Super of a pair — deferred. Panel shows countdown.
                                 // Timeout forwarding happens in the idle path below.
                                 update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue);
+                                return flush_state_changes(app, ControlFlow::Continue, false);
                             }
                             crate::window::SuperPressResult::Forward => {
                                 // Non-wm-toggle key → forward to terminal immediately.
                                 let _ = handle_focused_app_event(&evt, app);
                                 update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue);
+                                return flush_state_changes(app, ControlFlow::Continue, false);
                             }
                         }
                     }
@@ -290,7 +298,7 @@ where
                 // Layer 2a: App-level event handler (before WM actions, after overlays)
                 if app.handle_app_event(&evt) {
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue);
+                    return flush_state_changes(app, ControlFlow::Continue, false);
                 }
 
                 // Layer 2b: Global-layer actions (only WmToggleOverlay is Global;
@@ -329,7 +337,7 @@ where
                         app.wm().open_command_menu();
                     }
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue);
+                    return flush_state_changes(app, ControlFlow::Continue, false);
                 }
                 if wm_mode && app.wm().command_menu_visible() {
                     if let Some(action) = app.wm().handle_wm_menu_event(&evt) {
@@ -383,16 +391,16 @@ where
                                 app.wm().close_command_menu();
                                 app.open_exit_confirm();
                                 update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue);
+                                return flush_state_changes(app, ControlFlow::Continue, false);
                             }
                             _ => {}
                         }
                         update_selection_snapshot(app);
-                        return flush_state_changes(app, ControlFlow::Continue);
+                        return flush_state_changes(app, ControlFlow::Continue, false);
                     }
                     if app.wm().wm_menu_consumes_event(&evt) {
                         update_selection_snapshot(app);
-                        return flush_state_changes(app, ControlFlow::Continue);
+                        return flush_state_changes(app, ControlFlow::Continue, false);
                     }
                     // Focus routing in WM mode (Tab/Shift+Tab)
                     // Fold menu to outline so user can see the window they focused.
@@ -403,7 +411,7 @@ where
                             app.wm().close_command_menu();
                         }
                         update_selection_snapshot(app);
-                        return flush_state_changes(app, ControlFlow::Continue);
+                        return flush_state_changes(app, ControlFlow::Continue, false);
                     }
                     // Dispatch remaining WmMode actions (Quit, OpenHelp, etc.)
                     // while the WM overlay is open.
@@ -412,29 +420,29 @@ where
                             TermWmAction::Quit => {
                                 app.open_exit_confirm();
                                 update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue);
+                                return flush_state_changes(app, ControlFlow::Continue, false);
                             }
                             TermWmAction::OpenHelp => {
                                 app.open_help_overlay();
                                 app.wm().close_command_menu();
                                 update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue);
+                                return flush_state_changes(app, ControlFlow::Continue, false);
                             }
                             TermWmAction::OpenKeybindings => {
                                 app.open_keybindings_overlay();
                                 app.wm().close_command_menu();
                                 update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue);
+                                return flush_state_changes(app, ControlFlow::Continue, false);
                             }
                             TermWmAction::CycleNextWindow => {
                                 app.wm().advance_focus(true);
                                 update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue);
+                                return flush_state_changes(app, ControlFlow::Continue, false);
                             }
                             TermWmAction::CyclePrevWindow => {
                                 app.wm().advance_focus(false);
                                 update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue);
+                                return flush_state_changes(app, ControlFlow::Continue, false);
                             }
                             TermWmAction::HintToggle => {
                                 let current = app.wm().hint_visibility();
@@ -451,20 +459,20 @@ where
                                 };
                                 app.wm().set_hint_visibility(next);
                                 update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue);
+                                return flush_state_changes(app, ControlFlow::Continue, false);
                             }
                             _ => {}
                         }
                     }
                     if let Event::Key(_) = &evt {
                         update_selection_snapshot(app);
-                        return flush_state_changes(app, ControlFlow::Continue);
+                        return flush_state_changes(app, ControlFlow::Continue, false);
                     }
                 }
 
                 if matches!(evt, Event::Mouse(_)) && !app.wm().mouse_capture_enabled() {
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue);
+                    return flush_state_changes(app, ControlFlow::Continue, false);
                 }
                 // Direct focus switching for mouse clicks.  Uses the live window
                 // set from managed_draw_order (repopulated every draw) instead of
@@ -496,11 +504,11 @@ where
                 {
                     app.open_exit_confirm();
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue);
+                    return flush_state_changes(app, ControlFlow::Continue, false);
                 }
                 if !wm_mode && matches!(evt, Event::Key(_)) && app.wm().handle_focus_event(&evt) {
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue);
+                    return flush_state_changes(app, ControlFlow::Continue, false);
                 }
 
                 // Layer 3: Pass-through to focused component
@@ -518,7 +526,7 @@ where
             } else {
                 if app.quit_requested() || app.wm().quit_requested() {
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Quit);
+                    return flush_state_changes(app, ControlFlow::Quit, false);
                 }
                 update_selection_snapshot(app);
                 app.wm().begin_frame();
@@ -530,7 +538,7 @@ where
                 // After a panic, repair the terminal so the next draw starts
                 // from a clean slate (partial escape sequences, wrong cursor
                 // position, etc. are reset).
-                let did_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                did_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     output.draw(|frame| {
                         // TODO: Get area from DrawPlan or terminal size, not from frame
                         draw(frame, app)
@@ -541,7 +549,7 @@ where
                     output.repair()?;
                 }
             }
-            flush_state_changes(app, ControlFlow::Continue)
+            flush_state_changes(app, ControlFlow::Continue, !did_panic)
         };
 
         let handler_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(handler));

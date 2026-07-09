@@ -174,10 +174,6 @@ impl UnifiedEventSource {
         sig
     }
 
-    /// Take accumulated dirty windows and reset.
-    pub fn take_dirty_windows(&mut self) -> HashSet<WindowKey> {
-        std::mem::take(&mut self.dirty_windows)
-    }
 }
 
 /// Translate a crossterm event to a core-owned event.
@@ -355,7 +351,6 @@ impl EventSource for UnifiedEventSource {
         }
 
         self.frame_pacer.reset();
-        self.dirty_windows.clear();
         Ok(false)
     }
 
@@ -484,6 +479,10 @@ impl EventSource for UnifiedEventSource {
 
     fn take_exited_windows(&mut self) -> Vec<WindowKey> {
         std::mem::take(&mut self.exited_windows)
+    }
+
+    fn take_dirty_windows(&mut self) -> HashSet<WindowKey> {
+        std::mem::take(&mut self.dirty_windows)
     }
 }
 
@@ -753,6 +752,46 @@ mod tests {
         assert_eq!(exited, vec![key], "must return the pre-populated key");
 
         let again = EventSource::take_exited_windows(&mut source);
+        assert!(again.is_empty(), "second call must drain");
+    }
+
+    /// Regression: `take_dirty_windows` must be reachable through the
+    /// `EventSource` trait so that generic runner code (`D: EventSource`)
+    /// actually consumes accumulated dirty keys.  Without the trait
+    /// override the default no-op impl would silently return an empty
+    /// set, leaving dirty_windows accumulated forever.
+    #[test]
+    fn take_dirty_windows_returns_accumulated_keys_through_trait() {
+        use super::EventSource;
+        let (_tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
+        let key = WindowKey::default();
+        let mut set = HashSet::new();
+        set.insert(key);
+        let mut source = UnifiedEventSource {
+            rx,
+            tx: _tx,
+            _input_handle: std::thread::spawn(|| {}),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            dirty_windows: set,
+            exited_windows: Vec::new(),
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: false,
+        };
+        let dummy_handle = std::thread::spawn(|| {});
+        source._input_handle = dummy_handle;
+
+        // Call through the trait, not an inherent method. Would return
+        // an empty set if the trait override were missing.
+        let taken = EventSource::take_dirty_windows(&mut source);
+        assert_eq!(taken.len(), 1, "must return the pre-populated key");
+        assert!(taken.contains(&key), "must contain the dirty key");
+
+        let again = EventSource::take_dirty_windows(&mut source);
         assert!(again.is_empty(), "second call must drain");
     }
 }
