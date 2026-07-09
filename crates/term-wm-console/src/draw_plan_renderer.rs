@@ -1231,8 +1231,8 @@ mod tests {
     use super::*;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect as RatatuiRect;
-    use ratatui::style::Style;
     use ratatui::style::Modifier;
+    use ratatui::style::Style;
     use std::sync::Arc;
     use term_wm_core::app_context::AppContext;
     use term_wm_core::theme::NOIR;
@@ -1402,7 +1402,10 @@ mod tests {
         wm.set_hover_pos(0, 0);
         render_cursor_overlay(&mut buf, &wm, &NOIR);
         assert!(
-            buf.cell((0, 0)).unwrap().modifier.contains(Modifier::REVERSED),
+            buf.cell((0, 0))
+                .unwrap()
+                .modifier
+                .contains(Modifier::REVERSED),
             "single cell should be REVERSED"
         );
         assert_eq!(buf.cell((0, 0)).unwrap().symbol(), "·");
