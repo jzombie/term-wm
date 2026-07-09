@@ -1095,7 +1095,14 @@ impl WindowManager {
                             // NOT detach it again.
                             self.snap_preview = None;
                             self.snap_projection_cache = None;
-                            self.last_header_click = None;
+                            // Only clear the double-click timer if a drag actually
+                            // occurred.  A click-only release preserves the timer so
+                            // a subsequent click can still be detected as a
+                            // double-click (toggle maximize).
+                            let drag_dist = col.abs_diff(*anchor_x) + row.abs_diff(*anchor_y);
+                            if drag_dist > 0 {
+                                self.last_header_click = None;
+                            }
                             (true, false)
                         }
                         MouseEventKind::Moved if self.drag_snap.is_some() => {

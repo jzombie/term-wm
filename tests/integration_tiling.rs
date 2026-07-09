@@ -729,6 +729,42 @@ mod drag_snap_pipeline {
     }
 
     #[test]
+    fn double_click_header_toggles_maximize() {
+        let (mut wm, mut engine, mut renderer, keys) = setup();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+        assert!(!wm.is_window_floating(keys[0]), "starts tiled");
+
+        let header = header_rect(&wm, keys[0]);
+        let col = header.x as u16;
+        let row = header.y as u16;
+
+        // First click: Press + Release at same position (no drag)
+        let down = make_mouse(MouseEventKind::Press(MouseButton::Left), col, row);
+        wm.dispatch_mouse(&down);
+        let up = make_mouse(MouseEventKind::Release(MouseButton::Left), col, row);
+        wm.dispatch_mouse(&up);
+
+        // Second click within the 500ms double-click window
+        let down2 = make_mouse(MouseEventKind::Press(MouseButton::Left), col, row);
+        wm.dispatch_mouse(&down2);
+
+        // Double-click must trigger toggle_maximize on a tiled window.
+        // Maximized windows have floating_rect set but is_maximized flag true,
+        // so is_window_floating returns false — check via floating_panes + is_maximized.
+        let panes = wm.floating_panes();
+        let (_, spec) = panes
+            .iter()
+            .find(|(k, _)| *k == keys[0])
+            .expect("window in floating panes");
+        if let FloatRectSpec::Absolute(rect) = spec {
+            assert_eq!(rect.width, AREA.width, "maximized width");
+            assert_eq!(rect.height, AREA.height, "maximized height");
+        } else {
+            panic!("expected absolute float rect");
+        }
+    }
+
+    #[test]
     fn drag_to_corner_quadrant() {
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
