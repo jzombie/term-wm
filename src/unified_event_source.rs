@@ -181,7 +181,6 @@ impl UnifiedEventSource {
         self.signal_received = false;
         sig
     }
-
 }
 
 /// Translate a crossterm event to a core-owned event.
@@ -816,5 +815,42 @@ mod tests {
 
         let again = EventSource::take_dirty_windows(&mut source);
         assert!(again.is_empty(), "second call must drain");
+    }
+
+    #[test]
+    fn poll_interval_clamped_by_max_sleep_duration() {
+        let (_tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
+        let mut source = UnifiedEventSource {
+            rx,
+            tx: _tx,
+            _input_handle: std::thread::spawn(|| {}),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            dirty_windows: HashSet::new(),
+            exited_windows: Vec::new(),
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: false,
+            max_sleep_duration: None,
+        };
+        let dummy = std::thread::spawn(|| {});
+        source._input_handle = dummy;
+
+        assert_eq!(
+            source.poll_interval(),
+            PowerProfile::PowerSaver.poll_interval()
+        );
+
+        source.set_max_sleep_duration(Some(Duration::from_millis(100)));
+        assert_eq!(source.poll_interval(), Duration::from_millis(100));
+
+        source.set_max_sleep_duration(None);
+        assert_eq!(
+            source.poll_interval(),
+            PowerProfile::PowerSaver.poll_interval()
+        );
     }
 }

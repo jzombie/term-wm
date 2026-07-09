@@ -1202,3 +1202,73 @@ mod tests {
     }
     impl crate::components::WmComponent for TestMenu {}
 }
+
+#[cfg(test)]
+mod power_calibration_tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::time::Duration;
+
+    struct SpyEventSource {
+        captured_max_sleep: Option<Option<Duration>>,
+        mock_dirty_windows: HashSet<WindowKey>,
+    }
+
+    impl EventSource for SpyEventSource {
+        fn poll(&mut self, _: Duration) -> io::Result<bool> {
+            Ok(false)
+        }
+        fn read(&mut self) -> io::Result<Event> {
+            unreachable!()
+        }
+        fn next_key(&mut self) -> io::Result<crate::events::KeyEvent> {
+            unreachable!()
+        }
+        fn next_mouse(&mut self) -> io::Result<crate::events::MouseEvent> {
+            unreachable!()
+        }
+        fn set_max_sleep_duration(&mut self, d: Option<Duration>) {
+            self.captured_max_sleep = Some(d);
+        }
+        fn take_dirty_windows(&mut self) -> HashSet<WindowKey> {
+            std::mem::take(&mut self.mock_dirty_windows)
+        }
+    }
+
+    #[test]
+    fn scheduler_deadline_propagates_to_driver() {
+        let mut driver = SpyEventSource {
+            captured_max_sleep: None,
+            mock_dirty_windows: HashSet::new(),
+        };
+        let sched = crate::task_scheduler::TaskScheduler::<crate::actions::SystemTask>::new();
+        let handle = sched.handle();
+        handle.schedule_once(
+            Duration::from_millis(250),
+            crate::actions::SystemTask::DragSnap,
+        );
+
+        let time_left = handle.time_until_next();
+        driver.set_max_sleep_duration(time_left);
+
+        let captured = driver.captured_max_sleep.unwrap().unwrap();
+        assert!(captured <= Duration::from_millis(250));
+        assert!(captured > Duration::from_millis(200));
+    }
+
+    #[test]
+    fn dirty_keys_are_drained_cleanly_on_frame_completion() {
+        let mut key_set = HashSet::new();
+        key_set.insert(WindowKey::default());
+        let mut driver = SpyEventSource {
+            captured_max_sleep: None,
+            mock_dirty_windows: key_set,
+        };
+
+        let first = EventSource::take_dirty_windows(&mut driver);
+        assert_eq!(first.len(), 1);
+
+        let second = EventSource::take_dirty_windows(&mut driver);
+        assert!(second.is_empty(), "dirty keys must drain between cycles");
+    }
+}

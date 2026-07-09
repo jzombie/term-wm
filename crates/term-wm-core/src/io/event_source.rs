@@ -184,7 +184,9 @@ mod tests {
             fn next_mouse(&mut self) -> io::Result<MouseEvent> {
                 unreachable!()
             }
-            fn take_dirty_windows(&mut self) -> std::collections::HashSet<crate::window::WindowKey> {
+            fn take_dirty_windows(
+                &mut self,
+            ) -> std::collections::HashSet<crate::window::WindowKey> {
                 std::mem::take(&mut self.dirty)
             }
         }
@@ -201,5 +203,27 @@ mod tests {
             reference.dirty.is_empty(),
             "concrete impl must have cleared its dirty set"
         );
+    }
+
+    #[test]
+    fn set_max_sleep_duration_default_does_not_panic() {
+        struct Stub;
+        impl EventSource for Stub {
+            fn poll(&mut self, _: Duration) -> io::Result<bool> {
+                Ok(false)
+            }
+            fn read(&mut self) -> io::Result<Event> {
+                unreachable!()
+            }
+            fn next_key(&mut self) -> io::Result<KeyEvent> {
+                unreachable!()
+            }
+            fn next_mouse(&mut self) -> io::Result<MouseEvent> {
+                Err(io::Error::other("no"))
+            }
+        }
+        let mut s = Stub;
+        EventSource::set_max_sleep_duration(&mut s, Some(Duration::from_secs(1)));
+        EventSource::set_max_sleep_duration(&mut s, None);
     }
 }

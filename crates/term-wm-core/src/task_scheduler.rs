@@ -366,4 +366,14 @@ mod tests {
         std::thread::sleep(Duration::from_millis(10));
         assert_eq!(h2.drain_expired_once().len(), 1);
     }
+
+    #[test]
+    fn is_keep_awake_active_default_false() {
+        let sched = TaskScheduler::<String>::new();
+        assert!(!sched.handle().is_keep_awake_active());
+        sched.handle().set_keep_awake(true);
+        assert!(sched.handle().is_keep_awake_active());
+        sched.handle().set_keep_awake(false);
+        assert!(!sched.handle().is_keep_awake_active());
+    }
 }
