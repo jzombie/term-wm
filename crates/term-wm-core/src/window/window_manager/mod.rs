@@ -544,7 +544,7 @@ impl WindowManager {
         }
     }
 
-    pub(crate) fn with_config(
+    pub fn with_config(
         config: WmConfig,
         app_ctx: Arc<AppContext>,
         top_component: Option<Box<dyn WmComponent>>,

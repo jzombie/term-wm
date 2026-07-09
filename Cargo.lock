@@ -2883,6 +2883,7 @@ dependencies = [
  "indoc",
  "line-ending",
  "portable-pty",
+ "proptest",
  "ratatui",
  "term-wm-console",
  "term-wm-core",
