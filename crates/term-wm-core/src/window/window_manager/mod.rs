@@ -962,7 +962,7 @@ impl WindowManager {
                         prev_time_ns,
                         detach_coordinate,
                         snap_applied,
-                    } => match kind {
+                                 } => match kind {
                         MouseEventKind::Drag(_) => {
                             let dx = col.abs_diff(*anchor_x);
                             let dy = row.abs_diff(*anchor_y);
@@ -1094,6 +1094,7 @@ impl WindowManager {
                             // NOT detach it again.
                             self.snap_preview = None;
                             self.snap_projection_cache = None;
+                            self.last_header_click = None;
                             (true, false)
                         }
                         MouseEventKind::Moved if self.drag_snap.is_some() => {

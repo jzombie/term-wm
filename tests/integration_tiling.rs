@@ -451,36 +451,31 @@ mod spatial_isolation {
 #[cfg(test)]
 mod drag_snap_pipeline {
     use super::*;
-    use term_wm::events::{MouseButton, MouseEventKind};
 
-    fn setup() -> (WindowManager, [WindowKey; 2]) {
-        wm_with_two_windows()
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect as RatatuiRect;
+    use term_wm::events::{MouseButton, MouseEventKind};
+    use term_wm::render_app;
+    use term_wm_console::draw_plan_renderer::DrawPlanRenderer;
+    use term_wm_console::RatatuiBackend;
+    use term_wm_core::engine::CoreEngine;
+
+    fn setup() -> (WindowManager, CoreEngine, DrawPlanRenderer, [WindowKey; 2]) {
+        let (wm, keys) = wm_with_two_windows();
+        (wm, CoreEngine::new(), DrawPlanRenderer::new(), keys)
     }
 
-    /// Execute the production render pipeline against an in-memory backend.
-    fn setup_with_render(wm: &mut WindowManager) {
-        use ratatui::buffer::Buffer;
-        use ratatui::layout::Rect as RatatuiRect;
-        use term_wm::render_app;
-        use term_wm_console::draw_plan_renderer::DrawPlanRenderer;
-        use term_wm_console::RatatuiBackend;
-        use term_wm_core::engine::CoreEngine;
-
-        let area = RatatuiRect {
-            x: 0, y: 0,
-            width: AREA.width, height: AREA.height,
-        };
+    fn advance_frame(wm: &mut WindowManager, engine: &mut CoreEngine, renderer: &mut DrawPlanRenderer) {
+        let area = RatatuiRect { x: 0, y: 0, width: AREA.width, height: AREA.height };
         let buf = Buffer::empty(area);
         let mut backend = RatatuiBackend::new(buf, area);
-        let mut engine = CoreEngine::new();
-        let mut renderer = DrawPlanRenderer::new();
-        render_app(&mut backend, wm, &mut engine, &mut renderer);
+        render_app(&mut backend, wm, engine, renderer);
     }
 
     #[test]
     fn drag_to_right_edge_snaps() {
-        let (mut wm, keys) = setup();
-        setup_with_render(&mut wm);
+        let (mut wm, mut engine, mut renderer, keys) = setup();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
         let header = header_rect(&wm, keys[0]);
         let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
         wm.dispatch_mouse(&down);
@@ -490,13 +485,19 @@ mod drag_snap_pipeline {
         let right_edge = (AREA.x + i32::from(AREA.width) - 1) as u16;
         let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), right_edge, mid_y);
         wm.dispatch_mouse(&drag);
-        assert!(wm.drag_snap_rect().is_some(), "drag_snap must be set after Drag");
+
+        // Verify exact ghost geometry: right half (40, 0, 40, 24)
+        let snap_rect = wm.drag_snap_rect().expect("drag_snap must be set after Drag");
+        assert_eq!(snap_rect.x, AREA.x + i32::from(AREA.width / 2), "ghost x");
+        assert_eq!(snap_rect.y, AREA.y, "ghost y");
+        assert_eq!(snap_rect.width, AREA.width / 2, "ghost width");
+        assert_eq!(snap_rect.height, AREA.height, "ghost height");
 
         let up = make_mouse(MouseEventKind::Release(MouseButton::Left), right_edge, mid_y);
         wm.dispatch_mouse(&up);
 
         // Re-render to recompute regions after apply_snap modified the layout tree
-        setup_with_render(&mut wm);
+        advance_frame(&mut wm, &mut engine, &mut renderer);
 
         let r = wm.region(keys[0]);
         assert_eq!(r.x, AREA.x + i32::from(AREA.width / 2), "right-snapped window x");
@@ -506,55 +507,52 @@ mod drag_snap_pipeline {
     }
 
     #[test]
-    fn press_makes_window_floating() {
-        let (mut wm, keys) = setup();
-        setup_with_render(&mut wm);
+    fn press_preserves_tiled_state() {
+        let (mut wm, mut engine, mut renderer, keys) = setup();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
         assert!(!wm.is_window_floating(keys[0]), "starts tiled");
 
         let header = header_rect(&wm, keys[0]);
         let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
         wm.dispatch_mouse(&down);
+        advance_frame(&mut wm, &mut engine, &mut renderer);
 
-        assert!(wm.is_window_floating(keys[0]), "must be floating after Press on header");
-        assert!(!wm.floating_panes().is_empty(), "floating_panes must not be empty");
+        // Press alone must NOT decouple — deadzone drag requirement
+        assert!(!wm.is_window_floating(keys[0]), "press must not make window floating");
+
+        // Drag that breaches the kinetic deadzone (dx+dy > 2 cells)
+        let drag_x = (header.x + 5) as u16;
+        let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), drag_x, header.y as u16);
+        wm.dispatch_mouse(&drag);
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        assert!(wm.is_window_floating(keys[0]), "must be floating after drag breaches deadzone");
     }
 
     #[test]
-    fn drag_moves_floating_window() {
-        let (mut wm, keys) = setup();
-        setup_with_render(&mut wm);
+    fn drag_to_top_maximizes() {
+        let (mut wm, mut engine, mut renderer, keys) = setup();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
         let header = header_rect(&wm, keys[0]);
         let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
         wm.dispatch_mouse(&down);
 
-        let left_edge = AREA.x as u16;
-        let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), left_edge, header.y as u16);
+        // Use center column to avoid corner-snap collision at left edge
+        let mid_x = AREA.width / 2;
+        let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), mid_x, 0);
         wm.dispatch_mouse(&drag);
 
-        let up = make_mouse(MouseEventKind::Release(MouseButton::Left), left_edge, header.y as u16);
+        // Verify ghost preview is maximize (full area)
+        let snap_rect = wm.drag_snap_rect().expect("drag_snap must be set after Drag to top edge");
+        assert_eq!(snap_rect.x, AREA.x, "maximize ghost x");
+        assert_eq!(snap_rect.y, AREA.y, "maximize ghost y");
+        assert_eq!(snap_rect.width, AREA.width, "maximize ghost width");
+        assert_eq!(snap_rect.height, AREA.height, "maximize ghost height");
+
+        let up = make_mouse(MouseEventKind::Release(MouseButton::Left), mid_x, 0);
         wm.dispatch_mouse(&up);
 
-        let r = wm.region(keys[0]);
-        assert_eq!(r.x, AREA.x, "left-snapped window x");
-        assert_eq!(r.y, AREA.y, "left-snapped window y");
-        assert_eq!(r.width, AREA.width / 2, "left-snapped window width");
-        assert_eq!(r.height, AREA.height, "left-snapped window height");
-    }
-
-    #[test]
-    #[ignore = "uses wrong drag coordinate for maximize detection"]
-    fn release_leaves_valid_state() {
-        let (mut wm, keys) = setup();
-        setup_with_render(&mut wm);
-        let header = header_rect(&wm, keys[0]);
-        let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
-        wm.dispatch_mouse(&down);
-
-        let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), header.x as u16, 0);
-        wm.dispatch_mouse(&drag);
-
-        let up = make_mouse(MouseEventKind::Release(MouseButton::Left), header.x as u16, 0);
-        wm.dispatch_mouse(&up);
+        advance_frame(&mut wm, &mut engine, &mut renderer);
 
         let r = wm.region(keys[0]);
         assert_eq!(r.x, AREA.x, "maximized x");
@@ -564,10 +562,9 @@ mod drag_snap_pipeline {
     }
 
     #[test]
-    #[ignore = "corner snap timing issue with setup_with_render"]
     fn drag_to_corner_quadrant() {
-        let (mut wm, keys) = setup();
-        setup_with_render(&mut wm);
+        let (mut wm, mut engine, mut renderer, keys) = setup();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
         let header = header_rect(&wm, keys[0]);
         let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
         wm.dispatch_mouse(&down);
@@ -577,9 +574,16 @@ mod drag_snap_pipeline {
         let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), corner_x, corner_y);
         wm.dispatch_mouse(&drag);
 
+        // Verify exact ghost geometry: bottom-right quadrant (40, 12, 40, 12)
+        let snap_rect = wm.drag_snap_rect().expect("drag_snap must be set after Drag to corner");
+        assert_eq!(snap_rect.x, AREA.x + i32::from(AREA.width / 2), "ghost x");
+        assert_eq!(snap_rect.y, AREA.y + i32::from(AREA.height / 2), "ghost y");
+        assert_eq!(snap_rect.width, AREA.width / 2, "ghost width");
+        assert_eq!(snap_rect.height, AREA.height / 2, "ghost height");
+
         let up = make_mouse(MouseEventKind::Release(MouseButton::Left), corner_x, corner_y);
         wm.dispatch_mouse(&up);
-        setup_with_render(&mut wm);
+        advance_frame(&mut wm, &mut engine, &mut renderer);
 
         let r = wm.region(keys[0]);
         assert_eq!(r.x, AREA.x + i32::from(AREA.width / 2), "corner x");
@@ -589,28 +593,37 @@ mod drag_snap_pipeline {
     }
 
     #[test]
-    #[ignore = "floating state tracking across multi-phase snap→drag cycles requires engine fix"]
     fn drag_away_restores_float_geometry() {
-        let (mut wm, keys) = setup();
-        setup_with_render(&mut wm);
+        let (mut wm, mut engine, mut renderer, keys) = setup();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
         let header = header_rect(&wm, keys[0]);
 
         let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
         wm.dispatch_mouse(&down);
 
+        // Use y=12 (middle of screen) to avoid corner detection zone
+        let mid_y = 12u16;
         let right_edge = (AREA.x + i32::from(AREA.width) - 1) as u16;
-        let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), right_edge, header.y as u16);
+        let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), right_edge, mid_y);
         wm.dispatch_mouse(&drag);
 
-        let up = make_mouse(MouseEventKind::Release(MouseButton::Left), right_edge, header.y as u16);
+        // Verify exact ghost geometry for the right-edge snap
+        let snap_rect = wm.drag_snap_rect().expect("drag_snap must be set after Drag to right edge");
+        assert_eq!(snap_rect.x, AREA.x + i32::from(AREA.width / 2), "ghost x");
+        assert_eq!(snap_rect.y, AREA.y, "ghost y");
+        assert_eq!(snap_rect.width, AREA.width / 2, "ghost width");
+        assert_eq!(snap_rect.height, AREA.height, "ghost height");
+
+        let up = make_mouse(MouseEventKind::Release(MouseButton::Left), right_edge, mid_y);
         wm.dispatch_mouse(&up);
+
+        // Re-render to refresh hitboxes after layout mutation
+        advance_frame(&mut wm, &mut engine, &mut renderer);
 
         let snapped = wm.region(keys[0]);
         let pre_w = snapped.width;
         let pre_h = snapped.height;
 
-        // Re-render to refresh hitboxes after layout mutation
-        setup_with_render(&mut wm);
         let header2 = header_rect(&wm, keys[0]);
         let cursor_x = header2.x as u16;
         let cursor_y = header2.y as u16;
@@ -644,8 +657,8 @@ mod drag_snap_pipeline {
 
     #[test]
     fn double_snap_converges() {
-        let (mut wm, keys) = setup();
-        setup_with_render(&mut wm);
+        let (mut wm, mut engine, mut renderer, keys) = setup();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
         let header = header_rect(&wm, keys[0]);
 
         // Phase 1: snap right
@@ -654,11 +667,19 @@ mod drag_snap_pipeline {
         let right_edge = (AREA.x + i32::from(AREA.width) - 1) as u16;
         let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), right_edge, 12);
         wm.dispatch_mouse(&drag);
+
+        // Verify ghost geometry for Phase 1
+        let snap_rect = wm.drag_snap_rect().expect("phase 1: drag_snap must be set after Drag");
+        assert_eq!(snap_rect.x, AREA.x + i32::from(AREA.width / 2), "phase 1: ghost x");
+        assert_eq!(snap_rect.y, AREA.y, "phase 1: ghost y");
+        assert_eq!(snap_rect.width, AREA.width / 2, "phase 1: ghost width");
+        assert_eq!(snap_rect.height, AREA.height, "phase 1: ghost height");
+
         let up = make_mouse(MouseEventKind::Release(MouseButton::Left), right_edge, 12);
         wm.dispatch_mouse(&up);
 
         // Re-render for phase 2
-        setup_with_render(&mut wm);
+        advance_frame(&mut wm, &mut engine, &mut renderer);
 
         let r1 = wm.region(keys[0]);
         assert_eq!(r1.x, AREA.x + i32::from(AREA.width / 2), "phase 1: right-snapped x");
@@ -666,17 +687,36 @@ mod drag_snap_pipeline {
 
         // Phase 2: drag away from edge
         let header2 = header_rect(&wm, keys[0]);
-        let down2 = make_mouse(MouseEventKind::Press(MouseButton::Left), header2.x as u16, header2.y as u16);
+        let cursor_x = header2.x as u16;
+        let cursor_y = header2.y as u16;
+        let cursor_offset_x = cursor_x as i32 - r1.x;
+        let cursor_offset_y = cursor_y as i32 - r1.y;
+
+        let down2 = make_mouse(MouseEventKind::Press(MouseButton::Left), cursor_x, cursor_y);
         wm.dispatch_mouse(&down2);
         let away_x = (AREA.x + 10) as u16;
-        let drag2 = make_mouse(MouseEventKind::Drag(MouseButton::Left), away_x, 12);
+        let away_y = 12u16;
+        let drag2 = make_mouse(MouseEventKind::Drag(MouseButton::Left), away_x, away_y);
         wm.dispatch_mouse(&drag2);
-        let up2 = make_mouse(MouseEventKind::Release(MouseButton::Left), away_x, 12);
+        let up2 = make_mouse(MouseEventKind::Release(MouseButton::Left), away_x, away_y);
         wm.dispatch_mouse(&up2);
-        setup_with_render(&mut wm);
+        advance_frame(&mut wm, &mut engine, &mut renderer);
 
-        let r2 = wm.region(keys[0]);
-        assert!(r2.width > 0, "phase 2: window must have non-zero width");
+        // Phase 2: window must be floating with preserved dimensions and cursor offset
+        let float_panes = wm.floating_panes();
+        let (_, float_spec) = float_panes.iter()
+            .find(|(k, _)| *k == keys[0])
+            .expect("phase 2: window should be floating after drag-away");
+        if let FloatRectSpec::Absolute(fr) = float_spec {
+            assert_eq!(fr.width, AREA.width / 2, "phase 2: floating width must match snapped width");
+            assert_eq!(fr.height, AREA.height, "phase 2: floating height must match snapped height");
+            let new_cursor_offset_x = away_x as i32 - fr.x;
+            let new_cursor_offset_y = away_y as i32 - fr.y;
+            assert_eq!(new_cursor_offset_x, cursor_offset_x, "phase 2: cursor offset x must be preserved");
+            assert_eq!(new_cursor_offset_y, cursor_offset_y, "phase 2: cursor offset y must be preserved");
+        } else {
+            panic!("phase 2: expected absolute float rect");
+        }
 
         // Phase 3: snap left
         let header3 = header_rect(&wm, keys[0]);
@@ -687,11 +727,14 @@ mod drag_snap_pipeline {
         wm.dispatch_mouse(&drag3);
         let up3 = make_mouse(MouseEventKind::Release(MouseButton::Left), left_edge, 12);
         wm.dispatch_mouse(&up3);
-        setup_with_render(&mut wm);
+        advance_frame(&mut wm, &mut engine, &mut renderer);
 
         let r3 = wm.region(keys[0]);
-        assert!(r3.width > 0, "phase 3: window must have non-zero width");
-        assert!(r3.height > 0, "phase 3: window must have non-zero height");
+        let total_w = r3.width.saturating_add(wm.region(keys[1]).width);
+        assert_eq!(r3.x, AREA.x, "phase 3: left-snapped x");
+        assert_eq!(r3.y, AREA.y, "phase 3: left-snapped y");
+        assert_eq!(r3.width, total_w / 2, "phase 3: left-snapped width = total/2");
+        assert_eq!(r3.height, AREA.height, "phase 3: left-snapped height");
     }
 }
 
