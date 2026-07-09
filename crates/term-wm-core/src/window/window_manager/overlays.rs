@@ -22,7 +22,10 @@ impl WindowManager {
     }
 
     pub fn handle_help_event(&mut self, event: &Event) -> bool {
-        let ctx = self.component_context(true).with_overlay(true);
+        let ctx = self
+            .component_context(true)
+            .with_overlay(true)
+            .with_screen_area(self.managed_area());
         let Some(boxed) = self.overlays.get_mut(&super::OverlayId::Help) else {
             return false;
         };

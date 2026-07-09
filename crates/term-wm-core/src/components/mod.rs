@@ -7,7 +7,7 @@ use term_wm_layout_engine::LayoutRect;
 pub use crate::actions::EventResult;
 use crate::actions::TermWmAction;
 pub use crate::component_context::ComponentContext;
-use crate::events::Event;
+use crate::events::{Event, KeyModifiers, MouseButton, MouseEventKind};
 use crate::power_profile::PowerProfile;
 use crate::window::WindowKey;
 use crate::wm_config::HintVisibility;
@@ -40,33 +40,87 @@ pub trait Component<Msg>: std::any::Any {
 
     /// Phase 2: Evaluate raw events, return EventResult.
     /// Does NOT mutate state.
+    /// Dispatches mouse events to semantic handlers by MouseEventKind.
     fn handle_events(&mut self, event: &Event, ctx: &ComponentContext) -> EventResult<Msg> {
         if let Event::Mouse(mouse) = event {
             if let Some(screen_area) = ctx.screen_area() {
-                let is_inside = i32::from(mouse.column) >= screen_area.x
-                    && i32::from(mouse.column)
-                        < screen_area.x.saturating_add(i32::from(screen_area.width))
-                    && i32::from(mouse.row) >= screen_area.y
-                    && i32::from(mouse.row)
-                        < screen_area.y.saturating_add(i32::from(screen_area.height));
-                if is_inside {
-                    let local = crate::events::LocalMouseEvent {
-                        col: mouse.column.saturating_sub(screen_area.x.max(0) as u16),
-                        row: mouse.row.saturating_sub(screen_area.y.max(0) as u16),
-                        kind: mouse.kind,
-                        modifiers: mouse.modifiers,
-                    };
-                    return self.on_mouse(&local, ctx);
-                }
+                let local_x = (i32::from(mouse.column) - screen_area.x).max(0) as u16;
+                let local_y = (i32::from(mouse.row) - screen_area.y).max(0) as u16;
+                return match mouse.kind {
+                    MouseEventKind::Press(btn) => {
+                        self.on_mouse_press(local_x, local_y, btn, mouse.modifiers, ctx)
+                    }
+                    MouseEventKind::Release(btn) => {
+                        self.on_mouse_release(local_x, local_y, btn, mouse.modifiers, ctx)
+                    }
+                    MouseEventKind::Drag(btn) => {
+                        self.on_mouse_drag(local_x, local_y, btn, mouse.modifiers, ctx)
+                    }
+                    MouseEventKind::ScrollUp
+                    | MouseEventKind::ScrollDown
+                    | MouseEventKind::ScrollLeft
+                    | MouseEventKind::ScrollRight => {
+                        self.on_mouse_scroll(local_x, local_y, mouse.kind, mouse.modifiers, ctx)
+                    }
+                    MouseEventKind::Moved => {
+                        self.on_mouse_move(local_x, local_y, mouse.modifiers, ctx)
+                    }
+                };
             }
             return EventResult::Ignored;
         }
         self.on_key(event, ctx)
     }
 
-    fn on_mouse(
+    fn on_mouse_press(
         &mut self,
-        _mouse: &crate::events::LocalMouseEvent,
+        _local_x: u16,
+        _local_y: u16,
+        _button: MouseButton,
+        _modifiers: KeyModifiers,
+        _ctx: &ComponentContext,
+    ) -> EventResult<Msg> {
+        EventResult::Ignored
+    }
+
+    fn on_mouse_release(
+        &mut self,
+        _local_x: u16,
+        _local_y: u16,
+        _button: MouseButton,
+        _modifiers: KeyModifiers,
+        _ctx: &ComponentContext,
+    ) -> EventResult<Msg> {
+        EventResult::Ignored
+    }
+
+    fn on_mouse_drag(
+        &mut self,
+        _local_x: u16,
+        _local_y: u16,
+        _button: MouseButton,
+        _modifiers: KeyModifiers,
+        _ctx: &ComponentContext,
+    ) -> EventResult<Msg> {
+        EventResult::Ignored
+    }
+
+    fn on_mouse_scroll(
+        &mut self,
+        _local_x: u16,
+        _local_y: u16,
+        _kind: MouseEventKind,
+        _modifiers: KeyModifiers,
+        _ctx: &ComponentContext,
+    ) -> EventResult<Msg> {
+        EventResult::Ignored
+    }
+
+    fn on_mouse_move(
+        &mut self,
+        _local_x: u16,
+        _local_y: u16,
+        _modifiers: KeyModifiers,
         _ctx: &ComponentContext,
     ) -> EventResult<Msg> {
         EventResult::Ignored

@@ -1321,84 +1321,77 @@ impl WindowManager {
                 self.mouse_capture = Some(MouseCaptureState::ComponentInteraction { key });
                 consumed
             }
-            HitTarget::ChromeHeader(key, _) => {
-                let rect = self.visible_region_for_key(key);
-                match self.decorator().hit_test(rect, col, row) {
-                    HeaderAction::Close => {
-                        self.close_window(key);
-                        self.last_header_click = None;
-                        true
-                    }
-                    HeaderAction::Maximize => {
+            HitTarget::ChromeHeader(key, action) => match action {
+                HeaderAction::Close => {
+                    self.close_window(key);
+                    self.last_header_click = None;
+                    true
+                }
+                HeaderAction::Maximize => {
+                    self.toggle_maximize(key);
+                    self.last_header_click = None;
+                    true
+                }
+                HeaderAction::Minimize => {
+                    self.minimize_window(key);
+                    self.last_header_click = None;
+                    true
+                }
+                HeaderAction::ToggleDirectMode => {
+                    self.toggle_direct_mode(key);
+                    self.last_header_click = None;
+                    true
+                }
+                HeaderAction::Drag => {
+                    let now = Instant::now();
+                    if let Some((prev_key, prev)) = self.last_header_click
+                        && prev_key == key
+                        && now.duration_since(prev) <= Duration::from_millis(500)
+                    {
                         self.toggle_maximize(key);
                         self.last_header_click = None;
-                        true
+                        return true;
                     }
-                    HeaderAction::Minimize => {
-                        self.minimize_window(key);
-                        self.last_header_click = None;
-                        true
+                    self.last_header_click = Some((key, now));
+
+                    if self.is_window_floating(key) {
+                        self.bring_floating_to_front_key(key);
+                    } else {
+                        self.bring_to_front_key(key);
                     }
-                    HeaderAction::ToggleDirectMode => {
-                        self.toggle_direct_mode(key);
-                        self.last_header_click = None;
-                        true
-                    }
-                    HeaderAction::Drag => {
-                        let now = Instant::now();
-                        if let Some((prev_key, prev)) = self.last_header_click
-                            && prev_key == key
-                            && now.duration_since(prev) <= Duration::from_millis(500)
+
+                    let rect = self.visible_region_for_key(key);
+                    let (initial_x, initial_y) =
+                        if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
+                            self.floating_rect(key)
                         {
-                            self.toggle_maximize(key);
-                            self.last_header_click = None;
-                            return true;
-                        }
-                        self.last_header_click = Some((key, now));
-
-                        if self.is_window_floating(key) {
-                            self.bring_floating_to_front_key(key);
+                            (fr.x, fr.y)
                         } else {
-                            // Defer floating decoupling until the drag deadzone
-                            // is breached.  Capture the pointer now; the floating
-                            // rect will be installed on the first Drag event that
-                            // exceeds the kinetic threshold (dx + dy > 2).
-                            self.bring_to_front_key(key);
-                        }
-
-                        let (initial_x, initial_y) =
-                            if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
-                                self.floating_rect(key)
-                            {
-                                (fr.x, fr.y)
-                            } else {
-                                (rect.x, rect.y)
-                            };
-                        self.mouse_capture = Some(MouseCaptureState::DraggingWindow {
-                            key,
-                            resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
-                            anchor_x: col,
-                            anchor_y: row,
-                            initial_x,
-                            initial_y,
-                            start_x: col,
-                            start_y: row,
-                            prev_col: col,
-                            prev_row: row,
-                            prev_time_ns: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_nanos() as u64)
-                                .unwrap_or(0),
-                            detach_coordinate: None,
-                            snap_applied: false,
-                        });
-                        self.drag_last_event = Some(Instant::now());
-                        self.arm_drag_snap_timer();
-                        true
-                    }
-                    HeaderAction::None => false,
+                            (rect.x, rect.y)
+                        };
+                    self.mouse_capture = Some(MouseCaptureState::DraggingWindow {
+                        key,
+                        resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
+                        anchor_x: col,
+                        anchor_y: row,
+                        initial_x,
+                        initial_y,
+                        start_x: col,
+                        start_y: row,
+                        prev_col: col,
+                        prev_row: row,
+                        prev_time_ns: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_nanos() as u64)
+                            .unwrap_or(0),
+                        detach_coordinate: None,
+                        snap_applied: false,
+                    });
+                    self.drag_last_event = Some(Instant::now());
+                    self.arm_drag_snap_timer();
+                    true
                 }
-            }
+            },
             HitTarget::ChromeResize(key, edge) => {
                 if !self.config.floating_windows_enabled || !self.is_window_floating(key) {
                     return false;
@@ -1455,7 +1448,9 @@ impl WindowManager {
                 false
             }
             HitTarget::Overlay(id) => {
-                let ctx = self.component_context_for(false, slotmap::DefaultKey::default());
+                let ctx = self
+                    .component_context_for(false, slotmap::DefaultKey::default())
+                    .with_screen_area(hit_rect);
                 if let Some(overlay) = self.overlays.get_mut(&id) {
                     let result = overlay.handle_events(&core_event, &ctx);
                     !result.is_ignored()
@@ -3543,20 +3538,26 @@ mod tests {
         let min_x = max_x.saturating_sub(2);
         let kb_x = min_x.saturating_sub(2) as u16;
         let kb_y = full_rect.y.saturating_add(1) as u16; // header row
-        assert_eq!(
-            wm.decorator().hit_test(full_rect, kb_x, kb_y),
-            crate::window::decorator::HeaderAction::ToggleDirectMode,
-            "hit_test should detect D button at ({},{}) on {:?}",
-            kb_x,
-            kb_y,
-            full_rect
-        );
-
         assert!(!wm.direct_mode(win_key), "starts off");
 
+        // Register header hitboxes matching the render-pass arrangement:
+        // Drag zone for the full header, per-button hitbox for "D".
         wm.hitbox_registry.register(
             HitTarget::ChromeHeader(win_key, crate::window::decorator::HeaderAction::Drag),
             full_rect,
+        );
+        let button_rect = term_wm_layout_engine::LayoutRect {
+            x: i32::from(kb_x),
+            y: full_rect.y.saturating_add(1),
+            width: 1,
+            height: 1,
+        };
+        wm.hitbox_registry.register(
+            HitTarget::ChromeHeader(
+                win_key,
+                crate::window::decorator::HeaderAction::ToggleDirectMode,
+            ),
+            button_rect,
         );
 
         let click = Event::Mouse(MouseEvent {
@@ -3964,14 +3965,22 @@ mod tests {
         let min_x = max_x.saturating_sub(2);
         let kb_x = min_x.saturating_sub(2) as u16;
         let kb_y = full_rect.y.saturating_add(1) as u16; // header row
-        assert_eq!(
-            wm.decorator().hit_test(full_rect, kb_x, kb_y),
-            crate::window::decorator::HeaderAction::ToggleDirectMode,
-        );
-
         wm.hitbox_registry.register(
             HitTarget::ChromeHeader(win_key, crate::window::decorator::HeaderAction::Drag),
             full_rect,
+        );
+        let button_rect = term_wm_layout_engine::LayoutRect {
+            x: i32::from(kb_x),
+            y: full_rect.y.saturating_add(1),
+            width: 1,
+            height: 1,
+        };
+        wm.hitbox_registry.register(
+            HitTarget::ChromeHeader(
+                win_key,
+                crate::window::decorator::HeaderAction::ToggleDirectMode,
+            ),
+            button_rect,
         );
 
         assert!(wm.direct_mode(win_key), "direct mode enabled before click");
@@ -4599,15 +4608,15 @@ mod tests {
                 _registry: &mut crate::hitbox_registry::HitboxRegistry,
             ) {
             }
-            fn on_mouse(
+            fn on_mouse_press(
                 &mut self,
-                mouse: &crate::events::LocalMouseEvent,
+                _local_x: u16,
+                _local_y: u16,
+                _button: MouseButton,
+                _modifiers: KeyModifiers,
                 ctx: &ComponentContext,
             ) -> EventResult<TermWmAction> {
-                if !ctx.direct_mode()
-                    && self.enabled
-                    && matches!(mouse.kind, MouseEventKind::Press(_))
-                {
+                if !ctx.direct_mode() && self.enabled {
                     self.received_down = true;
                     return EventResult::Consumed;
                 }
@@ -4691,14 +4700,43 @@ mod tests {
                 _registry: &mut crate::hitbox_registry::HitboxRegistry,
             ) {
             }
-            fn on_mouse(
+            fn on_mouse_press(
                 &mut self,
-                mouse: &crate::events::LocalMouseEvent,
+                local_x: u16,
+                local_y: u16,
+                _button: MouseButton,
+                _modifiers: KeyModifiers,
                 _ctx: &ComponentContext,
             ) -> EventResult<TermWmAction> {
                 EventResult::Action(TermWmAction::MouseToBytes(vec![
-                    mouse.col as u8,
-                    mouse.row as u8,
+                    local_x as u8,
+                    local_y as u8,
+                ]))
+            }
+            fn on_mouse_release(
+                &mut self,
+                local_x: u16,
+                local_y: u16,
+                _button: MouseButton,
+                _modifiers: KeyModifiers,
+                _ctx: &ComponentContext,
+            ) -> EventResult<TermWmAction> {
+                EventResult::Action(TermWmAction::MouseToBytes(vec![
+                    local_x as u8,
+                    local_y as u8,
+                ]))
+            }
+            fn on_mouse_drag(
+                &mut self,
+                local_x: u16,
+                local_y: u16,
+                _button: MouseButton,
+                _modifiers: KeyModifiers,
+                _ctx: &ComponentContext,
+            ) -> EventResult<TermWmAction> {
+                EventResult::Action(TermWmAction::MouseToBytes(vec![
+                    local_x as u8,
+                    local_y as u8,
                 ]))
             }
             fn on_key(
@@ -4781,7 +4819,7 @@ mod tests {
     fn phase3_moved_dispatches_mouse_action_to_update() {
         use crate::actions::EventResult;
         use crate::components::{Component, ComponentContext};
-        use crate::events::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use std::collections::VecDeque;
 
         struct ActionRecorder {
@@ -4796,14 +4834,55 @@ mod tests {
                 _registry: &mut crate::hitbox_registry::HitboxRegistry,
             ) {
             }
-            fn on_mouse(
+            fn on_mouse_press(
                 &mut self,
-                mouse: &crate::events::LocalMouseEvent,
+                local_x: u16,
+                local_y: u16,
+                _button: MouseButton,
+                _modifiers: KeyModifiers,
                 _ctx: &ComponentContext,
             ) -> EventResult<TermWmAction> {
                 EventResult::Action(TermWmAction::MouseToBytes(vec![
-                    mouse.col as u8,
-                    mouse.row as u8,
+                    local_x as u8,
+                    local_y as u8,
+                ]))
+            }
+            fn on_mouse_release(
+                &mut self,
+                local_x: u16,
+                local_y: u16,
+                _button: MouseButton,
+                _modifiers: KeyModifiers,
+                _ctx: &ComponentContext,
+            ) -> EventResult<TermWmAction> {
+                EventResult::Action(TermWmAction::MouseToBytes(vec![
+                    local_x as u8,
+                    local_y as u8,
+                ]))
+            }
+            fn on_mouse_drag(
+                &mut self,
+                local_x: u16,
+                local_y: u16,
+                _button: MouseButton,
+                _modifiers: KeyModifiers,
+                _ctx: &ComponentContext,
+            ) -> EventResult<TermWmAction> {
+                EventResult::Action(TermWmAction::MouseToBytes(vec![
+                    local_x as u8,
+                    local_y as u8,
+                ]))
+            }
+            fn on_mouse_move(
+                &mut self,
+                local_x: u16,
+                local_y: u16,
+                _modifiers: KeyModifiers,
+                _ctx: &ComponentContext,
+            ) -> EventResult<TermWmAction> {
+                EventResult::Action(TermWmAction::MouseToBytes(vec![
+                    local_x as u8,
+                    local_y as u8,
                 ]))
             }
             fn on_key(

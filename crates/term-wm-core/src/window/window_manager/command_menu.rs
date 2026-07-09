@@ -56,7 +56,10 @@ impl WindowManager {
             }
         }
 
-        let ctx = self.component_context(false).with_overlay(true);
+        let ctx = self
+            .component_context(false)
+            .with_overlay(true)
+            .with_screen_area(self.managed_area());
         let Some(menu) = &mut self.command_menu_component else {
             return None;
         };

@@ -43,7 +43,6 @@ pub enum HeaderAction {
     Close,
     Drag,
     ToggleDirectMode,
-    None,
 }
 
 pub struct WindowRenderCtx<'a> {
@@ -89,14 +88,13 @@ pub trait WindowDecorator: std::fmt::Debug + Send + Sync {
         ctx: WindowRenderCtx<'_>,
     );
 
-    fn hit_test(&self, window_rect: LayoutRect, x: u16, y: u16) -> HeaderAction;
-
     /// Returns the content area inside the decorations, relative to `window_rect`.
     fn content_area(&self, window_rect: LayoutRect) -> LayoutRect;
 }
 
 #[derive(Debug)]
 pub struct DefaultDecorator {
+    #[expect(dead_code)]
     show_buttons: bool,
 }
 
@@ -132,32 +130,6 @@ pub fn header_buttons(outer_right: u16) -> [(u16, HeaderAction, &'static str); 4
 }
 
 impl WindowDecorator for DefaultDecorator {
-    fn hit_test(&self, rect: LayoutRect, x: u16, y: u16) -> HeaderAction {
-        if !self.show_buttons {
-            return HeaderAction::Drag;
-        }
-
-        let outer_left = rect.x as u16;
-        let outer_right = (rect.x as u16)
-            .saturating_add(rect.width)
-            .saturating_sub(EDGE_INDEX_ADJUST);
-        let header_y = (rect.y as u16).saturating_add(TOP_BORDER_HEIGHT);
-
-        if y != header_y {
-            return HeaderAction::None;
-        }
-        if x <= outer_left || x >= outer_right {
-            return HeaderAction::None;
-        }
-
-        for (bx, action, _) in header_buttons(outer_right) {
-            if x == bx {
-                return action;
-            }
-        }
-        HeaderAction::Drag
-    }
-
     fn render_window(
         &self,
         _backend: &mut dyn term_wm_render::RenderBackend,
@@ -187,46 +159,5 @@ mod tests {
         let dec = DefaultDecorator::new();
         let s = format!("{:?}", dec);
         assert!(s.contains("DefaultDecorator"));
-    }
-
-    #[test]
-    fn hit_test_returns_expected_actions() {
-        let dec = DefaultDecorator::new();
-        let rect = LayoutRect {
-            x: 10,
-            y: 5,
-            width: 10,
-            height: 6,
-        };
-        // header_y = y + 1 = 6
-        let header_y = 6;
-
-        // outside header row
-        assert_eq!(dec.hit_test(rect, 11, 5), HeaderAction::None);
-
-        // left/right edges
-        assert_eq!(dec.hit_test(rect, 10, header_y), HeaderAction::None);
-        assert_eq!(dec.hit_test(rect, 19, header_y), HeaderAction::None);
-
-        // buttons: compute positions (right-to-left: close, maximize, minimize, direct)
-        let outer_right = (rect.x as u16) + rect.width - 1;
-        let close_x = outer_right.saturating_sub(HEADER_BUTTON_GAP);
-        let max_x = close_x.saturating_sub(HEADER_BUTTON_GAP);
-        let min_x = max_x.saturating_sub(HEADER_BUTTON_GAP);
-        let kb_x = min_x.saturating_sub(HEADER_BUTTON_GAP);
-
-        assert_eq!(dec.hit_test(rect, close_x, header_y), HeaderAction::Close);
-        assert_eq!(dec.hit_test(rect, max_x, header_y), HeaderAction::Maximize);
-        assert_eq!(dec.hit_test(rect, min_x, header_y), HeaderAction::Minimize);
-        assert_eq!(
-            dec.hit_test(rect, kb_x, header_y),
-            HeaderAction::ToggleDirectMode
-        );
-
-        // area between buttons -> drag
-        assert_eq!(
-            dec.hit_test(rect, (rect.x as u16) + 2, header_y),
-            HeaderAction::Drag
-        );
     }
 }
