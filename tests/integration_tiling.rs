@@ -284,6 +284,61 @@ mod multi_window_tiling {
         let diff = (r1.width as i32 - r2.width as i32).abs();
         assert!(diff <= 1, "widths should be within 1px: {} vs {}", r1.width, r2.width);
     }
+
+    /// Verify that corner insert puts the dragged window in the correct
+    /// quadrant and the first sibling in the adjacent quadrant.
+    /// Regression guard against insert/first ordering swaps.
+    #[test]
+    fn corner_insert_window_ordering() {
+        // Start with 3 windows side by side: [1, 2, 3]
+        let mut root = LayoutNode::leaf(1usize);
+        root.insert_leaf(1, 2, InsertPosition::Right);
+        root.insert_leaf(2, 3, InsertPosition::Right);
+        let area = Rect { x: 0, y: 0, width: 120, height: 80 };
+        let mid_y: i32 = (area.height / 2).into();
+
+        // Insert 4 into BottomLeft quadrant
+        // Expected: 4 in bottom-left, 1 in bottom-right, others in top strip
+        root.insert_leaf(1, 4, InsertPosition::BottomLeft);
+        let regions = root.layout(area);
+        let r4 = regions.iter().find(|(id, _)| *id == 4).unwrap().1;
+        let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
+        assert!(r4.x < r1.x, "BottomLeft: insert must be left of first sibling");
+        assert!(r4.y >= mid_y, "BottomLeft: insert must be in bottom half");
+
+        // Reset and test BottomRight
+        let mut root = LayoutNode::leaf(1usize);
+        root.insert_leaf(1, 2, InsertPosition::Right);
+        root.insert_leaf(2, 3, InsertPosition::Right);
+        root.insert_leaf(1, 4, InsertPosition::BottomRight);
+        let regions = root.layout(area);
+        let r4 = regions.iter().find(|(id, _)| *id == 4).unwrap().1;
+        let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
+        assert!(r4.x > r1.x, "BottomRight: insert must be right of first sibling");
+        assert!(r4.y >= mid_y, "BottomRight: insert must be in bottom half");
+
+        // Reset and test TopLeft
+        let mut root = LayoutNode::leaf(1usize);
+        root.insert_leaf(1, 2, InsertPosition::Right);
+        root.insert_leaf(2, 3, InsertPosition::Right);
+        root.insert_leaf(1, 4, InsertPosition::TopLeft);
+        let regions = root.layout(area);
+        let r4 = regions.iter().find(|(id, _)| *id == 4).unwrap().1;
+        let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
+        assert!(r4.x < r1.x, "TopLeft: insert must be left of first sibling");
+        assert!(r4.y < mid_y, "TopLeft: insert must be in top half");
+
+        // Reset and test TopRight
+        let mut root = LayoutNode::leaf(1usize);
+        root.insert_leaf(1, 2, InsertPosition::Right);
+        root.insert_leaf(2, 3, InsertPosition::Right);
+        root.insert_leaf(1, 4, InsertPosition::TopRight);
+        let regions = root.layout(area);
+        let r4 = regions.iter().find(|(id, _)| *id == 4).unwrap().1;
+        let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
+        assert!(r4.x > r1.x, "TopRight: insert must be right of first sibling");
+        assert!(r4.y < mid_y, "TopRight: insert must be in top half");
+    }
 }
 
 // ─── Module 3: Void Node Lifecycle ───────────────────────────────────
