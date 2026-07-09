@@ -200,7 +200,7 @@ impl WindowManager {
             width: area.width,
             height: area.height,
         };
-        if let Some(corner_pos) = detect_corner_snap(mouse_x, mouse_y, managed_layout_rect, 2) {
+        if let Some(corner_pos) = detect_corner_snap(mouse_x, mouse_y, managed_layout_rect, 6) {
             let preview = self
                 .get_projected_preview(dragging_key, SnapPreviewState::Corner(corner_pos), area)
                 .unwrap_or_else(|| {
@@ -251,7 +251,7 @@ impl WindowManager {
                 height: rect.height,
             };
 
-            let position = detect_edge_snap(mouse_x, mouse_y, target_layout, 2);
+            let position = detect_edge_snap(mouse_x, mouse_y, target_layout, 6);
             if let Some(pos) = position {
                 let preview = self
                     .get_projected_preview(dragging_key, SnapPreviewState::TiledInsert(target_key, pos), area)
@@ -280,7 +280,7 @@ impl WindowManager {
             }
         }
 
-        let position = detect_edge_snap(mouse_x, mouse_y, managed_layout_rect, 2);
+        let position = detect_edge_snap(mouse_x, mouse_y, managed_layout_rect, 6);
 
         if let Some(pos) = position {
             let preview = self
