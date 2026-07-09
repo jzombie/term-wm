@@ -433,13 +433,6 @@ where
                                 update_selection_snapshot(app);
                                 return flush_state_changes(app, ControlFlow::Continue);
                             }
-                            TermWmAction::ToggleFloat => {
-                                let key = app.wm().focused_window();
-                                app.wm().toggle_float(key);
-                                app.wm().close_command_menu();
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue);
-                            }
                             TermWmAction::HintToggle => {
                                 let current = app.wm().hint_visibility();
                                 let next = match current {

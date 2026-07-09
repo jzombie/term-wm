@@ -646,34 +646,6 @@ impl WindowManager {
         self.layout_dirty = false;
     }
 
-    /// Toggle a window between floating and tiled state.
-    pub fn toggle_float(&mut self, key: WindowKey) {
-        if self.is_window_floating(key) {
-            // Floating → re-insert into tiled layout
-            assert!(
-                !self.layout_contains(key),
-                "floating window must not be in layout"
-            );
-            self.clear_floating_rect(key);
-            if self.managed_layout.is_some() {
-                self.tile_window_key(key);
-            } else {
-                self.managed_layout = Some(crate::layout::TilingLayout::new(
-                    crate::layout::LayoutNode::leaf(key),
-                ));
-            }
-            self.register_managed_layout(self.managed_area);
-            self.mark_layout_dirty();
-        } else {
-            // Tiled → detach and float at current rect
-            let rect = self.full_region(key);
-            self.detach_from_tiling_layout(key);
-            self.set_floating_rect(key, Some(crate::window::FloatRectSpec::Absolute(rect)));
-            self.bring_floating_to_front_key(key);
-            self.mark_layout_dirty();
-        }
-    }
-
     /// Remove a key from the focus ring's order (called after closing a window).
     fn remove_from_focus_ring(&mut self, key: WindowKey) {
         let order: Vec<WindowKey> = self
@@ -981,6 +953,29 @@ impl WindowManager {
                     if dx + dy <= 2 {
                         return true;
                     }
+
+                    // Fix 16a: Downward-drag restore for maximized windows
+                    let is_maximized = self.windows.get(key).is_some_and(|w| w.is_maximized);
+                    if is_maximized {
+                        if row > anchor_y && row - anchor_y > 2 {
+                            self.toggle_maximize(key);
+                            // Update capture initial coordinates after restore
+                            if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
+                                self.floating_rect(key)
+                                && let Some(MouseCaptureState::DraggingWindow {
+                                    ref mut initial_x,
+                                    ref mut initial_y,
+                                    ..
+                                }) = self.mouse_capture
+                            {
+                                *initial_x = fr.x;
+                                *initial_y = fr.y;
+                            }
+                        } else {
+                            return true;
+                        }
+                    }
+
                     self.drag_last_event = Some(Instant::now());
                     self.reset_drag_snap_timer();
                     if self.is_window_floating(key) {
@@ -991,7 +986,7 @@ impl WindowManager {
                             .duration_since(std::time::UNIX_EPOCH)
                             .map(|d| d.as_nanos() as u64)
                             .unwrap_or(prev_time_ns);
-                        let dt_ns = now_ns.saturating_sub(prev_time_ns);
+                        let dt_ns = now_ns.saturating_sub(prev_time_ns).max(1_000_000);
                         let dist_sq = u32::from(dx).saturating_mul(u32::from(dx))
                             .saturating_add(u32::from(dy).saturating_mul(u32::from(dy)));
                         // Threshold: 10 cells per 100ms → cross-multiply

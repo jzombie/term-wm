@@ -77,7 +77,6 @@ pub enum TermWmAction {
     MaximizeWindow,
     ToggleDebugWindow,
     BringFloatingFront,
-    ToggleFloat,
     ExitUi,
 
     // Clipboard
@@ -163,7 +162,6 @@ impl TermWmAction {
             | TermWmAction::MaximizeWindow
             | TermWmAction::ToggleDebugWindow
             | TermWmAction::BringFloatingFront
-            | TermWmAction::ToggleFloat
             | TermWmAction::ExitUi => Category::Windows,
 
             TermWmAction::MenuUp
@@ -270,7 +268,6 @@ impl fmt::Display for TermWmAction {
             TermWmAction::MaximizeWindow => "Maximize window",
             TermWmAction::ToggleDebugWindow => "Toggle debug window",
             TermWmAction::BringFloatingFront => "Bring floating front",
-            TermWmAction::ToggleFloat => "Toggle float",
             TermWmAction::ExitUi => "Exit UI",
             TermWmAction::ConfirmAction(_) => "Confirm action",
             TermWmAction::ClipboardPaste(_) => "Clipboard paste",
