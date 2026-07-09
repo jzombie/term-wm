@@ -992,7 +992,9 @@ impl WindowManager {
                                 }
 
                                 if detach_coordinate.is_none() {
-                                    *detach_coordinate = Some((col, row));
+                                    // Defer setting detach_coordinate until after
+                                    // update_snap_preview runs, so the first Drag
+                                    // event is not suppressed.
                                 }
 
                                 self.drag_last_event = Some(Instant::now());
@@ -1033,6 +1035,10 @@ impl WindowManager {
                                         self.update_snap_preview(*key, col, row, detach_coordinate);
                                     } else {
                                         self.drag_snap = None;
+                                    }
+                                    // Set detach_coordinate AFTER snap preview runs
+                                    if detach_coordinate.is_none() {
+                                        *detach_coordinate = Some((col, row));
                                     }
                                     *prev_col = col;
                                     *prev_row = row;
