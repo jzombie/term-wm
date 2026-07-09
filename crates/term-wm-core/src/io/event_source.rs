@@ -40,9 +40,29 @@ pub trait EventSource {
     /// [`current_profile()`]: Self::current_profile
     fn set_pending_work(&mut self, _pending: bool) {}
 
+    /// Inform the event source of the maximum duration it is allowed to block
+    /// before the next scheduled background task expires.
+    ///
+    /// The runner calls this at the end of each cycle with the shortest
+    /// deadline from the task scheduler.  When `None` there are no upcoming
+    /// tasks and the source may use its full profile-based poll interval.
+    ///
+    /// The default is a no-op for sources that don't need deadline awareness.
+    fn set_max_sleep_duration(&mut self, _duration: Option<std::time::Duration>) {}
+
     /// Take accumulated window exit notifications. Default returns empty.
     fn take_exited_windows(&mut self) -> Vec<crate::window::WindowKey> {
         Vec::new()
+    }
+
+    /// Take accumulated dirty-window keys and reset the set.
+    ///
+    /// After a successful render the runner calls this to signal that all
+    /// pending PTY output has been displayed and the power profile may
+    /// drop back to `PowerSaver`.  The default returns an empty set for
+    /// event sources that do not track dirty windows.
+    fn take_dirty_windows(&mut self) -> std::collections::HashSet<crate::window::WindowKey> {
+        std::collections::HashSet::new()
     }
 }
 
@@ -71,6 +91,10 @@ impl<T: EventSource + ?Sized> EventSource for &mut T {
         (**self).set_pending_work(pending)
     }
 
+    fn set_max_sleep_duration(&mut self, duration: Option<std::time::Duration>) {
+        (**self).set_max_sleep_duration(duration)
+    }
+
     fn poll_interval(&self) -> Duration {
         (**self).poll_interval()
     }
@@ -81,6 +105,10 @@ impl<T: EventSource + ?Sized> EventSource for &mut T {
 
     fn take_exited_windows(&mut self) -> Vec<crate::window::WindowKey> {
         (**self).take_exited_windows()
+    }
+
+    fn take_dirty_windows(&mut self) -> std::collections::HashSet<crate::window::WindowKey> {
+        (**self).take_dirty_windows()
     }
 }
 
@@ -128,5 +156,74 @@ mod tests {
         } else {
             panic!("expected key");
         }
+    }
+
+    #[test]
+    fn take_dirty_windows_default_returns_empty() {
+        let mut d = Dummy;
+        let set = EventSource::take_dirty_windows(&mut d);
+        assert!(set.is_empty(), "default impl must return empty set");
+    }
+
+    #[test]
+    fn take_dirty_windows_via_mut_ref_forwards_to_inner() {
+        struct TrackingSource {
+            dirty: std::collections::HashSet<crate::window::WindowKey>,
+        }
+
+        impl EventSource for TrackingSource {
+            fn poll(&mut self, _: Duration) -> io::Result<bool> {
+                Ok(false)
+            }
+            fn read(&mut self) -> io::Result<Event> {
+                unreachable!()
+            }
+            fn next_key(&mut self) -> io::Result<KeyEvent> {
+                unreachable!()
+            }
+            fn next_mouse(&mut self) -> io::Result<MouseEvent> {
+                unreachable!()
+            }
+            fn take_dirty_windows(
+                &mut self,
+            ) -> std::collections::HashSet<crate::window::WindowKey> {
+                std::mem::take(&mut self.dirty)
+            }
+        }
+
+        let mut inner = TrackingSource {
+            dirty: std::collections::HashSet::from([crate::window::WindowKey::default()]),
+        };
+        let mut reference = &mut inner;
+
+        // Call through the blanket impl — must forward to TrackingSource, not the default.
+        let taken = EventSource::take_dirty_windows(&mut reference);
+        assert_eq!(taken.len(), 1, "must forward to concrete impl");
+        assert!(
+            reference.dirty.is_empty(),
+            "concrete impl must have cleared its dirty set"
+        );
+    }
+
+    #[test]
+    fn set_max_sleep_duration_default_does_not_panic() {
+        struct Stub;
+        impl EventSource for Stub {
+            fn poll(&mut self, _: Duration) -> io::Result<bool> {
+                Ok(false)
+            }
+            fn read(&mut self) -> io::Result<Event> {
+                unreachable!()
+            }
+            fn next_key(&mut self) -> io::Result<KeyEvent> {
+                unreachable!()
+            }
+            fn next_mouse(&mut self) -> io::Result<MouseEvent> {
+                Err(io::Error::other("no"))
+            }
+        }
+        let mut s = Stub;
+        EventSource::set_max_sleep_duration(&mut s, Some(Duration::from_secs(1)));
+        EventSource::set_max_sleep_duration(&mut s, None);
     }
 }

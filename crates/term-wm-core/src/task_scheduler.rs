@@ -150,6 +150,12 @@ impl<T> TaskHandle<T> {
         self.inner.borrow_mut().keep_awake = active;
     }
 
+    /// Returns `true` if the scheduler has been explicitly requested to keep
+    /// the loop awake for high-frequency transient UI updates or animations.
+    pub fn is_keep_awake_active(&self) -> bool {
+        self.inner.borrow().keep_awake
+    }
+
     /// Returns the duration until the next deadline, or [`None`] when the
     /// scheduler is empty.
     pub fn time_until_next(&self) -> Option<Duration> {
@@ -359,5 +365,15 @@ mod tests {
         h1.schedule_once(Duration::from_millis(1), "shared");
         std::thread::sleep(Duration::from_millis(10));
         assert_eq!(h2.drain_expired_once().len(), 1);
+    }
+
+    #[test]
+    fn is_keep_awake_active_default_false() {
+        let sched = TaskScheduler::<String>::new();
+        assert!(!sched.handle().is_keep_awake_active());
+        sched.handle().set_keep_awake(true);
+        assert!(sched.handle().is_keep_awake_active());
+        sched.handle().set_keep_awake(false);
+        assert!(!sched.handle().is_keep_awake_active());
     }
 }
