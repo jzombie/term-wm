@@ -899,6 +899,22 @@ impl WindowManager {
         self.hover
     }
 
+    /// Set the hover position (used in tests or to prime state before rendering).
+    pub fn set_hover_pos(&mut self, col: u16, row: u16) {
+        self.hover = Some((col, row));
+    }
+
+    /// Set the mouse capture state (used in tests to simulate active interaction).
+    pub fn set_mouse_captured(&mut self, captured: bool) {
+        self.mouse_capture = if captured {
+            Some(MouseCaptureState::ComponentInteraction {
+                key: WindowKey::default(),
+            })
+        } else {
+            None
+        };
+    }
+
     /// Return a mutable reference to the hitbox registry (for render pipeline).
     pub fn hitbox_registry_mut(&mut self) -> &mut crate::hitbox_registry::HitboxRegistry {
         &mut self.hitbox_registry
@@ -943,6 +959,11 @@ impl WindowManager {
         };
         let col = position.column as u16;
         let row = position.row as u16;
+        // Record hover position on every mouse event — must happen before the
+        // Phase-1 active-capture branch (which returns early for Drag events
+        // during window resize/move) so that the cursor overlay always draws
+        // at the current pointer location.
+        self.hover = Some((col, row));
 
         // Phase 1 — Active capture: extract-operate-restore pattern.
         if !matches!(kind, MouseEventKind::Press(_)) {
@@ -1235,9 +1256,8 @@ impl WindowManager {
             return false;
         }
 
-        // Phase 3 — Moved events: update hover and forward to component.
+        // Phase 3 — Moved events: forward to component.
         if matches!(kind, MouseEventKind::Moved) {
-            self.hover = Some((col, row));
             if let Some((target, hit_rect)) = self.hitbox_registry.hit_test(*position)
                 && let HitTarget::Window(key) | HitTarget::Component(key, ..) = target
             {
@@ -1282,8 +1302,7 @@ impl WindowManager {
             return false;
         }
 
-        // Record hover position for decorator rendering
-        self.hover = Some((col, row));
+        // Hover already recorded at function entry.
 
         let Some((target, hit_rect)) = self.hitbox_registry.hit_test(*position) else {
             // No hitbox — try focus-on-click, then fall through
@@ -1635,6 +1654,13 @@ impl WindowManager {
 
     pub fn mouse_capture_enabled(&self) -> bool {
         self.mouse_capture_enabled
+    }
+
+    /// Returns `true` if any mouse capture is active (drag, resize, component
+    /// interaction, or layout handle manipulation).  Read-only — no side
+    /// effects, no deadline pruning.  Safe to call from the render path.
+    pub fn is_mouse_captured(&self) -> bool {
+        self.mouse_capture.is_some()
     }
 
     pub fn keyboard_focus_enabled(&self) -> bool {
