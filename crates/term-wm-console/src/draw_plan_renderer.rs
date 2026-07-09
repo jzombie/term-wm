@@ -1206,6 +1206,12 @@ impl ColorConvert for Color {
 pub fn render_cursor_overlay(buf: &mut Buffer, wm: &WindowManager, _theme: &Theme) {
     use ratatui::style::Modifier;
 
+    // Don't render when mouse capture is disabled — the last hover position
+    // would be stale and the OS pointer already provides visual feedback.
+    if !wm.mouse_capture_enabled() {
+        return;
+    }
+
     let Some((hx, hy)) = wm.hover_pos() else {
         return;
     };
