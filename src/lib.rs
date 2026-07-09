@@ -30,6 +30,11 @@ pub fn render_app(
     let Some(ratatui_backend) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() else {
         return;
     };
+
+    // Clear per-frame draw state (regions, floating headers, hitbox registry)
+    // that was populated during the previous frame's render pass.
+    wm.prepare_draw();
+
     let area = term_wm_layout_engine::LayoutRect {
         x: 0,
         y: 0,
