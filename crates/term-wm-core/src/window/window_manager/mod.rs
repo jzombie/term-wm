@@ -936,10 +936,8 @@ impl WindowManager {
 
         // Phase 1 — Active capture: extract-operate-restore pattern.
         if !matches!(kind, MouseEventKind::Press(_)) {
-            let Some(mut capture) = self.mouse_capture.take() else {
-                return true;
-            };
-            let (result, restore) = match &mut capture {
+            if let Some(mut capture) = self.mouse_capture.take() {
+                let (result, restore) = match &mut capture {
                 MouseCaptureState::DraggingWindow {
                     key,
                     resistance,
@@ -1122,6 +1120,7 @@ impl WindowManager {
                 self.mouse_capture = Some(capture);
             }
             return result;
+            }
         }
 
         // Phase 2 — Scroll events: hover-to-scroll to the window under cursor.

@@ -684,7 +684,6 @@ impl WindowManager {
     pub(super) fn detach_from_tiling_layout(&mut self, key: WindowKey) {
         if let Some(ref mut layout) = self.managed_layout {
             let _ = layout.root_mut().remove_leaf(key);
-            layout.root_mut().contract_tree();
         }
     }
 

@@ -318,7 +318,6 @@ impl WindowManager {
                 }
                 if let Some(layout) = &mut self.managed_layout {
                     layout.root_mut().remove_leaf(key);
-                    layout.root_mut().contract_tree();
                     layout.root_mut().replace_void_by_id(void_id, LayoutNode::leaf(key));
                 }
                 if let Some(pos) = self.z_order.iter().position(|&z_key| z_key == key) {
@@ -365,7 +364,6 @@ impl WindowManager {
                 };
                 if should_retile {
                     layout.root_mut().remove_leaf(key);
-                    layout.root_mut().contract_tree();
                 } else {
                     self.bring_to_front_key(key);
                     return;
