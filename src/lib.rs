@@ -16,7 +16,7 @@ use term_wm_console::draw_plan_renderer::{
     render_resize_outline,
 };
 use term_wm_core::hitbox_registry::{HitTarget, HitboxRegistry};
-use term_wm_core::window::decorator::HeaderAction;
+use term_wm_core::window::decorator::{HeaderAction, header_buttons};
 use term_wm_core::window::{WindowManager, WindowSurface};
 
 /// Default rendering implementation for the window manager.
@@ -163,7 +163,19 @@ pub fn render_app(
                 entries.push((HitTarget::ChromeResize(h.key, h.edge), h.rect));
             }
             for h in wm.floating_headers().iter().filter(|h| h.key == k) {
+                // Drag zone (full header width) — lower priority in reverse scan
                 entries.push((HitTarget::ChromeHeader(h.key, HeaderAction::Drag), h.rect));
+                // Per-button 1x1 hitboxes at exact button positions — higher priority
+                let outer_right = (h.rect.x.saturating_add(i32::from(h.rect.width))).max(0) as u16;
+                for (bx, action, _) in header_buttons(outer_right) {
+                    let button_rect = term_wm_layout_engine::LayoutRect {
+                        x: i32::from(bx),
+                        y: h.rect.y,
+                        width: 1,
+                        height: 1,
+                    };
+                    entries.push((HitTarget::ChromeHeader(h.key, action), button_rect));
+                }
             }
         }
         // Tiling split handles last — highest priority at split boundaries,

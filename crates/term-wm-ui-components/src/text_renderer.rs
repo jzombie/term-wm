@@ -8,13 +8,12 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
-use term_wm_core::events::MouseEvent;
+use term_wm_core::events::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::helpers::{color_to_ratatui, layout_rect_to_rect, linkified_to_text};
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::component_context::{ScrollHandle, ScrollViewport};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
-use term_wm_core::events::LocalMouseEvent;
 use term_wm_core::utils::linkifier::LinkifiedText;
 use term_wm_core::utils::selectable_text::{
     LogicalPosition, SelectionController, SelectionHost, SelectionRange, SelectionViewport,
@@ -178,37 +177,65 @@ impl Component<TermWmAction> for TextRendererComponent {
         self.render_selection_overlay(&mut backend.buffer, screen_area, &ctx.config().theme);
     }
 
-    fn on_mouse(
+    fn on_mouse_press(
         &mut self,
-        mouse: &LocalMouseEvent,
+        local_x: u16,
+        local_y: u16,
+        button: MouseButton,
+        modifiers: KeyModifiers,
         ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
-        self.viewport_cache.set(ctx.viewport());
-        if let Some(handle) = ctx.scroll_handle() {
-            self.scroll_handle.replace(Some(handle));
-        }
-        // Reconstruct screen-space MouseEvent for handle_selection_mouse
-        let screen_area = ctx
-            .screen_area()
-            .map(layout_rect_to_rect)
-            .unwrap_or_default();
-        let screen_mouse = MouseEvent {
-            column: mouse.col.saturating_add(screen_area.x),
-            row: mouse.row.saturating_add(screen_area.y),
-            kind: mouse.kind,
-            modifiers: mouse.modifiers,
-        };
-        let screen_area_lr = LayoutRect {
-            x: screen_area.x as i32,
-            y: screen_area.y as i32,
-            width: screen_area.width,
-            height: screen_area.height,
-        };
-        if handle_selection_mouse(self, self.selection_enabled, &screen_mouse, screen_area_lr) {
-            EventResult::Consumed
-        } else {
-            EventResult::Ignored
-        }
+        self.handle_local_mouse(
+            local_x,
+            local_y,
+            MouseEventKind::Press(button),
+            modifiers,
+            ctx,
+        )
+    }
+
+    fn on_mouse_release(
+        &mut self,
+        local_x: u16,
+        local_y: u16,
+        button: MouseButton,
+        modifiers: KeyModifiers,
+        ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        self.handle_local_mouse(
+            local_x,
+            local_y,
+            MouseEventKind::Release(button),
+            modifiers,
+            ctx,
+        )
+    }
+
+    fn on_mouse_drag(
+        &mut self,
+        local_x: u16,
+        local_y: u16,
+        button: MouseButton,
+        modifiers: KeyModifiers,
+        ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        self.handle_local_mouse(
+            local_x,
+            local_y,
+            MouseEventKind::Drag(button),
+            modifiers,
+            ctx,
+        )
+    }
+
+    fn on_mouse_move(
+        &mut self,
+        local_x: u16,
+        local_y: u16,
+        modifiers: KeyModifiers,
+        ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        self.handle_local_mouse(local_x, local_y, MouseEventKind::Moved, modifiers, ctx)
     }
 
     fn on_key(
@@ -626,6 +653,37 @@ impl TextRendererComponent {
             handle.scroll_horizontal_to(0);
         }
     }
+
+    fn handle_local_mouse(
+        &mut self,
+        local_x: u16,
+        local_y: u16,
+        kind: MouseEventKind,
+        modifiers: KeyModifiers,
+        ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        self.viewport_cache.set(ctx.viewport());
+        if let Some(handle) = ctx.scroll_handle() {
+            self.scroll_handle.replace(Some(handle));
+        }
+        let raw_area = ctx.screen_area().unwrap_or(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        });
+        let screen_mouse = MouseEvent {
+            column: (i32::from(local_x) + raw_area.x).max(0) as u16,
+            row: (i32::from(local_y) + raw_area.y).max(0) as u16,
+            kind,
+            modifiers,
+        };
+        if handle_selection_mouse(self, self.selection_enabled, &screen_mouse, raw_area) {
+            EventResult::Consumed
+        } else {
+            EventResult::Ignored
+        }
+    }
 }
 
 impl SelectionViewport for TextRendererComponent {
@@ -872,6 +930,112 @@ mod tests {
                 .selection_controller()
                 .is_dragging()
         );
+    }
+
+    #[test]
+    fn on_mouse_press_delegates_to_handle_local_mouse() {
+        use ratatui::text::Line;
+        let mut renderer = TextRendererComponent::new();
+        renderer.set_selection_enabled(true);
+        renderer.set_wrap(false);
+        let lines: Vec<Line<'static>> = (0..5)
+            .map(|idx| Line::from(format!("line {idx}")))
+            .collect();
+        renderer.set_text(Text::from(lines));
+
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 5,
+        };
+        let ctx = ComponentContext::new(true).with_screen_area(area);
+        let result = renderer.on_mouse_press(5, 2, MouseButton::Left, KeyModifiers::NONE, &ctx);
+        assert!(result.is_ignored());
+    }
+
+    #[test]
+    fn on_mouse_release_delegates_to_handle_local_mouse() {
+        use ratatui::text::Line;
+        let mut renderer = TextRendererComponent::new();
+        renderer.set_selection_enabled(true);
+        renderer.set_wrap(false);
+        let lines: Vec<Line<'static>> = (0..5)
+            .map(|idx| Line::from(format!("line {idx}")))
+            .collect();
+        renderer.set_text(Text::from(lines));
+
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 5,
+        };
+        let ctx = ComponentContext::new(true).with_screen_area(area);
+        let result = renderer.on_mouse_release(5, 2, MouseButton::Left, KeyModifiers::NONE, &ctx);
+        assert!(result.is_ignored());
+    }
+
+    #[test]
+    fn on_mouse_drag_delegates_to_handle_local_mouse() {
+        use ratatui::text::Line;
+        let mut renderer = TextRendererComponent::new();
+        renderer.set_selection_enabled(true);
+        renderer.set_wrap(false);
+        let lines: Vec<Line<'static>> = (0..5)
+            .map(|idx| Line::from(format!("line {idx}")))
+            .collect();
+        renderer.set_text(Text::from(lines));
+
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 5,
+        };
+        let ctx = ComponentContext::new(true).with_screen_area(area);
+        let result = renderer.on_mouse_drag(5, 2, MouseButton::Left, KeyModifiers::NONE, &ctx);
+        assert!(result.is_ignored());
+    }
+
+    #[test]
+    fn on_mouse_move_delegates_to_handle_local_mouse() {
+        use ratatui::text::Line;
+        let mut renderer = TextRendererComponent::new();
+        renderer.set_selection_enabled(true);
+        renderer.set_wrap(false);
+        let lines: Vec<Line<'static>> = (0..5)
+            .map(|idx| Line::from(format!("line {idx}")))
+            .collect();
+        renderer.set_text(Text::from(lines));
+
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 5,
+        };
+        let ctx = ComponentContext::new(true).with_screen_area(area);
+        let result = renderer.on_mouse_move(5, 2, KeyModifiers::NONE, &ctx);
+        assert!(result.is_ignored());
+    }
+
+    #[test]
+    fn handle_local_mouse_with_zero_area_falls_back() {
+        let mut renderer = TextRendererComponent::new();
+        renderer.set_selection_enabled(true);
+        let lines: Vec<Line<'static>> = vec![Line::from("hello")];
+        renderer.set_text(Text::from(lines));
+
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        };
+        let ctx = ComponentContext::new(true).with_screen_area(area);
+        let result = renderer.on_mouse_press(0, 0, MouseButton::Left, KeyModifiers::NONE, &ctx);
+        assert!(result.is_ignored());
     }
 }
 

@@ -2,13 +2,12 @@ use std::collections::VecDeque;
 
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem};
-use term_wm_core::events::{Event, MouseButton, MouseEventKind};
+use term_wm_core::events::{Event, KeyModifiers, MouseButton};
 
 use crate::helpers::{color_to_ratatui, layout_rect_to_rect};
 use ratatui::widgets::Widget;
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext};
-use term_wm_core::events::LocalMouseEvent;
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
 
@@ -82,18 +81,18 @@ impl Component<TermWmAction> for ListComponent {
         list.render(inner, &mut backend.buffer);
     }
 
-    fn on_mouse(
+    fn on_mouse_press(
         &mut self,
-        mouse: &LocalMouseEvent,
+        _local_x: u16,
+        local_y: u16,
+        button: MouseButton,
+        _modifiers: KeyModifiers,
         ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
-        if matches!(mouse.kind, MouseEventKind::Press(MouseButton::Left))
-            && ctx.focused()
-            && !self.items.is_empty()
-        {
+        if button == MouseButton::Left && ctx.focused() && !self.items.is_empty() {
             let vp = ctx.viewport();
             let skip_n = vp.offset_y.saturating_sub(1);
-            let visible_row = mouse.row.saturating_sub(1) as usize;
+            let visible_row = local_y.saturating_sub(1) as usize;
             let index = skip_n + visible_row;
             if index < self.items.len() {
                 self.selected = index;
@@ -393,15 +392,13 @@ mod tests {
         let mut list = ListComponent::new("t");
         list.set_items(vec!["a".into(), "b".into(), "c".into()]);
         let ctx = ComponentContext::new(true);
-        let mouse = term_wm_core::events::LocalMouseEvent {
-            col: 5,
-            row: 2,
-            kind: term_wm_core::events::MouseEventKind::Press(
-                term_wm_core::events::MouseButton::Left,
-            ),
-            modifiers: term_wm_core::events::KeyModifiers::NONE,
-        };
-        let result = list.on_mouse(&mouse, &ctx);
+        let result = list.on_mouse_press(
+            5,
+            2,
+            term_wm_core::events::MouseButton::Left,
+            term_wm_core::events::KeyModifiers::NONE,
+            &ctx,
+        );
         assert!(matches!(result, EventResult::Consumed));
         assert_eq!(list.selected(), 1);
     }
@@ -411,15 +408,13 @@ mod tests {
         let mut list = ListComponent::new("t");
         list.set_items(vec!["a".into(), "b".into()]);
         let ctx = ComponentContext::new(true);
-        let mouse = term_wm_core::events::LocalMouseEvent {
-            col: 5,
-            row: 10,
-            kind: term_wm_core::events::MouseEventKind::Press(
-                term_wm_core::events::MouseButton::Left,
-            ),
-            modifiers: term_wm_core::events::KeyModifiers::NONE,
-        };
-        let result = list.on_mouse(&mouse, &ctx);
+        let result = list.on_mouse_press(
+            5,
+            10,
+            term_wm_core::events::MouseButton::Left,
+            term_wm_core::events::KeyModifiers::NONE,
+            &ctx,
+        );
         assert!(matches!(result, EventResult::Ignored));
     }
 

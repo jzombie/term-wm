@@ -1321,84 +1321,77 @@ impl WindowManager {
                 self.mouse_capture = Some(MouseCaptureState::ComponentInteraction { key });
                 consumed
             }
-            HitTarget::ChromeHeader(key, _) => {
-                let rect = self.visible_region_for_key(key);
-                match self.decorator().hit_test(rect, col, row) {
-                    HeaderAction::Close => {
-                        self.close_window(key);
-                        self.last_header_click = None;
-                        true
-                    }
-                    HeaderAction::Maximize => {
+            HitTarget::ChromeHeader(key, action) => match action {
+                HeaderAction::Close => {
+                    self.close_window(key);
+                    self.last_header_click = None;
+                    true
+                }
+                HeaderAction::Maximize => {
+                    self.toggle_maximize(key);
+                    self.last_header_click = None;
+                    true
+                }
+                HeaderAction::Minimize => {
+                    self.minimize_window(key);
+                    self.last_header_click = None;
+                    true
+                }
+                HeaderAction::ToggleDirectMode => {
+                    self.toggle_direct_mode(key);
+                    self.last_header_click = None;
+                    true
+                }
+                HeaderAction::Drag => {
+                    let now = Instant::now();
+                    if let Some((prev_key, prev)) = self.last_header_click
+                        && prev_key == key
+                        && now.duration_since(prev) <= Duration::from_millis(500)
+                    {
                         self.toggle_maximize(key);
                         self.last_header_click = None;
-                        true
+                        return true;
                     }
-                    HeaderAction::Minimize => {
-                        self.minimize_window(key);
-                        self.last_header_click = None;
-                        true
+                    self.last_header_click = Some((key, now));
+
+                    if self.is_window_floating(key) {
+                        self.bring_floating_to_front_key(key);
+                    } else {
+                        self.bring_to_front_key(key);
                     }
-                    HeaderAction::ToggleDirectMode => {
-                        self.toggle_direct_mode(key);
-                        self.last_header_click = None;
-                        true
-                    }
-                    HeaderAction::Drag => {
-                        let now = Instant::now();
-                        if let Some((prev_key, prev)) = self.last_header_click
-                            && prev_key == key
-                            && now.duration_since(prev) <= Duration::from_millis(500)
+
+                    let rect = self.visible_region_for_key(key);
+                    let (initial_x, initial_y) =
+                        if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
+                            self.floating_rect(key)
                         {
-                            self.toggle_maximize(key);
-                            self.last_header_click = None;
-                            return true;
-                        }
-                        self.last_header_click = Some((key, now));
-
-                        if self.is_window_floating(key) {
-                            self.bring_floating_to_front_key(key);
+                            (fr.x, fr.y)
                         } else {
-                            // Defer floating decoupling until the drag deadzone
-                            // is breached.  Capture the pointer now; the floating
-                            // rect will be installed on the first Drag event that
-                            // exceeds the kinetic threshold (dx + dy > 2).
-                            self.bring_to_front_key(key);
-                        }
-
-                        let (initial_x, initial_y) =
-                            if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
-                                self.floating_rect(key)
-                            {
-                                (fr.x, fr.y)
-                            } else {
-                                (rect.x, rect.y)
-                            };
-                        self.mouse_capture = Some(MouseCaptureState::DraggingWindow {
-                            key,
-                            resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
-                            anchor_x: col,
-                            anchor_y: row,
-                            initial_x,
-                            initial_y,
-                            start_x: col,
-                            start_y: row,
-                            prev_col: col,
-                            prev_row: row,
-                            prev_time_ns: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_nanos() as u64)
-                                .unwrap_or(0),
-                            detach_coordinate: None,
-                            snap_applied: false,
-                        });
-                        self.drag_last_event = Some(Instant::now());
-                        self.arm_drag_snap_timer();
-                        true
-                    }
-                    HeaderAction::None => false,
+                            (rect.x, rect.y)
+                        };
+                    self.mouse_capture = Some(MouseCaptureState::DraggingWindow {
+                        key,
+                        resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
+                        anchor_x: col,
+                        anchor_y: row,
+                        initial_x,
+                        initial_y,
+                        start_x: col,
+                        start_y: row,
+                        prev_col: col,
+                        prev_row: row,
+                        prev_time_ns: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_nanos() as u64)
+                            .unwrap_or(0),
+                        detach_coordinate: None,
+                        snap_applied: false,
+                    });
+                    self.drag_last_event = Some(Instant::now());
+                    self.arm_drag_snap_timer();
+                    true
                 }
-            }
+            },
             HitTarget::ChromeResize(key, edge) => {
                 if !self.config.floating_windows_enabled || !self.is_window_floating(key) {
                     return false;
@@ -1455,7 +1448,9 @@ impl WindowManager {
                 false
             }
             HitTarget::Overlay(id) => {
-                let ctx = self.component_context_for(false, slotmap::DefaultKey::default());
+                let ctx = self
+                    .component_context_for(false, slotmap::DefaultKey::default())
+                    .with_screen_area(hit_rect);
                 if let Some(overlay) = self.overlays.get_mut(&id) {
                     let result = overlay.handle_events(&core_event, &ctx);
                     !result.is_ignored()
@@ -2303,6 +2298,7 @@ fn make_keys(wm: &mut WindowManager, n: usize) -> Vec<WindowKey> {
 mod tests {
     use super::*;
     use crate::layout::{Constraint, Direction};
+    use std::collections::VecDeque;
     use term_wm_layout_engine::LayoutRect;
 
     /// Test fixture: how far back to set `drag_last_event` to simulate
@@ -3543,20 +3539,26 @@ mod tests {
         let min_x = max_x.saturating_sub(2);
         let kb_x = min_x.saturating_sub(2) as u16;
         let kb_y = full_rect.y.saturating_add(1) as u16; // header row
-        assert_eq!(
-            wm.decorator().hit_test(full_rect, kb_x, kb_y),
-            crate::window::decorator::HeaderAction::ToggleDirectMode,
-            "hit_test should detect D button at ({},{}) on {:?}",
-            kb_x,
-            kb_y,
-            full_rect
-        );
-
         assert!(!wm.direct_mode(win_key), "starts off");
 
+        // Register header hitboxes matching the render-pass arrangement:
+        // Drag zone for the full header, per-button hitbox for "D".
         wm.hitbox_registry.register(
             HitTarget::ChromeHeader(win_key, crate::window::decorator::HeaderAction::Drag),
             full_rect,
+        );
+        let button_rect = term_wm_layout_engine::LayoutRect {
+            x: i32::from(kb_x),
+            y: full_rect.y.saturating_add(1),
+            width: 1,
+            height: 1,
+        };
+        wm.hitbox_registry.register(
+            HitTarget::ChromeHeader(
+                win_key,
+                crate::window::decorator::HeaderAction::ToggleDirectMode,
+            ),
+            button_rect,
         );
 
         let click = Event::Mouse(MouseEvent {
@@ -3964,14 +3966,22 @@ mod tests {
         let min_x = max_x.saturating_sub(2);
         let kb_x = min_x.saturating_sub(2) as u16;
         let kb_y = full_rect.y.saturating_add(1) as u16; // header row
-        assert_eq!(
-            wm.decorator().hit_test(full_rect, kb_x, kb_y),
-            crate::window::decorator::HeaderAction::ToggleDirectMode,
-        );
-
         wm.hitbox_registry.register(
             HitTarget::ChromeHeader(win_key, crate::window::decorator::HeaderAction::Drag),
             full_rect,
+        );
+        let button_rect = term_wm_layout_engine::LayoutRect {
+            x: i32::from(kb_x),
+            y: full_rect.y.saturating_add(1),
+            width: 1,
+            height: 1,
+        };
+        wm.hitbox_registry.register(
+            HitTarget::ChromeHeader(
+                win_key,
+                crate::window::decorator::HeaderAction::ToggleDirectMode,
+            ),
+            button_rect,
         );
 
         assert!(wm.direct_mode(win_key), "direct mode enabled before click");
@@ -4599,15 +4609,15 @@ mod tests {
                 _registry: &mut crate::hitbox_registry::HitboxRegistry,
             ) {
             }
-            fn on_mouse(
+            fn on_mouse_press(
                 &mut self,
-                mouse: &crate::events::LocalMouseEvent,
+                _local_x: u16,
+                _local_y: u16,
+                _button: MouseButton,
+                _modifiers: KeyModifiers,
                 ctx: &ComponentContext,
             ) -> EventResult<TermWmAction> {
-                if !ctx.direct_mode()
-                    && self.enabled
-                    && matches!(mouse.kind, MouseEventKind::Press(_))
-                {
+                if !ctx.direct_mode() && self.enabled {
                     self.received_down = true;
                     return EventResult::Consumed;
                 }
@@ -4691,14 +4701,43 @@ mod tests {
                 _registry: &mut crate::hitbox_registry::HitboxRegistry,
             ) {
             }
-            fn on_mouse(
+            fn on_mouse_press(
                 &mut self,
-                mouse: &crate::events::LocalMouseEvent,
+                local_x: u16,
+                local_y: u16,
+                _button: MouseButton,
+                _modifiers: KeyModifiers,
                 _ctx: &ComponentContext,
             ) -> EventResult<TermWmAction> {
                 EventResult::Action(TermWmAction::MouseToBytes(vec![
-                    mouse.col as u8,
-                    mouse.row as u8,
+                    local_x as u8,
+                    local_y as u8,
+                ]))
+            }
+            fn on_mouse_release(
+                &mut self,
+                local_x: u16,
+                local_y: u16,
+                _button: MouseButton,
+                _modifiers: KeyModifiers,
+                _ctx: &ComponentContext,
+            ) -> EventResult<TermWmAction> {
+                EventResult::Action(TermWmAction::MouseToBytes(vec![
+                    local_x as u8,
+                    local_y as u8,
+                ]))
+            }
+            fn on_mouse_drag(
+                &mut self,
+                local_x: u16,
+                local_y: u16,
+                _button: MouseButton,
+                _modifiers: KeyModifiers,
+                _ctx: &ComponentContext,
+            ) -> EventResult<TermWmAction> {
+                EventResult::Action(TermWmAction::MouseToBytes(vec![
+                    local_x as u8,
+                    local_y as u8,
                 ]))
             }
             fn on_key(
@@ -4781,7 +4820,7 @@ mod tests {
     fn phase3_moved_dispatches_mouse_action_to_update() {
         use crate::actions::EventResult;
         use crate::components::{Component, ComponentContext};
-        use crate::events::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use std::collections::VecDeque;
 
         struct ActionRecorder {
@@ -4796,14 +4835,55 @@ mod tests {
                 _registry: &mut crate::hitbox_registry::HitboxRegistry,
             ) {
             }
-            fn on_mouse(
+            fn on_mouse_press(
                 &mut self,
-                mouse: &crate::events::LocalMouseEvent,
+                local_x: u16,
+                local_y: u16,
+                _button: MouseButton,
+                _modifiers: KeyModifiers,
                 _ctx: &ComponentContext,
             ) -> EventResult<TermWmAction> {
                 EventResult::Action(TermWmAction::MouseToBytes(vec![
-                    mouse.col as u8,
-                    mouse.row as u8,
+                    local_x as u8,
+                    local_y as u8,
+                ]))
+            }
+            fn on_mouse_release(
+                &mut self,
+                local_x: u16,
+                local_y: u16,
+                _button: MouseButton,
+                _modifiers: KeyModifiers,
+                _ctx: &ComponentContext,
+            ) -> EventResult<TermWmAction> {
+                EventResult::Action(TermWmAction::MouseToBytes(vec![
+                    local_x as u8,
+                    local_y as u8,
+                ]))
+            }
+            fn on_mouse_drag(
+                &mut self,
+                local_x: u16,
+                local_y: u16,
+                _button: MouseButton,
+                _modifiers: KeyModifiers,
+                _ctx: &ComponentContext,
+            ) -> EventResult<TermWmAction> {
+                EventResult::Action(TermWmAction::MouseToBytes(vec![
+                    local_x as u8,
+                    local_y as u8,
+                ]))
+            }
+            fn on_mouse_move(
+                &mut self,
+                local_x: u16,
+                local_y: u16,
+                _modifiers: KeyModifiers,
+                _ctx: &ComponentContext,
+            ) -> EventResult<TermWmAction> {
+                EventResult::Action(TermWmAction::MouseToBytes(vec![
+                    local_x as u8,
+                    local_y as u8,
                 ]))
             }
             fn on_key(
@@ -5102,5 +5182,457 @@ mod tests {
             )),
             "registry must contain LayoutHandle at split gap"
         );
+    }
+
+    #[test]
+    fn header_close_action_closes_window() {
+        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use crate::layout::{LayoutNode, TilingLayout};
+
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+            None,
+        );
+        let keys = make_keys(&mut wm, 100);
+        wm.set_panel_visible(false);
+        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(keys[1])));
+        wm.managed_draw_order = vec![keys[1]];
+        wm.z_order = vec![keys[1]];
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_app_window(keys[1]);
+        wm.transition_window(keys[1], crate::window::entry::WindowState::Mapped);
+
+        let win_key = keys[1];
+        let full_rect = wm.full_region_for_key(win_key);
+        let outer_right = full_rect
+            .x
+            .saturating_add(i32::from(full_rect.width))
+            .saturating_sub(1);
+        let close_x = outer_right as u16;
+        let close_y = full_rect.y.saturating_add(1) as u16;
+
+        wm.hitbox_registry.register(
+            HitTarget::ChromeHeader(win_key, crate::window::decorator::HeaderAction::Close),
+            LayoutRect {
+                x: i32::from(close_x),
+                y: i32::from(close_y),
+                width: 1,
+                height: 1,
+            },
+        );
+
+        let click = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            column: close_x,
+            row: close_y,
+            modifiers: KeyModifiers::NONE,
+        });
+        let wm_click = crate::events::core_event_to_wm(&click).unwrap();
+        assert!(wm.dispatch_mouse(&wm_click));
+    }
+
+    #[test]
+    fn header_maximize_action_toggles_maximize() {
+        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use crate::layout::{LayoutNode, TilingLayout};
+
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+            None,
+        );
+        let keys = make_keys(&mut wm, 100);
+        wm.set_panel_visible(false);
+        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(keys[1])));
+        wm.managed_draw_order = vec![keys[1]];
+        wm.z_order = vec![keys[1]];
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_app_window(keys[1]);
+        wm.transition_window(keys[1], crate::window::entry::WindowState::Mapped);
+
+        let win_key = keys[1];
+        let full_rect = wm.full_region_for_key(win_key);
+        let outer_right = full_rect
+            .x
+            .saturating_add(i32::from(full_rect.width))
+            .saturating_sub(1);
+        let close_x = outer_right.saturating_sub(2);
+        let max_x = close_x as u16;
+        let max_y = full_rect.y.saturating_add(1) as u16;
+
+        wm.hitbox_registry.register(
+            HitTarget::ChromeHeader(win_key, crate::window::decorator::HeaderAction::Maximize),
+            LayoutRect {
+                x: i32::from(max_x),
+                y: i32::from(max_y),
+                width: 1,
+                height: 1,
+            },
+        );
+
+        let click = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            column: max_x,
+            row: max_y,
+            modifiers: KeyModifiers::NONE,
+        });
+        let wm_click = crate::events::core_event_to_wm(&click).unwrap();
+        assert!(wm.dispatch_mouse(&wm_click));
+    }
+
+    #[test]
+    fn header_minimize_action_minimizes_window() {
+        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use crate::layout::{LayoutNode, TilingLayout};
+
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+            None,
+        );
+        let keys = make_keys(&mut wm, 100);
+        wm.set_panel_visible(false);
+        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(keys[1])));
+        wm.managed_draw_order = vec![keys[1]];
+        wm.z_order = vec![keys[1]];
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_app_window(keys[1]);
+        wm.transition_window(keys[1], crate::window::entry::WindowState::Mapped);
+
+        let win_key = keys[1];
+        let full_rect = wm.full_region_for_key(win_key);
+        let outer_right = full_rect
+            .x
+            .saturating_add(i32::from(full_rect.width))
+            .saturating_sub(1);
+        let close_x = outer_right.saturating_sub(2);
+        let max_x = close_x.saturating_sub(2);
+        let min_x = max_x as u16;
+        let min_y = full_rect.y.saturating_add(1) as u16;
+
+        wm.hitbox_registry.register(
+            HitTarget::ChromeHeader(win_key, crate::window::decorator::HeaderAction::Minimize),
+            LayoutRect {
+                x: i32::from(min_x),
+                y: i32::from(min_y),
+                width: 1,
+                height: 1,
+            },
+        );
+
+        let click = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            column: min_x,
+            row: min_y,
+            modifiers: KeyModifiers::NONE,
+        });
+        let wm_click = crate::events::core_event_to_wm(&click).unwrap();
+        assert!(wm.dispatch_mouse(&wm_click));
+    }
+
+    #[test]
+    fn overlay_dispatch_passes_screen_area_to_context() {
+        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use crate::layout::{LayoutNode, TilingLayout};
+
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+            None,
+        );
+        let keys = make_keys(&mut wm, 100);
+        wm.set_panel_visible(false);
+        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(keys[1])));
+        wm.managed_draw_order = vec![keys[1]];
+        wm.z_order = vec![keys[1]];
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_app_window(keys[1]);
+
+        let overlay_rect = LayoutRect {
+            x: 10,
+            y: 5,
+            width: 30,
+            height: 15,
+        };
+
+        struct TestOverlay {
+            got_screen_area: std::cell::Cell<bool>,
+        }
+        impl crate::components::Component<TermWmAction> for TestOverlay {
+            fn handle_events(
+                &mut self,
+                _event: &Event,
+                ctx: &crate::components::ComponentContext,
+            ) -> crate::actions::EventResult<TermWmAction> {
+                if ctx.screen_area().is_some() {
+                    self.got_screen_area.set(true);
+                }
+                crate::actions::EventResult::Consumed
+            }
+            fn update(
+                &mut self,
+                _: TermWmAction,
+                _: &crate::components::ComponentContext,
+                _: &mut VecDeque<(crate::window::WindowKey, TermWmAction)>,
+            ) {
+            }
+            fn render(
+                &mut self,
+                _: &mut dyn term_wm_render::RenderBackend,
+                _: LayoutRect,
+                _: &crate::components::ComponentContext,
+                _: &mut crate::hitbox_registry::HitboxRegistry,
+            ) {
+            }
+        }
+        impl crate::components::Overlay<TermWmAction> for TestOverlay {}
+
+        wm.open_overlay(
+            OverlayId::Help,
+            Some(Box::new(TestOverlay {
+                got_screen_area: std::cell::Cell::new(false),
+            })),
+        );
+
+        wm.hitbox_registry
+            .register(HitTarget::Overlay(OverlayId::Help), overlay_rect);
+
+        let click = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            column: 15,
+            row: 8,
+            modifiers: KeyModifiers::NONE,
+        });
+        let wm_click = crate::events::core_event_to_wm(&click).unwrap();
+        assert!(wm.dispatch_mouse(&wm_click));
+    }
+
+    #[test]
+    fn overlay_close_exit_confirm_removes_overlay() {
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(!wm.exit_confirm_visible());
+
+        struct StubOverlay;
+        impl crate::components::Component<TermWmAction> for StubOverlay {
+            fn update(
+                &mut self,
+                _: TermWmAction,
+                _: &crate::components::ComponentContext,
+                _: &mut VecDeque<(crate::window::WindowKey, TermWmAction)>,
+            ) {
+            }
+            fn render(
+                &mut self,
+                _: &mut dyn term_wm_render::RenderBackend,
+                _: LayoutRect,
+                _: &crate::components::ComponentContext,
+                _: &mut crate::hitbox_registry::HitboxRegistry,
+            ) {
+            }
+        }
+        impl crate::components::Overlay<TermWmAction> for StubOverlay {}
+
+        wm.open_overlay(OverlayId::ExitConfirm, Some(Box::new(StubOverlay)));
+        assert!(wm.exit_confirm_visible());
+        wm.close_exit_confirm();
+        assert!(!wm.exit_confirm_visible());
+    }
+
+    #[test]
+    fn overlay_help_visible_and_close() {
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(!wm.help_overlay_visible());
+
+        struct StubOverlay;
+        impl crate::components::Component<TermWmAction> for StubOverlay {
+            fn update(
+                &mut self,
+                _: TermWmAction,
+                _: &crate::components::ComponentContext,
+                _: &mut VecDeque<(crate::window::WindowKey, TermWmAction)>,
+            ) {
+            }
+            fn render(
+                &mut self,
+                _: &mut dyn term_wm_render::RenderBackend,
+                _: LayoutRect,
+                _: &crate::components::ComponentContext,
+                _: &mut crate::hitbox_registry::HitboxRegistry,
+            ) {
+            }
+        }
+        impl crate::components::Overlay<TermWmAction> for StubOverlay {}
+
+        wm.open_overlay(OverlayId::Help, Some(Box::new(StubOverlay)));
+        assert!(wm.help_overlay_visible());
+        wm.close_help_overlay();
+        assert!(!wm.help_overlay_visible());
+    }
+
+    #[test]
+    fn handle_exit_confirm_event_returns_none_without_overlay() {
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+            None,
+        );
+        let event = Event::Key(crate::events::KeyEvent {
+            code: crate::events::KeyCode::Esc,
+            modifiers: crate::events::KeyModifiers::NONE,
+            kind: crate::events::KeyKind::Press,
+        });
+        assert!(wm.handle_exit_confirm_event(&event).is_none());
+    }
+
+    #[test]
+    fn fold_menu_is_noop_without_component() {
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+            None,
+        );
+        wm.fold_menu();
+    }
+
+    #[test]
+    fn command_menu_open_close_visibility() {
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(!wm.command_menu_visible());
+        wm.open_command_menu();
+        assert!(wm.command_menu_visible());
+        wm.close_command_menu();
+        assert!(!wm.command_menu_visible());
+    }
+
+    #[test]
+    fn command_menu_open_no_passthrough_sets_opened_at_none() {
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+            None,
+        );
+        wm.open_command_menu_no_passthrough();
+        assert!(wm.command_menu_visible());
+        wm.close_command_menu();
+    }
+
+    #[test]
+    fn handle_wm_menu_event_returns_none_when_not_visible() {
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+            None,
+        );
+        let event = Event::Key(crate::events::KeyEvent {
+            code: crate::events::KeyCode::Esc,
+            modifiers: crate::events::KeyModifiers::NONE,
+            kind: crate::events::KeyKind::Press,
+        });
+        assert!(wm.handle_wm_menu_event(&event).is_none());
+    }
+
+    #[test]
+    fn wm_menu_consumes_event_returns_false_when_not_visible() {
+        let wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+            None,
+        );
+        let event = Event::Key(crate::events::KeyEvent {
+            code: crate::events::KeyCode::Esc,
+            modifiers: crate::events::KeyModifiers::NONE,
+            kind: crate::events::KeyKind::Press,
+        });
+        assert!(!wm.wm_menu_consumes_event(&event));
+    }
+
+    #[test]
+    fn wm_menu_consumes_event_returns_false_for_mouse_event() {
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+            None,
+        );
+        wm.open_command_menu();
+        let event = Event::Mouse(crate::events::MouseEvent {
+            column: 0,
+            row: 0,
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        assert!(!wm.wm_menu_consumes_event(&event));
+        wm.close_command_menu();
     }
 }

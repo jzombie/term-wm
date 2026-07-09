@@ -7,7 +7,7 @@ use term_wm_layout_engine::LayoutRect;
 pub use crate::actions::EventResult;
 use crate::actions::TermWmAction;
 pub use crate::component_context::ComponentContext;
-use crate::events::Event;
+use crate::events::{Event, KeyModifiers, MouseButton, MouseEventKind};
 use crate::power_profile::PowerProfile;
 use crate::window::WindowKey;
 use crate::wm_config::HintVisibility;
@@ -40,33 +40,87 @@ pub trait Component<Msg>: std::any::Any {
 
     /// Phase 2: Evaluate raw events, return EventResult.
     /// Does NOT mutate state.
+    /// Dispatches mouse events to semantic handlers by MouseEventKind.
     fn handle_events(&mut self, event: &Event, ctx: &ComponentContext) -> EventResult<Msg> {
         if let Event::Mouse(mouse) = event {
             if let Some(screen_area) = ctx.screen_area() {
-                let is_inside = i32::from(mouse.column) >= screen_area.x
-                    && i32::from(mouse.column)
-                        < screen_area.x.saturating_add(i32::from(screen_area.width))
-                    && i32::from(mouse.row) >= screen_area.y
-                    && i32::from(mouse.row)
-                        < screen_area.y.saturating_add(i32::from(screen_area.height));
-                if is_inside {
-                    let local = crate::events::LocalMouseEvent {
-                        col: mouse.column.saturating_sub(screen_area.x.max(0) as u16),
-                        row: mouse.row.saturating_sub(screen_area.y.max(0) as u16),
-                        kind: mouse.kind,
-                        modifiers: mouse.modifiers,
-                    };
-                    return self.on_mouse(&local, ctx);
-                }
+                let local_x = (i32::from(mouse.column) - screen_area.x).max(0) as u16;
+                let local_y = (i32::from(mouse.row) - screen_area.y).max(0) as u16;
+                return match mouse.kind {
+                    MouseEventKind::Press(btn) => {
+                        self.on_mouse_press(local_x, local_y, btn, mouse.modifiers, ctx)
+                    }
+                    MouseEventKind::Release(btn) => {
+                        self.on_mouse_release(local_x, local_y, btn, mouse.modifiers, ctx)
+                    }
+                    MouseEventKind::Drag(btn) => {
+                        self.on_mouse_drag(local_x, local_y, btn, mouse.modifiers, ctx)
+                    }
+                    MouseEventKind::ScrollUp
+                    | MouseEventKind::ScrollDown
+                    | MouseEventKind::ScrollLeft
+                    | MouseEventKind::ScrollRight => {
+                        self.on_mouse_scroll(local_x, local_y, mouse.kind, mouse.modifiers, ctx)
+                    }
+                    MouseEventKind::Moved => {
+                        self.on_mouse_move(local_x, local_y, mouse.modifiers, ctx)
+                    }
+                };
             }
             return EventResult::Ignored;
         }
         self.on_key(event, ctx)
     }
 
-    fn on_mouse(
+    fn on_mouse_press(
         &mut self,
-        _mouse: &crate::events::LocalMouseEvent,
+        _local_x: u16,
+        _local_y: u16,
+        _button: MouseButton,
+        _modifiers: KeyModifiers,
+        _ctx: &ComponentContext,
+    ) -> EventResult<Msg> {
+        EventResult::Ignored
+    }
+
+    fn on_mouse_release(
+        &mut self,
+        _local_x: u16,
+        _local_y: u16,
+        _button: MouseButton,
+        _modifiers: KeyModifiers,
+        _ctx: &ComponentContext,
+    ) -> EventResult<Msg> {
+        EventResult::Ignored
+    }
+
+    fn on_mouse_drag(
+        &mut self,
+        _local_x: u16,
+        _local_y: u16,
+        _button: MouseButton,
+        _modifiers: KeyModifiers,
+        _ctx: &ComponentContext,
+    ) -> EventResult<Msg> {
+        EventResult::Ignored
+    }
+
+    fn on_mouse_scroll(
+        &mut self,
+        _local_x: u16,
+        _local_y: u16,
+        _kind: MouseEventKind,
+        _modifiers: KeyModifiers,
+        _ctx: &ComponentContext,
+    ) -> EventResult<Msg> {
+        EventResult::Ignored
+    }
+
+    fn on_mouse_move(
+        &mut self,
+        _local_x: u16,
+        _local_y: u16,
+        _modifiers: KeyModifiers,
         _ctx: &ComponentContext,
     ) -> EventResult<Msg> {
         EventResult::Ignored
@@ -327,5 +381,395 @@ mod tests {
             )
             .is_ignored()
         );
+    }
+
+    #[test]
+    fn mouse_outside_screen_area_returns_ignored() {
+        use crate::events::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let mut d = DummyComp;
+        let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
+            x: 10,
+            y: 10,
+            width: 20,
+            height: 10,
+        });
+        let event = Event::Mouse(MouseEvent {
+            column: 5,
+            row: 5,
+            kind: MouseEventKind::Press(MouseButton::Left),
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(d.handle_events(&event, &ctx).is_ignored());
+    }
+
+    #[test]
+    fn mouse_no_screen_area_returns_ignored() {
+        use crate::events::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let mut d = DummyComp;
+        let ctx = ComponentContext::new(true);
+        let event = Event::Mouse(MouseEvent {
+            column: 0,
+            row: 0,
+            kind: MouseEventKind::Press(MouseButton::Left),
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(d.handle_events(&event, &ctx).is_ignored());
+    }
+
+    #[test]
+    fn dispatch_press_calls_on_mouse_press() {
+        use crate::events::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        struct PressRecorder {
+            received: std::cell::Cell<bool>,
+        }
+        impl Component<()> for PressRecorder {
+            fn on_mouse_press(
+                &mut self,
+                local_x: u16,
+                local_y: u16,
+                button: MouseButton,
+                _modifiers: KeyModifiers,
+                _ctx: &ComponentContext,
+            ) -> EventResult<()> {
+                self.received.set(true);
+                assert_eq!(local_x, 5);
+                assert_eq!(local_y, 3);
+                assert_eq!(button, MouseButton::Left);
+                EventResult::Consumed
+            }
+            fn update(
+                &mut self,
+                _: (),
+                _: &ComponentContext,
+                _: &mut VecDeque<(crate::window::WindowKey, ())>,
+            ) {
+            }
+            fn render(
+                &mut self,
+                _: &mut dyn term_wm_render::RenderBackend,
+                _: LayoutRect,
+                _: &ComponentContext,
+                _: &mut crate::hitbox_registry::HitboxRegistry,
+            ) {
+            }
+        }
+
+        let mut comp = PressRecorder {
+            received: std::cell::Cell::new(false),
+        };
+        let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
+            x: 10,
+            y: 10,
+            width: 20,
+            height: 10,
+        });
+        let event = Event::Mouse(MouseEvent {
+            column: 15,
+            row: 13,
+            kind: MouseEventKind::Press(MouseButton::Left),
+            modifiers: KeyModifiers::NONE,
+        });
+        let result = comp.handle_events(&event, &ctx);
+        assert!(matches!(result, EventResult::Consumed));
+        assert!(comp.received.get());
+    }
+
+    #[test]
+    fn dispatch_release_calls_on_mouse_release() {
+        use crate::events::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        struct ReleaseRecorder {
+            received: std::cell::Cell<bool>,
+        }
+        impl Component<()> for ReleaseRecorder {
+            fn on_mouse_release(
+                &mut self,
+                local_x: u16,
+                _local_y: u16,
+                _button: MouseButton,
+                _modifiers: KeyModifiers,
+                _ctx: &ComponentContext,
+            ) -> EventResult<()> {
+                self.received.set(true);
+                assert_eq!(local_x, 5);
+                EventResult::Consumed
+            }
+            fn update(
+                &mut self,
+                _: (),
+                _: &ComponentContext,
+                _: &mut VecDeque<(crate::window::WindowKey, ())>,
+            ) {
+            }
+            fn render(
+                &mut self,
+                _: &mut dyn term_wm_render::RenderBackend,
+                _: LayoutRect,
+                _: &ComponentContext,
+                _: &mut crate::hitbox_registry::HitboxRegistry,
+            ) {
+            }
+        }
+
+        let mut comp = ReleaseRecorder {
+            received: std::cell::Cell::new(false),
+        };
+        let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
+            x: 10,
+            y: 10,
+            width: 20,
+            height: 10,
+        });
+        let event = Event::Mouse(MouseEvent {
+            column: 15,
+            row: 13,
+            kind: MouseEventKind::Release(MouseButton::Left),
+            modifiers: KeyModifiers::NONE,
+        });
+        comp.handle_events(&event, &ctx);
+        assert!(comp.received.get());
+    }
+
+    #[test]
+    fn dispatch_drag_calls_on_mouse_drag() {
+        use crate::events::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        struct DragRecorder {
+            received: std::cell::Cell<bool>,
+        }
+        impl Component<()> for DragRecorder {
+            fn on_mouse_drag(
+                &mut self,
+                local_x: u16,
+                _local_y: u16,
+                _button: MouseButton,
+                _modifiers: KeyModifiers,
+                _ctx: &ComponentContext,
+            ) -> EventResult<()> {
+                self.received.set(true);
+                assert_eq!(local_x, 0);
+                EventResult::Consumed
+            }
+            fn update(
+                &mut self,
+                _: (),
+                _: &ComponentContext,
+                _: &mut VecDeque<(crate::window::WindowKey, ())>,
+            ) {
+            }
+            fn render(
+                &mut self,
+                _: &mut dyn term_wm_render::RenderBackend,
+                _: LayoutRect,
+                _: &ComponentContext,
+                _: &mut crate::hitbox_registry::HitboxRegistry,
+            ) {
+            }
+        }
+
+        let mut comp = DragRecorder {
+            received: std::cell::Cell::new(false),
+        };
+        let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
+            x: 10,
+            y: 10,
+            width: 20,
+            height: 10,
+        });
+        let event = Event::Mouse(MouseEvent {
+            column: 8,
+            row: 15,
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            modifiers: KeyModifiers::NONE,
+        });
+        comp.handle_events(&event, &ctx);
+        assert!(comp.received.get());
+    }
+
+    #[test]
+    fn dispatch_scroll_variants_calls_on_mouse_scroll() {
+        use crate::events::{KeyModifiers, MouseEvent, MouseEventKind};
+
+        struct ScrollRecorder {
+            received: std::cell::Cell<bool>,
+        }
+        impl Component<()> for ScrollRecorder {
+            fn on_mouse_scroll(
+                &mut self,
+                _local_x: u16,
+                _local_y: u16,
+                kind: MouseEventKind,
+                _modifiers: KeyModifiers,
+                _ctx: &ComponentContext,
+            ) -> EventResult<()> {
+                self.received.set(true);
+                assert!(matches!(
+                    kind,
+                    MouseEventKind::ScrollUp
+                        | MouseEventKind::ScrollDown
+                        | MouseEventKind::ScrollLeft
+                        | MouseEventKind::ScrollRight
+                ));
+                EventResult::Consumed
+            }
+            fn update(
+                &mut self,
+                _: (),
+                _: &ComponentContext,
+                _: &mut VecDeque<(crate::window::WindowKey, ())>,
+            ) {
+            }
+            fn render(
+                &mut self,
+                _: &mut dyn term_wm_render::RenderBackend,
+                _: LayoutRect,
+                _: &ComponentContext,
+                _: &mut crate::hitbox_registry::HitboxRegistry,
+            ) {
+            }
+        }
+
+        let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        for kind in [
+            MouseEventKind::ScrollUp,
+            MouseEventKind::ScrollDown,
+            MouseEventKind::ScrollLeft,
+            MouseEventKind::ScrollRight,
+        ] {
+            let mut comp = ScrollRecorder {
+                received: std::cell::Cell::new(false),
+            };
+            let event = Event::Mouse(MouseEvent {
+                column: 40,
+                row: 12,
+                kind,
+                modifiers: KeyModifiers::NONE,
+            });
+            comp.handle_events(&event, &ctx);
+            assert!(
+                comp.received.get(),
+                "scroll variant {:?} not dispatched",
+                kind
+            );
+        }
+    }
+
+    #[test]
+    fn dispatch_move_calls_on_mouse_move() {
+        use crate::events::{KeyModifiers, MouseEvent, MouseEventKind};
+
+        struct MoveRecorder {
+            received: std::cell::Cell<bool>,
+        }
+        impl Component<()> for MoveRecorder {
+            fn on_mouse_move(
+                &mut self,
+                local_x: u16,
+                local_y: u16,
+                _modifiers: KeyModifiers,
+                _ctx: &ComponentContext,
+            ) -> EventResult<()> {
+                self.received.set(true);
+                assert_eq!(local_x, 40);
+                assert_eq!(local_y, 12);
+                EventResult::Consumed
+            }
+            fn update(
+                &mut self,
+                _: (),
+                _: &ComponentContext,
+                _: &mut VecDeque<(crate::window::WindowKey, ())>,
+            ) {
+            }
+            fn render(
+                &mut self,
+                _: &mut dyn term_wm_render::RenderBackend,
+                _: LayoutRect,
+                _: &ComponentContext,
+                _: &mut crate::hitbox_registry::HitboxRegistry,
+            ) {
+            }
+        }
+
+        let mut comp = MoveRecorder {
+            received: std::cell::Cell::new(false),
+        };
+        let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let event = Event::Mouse(MouseEvent {
+            column: 40,
+            row: 12,
+            kind: MouseEventKind::Moved,
+            modifiers: KeyModifiers::NONE,
+        });
+        comp.handle_events(&event, &ctx);
+        assert!(comp.received.get());
+    }
+
+    #[test]
+    fn mouse_coordinate_clamping_at_negative_area_origin() {
+        use crate::events::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        struct CoordRecorder {
+            coords: std::cell::Cell<(u16, u16)>,
+        }
+        impl Component<()> for CoordRecorder {
+            fn on_mouse_press(
+                &mut self,
+                local_x: u16,
+                local_y: u16,
+                _button: MouseButton,
+                _modifiers: KeyModifiers,
+                _ctx: &ComponentContext,
+            ) -> EventResult<()> {
+                self.coords.set((local_x, local_y));
+                EventResult::Consumed
+            }
+            fn update(
+                &mut self,
+                _: (),
+                _: &ComponentContext,
+                _: &mut VecDeque<(crate::window::WindowKey, ())>,
+            ) {
+            }
+            fn render(
+                &mut self,
+                _: &mut dyn term_wm_render::RenderBackend,
+                _: LayoutRect,
+                _: &ComponentContext,
+                _: &mut crate::hitbox_registry::HitboxRegistry,
+            ) {
+            }
+        }
+
+        let mut comp = CoordRecorder {
+            coords: std::cell::Cell::new((0, 0)),
+        };
+        let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
+            x: 10,
+            y: 10,
+            width: 20,
+            height: 10,
+        });
+        let event = Event::Mouse(MouseEvent {
+            column: 5,
+            row: 5,
+            kind: MouseEventKind::Press(MouseButton::Left),
+            modifiers: KeyModifiers::NONE,
+        });
+        comp.handle_events(&event, &ctx);
+        assert_eq!(comp.coords.get(), (0, 0));
     }
 }
