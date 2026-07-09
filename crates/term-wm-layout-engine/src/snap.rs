@@ -119,7 +119,8 @@ impl EdgeResistance {
             prev: self.prev_x,
             entered_at: self.entered_magnetic_x_at,
             now_ns,
-            snap_low_enabled: true,
+            enable_low_snap: true,
+            enable_high_snap: true,
         });
         // Track entry into magnetic zone for temporal threshold
         let is_snapped = result == low || result == high;
@@ -148,7 +149,8 @@ impl EdgeResistance {
             prev: self.prev_y,
             entered_at: self.entered_magnetic_y_at,
             now_ns,
-            snap_low_enabled: false,
+            enable_low_snap: false,
+            enable_high_snap: true,
         });
         let is_snapped = result == low || result == high;
         if is_snapped && self.entered_magnetic_y_at.is_none() {
@@ -175,7 +177,8 @@ struct SnapAxisParams {
     prev: Option<i32>,
     entered_at: Option<u64>,
     now_ns: u64,
-    snap_low_enabled: bool,
+    enable_low_snap: bool,
+    enable_high_snap: bool,
 }
 
 fn snap_axis(params: &SnapAxisParams) -> i32 {
@@ -190,7 +193,8 @@ fn snap_axis(params: &SnapAxisParams) -> i32 {
         .map(|p| {
             let pd_low = p.saturating_sub(params.low).unsigned_abs();
             let pd_high = params.high.saturating_sub(p).unsigned_abs();
-            pd_low <= zone as u32 || pd_high <= zone as u32
+            (params.enable_low_snap && pd_low <= zone as u32)
+                || (params.enable_high_snap && pd_high <= zone as u32)
         })
         .unwrap_or(false);
 
@@ -208,9 +212,9 @@ fn snap_axis(params: &SnapAxisParams) -> i32 {
         return params.new_val;
     }
 
-    if params.snap_low_enabled && snap_low && d_low <= d_high {
+    if params.enable_low_snap && snap_low && d_low <= d_high {
         params.low
-    } else if snap_high {
+    } else if params.enable_high_snap && snap_high {
         params.high
     } else {
         params.new_val
@@ -532,7 +536,7 @@ mod tests {
     }
 
     #[test]
-    fn edge_resistance_snaps_y_to_top() {
+    fn edge_resistance_does_not_snap_y_to_top() {
         let mut er = EdgeResistance::default_tui();
         let bounds = LayoutRect {
             x: 0,
@@ -540,7 +544,8 @@ mod tests {
             width: 80,
             height: 24,
         };
-        assert_eq!(er.apply_y(2, bounds, 0), 0);
+        // Y-axis low snap (title-bar area) is intentionally disabled
+        assert_eq!(er.apply_y(2, bounds, 0), 2);
     }
 
     #[test]

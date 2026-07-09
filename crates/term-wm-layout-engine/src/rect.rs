@@ -163,15 +163,6 @@ pub enum Orientation {
     Vertical,
 }
 
-/// One of the four cardinal directions, used for drag-and-drop insertion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Quadrant {
-    North,
-    South,
-    East,
-    West,
-}
-
 /// An integer ratio `(p, q)` meaning `p/(p+q)` of the parent's size.
 ///
 /// Remainder isolation guarantees `sum(child sizes) == parent size` —

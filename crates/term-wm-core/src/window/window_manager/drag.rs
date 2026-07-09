@@ -1,5 +1,5 @@
 use crate::Rect;
-use term_wm_layout_engine::{EdgeResistance, LayoutRect, detect_corner_snap, detect_quadrant};
+use term_wm_layout_engine::{EdgeResistance, LayoutRect, detect_corner_snap, detect_edge_snap};
 
 use super::{MouseCaptureState, SnapPreviewState, WindowManager};
 use crate::layout::InsertPosition;
@@ -108,7 +108,6 @@ impl WindowManager {
         let y = if velocity_exceeded {
             y
         } else {
-            let mut resistance = EdgeResistance::default_tui();
             resistance.apply_y(y, bounds_layout, now_ns)
         };
 
@@ -233,7 +232,7 @@ impl WindowManager {
             if key == dragging_key {
                 return None;
             }
-            if self.managed_layout.is_some() && self.is_window_floating(key) {
+            if self.is_window_floating(key) {
                 return None;
             }
             let rect = self.regions.get(key)?;
@@ -252,26 +251,14 @@ impl WindowManager {
                 height: rect.height,
             };
 
-            if let Some(quadrant) = detect_quadrant(mouse_x, mouse_y, &target_layout) {
-                let pos = match quadrant {
-                    term_wm_layout_engine::Quadrant::East => InsertPosition::Right,
-                    term_wm_layout_engine::Quadrant::West => InsertPosition::Left,
-                    term_wm_layout_engine::Quadrant::North => InsertPosition::Top,
-                    term_wm_layout_engine::Quadrant::South => InsertPosition::Bottom,
-                };
-
+            let position = detect_edge_snap(mouse_x, mouse_y, target_layout, 2);
+            if let Some(pos) = position {
                 let preview = self
                     .get_projected_preview(dragging_key, SnapPreviewState::TiledInsert(target_key, pos), area)
                     .unwrap_or_else(|| {
                         let ep = term_wm_layout_engine::tiled_preview_rect(target_layout, pos);
-                        Rect {
-                            x: ep.x,
-                            y: ep.y,
-                            width: ep.width,
-                            height: ep.height,
-                        }
+                        Rect { x: ep.x, y: ep.y, width: ep.width, height: ep.height }
                     });
-
                 self.drag_snap = Some((Some(target_key), pos, preview));
                 self.snap_preview = Some(SnapPreviewState::TiledInsert(target_key, pos));
                 return;
@@ -293,7 +280,7 @@ impl WindowManager {
             }
         }
 
-        let position = term_wm_layout_engine::detect_edge_snap(mouse_x, mouse_y, managed_layout_rect, 2);
+        let position = detect_edge_snap(mouse_x, mouse_y, managed_layout_rect, 2);
 
         if let Some(pos) = position {
             let preview = self

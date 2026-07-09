@@ -25,13 +25,13 @@ pub use floating::{
     DragHandle, FLOATING_MIN_HEIGHT, FLOATING_MIN_WIDTH, HeaderDrag, ResizeDrag, ResizeEdge,
     ResizeHandle, apply_resize_drag_signed, floating_header_for_region, resize_handles_for_region,
 };
-pub use hit_test::{detect_quadrant, hit_test_leaf};
+pub use hit_test::hit_test_leaf;
 pub use layout::LayoutEngine;
 pub use node::{BspNode, NaryNode};
 pub use ordering::{FocusRing, ZOrder};
 pub use orientation::{LongestSide, OrientationHeuristic, Spiral};
 pub use rect::{
-    LayoutError, LayoutRect, Orientation, Quadrant, Ratio, RectSpec, SizeConstraints, gap_insert,
+    LayoutError, LayoutRect, Orientation, Ratio, RectSpec, SizeConstraints, gap_insert,
     inset, rect_contains,
 };
 pub use region_map::RegionMap;
