@@ -619,6 +619,33 @@ mod drag_snap_pipeline {
         (wm, CoreEngine::new(), DrawPlanRenderer::new(), keys)
     }
 
+    /// Like `setup` but with `resizable: true` so split handles are produced.
+    fn setup_with_resizable() -> (WindowManager, CoreEngine, DrawPlanRenderer, [WindowKey; 2]) {
+        let mut config = WmConfig::standalone();
+        config.chrome_enabled = false;
+        let mut wm = WindowManager::with_config(
+            config,
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+            None,
+        );
+        wm.set_panel_visible(false);
+        let k0 = wm.create_window(Box::new(NoopComponent));
+        let k1 = wm.create_window(Box::new(NoopComponent));
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(k0), LayoutNode::Leaf(k1)],
+            weights: vec![1.0, 1.0],
+            constraints: vec![],
+            resizable: true,
+        };
+        wm.set_managed_layout(TilingLayout::new(split));
+        wm.register_managed_layout(AREA);
+        (wm, CoreEngine::new(), DrawPlanRenderer::new(), [k0, k1])
+    }
+
     fn advance_frame(
         wm: &mut WindowManager,
         engine: &mut CoreEngine,
@@ -1136,6 +1163,60 @@ mod drag_snap_pipeline {
             r0.x >= AREA.x + i32::from(AREA.width / 2),
             "pane must land on right half, got x={}",
             r0.x
+        );
+    }
+
+    #[test]
+    fn split_handle_drag_works_after_render_pipeline_populates_hitboxes() {
+        // Regression: render_app registered Window hitboxes with region.bounds
+        // (full chrome-inclusive rect) AFTER LayoutHandle, causing the Window
+        // to override the handle at the split boundary.  LayoutHandle must
+        // take priority so mouse events route to the layout engine, not the
+        // terminal component.
+        //
+        // Uses resizable: true so that split handles are produced.
+        let (mut wm, mut engine, mut renderer, keys) = setup_with_resizable();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        // Find the gap position from the WM state
+        let gap = &wm.tiling_handles()[0].rect;
+        let gap_col = (gap.x + i32::from(gap.width) / 2) as u16;
+        let gap_row = (gap.y + i32::from(gap.height) / 2) as u16;
+
+        // Press on the handle — must set LayoutHandle capture (dispatch returns true)
+        let down = make_mouse(MouseEventKind::Press(MouseButton::Left), gap_col, gap_row);
+        assert!(
+            wm.dispatch_mouse(&down),
+            "Press on split handle must be consumed"
+        );
+
+        // Drag right by 5 columns — layout must adjust
+        let drag = make_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            gap_col + 5,
+            gap_row,
+        );
+        assert!(
+            wm.dispatch_mouse(&drag),
+            "Drag on split handle must be consumed"
+        );
+
+        // Release
+        let up = make_mouse(
+            MouseEventKind::Release(MouseButton::Left),
+            gap_col + 5,
+            gap_row,
+        );
+        wm.dispatch_mouse(&up);
+
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        // The left window must have grown wider
+        let r0 = wm.region(keys[0]);
+        let r1 = wm.region(keys[1]);
+        assert!(
+            r0.width > r1.width,
+            "left window must be wider after dragging handle right"
         );
     }
 
