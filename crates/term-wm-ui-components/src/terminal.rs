@@ -1085,7 +1085,8 @@ impl Pane for TestPane {
     }
 
     fn kill_child(&mut self) -> term_wm_pty_engine::PtyResult<()> {
-        self.kill_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.kill_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 
@@ -1210,8 +1211,10 @@ mod tests {
         let (pane, kill_count) = TestPane::with_kill_tracker(200);
         let mut term = TerminalComponent::from_pane(Box::new(pane));
         term.destroy();
-        assert!(kill_count.load(std::sync::atomic::Ordering::SeqCst) >= 1,
-            "destroy() must call pane.kill_child()");
+        assert!(
+            kill_count.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+            "destroy() must call pane.kill_child()"
+        );
     }
 
     // --- Scroll sync tests ---
