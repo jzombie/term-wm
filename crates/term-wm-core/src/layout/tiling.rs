@@ -208,69 +208,70 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
         true
     }
 
-    pub fn remove_leaf(&mut self, id: Id) -> bool {
+    /// Remove the leaf matching `target` by replacing it with a `Void` node.
+    ///
+    /// Returns `true` if the target was found and replaced.  Does NOT contract
+    /// the parent split — call `contract_tree` as a post-processing pass after
+    /// all removals are complete.
+    pub fn remove_leaf(&mut self, target: Id) -> bool {
         match self {
-            LayoutNode::Leaf(_) => false,
-            LayoutNode::Void(_) => false,
-            LayoutNode::Split {
-                children,
-                weights,
-                constraints,
-                ..
-            } => {
-                let mut removed = false;
-                let mut index = 0;
-                while index < children.len() {
-                    let is_target = match &children[index] {
-                        LayoutNode::Leaf(i) => *i == id,
-                        _ => false,
-                    };
-
-                    if is_target {
-                        children.remove(index);
-                        if index < weights.len() {
-                            weights.remove(index);
-                        }
-                        if index < constraints.len() {
-                            constraints.remove(index);
-                        }
-                        removed = true;
-                        break;
-                    }
-
-                    if children[index].remove_leaf(id) {
-                        removed = true;
-                        // If the child split created an empty split, remove it
-                        let is_empty_split = match &children[index] {
-                            LayoutNode::Split { children: s, .. } => s.is_empty(),
-                            _ => false,
-                        };
-                        if is_empty_split {
-                            children.remove(index);
-                            if index < weights.len() {
-                                weights.remove(index);
-                            }
-                            if index < constraints.len() {
-                                constraints.remove(index);
-                            }
-                        }
-                        break;
-                    }
-
-                    index += 1;
-                }
-                if removed {
-                    if children.len() == 1 {
-                        let only = children.remove(0);
-                        *self = only;
-                    } else if children.iter().all(|c| matches!(c, LayoutNode::Void(_))) {
-                        *self = LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed));
-                        return true;
-                    }
-                }
-                removed
+            LayoutNode::Leaf(id) if *id == target => {
+                *self = LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed));
+                true
             }
+            LayoutNode::Split { children, .. } => {
+                let mut found = false;
+                for child in children.iter_mut() {
+                    if child.remove_leaf(target) {
+                        found = true;
+                    }
+                }
+                found
+            }
+            _ => false,
         }
+    }
+
+    /// Post-order contraction pass: collapse degenerate splits.
+    ///
+    /// - **0 children** → replaced with `Void`.
+    /// - **1 child** → replaced with that sole child.
+    /// - **2+ children** → left intact, preserving intentional `Void`
+    ///   placeholders (snap-assist drop targets, corner insert zones).
+    ///
+    /// This is safe: `std::mem::replace` takes ownership of `self` so no
+    /// outstanding field borrows prevent writing back the result.
+    pub fn contract_tree(&mut self) {
+        let replacement = match std::mem::replace(
+            self,
+            LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed)),
+        ) {
+            LayoutNode::Split { children, .. }
+                if children.is_empty() =>
+            {
+                LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
+            }
+            LayoutNode::Split { mut children, .. }
+                if children.len() == 1 =>
+            {
+                children[0].contract_tree();
+                children.swap_remove(0)
+            }
+            LayoutNode::Split { direction, mut children, weights, constraints, resizable } => {
+                for child in &mut children {
+                    child.contract_tree();
+                }
+                LayoutNode::Split {
+                    direction,
+                    children,
+                    weights,
+                    constraints,
+                    resizable,
+                }
+            }
+            other => other,
+        };
+        *self = replacement;
     }
 
     pub fn insert_leaf(&mut self, target: Id, insert: Id, position: InsertPosition) -> bool {

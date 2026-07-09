@@ -1,7 +1,7 @@
 use crate::Rect;
-use term_wm_layout_engine::{EdgeResistance, LayoutRect, detect_corner_snap, detect_edge_snap};
+use term_wm_layout_engine::{EdgeResistance, LayoutRect, detect_corner_snap, detect_edge_snap, detect_tiled_quadrant};
 
-use super::{MouseCaptureState, SnapPreviewState, WindowManager};
+use super::{SnapPreviewState, WindowManager};
 use crate::layout::InsertPosition;
 use crate::window::WindowKey;
 
@@ -68,6 +68,7 @@ impl WindowManager {
         initial_x: i32,
         initial_y: i32,
         velocity_exceeded: bool,
+        resistance: &mut EdgeResistance,
     ) {
         let panel_active = self.panel_active();
         let bounds = self.managed_area;
@@ -90,7 +91,6 @@ impl WindowManager {
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0);
 
-        let mut resistance = EdgeResistance::default_tui();
         let bounds_layout = LayoutRect {
             x: bounds.x,
             y: bounds.y,
@@ -165,11 +165,15 @@ impl WindowManager {
     /// 2. Sacred top edge maximize (y=0, deferred to release)
     /// 3. Edge snap (Left/Right/Top/Bottom half-screen)
     /// 4. Tiled insert (quadrant-based)
+    ///
+    /// `detach_coordinate` is passed separately for post-decouple suppression
+    /// (self.mouse_capture is `None` during the extract-operate-restore cycle).
     pub(super) fn update_snap_preview(
         &mut self,
         dragging_key: WindowKey,
         mouse_x: u16,
         mouse_y: u16,
+        detach_coordinate: &mut Option<(u16, u16)>,
     ) {
         self.drag_snap = None;
         self.snap_preview = None;
@@ -180,10 +184,10 @@ impl WindowManager {
         // snap previews until the cursor moves 5+ Euclidean cells from the
         // decouple point.
         const SUPPRESS_THRESHOLD_SQ: u32 = 2 * 2;
-        if let Some(MouseCaptureState::DraggingWindow { detach_coordinate, .. }) = &mut self.mouse_capture
-            && let Some((decouple_x, decouple_y)) = *detach_coordinate {
-                let dist_sq = u32::from(mouse_x.abs_diff(decouple_x)).pow(2)
-                    + u32::from(mouse_y.abs_diff(decouple_y)).pow(2);
+        if let Some((decouple_x, decouple_y)) = *detach_coordinate {
+                let dx = u32::from(mouse_x.abs_diff(decouple_x));
+                let dy = u32::from(mouse_y.abs_diff(decouple_y)).saturating_mul(2);
+                let dist_sq = dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy));
                 if dist_sq < SUPPRESS_THRESHOLD_SQ {
                     self.drag_snap = None;
                     self.snap_preview = None;
@@ -251,18 +255,16 @@ impl WindowManager {
                 height: rect.height,
             };
 
-            let position = detect_edge_snap(mouse_x, mouse_y, target_layout, 6);
-            if let Some(pos) = position {
-                let preview = self
-                    .get_projected_preview(dragging_key, SnapPreviewState::TiledInsert(target_key, pos), area)
-                    .unwrap_or_else(|| {
-                        let ep = term_wm_layout_engine::tiled_preview_rect(target_layout, pos);
-                        Rect { x: ep.x, y: ep.y, width: ep.width, height: ep.height }
-                    });
-                self.drag_snap = Some((Some(target_key), pos, preview));
-                self.snap_preview = Some(SnapPreviewState::TiledInsert(target_key, pos));
-                return;
-            }
+            let pos = detect_tiled_quadrant(mouse_x, mouse_y, target_layout);
+            let preview = self
+                .get_projected_preview(dragging_key, SnapPreviewState::TiledInsert(target_key, pos), area)
+                .unwrap_or_else(|| {
+                    let ep = term_wm_layout_engine::tiled_preview_rect(target_layout, pos);
+                    Rect { x: ep.x, y: ep.y, width: ep.width, height: ep.height }
+                });
+            self.drag_snap = Some((Some(target_key), pos, preview));
+            self.snap_preview = Some(SnapPreviewState::TiledInsert(target_key, pos));
+            return;
         }
 
         // Priority 3b: Void region (Snap Assist receptacle)
@@ -316,6 +318,7 @@ impl WindowManager {
                 }
                 if let Some(layout) = &mut self.managed_layout {
                     layout.root_mut().remove_leaf(key);
+                    layout.root_mut().contract_tree();
                     layout.root_mut().replace_void_by_id(void_id, LayoutNode::leaf(key));
                 }
                 if let Some(pos) = self.z_order.iter().position(|&z_key| z_key == key) {
@@ -362,6 +365,7 @@ impl WindowManager {
                 };
                 if should_retile {
                     layout.root_mut().remove_leaf(key);
+                    layout.root_mut().contract_tree();
                 } else {
                     self.bring_to_front_key(key);
                     return;

@@ -39,10 +39,13 @@ use term_wm_layout_engine::{LayoutRect, apply_resize_drag_signed};
 /// Locked on `Press` via registry hit-test; all subsequent `Drag`/`Release`
 /// events route through this state, bypassing the registry entirely.
 /// Cleared on `Release`, lost focus, or timeout.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) enum MouseCaptureState {
     DraggingWindow {
         key: WindowKey,
+        /// Persistent edge-resistance state, stored here so that temporal
+        /// threshold and hysteresis work across frames (not stack-allocated).
+        resistance: term_wm_layout_engine::EdgeResistance,
         /// Column at press time, used for deadzone-based detach guard.
         anchor_x: u16,
         /// Row at press time, used for deadzone-based detach guard.
@@ -225,6 +228,8 @@ pub struct WindowManager {
     super_timer_id: Option<TaskId>,
     /// ID of the drag-snap timer in the TaskScheduler, for cancellation.
     drag_timer_id: Option<TaskId>,
+    /// ID of the temporal-dwell tick timer, for cancellation and guard.
+    temporal_timer_id: Option<TaskId>,
     /// Handle to the shared `TaskScheduler<SystemTask>` for registering/cancelling
     /// system-level timers (super-passthrough, drag-snap).
     system_task_handle: Option<TaskHandle<SystemTask>>,
@@ -603,6 +608,7 @@ impl WindowManager {
             super_pending_at: None,
             super_timer_id: None,
             drag_timer_id: None,
+            temporal_timer_id: None,
             system_task_handle: None,
             last_frame_area: Rect::default(),
             overlays: BTreeMap::new(),
@@ -928,194 +934,152 @@ impl WindowManager {
         let col = position.column as u16;
         let row = position.row as u16;
 
-        // Phase 1 — Active capture: ongoing drag/resize/component-interaction
-        // bypasses the registry entirely.
-        if !matches!(kind, MouseEventKind::Press(_))
-            && let Some(capture) = self.mouse_capture
-        {
-            return match (capture, kind) {
-                (
-                    MouseCaptureState::DraggingWindow {
-                        key,
-                        anchor_x,
-                        anchor_y,
-                        initial_x,
-                        initial_y,
-                        start_x,
-                        start_y,
-                        prev_col,
-                        prev_row,
-                        prev_time_ns,
-                        detach_coordinate: _,
-                    },
-                    MouseEventKind::Drag(_),
-                ) => {
-                    // Deadzone guard: ignore micro-nudges within 2 cells of press
-                    // position to prevent accidental detach from tiling layout.
-                    let dx = col.abs_diff(anchor_x);
-                    let dy = row.abs_diff(anchor_y);
-                    if dx + dy <= 2 {
-                        return true;
-                    }
+        // Phase 1 — Active capture: extract-operate-restore pattern.
+        if !matches!(kind, MouseEventKind::Press(_)) {
+            let Some(mut capture) = self.mouse_capture.take() else {
+                return true;
+            };
+            let (result, restore) = match &mut capture {
+                MouseCaptureState::DraggingWindow {
+                    key,
+                    resistance,
+                    anchor_x,
+                    anchor_y,
+                    initial_x,
+                    initial_y,
+                    start_x,
+                    start_y,
+                    prev_col,
+                    prev_row,
+                    prev_time_ns,
+                    detach_coordinate,
+                } => match kind {
+                    MouseEventKind::Drag(_) => {
+                        let dx = col.abs_diff(*anchor_x);
+                        let dy = row.abs_diff(*anchor_y);
+                        let is_maximized = self.windows.get(*key).is_some_and(|w| w.is_maximized);
 
-                    // Fix 16a: Downward-drag restore for maximized windows
-                    let is_maximized = self.windows.get(key).is_some_and(|w| w.is_maximized);
-                    if is_maximized {
-                        if row > anchor_y && row - anchor_y > 2 {
-                            self.toggle_maximize(key);
-                            // Update capture initial coordinates after restore
-                            if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
-                                self.floating_rect(key)
-                                && let Some(MouseCaptureState::DraggingWindow {
-                                    ref mut initial_x,
-                                    ref mut initial_y,
-                                    ..
-                                }) = self.mouse_capture
-                            {
-                                *initial_x = fr.x;
-                                *initial_y = fr.y;
+                        if dx + dy <= 2 {
+                            // Deadzone guard: ignore micro-nudges
+                            (true, true)
+                        } else if is_maximized && !(row > *anchor_y && row - *anchor_y > 2) {
+                            // Maximized and not pulling down — consume event, keep capture
+                            (true, true)
+                        } else {
+                            // Downward-drag restore for maximized windows
+                            if is_maximized {
+                                self.toggle_maximize(*key);
+                                if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
+                                    self.floating_rect(*key)
+                                {
+                                    *initial_x = fr.x;
+                                    *initial_y = fr.y;
+                                    *start_x = col;
+                                    *start_y = row;
+                                    *prev_col = col;
+                                    *prev_row = row;
+                                }
                             }
-                        } else {
-                            return true;
-                        }
-                    }
 
-                    // Capture the cursor position at decouple time so that
-                    // update_snap_preview can suppress snap previews until the
-                    // cursor has travelled 5+ cells from this point.
-                    if let Some(MouseCaptureState::DraggingWindow { ref mut detach_coordinate, .. }) = self.mouse_capture
-                        && detach_coordinate.is_none()
-                    {
-                        *detach_coordinate = Some((col, row));
-                    }
+                            if detach_coordinate.is_none() {
+                                *detach_coordinate = Some((col, row));
+                            }
 
-                    self.drag_last_event = Some(Instant::now());
-                    self.reset_drag_snap_timer();
-                    if self.is_window_floating(key) {
-                        // Compute velocity using cross-multiplication (no sqrt, pure integer)
-                        let dx = col.abs_diff(prev_col);
-                        let dy = row.abs_diff(prev_row);
-                        let now_ns = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_nanos() as u64)
-                            .unwrap_or(prev_time_ns);
-                        let dt_ns = now_ns.saturating_sub(prev_time_ns).max(1_000_000);
-                        let dist_sq = u32::from(dx).saturating_mul(u32::from(dx))
-                            .saturating_add(u32::from(dy).saturating_mul(u32::from(dy)));
-                        // Threshold: 10 cells per 100ms → cross-multiply
-                        let threshold_cells_sq = 10u64.saturating_mul(10);
-                        let threshold_time_sq = 100_000_000u64.saturating_mul(100_000_000);
-                        let velocity_exceeded = u64::from(dist_sq)
-                            .saturating_mul(threshold_time_sq)
-                            > threshold_cells_sq.saturating_mul(dt_ns.saturating_mul(dt_ns));
-                        self.move_floating(
-                            key, col, row, start_x, start_y, initial_x, initial_y,
-                            velocity_exceeded,
-                        );
-                        let dx_total = col.abs_diff(start_x);
-                        let dy_total = row.abs_diff(start_y);
-                        if dx_total + dy_total > 2 {
-                            self.update_snap_preview(key, col, row);
-                        } else {
-                            self.drag_snap = None;
-                        }
-                        // Update velocity tracking fields
-                        if let Some(MouseCaptureState::DraggingWindow {
-                            ref mut prev_col,
-                            ref mut prev_row,
-                            ref mut prev_time_ns,
-                            ..
-                        }) = self.mouse_capture
-                        {
-                            *prev_col = col;
-                            *prev_row = row;
-                            *prev_time_ns = now_ns;
+                            self.drag_last_event = Some(Instant::now());
+                            self.reset_drag_snap_timer();
+                            if self.is_window_floating(*key) {
+                                let dx = col.abs_diff(*prev_col);
+                                let dy = row.abs_diff(*prev_row);
+                                let now_ns = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_nanos() as u64)
+                                    .unwrap_or(*prev_time_ns);
+                                let dt_ns = now_ns.saturating_sub(*prev_time_ns).max(1_000_000);
+                                let dy_weighted = u32::from(dy).saturating_mul(2);
+                                let dist_sq = u32::from(dx).saturating_mul(u32::from(dx))
+                                    .saturating_add(dy_weighted.saturating_mul(dy_weighted));
+                                let threshold_cells_sq = 10u64.saturating_mul(10);
+                                let threshold_time_sq = 100_000_000u64.saturating_mul(100_000_000);
+                                let velocity_exceeded = u64::from(dist_sq)
+                                    .saturating_mul(threshold_time_sq)
+                                    > threshold_cells_sq.saturating_mul(dt_ns.saturating_mul(dt_ns));
+                                self.move_floating(
+                                    *key, col, row, *start_x, *start_y, *initial_x, *initial_y,
+                                    velocity_exceeded, resistance,
+                                );
+                                let dx_total = col.abs_diff(*start_x);
+                                let dy_total = row.abs_diff(*start_y);
+                                if dx_total + dy_total > 2 {
+                                    self.update_snap_preview(*key, col, row, detach_coordinate);
+                                } else {
+                                    self.drag_snap = None;
+                                }
+                                *prev_col = col;
+                                *prev_row = row;
+                                *prev_time_ns = now_ns;
+                            }
+                            (true, true)
                         }
                     }
-                    true
-                }
-                (MouseCaptureState::DraggingWindow { .. }, MouseEventKind::Release(_)) => {
-                    self.cancel_drag_snap_timer();
-                    self.drag_last_event = None;
-                    if let Some(capture) = self.mouse_capture.take()
-                        && let MouseCaptureState::DraggingWindow { key, .. } = capture
-                    {
-                        // Sacred top edge: commit maximize on release (preview-only during drag)
+                    MouseEventKind::Release(_) => {
+                        self.cancel_drag_snap_timer();
+                        self.drag_last_event = None;
                         if self.snap_preview == Some(SnapPreviewState::Maximize) {
-                            self.toggle_maximize(key);
+                            self.toggle_maximize(*key);
                             self.snap_preview = None;
                         } else if self.drag_snap.is_some() {
-                            self.apply_snap(key);
+                            self.apply_snap(*key);
                         }
+                        self.snap_preview = None;
+                        self.snap_projection_cache = None;
+                        (true, false)
                     }
-                    self.snap_preview = None;
-                    self.snap_projection_cache = None;
-                    true
-                }
-                (MouseCaptureState::DraggingWindow { .. }, MouseEventKind::Moved)
-                    if self.drag_snap.is_some() =>
-                {
-                    // Mouse re-entered the terminal after being released outside
-                    // during a header drag (no Release event was delivered).
-                    self.cancel_drag_snap_timer();
-                    self.drag_last_event = None;
-                    if let Some(capture) = self.mouse_capture.take()
-                        && let MouseCaptureState::DraggingWindow { key, .. } = capture
-                    {
-                        self.apply_snap(key);
+                    MouseEventKind::Moved if self.drag_snap.is_some() => {
+                        self.cancel_drag_snap_timer();
+                        self.drag_last_event = None;
+                        self.apply_snap(*key);
+                        (true, false)
                     }
-                    true
-                }
-                (
-                    MouseCaptureState::ResizingWindow {
-                        key,
-                        edge,
-                        start_rect: _,
-                        start_col,
-                        start_row,
-                        start_x,
-                        start_y,
-                        start_width,
-                        start_height,
-                    },
-                    MouseEventKind::Drag(_),
-                ) => {
-                    if self.is_window_floating(key) {
-                        let bounds = LayoutRect {
-                            x: self.managed_area.x,
-                            y: self.managed_area.y,
-                            width: self.managed_area.width,
-                            height: self.managed_area.height,
-                        };
-                        let resized = apply_resize_drag_signed(
-                            start_x,
-                            start_y,
-                            start_width,
-                            start_height,
-                            edge,
-                            col,
-                            row,
-                            start_col,
-                            start_row,
-                            bounds,
-                            self.floating_resize_offscreen,
-                        );
-                        self.set_floating_rect(
-                            key,
-                            Some(crate::window::FloatRectSpec::Absolute(resized)),
-                        );
+                    _ => (false, true),
+                },
+                MouseCaptureState::ResizingWindow {
+                    key,
+                    edge,
+                    start_col,
+                    start_row,
+                    start_x,
+                    start_y,
+                    start_width,
+                    start_height,
+                    ..
+                } => match kind {
+                    MouseEventKind::Drag(_) => {
+                        if self.is_window_floating(*key) {
+                            let bounds = LayoutRect {
+                                x: self.managed_area.x,
+                                y: self.managed_area.y,
+                                width: self.managed_area.width,
+                                height: self.managed_area.height,
+                            };
+                            let resized = apply_resize_drag_signed(
+                                *start_x, *start_y, *start_width, *start_height,
+                                *edge, col, row, *start_col, *start_row,
+                                bounds, self.floating_resize_offscreen,
+                            );
+                            self.set_floating_rect(
+                                *key,
+                                Some(crate::window::FloatRectSpec::Absolute(resized)),
+                            );
+                        }
+                        (true, true)
                     }
-                    true
-                }
-                (MouseCaptureState::ResizingWindow { .. }, MouseEventKind::Release(_)) => {
-                    self.mouse_capture.take();
-                    true
-                }
-                (MouseCaptureState::ComponentInteraction { key }, _) => {
-                    // Forward Drag/Up/Moved to the captured component.
-                    let focused = *self.focus.current() == key;
-                    let mut ctx = self.component_context_for(focused, key);
-                    if let Some(area) = self.hitbox_registry.component_area(key) {
+                    MouseEventKind::Release(_) => (true, false),
+                    _ => (false, true),
+                },
+                MouseCaptureState::ComponentInteraction { key } => {
+                    let focused = *self.focus.current() == *key;
+                    let mut ctx = self.component_context_for(focused, *key);
+                    if let Some(area) = self.hitbox_registry.component_area(*key) {
                         ctx = ctx.with_screen_area(area);
                     }
                     let core_event = Event::Mouse(MouseEvent {
@@ -1124,41 +1088,40 @@ impl WindowManager {
                         row,
                         modifiers: *modifiers,
                     });
-                    let consumed = if let Some(comp) = self.component_for_key_mut(key) {
+                    let consumed = if let Some(comp) = self.component_for_key_mut(*key) {
                         let result = comp.handle_events(&core_event, &ctx);
                         let was_consumed = !result.is_ignored();
                         if let Some(action) = result.into_action() {
-                            self.process_action(key, action);
+                            self.process_action(*key, action);
                         }
                         was_consumed
                     } else {
                         false
                     };
-                    if matches!(kind, MouseEventKind::Release(_)) {
-                        self.mouse_capture = None;
-                    }
-                    consumed
+                    (consumed, !matches!(kind, MouseEventKind::Release(_)))
                 }
-                (MouseCaptureState::LayoutHandle, MouseEventKind::Drag(_))
-                | (MouseCaptureState::LayoutHandle, MouseEventKind::Release(_)) => {
-                    let event = Event::Mouse(MouseEvent {
-                        kind: *kind,
-                        column: col,
-                        row,
-                        modifiers: *modifiers,
-                    });
-                    let handled = self
-                        .managed_layout
-                        .as_mut()
-                        .map(|l| l.handle_event(&event, self.managed_area))
-                        .unwrap_or(false);
-                    if matches!(kind, MouseEventKind::Release(_)) {
-                        self.mouse_capture = None;
+                MouseCaptureState::LayoutHandle => match kind {
+                    MouseEventKind::Drag(_) | MouseEventKind::Release(_) => {
+                        let event = Event::Mouse(MouseEvent {
+                            kind: *kind,
+                            column: col,
+                            row,
+                            modifiers: *modifiers,
+                        });
+                        let handled = self
+                            .managed_layout
+                            .as_mut()
+                            .map(|l| l.handle_event(&event, self.managed_area))
+                            .unwrap_or(false);
+                        (handled, !matches!(kind, MouseEventKind::Release(_)))
                     }
-                    handled
-                }
-                _ => false,
+                    _ => (false, true),
+                },
             };
+            if restore {
+                self.mouse_capture = Some(capture);
+            }
+            return result;
         }
 
         // Phase 2 — Scroll events: hover-to-scroll to the window under cursor.
@@ -1326,6 +1289,7 @@ impl WindowManager {
                             };
                         self.mouse_capture = Some(MouseCaptureState::DraggingWindow {
                             key,
+                            resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
                             anchor_x: col,
                             anchor_y: row,
                             initial_x,
@@ -1449,6 +1413,43 @@ impl WindowManager {
             if let Some(timeout) = self.config.drag_snap_timeout {
                 self.drag_timer_id = Some(handle.schedule_once(timeout, SystemTask::DragSnap));
             }
+        }
+    }
+
+    /// Arm a 50ms single-shot timer for temporal-dwell visual feedback.
+    /// Cancels any previously-armed temporal tick before creating a new one.
+    /// The tick handler (on_temporal_dwell_tick) may re-arm for continuous
+    /// cycling while the cursor remains inside the magnetic zone.
+    fn arm_temporal_dwell_timer(&mut self) {
+        if let Some(handle) = &self.system_task_handle {
+            if let Some(old) = self.temporal_timer_id.take() {
+                let _ = handle.cancel(old);
+            }
+            self.temporal_timer_id = Some(
+                handle.schedule_once(
+                    std::time::Duration::from_millis(50),
+                    SystemTask::TemporalDwellTick,
+                ),
+            );
+        }
+    }
+
+    /// Called by the runner on each `SystemTask::TemporalDwellTick`.
+    /// If the cursor is still held stationary inside a magnetic zone,
+    /// triggers a render frame and re-arms the 50ms tick.  Otherwise
+    /// stops the cycle.
+    pub fn on_temporal_dwell_tick(&mut self) {
+        let in_magnetic_zone = matches!(
+            &self.mouse_capture,
+            Some(MouseCaptureState::DraggingWindow { resistance, .. })
+                if resistance.entered_magnetic_x_at.is_some()
+                || resistance.entered_magnetic_y_at.is_some()
+        );
+        if in_magnetic_zone {
+            self.mark_layout_dirty();
+            self.arm_temporal_dwell_timer();
+        } else {
+            self.temporal_timer_id = None;
         }
     }
 
@@ -2942,6 +2943,7 @@ mod tests {
         // Simulate abandoned drag (mouse released outside terminal).
         wm.mouse_capture = Some(MouseCaptureState::DraggingWindow {
             key,
+            resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
             anchor_x: 15,
             anchor_y: 10,
             initial_x: 10,
@@ -3423,6 +3425,7 @@ mod tests {
         let keys = make_keys(&mut wm, 100);
         wm.mouse_capture = Some(MouseCaptureState::DraggingWindow {
             key: keys[1],
+            resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
             anchor_x: 0,
             anchor_y: 0,
             initial_x: 0,
@@ -3453,6 +3456,7 @@ mod tests {
         let keys = make_keys(&mut wm, 100);
         wm.mouse_capture = Some(MouseCaptureState::DraggingWindow {
             key: keys[1],
+            resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
             anchor_x: 0,
             anchor_y: 0,
             initial_x: 0,
@@ -3475,6 +3479,7 @@ mod tests {
         let keys = make_keys(&mut wm, 100);
         wm.mouse_capture = Some(MouseCaptureState::DraggingWindow {
             key: keys[1],
+            resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
             anchor_x: 0,
             anchor_y: 0,
             initial_x: 0,
@@ -3555,6 +3560,7 @@ mod tests {
 
         wm.mouse_capture = Some(MouseCaptureState::DraggingWindow {
             key,
+            resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
             anchor_x: 15,
             anchor_y: 10,
             initial_x: 10,

@@ -25,7 +25,7 @@ pub use floating::{
     DragHandle, FLOATING_MIN_HEIGHT, FLOATING_MIN_WIDTH, HeaderDrag, ResizeDrag, ResizeEdge,
     ResizeHandle, apply_resize_drag_signed, floating_header_for_region, resize_handles_for_region,
 };
-pub use hit_test::hit_test_leaf;
+pub use hit_test::{detect_tiled_quadrant, hit_test_leaf};
 pub use layout::LayoutEngine;
 pub use node::{BspNode, NaryNode};
 pub use ordering::{FocusRing, ZOrder};
