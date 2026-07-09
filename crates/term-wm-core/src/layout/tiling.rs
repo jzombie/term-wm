@@ -714,10 +714,7 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
                         children: vec![
                             LayoutNode::Split {
                                 direction: Direction::Vertical,
-                                children: vec![
-                                    LayoutNode::leaf(insert),
-                                    LayoutNode::Void(void_id),
-                                ],
+                                children: vec![LayoutNode::leaf(insert), LayoutNode::Void(void_id)],
                                 weights: vec![1.0, 1.0],
                                 constraints: Vec::new(),
                                 resizable: true,
@@ -763,10 +760,7 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
                             LayoutNode::leaf(first),
                             LayoutNode::Split {
                                 direction: Direction::Vertical,
-                                children: vec![
-                                    LayoutNode::leaf(insert),
-                                    LayoutNode::Void(void_id),
-                                ],
+                                children: vec![LayoutNode::leaf(insert), LayoutNode::Void(void_id)],
                                 weights: vec![1.0, 1.0],
                                 constraints: Vec::new(),
                                 resizable: true,
@@ -810,10 +804,7 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
                         children: vec![
                             LayoutNode::Split {
                                 direction: Direction::Vertical,
-                                children: vec![
-                                    LayoutNode::Void(void_id),
-                                    LayoutNode::leaf(insert),
-                                ],
+                                children: vec![LayoutNode::Void(void_id), LayoutNode::leaf(insert)],
                                 weights: vec![1.0, 1.0],
                                 constraints: Vec::new(),
                                 resizable: true,
@@ -859,10 +850,7 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
                             LayoutNode::leaf(first),
                             LayoutNode::Split {
                                 direction: Direction::Vertical,
-                                children: vec![
-                                    LayoutNode::Void(void_id),
-                                    LayoutNode::leaf(insert),
-                                ],
+                                children: vec![LayoutNode::Void(void_id), LayoutNode::leaf(insert)],
                                 weights: vec![1.0, 1.0],
                                 constraints: Vec::new(),
                                 resizable: true,

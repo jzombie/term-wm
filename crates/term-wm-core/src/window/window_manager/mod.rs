@@ -962,7 +962,7 @@ impl WindowManager {
                         prev_time_ns,
                         detach_coordinate,
                         snap_applied,
-                                 } => match kind {
+                    } => match kind {
                         MouseEventKind::Drag(_) => {
                             let dx = col.abs_diff(*anchor_x);
                             let dy = row.abs_diff(*anchor_y);
