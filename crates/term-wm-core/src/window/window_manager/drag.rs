@@ -1,9 +1,15 @@
 use crate::Rect;
-use term_wm_layout_engine::{EdgeResistance, LayoutRect, detect_corner_snap, detect_edge_snap, detect_quadrant};
+use term_wm_layout_engine::{EdgeResistance, LayoutRect, detect_corner_snap, detect_edge_snap};
 
 use super::{SnapPreviewState, WindowManager};
 use crate::layout::InsertPosition;
 use crate::window::WindowKey;
+
+/// Cells from screen edge that triggers edge-snap preview.
+const EDGE_SNAP_THRESHOLD: u16 = 3;
+
+/// Cells from screen corner that triggers corner-snap preview.
+const CORNER_SNAP_THRESHOLD: u16 = 6;
 
 impl WindowManager {
     pub(super) fn focus_window_at(&mut self, column: u16, row: u16) -> bool {
@@ -203,7 +209,7 @@ impl WindowManager {
         };
 
         // Priority 1: Corner snap (smallest spatial region)
-        if let Some(corner_pos) = detect_corner_snap(mouse_x, mouse_y, managed_layout_rect, 2) {
+        if let Some(corner_pos) = detect_corner_snap(mouse_x, mouse_y, managed_layout_rect, CORNER_SNAP_THRESHOLD) {
             let preview = self
                 .get_projected_preview(dragging_key, SnapPreviewState::Corner(corner_pos), area)
                 .unwrap_or_else(|| {
@@ -229,7 +235,7 @@ impl WindowManager {
         // is near a screen edge.  This ensures that dragging to the right
         // edge always shows a right-half preview, even if the cursor is
         // inside a tiled window near that edge.
-        if let Some(pos) = detect_edge_snap(mouse_x, mouse_y, managed_layout_rect, 3) {
+        if let Some(pos) = detect_edge_snap(mouse_x, mouse_y, managed_layout_rect, EDGE_SNAP_THRESHOLD) {
             let preview = self
                 .get_projected_preview(dragging_key, SnapPreviewState::Edge(pos), area)
                 .unwrap_or_else(|| {
