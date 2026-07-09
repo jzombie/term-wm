@@ -229,7 +229,7 @@ impl WindowManager {
         // is near a screen edge.  This ensures that dragging to the right
         // edge always shows a right-half preview, even if the cursor is
         // inside a tiled window near that edge.
-        if let Some(pos) = detect_edge_snap(mouse_x, mouse_y, managed_layout_rect, 2) {
+        if let Some(pos) = detect_edge_snap(mouse_x, mouse_y, managed_layout_rect, 3) {
             let preview = self
                 .get_projected_preview(dragging_key, SnapPreviewState::Edge(pos), area)
                 .unwrap_or_else(|| {
