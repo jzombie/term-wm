@@ -461,21 +461,41 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
         }
     }
 
-    /// Post-removal cleanup: collapse degenerate splits and all-Void splits.
+    /// Post-removal cleanup: remove Void children and collapse degenerate splits.
     ///
-    /// After removing a leaf from the tree, this pass ensures the tree has no
-    /// degenerate nodes that waste screen space:
-    /// - Split with 0 children → Void
-    /// - Split with 1 child → replace with that child
-    /// - Split where ALL children are Void → replace with Void
+    /// After removing a leaf from the tree, this pass ensures:
+    /// 1. Void children (from remove_leaf) are removed from multi-child splits
+    /// 2. Splits with 0 children → Void
+    /// 3. Splits with 1 child → replace with that child
+    /// 4. Splits where ALL children are Void → replace with Void
     ///
     /// Call this after every `remove_leaf` to keep the layout clean.
     pub fn cleanup_after_removal(&mut self) {
         match self {
-            LayoutNode::Split { children, .. } => {
+            LayoutNode::Split {
+                children, weights, constraints, ..
+            } => {
+                // Recurse first
                 for child in children.iter_mut() {
                     child.cleanup_after_removal();
                 }
+                // Remove Void children and corresponding weights/constraints
+                let mut i = 0;
+                while i < children.len() {
+                    if matches!(children[i], LayoutNode::Void(_)) {
+                        children.remove(i);
+                        if i < weights.len() {
+                            weights.remove(i);
+                        }
+                        if i < constraints.len() {
+                            constraints.remove(i);
+                        }
+                        // Don't increment — next element shifted into this index
+                    } else {
+                        i += 1;
+                    }
+                }
+                // Contract degenerate splits
                 match children.len() {
                     0 => {
                         *self = LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed));
