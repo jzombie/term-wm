@@ -1196,15 +1196,66 @@ impl ColorConvert for Color {
     }
 }
 
+/// Apply background-color inversion (`Modifier::REVERSED`) to the cell under
+/// the mouse cursor.  Must be called as the **absolute last** render step
+/// (highest Z-order) so it paints over all previously rendered content.
+///
+/// Uses style-modifier overrides only — no character replacement — so the
+/// underlying text is fully preserved.  The active state (drag/resize) also
+/// inverts an adjacent cell as a visual "badge", clamped to buffer boundaries.
+pub fn render_cursor_overlay(buf: &mut Buffer, wm: &WindowManager, _theme: &Theme) {
+    use ratatui::style::Modifier;
+
+    let Some((hx, hy)) = wm.hover_pos() else {
+        return;
+    };
+
+    if hx >= buf.area.width || hy >= buf.area.height {
+        return;
+    }
+
+    // Derive interaction state from existing WindowManager fields (read-only).
+    let is_active = wm.is_mouse_captured();
+
+    // Apply REVERSED to cell under cursor (preserves text).
+    if let Some(cell) = buf.cell_mut((hx, hy)) {
+        cell.set_style(cell.style().add_modifier(Modifier::REVERSED));
+    }
+
+    // Active state: also invert an adjacent cell as a visual badge.
+    // Uses Modifier::REVERSED only — no character overwriting, preserves layout.
+    if is_active {
+        let badge_col = if hx + 1 < buf.area.width {
+            hx + 1
+        } else {
+            hx.saturating_sub(1)
+        };
+        let badge_row = if hy + 1 < buf.area.height {
+            hy + 1
+        } else {
+            hy.saturating_sub(1)
+        };
+        if (badge_col, badge_row) != (hx, hy)
+            && let Some(cell) = buf.cell_mut((badge_col, badge_row))
+        {
+            cell.set_style(cell.style().add_modifier(Modifier::REVERSED));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect as RatatuiRect;
     use ratatui::style::Style;
+    use ratatui::style::Modifier;
+    use std::sync::Arc;
+    use term_wm_core::app_context::AppContext;
     use term_wm_core::theme::NOIR;
     use term_wm_core::window::FloatRect;
     use term_wm_core::window::decorator::{DefaultDecorator, WindowRenderCtx};
+    use term_wm_core::wm_config::WmConfig;
 
     #[test]
     fn composite_window_skips_negative_dest_x() {
@@ -1294,5 +1345,120 @@ mod tests {
             Some("│"),
             "left border from source col 0 should NOT appear at main col 0"
         );
+    }
+
+    // ── render_cursor_overlay tests ──────────────────────────────────────
+
+    fn make_wm() -> WindowManager {
+        let config = WmConfig::default();
+        let app_ctx = Arc::new(AppContext::new("test", "0.1.0"));
+        WindowManager::with_config(config, app_ctx, None, None, None, None)
+    }
+
+    fn make_buf(width: u16, height: u16) -> Buffer {
+        let mut buf = Buffer::empty(RatatuiRect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        });
+        for cell in buf.content.iter_mut() {
+            cell.set_symbol("·");
+        }
+        buf
+    }
+
+    #[test]
+    fn cursor_overlay_no_hover_is_noop() {
+        let mut buf = make_buf(10, 10);
+        let wm = make_wm();
+        let before = buf.clone();
+        render_cursor_overlay(&mut buf, &wm, &NOIR);
+        assert_eq!(buf, before, "no hover → no change");
+    }
+
+    #[test]
+    fn cursor_overlay_hover_outside_bounds_is_noop() {
+        let mut buf = make_buf(10, 10);
+        let mut wm = make_wm();
+        wm.set_hover_pos(20, 20);
+        let before = buf.clone();
+        render_cursor_overlay(&mut buf, &wm, &NOIR);
+        assert_eq!(buf, before, "hover outside buffer → no change");
+    }
+
+    #[test]
+    fn cursor_overlay_hover_applies_reversed() {
+        let mut buf = make_buf(10, 10);
+        let mut wm = make_wm();
+        wm.set_hover_pos(3, 4);
+        render_cursor_overlay(&mut buf, &wm, &NOIR);
+        let cell = buf.cell((3, 4)).unwrap();
+        assert!(
+            cell.modifier.contains(Modifier::REVERSED),
+            "cell at hover position should have REVERSED modifier"
+        );
+        // Symbol should be preserved
+        assert_eq!(cell.symbol(), "·", "symbol must not be overwritten");
+    }
+
+    #[test]
+    fn cursor_overlay_active_applies_badge() {
+        let mut buf = make_buf(10, 10);
+        let mut wm = make_wm();
+        wm.set_hover_pos(3, 4);
+        wm.set_mouse_captured(true);
+        render_cursor_overlay(&mut buf, &wm, &NOIR);
+        // Main cell reversed
+        assert!(
+            buf.cell((3, 4)).unwrap().modifier.contains(Modifier::REVERSED),
+            "main cell should be REVERSED in active state"
+        );
+        // Badge cell (adjacent) reversed
+        assert!(
+            buf.cell((4, 5)).unwrap().modifier.contains(Modifier::REVERSED),
+            "adjacent badge cell should be REVERSED in active state"
+        );
+        // Symbols preserved
+        assert_eq!(buf.cell((4, 5)).unwrap().symbol(), "·");
+    }
+
+    #[test]
+    fn cursor_overlay_active_clamps_badge_at_right_edge() {
+        let mut buf = make_buf(5, 5);
+        let mut wm = make_wm();
+        wm.set_hover_pos(4, 4);
+        wm.set_mouse_captured(true);
+        render_cursor_overlay(&mut buf, &wm, &NOIR);
+        // Badge should be at (3, 3) — left+up of cursor since right+bottom edge
+        assert!(
+            buf.cell((3, 3)).unwrap().modifier.contains(Modifier::REVERSED),
+            "badge should appear at clamped position at right+bottom edge"
+        );
+    }
+
+    #[test]
+    fn cursor_overlay_zero_buffer_is_noop() {
+        let mut buf = make_buf(0, 0);
+        let mut wm = make_wm();
+        wm.set_hover_pos(0, 0);
+        let before = buf.clone();
+        render_cursor_overlay(&mut buf, &wm, &NOIR);
+        assert_eq!(buf, before, "zero-size buffer → no change");
+    }
+
+    #[test]
+    fn cursor_overlay_single_cell_buffer() {
+        let mut buf = make_buf(1, 1);
+        let mut wm = make_wm();
+        wm.set_hover_pos(0, 0);
+        wm.set_mouse_captured(true);
+        render_cursor_overlay(&mut buf, &wm, &NOIR);
+        // Single cell — main cell reversed, badge should be same cell
+        assert!(
+            buf.cell((0, 0)).unwrap().modifier.contains(Modifier::REVERSED),
+            "single cell should be REVERSED"
+        );
+        assert_eq!(buf.cell((0, 0)).unwrap().symbol(), "·");
     }
 }
