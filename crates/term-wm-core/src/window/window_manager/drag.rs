@@ -242,60 +242,9 @@ impl WindowManager {
             return;
         }
 
-        // Priority 4: Tiled insert (quadrant-based) — only when NOT near
-        // a screen edge (edge snap already checked above).
-        let target = self.z_order.iter().rev().find_map(|&key| {
-            if key == dragging_key { return None; }
-            if self.is_window_floating(key) { return None; }
-            let rect = self.regions.get(key)?;
-            if crate::layout::rect_contains(rect, mouse_x, mouse_y) {
-                Some((key, rect))
-            } else {
-                None
-            }
-        });
-
-        if let Some((target_key, rect)) = target {
-            let target_layout = LayoutRect {
-                x: rect.x, y: rect.y,
-                width: rect.width, height: rect.height,
-            };
-            let quadrant = detect_quadrant(mouse_x, mouse_y, &target_layout);
-            let pos = match quadrant {
-                term_wm_layout_engine::Quadrant::East => InsertPosition::Right,
-                term_wm_layout_engine::Quadrant::West => InsertPosition::Left,
-                term_wm_layout_engine::Quadrant::North => InsertPosition::Top,
-                term_wm_layout_engine::Quadrant::South => InsertPosition::Bottom,
-            };
-            let preview = self
-                .get_projected_preview(dragging_key, SnapPreviewState::TiledInsert(target_key, pos), area)
-                .unwrap_or_else(|| {
-                    let ep = term_wm_layout_engine::tiled_preview_rect(target_layout, pos);
-                    Rect { x: ep.x, y: ep.y, width: ep.width, height: ep.height }
-                });
-            self.drag_snap = Some((Some(target_key), pos, preview));
-            self.snap_preview = Some(SnapPreviewState::TiledInsert(target_key, pos));
-            return;
-        }
-
-        // Priority 5: Void region (Snap Assist receptacle)
-        if let Some(layout) = &self.managed_layout {
-            let void_regions = layout.void_regions(area);
-            for &(void_id, void_rect) in &void_regions {
-                if crate::layout::rect_contains(void_rect, mouse_x, mouse_y) {
-                    let state = SnapPreviewState::VoidInsert(void_id);
-                    let projected = self.get_projected_preview(dragging_key, state, area);
-                    let preview = projected.unwrap_or(void_rect);
-                    self.drag_snap = Some((None, InsertPosition::Top, preview));
-                    self.snap_preview = Some(state);
-                    return;
-                }
-            }
-        }
-
-        // No snap target found — keep existing preview visible instead of
-        // clearing it.  This prevents the overlay from blinking when the
-        // cursor moves through gaps between tiled windows.
+        // No snap target — clear preview
+        self.drag_snap = None;
+        self.snap_preview = None;
     }
 
     pub(super) fn apply_snap(&mut self, key: WindowKey) {
