@@ -1076,6 +1076,7 @@ impl WindowManager {
                             self.drag_last_event = None;
                             if self.snap_preview == Some(SnapPreviewState::Maximize) {
                                 self.toggle_maximize(*key);
+                                self.drag_snap = None;
                                 self.snap_preview = None;
                             } else if self.drag_snap.is_some() {
                                 // Snap target found — apply snap (removes from

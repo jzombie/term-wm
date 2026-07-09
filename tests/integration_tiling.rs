@@ -552,6 +552,9 @@ mod drag_snap_pipeline {
         let up = make_mouse(MouseEventKind::Release(MouseButton::Left), mid_x, 0);
         wm.dispatch_mouse(&up);
 
+        // Ghost overlay must be cleared immediately after maximize applies
+        assert!(wm.drag_snap_rect().is_none(), "drag_snap must be None after maximize release");
+
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
         let r = wm.region(keys[0]);
