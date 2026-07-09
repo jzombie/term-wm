@@ -494,6 +494,7 @@ mod drag_snap_pipeline {
         let header = header_rect(&wm, keys[0]);
         let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
         wm.dispatch_mouse(&down);
+        assert!(wm.is_window_floating(keys[0]), "window must be floating after Press");
 
         let right_edge = (AREA.x + i32::from(AREA.width) - 1) as u16;
         let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), right_edge, header.y as u16);
