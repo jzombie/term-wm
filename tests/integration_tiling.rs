@@ -738,6 +738,10 @@ mod drag_snap_pipeline {
         assert_eq!(r3.y, AREA.y, "phase 3: left-snapped y");
         assert_eq!(r3.width, total_w / 2, "phase 3: left-snapped width = total/2");
         assert_eq!(r3.height, AREA.height, "phase 3: left-snapped height");
+        // Sibling must stay constrained to its lane — not expanded across full width
+        let r_sibling = wm.region(keys[1]);
+        assert!(r_sibling.x > r3.x, "phase 3: sibling must be to the right of keys[0]");
+        assert!(!rects_overlap(r3, r_sibling), "phase 3: windows must not overlap");
     }
 }
 
