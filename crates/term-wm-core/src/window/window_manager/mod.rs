@@ -2949,11 +2949,9 @@ mod tests {
         });
         let wm_down = crate::events::core_event_to_wm(&down).unwrap();
         assert!(wm.dispatch_mouse(&wm_down));
-        assert!(wm.is_window_floating(debug_key));
-        let start_rect = match wm.floating_rect(debug_key).expect("floating rect present") {
-            crate::window::FloatRectSpec::Absolute(fr) => fr,
-            _ => panic!("expected absolute rect"),
-        };
+        // Floating rect is deferred — Press alone must not decouple.
+        assert!(!wm.is_window_floating(debug_key));
+        let start_rect = wm.full_region(debug_key);
 
         let drag_col = header_rect.x.saturating_add(5) as u16;
         let drag_row = header_rect.y.saturating_add(1) as u16;
@@ -2965,6 +2963,7 @@ mod tests {
         });
         let wm_drag = crate::events::core_event_to_wm(&drag).unwrap();
         assert!(wm.dispatch_mouse(&wm_drag));
+        assert!(wm.is_window_floating(debug_key));
 
         let moved = match wm.floating_rect(debug_key).expect("floating rect present") {
             crate::window::FloatRectSpec::Absolute(fr) => fr,
