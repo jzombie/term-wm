@@ -931,6 +931,112 @@ mod tests {
                 .is_dragging()
         );
     }
+
+    #[test]
+    fn on_mouse_press_delegates_to_handle_local_mouse() {
+        use ratatui::text::Line;
+        let mut renderer = TextRendererComponent::new();
+        renderer.set_selection_enabled(true);
+        renderer.set_wrap(false);
+        let lines: Vec<Line<'static>> = (0..5)
+            .map(|idx| Line::from(format!("line {idx}")))
+            .collect();
+        renderer.set_text(Text::from(lines));
+
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 5,
+        };
+        let ctx = ComponentContext::new(true).with_screen_area(area);
+        let result = renderer.on_mouse_press(5, 2, MouseButton::Left, KeyModifiers::NONE, &ctx);
+        assert!(result.is_ignored());
+    }
+
+    #[test]
+    fn on_mouse_release_delegates_to_handle_local_mouse() {
+        use ratatui::text::Line;
+        let mut renderer = TextRendererComponent::new();
+        renderer.set_selection_enabled(true);
+        renderer.set_wrap(false);
+        let lines: Vec<Line<'static>> = (0..5)
+            .map(|idx| Line::from(format!("line {idx}")))
+            .collect();
+        renderer.set_text(Text::from(lines));
+
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 5,
+        };
+        let ctx = ComponentContext::new(true).with_screen_area(area);
+        let result = renderer.on_mouse_release(5, 2, MouseButton::Left, KeyModifiers::NONE, &ctx);
+        assert!(result.is_ignored());
+    }
+
+    #[test]
+    fn on_mouse_drag_delegates_to_handle_local_mouse() {
+        use ratatui::text::Line;
+        let mut renderer = TextRendererComponent::new();
+        renderer.set_selection_enabled(true);
+        renderer.set_wrap(false);
+        let lines: Vec<Line<'static>> = (0..5)
+            .map(|idx| Line::from(format!("line {idx}")))
+            .collect();
+        renderer.set_text(Text::from(lines));
+
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 5,
+        };
+        let ctx = ComponentContext::new(true).with_screen_area(area);
+        let result = renderer.on_mouse_drag(5, 2, MouseButton::Left, KeyModifiers::NONE, &ctx);
+        assert!(result.is_ignored());
+    }
+
+    #[test]
+    fn on_mouse_move_delegates_to_handle_local_mouse() {
+        use ratatui::text::Line;
+        let mut renderer = TextRendererComponent::new();
+        renderer.set_selection_enabled(true);
+        renderer.set_wrap(false);
+        let lines: Vec<Line<'static>> = (0..5)
+            .map(|idx| Line::from(format!("line {idx}")))
+            .collect();
+        renderer.set_text(Text::from(lines));
+
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 5,
+        };
+        let ctx = ComponentContext::new(true).with_screen_area(area);
+        let result = renderer.on_mouse_move(5, 2, KeyModifiers::NONE, &ctx);
+        assert!(result.is_ignored());
+    }
+
+    #[test]
+    fn handle_local_mouse_with_zero_area_falls_back() {
+        let mut renderer = TextRendererComponent::new();
+        renderer.set_selection_enabled(true);
+        let lines: Vec<Line<'static>> = vec![Line::from("hello")];
+        renderer.set_text(Text::from(lines));
+
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        };
+        let ctx = ComponentContext::new(true).with_screen_area(area);
+        let result = renderer.on_mouse_press(0, 0, MouseButton::Left, KeyModifiers::NONE, &ctx);
+        assert!(result.is_ignored());
+    }
 }
 
 #[derive(Debug)]
