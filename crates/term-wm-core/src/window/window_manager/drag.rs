@@ -163,8 +163,12 @@ impl WindowManager {
     /// Spatial priority order (smallest region first):
     /// 1. Corner snap (TopLeft/TopRight/BottomLeft/BottomRight)
     /// 2. Sacred top edge maximize (y=0, deferred to release)
-    /// 3. Edge snap (Left/Right/Top/Bottom half-screen)
-    /// 4. Tiled insert (quadrant-based)
+    /// 3. Edge snap (Left/Right/Top/Bottom half-screen) — checked first
+    ///    when cursor is near a screen edge, even if inside a tiled window
+    /// 4. Tiled insert (quadrant-based) — when inside a tiled window
+    ///    but NOT near a screen edge
+    /// 5. Void region (Snap Assist receptacle)
+    /// 6. Edge snap fallback — when not inside any window
     ///
     /// `detach_coordinate` is passed separately for post-decouple suppression
     /// (self.mouse_capture is `None` during the extract-operate-restore cycle).
@@ -175,35 +179,30 @@ impl WindowManager {
         mouse_y: u16,
         detach_coordinate: &mut Option<(u16, u16)>,
     ) {
-        self.drag_snap = None;
-        self.snap_preview = None;
-        self.snap_projection_cache = None;
         let area = self.managed_area;
 
         // Post-decouple suppression: if detach_coordinate is set, suppress all
-        // snap previews until the cursor moves 5+ Euclidean cells from the
-        // decouple point.
+        // snap previews until the cursor moves 2+ cells from the decouple point.
         const SUPPRESS_THRESHOLD_SQ: u32 = 2 * 2;
         if let Some((decouple_x, decouple_y)) = *detach_coordinate {
-                let dx = u32::from(mouse_x.abs_diff(decouple_x));
-                let dy = u32::from(mouse_y.abs_diff(decouple_y)).saturating_mul(2);
-                let dist_sq = dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy));
-                if dist_sq < SUPPRESS_THRESHOLD_SQ {
-                    self.drag_snap = None;
-                    self.snap_preview = None;
-                    return;
-                }
-                // Distance exceeded — clear the lock permanently
-                *detach_coordinate = None;
+            let dx = u32::from(mouse_x.abs_diff(decouple_x));
+            let dy = u32::from(mouse_y.abs_diff(decouple_y)).saturating_mul(2);
+            let dist_sq = dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy));
+            if dist_sq < SUPPRESS_THRESHOLD_SQ {
+                // Keep existing snap state visible — don't clear
+                return;
             }
+            *detach_coordinate = None;
+        }
 
-        // Priority 1: Corner snap (smallest spatial region)
         let managed_layout_rect = LayoutRect {
             x: area.x,
             y: area.y,
             width: area.width,
             height: area.height,
         };
+
+        // Priority 1: Corner snap (smallest spatial region)
         if let Some(corner_pos) = detect_corner_snap(mouse_x, mouse_y, managed_layout_rect, 2) {
             let preview = self
                 .get_projected_preview(dragging_key, SnapPreviewState::Corner(corner_pos), area)
@@ -212,12 +211,7 @@ impl WindowManager {
                         managed_layout_rect,
                         corner_pos,
                     );
-                    Rect {
-                        x: ep.x,
-                        y: ep.y,
-                        width: ep.width,
-                        height: ep.height,
-                    }
+                    Rect { x: ep.x, y: ep.y, width: ep.width, height: ep.height }
                 });
             self.drag_snap = Some((None, corner_pos, preview));
             self.snap_preview = Some(SnapPreviewState::Corner(corner_pos));
@@ -231,14 +225,28 @@ impl WindowManager {
             return;
         }
 
-        // Priority 3 & 4: Edge snap / tiled insert
+        // Priority 3: Edge snap — checked BEFORE tiled insert when cursor
+        // is near a screen edge.  This ensures that dragging to the right
+        // edge always shows a right-half preview, even if the cursor is
+        // inside a tiled window near that edge.
+        if let Some(pos) = detect_edge_snap(mouse_x, mouse_y, managed_layout_rect, 2) {
+            let preview = self
+                .get_projected_preview(dragging_key, SnapPreviewState::Edge(pos), area)
+                .unwrap_or_else(|| {
+                    let ep = term_wm_layout_engine::edge_preview_rect(managed_layout_rect, pos);
+                    Rect { x: ep.x, y: ep.y, width: ep.width, height: ep.height }
+                });
+            let preview = if self.managed_layout.is_none() { area } else { preview };
+            self.drag_snap = Some((None, pos, preview));
+            self.snap_preview = Some(SnapPreviewState::Edge(pos));
+            return;
+        }
+
+        // Priority 4: Tiled insert (quadrant-based) — only when NOT near
+        // a screen edge (edge snap already checked above).
         let target = self.z_order.iter().rev().find_map(|&key| {
-            if key == dragging_key {
-                return None;
-            }
-            if self.is_window_floating(key) {
-                return None;
-            }
+            if key == dragging_key { return None; }
+            if self.is_window_floating(key) { return None; }
             let rect = self.regions.get(key)?;
             if crate::layout::rect_contains(rect, mouse_x, mouse_y) {
                 Some((key, rect))
@@ -249,12 +257,9 @@ impl WindowManager {
 
         if let Some((target_key, rect)) = target {
             let target_layout = LayoutRect {
-                x: rect.x,
-                y: rect.y,
-                width: rect.width,
-                height: rect.height,
+                x: rect.x, y: rect.y,
+                width: rect.width, height: rect.height,
             };
-
             let quadrant = detect_quadrant(mouse_x, mouse_y, &target_layout);
             let pos = match quadrant {
                 term_wm_layout_engine::Quadrant::East => InsertPosition::Right,
@@ -273,7 +278,7 @@ impl WindowManager {
             return;
         }
 
-        // Priority 3b: Void region (Snap Assist receptacle)
+        // Priority 5: Void region (Snap Assist receptacle)
         if let Some(layout) = &self.managed_layout {
             let void_regions = layout.void_regions(area);
             for &(void_id, void_rect) in &void_regions {
@@ -288,30 +293,9 @@ impl WindowManager {
             }
         }
 
-        let position = detect_edge_snap(mouse_x, mouse_y, managed_layout_rect, 2);
-
-        if let Some(pos) = position {
-            let preview = self
-                .get_projected_preview(dragging_key, SnapPreviewState::Edge(pos), area)
-                .unwrap_or_else(|| {
-                    let ep = term_wm_layout_engine::edge_preview_rect(managed_layout_rect, pos);
-                    Rect {
-                        x: ep.x,
-                        y: ep.y,
-                        width: ep.width,
-                        height: ep.height,
-                    }
-                });
-
-            let preview = if self.managed_layout.is_none() {
-                area
-            } else {
-                preview
-            };
-
-            self.drag_snap = Some((None, pos, preview));
-            self.snap_preview = Some(SnapPreviewState::Edge(pos));
-        }
+        // No snap target found — keep existing preview visible instead of
+        // clearing it.  This prevents the overlay from blinking when the
+        // cursor moves through gaps between tiled windows.
     }
 
     pub(super) fn apply_snap(&mut self, key: WindowKey) {
@@ -324,6 +308,7 @@ impl WindowManager {
                 }
                 if let Some(layout) = &mut self.managed_layout {
                     layout.root_mut().remove_leaf(key);
+                    layout.root_mut().cleanup_after_removal();
                     layout.root_mut().replace_void_by_id(void_id, LayoutNode::leaf(key));
                 }
                 if let Some(pos) = self.z_order.iter().position(|&z_key| z_key == key) {
@@ -370,6 +355,7 @@ impl WindowManager {
                 };
                 if should_retile {
                     layout.root_mut().remove_leaf(key);
+                    layout.root_mut().cleanup_after_removal();
                 } else {
                     self.bring_to_front_key(key);
                     return;

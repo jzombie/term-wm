@@ -461,6 +461,40 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
         }
     }
 
+    /// Post-removal cleanup: collapse degenerate splits and all-Void splits.
+    ///
+    /// After removing a leaf from the tree, this pass ensures the tree has no
+    /// degenerate nodes that waste screen space:
+    /// - Split with 0 children → Void
+    /// - Split with 1 child → replace with that child
+    /// - Split where ALL children are Void → replace with Void
+    ///
+    /// Call this after every `remove_leaf` to keep the layout clean.
+    pub fn cleanup_after_removal(&mut self) {
+        match self {
+            LayoutNode::Split { children, .. } => {
+                for child in children.iter_mut() {
+                    child.cleanup_after_removal();
+                }
+                match children.len() {
+                    0 => {
+                        *self = LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed));
+                    }
+                    1 => {
+                        let only = children.remove(0);
+                        *self = only;
+                    }
+                    _ => {
+                        if children.iter().all(|c| matches!(c, LayoutNode::Void(_))) {
+                            *self = LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub fn replace_void_by_id(&mut self, void_id: usize, new_leaf: LayoutNode<Id>) -> bool {
         match self {
             LayoutNode::Void(id) if *id == void_id => {
