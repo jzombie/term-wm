@@ -210,15 +210,15 @@ where
                 if let Some(sel_enabled) = app.wm().take_window_selection_change() {
                     app.set_window_selection_enabled(sel_enabled);
                 }
-                if let Some(profile) = profile_tracker.poll(driver.current_profile()) {
-                    app.wm().set_power_profile(profile);
-                }
                 if consume_dirty {
                     // Consume accumulated dirty-window keys so the power
                     // profile can drop back to PowerSaver when idle.  Only
                     // call after a successful render — on panics the dirty
                     // set is preserved so the next frame picks it up.
                     driver.take_dirty_windows();
+                }
+                if let Some(profile) = profile_tracker.poll(driver.current_profile()) {
+                    app.wm().set_power_profile(profile);
                 }
                 Ok(flow)
             };

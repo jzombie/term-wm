@@ -128,7 +128,7 @@ impl PowerProfile {
     }
 
     pub fn report_change(&self) {
-        tracing::info!(target: "power", "profile: {}", self.name());
+        tracing::trace!(target: "power", "profile: {}", self.name());
     }
 }
 
