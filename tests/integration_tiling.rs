@@ -1138,6 +1138,47 @@ mod drag_snap_pipeline {
             r0.x
         );
     }
+
+    #[test]
+    fn close_all_windows_then_tile_new_does_not_phantom() {
+        // Regression: closing all windows left a Void in the tree.
+        // Opening a new window via tile_window would call split_root on Void,
+        // creating Horizontal[Void, leaf] with a resize handle (the phantom).
+        let (mut wm, mut engine, mut renderer, keys) = setup();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        // Close both windows
+        wm.close_window(keys[0]);
+        wm.close_window(keys[1]);
+
+        // Open two new windows via tile_window (production path)
+        let k0 = wm.create_window(Box::new(NoopComponent));
+        assert!(wm.tile_window(k0), "first new window must tile");
+        let k1 = wm.create_window(Box::new(NoopComponent));
+        assert!(wm.tile_window(k1), "second new window must tile");
+
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        // Both new windows must have valid regions, no phantom split handles
+        let r0 = wm.region(k0);
+        let r1 = wm.region(k1);
+        assert!(
+            r0.width > 0 && r0.height > 0,
+            "window 0 must have valid region"
+        );
+        assert!(
+            r1.width > 0 && r1.height > 0,
+            "window 1 must have valid region"
+        );
+        assert!(!rects_overlap(r0, r1), "windows must not overlap");
+        let total_w = r0.width.saturating_add(r1.width);
+        assert!(
+            total_w == AREA.width || total_w == AREA.width.wrapping_sub(1),
+            "windows must fill width: {} vs {}",
+            total_w,
+            AREA.width
+        );
+    }
 }
 
 // ─── Module 6: Property Tests ────────────────────────────────────────

@@ -397,7 +397,11 @@ impl WindowManager {
             self.focus_window_key(key);
             return true;
         }
-        if self.managed_layout.is_none() {
+        let is_void = self
+            .managed_layout
+            .as_ref()
+            .is_some_and(|l| matches!(l.root(), crate::layout::LayoutNode::Void(_)));
+        if self.managed_layout.is_none() || is_void {
             self.managed_layout = Some(crate::layout::TilingLayout::new(LayoutNode::leaf(key)));
             self.focus_window_key(key);
             return true;
