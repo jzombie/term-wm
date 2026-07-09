@@ -11,9 +11,9 @@ pub use term_wm_console::widget_adapter::{StatefulWidgetAdapter, WidgetAdapter};
 use std::sync::Arc;
 use term_wm_console::RatatuiBackend;
 use term_wm_console::draw_plan_renderer::{
-    ColorConvert, DrawPlanRenderer, composite_window, overlay_shadow_data, render_drop_shadow,
-    render_ghost_preview, render_handles_masked, render_overlays, render_panels,
-    render_resize_outline,
+    ColorConvert, DrawPlanRenderer, composite_window, overlay_shadow_data, render_cursor_overlay,
+    render_drop_shadow, render_ghost_preview, render_handles_masked, render_overlays,
+    render_panels, render_resize_outline,
 };
 use term_wm_core::hitbox_registry::{HitTarget, HitboxRegistry};
 use term_wm_core::window::decorator::{HeaderAction, header_buttons};
@@ -355,4 +355,10 @@ pub fn render_app(
     }
     // Render overlays (command menu, help, exit confirm)
     render_overlays(backend, wm);
+
+    // Cursor overlay — MUST be last (highest Z-order) so it paints over
+    // all previously rendered content including overlays and chrome.
+    if let Some(rb) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() {
+        render_cursor_overlay(&mut rb.buffer, wm, &wm.config().theme);
+    }
 }
