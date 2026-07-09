@@ -157,13 +157,8 @@ pub fn render_app(
     // This ensures floating windows block clicks to tiling handles beneath them.
     let chrome_entries: Vec<(HitTarget, term_wm_layout_engine::LayoutRect)> = {
         let mut entries = Vec::new();
-        for handle in wm.tiling_handles() {
-            entries.push((HitTarget::LayoutHandle, handle.rect));
-        }
         for region in draw_plan.regions() {
             let k = region.key;
-            // Window content area — blocks clicks to anything beneath
-            entries.push((HitTarget::Window(k), region.bounds));
             for h in wm.resize_handles().iter().filter(|h| h.key == k) {
                 entries.push((HitTarget::ChromeResize(h.key, h.edge), h.rect));
             }
