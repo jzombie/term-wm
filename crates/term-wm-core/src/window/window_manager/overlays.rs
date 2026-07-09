@@ -22,6 +22,11 @@ impl WindowManager {
     }
 
     pub fn handle_help_event(&mut self, event: &Event) -> bool {
+        // Record hover position on every mouse event so the cursor overlay
+        // stays current even while overlays are active (they bypass dispatch_mouse).
+        if let Event::Mouse(mouse) = event {
+            self.hover = Some((mouse.column, mouse.row));
+        }
         let ctx = self
             .component_context(true)
             .with_overlay(true)
@@ -60,6 +65,11 @@ impl WindowManager {
     }
 
     pub fn handle_exit_confirm_event(&mut self, event: &Event) -> Option<ConfirmAction> {
+        // Record hover position on every mouse event so the cursor overlay
+        // stays current even while overlays are active (they bypass dispatch_mouse).
+        if let Event::Mouse(mouse) = event {
+            self.hover = Some((mouse.column, mouse.row));
+        }
         let comp = self.overlays.get_mut(&super::OverlayId::ExitConfirm)?;
         let overlay: &mut dyn Overlay<TermWmAction> = &mut **comp;
         overlay.handle_confirm_event(event)
