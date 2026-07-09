@@ -532,6 +532,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
     /// 4. Splits where ALL children are Void → replace with Void
     ///
     /// Call this after every `remove_leaf` to keep the layout clean.
+    #[allow(clippy::single_match)]
     pub fn cleanup_after_removal(&mut self) {
         match self {
             LayoutNode::Split {
@@ -583,6 +584,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
 
     /// Reset all split weights to 1.0 so every leaf gets equal space.
     /// Call after any snap insertion to rebalance the layout.
+    #[allow(clippy::single_match)]
     pub fn normalize_weights(&mut self) {
         match self {
             LayoutNode::Split {

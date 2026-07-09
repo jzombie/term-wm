@@ -36,11 +36,11 @@ use term_wm_layout_engine::{LayoutRect, apply_resize_drag_signed};
 
 /// State machine for in-progress mouse operations (drag, resize).
 ///
-/// Locked on `Press` via registry hit-test; all subsequent `Drag`/`Release`
-/// events route through this state, bypassing the registry entirely.
-/// Cleared on `Release`, lost focus, or timeout.
-#[derive(Debug, Clone)]
-pub(crate) enum MouseCaptureState {
+    /// Locked on `Press` via registry hit-test; all subsequent `Drag`/`Release`
+    /// events route through this state, bypassing the registry entirely.
+    /// Cleared on `Release`, lost focus, or timeout.
+    #[derive(Debug, Clone)]
+    pub(crate) enum MouseCaptureState {
     DraggingWindow {
         key: WindowKey,
         /// Persistent edge-resistance state, stored here so that temporal
@@ -63,10 +63,15 @@ pub(crate) enum MouseCaptureState {
         /// Cursor position at the moment the drag decoupled from tiling,
         /// used to suppress snap previews for a short distance after decouple.
         detach_coordinate: Option<(u16, u16)>,
+        /// Whether `apply_snap` has already committed the window to the
+        /// tiling tree.  Guards against double-detach when `Release`
+        /// fires after a `Moved`-triggered snap.
+        snap_applied: bool,
     },
     ResizingWindow {
         key: WindowKey,
         edge: ResizeEdge,
+        #[allow(dead_code)]
         start_rect: Rect,
         start_col: u16,
         start_row: u16,
@@ -94,8 +99,10 @@ pub(crate) enum SnapPreviewState {
     /// Edge snap to left/right/bottom half-screen.
     Edge(InsertPosition),
     /// Tiled insert next to an existing window (quadrant-based).
+    #[allow(dead_code)]
     TiledInsert(WindowKey, InsertPosition),
     /// Drop into an empty void placeholder (stores void ID).
+    #[allow(dead_code)]
     VoidInsert(usize),
 }
 
@@ -922,6 +929,7 @@ impl WindowManager {
     ///   Phase 3 — Unhandled events fall through to false.
     ///
     /// Returns `true` if the event was consumed.
+    #[allow(clippy::collapsible_if)]
     pub fn dispatch_mouse(&mut self, event: &crate::events::WmEvent) -> bool {
         use crate::events::WmEvent;
         use crate::window::decorator::HeaderAction;
@@ -953,6 +961,7 @@ impl WindowManager {
                         prev_row,
                         prev_time_ns,
                         detach_coordinate,
+                        snap_applied,
                     } => match kind {
                         MouseEventKind::Drag(_) => {
                             let dx = col.abs_diff(*anchor_x);
@@ -1042,11 +1051,15 @@ impl WindowManager {
                                 // Snap target found — apply snap (removes from
                                 // tiling tree and inserts at snap position)
                                 self.apply_snap(*key);
-                            } else {
-                                // No snap target — finalize as floating.
-                                // Remove from tiling tree now, keep floating rect.
+                            } else if !*snap_applied {
+                                // No snap target and snap was not already applied
+                                // by a Moved event — finalize as floating.  Remove
+                                // from tiling tree now, keep floating rect.
                                 self.detach_from_tiling_layout(*key);
                             }
+                            // else: snap was already applied by Moved handler — the
+                            // window is correctly positioned in the tiling tree; do
+                            // NOT detach it again.
                             self.snap_preview = None;
                             self.snap_projection_cache = None;
                             (true, false)
@@ -1055,7 +1068,10 @@ impl WindowManager {
                             self.cancel_drag_snap_timer();
                             self.drag_last_event = None;
                             self.apply_snap(*key);
-                            (true, false)
+                            *snap_applied = true;
+                            self.snap_preview = None;
+                            self.snap_projection_cache = None;
+                            (true, true)
                         }
                         _ => (false, true),
                     },
@@ -1345,6 +1361,7 @@ impl WindowManager {
                                 .map(|d| d.as_nanos() as u64)
                                 .unwrap_or(0),
                             detach_coordinate: None,
+                            snap_applied: false,
                         });
                         self.drag_last_event = Some(Instant::now());
                         self.arm_drag_snap_timer();
@@ -1465,7 +1482,7 @@ impl WindowManager {
     fn arm_temporal_dwell_timer(&mut self) {
         if let Some(handle) = &self.system_task_handle {
             if let Some(old) = self.temporal_timer_id.take() {
-                let _ = handle.cancel(old);
+                handle.cancel(old);
             }
             self.temporal_timer_id = Some(handle.schedule_once(
                 std::time::Duration::from_millis(50),
@@ -2994,6 +3011,7 @@ mod tests {
             prev_row: 10,
             prev_time_ns: 0,
             detach_coordinate: None,
+            snap_applied: false,
         });
         wm.drag_snap = Some((
             None,
@@ -3014,11 +3032,206 @@ mod tests {
         });
         let wm_moved = crate::events::core_event_to_wm(&moved).unwrap();
         assert!(wm.dispatch_mouse(&wm_moved));
-        assert!(wm.mouse_capture.is_none(), "mouse_capture should be taken");
+        // Capture is kept alive so Release can clean up properly
+        assert!(
+            wm.mouse_capture.is_some(),
+            "mouse_capture must survive Moved snap commit"
+        );
         assert!(
             wm.drag_snap.is_none(),
             "drag_snap should be consumed by apply_snap"
         );
+    }
+
+    #[test]
+    fn moved_snap_then_release_does_not_corrupt_layout() {
+        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use crate::layout::{Direction, LayoutNode, TilingLayout};
+        use crate::window::{FloatRect, FloatRectSpec};
+
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+            None,
+        );
+        wm.set_panel_visible(false);
+        let keys = make_keys(&mut wm, 100);
+
+        // Two-window horizontal tiling layout.
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(keys[1]), LayoutNode::Leaf(keys[2])],
+            weights: vec![1.0, 1.0],
+            constraints: vec![],
+            resizable: true,
+        };
+        wm.managed_layout = Some(TilingLayout::new(split));
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        let leaves_before: Vec<_> = wm
+            .managed_layout
+            .as_ref()
+            .unwrap()
+            .root()
+            .collect_leaves();
+        assert_eq!(leaves_before.len(), 2, "must start with 2 tiled windows");
+
+        let dragged_key = keys[1];
+        wm.set_floating_rect(
+            dragged_key,
+            Some(FloatRectSpec::Absolute(FloatRect {
+                x: 5,
+                y: 5,
+                width: 30,
+                height: 12,
+            })),
+        );
+
+        wm.mouse_capture = Some(MouseCaptureState::DraggingWindow {
+            key: dragged_key,
+            resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
+            anchor_x: 10,
+            anchor_y: 10,
+            initial_x: 5,
+            initial_y: 5,
+            start_x: 10,
+            start_y: 10,
+            prev_col: 10,
+            prev_row: 10,
+            prev_time_ns: 0,
+            detach_coordinate: None,
+            snap_applied: false,
+        });
+
+        // Snap target: insert keys[1] to the RIGHT of keys[2].
+        wm.drag_snap = Some((
+            Some(keys[2]),
+            InsertPosition::Right,
+            Rect {
+                x: 40,
+                y: 0,
+                width: 40,
+                height: 24,
+            },
+        ));
+
+        // Phase 1: Moved event fires — applies snap.
+        let moved = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let wm_moved = crate::events::core_event_to_wm(&moved).unwrap();
+        assert!(wm.dispatch_mouse(&wm_moved));
+
+        // Capture must still be alive.
+        assert!(
+            wm.mouse_capture.is_some(),
+            "capture must survive Moved snap commit"
+        );
+
+        // Verify snap was applied.
+        assert!(
+            wm.layout_contains(dragged_key),
+            "dragged window must be in tiling tree after Moved snap"
+        );
+        assert!(
+            wm.drag_snap.is_none(),
+            "drag_snap must be consumed by apply_snap"
+        );
+        assert!(
+            wm.snap_preview.is_none(),
+            "snap_preview must be cleared after Moved snap commit"
+        );
+
+        // Verify snap_applied flag was set.
+        match wm.mouse_capture.as_ref() {
+            Some(MouseCaptureState::DraggingWindow {
+                snap_applied, ..
+            }) => {
+                assert!(
+                    *snap_applied,
+                    "snap_applied must be true after Moved commits snap"
+                );
+            }
+            _ => panic!("expected DraggingWindow capture"),
+        }
+
+        // Phase 2: Release event fires — should NOT double-detach.
+        let release = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Release(MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let wm_release = crate::events::core_event_to_wm(&release).unwrap();
+        assert!(wm.dispatch_mouse(&wm_release));
+
+        assert!(
+            wm.mouse_capture.is_none(),
+            "capture must be cleared after Release"
+        );
+
+        // Verify layout is not corrupted: both windows present.
+        let leaves_after: Vec<_> = wm
+            .managed_layout
+            .as_ref()
+            .unwrap()
+            .root()
+            .collect_leaves();
+        assert_eq!(
+            leaves_after.len(),
+            2,
+            "layout must still have exactly 2 windows after Moved+Release"
+        );
+        assert!(
+            leaves_after.contains(&keys[1]),
+            "keys[1] must remain in layout"
+        );
+        assert!(
+            leaves_after.contains(&keys[2]),
+            "keys[2] must remain in layout"
+        );
+
+        // Verify regions can be computed without panic.
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let regions = wm
+            .managed_layout
+            .as_ref()
+            .unwrap()
+            .root()
+            .layout(area);
+        assert_eq!(regions.len(), 2, "layout must produce 2 regions");
+
+        // Verify no overlapping regions.
+        for (i, (_, r1)) in regions.iter().enumerate() {
+            for (j, (_, r2)) in regions.iter().enumerate() {
+                if i != j {
+                    assert!(
+                        !rects_intersect(*r1, *r2),
+                        "regions must not overlap: region {} = {:?}, region {} = {:?}",
+                        i,
+                        r1,
+                        j,
+                        r2,
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -3476,6 +3689,7 @@ mod tests {
             prev_row: 0,
             prev_time_ns: 0,
             detach_coordinate: None,
+            snap_applied: false,
         });
         wm.drag_last_event = Some(Instant::now());
         let remaining = wm.drag_snap_remaining();
@@ -3507,6 +3721,7 @@ mod tests {
             prev_row: 0,
             prev_time_ns: 0,
             detach_coordinate: None,
+            snap_applied: false,
         });
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
@@ -3530,6 +3745,7 @@ mod tests {
             prev_row: 0,
             prev_time_ns: 0,
             detach_coordinate: None,
+            snap_applied: false,
         });
         wm.drag_last_event = Some(Instant::now() - STALE_EVENT_OFFSET);
         assert_eq!(wm.drag_snap_remaining(), Some(Duration::ZERO));
@@ -3611,6 +3827,7 @@ mod tests {
             prev_row: 10,
             prev_time_ns: 0,
             detach_coordinate: None,
+            snap_applied: false,
         });
         wm.drag_snap = Some((
             Some(window_key),
@@ -4706,9 +4923,8 @@ mod tests {
         }))
         .unwrap();
         wm.dispatch_mouse(&down);
-        assert_eq!(
-            wm.mouse_capture,
-            Some(MouseCaptureState::LayoutHandle),
+        assert!(
+            matches!(wm.mouse_capture, Some(MouseCaptureState::LayoutHandle)),
             "Down on split handle must set LayoutHandle capture"
         );
     }
@@ -4788,7 +5004,7 @@ mod tests {
         }))
         .unwrap();
         wm.dispatch_mouse(&down);
-        assert_eq!(wm.mouse_capture, Some(MouseCaptureState::LayoutHandle));
+        assert!(matches!(wm.mouse_capture, Some(MouseCaptureState::LayoutHandle)));
 
         // Up
         let up = crate::events::core_event_to_wm(&Event::Mouse(MouseEvent {

@@ -26,6 +26,7 @@ impl WindowManager {
         true
     }
 
+    #[allow(dead_code)]
     pub(super) fn detach_to_floating(&mut self, key: WindowKey, rect: Rect) -> bool {
         if self.is_window_floating(key) {
             return true;
@@ -291,6 +292,7 @@ impl WindowManager {
                 }
                 self.z_order.push(key);
                 self.managed_draw_order = self.z_order.clone();
+                self.snap_projection_cache = None;
                 return;
             }
 
@@ -370,6 +372,7 @@ impl WindowManager {
             } else {
                 self.managed_layout = Some(crate::layout::TilingLayout::new(LayoutNode::leaf(key)));
             }
+            self.snap_projection_cache = None;
 
             let mut pending_snap = Vec::new();
             for r_key in self.regions.ids() {
