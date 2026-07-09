@@ -544,7 +544,7 @@ impl WindowManager {
         }
     }
 
-    pub(crate) fn with_config(
+    pub fn with_config(
         config: WmConfig,
         app_ctx: Arc<AppContext>,
         top_component: Option<Box<dyn WmComponent>>,
@@ -962,7 +962,7 @@ impl WindowManager {
                         prev_time_ns,
                         detach_coordinate,
                         snap_applied,
-                    } => match kind {
+                                 } => match kind {
                         MouseEventKind::Drag(_) => {
                             let dx = col.abs_diff(*anchor_x);
                             let dy = row.abs_diff(*anchor_y);
@@ -992,11 +992,37 @@ impl WindowManager {
                                 }
 
                                 if detach_coordinate.is_none() {
-                                    *detach_coordinate = Some((col, row));
+                                    // Defer setting detach_coordinate until after
+                                    // update_snap_preview runs, so the first Drag
+                                    // event is not suppressed.
                                 }
 
                                 self.drag_last_event = Some(Instant::now());
                                 self.reset_drag_snap_timer();
+
+                                // If the window is not yet floating, this is the
+                                // first Drag event that breached the kinetic
+                                // deadzone — install the floating rect now.
+                                // start_x/start_y/initial_x/initial_y were
+                                // already set at Press time and must NOT be
+                                // touched here — they anchor the cursor-to-
+                                // window offset for move_floating.
+                                if !self.is_window_floating(*key) {
+                                    let rect = self.visible_region_for_key(*key);
+                                    self.set_floating_rect(
+                                        *key,
+                                        Some(crate::window::FloatRectSpec::Absolute(
+                                            crate::window::FloatRect {
+                                                x: rect.x,
+                                                y: rect.y,
+                                                width: rect.width.max(1),
+                                                height: rect.height.max(1),
+                                            },
+                                        )),
+                                    );
+                                    self.bring_to_front_key(*key);
+                                }
+
                                 if self.is_window_floating(*key) {
                                     let dx = col.abs_diff(*prev_col);
                                     let dy = row.abs_diff(*prev_row);
@@ -1034,6 +1060,10 @@ impl WindowManager {
                                     } else {
                                         self.drag_snap = None;
                                     }
+                                    // Set detach_coordinate AFTER snap preview runs
+                                    if detach_coordinate.is_none() {
+                                        *detach_coordinate = Some((col, row));
+                                    }
                                     *prev_col = col;
                                     *prev_row = row;
                                     *prev_time_ns = now_ns;
@@ -1052,16 +1082,19 @@ impl WindowManager {
                                 // tiling tree and inserts at snap position)
                                 self.apply_snap(*key);
                             } else if !*snap_applied {
-                                // No snap target and snap was not already applied
-                                // by a Moved event — finalize as floating.  Remove
-                                // from tiling tree now, keep floating rect.
-                                self.detach_from_tiling_layout(*key);
+                                // Only detach if the user actually dragged the
+                                // window.
+                                let drag_dist = col.abs_diff(*anchor_x) + row.abs_diff(*anchor_y);
+                                if drag_dist > 0 {
+                                    self.detach_from_tiling_layout(*key);
+                                }
                             }
                             // else: snap was already applied by Moved handler — the
                             // window is correctly positioned in the tiling tree; do
                             // NOT detach it again.
                             self.snap_preview = None;
                             self.snap_projection_cache = None;
+                            self.last_header_click = None;
                             (true, false)
                         }
                         MouseEventKind::Moved if self.drag_snap.is_some() => {
@@ -1318,22 +1351,10 @@ impl WindowManager {
                         if self.is_window_floating(key) {
                             self.bring_floating_to_front_key(key);
                         } else {
-                            // Make window visually floating WITHOUT removing
-                            // from tiling tree.  The tiling layout stays intact
-                            // until release.
-                            let width = rect.width.max(1);
-                            let height = rect.height.max(1);
-                            self.set_floating_rect(
-                                key,
-                                Some(crate::window::FloatRectSpec::Absolute(
-                                    crate::window::FloatRect {
-                                        x: rect.x,
-                                        y: rect.y,
-                                        width,
-                                        height,
-                                    },
-                                )),
-                            );
+                            // Defer floating decoupling until the drag deadzone
+                            // is breached.  Capture the pointer now; the floating
+                            // rect will be installed on the first Drag event that
+                            // exceeds the kinetic threshold (dx + dy > 2).
                             self.bring_to_front_key(key);
                         }
 

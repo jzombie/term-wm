@@ -239,10 +239,7 @@ impl WindowManager {
             return;
         }
 
-        // Priority 3: Edge snap — checked BEFORE tiled insert when cursor
-        // is near a screen edge.  This ensures that dragging to the right
-        // edge always shows a right-half preview, even if the cursor is
-        // inside a tiled window near that edge.
+        // Priority 3: Edge snap
         if let Some(pos) =
             detect_edge_snap(mouse_x, mouse_y, managed_layout_rect, EDGE_SNAP_THRESHOLD)
         {
@@ -360,9 +357,6 @@ impl WindowManager {
                 if !success {
                     layout.split_root(key, position);
                 }
-
-                // Rebalance: all windows get equal space after snap
-                layout.root_mut().normalize_weights();
 
                 if let Some(pos) = self.z_order.iter().position(|&z_key| z_key == key) {
                     self.z_order.remove(pos);

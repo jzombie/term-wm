@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 45e5a967319fe2ce82ae481889ca9f27c47a47f031a4f2364936e32c548baaaf # shrinks to tree = Split { direction: Horizontal, children: [Leaf(1), Leaf(1)], weights: [1.0, 1.0], constraints: [], resizable: true }, area = LayoutRect { x: 0, y: 0, width: 100, height: 40 }

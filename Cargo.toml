@@ -110,4 +110,5 @@ webbrowser = { workspace = true }
 indoc = { workspace = true }
 
 [dev-dependencies]
+proptest = { workspace = true }
 term-wm-render = { workspace = true }
