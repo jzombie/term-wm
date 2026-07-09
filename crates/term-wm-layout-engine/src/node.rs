@@ -117,6 +117,17 @@ impl<Id: Copy + Eq + Ord> BspNode<Id> {
                         Self::leaf(*current),
                         Self::leaf(insert),
                     ),
+                    // Corners: use vertical split (top portion for new window)
+                    InsertPosition::TopLeft | InsertPosition::TopRight => (
+                        Orientation::Vertical,
+                        Self::leaf(insert),
+                        Self::leaf(*current),
+                    ),
+                    InsertPosition::BottomLeft | InsertPosition::BottomRight => (
+                        Orientation::Vertical,
+                        Self::leaf(*current),
+                        Self::leaf(insert),
+                    ),
                 };
                 let half_dim = match orientation {
                     Orientation::Horizontal => area.width / 2,
@@ -484,6 +495,17 @@ impl<Id: Copy + Eq + Ord> NaryNode<Id> {
                         Self::leaf(*current),
                     ),
                     InsertPosition::Bottom => (
+                        Orientation::Vertical,
+                        Self::leaf(*current),
+                        Self::leaf(insert),
+                    ),
+                    // Corners: use vertical split (top portion for new window)
+                    InsertPosition::TopLeft | InsertPosition::TopRight => (
+                        Orientation::Vertical,
+                        Self::leaf(insert),
+                        Self::leaf(*current),
+                    ),
+                    InsertPosition::BottomLeft | InsertPosition::BottomRight => (
                         Orientation::Vertical,
                         Self::leaf(*current),
                         Self::leaf(insert),

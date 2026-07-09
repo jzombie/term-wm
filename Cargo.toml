@@ -23,7 +23,7 @@ resolver = "2"
 
 [workspace.package]
 authors = ["Jeremy Harris <jeremy.harris@zenosmosis.com>"]
-version = "0.8.10-alpha"
+version = "0.8.11-alpha"
 edition = "2024"
 repository = "https://github.com/jzombie/term-wm"
 license = "MIT OR Apache-2.0"
@@ -52,14 +52,14 @@ resvg = "0.47.0"
 shell-words = "1.1.1"
 strum = { version = "0.28", features = ["derive"] }
 tempfile = "3.24.0"
-term-wm = { path = ".", version = "0.8.10-alpha" }
-term-wm-console = { path = "crates/term-wm-console", version = "0.8.10-alpha" }
-term-wm-core = { path = "crates/term-wm-core", version = "0.8.10-alpha" }
-term-wm-layout-engine = { path = "crates/term-wm-layout-engine", version = "0.8.10-alpha" }
-term-wm-pty-engine = { path = "crates/term-wm-pty-engine", version = "0.8.10-alpha" }
-term-wm-render = { path = "crates/term-wm-render", version = "0.8.10-alpha" }
-term-wm-sys-ui-components = { path = "crates/term-wm-sys-ui-components", version = "0.8.10-alpha" }
-term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.8.10-alpha" }
+term-wm = { path = ".", version = "0.8.11-alpha" }
+term-wm-console = { path = "crates/term-wm-console", version = "0.8.11-alpha" }
+term-wm-core = { path = "crates/term-wm-core", version = "0.8.11-alpha" }
+term-wm-layout-engine = { path = "crates/term-wm-layout-engine", version = "0.8.11-alpha" }
+term-wm-pty-engine = { path = "crates/term-wm-pty-engine", version = "0.8.11-alpha" }
+term-wm-render = { path = "crates/term-wm-render", version = "0.8.11-alpha" }
+term-wm-sys-ui-components = { path = "crates/term-wm-sys-ui-components", version = "0.8.11-alpha" }
+term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.8.11-alpha" }
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["full"] }
 tracing = "0.1.44"
@@ -97,4 +97,5 @@ webbrowser = { workspace = true }
 indoc = { workspace = true }
 
 [dev-dependencies]
+proptest = { workspace = true }
 term-wm-render = { workspace = true }

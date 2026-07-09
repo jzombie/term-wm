@@ -684,6 +684,11 @@ impl WindowManager {
     pub(super) fn detach_from_tiling_layout(&mut self, key: WindowKey) {
         if let Some(ref mut layout) = self.managed_layout {
             let _ = layout.root_mut().remove_leaf(key);
+            layout.root_mut().cleanup_after_removal();
+            // If the tree was a single leaf matching key, remove_leaf
+            // cannot remove it.  Clear it explicitly to prevent stale
+            // leaves from persisting in the tree.
+            layout.root_mut().clear_leaf(key);
         }
     }
 

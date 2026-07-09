@@ -12,7 +12,8 @@ use std::sync::Arc;
 use term_wm_console::RatatuiBackend;
 use term_wm_console::draw_plan_renderer::{
     ColorConvert, DrawPlanRenderer, composite_window, overlay_shadow_data, render_drop_shadow,
-    render_handles_masked, render_overlays, render_panels, render_resize_outline,
+    render_ghost_preview, render_handles_masked, render_overlays, render_panels,
+    render_resize_outline,
 };
 use term_wm_core::hitbox_registry::{HitTarget, HitboxRegistry};
 use term_wm_core::window::decorator::HeaderAction;
@@ -29,6 +30,11 @@ pub fn render_app(
     let Some(ratatui_backend) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() else {
         return;
     };
+
+    // Clear per-frame draw state (regions, floating headers, hitbox registry)
+    // that was populated during the previous frame's render pass.
+    wm.prepare_draw();
+
     let area = term_wm_layout_engine::LayoutRect {
         x: 0,
         y: 0,
@@ -147,6 +153,8 @@ pub fn render_app(
 
     // Register chrome hitboxes (resize handles + header drag zones)
     // Collect data first to avoid simultaneous mutable + immutable borrows on wm.
+    // Order: tiling handles (lowest z), window content (middle), chrome (highest z).
+    // This ensures floating windows block clicks to tiling handles beneath them.
     let chrome_entries: Vec<(HitTarget, term_wm_layout_engine::LayoutRect)> = {
         let mut entries = Vec::new();
         for region in draw_plan.regions() {
@@ -158,6 +166,8 @@ pub fn render_app(
                 entries.push((HitTarget::ChromeHeader(h.key, HeaderAction::Drag), h.rect));
             }
         }
+        // Tiling split handles last — highest priority at split boundaries,
+        // so they intercept clicks that would otherwise hit a Window region.
         for handle in wm.tiling_handles() {
             entries.push((HitTarget::LayoutHandle, handle.rect));
         }
@@ -243,38 +253,27 @@ pub fn render_app(
                 &wm.config().theme,
             );
 
-            // Snap preview (colored background + countdown text)
+            // Snap preview (dashed border + shade fill + countdown text)
             if let Some((_, _, snap_rect)) = wm.drag_snap_rect_data() {
                 use ratatui::layout::Alignment;
                 use ratatui::style::{Color, Style};
                 use ratatui::widgets::Paragraph;
-                let accent_color = wm.config().theme.accent.to_ratatui();
                 let rat_snap = ratatui::prelude::Rect {
                     x: snap_rect.x.max(0) as u16,
                     y: snap_rect.y.max(0) as u16,
                     width: snap_rect.width,
                     height: snap_rect.height,
                 };
-                let clip = rat_snap.intersection(buf.area);
-                if clip.width > 0 && clip.height > 0 {
-                    for y in clip.y..clip.y.saturating_add(clip.height) {
-                        for x in clip.x..clip.x.saturating_add(clip.width) {
-                            if let Some(cell) = buf.cell_mut((x, y)) {
-                                let mut style = cell.style();
-                                style.bg = Some(accent_color);
-                                cell.set_style(style);
-                            }
-                        }
-                    }
-                }
+                render_ghost_preview(buf, *snap_rect, &wm.config().theme);
                 if let Some(remaining) = wm.drag_snap_remaining() {
                     const GRACE: std::time::Duration = std::time::Duration::from_millis(500);
                     let timeout = wm.config().drag_snap_timeout.unwrap();
                     if timeout.saturating_sub(remaining) >= GRACE {
+                        let action = wm.snap_preview_action_label().unwrap_or("snap");
                         let text = if remaining == std::time::Duration::ZERO {
-                            "Mouse left — snapping...".to_string()
+                            format!("Mouse left — {}...", action)
                         } else {
-                            format!("Mouse left — snapping in {}s", remaining.as_secs().max(1))
+                            format!("Mouse left — {} in {}s", action, remaining.as_secs().max(1))
                         };
                         let text_len = text.len() as u16;
                         let text_x = rat_snap.x + (rat_snap.width.saturating_sub(text_len)) / 2;
@@ -295,6 +294,37 @@ pub fn render_app(
                                 .alignment(Alignment::Center);
                             ratatui::widgets::Widget::render(paragraph, text_area, buf);
                         }
+                    }
+                }
+            }
+
+            // Dim target tile border during tiled-insert snap preview
+            if let Some(target_key) = wm.snap_preview_target_key()
+                && let Some(target_rect) = wm.regions().get(target_key)
+            {
+                let dim = ratatui::style::Modifier::DIM;
+                let rx = target_rect.x.max(0) as u16;
+                let ry = target_rect.y.max(0) as u16;
+                let right = rx.saturating_add(target_rect.width).saturating_sub(1);
+                let bottom = ry.saturating_add(target_rect.height).saturating_sub(1);
+                for x in rx..=right {
+                    if let Some(cell) = buf.cell_mut((x, ry)) {
+                        cell.set_style(cell.style().add_modifier(dim));
+                    }
+                    if bottom != ry
+                        && let Some(cell) = buf.cell_mut((x, bottom))
+                    {
+                        cell.set_style(cell.style().add_modifier(dim));
+                    }
+                }
+                for y in (ry + 1)..bottom {
+                    if let Some(cell) = buf.cell_mut((rx, y)) {
+                        cell.set_style(cell.style().add_modifier(dim));
+                    }
+                    if right != rx
+                        && let Some(cell) = buf.cell_mut((right, y))
+                    {
+                        cell.set_style(cell.style().add_modifier(dim));
                     }
                 }
             }
