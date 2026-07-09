@@ -361,9 +361,6 @@ impl WindowManager {
                     layout.split_root(key, position);
                 }
 
-                // Rebalance: all windows get equal space after snap
-                layout.root_mut().normalize_weights();
-
                 if let Some(pos) = self.z_order.iter().position(|&z_key| z_key == key) {
                     self.z_order.remove(pos);
                 }
