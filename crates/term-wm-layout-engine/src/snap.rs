@@ -6,6 +6,10 @@ pub enum InsertPosition {
     Right,
     Top,
     Bottom,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
 }
 
 impl InsertPosition {
@@ -13,13 +17,24 @@ impl InsertPosition {
         match self {
             InsertPosition::Left | InsertPosition::Right => Orientation::Horizontal,
             InsertPosition::Top | InsertPosition::Bottom => Orientation::Vertical,
+            // Corners use horizontal orientation for BSP split (vertical divider)
+            InsertPosition::TopLeft
+            | InsertPosition::TopRight
+            | InsertPosition::BottomLeft
+            | InsertPosition::BottomRight => Orientation::Horizontal,
         }
     }
 
     pub fn ratio(&self) -> Ratio {
         match self {
-            InsertPosition::Left | InsertPosition::Top => Ratio(1, 1),
-            InsertPosition::Right | InsertPosition::Bottom => Ratio(1, 1),
+            InsertPosition::Left
+            | InsertPosition::Top
+            | InsertPosition::Right
+            | InsertPosition::Bottom
+            | InsertPosition::TopLeft
+            | InsertPosition::TopRight
+            | InsertPosition::BottomLeft
+            | InsertPosition::BottomRight => Ratio(1, 1),
         }
     }
 }
@@ -43,9 +58,9 @@ pub struct SnapPreview<Id: Copy + Eq + Ord> {
 pub struct EdgeResistanceConfig {
     pub magnetic_zone: u16,
     pub spatial_threshold: u16,
-    // temporal_threshold and velocity tracking planned but not yet wired;
-    // requires frame timestamp plumbing from the runtime.
-    pub _temporal_threshold_ns: Option<u64>,
+    /// Time in nanoseconds the cursor must stay within the magnetic zone
+    /// before the resistance is broken.  None disables temporal resistance.
+    pub temporal_threshold_ns: Option<u64>,
 }
 
 impl EdgeResistanceConfig {
@@ -53,7 +68,7 @@ impl EdgeResistanceConfig {
         Self {
             magnetic_zone: 3,
             spatial_threshold: 8,
-            _temporal_threshold_ns: None,
+            temporal_threshold_ns: Some(500_000_000), // 500ms
         }
     }
 }
@@ -63,6 +78,10 @@ pub struct EdgeResistance {
     pub config: EdgeResistanceConfig,
     pub prev_x: Option<i32>,
     pub prev_y: Option<i32>,
+    /// Wall-clock nanosecond timestamp when the cursor first entered the
+    /// magnetic zone on the current axis.  Pure integer; no `std::time` types.
+    pub entered_magnetic_x_at: Option<u64>,
+    pub entered_magnetic_y_at: Option<u64>,
 }
 
 impl EdgeResistance {
@@ -71,6 +90,8 @@ impl EdgeResistance {
             config,
             prev_x: None,
             prev_y: None,
+            entered_magnetic_x_at: None,
+            entered_magnetic_y_at: None,
         }
     }
 
@@ -78,64 +99,102 @@ impl EdgeResistance {
         Self::new(EdgeResistanceConfig::default_tui())
     }
 
-    pub fn apply_x(&mut self, new_x: i32, bounds: LayoutRect) -> i32 {
+    /// Apply X-axis magnetic resistance.
+    ///
+    /// `now_ns` is a raw nanosecond timestamp (from `Instant::now()`
+    /// converted to nanos-since-epoch in the caller).  The layout engine
+    /// treats it as an opaque integer — no `std::time` types are used.
+    pub fn apply_x(&mut self, new_x: i32, bounds: LayoutRect, now_ns: u64) -> i32 {
         let low = bounds.x;
         let high = bounds
             .x
             .saturating_add(i32::from(bounds.width.saturating_sub(1)));
-        let result = snap_axis(
-            new_x,
+        let result = snap_axis(&SnapAxisParams {
+            new_val: new_x,
             low,
             high,
-            self.config.magnetic_zone,
-            self.config.spatial_threshold,
-            &self.prev_x,
-        );
+            magnetic_zone: self.config.magnetic_zone,
+            spatial_threshold: self.config.spatial_threshold,
+            temporal_threshold_ns: self.config.temporal_threshold_ns,
+            prev: self.prev_x,
+            entered_at: self.entered_magnetic_x_at,
+            now_ns,
+            enable_low_snap: true,
+            enable_high_snap: true,
+        });
+        // Track entry into magnetic zone for temporal threshold
+        let is_snapped = result == low || result == high;
+        if is_snapped && self.entered_magnetic_x_at.is_none() {
+            self.entered_magnetic_x_at = Some(now_ns);
+        } else if !is_snapped {
+            self.entered_magnetic_x_at = None;
+        }
         self.prev_x = Some(new_x);
         result
     }
 
-    pub fn apply_y(&mut self, new_y: i32, bounds: LayoutRect) -> i32 {
+    /// Apply Y-axis magnetic resistance.
+    pub fn apply_y(&mut self, new_y: i32, bounds: LayoutRect, now_ns: u64) -> i32 {
         let low = bounds.y;
         let high = bounds
             .y
             .saturating_add(i32::from(bounds.height.saturating_sub(1)));
-        let result = snap_axis(
-            new_y,
+        let result = snap_axis(&SnapAxisParams {
+            new_val: new_y,
             low,
             high,
-            self.config.magnetic_zone,
-            self.config.spatial_threshold,
-            &self.prev_y,
-        );
+            magnetic_zone: self.config.magnetic_zone,
+            spatial_threshold: self.config.spatial_threshold,
+            temporal_threshold_ns: self.config.temporal_threshold_ns,
+            prev: self.prev_y,
+            entered_at: self.entered_magnetic_y_at,
+            now_ns,
+            enable_low_snap: false,
+            enable_high_snap: true,
+        });
+        let is_snapped = result == low || result == high;
+        if is_snapped && self.entered_magnetic_y_at.is_none() {
+            self.entered_magnetic_y_at = Some(now_ns);
+        } else if !is_snapped {
+            self.entered_magnetic_y_at = None;
+        }
         self.prev_y = Some(new_y);
         result
     }
 
-    pub fn apply(&mut self, new_x: i32, bounds: LayoutRect) -> i32 {
-        self.apply_x(new_x, bounds)
+    pub fn apply(&mut self, new_x: i32, bounds: LayoutRect, now_ns: u64) -> i32 {
+        self.apply_x(new_x, bounds, now_ns)
     }
 }
 
-fn snap_axis(
+struct SnapAxisParams {
     new_val: i32,
     low: i32,
     high: i32,
     magnetic_zone: u16,
     spatial_threshold: u16,
-    prev: &Option<i32>,
-) -> i32 {
-    let zone = i32::from(magnetic_zone);
-    let hysteresis = i32::from(spatial_threshold);
+    temporal_threshold_ns: Option<u64>,
+    prev: Option<i32>,
+    entered_at: Option<u64>,
+    now_ns: u64,
+    enable_low_snap: bool,
+    enable_high_snap: bool,
+}
 
-    let d_low = new_val.saturating_sub(low).unsigned_abs();
-    let d_high = high.saturating_sub(new_val).unsigned_abs();
+fn snap_axis(params: &SnapAxisParams) -> i32 {
+    let zone = i32::from(params.magnetic_zone);
+    let hysteresis = i32::from(params.spatial_threshold);
 
-    let already_snapped = prev
+    let d_low = params.new_val.saturating_sub(params.low).unsigned_abs();
+    let d_high = params.high.saturating_sub(params.new_val).unsigned_abs();
+
+    let already_snapped = params
+        .prev
         .map(|p| {
-            let pd_low = p.saturating_sub(low).unsigned_abs();
-            let pd_high = high.saturating_sub(p).unsigned_abs();
-            pd_low <= zone as u32 || pd_high <= zone as u32
+            let pd_low = p.saturating_sub(params.low).unsigned_abs();
+            let pd_high = params.high.saturating_sub(p).unsigned_abs();
+            (params.enable_low_snap && pd_low <= zone as u32)
+                || (params.enable_high_snap && pd_high <= zone as u32)
         })
         .unwrap_or(false);
 
@@ -144,12 +203,21 @@ fn snap_axis(
     let snap_low = d_low <= threshold as u32;
     let snap_high = d_high <= threshold as u32;
 
-    if snap_low && d_low <= d_high {
-        low
-    } else if snap_high {
-        high
+    // If already snapped and temporal threshold has elapsed, break the lock
+    if already_snapped
+        && let (Some(threshold_ns), Some(entry_ns)) =
+            (params.temporal_threshold_ns, params.entered_at)
+        && params.now_ns.saturating_sub(entry_ns) >= threshold_ns
+    {
+        return params.new_val;
+    }
+
+    if params.enable_low_snap && snap_low && d_low <= d_high {
+        params.low
+    } else if params.enable_high_snap && snap_high {
+        params.high
     } else {
-        new_val
+        params.new_val
     }
 }
 
@@ -213,6 +281,38 @@ pub fn edge_preview_rect(managed_area: LayoutRect, pos: InsertPosition) -> Layou
             height: managed_area.height / 2,
             ..managed_area
         },
+        // Corner previews: quarter-screen (50% × 50%)
+        InsertPosition::TopLeft => LayoutRect {
+            width: managed_area.width / 2,
+            height: managed_area.height / 2,
+            ..managed_area
+        },
+        InsertPosition::TopRight => LayoutRect {
+            x: managed_area
+                .x
+                .saturating_add(i32::from(managed_area.width / 2)),
+            width: managed_area.width / 2,
+            height: managed_area.height / 2,
+            ..managed_area
+        },
+        InsertPosition::BottomLeft => LayoutRect {
+            y: managed_area
+                .y
+                .saturating_add(i32::from(managed_area.height / 2)),
+            width: managed_area.width / 2,
+            height: managed_area.height / 2,
+            ..managed_area
+        },
+        InsertPosition::BottomRight => LayoutRect {
+            x: managed_area
+                .x
+                .saturating_add(i32::from(managed_area.width / 2)),
+            y: managed_area
+                .y
+                .saturating_add(i32::from(managed_area.height / 2)),
+            width: managed_area.width / 2,
+            height: managed_area.height / 2,
+        },
     }
 }
 
@@ -240,6 +340,112 @@ pub fn tiled_preview_rect(target_rect: LayoutRect, position: InsertPosition) -> 
             height: target_rect.height / 2,
             ..target_rect
         },
+        // Corner tiled previews: quarter of the target pane
+        InsertPosition::TopLeft => LayoutRect {
+            width: target_rect.width / 2,
+            height: target_rect.height / 2,
+            ..target_rect
+        },
+        InsertPosition::TopRight => LayoutRect {
+            x: target_rect
+                .x
+                .saturating_add(i32::from(target_rect.width / 2)),
+            width: target_rect.width / 2,
+            height: target_rect.height / 2,
+            ..target_rect
+        },
+        InsertPosition::BottomLeft => LayoutRect {
+            y: target_rect
+                .y
+                .saturating_add(i32::from(target_rect.height / 2)),
+            width: target_rect.width / 2,
+            height: target_rect.height / 2,
+            ..target_rect
+        },
+        InsertPosition::BottomRight => LayoutRect {
+            x: target_rect
+                .x
+                .saturating_add(i32::from(target_rect.width / 2)),
+            y: target_rect
+                .y
+                .saturating_add(i32::from(target_rect.height / 2)),
+            width: target_rect.width / 2,
+            height: target_rect.height / 2,
+        },
+    }
+}
+
+/// Compute a corner (quarter-screen) preview rect.
+pub fn corner_preview_rect(managed_area: LayoutRect, pos: InsertPosition) -> LayoutRect {
+    match pos {
+        InsertPosition::TopLeft => LayoutRect {
+            width: managed_area.width / 2,
+            height: managed_area.height / 2,
+            ..managed_area
+        },
+        InsertPosition::TopRight => LayoutRect {
+            x: managed_area
+                .x
+                .saturating_add(i32::from(managed_area.width / 2)),
+            width: managed_area.width / 2,
+            height: managed_area.height / 2,
+            ..managed_area
+        },
+        InsertPosition::BottomLeft => LayoutRect {
+            y: managed_area
+                .y
+                .saturating_add(i32::from(managed_area.height / 2)),
+            width: managed_area.width / 2,
+            height: managed_area.height / 2,
+            ..managed_area
+        },
+        InsertPosition::BottomRight => LayoutRect {
+            x: managed_area
+                .x
+                .saturating_add(i32::from(managed_area.width / 2)),
+            y: managed_area
+                .y
+                .saturating_add(i32::from(managed_area.height / 2)),
+            width: managed_area.width / 2,
+            height: managed_area.height / 2,
+        },
+        // Non-corner positions: delegate to edge_preview_rect
+        _ => edge_preview_rect(managed_area, pos),
+    }
+}
+
+/// Detect a corner snap when the cursor is simultaneously within `sensitivity`
+/// of both an X edge and a Y edge. Uses saturating arithmetic exclusively.
+pub fn detect_corner_snap(
+    col: u16,
+    row: u16,
+    managed_area: LayoutRect,
+    sensitivity: u16,
+) -> Option<InsertPosition> {
+    let margin_left = managed_area.x as u16;
+    let margin_right = (managed_area.x as u16)
+        .saturating_add(managed_area.width)
+        .saturating_sub(1);
+    let margin_top = managed_area.y as u16;
+    let margin_bottom = (managed_area.y as u16)
+        .saturating_add(managed_area.height)
+        .saturating_sub(1);
+
+    let near_left = col <= sensitivity.saturating_add(margin_left);
+    let near_right = col >= margin_right.saturating_sub(sensitivity);
+    let near_top = row <= sensitivity.saturating_add(margin_top);
+    let near_bottom = row >= margin_bottom.saturating_sub(sensitivity);
+
+    if near_top && near_left {
+        Some(InsertPosition::TopLeft)
+    } else if near_top && near_right {
+        Some(InsertPosition::TopRight)
+    } else if near_bottom && near_left {
+        Some(InsertPosition::BottomLeft)
+    } else if near_bottom && near_right {
+        Some(InsertPosition::BottomRight)
+    } else {
+        None
     }
 }
 
@@ -302,7 +508,7 @@ mod tests {
             width: 80,
             height: 24,
         };
-        assert_eq!(er.apply_x(2, bounds), 0);
+        assert_eq!(er.apply_x(2, bounds, 0), 0);
     }
 
     #[test]
@@ -314,7 +520,7 @@ mod tests {
             width: 80,
             height: 24,
         };
-        assert_eq!(er.apply_x(78, bounds), 79);
+        assert_eq!(er.apply_x(78, bounds, 0), 79);
     }
 
     #[test]
@@ -326,11 +532,11 @@ mod tests {
             width: 80,
             height: 24,
         };
-        assert_eq!(er.apply_x(40, bounds), 40);
+        assert_eq!(er.apply_x(40, bounds, 0), 40);
     }
 
     #[test]
-    fn edge_resistance_snaps_y_to_top() {
+    fn edge_resistance_does_not_snap_y_to_top() {
         let mut er = EdgeResistance::default_tui();
         let bounds = LayoutRect {
             x: 0,
@@ -338,7 +544,8 @@ mod tests {
             width: 80,
             height: 24,
         };
-        assert_eq!(er.apply_y(2, bounds), 0);
+        // Y-axis low snap (title-bar area) is intentionally disabled
+        assert_eq!(er.apply_y(2, bounds, 0), 2);
     }
 
     #[test]
@@ -350,7 +557,82 @@ mod tests {
             width: 80,
             height: 24,
         };
-        assert_eq!(er.apply_y(22, bounds), 23);
+        assert_eq!(er.apply_y(22, bounds, 0), 23);
+    }
+
+    #[test]
+    fn temporal_resistance_breaks_after_threshold() {
+        let mut er = EdgeResistance::default_tui();
+        let bounds = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        // First call: enters magnetic zone
+        assert_eq!(er.apply_x(2, bounds, 0), 0);
+        // Still within threshold — should stay snapped
+        assert_eq!(er.apply_x(5, bounds, 100_000_000), 0);
+        // After 500ms threshold — should break free
+        assert_eq!(er.apply_x(5, bounds, 600_000_000), 5);
+    }
+
+    #[test]
+    fn corner_snap_top_left() {
+        let a = area();
+        assert_eq!(
+            detect_corner_snap(0, 0, a, 2),
+            Some(InsertPosition::TopLeft)
+        );
+        assert_eq!(
+            detect_corner_snap(1, 0, a, 2),
+            Some(InsertPosition::TopLeft)
+        );
+        assert_eq!(
+            detect_corner_snap(0, 1, a, 2),
+            Some(InsertPosition::TopLeft)
+        );
+    }
+
+    #[test]
+    fn corner_snap_top_right() {
+        let a = area();
+        assert_eq!(
+            detect_corner_snap(79, 0, a, 2),
+            Some(InsertPosition::TopRight)
+        );
+        assert_eq!(
+            detect_corner_snap(78, 0, a, 2),
+            Some(InsertPosition::TopRight)
+        );
+    }
+
+    #[test]
+    fn corner_snap_bottom_left() {
+        let a = area();
+        assert_eq!(
+            detect_corner_snap(0, 23, a, 2),
+            Some(InsertPosition::BottomLeft)
+        );
+        assert_eq!(
+            detect_corner_snap(1, 23, a, 2),
+            Some(InsertPosition::BottomLeft)
+        );
+    }
+
+    #[test]
+    fn corner_snap_bottom_right() {
+        let a = area();
+        assert_eq!(
+            detect_corner_snap(79, 23, a, 2),
+            Some(InsertPosition::BottomRight)
+        );
+    }
+
+    #[test]
+    fn corner_snap_none_when_far() {
+        let a = area();
+        assert_eq!(detect_corner_snap(40, 12, a, 2), None);
     }
 
     #[test]

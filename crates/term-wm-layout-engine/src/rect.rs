@@ -154,6 +154,15 @@ pub fn gap_insert<T: Into<u16>>(
     }
 }
 
+/// Which diagonal quadrant of a rectangle a point falls in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Quadrant {
+    North,
+    South,
+    East,
+    West,
+}
+
 /// The direction children are stacked in a split container.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {
@@ -161,15 +170,6 @@ pub enum Orientation {
     Horizontal,
     /// Children are placed top-to-bottom, sharing the available width.
     Vertical,
-}
-
-/// One of the four cardinal directions, used for drag-and-drop insertion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Quadrant {
-    North,
-    South,
-    East,
-    West,
 }
 
 /// An integer ratio `(p, q)` meaning `p/(p+q)` of the parent's size.
