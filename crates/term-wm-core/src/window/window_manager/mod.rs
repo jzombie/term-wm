@@ -36,11 +36,11 @@ use term_wm_layout_engine::{LayoutRect, apply_resize_drag_signed};
 
 /// State machine for in-progress mouse operations (drag, resize).
 ///
-    /// Locked on `Press` via registry hit-test; all subsequent `Drag`/`Release`
-    /// events route through this state, bypassing the registry entirely.
-    /// Cleared on `Release`, lost focus, or timeout.
-    #[derive(Debug, Clone)]
-    pub(crate) enum MouseCaptureState {
+/// Locked on `Press` via registry hit-test; all subsequent `Drag`/`Release`
+/// events route through this state, bypassing the registry entirely.
+/// Cleared on `Release`, lost focus, or timeout.
+#[derive(Debug, Clone)]
+pub(crate) enum MouseCaptureState {
     DraggingWindow {
         key: WindowKey,
         /// Persistent edge-resistance state, stored here so that temporal
@@ -3076,12 +3076,7 @@ mod tests {
             height: 24,
         });
 
-        let leaves_before: Vec<_> = wm
-            .managed_layout
-            .as_ref()
-            .unwrap()
-            .root()
-            .collect_leaves();
+        let leaves_before: Vec<_> = wm.managed_layout.as_ref().unwrap().root().collect_leaves();
         assert_eq!(leaves_before.len(), 2, "must start with 2 tiled windows");
 
         let dragged_key = keys[1];
@@ -3155,9 +3150,7 @@ mod tests {
 
         // Verify snap_applied flag was set.
         match wm.mouse_capture.as_ref() {
-            Some(MouseCaptureState::DraggingWindow {
-                snap_applied, ..
-            }) => {
+            Some(MouseCaptureState::DraggingWindow { snap_applied, .. }) => {
                 assert!(
                     *snap_applied,
                     "snap_applied must be true after Moved commits snap"
@@ -3182,12 +3175,7 @@ mod tests {
         );
 
         // Verify layout is not corrupted: both windows present.
-        let leaves_after: Vec<_> = wm
-            .managed_layout
-            .as_ref()
-            .unwrap()
-            .root()
-            .collect_leaves();
+        let leaves_after: Vec<_> = wm.managed_layout.as_ref().unwrap().root().collect_leaves();
         assert_eq!(
             leaves_after.len(),
             2,
@@ -3209,12 +3197,7 @@ mod tests {
             width: 80,
             height: 24,
         };
-        let regions = wm
-            .managed_layout
-            .as_ref()
-            .unwrap()
-            .root()
-            .layout(area);
+        let regions = wm.managed_layout.as_ref().unwrap().root().layout(area);
         assert_eq!(regions.len(), 2, "layout must produce 2 regions");
 
         // Verify no overlapping regions.
@@ -5004,7 +4987,10 @@ mod tests {
         }))
         .unwrap();
         wm.dispatch_mouse(&down);
-        assert!(matches!(wm.mouse_capture, Some(MouseCaptureState::LayoutHandle)));
+        assert!(matches!(
+            wm.mouse_capture,
+            Some(MouseCaptureState::LayoutHandle)
+        ));
 
         // Up
         let up = crate::events::core_event_to_wm(&Event::Mouse(MouseEvent {
