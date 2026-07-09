@@ -704,6 +704,29 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
                     return self.root = LayoutNode::leaf(insert);
                 }
                 let first = ids.remove(0);
+                if ids.is_empty() {
+                    // Exactly 2 windows — split only the dragged window's
+                    // side.  The other window stays in its lane at full height.
+                    // The unused quadrant becomes a Void placeholder.
+                    let void_id = VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+                    self.root = LayoutNode::Split {
+                        direction: Direction::Horizontal,
+                        children: vec![
+                            LayoutNode::Split {
+                                direction: Direction::Vertical,
+                                children: vec![LayoutNode::leaf(insert), LayoutNode::Void(void_id)],
+                                weights: vec![1.0, 1.0],
+                                constraints: Vec::new(),
+                                resizable: true,
+                            },
+                            LayoutNode::leaf(first),
+                        ],
+                        weights: vec![1.0, 1.0],
+                        constraints: Vec::new(),
+                        resizable: true,
+                    };
+                    return;
+                }
                 let bottom = LayoutNode::build_flat(Direction::Horizontal, ids);
                 LayoutNode::Split {
                     direction: Direction::Vertical,
@@ -729,6 +752,26 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
                     return self.root = LayoutNode::leaf(insert);
                 }
                 let first = ids.remove(0);
+                if ids.is_empty() {
+                    let void_id = VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+                    self.root = LayoutNode::Split {
+                        direction: Direction::Horizontal,
+                        children: vec![
+                            LayoutNode::leaf(first),
+                            LayoutNode::Split {
+                                direction: Direction::Vertical,
+                                children: vec![LayoutNode::leaf(insert), LayoutNode::Void(void_id)],
+                                weights: vec![1.0, 1.0],
+                                constraints: Vec::new(),
+                                resizable: true,
+                            },
+                        ],
+                        weights: vec![1.0, 1.0],
+                        constraints: Vec::new(),
+                        resizable: true,
+                    };
+                    return;
+                }
                 let bottom = LayoutNode::build_flat(Direction::Horizontal, ids);
                 LayoutNode::Split {
                     direction: Direction::Vertical,
@@ -754,6 +797,26 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
                     return self.root = LayoutNode::leaf(insert);
                 }
                 let first = ids.remove(0);
+                if ids.is_empty() {
+                    let void_id = VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+                    self.root = LayoutNode::Split {
+                        direction: Direction::Horizontal,
+                        children: vec![
+                            LayoutNode::Split {
+                                direction: Direction::Vertical,
+                                children: vec![LayoutNode::Void(void_id), LayoutNode::leaf(insert)],
+                                weights: vec![1.0, 1.0],
+                                constraints: Vec::new(),
+                                resizable: true,
+                            },
+                            LayoutNode::leaf(first),
+                        ],
+                        weights: vec![1.0, 1.0],
+                        constraints: Vec::new(),
+                        resizable: true,
+                    };
+                    return;
+                }
                 let top = LayoutNode::build_flat(Direction::Horizontal, ids);
                 LayoutNode::Split {
                     direction: Direction::Vertical,
@@ -779,6 +842,26 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
                     return self.root = LayoutNode::leaf(insert);
                 }
                 let first = ids.remove(0);
+                if ids.is_empty() {
+                    let void_id = VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+                    self.root = LayoutNode::Split {
+                        direction: Direction::Horizontal,
+                        children: vec![
+                            LayoutNode::leaf(first),
+                            LayoutNode::Split {
+                                direction: Direction::Vertical,
+                                children: vec![LayoutNode::Void(void_id), LayoutNode::leaf(insert)],
+                                weights: vec![1.0, 1.0],
+                                constraints: Vec::new(),
+                                resizable: true,
+                            },
+                        ],
+                        weights: vec![1.0, 1.0],
+                        constraints: Vec::new(),
+                        resizable: true,
+                    };
+                    return;
+                }
                 let top = LayoutNode::build_flat(Direction::Horizontal, ids);
                 LayoutNode::Split {
                     direction: Direction::Vertical,

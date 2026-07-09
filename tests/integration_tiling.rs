@@ -1,10 +1,10 @@
 use std::sync::Arc;
-use term_wm::layout::tiling::{InsertPosition, LayoutNode, TilingLayout};
+use term_wm::AppContext;
 use term_wm::layout::Direction;
+use term_wm::layout::tiling::{InsertPosition, LayoutNode, TilingLayout};
 use term_wm::window::{FloatRectSpec, WindowKey, WindowManager};
 use term_wm::wm_config::WmConfig;
-use term_wm::AppContext;
-use term_wm_layout_engine::{detect_corner_snap, detect_edge_snap, edge_preview_rect, LayoutRect};
+use term_wm_layout_engine::{LayoutRect, detect_corner_snap, detect_edge_snap, edge_preview_rect};
 
 type Rect = term_wm_core::Rect;
 
@@ -194,7 +194,11 @@ mod multi_window_tiling {
     fn three_windows_horizontal() {
         let root = LayoutNode::Split {
             direction: Direction::Horizontal,
-            children: vec![LayoutNode::leaf(1usize), LayoutNode::leaf(2), LayoutNode::leaf(3)],
+            children: vec![
+                LayoutNode::leaf(1usize),
+                LayoutNode::leaf(2),
+                LayoutNode::leaf(3),
+            ],
             weights: vec![1.0, 1.0, 1.0],
             constraints: vec![],
             resizable: false,
@@ -232,7 +236,10 @@ mod multi_window_tiling {
         };
         let regions = root.layout(AREA);
         assert_eq!(regions.len(), 3);
-        let total_area: u32 = regions.iter().map(|(_, r)| r.width as u32 * r.height as u32).sum();
+        let total_area: u32 = regions
+            .iter()
+            .map(|(_, r)| r.width as u32 * r.height as u32)
+            .sum();
         assert_eq!(total_area, AREA.width as u32 * AREA.height as u32);
     }
 
@@ -269,7 +276,10 @@ mod multi_window_tiling {
         assert_eq!(regions.len(), 1, "after removing 1 of 2, one leaf remains");
         root.remove_leaf(2);
         root.cleanup_after_removal();
-        assert!(matches!(root, LayoutNode::Leaf(2)), "removing last leaf from collapsed tree");
+        assert!(
+            matches!(root, LayoutNode::Leaf(2)),
+            "removing last leaf from collapsed tree"
+        );
     }
 
     #[test]
@@ -282,7 +292,81 @@ mod multi_window_tiling {
         let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
         let r2 = regions.iter().find(|(id, _)| *id == 2).unwrap().1;
         let diff = (r1.width as i32 - r2.width as i32).abs();
-        assert!(diff <= 1, "widths should be within 1px: {} vs {}", r1.width, r2.width);
+        assert!(
+            diff <= 1,
+            "widths should be within 1px: {} vs {}",
+            r1.width,
+            r2.width
+        );
+    }
+
+    /// Verify that corner insert puts the dragged window in the correct
+    /// quadrant and the first sibling in the adjacent quadrant.
+    /// Regression guard against insert/first ordering swaps.
+    #[test]
+    fn corner_insert_window_ordering() {
+        // Start with 3 windows side by side: [1, 2, 3]
+        let mut root = LayoutNode::leaf(1usize);
+        root.insert_leaf(1, 2, InsertPosition::Right);
+        root.insert_leaf(2, 3, InsertPosition::Right);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 120,
+            height: 80,
+        };
+        let mid_y: i32 = (area.height / 2).into();
+
+        // Insert 4 into BottomLeft quadrant
+        // Expected: 4 in bottom-left, 1 in bottom-right, others in top strip
+        root.insert_leaf(1, 4, InsertPosition::BottomLeft);
+        let regions = root.layout(area);
+        let r4 = regions.iter().find(|(id, _)| *id == 4).unwrap().1;
+        let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
+        assert!(
+            r4.x < r1.x,
+            "BottomLeft: insert must be left of first sibling"
+        );
+        assert!(r4.y >= mid_y, "BottomLeft: insert must be in bottom half");
+
+        // Reset and test BottomRight
+        let mut root = LayoutNode::leaf(1usize);
+        root.insert_leaf(1, 2, InsertPosition::Right);
+        root.insert_leaf(2, 3, InsertPosition::Right);
+        root.insert_leaf(1, 4, InsertPosition::BottomRight);
+        let regions = root.layout(area);
+        let r4 = regions.iter().find(|(id, _)| *id == 4).unwrap().1;
+        let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
+        assert!(
+            r4.x > r1.x,
+            "BottomRight: insert must be right of first sibling"
+        );
+        assert!(r4.y >= mid_y, "BottomRight: insert must be in bottom half");
+
+        // Reset and test TopLeft
+        let mut root = LayoutNode::leaf(1usize);
+        root.insert_leaf(1, 2, InsertPosition::Right);
+        root.insert_leaf(2, 3, InsertPosition::Right);
+        root.insert_leaf(1, 4, InsertPosition::TopLeft);
+        let regions = root.layout(area);
+        let r4 = regions.iter().find(|(id, _)| *id == 4).unwrap().1;
+        let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
+        assert!(r4.x < r1.x, "TopLeft: insert must be left of first sibling");
+        assert!(r4.y < mid_y, "TopLeft: insert must be in top half");
+
+        // Reset and test TopRight
+        let mut root = LayoutNode::leaf(1usize);
+        root.insert_leaf(1, 2, InsertPosition::Right);
+        root.insert_leaf(2, 3, InsertPosition::Right);
+        root.insert_leaf(1, 4, InsertPosition::TopRight);
+        let regions = root.layout(area);
+        let r4 = regions.iter().find(|(id, _)| *id == 4).unwrap().1;
+        let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
+        assert!(
+            r4.x > r1.x,
+            "TopRight: insert must be right of first sibling"
+        );
+        assert!(r4.y < mid_y, "TopRight: insert must be in top half");
     }
 }
 
@@ -305,7 +389,9 @@ mod void_node_lifecycle {
         root.insert_leaf(1, 2, InsertPosition::TopLeft);
         let void_id = match &root {
             LayoutNode::Split { children, .. } => match &children[0] {
-                LayoutNode::Split { children: inner, .. } => match &inner[1] {
+                LayoutNode::Split {
+                    children: inner, ..
+                } => match &inner[1] {
                     LayoutNode::Void(id) => *id,
                     _ => panic!("expected Void in inner split"),
                 },
@@ -395,10 +481,22 @@ mod spatial_isolation {
         wm.register_managed_layout(AREA);
 
         let rect_after_left = wm.region(k0);
-        assert_eq!(rect_after_left.x, rect_before_left.x, "left sibling x must not change");
-        assert_eq!(rect_after_left.y, rect_before_left.y, "left sibling y must not change");
-        assert_eq!(rect_after_left.width, rect_before_left.width, "left sibling width must not change");
-        assert_eq!(rect_after_left.height, rect_before_left.height, "left sibling height must not change");
+        assert_eq!(
+            rect_after_left.x, rect_before_left.x,
+            "left sibling x must not change"
+        );
+        assert_eq!(
+            rect_after_left.y, rect_before_left.y,
+            "left sibling y must not change"
+        );
+        assert_eq!(
+            rect_after_left.width, rect_before_left.width,
+            "left sibling width must not change"
+        );
+        assert_eq!(
+            rect_after_left.height, rect_before_left.height,
+            "left sibling height must not change"
+        );
     }
 
     #[test]
@@ -410,14 +508,22 @@ mod spatial_isolation {
             LayoutNode::Split { direction, .. } => *direction,
             _ => panic!("expected root Split"),
         };
-        assert_eq!(root_dir, Direction::Horizontal, "root must remain Horizontal");
+        assert_eq!(
+            root_dir,
+            Direction::Horizontal,
+            "root must remain Horizontal"
+        );
 
         root.insert_leaf(3, 4, InsertPosition::BottomRight);
         let root_dir_after = match &root {
             LayoutNode::Split { direction, .. } => *direction,
             _ => panic!("expected root Split"),
         };
-        assert_eq!(root_dir_after, Direction::Horizontal, "root direction must not change after quadrant insert");
+        assert_eq!(
+            root_dir_after,
+            Direction::Horizontal,
+            "root direction must not change after quadrant insert"
+        );
     }
 
     #[test]
@@ -433,10 +539,22 @@ mod spatial_isolation {
 
         let regions_after = root.layout(AREA);
         let r3_after = *regions_after.iter().find(|(id, _)| *id == 3).unwrap();
-        assert_eq!(r3_before.1.x, r3_after.1.x, "unrelated sibling x must not change");
-        assert_eq!(r3_before.1.y, r3_after.1.y, "unrelated sibling y must not change");
-        assert_eq!(r3_before.1.width, r3_after.1.width, "unrelated sibling width must not change");
-        assert_eq!(r3_before.1.height, r3_after.1.height, "unrelated sibling height must not change");
+        assert_eq!(
+            r3_before.1.x, r3_after.1.x,
+            "unrelated sibling x must not change"
+        );
+        assert_eq!(
+            r3_before.1.y, r3_after.1.y,
+            "unrelated sibling y must not change"
+        );
+        assert_eq!(
+            r3_before.1.width, r3_after.1.width,
+            "unrelated sibling width must not change"
+        );
+        assert_eq!(
+            r3_before.1.height, r3_after.1.height,
+            "unrelated sibling height must not change"
+        );
     }
 }
 
@@ -456,8 +574,8 @@ mod drag_snap_pipeline {
     use ratatui::layout::Rect as RatatuiRect;
     use term_wm::events::{MouseButton, MouseEventKind};
     use term_wm::render_app;
-    use term_wm_console::draw_plan_renderer::DrawPlanRenderer;
     use term_wm_console::RatatuiBackend;
+    use term_wm_console::draw_plan_renderer::DrawPlanRenderer;
     use term_wm_core::engine::CoreEngine;
 
     fn setup() -> (WindowManager, CoreEngine, DrawPlanRenderer, [WindowKey; 2]) {
@@ -465,8 +583,17 @@ mod drag_snap_pipeline {
         (wm, CoreEngine::new(), DrawPlanRenderer::new(), keys)
     }
 
-    fn advance_frame(wm: &mut WindowManager, engine: &mut CoreEngine, renderer: &mut DrawPlanRenderer) {
-        let area = RatatuiRect { x: 0, y: 0, width: AREA.width, height: AREA.height };
+    fn advance_frame(
+        wm: &mut WindowManager,
+        engine: &mut CoreEngine,
+        renderer: &mut DrawPlanRenderer,
+    ) {
+        let area = RatatuiRect {
+            x: 0,
+            y: 0,
+            width: AREA.width,
+            height: AREA.height,
+        };
         let buf = Buffer::empty(area);
         let mut backend = RatatuiBackend::new(buf, area);
         render_app(&mut backend, wm, engine, renderer);
@@ -477,7 +604,11 @@ mod drag_snap_pipeline {
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
         let header = header_rect(&wm, keys[0]);
-        let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
+        let down = make_mouse(
+            MouseEventKind::Press(MouseButton::Left),
+            header.x as u16,
+            header.y as u16,
+        );
         wm.dispatch_mouse(&down);
 
         // Use y=12 (middle of screen) to avoid corner detection zone (y <= 6)
@@ -487,20 +618,30 @@ mod drag_snap_pipeline {
         wm.dispatch_mouse(&drag);
 
         // Verify exact ghost geometry: right half (40, 0, 40, 24)
-        let snap_rect = wm.drag_snap_rect().expect("drag_snap must be set after Drag");
+        let snap_rect = wm
+            .drag_snap_rect()
+            .expect("drag_snap must be set after Drag");
         assert_eq!(snap_rect.x, AREA.x + i32::from(AREA.width / 2), "ghost x");
         assert_eq!(snap_rect.y, AREA.y, "ghost y");
         assert_eq!(snap_rect.width, AREA.width / 2, "ghost width");
         assert_eq!(snap_rect.height, AREA.height, "ghost height");
 
-        let up = make_mouse(MouseEventKind::Release(MouseButton::Left), right_edge, mid_y);
+        let up = make_mouse(
+            MouseEventKind::Release(MouseButton::Left),
+            right_edge,
+            mid_y,
+        );
         wm.dispatch_mouse(&up);
 
         // Re-render to recompute regions after apply_snap modified the layout tree
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
         let r = wm.region(keys[0]);
-        assert_eq!(r.x, AREA.x + i32::from(AREA.width / 2), "right-snapped window x");
+        assert_eq!(
+            r.x,
+            AREA.x + i32::from(AREA.width / 2),
+            "right-snapped window x"
+        );
         assert_eq!(r.y, AREA.y, "right-snapped window y");
         assert_eq!(r.width, AREA.width / 2, "right-snapped window width");
         assert_eq!(r.height, AREA.height, "right-snapped window height");
@@ -513,20 +654,34 @@ mod drag_snap_pipeline {
         assert!(!wm.is_window_floating(keys[0]), "starts tiled");
 
         let header = header_rect(&wm, keys[0]);
-        let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
+        let down = make_mouse(
+            MouseEventKind::Press(MouseButton::Left),
+            header.x as u16,
+            header.y as u16,
+        );
         wm.dispatch_mouse(&down);
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
         // Press alone must NOT decouple — deadzone drag requirement
-        assert!(!wm.is_window_floating(keys[0]), "press must not make window floating");
+        assert!(
+            !wm.is_window_floating(keys[0]),
+            "press must not make window floating"
+        );
 
         // Drag that breaches the kinetic deadzone (dx+dy > 2 cells)
         let drag_x = (header.x + 5) as u16;
-        let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), drag_x, header.y as u16);
+        let drag = make_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            drag_x,
+            header.y as u16,
+        );
         wm.dispatch_mouse(&drag);
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
-        assert!(wm.is_window_floating(keys[0]), "must be floating after drag breaches deadzone");
+        assert!(
+            wm.is_window_floating(keys[0]),
+            "must be floating after drag breaches deadzone"
+        );
     }
 
     #[test]
@@ -534,7 +689,11 @@ mod drag_snap_pipeline {
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
         let header = header_rect(&wm, keys[0]);
-        let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
+        let down = make_mouse(
+            MouseEventKind::Press(MouseButton::Left),
+            header.x as u16,
+            header.y as u16,
+        );
         wm.dispatch_mouse(&down);
 
         // Use center column to avoid corner-snap collision at left edge
@@ -543,7 +702,9 @@ mod drag_snap_pipeline {
         wm.dispatch_mouse(&drag);
 
         // Verify ghost preview is maximize (full area)
-        let snap_rect = wm.drag_snap_rect().expect("drag_snap must be set after Drag to top edge");
+        let snap_rect = wm
+            .drag_snap_rect()
+            .expect("drag_snap must be set after Drag to top edge");
         assert_eq!(snap_rect.x, AREA.x, "maximize ghost x");
         assert_eq!(snap_rect.y, AREA.y, "maximize ghost y");
         assert_eq!(snap_rect.width, AREA.width, "maximize ghost width");
@@ -551,6 +712,12 @@ mod drag_snap_pipeline {
 
         let up = make_mouse(MouseEventKind::Release(MouseButton::Left), mid_x, 0);
         wm.dispatch_mouse(&up);
+
+        // Ghost overlay must be cleared immediately after maximize applies
+        assert!(
+            wm.drag_snap_rect().is_none(),
+            "drag_snap must be None after maximize release"
+        );
 
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
@@ -566,7 +733,11 @@ mod drag_snap_pipeline {
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
         let header = header_rect(&wm, keys[0]);
-        let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
+        let down = make_mouse(
+            MouseEventKind::Press(MouseButton::Left),
+            header.x as u16,
+            header.y as u16,
+        );
         wm.dispatch_mouse(&down);
 
         let corner_x = (AREA.x + i32::from(AREA.width) - 1) as u16;
@@ -575,13 +746,19 @@ mod drag_snap_pipeline {
         wm.dispatch_mouse(&drag);
 
         // Verify exact ghost geometry: bottom-right quadrant (40, 12, 40, 12)
-        let snap_rect = wm.drag_snap_rect().expect("drag_snap must be set after Drag to corner");
+        let snap_rect = wm
+            .drag_snap_rect()
+            .expect("drag_snap must be set after Drag to corner");
         assert_eq!(snap_rect.x, AREA.x + i32::from(AREA.width / 2), "ghost x");
         assert_eq!(snap_rect.y, AREA.y + i32::from(AREA.height / 2), "ghost y");
         assert_eq!(snap_rect.width, AREA.width / 2, "ghost width");
         assert_eq!(snap_rect.height, AREA.height / 2, "ghost height");
 
-        let up = make_mouse(MouseEventKind::Release(MouseButton::Left), corner_x, corner_y);
+        let up = make_mouse(
+            MouseEventKind::Release(MouseButton::Left),
+            corner_x,
+            corner_y,
+        );
         wm.dispatch_mouse(&up);
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
@@ -598,7 +775,11 @@ mod drag_snap_pipeline {
         advance_frame(&mut wm, &mut engine, &mut renderer);
         let header = header_rect(&wm, keys[0]);
 
-        let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
+        let down = make_mouse(
+            MouseEventKind::Press(MouseButton::Left),
+            header.x as u16,
+            header.y as u16,
+        );
         wm.dispatch_mouse(&down);
 
         // Use y=12 (middle of screen) to avoid corner detection zone
@@ -608,13 +789,19 @@ mod drag_snap_pipeline {
         wm.dispatch_mouse(&drag);
 
         // Verify exact ghost geometry for the right-edge snap
-        let snap_rect = wm.drag_snap_rect().expect("drag_snap must be set after Drag to right edge");
+        let snap_rect = wm
+            .drag_snap_rect()
+            .expect("drag_snap must be set after Drag to right edge");
         assert_eq!(snap_rect.x, AREA.x + i32::from(AREA.width / 2), "ghost x");
         assert_eq!(snap_rect.y, AREA.y, "ghost y");
         assert_eq!(snap_rect.width, AREA.width / 2, "ghost width");
         assert_eq!(snap_rect.height, AREA.height, "ghost height");
 
-        let up = make_mouse(MouseEventKind::Release(MouseButton::Left), right_edge, mid_y);
+        let up = make_mouse(
+            MouseEventKind::Release(MouseButton::Left),
+            right_edge,
+            mid_y,
+        );
         wm.dispatch_mouse(&up);
 
         // Re-render to refresh hitboxes after layout mutation
@@ -642,14 +829,23 @@ mod drag_snap_pipeline {
         wm.dispatch_mouse(&up2);
 
         let float_panes = wm.floating_panes();
-        let (_, float_spec) = float_panes.iter().find(|(k, _)| *k == keys[0]).expect("window should be floating");
+        let (_, float_spec) = float_panes
+            .iter()
+            .find(|(k, _)| *k == keys[0])
+            .expect("window should be floating");
         if let FloatRectSpec::Absolute(fr) = float_spec {
             assert_eq!(fr.width, pre_w, "restored width must match pre-snap");
             assert_eq!(fr.height, pre_h, "restored height must match pre-snap");
             let new_cursor_offset_x = away_x as i32 - fr.x;
             let new_cursor_offset_y = away_y as i32 - fr.y;
-            assert_eq!(new_cursor_offset_x, cursor_offset_x, "cursor offset x must match");
-            assert_eq!(new_cursor_offset_y, cursor_offset_y, "cursor offset y must match");
+            assert_eq!(
+                new_cursor_offset_x, cursor_offset_x,
+                "cursor offset x must match"
+            );
+            assert_eq!(
+                new_cursor_offset_y, cursor_offset_y,
+                "cursor offset y must match"
+            );
         } else {
             panic!("expected absolute float rect");
         }
@@ -662,15 +858,25 @@ mod drag_snap_pipeline {
         let header = header_rect(&wm, keys[0]);
 
         // Phase 1: snap right
-        let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
+        let down = make_mouse(
+            MouseEventKind::Press(MouseButton::Left),
+            header.x as u16,
+            header.y as u16,
+        );
         wm.dispatch_mouse(&down);
         let right_edge = (AREA.x + i32::from(AREA.width) - 1) as u16;
         let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), right_edge, 12);
         wm.dispatch_mouse(&drag);
 
         // Verify ghost geometry for Phase 1
-        let snap_rect = wm.drag_snap_rect().expect("phase 1: drag_snap must be set after Drag");
-        assert_eq!(snap_rect.x, AREA.x + i32::from(AREA.width / 2), "phase 1: ghost x");
+        let snap_rect = wm
+            .drag_snap_rect()
+            .expect("phase 1: drag_snap must be set after Drag");
+        assert_eq!(
+            snap_rect.x,
+            AREA.x + i32::from(AREA.width / 2),
+            "phase 1: ghost x"
+        );
         assert_eq!(snap_rect.y, AREA.y, "phase 1: ghost y");
         assert_eq!(snap_rect.width, AREA.width / 2, "phase 1: ghost width");
         assert_eq!(snap_rect.height, AREA.height, "phase 1: ghost height");
@@ -682,7 +888,11 @@ mod drag_snap_pipeline {
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
         let r1 = wm.region(keys[0]);
-        assert_eq!(r1.x, AREA.x + i32::from(AREA.width / 2), "phase 1: right-snapped x");
+        assert_eq!(
+            r1.x,
+            AREA.x + i32::from(AREA.width / 2),
+            "phase 1: right-snapped x"
+        );
         assert_eq!(r1.width, AREA.width / 2, "phase 1: right-snapped width");
 
         // Phase 2: drag away from edge
@@ -704,23 +914,41 @@ mod drag_snap_pipeline {
 
         // Phase 2: window must be floating with preserved dimensions and cursor offset
         let float_panes = wm.floating_panes();
-        let (_, float_spec) = float_panes.iter()
+        let (_, float_spec) = float_panes
+            .iter()
             .find(|(k, _)| *k == keys[0])
             .expect("phase 2: window should be floating after drag-away");
         if let FloatRectSpec::Absolute(fr) = float_spec {
-            assert_eq!(fr.width, AREA.width / 2, "phase 2: floating width must match snapped width");
-            assert_eq!(fr.height, AREA.height, "phase 2: floating height must match snapped height");
+            assert_eq!(
+                fr.width,
+                AREA.width / 2,
+                "phase 2: floating width must match snapped width"
+            );
+            assert_eq!(
+                fr.height, AREA.height,
+                "phase 2: floating height must match snapped height"
+            );
             let new_cursor_offset_x = away_x as i32 - fr.x;
             let new_cursor_offset_y = away_y as i32 - fr.y;
-            assert_eq!(new_cursor_offset_x, cursor_offset_x, "phase 2: cursor offset x must be preserved");
-            assert_eq!(new_cursor_offset_y, cursor_offset_y, "phase 2: cursor offset y must be preserved");
+            assert_eq!(
+                new_cursor_offset_x, cursor_offset_x,
+                "phase 2: cursor offset x must be preserved"
+            );
+            assert_eq!(
+                new_cursor_offset_y, cursor_offset_y,
+                "phase 2: cursor offset y must be preserved"
+            );
         } else {
             panic!("phase 2: expected absolute float rect");
         }
 
         // Phase 3: snap left
         let header3 = header_rect(&wm, keys[0]);
-        let down3 = make_mouse(MouseEventKind::Press(MouseButton::Left), header3.x as u16, header3.y as u16);
+        let down3 = make_mouse(
+            MouseEventKind::Press(MouseButton::Left),
+            header3.x as u16,
+            header3.y as u16,
+        );
         wm.dispatch_mouse(&down3);
         let left_edge = AREA.x as u16;
         let drag3 = make_mouse(MouseEventKind::Drag(MouseButton::Left), left_edge, 12);
@@ -733,8 +961,22 @@ mod drag_snap_pipeline {
         let total_w = r3.width.saturating_add(wm.region(keys[1]).width);
         assert_eq!(r3.x, AREA.x, "phase 3: left-snapped x");
         assert_eq!(r3.y, AREA.y, "phase 3: left-snapped y");
-        assert_eq!(r3.width, total_w / 2, "phase 3: left-snapped width = total/2");
+        assert_eq!(
+            r3.width,
+            total_w / 2,
+            "phase 3: left-snapped width = total/2"
+        );
         assert_eq!(r3.height, AREA.height, "phase 3: left-snapped height");
+        // Sibling must stay constrained to its lane — not expanded across full width
+        let r_sibling = wm.region(keys[1]);
+        assert!(
+            r_sibling.x > r3.x,
+            "phase 3: sibling must be to the right of keys[0]"
+        );
+        assert!(
+            !rects_overlap(r3, r_sibling),
+            "phase 3: windows must not overlap"
+        );
     }
 }
 
@@ -746,7 +988,12 @@ mod property_tests {
     use proptest::prelude::*;
 
     fn area_strategy() -> impl Strategy<Value = Rect> {
-        (100u16..200, 40u16..80).prop_map(|(w, h)| Rect { x: 0, y: 0, width: w, height: h })
+        (100u16..200, 40u16..80).prop_map(|(w, h)| Rect {
+            x: 0,
+            y: 0,
+            width: w,
+            height: h,
+        })
     }
 
     fn leaf_id_strategy() -> impl Strategy<Value = usize> {
@@ -764,14 +1011,15 @@ mod property_tests {
             (
                 Just(first_id),
                 prop::collection::vec((leaf_id_strategy(), insert_pos), 0..7),
-            ).prop_map(move |(_, ops)| {
-                let mut tree = LayoutNode::leaf(first_id);
-                for (new_id, pos) in ops {
-                    let target = *collect_leaf_ids(&tree).last().unwrap_or(&first_id);
-                    tree.insert_leaf(target, new_id, pos);
-                }
-                tree
-            })
+            )
+                .prop_map(move |(_, ops)| {
+                    let mut tree = LayoutNode::leaf(first_id);
+                    for (new_id, pos) in ops {
+                        let target = *collect_leaf_ids(&tree).last().unwrap_or(&first_id);
+                        tree.insert_leaf(target, new_id, pos);
+                    }
+                    tree
+                })
         })
     }
 
