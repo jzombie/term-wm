@@ -1026,7 +1026,13 @@ impl WindowManager {
                             self.toggle_maximize(*key);
                             self.snap_preview = None;
                         } else if self.drag_snap.is_some() {
+                            // Snap target found — apply snap (removes from
+                            // tiling tree and inserts at snap position)
                             self.apply_snap(*key);
+                        } else {
+                            // No snap target — finalize as floating.
+                            // Remove from tiling tree now, keep floating rect.
+                            self.detach_from_tiling_layout(*key);
                         }
                         self.snap_preview = None;
                         self.snap_projection_cache = None;
@@ -1275,7 +1281,21 @@ impl WindowManager {
                         if self.is_window_floating(key) {
                             self.bring_floating_to_front_key(key);
                         } else {
-                            let _ = self.detach_to_floating(key, rect);
+                            // Make window visually floating WITHOUT removing
+                            // from tiling tree.  The tiling layout stays intact
+                            // until release.
+                            let width = rect.width.max(1);
+                            let height = rect.height.max(1);
+                            self.set_floating_rect(
+                                key,
+                                Some(crate::window::FloatRectSpec::Absolute(
+                                    crate::window::FloatRect {
+                                        x: rect.x, y: rect.y,
+                                        width, height,
+                                    },
+                                )),
+                            );
+                            self.bring_to_front_key(key);
                         }
 
                         let (initial_x, initial_y) =
