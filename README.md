@@ -10,8 +10,8 @@ A cross-platform terminal multiplexer, window manager, and [Ratatui](https://cra
 It is controllable via mouse and keyboard and works the same over SSH, Mac, Linux, and Windows.
 
 <div align="center">
-  <img src="https://github.com/jzombie/live-assets/blob/main/term-wm-0.5.0-alpha-mac.gif?raw=true" alt="term-wm 0.5.0-alpha on macOS" /><br />
-  <em>pictured: term-wm 0.5.0-alpha on macOS</em>
+  <img src="https://github.com/jzombie/live-assets/blob/main/term-wm-0.8.12-alpha-mac.png?raw=true" alt="term-wm v0.8.12-alpha on macOS" /><br />
+  <em>pictured: term-wm v0.8.12-alpha on macOS</em>
 </div>
 
 `term-wm` serves two distinct purposes:
