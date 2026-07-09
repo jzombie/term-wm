@@ -580,29 +580,53 @@ mod tests {
     #[test]
     fn corner_snap_top_left() {
         let a = area();
-        assert_eq!(detect_corner_snap(0, 0, a, 2), Some(InsertPosition::TopLeft));
-        assert_eq!(detect_corner_snap(1, 0, a, 2), Some(InsertPosition::TopLeft));
-        assert_eq!(detect_corner_snap(0, 1, a, 2), Some(InsertPosition::TopLeft));
+        assert_eq!(
+            detect_corner_snap(0, 0, a, 2),
+            Some(InsertPosition::TopLeft)
+        );
+        assert_eq!(
+            detect_corner_snap(1, 0, a, 2),
+            Some(InsertPosition::TopLeft)
+        );
+        assert_eq!(
+            detect_corner_snap(0, 1, a, 2),
+            Some(InsertPosition::TopLeft)
+        );
     }
 
     #[test]
     fn corner_snap_top_right() {
         let a = area();
-        assert_eq!(detect_corner_snap(79, 0, a, 2), Some(InsertPosition::TopRight));
-        assert_eq!(detect_corner_snap(78, 0, a, 2), Some(InsertPosition::TopRight));
+        assert_eq!(
+            detect_corner_snap(79, 0, a, 2),
+            Some(InsertPosition::TopRight)
+        );
+        assert_eq!(
+            detect_corner_snap(78, 0, a, 2),
+            Some(InsertPosition::TopRight)
+        );
     }
 
     #[test]
     fn corner_snap_bottom_left() {
         let a = area();
-        assert_eq!(detect_corner_snap(0, 23, a, 2), Some(InsertPosition::BottomLeft));
-        assert_eq!(detect_corner_snap(1, 23, a, 2), Some(InsertPosition::BottomLeft));
+        assert_eq!(
+            detect_corner_snap(0, 23, a, 2),
+            Some(InsertPosition::BottomLeft)
+        );
+        assert_eq!(
+            detect_corner_snap(1, 23, a, 2),
+            Some(InsertPosition::BottomLeft)
+        );
     }
 
     #[test]
     fn corner_snap_bottom_right() {
         let a = area();
-        assert_eq!(detect_corner_snap(79, 23, a, 2), Some(InsertPosition::BottomRight));
+        assert_eq!(
+            detect_corner_snap(79, 23, a, 2),
+            Some(InsertPosition::BottomRight)
+        );
     }
 
     #[test]

@@ -141,23 +141,25 @@ impl WindowManager {
         area: Rect,
     ) -> Option<Rect> {
         if let Some((s, a, r)) = &self.snap_projection_cache
-            && *s == state && *a == area
+            && *s == state
+            && *a == area
         {
             return *r;
         }
         let rect = match state {
-            SnapPreviewState::Corner(pos) | SnapPreviewState::Edge(pos) => {
-                self.managed_layout.as_ref()
-                    .and_then(|layout| layout.project_insert(None, dragging_key, pos, area))
-            }
+            SnapPreviewState::Corner(pos) | SnapPreviewState::Edge(pos) => self
+                .managed_layout
+                .as_ref()
+                .and_then(|layout| layout.project_insert(None, dragging_key, pos, area)),
             SnapPreviewState::TiledInsert(target_key, pos) => {
-                self.managed_layout.as_ref()
-                    .and_then(|layout| layout.project_insert(Some(target_key), dragging_key, pos, area))
+                self.managed_layout.as_ref().and_then(|layout| {
+                    layout.project_insert(Some(target_key), dragging_key, pos, area)
+                })
             }
-            SnapPreviewState::VoidInsert(void_id) => {
-                self.managed_layout.as_ref()
-                    .and_then(|layout| layout.project_insert_void(dragging_key, void_id, area))
-            }
+            SnapPreviewState::VoidInsert(void_id) => self
+                .managed_layout
+                .as_ref()
+                .and_then(|layout| layout.project_insert_void(dragging_key, void_id, area)),
             SnapPreviewState::Maximize => None,
         };
         self.snap_projection_cache = Some((state, area, rect));
@@ -209,15 +211,20 @@ impl WindowManager {
         };
 
         // Priority 1: Corner snap (smallest spatial region)
-        if let Some(corner_pos) = detect_corner_snap(mouse_x, mouse_y, managed_layout_rect, CORNER_SNAP_THRESHOLD) {
+        if let Some(corner_pos) =
+            detect_corner_snap(mouse_x, mouse_y, managed_layout_rect, CORNER_SNAP_THRESHOLD)
+        {
             let preview = self
                 .get_projected_preview(dragging_key, SnapPreviewState::Corner(corner_pos), area)
                 .unwrap_or_else(|| {
-                    let ep = term_wm_layout_engine::corner_preview_rect(
-                        managed_layout_rect,
-                        corner_pos,
-                    );
-                    Rect { x: ep.x, y: ep.y, width: ep.width, height: ep.height }
+                    let ep =
+                        term_wm_layout_engine::corner_preview_rect(managed_layout_rect, corner_pos);
+                    Rect {
+                        x: ep.x,
+                        y: ep.y,
+                        width: ep.width,
+                        height: ep.height,
+                    }
                 });
             self.drag_snap = Some((None, corner_pos, preview));
             self.snap_preview = Some(SnapPreviewState::Corner(corner_pos));
@@ -235,14 +242,25 @@ impl WindowManager {
         // is near a screen edge.  This ensures that dragging to the right
         // edge always shows a right-half preview, even if the cursor is
         // inside a tiled window near that edge.
-        if let Some(pos) = detect_edge_snap(mouse_x, mouse_y, managed_layout_rect, EDGE_SNAP_THRESHOLD) {
+        if let Some(pos) =
+            detect_edge_snap(mouse_x, mouse_y, managed_layout_rect, EDGE_SNAP_THRESHOLD)
+        {
             let preview = self
                 .get_projected_preview(dragging_key, SnapPreviewState::Edge(pos), area)
                 .unwrap_or_else(|| {
                     let ep = term_wm_layout_engine::edge_preview_rect(managed_layout_rect, pos);
-                    Rect { x: ep.x, y: ep.y, width: ep.width, height: ep.height }
+                    Rect {
+                        x: ep.x,
+                        y: ep.y,
+                        width: ep.width,
+                        height: ep.height,
+                    }
                 });
-            let preview = if self.managed_layout.is_none() { area } else { preview };
+            let preview = if self.managed_layout.is_none() {
+                area
+            } else {
+                preview
+            };
             self.drag_snap = Some((None, pos, preview));
             self.snap_preview = Some(SnapPreviewState::Edge(pos));
             return;
@@ -264,7 +282,9 @@ impl WindowManager {
                 if let Some(layout) = &mut self.managed_layout {
                     layout.root_mut().remove_leaf(key);
                     layout.root_mut().cleanup_after_removal();
-                    layout.root_mut().replace_void_by_id(void_id, LayoutNode::leaf(key));
+                    layout
+                        .root_mut()
+                        .replace_void_by_id(void_id, LayoutNode::leaf(key));
                 }
                 if let Some(pos) = self.z_order.iter().position(|&z_key| z_key == key) {
                     self.z_order.remove(pos);

@@ -60,21 +60,50 @@ mod tests {
     use super::*;
 
     fn rect() -> LayoutRect {
-        LayoutRect { x: 0, y: 0, width: 100, height: 100 }
+        LayoutRect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+        }
     }
 
     #[test]
     fn hit_test_finds_topmost() {
         let regions = vec![
-            (1u8, LayoutRect { x: 0, y: 0, width: 50, height: 50 }),
-            (2u8, LayoutRect { x: 0, y: 0, width: 10, height: 10 }),
+            (
+                1u8,
+                LayoutRect {
+                    x: 0,
+                    y: 0,
+                    width: 50,
+                    height: 50,
+                },
+            ),
+            (
+                2u8,
+                LayoutRect {
+                    x: 0,
+                    y: 0,
+                    width: 10,
+                    height: 10,
+                },
+            ),
         ];
         assert_eq!(hit_test_leaf(&regions, 5, 5), Some(2));
     }
 
     #[test]
     fn hit_test_miss() {
-        let regions = vec![(1u8, LayoutRect { x: 0, y: 0, width: 10, height: 10 })];
+        let regions = vec![(
+            1u8,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
+        )];
         assert_eq!(hit_test_leaf(&regions, 20, 20), None);
     }
 
@@ -105,7 +134,12 @@ mod tests {
 
     #[test]
     fn quadrant_non_square_wide_target() {
-        let wide = LayoutRect { x: 0, y: 0, width: 100, height: 20 };
+        let wide = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 20,
+        };
         assert_eq!(detect_quadrant(80, 5, &wide), Quadrant::East);
         assert_eq!(detect_quadrant(60, 2, &wide), Quadrant::North);
         assert_eq!(detect_quadrant(55, 0, &wide), Quadrant::North);
@@ -113,7 +147,12 @@ mod tests {
 
     #[test]
     fn quadrant_non_square_tall_target() {
-        let tall = LayoutRect { x: 0, y: 0, width: 20, height: 60 };
+        let tall = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 60,
+        };
         assert_eq!(detect_quadrant(18, 5, &tall), Quadrant::North);
         assert_eq!(detect_quadrant(19, 10, &tall), Quadrant::East);
     }

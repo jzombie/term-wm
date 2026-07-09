@@ -809,7 +809,9 @@ impl WindowManager {
         if let Some((crate::hitbox_registry::HitTarget::LayoutHandle, _)) =
             self.hitbox_registry.hit_test(pos)
         {
-            self.managed_layout.as_ref()?.hovered_handle(self.managed_area)
+            self.managed_layout
+                .as_ref()?
+                .hovered_handle(self.managed_area)
         } else {
             None
         }
@@ -938,194 +940,213 @@ impl WindowManager {
         if !matches!(kind, MouseEventKind::Press(_)) {
             if let Some(mut capture) = self.mouse_capture.take() {
                 let (result, restore) = match &mut capture {
-                MouseCaptureState::DraggingWindow {
-                    key,
-                    resistance,
-                    anchor_x,
-                    anchor_y,
-                    initial_x,
-                    initial_y,
-                    start_x,
-                    start_y,
-                    prev_col,
-                    prev_row,
-                    prev_time_ns,
-                    detach_coordinate,
-                } => match kind {
-                    MouseEventKind::Drag(_) => {
-                        let dx = col.abs_diff(*anchor_x);
-                        let dy = row.abs_diff(*anchor_y);
-                        let is_maximized = self.windows.get(*key).is_some_and(|w| w.is_maximized);
+                    MouseCaptureState::DraggingWindow {
+                        key,
+                        resistance,
+                        anchor_x,
+                        anchor_y,
+                        initial_x,
+                        initial_y,
+                        start_x,
+                        start_y,
+                        prev_col,
+                        prev_row,
+                        prev_time_ns,
+                        detach_coordinate,
+                    } => match kind {
+                        MouseEventKind::Drag(_) => {
+                            let dx = col.abs_diff(*anchor_x);
+                            let dy = row.abs_diff(*anchor_y);
+                            let is_maximized =
+                                self.windows.get(*key).is_some_and(|w| w.is_maximized);
 
-                        if dx + dy <= 2 {
-                            // Deadzone guard: ignore micro-nudges
-                            (true, true)
-                        } else if is_maximized && !(row > *anchor_y && row - *anchor_y > 2) {
-                            // Maximized and not pulling down — consume event, keep capture
-                            (true, true)
-                        } else {
-                            // Downward-drag restore for maximized windows
-                            if is_maximized {
-                                self.toggle_maximize(*key);
-                                if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
-                                    self.floating_rect(*key)
-                                {
-                                    *initial_x = fr.x;
-                                    *initial_y = fr.y;
-                                    *start_x = col;
-                                    *start_y = row;
+                            if dx + dy <= 2 {
+                                // Deadzone guard: ignore micro-nudges
+                                (true, true)
+                            } else if is_maximized && !(row > *anchor_y && row - *anchor_y > 2) {
+                                // Maximized and not pulling down — consume event, keep capture
+                                (true, true)
+                            } else {
+                                // Downward-drag restore for maximized windows
+                                if is_maximized {
+                                    self.toggle_maximize(*key);
+                                    if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
+                                        self.floating_rect(*key)
+                                    {
+                                        *initial_x = fr.x;
+                                        *initial_y = fr.y;
+                                        *start_x = col;
+                                        *start_y = row;
+                                        *prev_col = col;
+                                        *prev_row = row;
+                                    }
+                                }
+
+                                if detach_coordinate.is_none() {
+                                    *detach_coordinate = Some((col, row));
+                                }
+
+                                self.drag_last_event = Some(Instant::now());
+                                self.reset_drag_snap_timer();
+                                if self.is_window_floating(*key) {
+                                    let dx = col.abs_diff(*prev_col);
+                                    let dy = row.abs_diff(*prev_row);
+                                    let now_ns = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map(|d| d.as_nanos() as u64)
+                                        .unwrap_or(*prev_time_ns);
+                                    let dt_ns = now_ns.saturating_sub(*prev_time_ns).max(1_000_000);
+                                    let dy_weighted = u32::from(dy).saturating_mul(2);
+                                    let dist_sq = u32::from(dx)
+                                        .saturating_mul(u32::from(dx))
+                                        .saturating_add(dy_weighted.saturating_mul(dy_weighted));
+                                    let threshold_cells_sq = 10u64.saturating_mul(10);
+                                    let threshold_time_sq =
+                                        100_000_000u64.saturating_mul(100_000_000);
+                                    let velocity_exceeded = u64::from(dist_sq)
+                                        .saturating_mul(threshold_time_sq)
+                                        > threshold_cells_sq
+                                            .saturating_mul(dt_ns.saturating_mul(dt_ns));
+                                    self.move_floating(
+                                        *key,
+                                        col,
+                                        row,
+                                        *start_x,
+                                        *start_y,
+                                        *initial_x,
+                                        *initial_y,
+                                        velocity_exceeded,
+                                        resistance,
+                                    );
+                                    let dx_total = col.abs_diff(*start_x);
+                                    let dy_total = row.abs_diff(*start_y);
+                                    if dx_total + dy_total > 2 {
+                                        self.update_snap_preview(*key, col, row, detach_coordinate);
+                                    } else {
+                                        self.drag_snap = None;
+                                    }
                                     *prev_col = col;
                                     *prev_row = row;
+                                    *prev_time_ns = now_ns;
                                 }
+                                (true, true)
                             }
-
-                            if detach_coordinate.is_none() {
-                                *detach_coordinate = Some((col, row));
+                        }
+                        MouseEventKind::Release(_) => {
+                            self.cancel_drag_snap_timer();
+                            self.drag_last_event = None;
+                            if self.snap_preview == Some(SnapPreviewState::Maximize) {
+                                self.toggle_maximize(*key);
+                                self.snap_preview = None;
+                            } else if self.drag_snap.is_some() {
+                                // Snap target found — apply snap (removes from
+                                // tiling tree and inserts at snap position)
+                                self.apply_snap(*key);
+                            } else {
+                                // No snap target — finalize as floating.
+                                // Remove from tiling tree now, keep floating rect.
+                                self.detach_from_tiling_layout(*key);
                             }
-
-                            self.drag_last_event = Some(Instant::now());
-                            self.reset_drag_snap_timer();
+                            self.snap_preview = None;
+                            self.snap_projection_cache = None;
+                            (true, false)
+                        }
+                        MouseEventKind::Moved if self.drag_snap.is_some() => {
+                            self.cancel_drag_snap_timer();
+                            self.drag_last_event = None;
+                            self.apply_snap(*key);
+                            (true, false)
+                        }
+                        _ => (false, true),
+                    },
+                    MouseCaptureState::ResizingWindow {
+                        key,
+                        edge,
+                        start_col,
+                        start_row,
+                        start_x,
+                        start_y,
+                        start_width,
+                        start_height,
+                        ..
+                    } => match kind {
+                        MouseEventKind::Drag(_) => {
                             if self.is_window_floating(*key) {
-                                let dx = col.abs_diff(*prev_col);
-                                let dy = row.abs_diff(*prev_row);
-                                let now_ns = std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .map(|d| d.as_nanos() as u64)
-                                    .unwrap_or(*prev_time_ns);
-                                let dt_ns = now_ns.saturating_sub(*prev_time_ns).max(1_000_000);
-                                let dy_weighted = u32::from(dy).saturating_mul(2);
-                                let dist_sq = u32::from(dx).saturating_mul(u32::from(dx))
-                                    .saturating_add(dy_weighted.saturating_mul(dy_weighted));
-                                let threshold_cells_sq = 10u64.saturating_mul(10);
-                                let threshold_time_sq = 100_000_000u64.saturating_mul(100_000_000);
-                                let velocity_exceeded = u64::from(dist_sq)
-                                    .saturating_mul(threshold_time_sq)
-                                    > threshold_cells_sq.saturating_mul(dt_ns.saturating_mul(dt_ns));
-                                self.move_floating(
-                                    *key, col, row, *start_x, *start_y, *initial_x, *initial_y,
-                                    velocity_exceeded, resistance,
+                                let bounds = LayoutRect {
+                                    x: self.managed_area.x,
+                                    y: self.managed_area.y,
+                                    width: self.managed_area.width,
+                                    height: self.managed_area.height,
+                                };
+                                let resized = apply_resize_drag_signed(
+                                    *start_x,
+                                    *start_y,
+                                    *start_width,
+                                    *start_height,
+                                    *edge,
+                                    col,
+                                    row,
+                                    *start_col,
+                                    *start_row,
+                                    bounds,
+                                    self.floating_resize_offscreen,
                                 );
-                                let dx_total = col.abs_diff(*start_x);
-                                let dy_total = row.abs_diff(*start_y);
-                                if dx_total + dy_total > 2 {
-                                    self.update_snap_preview(*key, col, row, detach_coordinate);
-                                } else {
-                                    self.drag_snap = None;
-                                }
-                                *prev_col = col;
-                                *prev_row = row;
-                                *prev_time_ns = now_ns;
+                                self.set_floating_rect(
+                                    *key,
+                                    Some(crate::window::FloatRectSpec::Absolute(resized)),
+                                );
                             }
                             (true, true)
                         }
-                    }
-                    MouseEventKind::Release(_) => {
-                        self.cancel_drag_snap_timer();
-                        self.drag_last_event = None;
-                        if self.snap_preview == Some(SnapPreviewState::Maximize) {
-                            self.toggle_maximize(*key);
-                            self.snap_preview = None;
-                        } else if self.drag_snap.is_some() {
-                            // Snap target found — apply snap (removes from
-                            // tiling tree and inserts at snap position)
-                            self.apply_snap(*key);
-                        } else {
-                            // No snap target — finalize as floating.
-                            // Remove from tiling tree now, keep floating rect.
-                            self.detach_from_tiling_layout(*key);
+                        MouseEventKind::Release(_) => (true, false),
+                        _ => (false, true),
+                    },
+                    MouseCaptureState::ComponentInteraction { key } => {
+                        let focused = *self.focus.current() == *key;
+                        let mut ctx = self.component_context_for(focused, *key);
+                        if let Some(area) = self.hitbox_registry.component_area(*key) {
+                            ctx = ctx.with_screen_area(area);
                         }
-                        self.snap_preview = None;
-                        self.snap_projection_cache = None;
-                        (true, false)
-                    }
-                    MouseEventKind::Moved if self.drag_snap.is_some() => {
-                        self.cancel_drag_snap_timer();
-                        self.drag_last_event = None;
-                        self.apply_snap(*key);
-                        (true, false)
-                    }
-                    _ => (false, true),
-                },
-                MouseCaptureState::ResizingWindow {
-                    key,
-                    edge,
-                    start_col,
-                    start_row,
-                    start_x,
-                    start_y,
-                    start_width,
-                    start_height,
-                    ..
-                } => match kind {
-                    MouseEventKind::Drag(_) => {
-                        if self.is_window_floating(*key) {
-                            let bounds = LayoutRect {
-                                x: self.managed_area.x,
-                                y: self.managed_area.y,
-                                width: self.managed_area.width,
-                                height: self.managed_area.height,
-                            };
-                            let resized = apply_resize_drag_signed(
-                                *start_x, *start_y, *start_width, *start_height,
-                                *edge, col, row, *start_col, *start_row,
-                                bounds, self.floating_resize_offscreen,
-                            );
-                            self.set_floating_rect(
-                                *key,
-                                Some(crate::window::FloatRectSpec::Absolute(resized)),
-                            );
-                        }
-                        (true, true)
-                    }
-                    MouseEventKind::Release(_) => (true, false),
-                    _ => (false, true),
-                },
-                MouseCaptureState::ComponentInteraction { key } => {
-                    let focused = *self.focus.current() == *key;
-                    let mut ctx = self.component_context_for(focused, *key);
-                    if let Some(area) = self.hitbox_registry.component_area(*key) {
-                        ctx = ctx.with_screen_area(area);
-                    }
-                    let core_event = Event::Mouse(MouseEvent {
-                        kind: *kind,
-                        column: col,
-                        row,
-                        modifiers: *modifiers,
-                    });
-                    let consumed = if let Some(comp) = self.component_for_key_mut(*key) {
-                        let result = comp.handle_events(&core_event, &ctx);
-                        let was_consumed = !result.is_ignored();
-                        if let Some(action) = result.into_action() {
-                            self.process_action(*key, action);
-                        }
-                        was_consumed
-                    } else {
-                        false
-                    };
-                    (consumed, !matches!(kind, MouseEventKind::Release(_)))
-                }
-                MouseCaptureState::LayoutHandle => match kind {
-                    MouseEventKind::Drag(_) | MouseEventKind::Release(_) => {
-                        let event = Event::Mouse(MouseEvent {
+                        let core_event = Event::Mouse(MouseEvent {
                             kind: *kind,
                             column: col,
                             row,
                             modifiers: *modifiers,
                         });
-                        let handled = self
-                            .managed_layout
-                            .as_mut()
-                            .map(|l| l.handle_event(&event, self.managed_area))
-                            .unwrap_or(false);
-                        (handled, !matches!(kind, MouseEventKind::Release(_)))
+                        let consumed = if let Some(comp) = self.component_for_key_mut(*key) {
+                            let result = comp.handle_events(&core_event, &ctx);
+                            let was_consumed = !result.is_ignored();
+                            if let Some(action) = result.into_action() {
+                                self.process_action(*key, action);
+                            }
+                            was_consumed
+                        } else {
+                            false
+                        };
+                        (consumed, !matches!(kind, MouseEventKind::Release(_)))
                     }
-                    _ => (false, true),
-                },
-            };
-            if restore {
-                self.mouse_capture = Some(capture);
-            }
-            return result;
+                    MouseCaptureState::LayoutHandle => match kind {
+                        MouseEventKind::Drag(_) | MouseEventKind::Release(_) => {
+                            let event = Event::Mouse(MouseEvent {
+                                kind: *kind,
+                                column: col,
+                                row,
+                                modifiers: *modifiers,
+                            });
+                            let handled = self
+                                .managed_layout
+                                .as_mut()
+                                .map(|l| l.handle_event(&event, self.managed_area))
+                                .unwrap_or(false);
+                            (handled, !matches!(kind, MouseEventKind::Release(_)))
+                        }
+                        _ => (false, true),
+                    },
+                };
+                if restore {
+                    self.mouse_capture = Some(capture);
+                }
+                return result;
             }
         }
 
@@ -1290,8 +1311,10 @@ impl WindowManager {
                                 key,
                                 Some(crate::window::FloatRectSpec::Absolute(
                                     crate::window::FloatRect {
-                                        x: rect.x, y: rect.y,
-                                        width, height,
+                                        x: rect.x,
+                                        y: rect.y,
+                                        width,
+                                        height,
                                     },
                                 )),
                             );
@@ -1444,12 +1467,10 @@ impl WindowManager {
             if let Some(old) = self.temporal_timer_id.take() {
                 let _ = handle.cancel(old);
             }
-            self.temporal_timer_id = Some(
-                handle.schedule_once(
-                    std::time::Duration::from_millis(50),
-                    SystemTask::TemporalDwellTick,
-                ),
-            );
+            self.temporal_timer_id = Some(handle.schedule_once(
+                std::time::Duration::from_millis(50),
+                SystemTask::TemporalDwellTick,
+            ));
         }
     }
 

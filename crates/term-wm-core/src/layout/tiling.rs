@@ -355,7 +355,10 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                     InsertPosition::TopLeft => {
                         let inner = LayoutNode::Split {
                             direction: Direction::Vertical,
-                            children: vec![LayoutNode::leaf(insert), LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed))],
+                            children: vec![
+                                LayoutNode::leaf(insert),
+                                LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed)),
+                            ],
                             weights: vec![1.0, 1.0],
                             constraints: Vec::new(),
                             resizable: true,
@@ -371,7 +374,10 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                     InsertPosition::TopRight => {
                         let inner = LayoutNode::Split {
                             direction: Direction::Vertical,
-                            children: vec![LayoutNode::leaf(insert), LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed))],
+                            children: vec![
+                                LayoutNode::leaf(insert),
+                                LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed)),
+                            ],
                             weights: vec![1.0, 1.0],
                             constraints: Vec::new(),
                             resizable: true,
@@ -387,7 +393,10 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                     InsertPosition::BottomLeft => {
                         let inner = LayoutNode::Split {
                             direction: Direction::Vertical,
-                            children: vec![LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed)), LayoutNode::leaf(insert)],
+                            children: vec![
+                                LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed)),
+                                LayoutNode::leaf(insert),
+                            ],
                             weights: vec![1.0, 1.0],
                             constraints: Vec::new(),
                             resizable: true,
@@ -403,7 +412,10 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                     InsertPosition::BottomRight => {
                         let inner = LayoutNode::Split {
                             direction: Direction::Vertical,
-                            children: vec![LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed)), LayoutNode::leaf(insert)],
+                            children: vec![
+                                LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed)),
+                                LayoutNode::leaf(insert),
+                            ],
                             weights: vec![1.0, 1.0],
                             constraints: Vec::new(),
                             resizable: true,
@@ -488,8 +500,21 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
     fn void_regions_recursive(&self, area: Rect, out: &mut Vec<(usize, Rect)>) {
         match self {
             LayoutNode::Void(id) => out.push((*id, area)),
-            LayoutNode::Split { direction, children, weights, constraints, resizable } => {
-                let (rects, _) = split_rects_with_gaps(*direction, area, weights, constraints, children.len(), *resizable);
+            LayoutNode::Split {
+                direction,
+                children,
+                weights,
+                constraints,
+                resizable,
+            } => {
+                let (rects, _) = split_rects_with_gaps(
+                    *direction,
+                    area,
+                    weights,
+                    constraints,
+                    children.len(),
+                    *resizable,
+                );
                 for (child, sub) in children.iter().zip(rects) {
                     child.void_regions_recursive(sub, out);
                 }
@@ -510,7 +535,10 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
     pub fn cleanup_after_removal(&mut self) {
         match self {
             LayoutNode::Split {
-                children, weights, constraints, ..
+                children,
+                weights,
+                constraints,
+                ..
             } => {
                 // Recurse first
                 for child in children.iter_mut() {
@@ -543,7 +571,8 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                     }
                     _ => {
                         if children.iter().all(|c| matches!(c, LayoutNode::Void(_))) {
-                            *self = LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed));
+                            *self =
+                                LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed));
                         }
                     }
                 }
@@ -556,7 +585,9 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
     /// Call after any snap insertion to rebalance the layout.
     pub fn normalize_weights(&mut self) {
         match self {
-            LayoutNode::Split { weights, children, .. } => {
+            LayoutNode::Split {
+                weights, children, ..
+            } => {
                 for w in weights.iter_mut() {
                     *w = 1.0;
                 }
@@ -779,16 +810,12 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
         self.root.replace_void_by_id(void_id, new_leaf)
     }
 
-    pub fn project_insert_void(
-        &self,
-        insert: Id,
-        void_id: usize,
-        area: Rect,
-    ) -> Option<Rect> {
+    pub fn project_insert_void(&self, insert: Id, void_id: usize, area: Rect) -> Option<Rect> {
         let mut root = self.root.clone();
         root.remove_leaf(insert);
         if root.replace_void_by_id(void_id, LayoutNode::leaf(insert)) {
-            root.layout(area).into_iter()
+            root.layout(area)
+                .into_iter()
                 .find(|(id, _)| *id == insert)
                 .map(|(_, r)| r)
         } else {

@@ -118,14 +118,12 @@ impl<Id: Copy + Eq + Ord> BspNode<Id> {
                         Self::leaf(insert),
                     ),
                     // Corners: use vertical split (top portion for new window)
-                    InsertPosition::TopLeft
-                    | InsertPosition::TopRight => (
+                    InsertPosition::TopLeft | InsertPosition::TopRight => (
                         Orientation::Vertical,
                         Self::leaf(insert),
                         Self::leaf(*current),
                     ),
-                    InsertPosition::BottomLeft
-                    | InsertPosition::BottomRight => (
+                    InsertPosition::BottomLeft | InsertPosition::BottomRight => (
                         Orientation::Vertical,
                         Self::leaf(*current),
                         Self::leaf(insert),
@@ -502,14 +500,12 @@ impl<Id: Copy + Eq + Ord> NaryNode<Id> {
                         Self::leaf(insert),
                     ),
                     // Corners: use vertical split (top portion for new window)
-                    InsertPosition::TopLeft
-                    | InsertPosition::TopRight => (
+                    InsertPosition::TopLeft | InsertPosition::TopRight => (
                         Orientation::Vertical,
                         Self::leaf(insert),
                         Self::leaf(*current),
                     ),
-                    InsertPosition::BottomLeft
-                    | InsertPosition::BottomRight => (
+                    InsertPosition::BottomLeft | InsertPosition::BottomRight => (
                         Orientation::Vertical,
                         Self::leaf(*current),
                         Self::leaf(insert),
