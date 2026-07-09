@@ -24,11 +24,11 @@ pub fn hit_test_leaf<Id: Copy + Eq + Ord>(
 /// diagonal `(±height/±width)`, producing equal-area triangular quadrants
 /// regardless of the rectangle's shape.
 pub fn detect_quadrant(cursor_col: u16, cursor_row: u16, target: &LayoutRect) -> Option<Quadrant> {
-    // Central 50% deadzone — cursor here means "leave floating"
-    let deadzone_left = target.x + i32::from(target.width / 4);
-    let deadzone_right = target.x + i32::from(target.width * 3 / 4);
-    let deadzone_top = target.y + i32::from(target.height / 4);
-    let deadzone_bottom = target.y + i32::from(target.height * 3 / 4);
+    // Central 25% deadzone — cursor here means "leave floating"
+    let deadzone_left = target.x + i32::from(target.width * 3 / 8);
+    let deadzone_right = target.x + i32::from(target.width * 5 / 8);
+    let deadzone_top = target.y + i32::from(target.height * 3 / 8);
+    let deadzone_bottom = target.y + i32::from(target.height * 5 / 8);
 
     let cx = cursor_col as i32;
     let cy = cursor_row as i32;

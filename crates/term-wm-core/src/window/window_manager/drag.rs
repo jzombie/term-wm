@@ -180,7 +180,7 @@ impl WindowManager {
         // Post-decouple suppression: if detach_coordinate is set, suppress all
         // snap previews until the cursor moves 5+ Euclidean cells from the
         // decouple point.
-        const SUPPRESS_THRESHOLD_SQ: u32 = 5 * 5;
+        const SUPPRESS_THRESHOLD_SQ: u32 = 2 * 2;
         if let Some(MouseCaptureState::DraggingWindow { detach_coordinate, .. }) = &mut self.mouse_capture
             && let Some((decouple_x, decouple_y)) = *detach_coordinate {
                 let dist_sq = u32::from(mouse_x.abs_diff(decouple_x)).pow(2)
