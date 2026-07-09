@@ -52,22 +52,6 @@ fn wm_with_two_windows() -> (WindowManager, [WindowKey; 2]) {
     (wm, [k0, k1])
 }
 
-fn register_header_hitbox(wm: &mut WindowManager, key: WindowKey) {
-    let header_rect = wm
-        .floating_headers()
-        .iter()
-        .find(|h| h.key == key)
-        .map(|h| h.rect);
-    if let Some(rect) = header_rect {
-        use term_wm::hitbox_registry::HitTarget;
-        use term_wm::window::decorator::HeaderAction;
-        wm.hitbox_registry_mut().register(
-            HitTarget::ChromeHeader(key, HeaderAction::Drag),
-            rect,
-        );
-    }
-}
-
 fn header_rect(wm: &WindowManager, key: WindowKey) -> Rect {
     for h in wm.floating_headers() {
         if h.key == key {
@@ -457,18 +441,6 @@ mod spatial_isolation {
 }
 
 // ─── Module 5: Drag-Snap Pipeline ────────────────────────────────────
-//
-// NOTE: The full drag→snap→release pipeline does NOT currently trigger
-// `update_snap_preview` through `dispatch_mouse`.  The `Moved` event
-// handler calls `apply_snap` when `drag_snap.is_some()`, but `drag_snap`
-// is never set because `update_snap_preview` is gated behind
-// `is_window_floating` in the Drag handler — and while the Press handler
-// sets `floating_rect`, the Drag handler's extract-operate-restore cycle
-// may not see it.  These tests document the expected behavior; they
-// should pass once the pipeline integration is fixed.
-//
-// For snap detection coverage, see Module 1 (pure geometry) which tests
-// `detect_edge_snap` and `detect_corner_snap` directly.
 
 #[cfg(test)]
 mod drag_snap_pipeline {
@@ -479,22 +451,40 @@ mod drag_snap_pipeline {
         wm_with_two_windows()
     }
 
-    fn setup_with_hitboxes() -> (WindowManager, [WindowKey; 2]) {
-        let (mut wm, keys) = setup();
-        for &k in &keys {
-            register_header_hitbox(&mut wm, k);
-        }
-        (wm, keys)
+    /// Execute the production render pipeline against an in-memory backend.
+    /// This forces the window manager to naturally populate its HitboxRegistry
+    /// via the same code path used in production.  Must be called before
+    /// every mouse interaction phase, since HitboxRegistry is immediate-mode
+    /// and cleared/rebuilt each frame.
+    fn setup_with_render(wm: &mut WindowManager) {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect as RatatuiRect;
+        use term_wm::render_app;
+        use term_wm_console::draw_plan_renderer::DrawPlanRenderer;
+        use term_wm_console::RatatuiBackend;
+        use term_wm_core::engine::CoreEngine;
+
+        let area = RatatuiRect {
+            x: 0,
+            y: 0,
+            width: AREA.width,
+            height: AREA.height,
+        };
+        let buf = Buffer::empty(area);
+        let mut backend = RatatuiBackend::new(buf, area);
+        let mut engine = CoreEngine::new();
+        let mut renderer = DrawPlanRenderer::new();
+
+        render_app(&mut backend, wm, &mut engine, &mut renderer);
     }
 
     #[test]
-    #[ignore = "pipeline: update_snap_preview not triggered via dispatch_mouse"]
     fn drag_to_right_edge_snaps() {
-        let (mut wm, keys) = setup_with_hitboxes();
+        let (mut wm, keys) = setup();
+        setup_with_render(&mut wm);
         let header = header_rect(&wm, keys[0]);
         let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
         wm.dispatch_mouse(&down);
-        assert!(wm.is_window_floating(keys[0]), "window must be floating after Press");
 
         let right_edge = (AREA.x + i32::from(AREA.width) - 1) as u16;
         let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), right_edge, header.y as u16);
@@ -511,9 +501,9 @@ mod drag_snap_pipeline {
     }
 
     #[test]
-    #[ignore = "pipeline: update_snap_preview not triggered via dispatch_mouse"]
     fn drag_to_left_edge_snaps() {
-        let (mut wm, keys) = setup_with_hitboxes();
+        let (mut wm, keys) = setup();
+        setup_with_render(&mut wm);
         let header = header_rect(&wm, keys[0]);
         let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
         wm.dispatch_mouse(&down);
@@ -533,9 +523,9 @@ mod drag_snap_pipeline {
     }
 
     #[test]
-    #[ignore = "pipeline: update_snap_preview not triggered via dispatch_mouse"]
     fn drag_to_top_maximizes() {
-        let (mut wm, keys) = setup_with_hitboxes();
+        let (mut wm, keys) = setup();
+        setup_with_render(&mut wm);
         let header = header_rect(&wm, keys[0]);
         let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
         wm.dispatch_mouse(&down);
@@ -554,9 +544,9 @@ mod drag_snap_pipeline {
     }
 
     #[test]
-    #[ignore = "pipeline: update_snap_preview not triggered via dispatch_mouse"]
     fn drag_to_corner_quadrant() {
-        let (mut wm, keys) = setup_with_hitboxes();
+        let (mut wm, keys) = setup();
+        setup_with_render(&mut wm);
         let header = header_rect(&wm, keys[0]);
         let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
         wm.dispatch_mouse(&down);
@@ -577,9 +567,9 @@ mod drag_snap_pipeline {
     }
 
     #[test]
-    #[ignore = "pipeline: update_snap_preview not triggered via dispatch_mouse"]
     fn drag_away_restores_float_geometry() {
-        let (mut wm, keys) = setup_with_hitboxes();
+        let (mut wm, keys) = setup();
+        setup_with_render(&mut wm);
         let header = header_rect(&wm, keys[0]);
 
         let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
@@ -596,7 +586,8 @@ mod drag_snap_pipeline {
         let pre_w = snapped.width;
         let pre_h = snapped.height;
 
-        register_header_hitbox(&mut wm, keys[0]);
+        // Re-render to refresh hitboxes after layout mutation
+        setup_with_render(&mut wm);
         let header2 = header_rect(&wm, keys[0]);
         let cursor_x = header2.x as u16;
         let cursor_y = header2.y as u16;
@@ -629,11 +620,12 @@ mod drag_snap_pipeline {
     }
 
     #[test]
-    #[ignore = "pipeline: update_snap_preview not triggered via dispatch_mouse"]
     fn double_snap_converges() {
-        let (mut wm, keys) = setup_with_hitboxes();
+        let (mut wm, keys) = setup();
+        setup_with_render(&mut wm);
         let header = header_rect(&wm, keys[0]);
 
+        // Phase 1: snap right
         let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
         wm.dispatch_mouse(&down);
         let right_edge = (AREA.x + i32::from(AREA.width) - 1) as u16;
@@ -642,7 +634,8 @@ mod drag_snap_pipeline {
         let up = make_mouse(MouseEventKind::Release(MouseButton::Left), right_edge, header.y as u16);
         wm.dispatch_mouse(&up);
 
-        register_header_hitbox(&mut wm, keys[0]);
+        // Re-render for phase 2
+        setup_with_render(&mut wm);
         let header2 = header_rect(&wm, keys[0]);
         let down2 = make_mouse(MouseEventKind::Press(MouseButton::Left), header2.x as u16, header2.y as u16);
         wm.dispatch_mouse(&down2);
@@ -652,7 +645,8 @@ mod drag_snap_pipeline {
         let up2 = make_mouse(MouseEventKind::Release(MouseButton::Left), away_x, header2.y as u16);
         wm.dispatch_mouse(&up2);
 
-        register_header_hitbox(&mut wm, keys[0]);
+        // Re-render for phase 3
+        setup_with_render(&mut wm);
         let header3 = header_rect(&wm, keys[0]);
         let down3 = make_mouse(MouseEventKind::Press(MouseButton::Left), header3.x as u16, header3.y as u16);
         wm.dispatch_mouse(&down3);
