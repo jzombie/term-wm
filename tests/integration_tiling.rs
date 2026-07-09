@@ -27,8 +27,10 @@ fn area_lr() -> LayoutRect {
 }
 
 fn wm_with_two_windows() -> (WindowManager, [WindowKey; 2]) {
+    let mut config = WmConfig::standalone();
+    config.chrome_enabled = false;
     let mut wm = WindowManager::with_config(
-        WmConfig::standalone(),
+        config,
         Arc::new(AppContext::new("test", "0.0.0")),
         None,
         None,
@@ -38,8 +40,41 @@ fn wm_with_two_windows() -> (WindowManager, [WindowKey; 2]) {
     wm.set_panel_visible(false);
     let k0 = wm.create_window(Box::new(NoopComponent));
     let k1 = wm.create_window(Box::new(NoopComponent));
+    let split = LayoutNode::Split {
+        direction: Direction::Horizontal,
+        children: vec![LayoutNode::Leaf(k0), LayoutNode::Leaf(k1)],
+        weights: vec![1.0, 1.0],
+        constraints: vec![],
+        resizable: false,
+    };
+    wm.set_managed_layout(TilingLayout::new(split));
     wm.register_managed_layout(AREA);
     (wm, [k0, k1])
+}
+
+fn register_header_hitbox(wm: &mut WindowManager, key: WindowKey) {
+    let header_rect = wm
+        .floating_headers()
+        .iter()
+        .find(|h| h.key == key)
+        .map(|h| h.rect);
+    if let Some(rect) = header_rect {
+        use term_wm::hitbox_registry::HitTarget;
+        use term_wm::window::decorator::HeaderAction;
+        wm.hitbox_registry_mut().register(
+            HitTarget::ChromeHeader(key, HeaderAction::Drag),
+            rect,
+        );
+    }
+}
+
+fn header_rect(wm: &WindowManager, key: WindowKey) -> Rect {
+    for h in wm.floating_headers() {
+        if h.key == key {
+            return h.rect;
+        }
+    }
+    panic!("no header found for key");
 }
 
 fn make_mouse(
@@ -115,7 +150,11 @@ mod snap_detection {
     #[test]
     fn top_edge_y0_is_sacred() {
         let pos = detect_edge_snap(40, 0, area_lr(), SNAP_SENSITIVITY);
-        assert_eq!(pos, None, "top edge must not trigger edge snap (it is maximize)");
+        assert_eq!(
+            pos,
+            Some(InsertPosition::Top),
+            "detection returns Top; the WM treats y=0 as maximize"
+        );
     }
 
     #[test]
@@ -169,9 +208,13 @@ mod multi_window_tiling {
 
     #[test]
     fn three_windows_horizontal() {
-        let mut root = LayoutNode::leaf(1usize);
-        root.insert_leaf(1, 2, InsertPosition::Right);
-        root.insert_leaf(2, 3, InsertPosition::Right);
+        let root = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1usize), LayoutNode::leaf(2), LayoutNode::leaf(3)],
+            weights: vec![1.0, 1.0, 1.0],
+            constraints: vec![],
+            resizable: false,
+        };
         let regions = root.layout(AREA);
         assert_eq!(regions.len(), 3);
         let total_w: u16 = regions.iter().map(|(_, r)| r.width).sum();
@@ -187,9 +230,22 @@ mod multi_window_tiling {
 
     #[test]
     fn nested_mixed_orientation() {
-        let mut root = LayoutNode::leaf(1usize);
-        root.insert_leaf(1, 2, InsertPosition::Right);
-        root.insert_leaf(2, 3, InsertPosition::Bottom);
+        let root = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![
+                LayoutNode::leaf(1usize),
+                LayoutNode::Split {
+                    direction: Direction::Vertical,
+                    children: vec![LayoutNode::leaf(2), LayoutNode::leaf(3)],
+                    weights: vec![1.0, 1.0],
+                    constraints: vec![],
+                    resizable: false,
+                },
+            ],
+            weights: vec![1.0, 1.0],
+            constraints: vec![],
+            resizable: false,
+        };
         let regions = root.layout(AREA);
         assert_eq!(regions.len(), 3);
         let total_area: u32 = regions.iter().map(|(_, r)| r.width as u32 * r.height as u32).sum();
@@ -220,14 +276,16 @@ mod multi_window_tiling {
     }
 
     #[test]
-    fn remove_all_produces_void() {
+    fn remove_all_collapses_to_single_leaf() {
         let mut root = LayoutNode::leaf(1usize);
         root.insert_leaf(1, 2, InsertPosition::Right);
         root.remove_leaf(1);
         root.cleanup_after_removal();
+        let regions = root.layout(AREA);
+        assert_eq!(regions.len(), 1, "after removing 1 of 2, one leaf remains");
         root.remove_leaf(2);
         root.cleanup_after_removal();
-        assert!(matches!(root, LayoutNode::Void(_)));
+        assert!(matches!(root, LayoutNode::Leaf(2)), "removing last leaf from collapsed tree");
     }
 
     #[test]
@@ -308,8 +366,10 @@ mod spatial_isolation {
 
     #[test]
     fn snap_right_preserves_left_sibling() {
+        let mut config = WmConfig::standalone();
+        config.chrome_enabled = false;
         let mut wm = WindowManager::with_config(
-            WmConfig::standalone(),
+            config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             None,
@@ -324,7 +384,7 @@ mod spatial_isolation {
             children: vec![LayoutNode::Leaf(k0), LayoutNode::Leaf(k1)],
             weights: vec![1.0, 1.0],
             constraints: vec![],
-            resizable: true,
+            resizable: false,
         };
         wm.set_managed_layout(TilingLayout::new(split));
         wm.register_managed_layout(AREA);
@@ -340,12 +400,12 @@ mod spatial_isolation {
                     children: vec![LayoutNode::Leaf(k1), LayoutNode::Void(0)],
                     weights: vec![1.0, 1.0],
                     constraints: vec![],
-                    resizable: true,
+                    resizable: false,
                 },
             ],
             weights: vec![1.0, 1.0],
             constraints: vec![],
-            resizable: true,
+            resizable: false,
         };
         wm.set_managed_layout(TilingLayout::new(new_root));
         wm.register_managed_layout(AREA);
@@ -407,21 +467,21 @@ mod drag_snap_pipeline {
         wm_with_two_windows()
     }
 
-    fn header_rect(wm: &WindowManager, key: WindowKey) -> Rect {
-        for h in wm.floating_headers() {
-            if h.key == key {
-                return h.rect;
-            }
+    fn setup_with_hitboxes() -> (WindowManager, [WindowKey; 2]) {
+        let (mut wm, keys) = setup();
+        for &k in &keys {
+            register_header_hitbox(&mut wm, k);
         }
-        panic!("no header found for key");
+        (wm, keys)
     }
 
     #[test]
     fn drag_to_right_edge_snaps() {
-        let (mut wm, keys) = setup();
+        let (mut wm, keys) = setup_with_hitboxes();
         let header = header_rect(&wm, keys[0]);
         let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
         wm.dispatch_mouse(&down);
+        assert!(wm.is_window_floating(keys[0]), "window must be floating after Press");
 
         let right_edge = (AREA.x + i32::from(AREA.width) - 1) as u16;
         let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), right_edge, header.y as u16);
@@ -439,7 +499,7 @@ mod drag_snap_pipeline {
 
     #[test]
     fn drag_to_left_edge_snaps() {
-        let (mut wm, keys) = setup();
+        let (mut wm, keys) = setup_with_hitboxes();
         let header = header_rect(&wm, keys[0]);
         let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
         wm.dispatch_mouse(&down);
@@ -460,7 +520,7 @@ mod drag_snap_pipeline {
 
     #[test]
     fn drag_to_top_maximizes() {
-        let (mut wm, keys) = setup();
+        let (mut wm, keys) = setup_with_hitboxes();
         let header = header_rect(&wm, keys[0]);
         let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
         wm.dispatch_mouse(&down);
@@ -480,7 +540,7 @@ mod drag_snap_pipeline {
 
     #[test]
     fn drag_to_corner_quadrant() {
-        let (mut wm, keys) = setup();
+        let (mut wm, keys) = setup_with_hitboxes();
         let header = header_rect(&wm, keys[0]);
         let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
         wm.dispatch_mouse(&down);
@@ -502,7 +562,7 @@ mod drag_snap_pipeline {
 
     #[test]
     fn drag_away_restores_float_geometry() {
-        let (mut wm, keys) = setup();
+        let (mut wm, keys) = setup_with_hitboxes();
         let header = header_rect(&wm, keys[0]);
 
         let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
@@ -519,6 +579,7 @@ mod drag_snap_pipeline {
         let pre_w = snapped.width;
         let pre_h = snapped.height;
 
+        register_header_hitbox(&mut wm, keys[0]);
         let header2 = header_rect(&wm, keys[0]);
         let cursor_x = header2.x as u16;
         let cursor_y = header2.y as u16;
@@ -552,7 +613,7 @@ mod drag_snap_pipeline {
 
     #[test]
     fn double_snap_converges() {
-        let (mut wm, keys) = setup();
+        let (mut wm, keys) = setup_with_hitboxes();
         let header = header_rect(&wm, keys[0]);
 
         let down = make_mouse(MouseEventKind::Press(MouseButton::Left), header.x as u16, header.y as u16);
@@ -563,6 +624,7 @@ mod drag_snap_pipeline {
         let up = make_mouse(MouseEventKind::Release(MouseButton::Left), right_edge, header.y as u16);
         wm.dispatch_mouse(&up);
 
+        register_header_hitbox(&mut wm, keys[0]);
         let header2 = header_rect(&wm, keys[0]);
         let down2 = make_mouse(MouseEventKind::Press(MouseButton::Left), header2.x as u16, header2.y as u16);
         wm.dispatch_mouse(&down2);
@@ -572,6 +634,7 @@ mod drag_snap_pipeline {
         let up2 = make_mouse(MouseEventKind::Release(MouseButton::Left), away_x, header2.y as u16);
         wm.dispatch_mouse(&up2);
 
+        register_header_hitbox(&mut wm, keys[0]);
         let header3 = header_rect(&wm, keys[0]);
         let down3 = make_mouse(MouseEventKind::Press(MouseButton::Left), header3.x as u16, header3.y as u16);
         wm.dispatch_mouse(&down3);
@@ -606,7 +669,6 @@ mod property_tests {
 
     fn tree_strategy() -> impl Strategy<Value = LayoutNode<usize>> {
         leaf_id_strategy().prop_flat_map(|first_id| {
-            let leaf = LayoutNode::leaf(first_id);
             let insert_pos = prop_oneof![
                 Just(InsertPosition::Left),
                 Just(InsertPosition::Right),
@@ -614,7 +676,7 @@ mod property_tests {
                 Just(InsertPosition::Bottom),
             ];
             (
-                Just(leaf.clone()),
+                Just(first_id),
                 prop::collection::vec((leaf_id_strategy(), insert_pos), 0..7),
             ).prop_map(move |(_, ops)| {
                 let mut tree = LayoutNode::leaf(first_id);
@@ -625,6 +687,27 @@ mod property_tests {
                 tree
             })
         })
+    }
+
+    /// Build a non-resizable version of a tree (all splits have resizable: false).
+    fn make_non_resizable(node: &LayoutNode<usize>) -> LayoutNode<usize> {
+        match node {
+            LayoutNode::Leaf(id) => LayoutNode::leaf(*id),
+            LayoutNode::Void(id) => LayoutNode::Void(*id),
+            LayoutNode::Split {
+                direction,
+                children,
+                weights,
+                constraints,
+                ..
+            } => LayoutNode::Split {
+                direction: *direction,
+                children: children.iter().map(make_non_resizable).collect(),
+                weights: weights.clone(),
+                constraints: constraints.clone(),
+                resizable: false,
+            },
+        }
     }
 
     proptest! {
@@ -670,12 +753,14 @@ mod property_tests {
             tree in tree_strategy(),
             area in area_strategy(),
         ) {
-            let regions = tree.layout(area);
-            let non_void_area: u32 = regions.iter()
+            let non_resizable = make_non_resizable(&tree);
+            let regions = non_resizable.layout(area);
+            let leaf_area: u32 = regions.iter()
                 .map(|(_, r)| r.width as u32 * r.height as u32)
                 .sum();
             let total_area = area.width as u32 * area.height as u32;
-            prop_assert_eq!(non_void_area, total_area);
+            prop_assert_eq!(leaf_area, total_area,
+                "non-resizable tree must cover full area");
         }
 
         #[test]
