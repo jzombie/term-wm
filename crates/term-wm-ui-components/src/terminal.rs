@@ -981,6 +981,7 @@ struct TestPane {
     max_sb: usize,
     alt_screen: bool,
     pending_title: Option<String>,
+    kill_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[cfg(test)]
@@ -992,7 +993,21 @@ impl TestPane {
             max_sb,
             alt_screen: false,
             pending_title: None,
+            kill_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
+    }
+
+    fn with_kill_tracker(max_sb: usize) -> (Self, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let kill_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let pane = Self {
+            parser: std::sync::Arc::new(std::sync::Mutex::new(vt100::Parser::new(24, 80, max_sb))),
+            current_scrollback: 0,
+            max_sb,
+            alt_screen: false,
+            pending_title: None,
+            kill_count: std::sync::Arc::clone(&kill_count),
+        };
+        (pane, kill_count)
     }
 
     fn set_scrollback_value(&mut self, val: usize) {
@@ -1070,6 +1085,7 @@ impl Pane for TestPane {
     }
 
     fn kill_child(&mut self) -> term_wm_pty_engine::PtyResult<()> {
+        self.kill_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 
@@ -1185,6 +1201,17 @@ mod tests {
             &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
         );
         term.pane_mut().scrollback()
+    }
+
+    // --- Destroy / kill tests ---
+
+    #[test]
+    fn destroy_calls_kill_child() {
+        let (pane, kill_count) = TestPane::with_kill_tracker(200);
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        term.destroy();
+        assert!(kill_count.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+            "destroy() must call pane.kill_child()");
     }
 
     // --- Scroll sync tests ---
