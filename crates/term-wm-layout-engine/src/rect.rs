@@ -154,6 +154,15 @@ pub fn gap_insert<T: Into<u16>>(
     }
 }
 
+/// Which diagonal quadrant of a rectangle a point falls in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Quadrant {
+    North,
+    South,
+    East,
+    West,
+}
+
 /// The direction children are stacked in a split container.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {

@@ -1,5 +1,5 @@
 use crate::Rect;
-use term_wm_layout_engine::{EdgeResistance, LayoutRect, detect_corner_snap, detect_edge_snap, detect_tiled_quadrant};
+use term_wm_layout_engine::{EdgeResistance, LayoutRect, detect_corner_snap, detect_edge_snap, detect_quadrant};
 
 use super::{SnapPreviewState, WindowManager};
 use crate::layout::InsertPosition;
@@ -204,7 +204,7 @@ impl WindowManager {
             width: area.width,
             height: area.height,
         };
-        if let Some(corner_pos) = detect_corner_snap(mouse_x, mouse_y, managed_layout_rect, 6) {
+        if let Some(corner_pos) = detect_corner_snap(mouse_x, mouse_y, managed_layout_rect, 2) {
             let preview = self
                 .get_projected_preview(dragging_key, SnapPreviewState::Corner(corner_pos), area)
                 .unwrap_or_else(|| {
@@ -255,7 +255,13 @@ impl WindowManager {
                 height: rect.height,
             };
 
-            let pos = detect_tiled_quadrant(mouse_x, mouse_y, target_layout);
+            let quadrant = detect_quadrant(mouse_x, mouse_y, &target_layout);
+            let pos = match quadrant {
+                term_wm_layout_engine::Quadrant::East => InsertPosition::Right,
+                term_wm_layout_engine::Quadrant::West => InsertPosition::Left,
+                term_wm_layout_engine::Quadrant::North => InsertPosition::Top,
+                term_wm_layout_engine::Quadrant::South => InsertPosition::Bottom,
+            };
             let preview = self
                 .get_projected_preview(dragging_key, SnapPreviewState::TiledInsert(target_key, pos), area)
                 .unwrap_or_else(|| {
@@ -282,7 +288,7 @@ impl WindowManager {
             }
         }
 
-        let position = detect_edge_snap(mouse_x, mouse_y, managed_layout_rect, 6);
+        let position = detect_edge_snap(mouse_x, mouse_y, managed_layout_rect, 2);
 
         if let Some(pos) = position {
             let preview = self
