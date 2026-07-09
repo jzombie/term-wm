@@ -426,6 +426,42 @@ mod void_node_lifecycle {
         }
         assert_eq!(regions.len(), 2);
     }
+
+    #[test]
+    fn clear_leaf_converts_single_leaf_to_void() {
+        let mut root = LayoutNode::leaf(42usize);
+        assert!(
+            root.clear_leaf(42),
+            "clear_leaf must return true when id matches"
+        );
+        assert!(has_void(&root), "Leaf must become Void after clear_leaf");
+        let regions = root.layout(AREA);
+        assert!(regions.is_empty(), "Void produces no regions");
+
+        // Non-matching id must be a no-op
+        let mut root2 = LayoutNode::leaf(99usize);
+        assert!(
+            !root2.clear_leaf(42),
+            "clear_leaf must return false when id does not match"
+        );
+        assert!(
+            matches!(root2, LayoutNode::Leaf(99)),
+            "Leaf must be preserved when id does not match"
+        );
+    }
+
+    #[test]
+    fn remove_leaf_on_split_then_clear_leaf_on_remaining() {
+        // Simulate: two side-by-side windows [1, 2], remove one,
+        // then clear_leaf the remaining before re-inserting the removed one.
+        let mut root = LayoutNode::leaf(1usize);
+        root.insert_leaf(1, 2, InsertPosition::Right);
+        root.remove_leaf(1);
+        root.cleanup_after_removal();
+        // Tree is now Leaf(2)
+        assert!(root.clear_leaf(2), "clear_leaf on remaining leaf");
+        assert!(has_void(&root), "tree is now Void");
+    }
 }
 
 // ─── Module 4: Spatial Isolation ─────────────────────────────────────
@@ -1012,6 +1048,94 @@ mod drag_snap_pipeline {
         assert!(
             !rects_overlap(r3, r_sibling),
             "phase 3: windows must not overlap"
+        );
+    }
+
+    #[test]
+    fn regr_sole_leaf_maximize_cycle_shows_ghost_on_right_side() {
+        // https://github.com/anomalyco/term-wm/issues/NNN
+        //
+        // 1. start with two side-by-side panes
+        let (mut wm, mut engine, mut renderer, keys) = setup();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        // 2. double-click the right pane to maximize it, then double-click it
+        //    again to restore it — the right pane becomes floating and the left
+        //    pane becomes the sole leaf in the tiling tree.
+        let right_header = header_rect(&wm, keys[1]);
+        let col = right_header.x as u16;
+        let row = right_header.y as u16;
+
+        let press1 = make_mouse(MouseEventKind::Press(MouseButton::Left), col, row);
+        wm.dispatch_mouse(&press1);
+        let release1 = make_mouse(MouseEventKind::Release(MouseButton::Left), col, row);
+        wm.dispatch_mouse(&release1);
+        let press2 = make_mouse(MouseEventKind::Press(MouseButton::Left), col, row);
+        wm.dispatch_mouse(&press2);
+
+        let panes = wm.floating_panes();
+        let (_, spec) = panes
+            .iter()
+            .find(|(k, _)| *k == keys[1])
+            .expect("right pane maximized");
+        if let FloatRectSpec::Absolute(rect) = spec {
+            assert_eq!(rect.width, AREA.width, "maximized: full width");
+            assert_eq!(rect.height, AREA.height, "maximized: full height");
+        } else {
+            panic!("expected absolute float rect");
+        }
+
+        let release2 = make_mouse(MouseEventKind::Release(MouseButton::Left), col, row);
+        wm.dispatch_mouse(&release2);
+        let press3 = make_mouse(MouseEventKind::Press(MouseButton::Left), col, row);
+        wm.dispatch_mouse(&press3);
+        let release3 = make_mouse(MouseEventKind::Release(MouseButton::Left), col, row);
+        wm.dispatch_mouse(&release3);
+        assert!(
+            wm.floating_panes().iter().any(|(k, _)| *k == keys[1]),
+            "right pane must be floating after restore"
+        );
+
+        // Re-render to refresh hitboxes
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        // 3. drag the left pane to the right side of the screen.
+        //    The ghost overlay must appear on the RIGHT half — not the left
+        //    (which was the bug: split_root created duplicate entries from a
+        //    sole leaf, and project_insert returned the first match).
+        let left_header = header_rect(&wm, keys[0]);
+        let press_left = make_mouse(
+            MouseEventKind::Press(MouseButton::Left),
+            left_header.x as u16,
+            left_header.y as u16,
+        );
+        wm.dispatch_mouse(&press_left);
+
+        let right_edge = (AREA.x + i32::from(AREA.width) - 1) as u16;
+        let mid_y = 12u16;
+        let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), right_edge, mid_y);
+        wm.dispatch_mouse(&drag);
+
+        let snap_rect = wm.drag_snap_rect().expect("drag snap must be set");
+        assert!(
+            snap_rect.x >= AREA.x + i32::from(AREA.width / 2),
+            "ghost x={} must be on right half",
+            snap_rect.x
+        );
+
+        let release_left = make_mouse(
+            MouseEventKind::Release(MouseButton::Left),
+            right_edge,
+            mid_y,
+        );
+        wm.dispatch_mouse(&release_left);
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        let r0 = wm.region(keys[0]);
+        assert!(
+            r0.x >= AREA.x + i32::from(AREA.width / 2),
+            "pane must land on right half, got x={}",
+            r0.x
         );
     }
 }

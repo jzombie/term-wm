@@ -245,6 +245,8 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
         true
     }
 
+    /// Remove a leaf by ID from a Split parent.  Returns false if the node
+    /// itself is a Leaf (caller must handle via `clear_leaf` or similar).
     pub fn remove_leaf(&mut self, id: Id) -> bool {
         match self {
             LayoutNode::Leaf(_) => false,
@@ -306,6 +308,17 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                 }
                 removed
             }
+        }
+    }
+
+    /// If this node is a `Leaf(id)`, replace it with `Void` and return true.
+    /// Useful when `remove_leaf` failed because the target IS the root.
+    pub fn clear_leaf(&mut self, id: Id) -> bool {
+        if matches!(self, LayoutNode::Leaf(current) if *current == id) {
+            *self = LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed));
+            true
+        } else {
+            false
         }
     }
 
@@ -663,7 +676,41 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
 
     pub fn split_root(&mut self, insert: Id, position: InsertPosition) {
         if matches!(self.root, LayoutNode::Void(_)) {
-            self.root = LayoutNode::leaf(insert);
+            let void_id = VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+            self.root = match position {
+                InsertPosition::Left | InsertPosition::TopLeft | InsertPosition::BottomLeft => {
+                    LayoutNode::Split {
+                        direction: Direction::Horizontal,
+                        children: vec![LayoutNode::leaf(insert), LayoutNode::Void(void_id)],
+                        weights: vec![1.0, 1.0],
+                        constraints: Vec::new(),
+                        resizable: true,
+                    }
+                }
+                InsertPosition::Right | InsertPosition::TopRight | InsertPosition::BottomRight => {
+                    LayoutNode::Split {
+                        direction: Direction::Horizontal,
+                        children: vec![LayoutNode::Void(void_id), LayoutNode::leaf(insert)],
+                        weights: vec![1.0, 1.0],
+                        constraints: Vec::new(),
+                        resizable: true,
+                    }
+                }
+                InsertPosition::Top => LayoutNode::Split {
+                    direction: Direction::Vertical,
+                    children: vec![LayoutNode::leaf(insert), LayoutNode::Void(void_id)],
+                    weights: vec![1.0, 1.0],
+                    constraints: Vec::new(),
+                    resizable: true,
+                },
+                InsertPosition::Bottom => LayoutNode::Split {
+                    direction: Direction::Vertical,
+                    children: vec![LayoutNode::Void(void_id), LayoutNode::leaf(insert)],
+                    weights: vec![1.0, 1.0],
+                    constraints: Vec::new(),
+                    resizable: true,
+                },
+            };
             return;
         }
         self.root = match position {
@@ -920,7 +967,13 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
         let mut root = self.root.clone();
         // Cull stale leaf before re-insertion — the window may still be in
         // the tree (detach_to_floating does not remove it).
-        root.remove_leaf(insert);
+        let removed = root.remove_leaf(insert);
+        if !removed && matches!(&root, LayoutNode::Leaf(id) if *id == insert) {
+            // The tree is a single leaf matching insert — cannot remove a
+            // leaf from itself.  Replace with Void so split_root doesn't
+            // create duplicate entries.
+            root = LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed));
+        }
         let success = match target {
             Some(t) => root.insert_leaf(t, insert, position),
             None => false,

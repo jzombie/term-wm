@@ -330,6 +330,10 @@ impl WindowManager {
                 if should_retile {
                     layout.root_mut().remove_leaf(key);
                     layout.root_mut().cleanup_after_removal();
+                    // If the tree was a single leaf matching key, remove_leaf
+                    // cannot remove it (Leaf nodes return false).  Clear it
+                    // explicitly so split_root doesn't create duplicates.
+                    layout.root_mut().clear_leaf(key);
                 } else {
                     self.bring_to_front_key(key);
                     return;
