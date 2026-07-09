@@ -292,4 +292,9 @@ pub enum SystemTask {
     /// The drag-snap timeout has elapsed — auto-apply the pending layout
     /// snap for the window that was being dragged.
     DragSnap,
+    /// Periodic tick while a drag cursor is held stationary inside a magnetic
+    /// edge-resistance zone.  Drives the temporal-dwell visual hint without
+    /// requiring mouse motion events (which stop flowing when the user holds
+    /// the mouse still).
+    TemporalDwellTick,
 }

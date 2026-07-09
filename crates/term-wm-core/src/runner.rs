@@ -178,6 +178,9 @@ where
                     SystemTask::DragSnap => {
                         app.wm().apply_drag_snap_if_pending();
                     }
+                    SystemTask::TemporalDwellTick => {
+                        app.wm().on_temporal_dwell_tick();
+                    }
                 }
             }
 
