@@ -150,6 +150,12 @@ impl<T> TaskHandle<T> {
         self.inner.borrow_mut().keep_awake = active;
     }
 
+    /// Returns `true` if the scheduler has been explicitly requested to keep
+    /// the loop awake for high-frequency transient UI updates or animations.
+    pub fn is_keep_awake_active(&self) -> bool {
+        self.inner.borrow().keep_awake
+    }
+
     /// Returns the duration until the next deadline, or [`None`] when the
     /// scheduler is empty.
     pub fn time_until_next(&self) -> Option<Duration> {

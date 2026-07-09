@@ -40,6 +40,16 @@ pub trait EventSource {
     /// [`current_profile()`]: Self::current_profile
     fn set_pending_work(&mut self, _pending: bool) {}
 
+    /// Inform the event source of the maximum duration it is allowed to block
+    /// before the next scheduled background task expires.
+    ///
+    /// The runner calls this at the end of each cycle with the shortest
+    /// deadline from the task scheduler.  When `None` there are no upcoming
+    /// tasks and the source may use its full profile-based poll interval.
+    ///
+    /// The default is a no-op for sources that don't need deadline awareness.
+    fn set_max_sleep_duration(&mut self, _duration: Option<std::time::Duration>) {}
+
     /// Take accumulated window exit notifications. Default returns empty.
     fn take_exited_windows(&mut self) -> Vec<crate::window::WindowKey> {
         Vec::new()
@@ -79,6 +89,10 @@ impl<T: EventSource + ?Sized> EventSource for &mut T {
 
     fn set_pending_work(&mut self, pending: bool) {
         (**self).set_pending_work(pending)
+    }
+
+    fn set_max_sleep_duration(&mut self, duration: Option<std::time::Duration>) {
+        (**self).set_max_sleep_duration(duration)
     }
 
     fn poll_interval(&self) -> Duration {

@@ -73,6 +73,13 @@ pub struct UnifiedEventSource {
     /// pending work (e.g. countdown timer) that requires frequent polling
     /// regardless of PTY dirty-window state.
     pending_work: bool,
+    /// Maximum duration the next [`poll`] call is allowed to block.
+    /// Set by the runner via [`EventSource::set_max_sleep_duration`] to
+    /// clamp the PowerSaver poll interval to the next scheduler deadline.
+    ///
+    /// [`poll`]: EventSource::poll
+    /// [`set_max_sleep_duration`]: EventSource::set_max_sleep_duration
+    max_sleep_duration: Option<Duration>,
 }
 
 impl UnifiedEventSource {
@@ -129,6 +136,7 @@ impl UnifiedEventSource {
             last_event_at: None,
             frame_pacer: FramePacer::new(),
             pending_work: false,
+            max_sleep_duration: None,
         })
     }
 
@@ -466,8 +474,16 @@ impl EventSource for UnifiedEventSource {
         self.pending_work = pending;
     }
 
+    fn set_max_sleep_duration(&mut self, duration: Option<Duration>) {
+        self.max_sleep_duration = duration;
+    }
+
     fn poll_interval(&self) -> Duration {
-        self.current_profile().poll_interval()
+        let base = self.current_profile().poll_interval();
+        match self.max_sleep_duration {
+            Some(max_sleep) => base.min(max_sleep),
+            None => base,
+        }
     }
 
     fn current_profile(&self) -> PowerProfile {
@@ -516,6 +532,7 @@ mod tests {
             last_event_at: None,
             frame_pacer: FramePacer::new(),
             pending_work: false,
+            max_sleep_duration: None,
         };
         // Prevent the no-op handle from panicking on join in drop
         let dummy_handle = std::thread::spawn(|| {});
@@ -605,6 +622,7 @@ mod tests {
             last_event_at: None,
             frame_pacer: FramePacer::new(),
             pending_work: false,
+            max_sleep_duration: None,
         };
         // Prevent the no-op handle from panicking on drop
         let dummy_handle = std::thread::spawn(|| {});
@@ -661,6 +679,7 @@ mod tests {
             last_event_at: None,
             frame_pacer: FramePacer::new(),
             pending_work: false,
+            max_sleep_duration: None,
         };
         assert_eq!(
             source.current_profile(),
@@ -686,6 +705,7 @@ mod tests {
             last_event_at: None,
             frame_pacer: FramePacer::new(),
             pending_work: true,
+            max_sleep_duration: None,
         };
         assert_eq!(
             source.current_profile(),
@@ -709,6 +729,7 @@ mod tests {
             last_event_at: stale,
             frame_pacer: FramePacer::new(),
             pending_work: true,
+            max_sleep_duration: None,
         };
         assert_eq!(
             source2.current_profile(),
@@ -742,6 +763,7 @@ mod tests {
             last_event_at: None,
             frame_pacer: FramePacer::new(),
             pending_work: false,
+            max_sleep_duration: None,
         };
         let dummy_handle = std::thread::spawn(|| {});
         source._input_handle = dummy_handle;
@@ -781,6 +803,7 @@ mod tests {
             last_event_at: None,
             frame_pacer: FramePacer::new(),
             pending_work: false,
+            max_sleep_duration: None,
         };
         let dummy_handle = std::thread::spawn(|| {});
         source._input_handle = dummy_handle;

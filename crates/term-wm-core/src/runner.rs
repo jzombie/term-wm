@@ -217,6 +217,10 @@ where
                     // set is preserved so the next frame picks it up.
                     driver.take_dirty_windows();
                 }
+                // Clamp the driver's sleep duration to the next scheduler
+                // deadline so PowerSaver's 3600s interval doesn't block
+                // past a pending task timeout (e.g. SuperPassthrough).
+                driver.set_max_sleep_duration(system_handle.time_until_next());
                 if let Some(profile) = profile_tracker.poll(driver.current_profile()) {
                     app.wm().set_power_profile(profile);
                 }
@@ -555,7 +559,7 @@ where
         let handler_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(handler));
 
         system_handle.set_keep_awake(app.wm().visible_overlay_count() > 0);
-        driver.set_pending_work(system_handle.has_pending());
+        driver.set_pending_work(system_handle.is_keep_awake_active());
         match handler_result {
             Ok(result) => result,
             Err(_) => {
