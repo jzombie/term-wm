@@ -1,7 +1,7 @@
 use crate::Rect;
 use term_wm_layout_engine::{EdgeResistance, LayoutRect, detect_corner_snap, detect_quadrant};
 
-use super::{SnapPreviewState, WindowManager};
+use super::{MouseCaptureState, SnapPreviewState, WindowManager};
 use crate::layout::InsertPosition;
 use crate::window::WindowKey;
 
@@ -177,6 +177,23 @@ impl WindowManager {
         self.snap_projection_cache = None;
         let area = self.managed_area;
 
+        // Post-decouple suppression: if detach_coordinate is set, suppress all
+        // snap previews until the cursor moves 5+ Euclidean cells from the
+        // decouple point.
+        const SUPPRESS_THRESHOLD_SQ: u32 = 5 * 5;
+        if let Some(MouseCaptureState::DraggingWindow { detach_coordinate, .. }) = &mut self.mouse_capture
+            && let Some((decouple_x, decouple_y)) = *detach_coordinate {
+                let dist_sq = u32::from(mouse_x.abs_diff(decouple_x)).pow(2)
+                    + u32::from(mouse_y.abs_diff(decouple_y)).pow(2);
+                if dist_sq < SUPPRESS_THRESHOLD_SQ {
+                    self.drag_snap = None;
+                    self.snap_preview = None;
+                    return;
+                }
+                // Distance exceeded — clear the lock permanently
+                *detach_coordinate = None;
+            }
+
         // Priority 1: Corner snap (smallest spatial region)
         let managed_layout_rect = LayoutRect {
             x: area.x,
@@ -235,29 +252,30 @@ impl WindowManager {
                 height: rect.height,
             };
 
-            let quadrant = detect_quadrant(mouse_x, mouse_y, &target_layout);
-            let pos = match quadrant {
-                term_wm_layout_engine::Quadrant::East => InsertPosition::Right,
-                term_wm_layout_engine::Quadrant::West => InsertPosition::Left,
-                term_wm_layout_engine::Quadrant::North => InsertPosition::Top,
-                term_wm_layout_engine::Quadrant::South => InsertPosition::Bottom,
-            };
+            if let Some(quadrant) = detect_quadrant(mouse_x, mouse_y, &target_layout) {
+                let pos = match quadrant {
+                    term_wm_layout_engine::Quadrant::East => InsertPosition::Right,
+                    term_wm_layout_engine::Quadrant::West => InsertPosition::Left,
+                    term_wm_layout_engine::Quadrant::North => InsertPosition::Top,
+                    term_wm_layout_engine::Quadrant::South => InsertPosition::Bottom,
+                };
 
-            let preview = self
-                .get_projected_preview(dragging_key, SnapPreviewState::TiledInsert(target_key, pos), area)
-                .unwrap_or_else(|| {
-                    let ep = term_wm_layout_engine::tiled_preview_rect(target_layout, pos);
-                    Rect {
-                        x: ep.x,
-                        y: ep.y,
-                        width: ep.width,
-                        height: ep.height,
-                    }
-                });
+                let preview = self
+                    .get_projected_preview(dragging_key, SnapPreviewState::TiledInsert(target_key, pos), area)
+                    .unwrap_or_else(|| {
+                        let ep = term_wm_layout_engine::tiled_preview_rect(target_layout, pos);
+                        Rect {
+                            x: ep.x,
+                            y: ep.y,
+                            width: ep.width,
+                            height: ep.height,
+                        }
+                    });
 
-            self.drag_snap = Some((Some(target_key), pos, preview));
-            self.snap_preview = Some(SnapPreviewState::TiledInsert(target_key, pos));
-            return;
+                self.drag_snap = Some((Some(target_key), pos, preview));
+                self.snap_preview = Some(SnapPreviewState::TiledInsert(target_key, pos));
+                return;
+            }
         }
 
         // Priority 3b: Void region (Snap Assist receptacle)

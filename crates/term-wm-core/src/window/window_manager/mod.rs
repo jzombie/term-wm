@@ -57,6 +57,9 @@ pub(crate) enum MouseCaptureState {
         prev_row: u16,
         /// Raw nanosecond timestamp of the previous drag event.
         prev_time_ns: u64,
+        /// Cursor position at the moment the drag decoupled from tiling,
+        /// used to suppress snap previews for a short distance after decouple.
+        detach_coordinate: Option<(u16, u16)>,
     },
     ResizingWindow {
         key: WindowKey,
@@ -943,6 +946,7 @@ impl WindowManager {
                         prev_col,
                         prev_row,
                         prev_time_ns,
+                        detach_coordinate: _,
                     },
                     MouseEventKind::Drag(_),
                 ) => {
@@ -974,6 +978,15 @@ impl WindowManager {
                         } else {
                             return true;
                         }
+                    }
+
+                    // Capture the cursor position at decouple time so that
+                    // update_snap_preview can suppress snap previews until the
+                    // cursor has travelled 5+ cells from this point.
+                    if let Some(MouseCaptureState::DraggingWindow { ref mut detach_coordinate, .. }) = self.mouse_capture
+                        && detach_coordinate.is_none()
+                    {
+                        *detach_coordinate = Some((col, row));
                     }
 
                     self.drag_last_event = Some(Instant::now());
@@ -1325,6 +1338,7 @@ impl WindowManager {
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .map(|d| d.as_nanos() as u64)
                                 .unwrap_or(0),
+                            detach_coordinate: None,
                         });
                         self.drag_last_event = Some(Instant::now());
                         self.arm_drag_snap_timer();
@@ -2937,6 +2951,7 @@ mod tests {
             prev_col: 15,
             prev_row: 10,
             prev_time_ns: 0,
+            detach_coordinate: None,
         });
         wm.drag_snap = Some((
             None,
@@ -3417,6 +3432,7 @@ mod tests {
             prev_col: 0,
             prev_row: 0,
             prev_time_ns: 0,
+            detach_coordinate: None,
         });
         wm.drag_last_event = Some(Instant::now());
         let remaining = wm.drag_snap_remaining();
@@ -3446,6 +3462,7 @@ mod tests {
             prev_col: 0,
             prev_row: 0,
             prev_time_ns: 0,
+            detach_coordinate: None,
         });
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
@@ -3467,6 +3484,7 @@ mod tests {
             prev_col: 0,
             prev_row: 0,
             prev_time_ns: 0,
+            detach_coordinate: None,
         });
         wm.drag_last_event = Some(Instant::now() - STALE_EVENT_OFFSET);
         assert_eq!(wm.drag_snap_remaining(), Some(Duration::ZERO));
@@ -3546,6 +3564,7 @@ mod tests {
             prev_col: 15,
             prev_row: 10,
             prev_time_ns: 0,
+            detach_coordinate: None,
         });
         wm.drag_snap = Some((
             Some(window_key),

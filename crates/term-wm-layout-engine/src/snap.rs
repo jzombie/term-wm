@@ -119,6 +119,7 @@ impl EdgeResistance {
             prev: self.prev_x,
             entered_at: self.entered_magnetic_x_at,
             now_ns,
+            snap_low_enabled: true,
         });
         // Track entry into magnetic zone for temporal threshold
         let is_snapped = result == low || result == high;
@@ -147,6 +148,7 @@ impl EdgeResistance {
             prev: self.prev_y,
             entered_at: self.entered_magnetic_y_at,
             now_ns,
+            snap_low_enabled: false,
         });
         let is_snapped = result == low || result == high;
         if is_snapped && self.entered_magnetic_y_at.is_none() {
@@ -173,6 +175,7 @@ struct SnapAxisParams {
     prev: Option<i32>,
     entered_at: Option<u64>,
     now_ns: u64,
+    snap_low_enabled: bool,
 }
 
 fn snap_axis(params: &SnapAxisParams) -> i32 {
@@ -205,7 +208,7 @@ fn snap_axis(params: &SnapAxisParams) -> i32 {
         return params.new_val;
     }
 
-    if snap_low && d_low <= d_high {
+    if params.snap_low_enabled && snap_low && d_low <= d_high {
         params.low
     } else if snap_high {
         params.high

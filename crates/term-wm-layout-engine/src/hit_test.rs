@@ -14,7 +14,8 @@ pub fn hit_test_leaf<Id: Copy + Eq + Ord>(
     None
 }
 
-/// Determine which diagonal quadrant of `target` the cursor falls in.
+/// Determine which diagonal quadrant of `target` the cursor falls in, or
+/// `None` if the cursor is in the central 50% deadzone.
 ///
 /// Uses dimension-scaled cross-product (no floating-point, no sqrt) to
 /// account for the target's aspect ratio.  The comparison
@@ -22,14 +23,28 @@ pub fn hit_test_leaf<Id: Copy + Eq + Ord>(
 /// angle from center to cursor is shallower than the true geometric
 /// diagonal `(±height/±width)`, producing equal-area triangular quadrants
 /// regardless of the rectangle's shape.
-pub fn detect_quadrant(cursor_col: u16, cursor_row: u16, target: &LayoutRect) -> Quadrant {
-    let (cx, cy) = target.center();
+pub fn detect_quadrant(cursor_col: u16, cursor_row: u16, target: &LayoutRect) -> Option<Quadrant> {
+    // Central 50% deadzone — cursor here means "leave floating"
+    let deadzone_left = target.x + i32::from(target.width / 4);
+    let deadzone_right = target.x + i32::from(target.width * 3 / 4);
+    let deadzone_top = target.y + i32::from(target.height / 4);
+    let deadzone_bottom = target.y + i32::from(target.height * 3 / 4);
 
+    let cx = cursor_col as i32;
+    let cy = cursor_row as i32;
+    if cx >= deadzone_left && cx < deadzone_right
+        && cy >= deadzone_top && cy < deadzone_bottom
+    {
+        return None;
+    }
+
+    // Cursor is in the outer ring — classify via dimension-scaled cross-product
+    let (cx, cy) = target.center();
     let dx = i32::from(cursor_col).saturating_sub(cx);
     let dy = i32::from(cursor_row).saturating_sub(cy);
 
     if dx == 0 && dy == 0 {
-        return Quadrant::East;
+        return Some(Quadrant::East);
     }
 
     let adx = dx.unsigned_abs();
@@ -44,17 +59,9 @@ pub fn detect_quadrant(cursor_col: u16, cursor_row: u16, target: &LayoutRect) ->
     let scaled_dy = ady.saturating_mul(w);
 
     if scaled_dx > scaled_dy || (scaled_dx == scaled_dy && dx >= 0) {
-        if dx >= 0 {
-            Quadrant::East
-        } else {
-            Quadrant::West
-        }
+        Some(if dx >= 0 { Quadrant::East } else { Quadrant::West })
     } else {
-        if dy < 0 {
-            Quadrant::North
-        } else {
-            Quadrant::South
-        }
+        Some(if dy < 0 { Quadrant::North } else { Quadrant::South })
     }
 }
 
@@ -112,27 +119,27 @@ mod tests {
 
     #[test]
     fn quadrant_east() {
-        assert_eq!(detect_quadrant(75, 50, &rect()), Quadrant::East);
+        assert_eq!(detect_quadrant(75, 50, &rect()), Some(Quadrant::East));
     }
 
     #[test]
     fn quadrant_west() {
-        assert_eq!(detect_quadrant(25, 50, &rect()), Quadrant::West);
+        assert_eq!(detect_quadrant(25, 50, &rect()), Some(Quadrant::West));
     }
 
     #[test]
     fn quadrant_south() {
-        assert_eq!(detect_quadrant(50, 75, &rect()), Quadrant::South);
+        assert_eq!(detect_quadrant(50, 75, &rect()), Some(Quadrant::South));
     }
 
     #[test]
     fn quadrant_north() {
-        assert_eq!(detect_quadrant(50, 25, &rect()), Quadrant::North);
+        assert_eq!(detect_quadrant(50, 25, &rect()), Some(Quadrant::North));
     }
 
     #[test]
     fn quadrant_on_center_defaults_to_east() {
-        assert_eq!(detect_quadrant(50, 50, &rect()), Quadrant::East);
+        assert_eq!(detect_quadrant(50, 50, &rect()), Some(Quadrant::East));
     }
 
     #[test]
@@ -146,11 +153,11 @@ mod tests {
             width: 100,
             height: 20,
         };
-        assert_eq!(detect_quadrant(80, 5, &wide), Quadrant::East);
+        assert_eq!(detect_quadrant(80, 5, &wide), Some(Quadrant::East));
         // Cursor at (60, 2): dx=10, dy=-8 → scaled_dx=200, scaled_dy=800 → 200<800 → North
-        assert_eq!(detect_quadrant(60, 2, &wide), Quadrant::North);
+        assert_eq!(detect_quadrant(60, 2, &wide), Some(Quadrant::North));
         // Cursor at (55, 0): dx=5, dy=-10 → scaled_dx=100, scaled_dy=1000 → North
-        assert_eq!(detect_quadrant(55, 0, &wide), Quadrant::North);
+        assert_eq!(detect_quadrant(55, 0, &wide), Some(Quadrant::North));
     }
 
     #[test]
@@ -164,8 +171,8 @@ mod tests {
             height: 60,
         };
         // Cursor at (18, 5): dx=8, dy=-25 → scaled_dx=8*60=480, scaled_dy=25*20=500 → 480<500 → North
-        assert_eq!(detect_quadrant(18, 5, &tall), Quadrant::North);
+        assert_eq!(detect_quadrant(18, 5, &tall), Some(Quadrant::North));
         // Cursor at (19, 10): dx=9, dy=-20 → scaled_dx=540, scaled_dy=400 → East
-        assert_eq!(detect_quadrant(19, 10, &tall), Quadrant::East);
+        assert_eq!(detect_quadrant(19, 10, &tall), Some(Quadrant::East));
     }
 }
