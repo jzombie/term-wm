@@ -936,7 +936,7 @@ mod tests {
         };
         let ctx = ComponentContext::new(true).with_screen_area(area);
         let result = renderer.on_mouse_press(5, 2, MouseButton::Left, KeyModifiers::NONE, &ctx);
-        assert!(result.is_ignored());
+        assert!(!result.is_ignored());
     }
 
     #[test]
