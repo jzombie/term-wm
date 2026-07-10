@@ -2467,7 +2467,7 @@ dependencies = [
 
 [[package]]
 name = "term-bench"
-version = "0.8.17-alpha"
+version = "0.8.18-alpha"
 dependencies = [
  "clap",
  "crossterm",
@@ -2477,7 +2477,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm"
-version = "0.8.17-alpha"
+version = "0.8.18-alpha"
 dependencies = [
  "clap",
  "crossbeam-channel",
@@ -2501,7 +2501,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-console"
-version = "0.8.17-alpha"
+version = "0.8.18-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -2513,7 +2513,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-core"
-version = "0.8.17-alpha"
+version = "0.8.18-alpha"
 dependencies = [
  "console",
  "crossbeam-channel",
@@ -2531,14 +2531,14 @@ dependencies = [
 
 [[package]]
 name = "term-wm-layout-engine"
-version = "0.8.17-alpha"
+version = "0.8.18-alpha"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "term-wm-pty-engine"
-version = "0.8.17-alpha"
+version = "0.8.18-alpha"
 dependencies = [
  "arboard",
  "base64",
@@ -2551,11 +2551,11 @@ dependencies = [
 
 [[package]]
 name = "term-wm-render"
-version = "0.8.17-alpha"
+version = "0.8.18-alpha"
 
 [[package]]
 name = "term-wm-sys-ui-components"
-version = "0.8.17-alpha"
+version = "0.8.18-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -2570,7 +2570,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-components"
-version = "0.8.17-alpha"
+version = "0.8.18-alpha"
 dependencies = [
  "crossterm",
  "indoc",

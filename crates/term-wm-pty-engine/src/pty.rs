@@ -245,16 +245,26 @@ impl Pty {
     }
 
     pub fn take_pending_title(&self) -> Option<String> {
-        self.foreground_title
+        let fg = self
+            .foreground_title
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .clone();
+
+        if fg.is_some() {
+            // Process name is authoritative. Purge any stale OSC titles.
+            let _ = self
+                .pending_title
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .take();
+            return fg;
+        }
+
+        self.pending_title
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .take()
-            .or_else(|| {
-                self.pending_title
-                    .lock()
-                    .unwrap_or_else(|err| err.into_inner())
-                    .take()
-            })
     }
 
     fn poll_foreground(&mut self) {
@@ -264,12 +274,11 @@ impl Pty {
                 && fg_pid != self.last_fg_pid
             {
                 self.last_fg_pid = fg_pid;
-                if let Some(name) = get_process_name(fg_pid) {
-                    *self
-                        .foreground_title
-                        .lock()
-                        .unwrap_or_else(|err| err.into_inner()) = Some(name);
-                }
+                let name = get_process_name(fg_pid);
+                *self
+                    .foreground_title
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner()) = name;
             }
         }
     }
@@ -1266,5 +1275,99 @@ mod tests {
         let e = wrap_err("spawn_command", 42);
         let s = format!("{}", e);
         assert!(s.contains("pty spawn_command failed: 42"));
+    }
+
+    #[test]
+    fn take_pending_title_clones_foreground_not_consumes() {
+        let cmd = CommandBuilder::new("cat");
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn");
+
+        *pty.foreground_title.lock().unwrap() = Some("vim".to_string());
+
+        assert_eq!(pty.take_pending_title(), Some("vim".to_string()));
+        assert_eq!(pty.take_pending_title(), Some("vim".to_string()));
+
+        if let Some(child) = pty.child.as_mut() {
+            let _ = child.kill();
+        }
+    }
+
+    #[test]
+    fn take_pending_title_purges_stale_osc_when_fg_present() {
+        let cmd = CommandBuilder::new("cat");
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn");
+
+        *pty.foreground_title.lock().unwrap() = Some("vim".to_string());
+        *pty.pending_title.lock().unwrap() = Some("user@host".to_string());
+
+        assert_eq!(pty.take_pending_title(), Some("vim".to_string()));
+        assert_eq!(
+            *pty.pending_title.lock().unwrap(),
+            None,
+            "stale OSC title must be purged"
+        );
+
+        if let Some(child) = pty.child.as_mut() {
+            let _ = child.kill();
+        }
+    }
+
+    #[test]
+    fn take_pending_title_falls_back_to_osc_when_no_fg() {
+        let cmd = CommandBuilder::new("cat");
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn");
+
+        *pty.foreground_title.lock().unwrap() = None;
+        *pty.pending_title.lock().unwrap() = Some("user@host".to_string());
+
+        assert_eq!(pty.take_pending_title(), Some("user@host".to_string()));
+        assert_eq!(
+            *pty.pending_title.lock().unwrap(),
+            None,
+            "OSC title must be consumed"
+        );
+
+        if let Some(child) = pty.child.as_mut() {
+            let _ = child.kill();
+        }
+    }
+
+    #[test]
+    fn take_pending_title_returns_none_when_both_empty() {
+        let cmd = CommandBuilder::new("cat");
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn");
+
+        *pty.foreground_title.lock().unwrap() = None;
+        *pty.pending_title.lock().unwrap() = None;
+
+        assert_eq!(pty.take_pending_title(), None);
+
+        if let Some(child) = pty.child.as_mut() {
+            let _ = child.kill();
+        }
     }
 }
