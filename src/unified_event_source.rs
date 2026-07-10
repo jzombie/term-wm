@@ -155,7 +155,9 @@ impl UnifiedEventSource {
         loop {
             match self.rx.try_recv() {
                 Ok(UnifiedEvent::Input(event)) => {
-                    self.input_buffer.push_back(event);
+                    if let Some(normalized) = self.normalizer.normalize(event) {
+                        self.input_buffer.push_back(normalized);
+                    }
                 }
                 Ok(UnifiedEvent::PtyWakeup(key)) => {
                     self.dirty_windows.insert(key);
@@ -320,9 +322,16 @@ impl EventSource for UnifiedEventSource {
             match self.rx.recv_timeout(remaining) {
                 Ok(UnifiedEvent::Input(event)) => {
                     self.last_event_at = Some(Instant::now());
-                    self.frame_pacer.reset();
-                    self.pending_event = Some(event);
-                    return Ok(true);
+                    if let Some(normalized) = self.normalizer.normalize(event) {
+                        self.frame_pacer.reset();
+                        self.pending_event = Some(normalized);
+                        return Ok(true);
+                    }
+                    // Event filtered out — update remaining and continue.
+                    if let Some(t) = self.frame_pacer.time_until_deadline() {
+                        remaining = remaining.min(t);
+                    }
+                    continue;
                 }
                 Ok(UnifiedEvent::PtyWakeup(key)) => {
                     self.dirty_windows.insert(key);
@@ -481,7 +490,19 @@ impl EventSource for UnifiedEventSource {
         let base = self.current_profile().poll_interval();
         match self.max_sleep_duration {
             Some(max_sleep) => base.min(max_sleep),
-            None => base,
+            None => {
+                #[cfg(target_os = "windows")]
+                {
+                    // Windows ConPTY requires regular event loop ticks to prevent
+                    // background PTY reader threads from stalling. When no explicit
+                    // cap is set, clamp to WINDOWS_MAX_POLL_INTERVAL maximum.
+                    base.min(term_wm_core::power_profile::WINDOWS_MAX_POLL_INTERVAL)
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    base
+                }
+            }
         }
     }
 
@@ -599,6 +620,125 @@ mod tests {
         assert!(
             !source.poll(Duration::ZERO).unwrap(),
             "poll must return false after buffer drained"
+        );
+    }
+
+    /// `drain_pending` must filter out Release events through the
+    /// normalizer, keeping Press and Repeat events in the buffer.
+    #[test]
+    fn drain_pending_filters_release_events() {
+        let (tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
+        let mut source = UnifiedEventSource {
+            rx,
+            tx: tx.clone(),
+            _input_handle: std::thread::spawn(|| {}),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            dirty_windows: HashSet::new(),
+            exited_windows: Vec::new(),
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: false,
+            max_sleep_duration: None,
+        };
+        source._input_handle = std::thread::spawn(|| {});
+
+        // Send: Press, Release, Repeat, Press
+        // On non-Windows: Release filtered, 3 survive (Press, Repeat, Press)
+        // On Windows: Release + Repeat filtered, 2 survive (Press, Press)
+        for (i, kind) in [
+            KeyKind::Press,
+            KeyKind::Release,
+            KeyKind::Repeat,
+            KeyKind::Press,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let evt = Event::Key(KeyEvent {
+                code: KeyCode::Char(char::from(b'a' + i as u8)),
+                modifiers: KeyModifiers::NONE,
+                kind,
+            });
+            tx.send(UnifiedEvent::Input(evt)).unwrap();
+        }
+
+        source.drain_pending();
+
+        // Count surviving events — Release is always filtered, Repeat only on Windows
+        let expected = if cfg!(windows) { 2 } else { 3 };
+        assert_eq!(
+            source.input_buffer.len(),
+            expected,
+            "Release must be filtered; on non-Windows Repeat survives"
+        );
+
+        // Verify Release event (index 1) is absent
+        for evt in &source.input_buffer {
+            if let Event::Key(k) = evt {
+                assert_ne!(
+                    k.kind,
+                    KeyKind::Release,
+                    "Release events must never survive normalization"
+                );
+            }
+        }
+
+        // Verify first and last events are the Press events
+        let first = source.input_buffer.front().unwrap();
+        let last = source.input_buffer.back().unwrap();
+        if let (Event::Key(k1), Event::Key(k2)) = (first, last) {
+            assert_eq!(k1.kind, KeyKind::Press);
+            assert_eq!(k1.code, KeyCode::Char('a'));
+            assert_eq!(k2.kind, KeyKind::Press);
+            assert_eq!(k2.code, KeyCode::Char('d'));
+        } else {
+            panic!("expected Key events");
+        }
+    }
+
+    /// `poll` must skip Release events that arrive via recv_timeout,
+    /// continuing to wait until a valid event arrives or the deadline expires.
+    #[test]
+    fn poll_filters_release_events() {
+        let (tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
+        let mut source = UnifiedEventSource {
+            rx,
+            tx: tx.clone(),
+            _input_handle: std::thread::spawn(|| {}),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            dirty_windows: HashSet::new(),
+            exited_windows: Vec::new(),
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: false,
+            max_sleep_duration: None,
+        };
+        source._input_handle = std::thread::spawn(|| {});
+
+        // Send only Release events (filtered on all platforms)
+        for _ in 0..3 {
+            let evt = Event::Key(KeyEvent {
+                code: KeyCode::Char('x'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyKind::Release,
+            });
+            tx.send(UnifiedEvent::Input(evt)).unwrap();
+        }
+
+        // poll with a short timeout — should consume the filtered events
+        // and return Ok(false) since no valid event is available
+        let result = source.poll(Duration::from_millis(50));
+        assert!(
+            !result.unwrap() || source.pending_event.is_none(),
+            "poll must not set pending_event for filtered Release events"
         );
     }
 
@@ -839,18 +979,30 @@ mod tests {
         let dummy = std::thread::spawn(|| {});
         source._input_handle = dummy;
 
+        #[cfg(not(target_os = "windows"))]
         assert_eq!(
             source.poll_interval(),
             PowerProfile::PowerSaver.poll_interval()
+        );
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            source.poll_interval(),
+            term_wm_core::power_profile::WINDOWS_MAX_POLL_INTERVAL
         );
 
         source.set_max_sleep_duration(Some(Duration::from_millis(100)));
         assert_eq!(source.poll_interval(), Duration::from_millis(100));
 
         source.set_max_sleep_duration(None);
+        #[cfg(not(target_os = "windows"))]
         assert_eq!(
             source.poll_interval(),
             PowerProfile::PowerSaver.poll_interval()
+        );
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            source.poll_interval(),
+            term_wm_core::power_profile::WINDOWS_MAX_POLL_INTERVAL
         );
     }
 }

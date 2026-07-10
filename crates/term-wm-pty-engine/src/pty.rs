@@ -290,10 +290,8 @@ impl Pty {
 
     #[cfg(windows)]
     fn foreground_pid(&self) -> Option<u32> {
-        // TODO: re-enable when find_foreground_process_windows is implemented
-        // let shell_pid = self.child.as_ref().and_then(|c| c.process_id())?;
-        // find_foreground_process_windows(shell_pid)
-        None
+        let shell_pid = self.child.as_ref().and_then(|c| c.process_id())?;
+        find_foreground_process_windows(shell_pid)
     }
 
     #[cfg(not(any(unix, windows)))]
@@ -332,6 +330,17 @@ impl Pty {
                 self.exited = true;
                 self.exit_status = Some(status);
                 self.child = None;
+
+                // ConPTY pipes on Windows frequently swallow EOF, leaving the
+                // reader thread blocked forever. Since this method is polled
+                // every frame, we manually synthesize the exit callback here
+                // when we detect the child process has died.
+                if let Ok(guard) = self.status_cb.lock()
+                    && let Some(ref cb) = *guard
+                {
+                    cb(crate::PtyStatus::Exited);
+                }
+
                 true
             }
             Ok(None) => false,
@@ -662,84 +671,107 @@ fn get_process_name(pid: u32) -> Option<String> {
 }
 
 #[cfg(windows)]
-fn get_process_name(_pid: u32) -> Option<String> {
-    // TODO: re-enable when Windows foreground process tracking is implemented
-    // use std::ffi::OsString;
-    // use std::os::windows::ffi::OsStringExt;
-    //
-    // const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
-    // let handle = unsafe { kernel32::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-    // if handle.is_null() { return None; }
-    // let mut buf = [0u16; 260];
-    // let mut size = buf.len() as u32;
-    // let result = unsafe {
-    //     kernel32::QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut size)
-    // };
-    // unsafe { kernel32::CloseHandle(handle); }
-    // if result == 0 { return None; }
-    // let path = OsString::from_wide(&buf[..size as usize]);
-    // std::path::Path::new(&path).file_stem().map(|s| s.to_string_lossy().into_owned())
-    None
+fn get_process_name(pid: u32) -> Option<String> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    let handle = unsafe { kernel32::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle == 0 {
+        return None;
+    }
+
+    let mut buf = [0u16; 260];
+    let mut size = buf.len() as u32;
+    let result =
+        unsafe { kernel32::QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut size) };
+    unsafe {
+        kernel32::CloseHandle(handle);
+    }
+
+    if result == 0 {
+        return None;
+    }
+    let path = OsString::from_wide(&buf[..size as usize]);
+    std::path::Path::new(&path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
 }
 
-// TODO: Windows foreground process tracking — implement find_foreground_process_windows
-// using CreateToolhelp32Snapshot to walk the process tree from the shell PID:
-//
-// #[cfg(windows)]
-// fn find_foreground_process_windows(shell_pid: u32) -> Option<u32> {
-//     let snapshot = unsafe { kernel32::CreateToolhelp32Snapshot(0x00000002, 0) };
-//     if snapshot == kernel32::INVALID_HANDLE_VALUE { return None; }
-//     let mut children: Vec<(u32, u32)> = Vec::new();
-//     let mut entry = std::mem::MaybeUninit::<kernel32::PROCESSENTRY32W>::zeroed();
-//     unsafe {
-//         (*entry.as_mut_ptr()).dwSize = std::mem::size_of::<kernel32::PROCESSENTRY32W>() as u32;
-//         if kernel32::Process32FirstW(snapshot, entry.as_mut_ptr()) != 0 {
-//             loop {
-//                 let e = entry.assume_init();
-//                 children.push((e.th32ProcessID, e.th32ParentProcessID));
-//                 if kernel32::Process32NextW(snapshot, entry.as_mut_ptr()) == 0 { break; }
-//             }
-//         }
-//         kernel32::CloseHandle(snapshot);
-//     }
-//     let mut current = shell_pid;
-//     loop {
-//         let next = children.iter()
-//             .find(|&&(pid, parent)| parent == current && pid != current)
-//             .map(|&(pid, _)| pid);
-//         match next { Some(next) => current = next, None => break }
-//     }
-//     if current != shell_pid { Some(current) } else { None }
-// }
+#[cfg(windows)]
+fn find_foreground_process_windows(shell_pid: u32) -> Option<u32> {
+    let snapshot = unsafe { kernel32::CreateToolhelp32Snapshot(0x00000002, 0) };
+    if snapshot == kernel32::INVALID_HANDLE_VALUE {
+        return None;
+    }
 
-// TODO: Windows kernel32 FFI module — needed by the above when re-enabled:
-//
-// #[cfg(windows)]
-// mod kernel32 {
-//     use std::ffi::c_void;
-//     pub const INVALID_HANDLE_VALUE: isize = -1;
-//     #[repr(C)]
-//     pub struct PROCESSENTRY32W {
-//         pub dwSize: u32,
-//         pub cntUsage: u32,
-//         pub th32ProcessID: u32,
-//         pub th32DefaultHeapID: usize,
-//         pub th32ModuleID: u32,
-//         pub cntThreads: u32,
-//         pub th32ParentProcessID: u32,
-//         pub pcPriClassBase: i32,
-//         pub dwFlags: u32,
-//         pub szExeFile: [u16; 260],
-//     }
-//     extern "system" {
-//         pub fn CreateToolhelp32Snapshot(dwFlags: u32, th32ProcessID: u32) -> isize;
-//         pub fn Process32FirstW(hSnapshot: isize, lppe: *mut PROCESSENTRY32W) -> i32;
-//         pub fn Process32NextW(hSnapshot: isize, lppe: *mut PROCESSENTRY32W) -> i32;
-//         pub fn CloseHandle(hObject: isize) -> i32;
-//         pub fn OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) -> *mut c_void;
-//         pub fn QueryFullProcessImageNameW(hProcess: *mut c_void, dwFlags: u32, lpExeName: *mut u16, lpdwSize: *mut u32) -> i32;
-//     }
-// }
+    let mut children: Vec<(u32, u32)> = Vec::new();
+    let mut entry = std::mem::MaybeUninit::<kernel32::PROCESSENTRY32W>::zeroed();
+
+    unsafe {
+        (*entry.as_mut_ptr()).dwSize = std::mem::size_of::<kernel32::PROCESSENTRY32W>() as u32;
+        if kernel32::Process32FirstW(snapshot, entry.as_mut_ptr()) != 0 {
+            loop {
+                let e = entry.assume_init();
+                children.push((e.th32ProcessID, e.th32ParentProcessID));
+                if kernel32::Process32NextW(snapshot, entry.as_mut_ptr()) == 0 {
+                    break;
+                }
+            }
+        }
+        kernel32::CloseHandle(snapshot);
+    }
+
+    let mut current = shell_pid;
+    loop {
+        let next = children
+            .iter()
+            .find(|&&(pid, parent)| parent == current && pid != current)
+            .map(|&(pid, _)| pid);
+        match next {
+            Some(next) => current = next,
+            None => break,
+        }
+    }
+
+    Some(current)
+}
+
+#[cfg(windows)]
+mod kernel32 {
+    pub const INVALID_HANDLE_VALUE: isize = -1;
+
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    #[allow(non_snake_case)]
+    pub struct PROCESSENTRY32W {
+        pub dwSize: u32,
+        pub cntUsage: u32,
+        pub th32ProcessID: u32,
+        pub th32DefaultHeapID: usize,
+        pub th32ModuleID: u32,
+        pub cntThreads: u32,
+        pub th32ParentProcessID: u32,
+        pub pcPriClassBase: i32,
+        pub dwFlags: u32,
+        pub szExeFile: [u16; 260],
+    }
+
+    #[allow(non_snake_case)]
+    unsafe extern "system" {
+        pub fn CreateToolhelp32Snapshot(dwFlags: u32, th32ProcessID: u32) -> isize;
+        pub fn Process32FirstW(hSnapshot: isize, lppe: *mut PROCESSENTRY32W) -> i32;
+        pub fn Process32NextW(hSnapshot: isize, lppe: *mut PROCESSENTRY32W) -> i32;
+        pub fn CloseHandle(hObject: isize) -> i32;
+        pub fn OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) -> isize;
+        pub fn QueryFullProcessImageNameW(
+            hProcess: isize,
+            dwFlags: u32,
+            lpExeName: *mut u16,
+            lpdwSize: *mut u32,
+        ) -> i32;
+    }
+}
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 fn get_process_name(_pid: u32) -> Option<String> {
@@ -754,6 +786,20 @@ mod tests {
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
+
+    /// Returns a platform-appropriate dummy executable for PTY plumbing tests.
+    /// On Unix, `cat` blocks on stdin and echoes output. On Windows, `cmd.exe`
+    /// blocks on stdin and keeps the ConPTY alive.
+    fn get_test_executable() -> &'static str {
+        #[cfg(target_os = "windows")]
+        {
+            "cmd.exe"
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            "cat"
+        }
+    }
 
     // ── bytes_to_debug_text ──────────────────────────────────────────
 
@@ -918,7 +964,7 @@ mod tests {
         // Use cat, which blocks on input, so we control when output happens.
         // Portability: `cat` exists on Unix; on Windows the test is skipped.
         // TODO: add Windows support with `cmd /c type CON`
-        let cmd = CommandBuilder::new("cat");
+        let cmd = CommandBuilder::new(get_test_executable());
         let size = PtySize {
             rows: 24,
             cols: 80,
@@ -958,6 +1004,90 @@ mod tests {
         );
     }
 
+    #[test]
+    fn has_exited_fires_exited_callback_when_child_dies() {
+        let cmd = CommandBuilder::new(get_test_executable());
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+
+        let exited_fired = Arc::new(AtomicBool::new(false));
+        let exited_cb = Arc::clone(&exited_fired);
+        pty.set_status_callback(Some(Box::new(move |status| {
+            if status == crate::PtyStatus::Exited {
+                exited_cb.store(true, Ordering::Relaxed);
+            }
+        })));
+
+        // Kill the child so try_wait returns Ok(Some(...))
+        if let Some(child) = pty.child.as_mut() {
+            let _ = child.kill();
+        }
+
+        // Wait for child to be reaped
+        for _ in 0..250 {
+            if pty.has_exited() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        assert!(
+            exited_fired.load(Ordering::Relaxed),
+            "has_exited() must fire PtyStatus::Exited callback when child dies"
+        );
+    }
+
+    #[test]
+    fn has_exited_idempotent_after_child_exits() {
+        let cmd = CommandBuilder::new(get_test_executable());
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+
+        let exit_count = Arc::new(AtomicUsize::new(0));
+        let count_cb = Arc::clone(&exit_count);
+        pty.set_status_callback(Some(Box::new(move |status| {
+            if status == crate::PtyStatus::Exited {
+                count_cb.fetch_add(1, Ordering::Relaxed);
+            }
+        })));
+
+        // Kill the child
+        if let Some(child) = pty.child.as_mut() {
+            let _ = child.kill();
+        }
+
+        // Wait for first has_exited to succeed
+        for _ in 0..250 {
+            if pty.has_exited() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        // Record count after has_exited() first returned true
+        let count_after_first = exit_count.load(Ordering::Relaxed);
+
+        // Call has_exited() again — must NOT fire the callback
+        assert!(pty.has_exited(), "second call must also return true");
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let count_after_second = exit_count.load(Ordering::Relaxed);
+        assert_eq!(
+            count_after_first, count_after_second,
+            "has_exited() must not re-fire the Exited callback after returning true"
+        );
+    }
+
     // ── screen / set_scrollback / into_parts / Drop ─────────────────
     //
     // These tests exercise the shared-parser screen sharing path (sync
@@ -967,7 +1097,7 @@ mod tests {
 
     #[test]
     fn screen_loads_from_shared_parser_when_dirty() {
-        let cmd = CommandBuilder::new("cat");
+        let cmd = CommandBuilder::new(get_test_executable());
         let size = PtySize {
             rows: 24,
             cols: 80,
@@ -1013,7 +1143,7 @@ mod tests {
 
     #[test]
     fn screen_syncs_from_shared_parser() {
-        let cmd = CommandBuilder::new("cat");
+        let cmd = CommandBuilder::new(get_test_executable());
         let size = PtySize {
             rows: 24,
             cols: 80,
@@ -1055,7 +1185,7 @@ mod tests {
         //
         // Generate enough output (30 lines in a 24-row terminal) to fill the
         // scrollback buffer so that set_scrollback(N) isn't clamped to 0.
-        let cmd = CommandBuilder::new("cat");
+        let cmd = CommandBuilder::new(get_test_executable());
         let size = PtySize {
             rows: 24,
             cols: 80,
@@ -1146,7 +1276,7 @@ mod tests {
     fn set_scrollback_and_scrollback_consistent() {
         // set_scrollback() and scrollback() both operate on the shared parser.
         // Mutations via set_scrollback must be visible through scrollback().
-        let cmd = CommandBuilder::new("cat");
+        let cmd = CommandBuilder::new(get_test_executable());
         let size = PtySize {
             rows: 24,
             cols: 80,
@@ -1204,7 +1334,7 @@ mod tests {
 
     #[test]
     fn into_parts_takes_child_and_reader() {
-        let cmd = CommandBuilder::new("cat");
+        let cmd = CommandBuilder::new(get_test_executable());
         let size = PtySize {
             rows: 24,
             cols: 80,
@@ -1233,7 +1363,7 @@ mod tests {
 
     #[test]
     fn set_status_callback_with_existing_reader_does_not_panic() {
-        let cmd = CommandBuilder::new("cat");
+        let cmd = CommandBuilder::new(get_test_executable());
         let size = PtySize {
             rows: 24,
             cols: 80,
@@ -1279,7 +1409,7 @@ mod tests {
 
     #[test]
     fn take_pending_title_clones_foreground_not_consumes() {
-        let cmd = CommandBuilder::new("cat");
+        let cmd = CommandBuilder::new(get_test_executable());
         let size = PtySize {
             rows: 24,
             cols: 80,
@@ -1300,7 +1430,7 @@ mod tests {
 
     #[test]
     fn take_pending_title_purges_stale_osc_when_fg_present() {
-        let cmd = CommandBuilder::new("cat");
+        let cmd = CommandBuilder::new(get_test_executable());
         let size = PtySize {
             rows: 24,
             cols: 80,
@@ -1326,7 +1456,7 @@ mod tests {
 
     #[test]
     fn take_pending_title_falls_back_to_osc_when_no_fg() {
-        let cmd = CommandBuilder::new("cat");
+        let cmd = CommandBuilder::new(get_test_executable());
         let size = PtySize {
             rows: 24,
             cols: 80,
@@ -1352,7 +1482,7 @@ mod tests {
 
     #[test]
     fn take_pending_title_returns_none_when_both_empty() {
-        let cmd = CommandBuilder::new("cat");
+        let cmd = CommandBuilder::new(get_test_executable());
         let size = PtySize {
             rows: 24,
             cols: 80,

@@ -7,13 +7,11 @@
 use crate::events::{Event, KeyCode, KeyKind};
 
 #[derive(Default)]
-pub struct KeyboardNormalizer {
-    esc_down: bool,
-}
+pub struct KeyboardNormalizer;
 
 impl KeyboardNormalizer {
     pub fn new() -> Self {
-        Self::default()
+        Self
     }
 
     pub fn normalize(&mut self, evt: Event) -> Option<Event> {
@@ -27,22 +25,9 @@ impl KeyboardNormalizer {
                 }
                 if cfg!(windows) {
                     match key.kind {
-                        KeyKind::Release => {
-                            if key.code == KeyCode::Esc {
-                                self.esc_down = false;
-                            }
-                            return None;
-                        }
+                        KeyKind::Release => return None,
                         KeyKind::Repeat => return None,
                         KeyKind::Press => {}
-                    }
-                    if key.code == KeyCode::Esc {
-                        if self.esc_down {
-                            return None;
-                        }
-                        self.esc_down = true;
-                    } else {
-                        self.esc_down = false;
                     }
                 } else if key.kind == KeyKind::Release {
                     return None;
@@ -119,6 +104,28 @@ mod tests {
             assert!(!k.modifiers.shift);
         } else {
             panic!("expected key event");
+        }
+    }
+
+    #[test]
+    fn repeat_key_passes_through_on_unix() {
+        let mut norm = KeyboardNormalizer::new();
+        let evt = Event::Key(crate::events::KeyEvent {
+            code: KeyCode::Char('a'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyKind::Repeat,
+        });
+        // On non-Windows, Repeat passes through (only Release is filtered)
+        #[cfg(not(target_os = "windows"))]
+        {
+            let out = norm.normalize(evt);
+            assert!(out.is_some(), "Repeat must pass through on Unix");
+        }
+        // On Windows, Repeat is filtered
+        #[cfg(target_os = "windows")]
+        {
+            let out = norm.normalize(evt);
+            assert!(out.is_none(), "Repeat must be filtered on Windows");
         }
     }
 }

@@ -682,6 +682,29 @@ impl TerminalComponent {
     }
 }
 
+/// RAII guard that saves and restores the vt100 scrollback position.
+/// Guarantees restoration even on panic or early return.
+struct ScrollbackGuard<'a> {
+    screen: &'a mut vt100::Screen,
+    original_offset: usize,
+}
+
+impl<'a> ScrollbackGuard<'a> {
+    fn new(screen: &'a mut vt100::Screen) -> Self {
+        let original_offset = screen.scrollback();
+        Self {
+            screen,
+            original_offset,
+        }
+    }
+}
+
+impl<'a> Drop for ScrollbackGuard<'a> {
+    fn drop(&mut self) {
+        self.screen.set_scrollback(self.original_offset);
+    }
+}
+
 impl SelectionViewport for TerminalComponent {
     fn selection_viewport(&self, area: LayoutRect) -> LayoutRect {
         area
@@ -769,38 +792,85 @@ impl TerminalComponent {
 
     fn selection_text_for_range(&self, range: SelectionRange) -> Option<String> {
         let mut pane = self.pane.borrow_mut();
-        let row_base = pane.max_scrollback().saturating_sub(pane.scrollback());
+
+        // 1. SAFE EXTRACTION: Get max_scrollback BEFORE locking the parser
+        // This prevents Mutex deadlocks if the pane internally accesses the parser.
+        let max_scrollback = pane.max_scrollback();
+
         let parser_arc = pane.shared_parser();
-        let parser = parser_arc.lock().unwrap();
-        let screen = parser.screen();
-        let (rows, cols) = screen.size();
-        if rows == 0 || cols == 0 {
+        let mut parser = parser_arc.lock().unwrap();
+        let screen = parser.screen_mut();
+
+        let (viewport_rows, cols) = screen.size();
+        if viewport_rows == 0 || cols == 0 {
             return None;
         }
-        let (mut end_row, mut end_col) = (range.end.row, range.end.column);
+
+        let guard = ScrollbackGuard::new(screen);
+
+        // 2. BOUNDED PROBE: Use the known max_scrollback instead of usize::MAX.
+        // This prevents O(N) CPU hangs and integer overflow panics.
+        guard.screen.set_scrollback(max_scrollback);
+        let vt100_max_scrollback = guard.screen.scrollback();
+        let vt100_total_lines = vt100_max_scrollback + viewport_rows as usize;
+
+        // Map Pane coordinates to vt100 coordinates
+        let offset_from_pane_to_vt100 = max_scrollback.saturating_sub(vt100_max_scrollback);
+
+        let mut end_row = range.end.row;
+        let mut end_col = range.end.column;
         if end_col == 0 && end_row > range.start.row {
             end_row = end_row.saturating_sub(1);
             end_col = cols as usize;
         }
 
-        let start_row = range.start.row.saturating_sub(row_base);
-        let end_row = end_row.saturating_sub(row_base);
-        if start_row >= rows as usize {
-            return None;
-        }
-        let end_row = end_row.min(rows.saturating_sub(1) as usize);
+        let vt100_start_row = range.start.row.saturating_sub(offset_from_pane_to_vt100);
+        let vt100_end_row = end_row.saturating_sub(offset_from_pane_to_vt100);
+
+        // Clamp to actual vt100 bounds
+        let vt100_start_row = vt100_start_row.min(vt100_total_lines.saturating_sub(1));
+        let vt100_end_row = vt100_end_row.min(vt100_total_lines.saturating_sub(1));
         let start_col = range.start.column.min(cols as usize);
         let end_col = end_col.min(cols as usize);
-        if end_row < start_row {
+
+        if vt100_end_row < vt100_start_row {
             return None;
         }
 
-        Some(screen.contents_between(
-            start_row as u16,
-            start_col as u16,
-            end_row as u16,
-            end_col as u16,
-        ))
+        let mut result = String::new();
+
+        // Paginate using the translated vt100 coordinates
+        for absolute_row in vt100_start_row..=vt100_end_row {
+            let viewport_start = absolute_row.min(vt100_max_scrollback);
+            let offset = vt100_max_scrollback - viewport_start;
+            guard.screen.set_scrollback(offset);
+
+            let viewport_row = (absolute_row - viewport_start) as u16;
+
+            let col_start = if absolute_row == vt100_start_row {
+                start_col as u16
+            } else {
+                0
+            };
+
+            let col_end = if absolute_row == vt100_end_row {
+                end_col as u16
+            } else {
+                cols
+            };
+
+            let line =
+                guard
+                    .screen
+                    .contents_between(viewport_row, col_start, viewport_row, col_end);
+            result.push_str(&line);
+
+            if absolute_row < vt100_end_row {
+                result.push('\n');
+            }
+        }
+
+        Some(result)
     }
 
     pub fn terminate(&mut self) {
@@ -1651,6 +1721,70 @@ mod tests {
             "should copy all 26 chars, got: {:?}",
             text
         );
+    }
+
+    /// Selection within scrollback region using a small max_sb that fills quickly.
+    /// This exercises the paginated extraction loop where absolute_row falls
+    /// entirely in scrollback (not viewport), testing offset_from_pane_to_vt100.
+    #[test]
+    fn selection_text_in_scrollback_with_small_max_sb() {
+        let max_sb = 30;
+        let width = 80u16;
+        let height = 24u16;
+        // Fill 50 lines so scrollback is maxed out at 30
+        let text: String = (1..=50)
+            .map(|i| format!("line {:02} data", i))
+            .collect::<Vec<_>>()
+            .join("\r\n");
+
+        let mut pane = TestPane::new(max_sb);
+        pane.set_parser_size(height, width);
+        pane.write_to_parser(text.as_bytes());
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        term.selection_enabled = true;
+
+        // row_base = max_scrollback = 30
+        let rb = max_sb;
+
+        // Select lines 5-8 in the scrollback region (well above viewport)
+        // These are the 5th through 8th most recent lines in the buffer.
+        // Lines in order from oldest to newest in scrollback (index 0 = oldest):
+        // line 01, line 02, ..., line 30 (scrollback)
+        // line 31..50 (in viewport, but we select in scrollback)
+        // row_base=30 means row 30 = viewport row 0, row 29 = scrollback bottom, row 0 = scrollback top
+        term.selection
+            .borrow_mut()
+            .begin_drag(LogicalPosition::new(rb - 8, 0));
+        term.selection
+            .borrow_mut()
+            .update_drag(LogicalPosition::new(rb - 5, 13));
+
+        let text = term.selection_text();
+        assert!(text.is_some(), "should extract text from scrollback region");
+        let t = text.unwrap();
+        // The 4 lines (indices rb-8 through rb-5) should contain unique line identifiers
+        assert!(
+            t.contains("line"),
+            "scrollback selection must contain 'line', got: {:?}",
+            t
+        );
+        let line_count = t.lines().count();
+        assert_eq!(line_count, 4, "should span 4 lines, got {}", line_count);
+    }
+
+    /// A zero-length selection (click without drag) must return None.
+    #[test]
+    fn selection_text_empty_range_returns_none() {
+        let (term, rb) = make_term_with_content(80, 24, 2000, "Hello World");
+        // Click at a single position without dragging — start == end
+        term.selection
+            .borrow_mut()
+            .begin_drag(LogicalPosition::new(rb, 5));
+        term.selection
+            .borrow_mut()
+            .update_drag(LogicalPosition::new(rb, 5));
+        let text = term.selection_text();
+        assert!(text.is_none(), "zero-length selection must return None");
     }
 
     #[test]
