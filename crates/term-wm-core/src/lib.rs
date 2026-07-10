@@ -14,6 +14,7 @@ pub mod io;
 pub mod keybindings;
 pub mod layout;
 pub mod mouse_coord;
+pub mod notification;
 pub mod power_profile;
 pub mod reaper;
 pub mod task_scheduler;

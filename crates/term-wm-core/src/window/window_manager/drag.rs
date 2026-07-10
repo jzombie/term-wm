@@ -254,11 +254,6 @@ impl WindowManager {
                         height: ep.height,
                     }
                 });
-            let preview = if self.managed_layout.is_none() {
-                area
-            } else {
-                preview
-            };
             self.drag_snap = Some((None, pos, preview));
             self.snap_preview = Some(SnapPreviewState::Edge(pos));
             return;
@@ -271,7 +266,7 @@ impl WindowManager {
 
     pub(super) fn apply_snap(&mut self, key: WindowKey) {
         use crate::layout::LayoutNode;
-        if let Some((target, position, preview)) = self.drag_snap.take() {
+        if let Some((target, position, _preview)) = self.drag_snap.take() {
             // Void snap: replace the void placeholder in the BSP tree
             if let Some(SnapPreviewState::VoidInsert(void_id)) = self.snap_preview {
                 if self.is_window_floating(key) {
@@ -288,31 +283,8 @@ impl WindowManager {
                     self.z_order.remove(pos);
                 }
                 self.z_order.push(key);
-                self.managed_draw_order = self.z_order.clone();
+                self.bifurcate_draw_order();
                 self.snap_projection_cache = None;
-                return;
-            }
-
-            let other_windows_exist = if let Some(layout) = &self.managed_layout {
-                !layout.regions(self.managed_area).is_empty()
-            } else {
-                false
-            };
-
-            if target.is_none() && !other_windows_exist {
-                if self.is_window_floating(key) {
-                    self.set_floating_rect(
-                        key,
-                        Some(crate::window::FloatRectSpec::Absolute(
-                            crate::window::FloatRect {
-                                x: preview.x,
-                                y: preview.y,
-                                width: preview.width,
-                                height: preview.height,
-                            },
-                        )),
-                    );
-                }
                 return;
             }
 
@@ -351,6 +323,10 @@ impl WindowManager {
                 }
             }
 
+            if self.managed_layout.is_none() {
+                self.managed_layout = Some(crate::layout::TilingLayout::new_void());
+            }
+
             if let Some(layout) = &mut self.managed_layout {
                 let success = if let Some(target_key) = target {
                     layout.root_mut().insert_leaf(target_key, key, position)
@@ -366,9 +342,7 @@ impl WindowManager {
                     self.z_order.remove(pos);
                 }
                 self.z_order.push(key);
-                self.managed_draw_order = self.z_order.clone();
-            } else {
-                self.managed_layout = Some(crate::layout::TilingLayout::new(LayoutNode::leaf(key)));
+                self.bifurcate_draw_order();
             }
             self.snap_projection_cache = None;
 
@@ -397,11 +371,7 @@ impl WindowManager {
             self.focus_window_key(key);
             return true;
         }
-        let is_void = self
-            .managed_layout
-            .as_ref()
-            .is_some_and(|l| matches!(l.root(), crate::layout::LayoutNode::Void(_)));
-        if self.managed_layout.is_none() || is_void {
+        if self.managed_layout.is_none() {
             self.managed_layout = Some(crate::layout::TilingLayout::new(LayoutNode::leaf(key)));
             self.focus_window_key(key);
             return true;
@@ -412,6 +382,13 @@ impl WindowManager {
         let Some(layout) = self.managed_layout.as_mut() else {
             return false;
         };
+
+        let voids = layout.void_regions(self.managed_area);
+        if let Some((void_id, _)) = voids.first() {
+            layout.replace_void_by_id(*void_id, LayoutNode::leaf(key));
+            self.focus_window_key(key);
+            return true;
+        }
 
         let target = self
             .regions

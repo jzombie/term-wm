@@ -1079,64 +1079,28 @@ mod drag_snap_pipeline {
     }
 
     #[test]
-    fn regr_sole_leaf_maximize_cycle_shows_ghost_on_right_side() {
-        // https://github.com/anomalyco/term-wm/issues/NNN
-        //
-        // 1. start with two side-by-side panes
+    fn regr_sole_leaf_snap_edge_creates_correct_split() {
+        // Snapping a sole tiled leaf to an edge should create a proper
+        // Void split that preserves edge geometry (not a 100% maximize).
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
-        // 2. double-click the right pane to maximize it, then double-click it
-        //    again to restore it — the right pane becomes floating and the left
-        //    pane becomes the sole leaf in the tiling tree.
-        let right_header = header_rect(&wm, keys[1]);
-        let col = right_header.x as u16;
-        let row = right_header.y as u16;
-
-        let press1 = make_mouse(MouseEventKind::Press(MouseButton::Left), col, row);
-        wm.dispatch_mouse(&press1);
-        let release1 = make_mouse(MouseEventKind::Release(MouseButton::Left), col, row);
-        wm.dispatch_mouse(&release1);
-        let press2 = make_mouse(MouseEventKind::Press(MouseButton::Left), col, row);
-        wm.dispatch_mouse(&press2);
-
-        let panes = wm.floating_panes();
-        let (_, spec) = panes
-            .iter()
-            .find(|(k, _)| *k == keys[1])
-            .expect("right pane maximized");
-        if let FloatRectSpec::Absolute(rect) = spec {
-            assert_eq!(rect.width, AREA.width, "maximized: full width");
-            assert_eq!(rect.height, AREA.height, "maximized: full height");
-        } else {
-            panic!("expected absolute float rect");
-        }
-
-        let release2 = make_mouse(MouseEventKind::Release(MouseButton::Left), col, row);
-        wm.dispatch_mouse(&release2);
-        let press3 = make_mouse(MouseEventKind::Press(MouseButton::Left), col, row);
-        wm.dispatch_mouse(&press3);
-        let release3 = make_mouse(MouseEventKind::Release(MouseButton::Left), col, row);
-        wm.dispatch_mouse(&release3);
-        assert!(
-            wm.floating_panes().iter().any(|(k, _)| *k == keys[1]),
-            "right pane must be floating after restore"
-        );
-
-        // Re-render to refresh hitboxes
+        // Close the right pane so keys[0] is the sole leaf
+        wm.close_window(keys[1]);
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
-        // 3. drag the left pane to the right side of the screen.
-        //    The ghost overlay must appear on the RIGHT half — not the left
-        //    (which was the bug: split_root created duplicate entries from a
-        //    sole leaf, and project_insert returned the first match).
-        let left_header = header_rect(&wm, keys[0]);
-        let press_left = make_mouse(
+        // keys[0] is now the only tiled window — it occupies the full area.
+        let r_before = wm.region(keys[0]);
+        assert_eq!(r_before, AREA, "sole leaf must fill the full area");
+
+        // Drag the header to the right edge to trigger a snap preview.
+        let header = header_rect(&wm, keys[0]);
+        let press = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
-            left_header.x as u16,
-            left_header.y as u16,
+            header.x as u16,
+            header.y as u16,
         );
-        wm.dispatch_mouse(&press_left);
+        wm.dispatch_mouse(&press);
 
         let right_edge = (AREA.x + i32::from(AREA.width) - 1) as u16;
         let mid_y = 12u16;
@@ -1150,12 +1114,12 @@ mod drag_snap_pipeline {
             snap_rect.x
         );
 
-        let release_left = make_mouse(
+        let release = make_mouse(
             MouseEventKind::Release(MouseButton::Left),
             right_edge,
             mid_y,
         );
-        wm.dispatch_mouse(&release_left);
+        wm.dispatch_mouse(&release);
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
         let r0 = wm.region(keys[0]);
@@ -1186,7 +1150,7 @@ mod drag_snap_pipeline {
         // Press on the handle — must set LayoutHandle capture (dispatch returns true)
         let down = make_mouse(MouseEventKind::Press(MouseButton::Left), gap_col, gap_row);
         assert!(
-            wm.dispatch_mouse(&down),
+            wm.dispatch_mouse(&down).is_consumed(),
             "Press on split handle must be consumed"
         );
 
@@ -1197,7 +1161,7 @@ mod drag_snap_pipeline {
             gap_row,
         );
         assert!(
-            wm.dispatch_mouse(&drag),
+            wm.dispatch_mouse(&drag).is_consumed(),
             "Drag on split handle must be consumed"
         );
 
@@ -1258,6 +1222,35 @@ mod drag_snap_pipeline {
             "windows must fill width: {} vs {}",
             total_w,
             AREA.width
+        );
+    }
+
+    #[test]
+    fn tile_single_window_on_empty_workspace_occupies_full_screen() {
+        let mut config = WmConfig::standalone();
+        config.chrome_enabled = false;
+        let mut wm = WindowManager::with_config(
+            config,
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+            None,
+        );
+        wm.set_panel_visible(false);
+
+        let k0 = wm.create_window(Box::new(NoopComponent));
+        assert!(wm.tile_window(k0));
+        wm.register_managed_layout(AREA);
+
+        let r0 = wm.region(k0);
+        assert_eq!(
+            r0.width, AREA.width,
+            "Single tiled window must span full width"
+        );
+        assert_eq!(
+            r0.height, AREA.height,
+            "Single tiled window must span full height"
         );
     }
 }
@@ -1394,5 +1387,410 @@ mod property_tests {
             }
             prop_assert!(check(&tree), "all weights must be positive");
         }
+    }
+}
+
+// ─── Module 7: Floating/Tiled Layer Separation ──────────────────────
+//
+// Regression tests enforcing the architectural rule that floating and
+// tiled windows must never be intermingled in the Z-index hierarchy.
+// All tiled windows occupy a mathematically flat base layer; all floating
+// windows occupy an elevated Z-layer above the entire tiled grid.
+
+#[cfg(test)]
+mod floating_tiled_separation {
+    use super::*;
+
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect as RatatuiRect;
+    use term_wm::events::{MouseButton, MouseEventKind};
+    use term_wm::render_app;
+    use term_wm_console::RatatuiBackend;
+    use term_wm_console::draw_plan_renderer::DrawPlanRenderer;
+    use term_wm_core::engine::CoreEngine;
+
+    fn assert_bifurcation_invariant(wm: &WindowManager) {
+        let order = wm.managed_draw_order_all();
+        let mut seen_floating = false;
+        for &key in order.iter() {
+            if wm.is_window_floating(key) {
+                seen_floating = true;
+            } else if seen_floating {
+                panic!(
+                    "Tiled window {:?} found after floating window in managed_draw_order",
+                    key
+                );
+            }
+        }
+    }
+
+    fn setup() -> (WindowManager, CoreEngine, DrawPlanRenderer, [WindowKey; 2]) {
+        let (wm, keys) = wm_with_two_windows();
+        (wm, CoreEngine::new(), DrawPlanRenderer::new(), keys)
+    }
+
+    fn advance_frame(
+        wm: &mut WindowManager,
+        engine: &mut CoreEngine,
+        renderer: &mut DrawPlanRenderer,
+    ) {
+        let area = RatatuiRect {
+            x: 0,
+            y: 0,
+            width: AREA.width,
+            height: AREA.height,
+        };
+        let buf = Buffer::empty(area);
+        let mut backend = RatatuiBackend::new(buf, area);
+        render_app(&mut backend, wm, engine, renderer);
+    }
+
+    #[test]
+    fn snap_to_edge_preserves_bifurcation() {
+        let (mut wm, mut engine, mut renderer, keys) = setup();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+        assert_bifurcation_invariant(&wm);
+
+        let header = header_rect(&wm, keys[0]);
+        let down = make_mouse(
+            MouseEventKind::Press(MouseButton::Left),
+            header.x as u16,
+            header.y as u16,
+        );
+        wm.dispatch_mouse(&down);
+
+        let mid_y = 12u16;
+        let right_edge = (AREA.x + i32::from(AREA.width) - 1) as u16;
+        let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), right_edge, mid_y);
+        wm.dispatch_mouse(&drag);
+
+        let up = make_mouse(
+            MouseEventKind::Release(MouseButton::Left),
+            right_edge,
+            mid_y,
+        );
+        wm.dispatch_mouse(&up);
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        assert_bifurcation_invariant(&wm);
+        assert!(
+            !wm.is_window_floating(keys[0]),
+            "snapped window must be tiled"
+        );
+    }
+
+    #[test]
+    fn floating_window_never_in_tiled_partition() {
+        let (mut wm, _engine, _renderer, keys) = setup();
+
+        wm.set_floating_rect(
+            keys[0],
+            Some(FloatRectSpec::Absolute(LayoutRect {
+                x: 10,
+                y: 5,
+                width: 20,
+                height: 10,
+            })),
+        );
+        wm.register_managed_layout(AREA);
+        assert_bifurcation_invariant(&wm);
+
+        wm.bring_to_front(keys[0]);
+        assert_bifurcation_invariant(&wm);
+
+        wm.bring_to_front(keys[0]);
+        assert_bifurcation_invariant(&wm);
+    }
+
+    #[test]
+    fn tiled_window_never_moved_to_front() {
+        let (mut wm, _engine, _renderer, keys) = setup();
+        wm.register_managed_layout(AREA);
+
+        let order_before = wm.managed_draw_order_all().to_vec();
+        wm.bring_to_front(keys[0]);
+        let order_after = wm.managed_draw_order_all().to_vec();
+
+        assert_eq!(
+            order_before, order_after,
+            "tiled window must not move in draw order"
+        );
+        assert_bifurcation_invariant(&wm);
+    }
+
+    #[test]
+    fn focus_cycle_preserves_bifurcation() {
+        let (mut wm, mut engine, mut renderer, keys) = setup();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        wm.set_floating_rect(
+            keys[0],
+            Some(FloatRectSpec::Absolute(LayoutRect {
+                x: 10,
+                y: 5,
+                width: 20,
+                height: 10,
+            })),
+        );
+        wm.register_managed_layout(AREA);
+        assert_bifurcation_invariant(&wm);
+
+        let event = term_wm::events::Event::Key(term_wm::events::KeyEvent {
+            code: term_wm::events::KeyCode::Tab,
+            modifiers: term_wm::events::KeyModifiers::NONE,
+            kind: term_wm::events::KeyKind::Press,
+        });
+        wm.handle_focus_event(&event);
+        assert_bifurcation_invariant(&wm);
+
+        wm.handle_focus_event(&event);
+        assert_bifurcation_invariant(&wm);
+    }
+
+    #[test]
+    fn shadow_only_on_floating() {
+        let (mut wm, mut engine, mut renderer, keys) = setup();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        wm.set_floating_rect(
+            keys[0],
+            Some(FloatRectSpec::Absolute(LayoutRect {
+                x: 10,
+                y: 5,
+                width: 20,
+                height: 10,
+            })),
+        );
+        wm.register_managed_layout(AREA);
+
+        for &key in wm.managed_draw_order_all() {
+            let is_floating = wm.is_window_floating(key);
+            let shadow_enabled = wm.config().shadow_enabled;
+            let expected_shadow = is_floating && shadow_enabled;
+            if is_floating {
+                assert!(
+                    expected_shadow,
+                    "floating window must have shadow when enabled"
+                );
+            } else {
+                assert!(!expected_shadow, "tiled window must NOT have shadow");
+            }
+        }
+    }
+
+    #[test]
+    fn drag_snap_round_trip() {
+        let (mut wm, mut engine, mut renderer, keys) = setup();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        let header = header_rect(&wm, keys[0]);
+        let down = make_mouse(
+            MouseEventKind::Press(MouseButton::Left),
+            header.x as u16,
+            header.y as u16,
+        );
+        wm.dispatch_mouse(&down);
+
+        let mid_y = 12u16;
+        let right_edge = (AREA.x + i32::from(AREA.width) - 1) as u16;
+        let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), right_edge, mid_y);
+        wm.dispatch_mouse(&drag);
+
+        let up = make_mouse(
+            MouseEventKind::Release(MouseButton::Left),
+            right_edge,
+            mid_y,
+        );
+        wm.dispatch_mouse(&up);
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+        assert_bifurcation_invariant(&wm);
+        assert!(!wm.is_window_floating(keys[0]), "after first snap: tiled");
+
+        let header2 = header_rect(&wm, keys[0]);
+        let down2 = make_mouse(
+            MouseEventKind::Press(MouseButton::Left),
+            header2.x as u16,
+            header2.y as u16,
+        );
+        wm.dispatch_mouse(&down2);
+
+        let away_x = (AREA.x + 10) as u16;
+        let away_y = (AREA.y + 5) as u16;
+        let drag2 = make_mouse(MouseEventKind::Drag(MouseButton::Left), away_x, away_y);
+        wm.dispatch_mouse(&drag2);
+
+        let up2 = make_mouse(MouseEventKind::Release(MouseButton::Left), away_x, away_y);
+        wm.dispatch_mouse(&up2);
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+        assert_bifurcation_invariant(&wm);
+        assert!(wm.is_window_floating(keys[0]), "after float: floating");
+
+        let header3 = header_rect(&wm, keys[0]);
+        let down3 = make_mouse(
+            MouseEventKind::Press(MouseButton::Left),
+            header3.x as u16,
+            header3.y as u16,
+        );
+        wm.dispatch_mouse(&down3);
+
+        let left_edge = AREA.x as u16;
+        let drag3 = make_mouse(MouseEventKind::Drag(MouseButton::Left), left_edge, mid_y);
+        wm.dispatch_mouse(&drag3);
+
+        let up3 = make_mouse(MouseEventKind::Release(MouseButton::Left), left_edge, mid_y);
+        wm.dispatch_mouse(&up3);
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+        assert_bifurcation_invariant(&wm);
+        assert!(!wm.is_window_floating(keys[0]), "after second snap: tiled");
+    }
+
+    #[test]
+    fn close_floating_preserves_tiled_order() {
+        let (mut wm, mut engine, mut renderer, keys) = setup();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        wm.set_floating_rect(
+            keys[0],
+            Some(FloatRectSpec::Absolute(LayoutRect {
+                x: 10,
+                y: 5,
+                width: 20,
+                height: 10,
+            })),
+        );
+        wm.register_managed_layout(AREA);
+        assert_bifurcation_invariant(&wm);
+
+        wm.close_window(keys[0]);
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        assert_bifurcation_invariant(&wm);
+        for &key in wm.managed_draw_order_all() {
+            assert!(
+                !wm.is_window_floating(key),
+                "only tiled windows should remain"
+            );
+        }
+    }
+
+    #[test]
+    fn multiple_floating_stacked_correctly() {
+        let mut config = WmConfig::standalone();
+        config.chrome_enabled = false;
+        let mut wm = WindowManager::with_config(
+            config,
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            None,
+            None,
+            None,
+        );
+        wm.set_panel_visible(false);
+
+        let k0 = wm.create_window(Box::new(NoopComponent));
+        let k1 = wm.create_window(Box::new(NoopComponent));
+        let k2 = wm.create_window(Box::new(NoopComponent));
+
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![
+                LayoutNode::Leaf(k0),
+                LayoutNode::Leaf(k1),
+                LayoutNode::Leaf(k2),
+            ],
+            weights: vec![1.0, 1.0, 1.0],
+            constraints: vec![],
+            resizable: false,
+        };
+        wm.set_managed_layout(TilingLayout::new(split));
+
+        wm.set_floating_rect(
+            k0,
+            Some(FloatRectSpec::Absolute(LayoutRect {
+                x: 5,
+                y: 5,
+                width: 20,
+                height: 10,
+            })),
+        );
+        wm.set_floating_rect(
+            k1,
+            Some(FloatRectSpec::Absolute(LayoutRect {
+                x: 10,
+                y: 5,
+                width: 20,
+                height: 10,
+            })),
+        );
+        wm.register_managed_layout(AREA);
+
+        assert!(!wm.is_window_floating(k2), "k2 must be tiled");
+        assert!(wm.is_window_floating(k0), "k0 must be floating");
+        assert!(wm.is_window_floating(k1), "k1 must be floating");
+
+        assert_bifurcation_invariant(&wm);
+
+        wm.bring_to_front(k0);
+        assert_bifurcation_invariant(&wm);
+
+        wm.bring_to_front(k1);
+        assert_bifurcation_invariant(&wm);
+
+        wm.bring_to_front(k0);
+        assert_bifurcation_invariant(&wm);
+    }
+
+    #[test]
+    fn void_snap_preserves_bifurcation() {
+        let (mut wm, mut engine, mut renderer, keys) = setup();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        let corner_x = (AREA.x + i32::from(AREA.width) - 1) as u16;
+        let corner_y = (AREA.y + i32::from(AREA.height) - 1) as u16;
+        let header = header_rect(&wm, keys[0]);
+        let down = make_mouse(
+            MouseEventKind::Press(MouseButton::Left),
+            header.x as u16,
+            header.y as u16,
+        );
+        wm.dispatch_mouse(&down);
+
+        let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), corner_x, corner_y);
+        wm.dispatch_mouse(&drag);
+
+        let up = make_mouse(
+            MouseEventKind::Release(MouseButton::Left),
+            corner_x,
+            corner_y,
+        );
+        wm.dispatch_mouse(&up);
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        assert_bifurcation_invariant(&wm);
+    }
+
+    #[test]
+    fn normal_snap_preserves_bifurcation() {
+        let (mut wm, mut engine, mut renderer, keys) = setup();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        let header = header_rect(&wm, keys[0]);
+        let down = make_mouse(
+            MouseEventKind::Press(MouseButton::Left),
+            header.x as u16,
+            header.y as u16,
+        );
+        wm.dispatch_mouse(&down);
+
+        let left_edge = AREA.x as u16;
+        let mid_y = 12u16;
+        let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), left_edge, mid_y);
+        wm.dispatch_mouse(&drag);
+
+        let up = make_mouse(MouseEventKind::Release(MouseButton::Left), left_edge, mid_y);
+        wm.dispatch_mouse(&up);
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        assert_bifurcation_invariant(&wm);
     }
 }

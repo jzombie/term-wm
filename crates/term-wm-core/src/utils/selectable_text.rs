@@ -311,6 +311,7 @@ pub fn handle_selection_mouse<H: SelectionHost>(
                 let selection = host.selection_controller();
                 selection.set_pointer(mouse.column, mouse.row);
                 selection.prepare_drag(pos);
+                return true;
             }
             false
         }
@@ -723,8 +724,8 @@ mod tests {
             width: 10,
             height: 5,
         };
-        // Down records position but doesn't consume — clicks pass through
-        assert!(!handle_selection_mouse(
+        // Down records position and consumes to lock the capture for drag-to-select
+        assert!(handle_selection_mouse(
             &mut host,
             true,
             &mouse(1, 1, MouseEventKind::Press(MouseButton::Left)),
