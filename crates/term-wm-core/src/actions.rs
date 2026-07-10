@@ -49,7 +49,6 @@ pub enum TermWmAction {
     ScrollUp,
     ScrollDown,
     ToggleSelection,
-    CopySelection,
     PasteClipboard,
 
     // --- New component-level actions ---
@@ -76,8 +75,9 @@ pub enum TermWmAction {
     MinimizeWindow,
     MaximizeWindow,
     ToggleDebugWindow,
-    BringFloatingFront,
     ExitUi,
+    ToggleSystemPanel,
+    SendNotification(String),
 
     // Clipboard
     ConfirmAction(ConfirmAction),
@@ -123,6 +123,14 @@ impl<Msg> EventResult<Msg> {
             _ => None,
         }
     }
+    /// Transform the inner action value, preserving Ignored/Consumed.
+    pub fn map<U>(self, f: impl FnOnce(Msg) -> U) -> EventResult<U> {
+        match self {
+            Self::Action(msg) => EventResult::Action(f(msg)),
+            Self::Consumed => EventResult::Consumed,
+            Self::Ignored => EventResult::Ignored,
+        }
+    }
 }
 
 impl TermWmAction {
@@ -161,8 +169,9 @@ impl TermWmAction {
             | TermWmAction::MinimizeWindow
             | TermWmAction::MaximizeWindow
             | TermWmAction::ToggleDebugWindow
-            | TermWmAction::BringFloatingFront
-            | TermWmAction::ExitUi => Category::Windows,
+            | TermWmAction::ExitUi
+            | TermWmAction::ToggleSystemPanel
+            | TermWmAction::SendNotification(_) => Category::Windows,
 
             TermWmAction::MenuUp
             | TermWmAction::MenuDown
@@ -191,7 +200,6 @@ impl TermWmAction {
             | TermWmAction::ScrollToBottom => Category::Scrolling,
 
             TermWmAction::ToggleSelection
-            | TermWmAction::CopySelection
             | TermWmAction::PasteClipboard
             | TermWmAction::ClearSelection
             | TermWmAction::ClipboardPaste(_) => Category::Selection,
@@ -248,7 +256,6 @@ impl fmt::Display for TermWmAction {
             TermWmAction::ScrollUp => "Scroll up",
             TermWmAction::ScrollDown => "Scroll down",
             TermWmAction::ToggleSelection => "Toggle selection",
-            TermWmAction::CopySelection => "Copy selection",
             TermWmAction::PasteClipboard => "Paste clipboard",
             TermWmAction::KeyToBytes(_) => "Key to bytes",
             TermWmAction::Scroll(_) => "Scroll",
@@ -267,8 +274,9 @@ impl fmt::Display for TermWmAction {
             TermWmAction::MinimizeWindow => "Minimize window",
             TermWmAction::MaximizeWindow => "Maximize window",
             TermWmAction::ToggleDebugWindow => "Toggle debug window",
-            TermWmAction::BringFloatingFront => "Bring floating front",
             TermWmAction::ExitUi => "Exit UI",
+            TermWmAction::ToggleSystemPanel => "Toggle system panel",
+            TermWmAction::SendNotification(_) => "Send notification",
             TermWmAction::ConfirmAction(_) => "Confirm action",
             TermWmAction::ClipboardPaste(_) => "Clipboard paste",
             TermWmAction::ProcessExited => "Process exited",
@@ -297,4 +305,6 @@ pub enum SystemTask {
     /// requiring mouse motion events (which stop flowing when the user holds
     /// the mouse still).
     TemporalDwellTick,
+    /// A notification's TTL has expired — dismiss it from the queue.
+    DismissNotification(u64),
 }

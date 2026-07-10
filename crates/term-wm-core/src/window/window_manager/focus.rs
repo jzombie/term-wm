@@ -44,7 +44,6 @@ impl WindowManager {
     pub fn focus_app_window(&mut self, key: WindowKey) {
         self.focus.set_current(key);
         self.bring_to_front_key(key);
-        self.managed_draw_order = self.z_order.clone();
         self.mark_layout_dirty();
     }
 
@@ -53,7 +52,6 @@ impl WindowManager {
         // retain their size regardless of Z-order changes.
         self.focus.set_current(key);
         self.bring_to_front_key(key);
-        self.managed_draw_order = self.z_order.clone();
         self.mark_layout_dirty();
     }
 

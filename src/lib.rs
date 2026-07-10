@@ -85,109 +85,106 @@ pub fn render_app(
     let plan_regions = draw_plan.regions();
     let num_windows = plan_regions.len();
     for (i, region) in plan_regions.iter().enumerate() {
-        let key = region.key;
-        let full = region.bounds;
-        if full.width == 0 || full.height == 0 {
-            continue;
-        }
-        let dest = wm.window_dest(key, full);
-        let inner = decorator.content_area(Rect {
-            x: 0,
-            y: 0,
-            width: full.width,
-            height: full.height,
-        });
-        if inner.width == 0 || inner.height == 0 {
-            continue;
-        }
-        let floating = wm.is_window_floating(key);
-        let focused = wm.focused_window() == key;
-        let draw_shadow = floating && wm.config().shadow_enabled;
-        let z_depth = WindowManager::compute_z_depth(i, total);
-        let surface = WindowSurface {
-            full,
-            inner,
-            dest,
-            draw_shadow,
-            z_depth,
-        };
-
-        // Register window content hitbox
-        let decorator_ref = wm.decorator();
-        let screen_inner = decorator_ref.content_area(Rect {
-            x: surface.dest.x,
-            y: surface.dest.y,
-            width: surface.dest.width,
-            height: surface.dest.height,
-        });
-        wm.hitbox_registry_mut()
-            .register(HitTarget::Window(key), screen_inner);
-
-        let title = all_titles.get(&key).map(String::as_str).unwrap_or("");
-        let win_ctx = term_wm_core::window::decorator::WindowRenderCtx {
-            title,
-            focused,
-            floating,
-            direct_mode: wm.direct_mode(key),
-            hover_pos: wm.hover_pos(),
-            theme: wm.config().theme,
-        };
-        let decorator_arc = Arc::clone(&decorator);
-        composite_window(
-            backend,
-            &surface,
-            decorator_arc.as_ref(),
-            win_ctx,
-            |backend, _registry| {
-                let ctx = wm
-                    .component_context_for(focused, key)
-                    .with_screen_area(screen_inner);
-                if let Some(component) = wm.component_for_key_mut(key) {
-                    component.render(backend, surface.inner, &ctx, &mut HitboxRegistry::new());
+        match &region.region_type {
+            term_wm_core::draw_plan::RegionType::Window(key) => {
+                let full = region.bounds;
+                if full.width == 0 || full.height == 0 {
+                    continue;
                 }
-            },
-            &mut scratch_buf,
-        );
+                let dest = wm.window_dest(*key, full);
+                let inner = decorator.content_area(Rect {
+                    x: 0,
+                    y: 0,
+                    width: full.width,
+                    height: full.height,
+                });
+                if inner.width == 0 || inner.height == 0 {
+                    continue;
+                }
+                let floating = wm.is_window_floating(*key);
+                let focused = wm.focused_window() == *key;
+                let draw_shadow = floating && wm.config().shadow_enabled;
+                let z_depth = WindowManager::compute_z_depth(i, total);
+                let surface = WindowSurface {
+                    full,
+                    inner,
+                    dest,
+                    draw_shadow,
+                    z_depth,
+                };
+
+                // Register window content hitbox
+                let decorator_ref = wm.decorator();
+                let screen_inner = decorator_ref.content_area(Rect {
+                    x: surface.dest.x,
+                    y: surface.dest.y,
+                    width: surface.dest.width,
+                    height: surface.dest.height,
+                });
+                wm.hitbox_registry_mut()
+                    .register(HitTarget::Window(*key), screen_inner);
+
+                // Collect chrome entries for this window, then register
+                let mut chrome = Vec::new();
+                for h in wm.resize_handles().iter().filter(|h| h.key == *key) {
+                    chrome.push((HitTarget::ChromeResize(h.key, h.edge), h.rect));
+                }
+                for h in wm.floating_headers().iter().filter(|h| h.key == *key) {
+                    chrome.push((HitTarget::ChromeHeader(h.key, HeaderAction::Drag), h.rect));
+                    let outer_right =
+                        (h.rect.x.saturating_add(i32::from(h.rect.width))).max(0) as u16;
+                    for (bx, action, _) in header_buttons(outer_right) {
+                        chrome.push((
+                            HitTarget::ChromeHeader(h.key, action),
+                            term_wm_layout_engine::LayoutRect {
+                                x: i32::from(bx),
+                                y: h.rect.y,
+                                width: 1,
+                                height: 1,
+                            },
+                        ));
+                    }
+                }
+                for (target, rect) in chrome {
+                    wm.hitbox_registry_mut().register(target, rect);
+                }
+
+                let title = all_titles.get(key).map(String::as_str).unwrap_or("");
+                let win_ctx = term_wm_core::window::decorator::WindowRenderCtx {
+                    title,
+                    focused,
+                    floating,
+                    direct_mode: wm.direct_mode(*key),
+                    hover_pos: wm.hover_pos(),
+                    theme: wm.config().theme,
+                };
+                let decorator_arc = Arc::clone(&decorator);
+                composite_window(
+                    backend,
+                    &surface,
+                    decorator_arc.as_ref(),
+                    win_ctx,
+                    |backend, _registry| {
+                        let ctx = wm
+                            .component_context_for(focused, *key)
+                            .with_screen_area(screen_inner);
+                        if let Some(component) = wm.component_for_key_mut(*key) {
+                            component.render(
+                                backend,
+                                surface.inner,
+                                &ctx,
+                                &mut HitboxRegistry::new(),
+                            );
+                        }
+                    },
+                    &mut scratch_buf,
+                );
+            }
+            // Notification rendering deferred to after tiling handles
+            term_wm_core::draw_plan::RegionType::Notification(_) => {}
+        }
     }
     renderer.put_scratch(scratch_buf);
-
-    // Register chrome hitboxes (resize handles + header drag zones)
-    // Collect data first to avoid simultaneous mutable + immutable borrows on wm.
-    // Order: tiling handles (lowest z), window content (middle), chrome (highest z).
-    // This ensures floating windows block clicks to tiling handles beneath them.
-    let chrome_entries: Vec<(HitTarget, term_wm_layout_engine::LayoutRect)> = {
-        let mut entries = Vec::new();
-        for region in draw_plan.regions() {
-            let k = region.key;
-            for h in wm.resize_handles().iter().filter(|h| h.key == k) {
-                entries.push((HitTarget::ChromeResize(h.key, h.edge), h.rect));
-            }
-            for h in wm.floating_headers().iter().filter(|h| h.key == k) {
-                // Drag zone (full header width) — lower priority in reverse scan
-                entries.push((HitTarget::ChromeHeader(h.key, HeaderAction::Drag), h.rect));
-                // Per-button 1x1 hitboxes at exact button positions — higher priority
-                let outer_right = (h.rect.x.saturating_add(i32::from(h.rect.width))).max(0) as u16;
-                for (bx, action, _) in header_buttons(outer_right) {
-                    let button_rect = term_wm_layout_engine::LayoutRect {
-                        x: i32::from(bx),
-                        y: h.rect.y,
-                        width: 1,
-                        height: 1,
-                    };
-                    entries.push((HitTarget::ChromeHeader(h.key, action), button_rect));
-                }
-            }
-        }
-        // Tiling split handles last — highest priority at split boundaries,
-        // so they intercept clicks that would otherwise hit a Window region.
-        for handle in wm.tiling_handles() {
-            entries.push((HitTarget::LayoutHandle, handle.rect));
-        }
-        entries
-    };
-    for (target, rect) in chrome_entries {
-        wm.hitbox_registry_mut().register(target, rect);
-    }
 
     // Render panels AFTER windows
     render_panels(backend, wm);
@@ -343,6 +340,16 @@ pub fn render_app(
         }
     }
 
+    // Render notification toasts (after tiling handles, before overlays)
+    {
+        for region in draw_plan.regions() {
+            if let term_wm_core::draw_plan::RegionType::Notification(msg) = &region.region_type {
+                let area = term_wm_ui_components::helpers::layout_rect_to_rect(region.bounds);
+                renderer.render_notification(backend, area, msg);
+            }
+        }
+    }
+
     // Render overlay drop shadows before overlays themselves
     {
         use term_wm_console::RatatuiBackend;
@@ -355,6 +362,17 @@ pub fn render_app(
     }
     // Render overlays (command menu, help, exit confirm)
     render_overlays(backend, wm);
+
+    // Register notification hitboxes — swallows mouse events over toast area
+    for region in draw_plan.regions() {
+        if matches!(
+            region.region_type,
+            term_wm_core::draw_plan::RegionType::Notification(_)
+        ) {
+            wm.hitbox_registry_mut()
+                .register(HitTarget::Notification, region.bounds);
+        }
+    }
 
     // Cursor overlay — MUST be last (highest Z-order) so it paints over
     // all previously rendered content including overlays and chrome.

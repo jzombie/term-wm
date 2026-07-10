@@ -67,7 +67,6 @@ impl TermWmApp {
                 TermWmAction::ToggleMouseCapture,
                 TermWmAction::ToggleClipboardMode,
                 TermWmAction::ToggleWindowSelection,
-                TermWmAction::BringFloatingFront,
                 TermWmAction::ExitUi,
             ])
             .build()

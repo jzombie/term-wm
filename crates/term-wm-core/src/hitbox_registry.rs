@@ -55,6 +55,8 @@ pub enum HitTarget {
     ChromeHeader(WindowKey, HeaderAction),
     /// Click on a tiling layout split handle.
     LayoutHandle,
+    /// Click on a notification toast — event is consumed, no passthrough.
+    Notification,
 }
 
 /// A single entry in the hitbox registry.
@@ -183,6 +185,16 @@ impl HitboxRegistry {
             .iter()
             .rev()
             .find(|entry| matches!(entry.target, HitTarget::Component(k, _) if k == key))
+            .map(|entry| entry.area)
+    }
+
+    /// Find the screen-space area for a window by key.
+    /// Used for system windows (debug log) that aren't in the tiling layout.
+    pub fn window_area(&self, key: WindowKey) -> Option<LayoutRect> {
+        self.entries
+            .iter()
+            .rev()
+            .find(|entry| matches!(entry.target, HitTarget::Window(k) if k == key))
             .map(|entry| entry.area)
     }
 

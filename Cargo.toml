@@ -73,6 +73,7 @@ term-wm-pty-engine = { path = "crates/term-wm-pty-engine", version = "0.8.16-alp
 term-wm-render = { path = "crates/term-wm-render", version = "0.8.16-alpha" }
 term-wm-sys-ui-components = { path = "crates/term-wm-sys-ui-components", version = "0.8.16-alpha" }
 term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.8.16-alpha" }
+textwrap = "0.16.2"
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["full"] }
 tracing = "0.1.44"
