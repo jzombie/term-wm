@@ -173,30 +173,16 @@ impl Component<TermWmAction> for WmSystemPanelComponent {
         event: &term_wm_core::events::Event,
         ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
-        // Check for button click first (before scroll view intercepts)
-        if let term_wm_core::events::Event::Mouse(mouse) = event
-            && let term_wm_core::events::MouseEventKind::Press(MouseButton::Left) = mouse.kind
-            && let Some(screen_area) = ctx.screen_area()
-        {
-            let sa_x = screen_area.x as u16;
-            let sa_y = screen_area.y as u16;
-            if mouse.column >= sa_x
-                && mouse.column < sa_x.saturating_add(screen_area.width)
-                && mouse.row >= sa_y
-                && mouse.row < sa_y.saturating_add(screen_area.height)
-            {
-                let local_x = mouse.column.saturating_sub(sa_x);
-                let local_y = mouse.row.saturating_sub(sa_y);
-                let result = self.on_mouse_press(
-                    local_x,
-                    local_y,
-                    MouseButton::Left,
-                    mouse.modifiers,
-                    ctx,
-                );
-                if !result.is_ignored() {
-                    return result;
-                }
+        if let Some((local_x, local_y)) = ctx.localize_mouse_click(event, MouseButton::Left) {
+            let result = self.on_mouse_press(
+                local_x,
+                local_y,
+                MouseButton::Left,
+                term_wm_core::events::KeyModifiers::NONE,
+                ctx,
+            );
+            if !result.is_ignored() {
+                return result;
             }
         }
         self.scroll_view.handle_events(event, ctx)

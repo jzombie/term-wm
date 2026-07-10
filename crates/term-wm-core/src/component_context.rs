@@ -5,6 +5,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::app_context::AppContext;
+use crate::events::{Event, MouseButton, MouseEventKind};
 use crate::keybindings::KeyBindings;
 use crate::window::WindowKey;
 use crate::wm_config::WmConfig;
@@ -354,6 +355,37 @@ impl ComponentContext {
         let mut ctx = self.clone();
         ctx.screen_area = Some(area);
         ctx
+    }
+
+    /// If `event` is a `Press` of the given `button` within this component's
+    /// screen area, returns the local coordinates `(col, row)` relative to
+    /// the component's top-left `(0, 0)`. Returns `None` otherwise.
+    pub fn localize_mouse_click(&self, event: &Event, button: MouseButton) -> Option<(u16, u16)> {
+        let mouse = match event {
+            Event::Mouse(m) => m,
+            _ => return None,
+        };
+        if !matches!(mouse.kind, MouseEventKind::Press(b) if b == button) {
+            return None;
+        }
+        let area = self.screen_area?;
+
+        // Lift to i32 for sign-safe arithmetic against potentially negative origins
+        let m_x = i32::from(mouse.column);
+        let m_y = i32::from(mouse.row);
+        let w = i32::from(area.width);
+        let h = i32::from(area.height);
+
+        // Bounds check in i32 space
+        if m_x < area.x || m_x >= area.x + w || m_y < area.y || m_y >= area.y + h {
+            return None;
+        }
+
+        // Compute local offsets, clamp negatives, downcast
+        let local_x = (m_x - area.x).max(0) as u16;
+        let local_y = (m_y - area.y).max(0) as u16;
+
+        Some((local_x, local_y))
     }
 }
 
