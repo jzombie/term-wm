@@ -2179,6 +2179,7 @@ impl WindowManager {
     /// Push a notification and schedule its auto-dismiss via the system task scheduler.
     pub fn push_notification(&mut self, message: impl Into<String>, ttl: Duration) -> u64 {
         let id = self.notification_queue.push(message);
+        tracing::info!("push_notification: id={}, queue_len={}", id, self.notification_queue.len());
         if let Some(handle) = &self.system_task_handle {
             handle.schedule_once(ttl, SystemTask::DismissNotification(id));
         }

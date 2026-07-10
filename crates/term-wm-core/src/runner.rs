@@ -96,8 +96,10 @@ where
     if matches!(event, Event::Mouse(_)) {
         if let Some(wm_event) = core_event_to_wm(event) {
             let result = app.wm().dispatch_mouse(&wm_event);
+            tracing::info!("runner: dispatch_mouse result={:?}", result);
             match result {
                 EventResult::Action((target_key, action)) => {
+                    tracing::info!("runner: mouse action {:?} for key {:?}", action, target_key);
                     let key = target_key.unwrap_or_else(|| app.wm().focused_window());
                     let mut queue = VecDeque::from([(key, action)]);
                     drain_action_queue(app, &mut queue);

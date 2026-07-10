@@ -2966,6 +2966,7 @@ dependencies = [
  "term-wm-layout-engine",
  "term-wm-render",
  "term-wm-ui-components",
+ "tracing",
  "webbrowser",
 ]
 

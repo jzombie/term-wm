@@ -119,11 +119,11 @@ impl Component<TermWmAction> for WmSystemPanelComponent {
             content.set_wrap(false);
         }
 
-        // The button is at virtual row 7 (after 5 info lines + empty line)
+        // The button is at virtual row 5 (after 5 info/empty lines)
         // in the full content, spanning 3 lines (top border, label, bottom border).
         self.button_rect.set(Some(LayoutRect {
             x: 0,
-            y: 7,
+            y: 5,
             width: BUTTON_WIDTH,
             height: 3,
         }));
@@ -178,17 +178,26 @@ impl Component<TermWmAction> for WmSystemPanelComponent {
             && let term_wm_core::events::MouseEventKind::Press(MouseButton::Left) = mouse.kind
             && let Some(screen_area) = ctx.screen_area()
         {
-            // Strict bounds check — no clamping, no phantom clicks
             let sa_x = screen_area.x as u16;
             let sa_y = screen_area.y as u16;
+            tracing::info!(
+                "system_panel: mouse press at ({}, {}), screen_area=({}, {}, {}, {})",
+                mouse.column, mouse.row, sa_x, sa_y, screen_area.width, screen_area.height
+            );
             if mouse.column >= sa_x
                 && mouse.column < sa_x.saturating_add(screen_area.width)
                 && mouse.row >= sa_y
                 && mouse.row < sa_y.saturating_add(screen_area.height)
             {
-                // Safe: bounds proven, saturating_sub cannot underflow
                 let local_x = mouse.column.saturating_sub(sa_x);
                 let local_y = mouse.row.saturating_sub(sa_y);
+                tracing::info!(
+                    "system_panel: local ({}, {}), button_rect={:?}, scroll_offset={}",
+                    local_x,
+                    local_y,
+                    self.button_rect.get(),
+                    self.scroll_view.scroll_handle().info().offset_y
+                );
                 let result = self.on_mouse_press(
                     local_x,
                     local_y,
@@ -196,12 +205,12 @@ impl Component<TermWmAction> for WmSystemPanelComponent {
                     mouse.modifiers,
                     ctx,
                 );
+                tracing::info!("system_panel: on_mouse_press result={:?}", result);
                 if !result.is_ignored() {
                     return result;
                 }
             }
         }
-        // Delegate everything else to scroll view (scroll wheel, keyboard, etc.)
         self.scroll_view.handle_events(event, ctx)
     }
 
