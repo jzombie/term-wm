@@ -54,7 +54,6 @@ impl Component<TermWmAction> for TextRendererComponent {
             return;
         }
 
-        let screen_area = ctx.screen_area().map(layout_rect_to_rect).unwrap_or(area);
         self.viewport_cache.set(ctx.viewport());
         if let Some(handle) = ctx.scroll_handle() {
             self.scroll_handle.replace(Some(handle));
@@ -174,7 +173,7 @@ impl Component<TermWmAction> for TextRendererComponent {
             cum_visual += line_vh;
         }
         let backend = crate::helpers::downcast_ratatui(backend);
-        self.render_selection_overlay(&mut backend.buffer, screen_area, &ctx.config().theme);
+        self.render_selection_overlay(&mut backend.buffer, area, &ctx.config().theme);
     }
 
     fn on_mouse_press(
