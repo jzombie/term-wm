@@ -140,7 +140,11 @@ fn generate_notification_regions(plan: &mut DrawPlan, wm: &WindowManager) {
     for notification in wm.notifications().renderable().rev() {
         let lines = textwrap::wrap(&notification.message, &wrap_opts);
         let h = (lines.len() as u16).saturating_add(2);
-        let h = h.min(managed.height.saturating_sub(y_offset.saturating_add(MARGIN)));
+        let h = h.min(
+            managed
+                .height
+                .saturating_sub(y_offset.saturating_add(MARGIN)),
+        );
         if h < 3 {
             break;
         }
