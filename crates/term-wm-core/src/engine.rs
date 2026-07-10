@@ -125,11 +125,6 @@ fn generate_notification_regions(plan: &mut DrawPlan, wm: &WindowManager) {
     if notif_count == 0 {
         return;
     }
-    tracing::info!(
-        "generate_notification_regions: {} notifications, managed={:?}",
-        notif_count,
-        managed
-    );
 
     // Circuit breaker — terminal too narrow; skip notification layers only.
     if managed.width <= MARGIN.saturating_mul(2).saturating_add(2) {

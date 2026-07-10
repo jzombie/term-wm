@@ -180,10 +180,6 @@ impl Component<TermWmAction> for WmSystemPanelComponent {
         {
             let sa_x = screen_area.x as u16;
             let sa_y = screen_area.y as u16;
-            tracing::info!(
-                "system_panel: mouse press at ({}, {}), screen_area=({}, {}, {}, {})",
-                mouse.column, mouse.row, sa_x, sa_y, screen_area.width, screen_area.height
-            );
             if mouse.column >= sa_x
                 && mouse.column < sa_x.saturating_add(screen_area.width)
                 && mouse.row >= sa_y
@@ -191,13 +187,6 @@ impl Component<TermWmAction> for WmSystemPanelComponent {
             {
                 let local_x = mouse.column.saturating_sub(sa_x);
                 let local_y = mouse.row.saturating_sub(sa_y);
-                tracing::info!(
-                    "system_panel: local ({}, {}), button_rect={:?}, scroll_offset={}",
-                    local_x,
-                    local_y,
-                    self.button_rect.get(),
-                    self.scroll_view.scroll_handle().info().offset_y
-                );
                 let result = self.on_mouse_press(
                     local_x,
                     local_y,
@@ -205,7 +194,6 @@ impl Component<TermWmAction> for WmSystemPanelComponent {
                     mouse.modifiers,
                     ctx,
                 );
-                tracing::info!("system_panel: on_mouse_press result={:?}", result);
                 if !result.is_ignored() {
                     return result;
                 }
