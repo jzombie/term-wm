@@ -150,10 +150,8 @@ pub fn render_app(
                     &mut scratch_buf,
                 );
             }
-            term_wm_core::draw_plan::RegionType::Notification(msg) => {
-                let area = term_wm_ui_components::helpers::layout_rect_to_rect(region.bounds);
-                renderer.render_notification(backend, area, msg);
-            }
+            // Notification rendering deferred to after tiling handles
+            term_wm_core::draw_plan::RegionType::Notification(_) => {}
         }
     }
     renderer.put_scratch(scratch_buf);
@@ -349,6 +347,16 @@ pub fn render_app(
                         cell.set_style(cell.style().add_modifier(dim));
                     }
                 }
+            }
+        }
+    }
+
+    // Render notification toasts (after tiling handles, before overlays)
+    {
+        for region in draw_plan.regions() {
+            if let term_wm_core::draw_plan::RegionType::Notification(msg) = &region.region_type {
+                let area = term_wm_ui_components::helpers::layout_rect_to_rect(region.bounds);
+                renderer.render_notification(backend, area, msg);
             }
         }
     }
