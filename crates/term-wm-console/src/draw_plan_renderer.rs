@@ -169,6 +169,31 @@ impl DrawPlanRenderer {
         self.direct_buffer = backend.buffer;
     }
 
+    /// Render a notification toast into the target buffer.
+    pub fn render_notification(
+        &self,
+        backend: &mut dyn crate::RenderBackend,
+        area: Rect,
+        msg: &str,
+    ) {
+        use ratatui::style::{Color, Style};
+        use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
+
+        let Some(rb) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() else {
+            return;
+        };
+        let buf = &mut rb.buffer;
+        Clear.render(area, buf);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::White))
+            .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+        Paragraph::new(msg)
+            .block(block)
+            .wrap(Wrap { trim: true })
+            .render(area, buf);
+    }
+
     /// Render the draw plan to the terminal frame.
     /// This is the ONLY place where Ratatui types are used for rendering.
     pub fn render(

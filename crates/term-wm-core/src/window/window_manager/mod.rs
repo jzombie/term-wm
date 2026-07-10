@@ -2190,6 +2190,7 @@ impl WindowManager {
 
     /// Dismiss a notification by ID.
     pub fn dismiss_notification(&mut self, id: u64) {
+        tracing::info!("dismiss_notification: id={}", id);
         self.notification_queue.dismiss(id);
         self.mark_layout_dirty();
     }

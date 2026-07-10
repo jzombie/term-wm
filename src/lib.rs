@@ -85,72 +85,76 @@ pub fn render_app(
     let plan_regions = draw_plan.regions();
     let num_windows = plan_regions.len();
     for (i, region) in plan_regions.iter().enumerate() {
-        let key = match region.region_type {
-            term_wm_core::draw_plan::RegionType::Window(k) => k,
-            _ => continue,
-        };
-        let full = region.bounds;
-        if full.width == 0 || full.height == 0 {
-            continue;
-        }
-        let dest = wm.window_dest(key, full);
-        let inner = decorator.content_area(Rect {
-            x: 0,
-            y: 0,
-            width: full.width,
-            height: full.height,
-        });
-        if inner.width == 0 || inner.height == 0 {
-            continue;
-        }
-        let floating = wm.is_window_floating(key);
-        let focused = wm.focused_window() == key;
-        let draw_shadow = floating && wm.config().shadow_enabled;
-        let z_depth = WindowManager::compute_z_depth(i, total);
-        let surface = WindowSurface {
-            full,
-            inner,
-            dest,
-            draw_shadow,
-            z_depth,
-        };
-
-        // Register window content hitbox
-        let decorator_ref = wm.decorator();
-        let screen_inner = decorator_ref.content_area(Rect {
-            x: surface.dest.x,
-            y: surface.dest.y,
-            width: surface.dest.width,
-            height: surface.dest.height,
-        });
-        wm.hitbox_registry_mut()
-            .register(HitTarget::Window(key), screen_inner);
-
-        let title = all_titles.get(&key).map(String::as_str).unwrap_or("");
-        let win_ctx = term_wm_core::window::decorator::WindowRenderCtx {
-            title,
-            focused,
-            floating,
-            direct_mode: wm.direct_mode(key),
-            hover_pos: wm.hover_pos(),
-            theme: wm.config().theme,
-        };
-        let decorator_arc = Arc::clone(&decorator);
-        composite_window(
-            backend,
-            &surface,
-            decorator_arc.as_ref(),
-            win_ctx,
-            |backend, _registry| {
-                let ctx = wm
-                    .component_context_for(focused, key)
-                    .with_screen_area(screen_inner);
-                if let Some(component) = wm.component_for_key_mut(key) {
-                    component.render(backend, surface.inner, &ctx, &mut HitboxRegistry::new());
+        match &region.region_type {
+            term_wm_core::draw_plan::RegionType::Window(key) => {
+                let full = region.bounds;
+                if full.width == 0 || full.height == 0 {
+                    continue;
                 }
-            },
-            &mut scratch_buf,
-        );
+                let dest = wm.window_dest(*key, full);
+                let inner = decorator.content_area(Rect {
+                    x: 0,
+                    y: 0,
+                    width: full.width,
+                    height: full.height,
+                });
+                if inner.width == 0 || inner.height == 0 {
+                    continue;
+                }
+                let floating = wm.is_window_floating(*key);
+                let focused = wm.focused_window() == *key;
+                let draw_shadow = floating && wm.config().shadow_enabled;
+                let z_depth = WindowManager::compute_z_depth(i, total);
+                let surface = WindowSurface {
+                    full,
+                    inner,
+                    dest,
+                    draw_shadow,
+                    z_depth,
+                };
+
+                // Register window content hitbox
+                let decorator_ref = wm.decorator();
+                let screen_inner = decorator_ref.content_area(Rect {
+                    x: surface.dest.x,
+                    y: surface.dest.y,
+                    width: surface.dest.width,
+                    height: surface.dest.height,
+                });
+                wm.hitbox_registry_mut()
+                    .register(HitTarget::Window(*key), screen_inner);
+
+                let title = all_titles.get(key).map(String::as_str).unwrap_or("");
+                let win_ctx = term_wm_core::window::decorator::WindowRenderCtx {
+                    title,
+                    focused,
+                    floating,
+                    direct_mode: wm.direct_mode(*key),
+                    hover_pos: wm.hover_pos(),
+                    theme: wm.config().theme,
+                };
+                let decorator_arc = Arc::clone(&decorator);
+                composite_window(
+                    backend,
+                    &surface,
+                    decorator_arc.as_ref(),
+                    win_ctx,
+                    |backend, _registry| {
+                        let ctx = wm
+                            .component_context_for(focused, *key)
+                            .with_screen_area(screen_inner);
+                        if let Some(component) = wm.component_for_key_mut(*key) {
+                            component.render(backend, surface.inner, &ctx, &mut HitboxRegistry::new());
+                        }
+                    },
+                    &mut scratch_buf,
+                );
+            }
+            term_wm_core::draw_plan::RegionType::Notification(msg) => {
+                let area = term_wm_ui_components::helpers::layout_rect_to_rect(region.bounds);
+                renderer.render_notification(backend, area, msg);
+            }
+        }
     }
     renderer.put_scratch(scratch_buf);
 
