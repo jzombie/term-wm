@@ -131,7 +131,8 @@ pub fn render_app(
                 }
                 for h in wm.floating_headers().iter().filter(|h| h.key == *key) {
                     chrome.push((HitTarget::ChromeHeader(h.key, HeaderAction::Drag), h.rect));
-                    let outer_right = (h.rect.x.saturating_add(i32::from(h.rect.width))).max(0) as u16;
+                    let outer_right =
+                        (h.rect.x.saturating_add(i32::from(h.rect.width))).max(0) as u16;
                     for (bx, action, _) in header_buttons(outer_right) {
                         chrome.push((
                             HitTarget::ChromeHeader(h.key, action),
@@ -168,7 +169,12 @@ pub fn render_app(
                             .component_context_for(focused, *key)
                             .with_screen_area(screen_inner);
                         if let Some(component) = wm.component_for_key_mut(*key) {
-                            component.render(backend, surface.inner, &ctx, &mut HitboxRegistry::new());
+                            component.render(
+                                backend,
+                                surface.inner,
+                                &ctx,
+                                &mut HitboxRegistry::new(),
+                            );
                         }
                     },
                     &mut scratch_buf,

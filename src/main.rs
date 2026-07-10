@@ -16,10 +16,10 @@ use term_wm::{
     PtyStatus, ScrollKeyMode, ScrollViewComponent, TerminalComponent, default_shell_command,
 };
 use term_wm_console::console_render_target::ConsoleRenderTarget;
+use term_wm_sys_ui_components::WmSystemPanelComponent;
 use term_wm_sys_ui_components::wm_debug_log::{
     WmDebugLogComponent, install_panic_hook, set_global_debug_log,
 };
-use term_wm_sys_ui_components::WmSystemPanelComponent;
 
 /// Simple CLI for launching `term-wm` with optional commands / window count.
 #[derive(Parser, Debug)]

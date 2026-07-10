@@ -25,9 +25,9 @@ use crate::components::{
 };
 use crate::hitbox_registry::{HitTarget, HitboxRegistry};
 use crate::keybindings::KeyBindings;
-use crate::notification::NotificationQueue;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
+use crate::notification::NotificationQueue;
 use crate::power_profile::PowerProfile;
 use crate::reaper::Reaper;
 use crate::task_scheduler::{TaskHandle, TaskId};
@@ -1195,7 +1195,8 @@ impl WindowManager {
                     },
                     MouseCaptureState::ComponentInteraction { key, screen_area } => {
                         let focused = *self.focus.current() == *key;
-                        let ctx = self.component_context_for(focused, *key)
+                        let ctx = self
+                            .component_context_for(focused, *key)
                             .with_screen_area(*screen_area);
                         let core_event = Event::Mouse(MouseEvent {
                             kind: *kind,
@@ -2185,7 +2186,11 @@ impl WindowManager {
     /// Push a notification and schedule its auto-dismiss via the system task scheduler.
     pub fn push_notification(&mut self, message: impl Into<String>, ttl: Duration) -> u64 {
         let id = self.notification_queue.push(message);
-        tracing::info!("push_notification: id={}, queue_len={}", id, self.notification_queue.len());
+        tracing::info!(
+            "push_notification: id={}, queue_len={}",
+            id,
+            self.notification_queue.len()
+        );
         // Mark layout dirty so the draw plan regenerates with notification regions
         self.mark_layout_dirty();
         if let Some(handle) = &self.system_task_handle {
@@ -4071,7 +4076,10 @@ mod tests {
         let result = wm.dispatch_mouse(&wm_click);
 
         // The header D button click should be consumed by chrome, toggling direct_mode off.
-        assert!(result.is_consumed(), "header D click must be consumed by chrome");
+        assert!(
+            result.is_consumed(),
+            "header D click must be consumed by chrome"
+        );
         assert!(
             !wm.direct_mode(win_key),
             "header D click must toggle direct_mode off"
@@ -4145,7 +4153,10 @@ mod tests {
 
         let wm_down = crate::events::core_event_to_wm(&down).unwrap();
         let result_down = wm.dispatch_mouse(&wm_down);
-        assert!(result_down.is_consumed(), "down event must be consumed by chrome");
+        assert!(
+            result_down.is_consumed(),
+            "down event must be consumed by chrome"
+        );
         assert!(wm.mouse_capture.is_some(), "drag must be in progress");
 
         // Now send a Drag event deep into the content area.
@@ -4186,7 +4197,10 @@ mod tests {
         });
         let wm_up = crate::events::core_event_to_wm(&up).unwrap();
         let result_up = wm.dispatch_mouse(&wm_up);
-        assert!(result_up.is_consumed(), "up event must be consumed by chrome");
+        assert!(
+            result_up.is_consumed(),
+            "up event must be consumed by chrome"
+        );
         assert!(wm.mouse_capture.is_none(), "drag must be finished after up");
     }
 

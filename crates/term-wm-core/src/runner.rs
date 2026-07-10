@@ -412,7 +412,8 @@ where
                                 app.wm().close_command_menu();
                             }
                             TermWmAction::SendNotification(msg) => {
-                                app.wm().push_notification(msg, std::time::Duration::from_secs(3));
+                                app.wm()
+                                    .push_notification(msg, std::time::Duration::from_secs(3));
                                 app.wm().close_command_menu();
                             }
                             TermWmAction::Help => {

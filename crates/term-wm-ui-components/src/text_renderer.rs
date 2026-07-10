@@ -384,7 +384,6 @@ impl TextRendererComponent {
         }
     }
 
-
     fn render_selection_overlay(
         &self,
         buffer: &mut ratatui::buffer::Buffer,

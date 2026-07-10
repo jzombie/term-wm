@@ -106,10 +106,7 @@ impl Component<TermWmAction> for ButtonComponent {
         event: &term_wm_core::events::Event,
         ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
-        if ctx
-            .localize_mouse_click(event, MouseButton::Left)
-            .is_some()
-        {
+        if ctx.localize_mouse_click(event, MouseButton::Left).is_some() {
             return EventResult::Action(self.action.clone());
         }
         EventResult::Ignored

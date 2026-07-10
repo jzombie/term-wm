@@ -107,12 +107,8 @@ impl Component<TermWmAction> for VerticalStackComponent {
                     width: area.width,
                     height: remaining,
                 };
-                let child_screen = Self::child_screen_area(
-                    parent_screen,
-                    child_virtual_y,
-                    remaining,
-                    scroll_y,
-                );
+                let child_screen =
+                    Self::child_screen_area(parent_screen, child_virtual_y, remaining, scroll_y);
                 let child_ctx = ctx.clone().with_screen_area(child_screen);
                 child.render(backend, child_local, &child_ctx, registry);
                 break;
@@ -161,15 +157,12 @@ impl Component<TermWmAction> for VerticalStackComponent {
             let child_h = child.desired_height(parent_area.width);
             if child_h == 0 {
                 // Stretch child fills rest — check bounds
-                let remaining =
-                    (parent_area.height as i32).saturating_sub(child_virtual_y).max(0) as u16;
+                let remaining = (parent_area.height as i32)
+                    .saturating_sub(child_virtual_y)
+                    .max(0) as u16;
                 if remaining > 0 {
-                    let child_screen = Self::child_screen_area(
-                        parent_area,
-                        child_virtual_y,
-                        remaining,
-                        scroll_y,
-                    );
+                    let child_screen =
+                        Self::child_screen_area(parent_area, child_virtual_y, remaining, scroll_y);
                     if m_x >= child_screen.x
                         && m_x < child_screen.x + child_screen.width as i32
                         && m_y >= child_screen.y
