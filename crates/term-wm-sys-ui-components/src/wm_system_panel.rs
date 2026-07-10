@@ -1,95 +1,37 @@
-use std::cell::Cell;
 use std::collections::VecDeque;
 
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span, Text};
+use ratatui::style::Color;
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
-use term_wm_core::events::MouseButton;
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
-use term_wm_ui_components::{ScrollViewComponent, TextRendererComponent};
+use term_wm_ui_components::{
+    ButtonComponent, LabelComponent, ScrollViewComponent, VerticalStackComponent,
+};
 
-/// A system panel with utility buttons inside a scrollable view.
-///
-/// The "Send Notification" button is rendered as styled text lines
-/// within the scroll view. Hit-testing accounts for scroll offset.
-#[derive(Debug)]
+/// A system panel with utility buttons, built from declarative components.
 pub struct WmSystemPanelComponent {
-    scroll_view: ScrollViewComponent<TextRendererComponent>,
-    /// Button position in VIRTUAL coordinates (relative to content top-left, before scroll).
-    button_rect: Cell<Option<LayoutRect>>,
+    scroll_view: ScrollViewComponent<VerticalStackComponent>,
 }
-
-const BUTTON_WIDTH: u16 = 24;
-const BUTTON_LABEL: &str = " Send Notification ";
-const BUTTON_TOP_BORDER: &str = "╭─────────────────────╮";
-const BUTTON_BOTTOM_BORDER: &str = "╰─────────────────────╯";
 
 impl WmSystemPanelComponent {
     pub fn new() -> Self {
-        let mut renderer = TextRendererComponent::new();
-        renderer.set_wrap(false);
-        let scroll_view = ScrollViewComponent::new(renderer);
-        Self {
-            scroll_view,
-            button_rect: Cell::new(None),
-        }
-    }
-
-    /// Build the text content including the button lines.
-    fn build_content() -> Text<'static> {
-        let mut lines: Vec<Line<'static>> = Vec::new();
-
-        // Info text
-        lines.push(Line::from(Span::styled(
-            "Notification test panel",
-            Style::default().fg(Color::DarkGray),
-        )));
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "Click the button below to send",
-            Style::default().fg(Color::DarkGray),
-        )));
-        lines.push(Line::from(Span::styled(
-            "a test toast notification.",
-            Style::default().fg(Color::DarkGray),
-        )));
-        lines.push(Line::from(""));
-
-        // Button — 3 styled lines
-        lines.push(Line::from(Span::styled(
-            BUTTON_TOP_BORDER.to_string(),
-            Style::default().fg(Color::Cyan),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("│{BUTTON_LABEL}│"),
-            Style::default()
-                .fg(Color::White)
-                .bg(Color::Rgb(30, 30, 50))
-                .add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(Span::styled(
-            BUTTON_BOTTOM_BORDER.to_string(),
-            Style::default().fg(Color::Cyan),
-        )));
-        lines.push(Line::from(""));
-
-        // Hint
-        lines.push(Line::from(Span::styled(
-            "Scroll to see more content below.",
-            Style::default().fg(Color::DarkGray),
+        let mut stack = VerticalStackComponent::new();
+        stack.add(Box::new(
+            LabelComponent::new("Notification test panel").with_color(Color::DarkGray),
+        ));
+        stack.add(Box::new(SpacerComponent::new(1)));
+        stack.add(Box::new(
+            LabelComponent::new("Click below to send a test toast:").with_color(Color::DarkGray),
+        ));
+        stack.add(Box::new(SpacerComponent::new(1)));
+        stack.add(Box::new(ButtonComponent::new(
+            "  Send Notification  ",
+            TermWmAction::SendNotification("Hello from System Panel!".to_string()),
         )));
 
-        // Extra lines to make the content scrollable
-        for i in 0..20 {
-            lines.push(Line::from(Span::styled(
-                format!("  Item {}", i + 1),
-                Style::default().fg(Color::DarkGray),
-            )));
-        }
-
-        Text::from(lines)
+        let scroll_view = ScrollViewComponent::new(stack);
+        Self { scroll_view }
     }
 }
 
@@ -107,65 +49,7 @@ impl Component<TermWmAction> for WmSystemPanelComponent {
         ctx: &ComponentContext,
         registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-
-        // Set text content on the inner renderer
-        let text = Self::build_content();
-        {
-            let mut content = self.scroll_view.content.borrow_mut();
-            content.set_text(text);
-            content.set_wrap(false);
-        }
-
-        // The button is at virtual row 5 (after 5 info/empty lines)
-        // in the full content, spanning 3 lines (top border, label, bottom border).
-        self.button_rect.set(Some(LayoutRect {
-            x: 0,
-            y: 5,
-            width: BUTTON_WIDTH,
-            height: 3,
-        }));
-
-        // Delegate to scroll view — it handles rendering the scrollable content
         self.scroll_view.render(backend, area, ctx, registry);
-    }
-
-    fn on_mouse_press(
-        &mut self,
-        local_x: u16,
-        local_y: u16,
-        button: MouseButton,
-        _modifiers: term_wm_core::events::KeyModifiers,
-        _ctx: &ComponentContext,
-    ) -> EventResult<TermWmAction> {
-        if button != MouseButton::Left {
-            return EventResult::Ignored;
-        }
-
-        let Some(btn) = self.button_rect.get() else {
-            return EventResult::Ignored;
-        };
-
-        // Fetch scroll offset from the scroll view
-        let scroll_offset = self.scroll_view.scroll_handle().info().offset_y as u16;
-
-        // Translate local viewport Y to virtual content Y
-        let virtual_y = local_y.saturating_add(scroll_offset);
-
-        // Strict u16 hit-test against the button's virtual position
-        let btn_y = btn.y as u16;
-        if local_x < btn.width
-            && virtual_y >= btn_y
-            && virtual_y < btn_y.saturating_add(btn.height)
-        {
-            return EventResult::Action(TermWmAction::SendNotification(
-                "Hello from System Panel!".to_string(),
-            ));
-        }
-
-        EventResult::Ignored
     }
 
     fn handle_events(
@@ -173,18 +57,6 @@ impl Component<TermWmAction> for WmSystemPanelComponent {
         event: &term_wm_core::events::Event,
         ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
-        if let Some((local_x, local_y)) = ctx.localize_mouse_click(event, MouseButton::Left) {
-            let result = self.on_mouse_press(
-                local_x,
-                local_y,
-                MouseButton::Left,
-                term_wm_core::events::KeyModifiers::NONE,
-                ctx,
-            );
-            if !result.is_ignored() {
-                return result;
-            }
-        }
         self.scroll_view.handle_events(event, ctx)
     }
 
@@ -206,4 +78,48 @@ impl Component<TermWmAction> for WmSystemPanelComponent {
     fn selection_text(&self) -> Option<String> {
         self.scroll_view.selection_text()
     }
+}
+
+/// A simple spacer component that takes up a fixed number of rows.
+struct SpacerComponent {
+    height: u16,
+}
+
+impl SpacerComponent {
+    fn new(height: u16) -> Self {
+        Self { height }
+    }
+}
+
+impl Component<TermWmAction> for SpacerComponent {
+    fn desired_height(&self, _width: u16) -> u16 {
+        self.height
+    }
+
+    fn render(
+        &mut self,
+        _backend: &mut dyn term_wm_render::RenderBackend,
+        _area: LayoutRect,
+        _ctx: &ComponentContext,
+        _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
+    }
+
+    fn handle_events(
+        &mut self,
+        _event: &term_wm_core::events::Event,
+        _ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        EventResult::Ignored
+    }
+
+    fn update(
+        &mut self,
+        _action: TermWmAction,
+        _ctx: &ComponentContext,
+        _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+    ) {
+    }
+
+    fn destroy(&mut self) {}
 }
