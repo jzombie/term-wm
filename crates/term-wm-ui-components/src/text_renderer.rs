@@ -385,28 +385,6 @@ impl TextRendererComponent {
         }
     }
 
-    fn logical_position_from_point_impl(
-        &self,
-        area: Rect,
-        column: u16,
-        row: u16,
-    ) -> Option<LogicalPosition> {
-        if area.width == 0 || area.height == 0 {
-            return None;
-        }
-        let max_x = area.x.saturating_add(area.width).saturating_sub(1);
-        let max_y = area.y.saturating_add(area.height).saturating_sub(1);
-        let clamped_col = column.clamp(area.x, max_x);
-        let clamped_row = row.clamp(area.y, max_y);
-        let local_col = clamped_col.saturating_sub(area.x) as usize;
-        let local_row = clamped_row.saturating_sub(area.y) as usize;
-        let row_base = self.viewport_cache.get().offset_y;
-        let col_base = self.viewport_cache.get().offset_x;
-        Some(LogicalPosition::new(
-            row_base.saturating_add(local_row),
-            col_base.saturating_add(local_col),
-        ))
-    }
 
     fn render_selection_overlay(
         &self,
@@ -697,8 +675,17 @@ impl SelectionViewport for TextRendererComponent {
         column: u16,
         row: u16,
     ) -> Option<LogicalPosition> {
-        let area = layout_rect_to_rect(area);
-        self.logical_position_from_point_impl(area, column, row)
+        if area.width == 0 || area.height == 0 {
+            return None;
+        }
+        // Signed math: lift to i32, compute offset, clamp negative to 0
+        let local_x = (i32::from(column) - area.x).max(0) as u16;
+        let local_y = (i32::from(row) - area.y).max(0) as u16;
+        let state = self.viewport_cache.get();
+        Some(LogicalPosition::new(
+            state.offset_y.saturating_add(local_y as usize),
+            state.offset_x.saturating_add(local_x as usize),
+        ))
     }
 
     fn scroll_selection_vertical(&mut self, delta: isize) {
