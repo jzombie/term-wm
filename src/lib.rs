@@ -186,13 +186,6 @@ pub fn render_app(
     }
     renderer.put_scratch(scratch_buf);
 
-    // Register tiling split handle hitboxes — keep these after per-window
-    // chrome so they maintain high-priority interception on layout boundaries.
-    let tiling_handles: Vec<_> = wm.tiling_handles().to_vec();
-    for handle in &tiling_handles {
-        wm.hitbox_registry_mut()
-            .register(HitTarget::LayoutHandle, handle.rect);
-    }
 
     // Render panels AFTER windows
     render_panels(backend, wm);
