@@ -1772,6 +1772,21 @@ mod tests {
         assert_eq!(line_count, 4, "should span 4 lines, got {}", line_count);
     }
 
+    /// A zero-length selection (click without drag) must return None.
+    #[test]
+    fn selection_text_empty_range_returns_none() {
+        let (term, rb) = make_term_with_content(80, 24, 2000, "Hello World");
+        // Click at a single position without dragging — start == end
+        term.selection
+            .borrow_mut()
+            .begin_drag(LogicalPosition::new(rb, 5));
+        term.selection
+            .borrow_mut()
+            .update_drag(LogicalPosition::new(rb, 5));
+        let text = term.selection_text();
+        assert!(text.is_none(), "zero-length selection must return None");
+    }
+
     #[test]
     fn mouse_selection_works_through_handle_events() {
         use term_wm_core::components::ComponentContext;
