@@ -314,7 +314,7 @@ impl WindowManager {
                     let left = children.get(handle.index);
                     let right = children.get(handle.index + 1);
                     left.is_some_and(|node| node.subtree_any(|key| !self.is_window_floating(key)))
-                        || right.is_some_and(|node| {
+                        && right.is_some_and(|node| {
                             node.subtree_any(|key| !self.is_window_floating(key))
                         })
                 })
@@ -346,11 +346,17 @@ impl WindowManager {
             self.regions.set(floating_key, rect);
             let visible = self.visible_rect_from_spec(spec);
             if visible.width > 0 && visible.height > 0 {
-                self.resize_handles.extend(resize_handles_for_region(
-                    floating_key,
-                    visible,
-                    self.managed_area,
-                ));
+                let is_maximized = self
+                    .windows
+                    .get(floating_key)
+                    .is_some_and(|w| w.is_maximized);
+                if !is_maximized {
+                    self.resize_handles.extend(resize_handles_for_region(
+                        floating_key,
+                        visible,
+                        self.managed_area,
+                    ));
+                }
                 if let Some(header) =
                     floating_header_for_region(floating_key, visible, self.managed_area)
                 {
@@ -366,7 +372,7 @@ impl WindowManager {
                 self.z_order.push(key);
             }
         }
-        self.managed_draw_order = self.z_order.clone();
+        self.bifurcate_draw_order();
         self.rebuild_focus_ring(&active_keys);
         let focused = *self.focus.current();
         if self.z_order.last().copied() != Some(focused) {
@@ -641,33 +647,36 @@ impl WindowManager {
         }
     }
 
+    /// Rebuild `managed_draw_order` from `z_order` with strict layer separation:
+    /// all tiled windows first (back), then all floating windows (front).
+    pub(super) fn bifurcate_draw_order(&mut self) {
+        let mut bifurcated = Vec::with_capacity(self.z_order.len());
+        for &key in &self.z_order {
+            if !self.is_window_floating(key) {
+                bifurcated.push(key);
+            }
+        }
+        for &key in &self.z_order {
+            if self.is_window_floating(key) {
+                bifurcated.push(key);
+            }
+        }
+        self.managed_draw_order = bifurcated;
+    }
+
     pub fn bring_to_front(&mut self, key: WindowKey) {
         self.bring_to_front_key(key);
     }
 
     pub(super) fn bring_to_front_key(&mut self, key: WindowKey) {
+        if !self.is_window_floating(key) {
+            return;
+        }
         if let Some(pos) = self.z_order.iter().position(|&x| x == key) {
             let item = self.z_order.remove(pos);
             self.z_order.push(item);
         }
-        // Also update managed_draw_order immediately so the visual order
-        // reflects the change before the next register_managed_layout call.
-        if let Some(pos) = self.managed_draw_order.iter().position(|&x| x == key) {
-            let item = self.managed_draw_order.remove(pos);
-            self.managed_draw_order.push(item);
-        }
-    }
-
-    pub fn bring_all_floating_to_front(&mut self) {
-        let keys: Vec<WindowKey> = self
-            .z_order
-            .iter()
-            .copied()
-            .filter(|key| self.is_window_floating(*key))
-            .collect();
-        for key in keys {
-            self.bring_to_front_key(key);
-        }
+        self.bifurcate_draw_order();
     }
 
     pub(super) fn bring_floating_to_front_key(&mut self, key: WindowKey) {

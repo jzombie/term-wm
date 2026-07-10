@@ -18,7 +18,7 @@ use slotmap::SlotMap;
 use super::WindowKey;
 use super::decorator::WindowDecorator;
 use super::entry::{Window, WindowState};
-use crate::actions::{SystemTask, TermWmAction};
+use crate::actions::{EventResult, SystemTask, TermWmAction};
 use crate::app_context::AppContext;
 use crate::components::{
     Component, ComponentAction, ComponentContext, MenuItem, Overlay, WmComponent,
@@ -27,6 +27,7 @@ use crate::hitbox_registry::{HitTarget, HitboxRegistry};
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
+use crate::notification::NotificationQueue;
 use crate::power_profile::PowerProfile;
 use crate::reaper::Reaper;
 use crate::task_scheduler::{TaskHandle, TaskId};
@@ -82,7 +83,11 @@ pub(crate) enum MouseCaptureState {
     },
     /// A Press hit a Window or Component target — subsequent Drag/Release/Moved
     /// events are forwarded to that component until the Up releases.
-    ComponentInteraction { key: WindowKey },
+    ComponentInteraction {
+        key: WindowKey,
+        /// Immutable snapshot of the hitbox area at Press time.
+        screen_area: LayoutRect,
+    },
     /// A Press hit a tiling layout split handle — Drag/Release events route to
     /// `TilingLayout::handle_event()` for split-ratio adjustment.
     LayoutHandle,
@@ -221,8 +226,6 @@ pub struct WindowManager {
     selection_active: bool,
     selection_dragging: bool,
     selection_text: Option<String>,
-    selection_copied: bool,
-    selection_copied_text: Option<String>,
     config: WmConfig,
     hint_visibility: HintVisibility,
     command_menu_opened_at: Option<Instant>,
@@ -263,6 +266,8 @@ pub struct WindowManager {
     quit_requested: bool,
     /// Flag indicating the layout has changed and needs re-projection
     layout_dirty: bool,
+    /// Active toast notifications
+    notification_queue: NotificationQueue,
 }
 
 impl WindowManager {
@@ -430,7 +435,11 @@ impl WindowManager {
         self.window(key).and_then(|window| window.floating_rect)
     }
 
-    fn set_floating_rect(&mut self, key: WindowKey, rect: Option<crate::window::FloatRectSpec>) {
+    pub fn set_floating_rect(
+        &mut self,
+        key: WindowKey,
+        rect: Option<crate::window::FloatRectSpec>,
+    ) {
         if let Some(w) = self.windows.get_mut(key) {
             w.floating_rect = rect;
         }
@@ -558,9 +567,9 @@ impl WindowManager {
                 TermWmAction::ToggleMouseCapture,
                 TermWmAction::ToggleClipboardMode,
                 TermWmAction::ToggleWindowSelection,
-                TermWmAction::BringFloatingFront,
                 TermWmAction::NewWindow,
                 TermWmAction::ToggleDebugWindow,
+                TermWmAction::ToggleSystemPanel,
                 TermWmAction::Help,
                 TermWmAction::ExitUi,
             ]
@@ -604,8 +613,6 @@ impl WindowManager {
             selection_active: false,
             selection_dragging: false,
             selection_text: None,
-            selection_copied: false,
-            selection_copied_text: None,
             window_selection_enabled: config.window_selection_enabled,
             window_selection_dirty: false,
             hint_visibility: config.hint_visibility,
@@ -634,6 +641,7 @@ impl WindowManager {
             reaper: Reaper::default(),
             quit_requested: false,
             layout_dirty: true,
+            notification_queue: NotificationQueue::default(),
         }
     }
 
@@ -909,6 +917,7 @@ impl WindowManager {
         self.mouse_capture = if captured {
             Some(MouseCaptureState::ComponentInteraction {
                 key: WindowKey::default(),
+                screen_area: LayoutRect::default(),
             })
         } else {
             None
@@ -942,11 +951,15 @@ impl WindowManager {
     ///   Phase 3 — Moved events: update hover and forward to component.
     ///   Phase 4 — Press events hit-test the registry.
     ///             dispatch to components on content hits.
-    ///   Phase 3 — Unhandled events fall through to false.
+    ///   Phase 3 — Unhandled events fall through to Ignored.
     ///
-    /// Returns `true` if the event was consumed.
+    /// Returns `EventResult<(Option<WindowKey>, TermWmAction)>` — the action
+    /// and the exact spatial target key from the hit test.
     #[allow(clippy::collapsible_if)]
-    pub fn dispatch_mouse(&mut self, event: &crate::events::WmEvent) -> bool {
+    pub fn dispatch_mouse(
+        &mut self,
+        event: &crate::events::WmEvent,
+    ) -> EventResult<(Option<WindowKey>, TermWmAction)> {
         use crate::events::WmEvent;
         use crate::window::decorator::HeaderAction;
         let WmEvent::Mouse {
@@ -955,7 +968,7 @@ impl WindowManager {
             position,
         } = event
         else {
-            return false;
+            return EventResult::Ignored;
         };
         let col = position.column as u16;
         let row = position.row as u16;
@@ -1179,12 +1192,11 @@ impl WindowManager {
                         MouseEventKind::Release(_) => (true, false),
                         _ => (false, true),
                     },
-                    MouseCaptureState::ComponentInteraction { key } => {
+                    MouseCaptureState::ComponentInteraction { key, screen_area } => {
                         let focused = *self.focus.current() == *key;
-                        let mut ctx = self.component_context_for(focused, *key);
-                        if let Some(area) = self.hitbox_registry.component_area(*key) {
-                            ctx = ctx.with_screen_area(area);
-                        }
+                        let ctx = self
+                            .component_context_for(focused, *key)
+                            .with_screen_area(*screen_area);
                         let core_event = Event::Mouse(MouseEvent {
                             kind: *kind,
                             column: col,
@@ -1224,7 +1236,11 @@ impl WindowManager {
                 if restore {
                     self.mouse_capture = Some(capture);
                 }
-                return result;
+                return if result {
+                    EventResult::Consumed
+                } else {
+                    EventResult::Ignored
+                };
             }
         }
 
@@ -1246,14 +1262,10 @@ impl WindowManager {
                 });
                 if let Some(comp) = self.component_for_key_mut(key) {
                     let result = comp.handle_events(&core_event, &ctx);
-                    let was_consumed = !result.is_ignored();
-                    if let Some(action) = result.into_action() {
-                        self.process_action(key, action);
-                    }
-                    return was_consumed;
+                    return result.map(|action| (Some(key), action));
                 }
             }
-            return false;
+            return EventResult::Ignored;
         }
 
         // Phase 3 — Moved events: forward to component.
@@ -1273,11 +1285,7 @@ impl WindowManager {
                 });
                 if let Some(comp) = self.component_for_key_mut(key) {
                     let result = comp.handle_events(&core_event, &ctx);
-                    let was_consumed = !result.is_ignored();
-                    if let Some(action) = result.into_action() {
-                        self.process_action(key, action);
-                    }
-                    return was_consumed;
+                    return result.map(|action| (Some(key), action));
                 }
             }
             // Forward Moved to tiling layout for hover feedback on split handles.
@@ -1294,12 +1302,12 @@ impl WindowManager {
                     layout.handle_event(&event, self.managed_area);
                 }
             }
-            return false;
+            return EventResult::Ignored;
         }
 
         // Phase 4 — Press events hit-test the registry.
         if !matches!(kind, MouseEventKind::Press(_)) {
-            return false;
+            return EventResult::Ignored;
         }
 
         // Hover already recorded at function entry.
@@ -1309,7 +1317,7 @@ impl WindowManager {
             if self.config.wm_command_menu_enabled {
                 self.focus_window_at(col, row);
             }
-            return false;
+            return EventResult::Ignored;
         };
 
         // Build core Event for Component::handle_events.
@@ -1326,40 +1334,40 @@ impl WindowManager {
                 let ctx = self
                     .component_context_for(focused, key)
                     .with_screen_area(hit_rect);
-                let consumed = if let Some(comp) = self.component_for_key_mut(key) {
-                    let result = comp.handle_events(&core_event, &ctx);
-                    let was_consumed = !result.is_ignored();
-                    if let Some(action) = result.into_action() {
-                        self.process_action(key, action);
-                    }
-                    was_consumed
+                let result = if let Some(comp) = self.component_for_key_mut(key) {
+                    comp.handle_events(&core_event, &ctx)
                 } else {
-                    false
+                    EventResult::Ignored
                 };
-                // Lock capture so subsequent Drag/Up/Moved go to this component.
-                self.mouse_capture = Some(MouseCaptureState::ComponentInteraction { key });
-                consumed
+                // Only capture on Press events when consumed
+                if !result.is_ignored() {
+                    self.mouse_capture = Some(MouseCaptureState::ComponentInteraction {
+                        key,
+                        screen_area: hit_rect,
+                    });
+                }
+                result.map(|action| (Some(key), action))
             }
             HitTarget::ChromeHeader(key, action) => match action {
                 HeaderAction::Close => {
                     self.close_window(key);
                     self.last_header_click = None;
-                    true
+                    EventResult::Consumed
                 }
                 HeaderAction::Maximize => {
                     self.toggle_maximize(key);
                     self.last_header_click = None;
-                    true
+                    EventResult::Consumed
                 }
                 HeaderAction::Minimize => {
                     self.minimize_window(key);
                     self.last_header_click = None;
-                    true
+                    EventResult::Consumed
                 }
                 HeaderAction::ToggleDirectMode => {
                     self.toggle_direct_mode(key);
                     self.last_header_click = None;
-                    true
+                    EventResult::Consumed
                 }
                 HeaderAction::Drag => {
                     let now = Instant::now();
@@ -1369,14 +1377,12 @@ impl WindowManager {
                     {
                         self.toggle_maximize(key);
                         self.last_header_click = None;
-                        return true;
+                        return EventResult::Consumed;
                     }
                     self.last_header_click = Some((key, now));
 
                     if self.is_window_floating(key) {
                         self.bring_floating_to_front_key(key);
-                    } else {
-                        self.bring_to_front_key(key);
                     }
 
                     let rect = self.visible_region_for_key(key);
@@ -1408,12 +1414,12 @@ impl WindowManager {
                     });
                     self.drag_last_event = Some(Instant::now());
                     self.arm_drag_snap_timer();
-                    true
+                    EventResult::Consumed
                 }
             },
             HitTarget::ChromeResize(key, edge) => {
                 if !self.config.floating_windows_enabled || !self.is_window_floating(key) {
-                    return false;
+                    return EventResult::Ignored;
                 }
                 self.bring_floating_to_front_key(key);
                 let rect = self.full_region_for_key(key);
@@ -1436,19 +1442,19 @@ impl WindowManager {
                     start_width,
                     start_height,
                 });
-                true
+                EventResult::Consumed
             }
             HitTarget::TopPanel => {
                 if self.config.wm_command_menu_enabled && self.panel_active() {
                     let panel_handled = self.handle_panel_click(col, row);
                     if panel_handled {
-                        return true;
+                        return EventResult::Consumed;
                     }
                 }
                 if self.config.wm_command_menu_enabled {
                     self.focus_window_at(col, row);
                 }
-                false
+                EventResult::Ignored
             }
             HitTarget::BottomPanel => {
                 let ctx = self.component_context(false);
@@ -1462,9 +1468,9 @@ impl WindowManager {
                         modifiers: combo.mods,
                         kind: KeyKind::Press,
                     }));
-                    return true;
+                    return EventResult::Consumed;
                 }
-                false
+                EventResult::Ignored
             }
             HitTarget::Overlay(id) => {
                 let ctx = self
@@ -1472,18 +1478,27 @@ impl WindowManager {
                     .with_screen_area(hit_rect);
                 if let Some(overlay) = self.overlays.get_mut(&id) {
                     let result = overlay.handle_events(&core_event, &ctx);
-                    !result.is_ignored()
+                    result.map(|action| (None, action))
                 } else {
-                    false
+                    EventResult::Ignored
                 }
             }
             HitTarget::LayoutHandle => {
                 self.mouse_capture = Some(MouseCaptureState::LayoutHandle);
                 if let Some(layout) = self.managed_layout.as_mut() {
-                    layout.handle_event(&core_event, self.managed_area)
+                    let consumed = layout.handle_event(&core_event, self.managed_area);
+                    if consumed {
+                        EventResult::Consumed
+                    } else {
+                        EventResult::Ignored
+                    }
                 } else {
-                    false
+                    EventResult::Ignored
                 }
+            }
+            HitTarget::Notification => {
+                // Swallow all mouse events over notification area — no passthrough.
+                EventResult::Consumed
             }
         }
     }
@@ -1593,10 +1608,6 @@ impl WindowManager {
                 }
                 TermWmAction::ToggleClipboardMode => {
                     self.toggle_clipboard_enabled();
-                    true
-                }
-                TermWmAction::CopySelection => {
-                    self.copy_selection_to_clipboard();
                     true
                 }
                 TermWmAction::FocusWindow(key) => {
@@ -1737,14 +1748,9 @@ impl WindowManager {
     }
 
     pub fn set_selection_snapshot(&mut self, active: bool, dragging: bool, text: Option<String>) {
-        let changed = text.as_ref() != self.selection_text.as_ref();
         self.selection_active = active;
         self.selection_dragging = dragging;
         self.selection_text = text;
-        if !self.selection_active || self.selection_text.is_none() || changed {
-            self.selection_copied = false;
-            self.selection_copied_text = None;
-        }
     }
 
     pub fn selection_active(&self) -> bool {
@@ -1759,10 +1765,6 @@ impl WindowManager {
         self.selection_text.as_deref()
     }
 
-    pub fn selection_copied(&self) -> bool {
-        self.selection_copied
-    }
-
     pub fn copy_selection_to_clipboard(&mut self) {
         if !self.clipboard_enabled() {
             return;
@@ -1773,8 +1775,10 @@ impl WindowManager {
         if let Some(cb) = &mut self.clipboard
             && cb.set(&text).is_ok()
         {
-            self.selection_copied = true;
-            self.selection_copied_text = Some(text);
+            self.push_notification(
+                "Selection copied to clipboard",
+                std::time::Duration::from_secs(2),
+            );
         }
     }
 
@@ -2164,6 +2168,34 @@ impl WindowManager {
     pub fn floating_headers(&self) -> &[DragHandle<WindowKey>] {
         &self.floating_headers
     }
+
+    /// Push a notification and schedule its auto-dismiss via the system task scheduler.
+    pub fn push_notification(&mut self, message: impl Into<String>, ttl: Duration) -> u64 {
+        let id = self.notification_queue.push(message);
+        tracing::info!(
+            "push_notification: id={}, queue_len={}",
+            id,
+            self.notification_queue.len()
+        );
+        // Mark layout dirty so the draw plan regenerates with notification regions
+        self.mark_layout_dirty();
+        if let Some(handle) = &self.system_task_handle {
+            handle.schedule_once(ttl, SystemTask::DismissNotification(id));
+        }
+        id
+    }
+
+    /// Dismiss a notification by ID.
+    pub fn dismiss_notification(&mut self, id: u64) {
+        tracing::info!("dismiss_notification: id={}", id);
+        self.notification_queue.dismiss(id);
+        self.mark_layout_dirty();
+    }
+
+    /// Read-only access to the notification queue.
+    pub fn notifications(&self) -> &NotificationQueue {
+        &self.notification_queue
+    }
 }
 
 pub fn wm_menu_items(
@@ -2208,11 +2240,6 @@ pub fn wm_menu_items(
             action: crate::actions::TermWmAction::ToggleWindowSelection,
         },
         MenuItem {
-            label: "Floating Front",
-            icon: Some("↑"),
-            action: crate::actions::TermWmAction::BringFloatingFront,
-        },
-        MenuItem {
             label: "New Window",
             icon: Some("+"),
             action: crate::actions::TermWmAction::NewWindow,
@@ -2221,6 +2248,11 @@ pub fn wm_menu_items(
             label: "Debug Log",
             icon: Some("≣"),
             action: crate::actions::TermWmAction::ToggleDebugWindow,
+        },
+        MenuItem {
+            label: "System Panel",
+            icon: Some("⚙"),
+            action: crate::actions::TermWmAction::ToggleSystemPanel,
         },
         MenuItem {
             label: "Help",
@@ -2977,7 +3009,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         let wm_down = crate::events::core_event_to_wm(&down).unwrap();
-        assert!(wm.dispatch_mouse(&wm_down));
+        assert!(wm.dispatch_mouse(&wm_down).is_consumed());
         // Floating rect is deferred — Press alone must not decouple.
         assert!(!wm.is_window_floating(debug_key));
         let start_rect = wm.full_region(debug_key);
@@ -2991,7 +3023,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         let wm_drag = crate::events::core_event_to_wm(&drag).unwrap();
-        assert!(wm.dispatch_mouse(&wm_drag));
+        assert!(wm.dispatch_mouse(&wm_drag).is_consumed());
         assert!(wm.is_window_floating(debug_key));
 
         let moved = match wm.floating_rect(debug_key).expect("floating rect present") {
@@ -3008,7 +3040,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         let wm_up = crate::events::core_event_to_wm(&up).unwrap();
-        assert!(wm.dispatch_mouse(&wm_up));
+        assert!(wm.dispatch_mouse(&wm_up).is_consumed());
         assert!(wm.mouse_capture.is_none());
     }
 
@@ -3081,7 +3113,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         let wm_moved = crate::events::core_event_to_wm(&moved).unwrap();
-        assert!(wm.dispatch_mouse(&wm_moved));
+        assert!(wm.dispatch_mouse(&wm_moved).is_consumed());
         // Capture is kept alive so Release can clean up properly
         assert!(
             wm.mouse_capture.is_some(),
@@ -3176,7 +3208,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         let wm_moved = crate::events::core_event_to_wm(&moved).unwrap();
-        assert!(wm.dispatch_mouse(&wm_moved));
+        assert!(wm.dispatch_mouse(&wm_moved).is_consumed());
 
         // Capture must still be alive.
         assert!(
@@ -3217,7 +3249,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         let wm_release = crate::events::core_event_to_wm(&release).unwrap();
-        assert!(wm.dispatch_mouse(&wm_release));
+        assert!(wm.dispatch_mouse(&wm_release).is_consumed());
 
         assert!(
             wm.mouse_capture.is_none(),
@@ -3595,7 +3627,7 @@ mod tests {
         });
         let wm_click = crate::events::core_event_to_wm(&click).unwrap();
         assert!(
-            wm.dispatch_mouse(&wm_click),
+            wm.dispatch_mouse(&wm_click).is_consumed(),
             "header D button click should be handled"
         );
         assert!(
@@ -3610,7 +3642,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         let wm_click2 = crate::events::core_event_to_wm(&click2).unwrap();
-        assert!(wm.dispatch_mouse(&wm_click2));
+        assert!(wm.dispatch_mouse(&wm_click2).is_consumed());
         assert!(
             !wm.direct_mode(win_key),
             "second click toggles back to false"
@@ -3670,7 +3702,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         let wm_click = crate::events::core_event_to_wm(&click).unwrap();
-        assert!(wm.dispatch_mouse(&wm_click));
+        assert!(wm.dispatch_mouse(&wm_click).is_consumed());
         assert!(!wm.direct_mode(win_key), "drag area click must not toggle");
     }
 
@@ -4025,7 +4057,10 @@ mod tests {
         let result = wm.dispatch_mouse(&wm_click);
 
         // The header D button click should be consumed by chrome, toggling direct_mode off.
-        assert!(result, "header D click must be consumed by chrome");
+        assert!(
+            result.is_consumed(),
+            "header D click must be consumed by chrome"
+        );
         assert!(
             !wm.direct_mode(win_key),
             "header D click must toggle direct_mode off"
@@ -4099,7 +4134,10 @@ mod tests {
 
         let wm_down = crate::events::core_event_to_wm(&down).unwrap();
         let result_down = wm.dispatch_mouse(&wm_down);
-        assert!(result_down, "down event must be consumed by chrome");
+        assert!(
+            result_down.is_consumed(),
+            "down event must be consumed by chrome"
+        );
         assert!(wm.mouse_capture.is_some(), "drag must be in progress");
 
         // Now send a Drag event deep into the content area.
@@ -4116,7 +4154,7 @@ mod tests {
         let wm_drag = crate::events::core_event_to_wm(&drag).unwrap();
         let result_drag = wm.dispatch_mouse(&wm_drag);
         assert!(
-            result_drag,
+            result_drag.is_consumed(),
             "drag event in content area must be consumed by chrome"
         );
 
@@ -4140,7 +4178,10 @@ mod tests {
         });
         let wm_up = crate::events::core_event_to_wm(&up).unwrap();
         let result_up = wm.dispatch_mouse(&wm_up);
-        assert!(result_up, "up event must be consumed by chrome");
+        assert!(
+            result_up.is_consumed(),
+            "up event must be consumed by chrome"
+        );
         assert!(wm.mouse_capture.is_none(), "drag must be finished after up");
     }
 
@@ -4256,7 +4297,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         let wm_down = crate::events::core_event_to_wm(&down).unwrap();
-        assert!(wm.dispatch_mouse(&wm_down));
+        assert!(wm.dispatch_mouse(&wm_down).is_consumed());
         assert!(wm.drag_last_event.is_some());
 
         wm.drag_last_event = Some(Instant::now() - STALE_EVENT_OFFSET);
@@ -4267,7 +4308,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         let wm_drag = crate::events::core_event_to_wm(&drag).unwrap();
-        assert!(wm.dispatch_mouse(&wm_drag));
+        assert!(wm.dispatch_mouse(&wm_drag).is_consumed());
         if let Some(last) = wm.drag_last_event {
             assert!(
                 last.elapsed() < SHORT_SNAP_TIMEOUT,
@@ -5263,7 +5304,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         let wm_click = crate::events::core_event_to_wm(&click).unwrap();
-        assert!(wm.dispatch_mouse(&wm_click));
+        assert!(wm.dispatch_mouse(&wm_click).is_consumed());
     }
 
     #[test]
@@ -5320,7 +5361,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         let wm_click = crate::events::core_event_to_wm(&click).unwrap();
-        assert!(wm.dispatch_mouse(&wm_click));
+        assert!(wm.dispatch_mouse(&wm_click).is_consumed());
     }
 
     #[test]
@@ -5378,7 +5419,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         let wm_click = crate::events::core_event_to_wm(&click).unwrap();
-        assert!(wm.dispatch_mouse(&wm_click));
+        assert!(wm.dispatch_mouse(&wm_click).is_consumed());
     }
 
     #[test]
@@ -5463,7 +5504,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         let wm_click = crate::events::core_event_to_wm(&click).unwrap();
-        assert!(wm.dispatch_mouse(&wm_click));
+        assert!(wm.dispatch_mouse(&wm_click).is_consumed());
     }
 
     #[test]

@@ -166,6 +166,12 @@ pub trait Component<Msg>: std::any::Any {
         None
     }
 
+    /// The preferred height in terminal rows given the available width.
+    /// Return 0 to stretch and fill remaining space (default).
+    fn desired_height(&self, _width: u16) -> u16 {
+        0
+    }
+
     /// Read and clear the pending window title (set by OSC 0/1/2 escape sequences).
     /// Returns `None` for non-terminal components.
     fn take_pending_title(&mut self) -> Option<String> {
@@ -272,8 +278,6 @@ pub struct TopPanelState {
     pub window_selection_enabled: bool,
     pub selection_active: bool,
     pub selection_dragging: bool,
-    pub selection_copy_available: bool,
-    pub selection_copied: bool,
     pub menu_open: bool,
 }
 

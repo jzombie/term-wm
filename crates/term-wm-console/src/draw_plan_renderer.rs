@@ -10,7 +10,7 @@ use term_wm_core::components::{
     Component, ComponentAction, ComponentQuery, ComponentResponse, MenuItem, TopPanelState,
 };
 use term_wm_core::constants::{SHADOW_OFFSET_X, SHADOW_OFFSET_Y};
-use term_wm_core::draw_plan::{DrawPlan, RenderRegion};
+use term_wm_core::draw_plan::{DrawPlan, RegionType, RenderRegion};
 use term_wm_core::hitbox_registry::HitboxRegistry;
 use term_wm_core::layout::floating::{ResizeEdge, ResizeHandle};
 use term_wm_core::layout::rect_contains;
@@ -85,17 +85,35 @@ impl DrawPlanRenderer {
         for region in draw_plan.regions() {
             let area = layout_rect_to_rect(region.bounds);
 
-            if let Some(component) = wm.component_for_key_mut(region.key) {
-                if region.z_index < 10 {
-                    self.render_window_composite_to_buffer(
-                        target_buf,
-                        area,
-                        component,
-                        region,
-                        hitbox_registry,
-                    );
-                } else {
-                    self.render_direct_to_buffer(target_buf, area, component, region);
+            match &region.region_type {
+                RegionType::Window(key) => {
+                    if let Some(component) = wm.component_for_key_mut(*key) {
+                        if region.z_index < 10 {
+                            self.render_window_composite_to_buffer(
+                                target_buf,
+                                area,
+                                component,
+                                region,
+                                hitbox_registry,
+                            );
+                        } else {
+                            self.render_direct_to_buffer(target_buf, area, component, region);
+                        }
+                    }
+                }
+                RegionType::Notification(msg) => {
+                    use ratatui::style::{Color, Style};
+                    use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
+
+                    Clear.render(area, target_buf);
+                    let block = Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::White))
+                        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+                    Paragraph::new(msg.as_ref())
+                        .block(block)
+                        .wrap(Wrap { trim: true })
+                        .render(area, target_buf);
                 }
             }
         }
@@ -151,6 +169,31 @@ impl DrawPlanRenderer {
         self.direct_buffer = backend.buffer;
     }
 
+    /// Render a notification toast into the target buffer.
+    pub fn render_notification(
+        &self,
+        backend: &mut dyn crate::RenderBackend,
+        area: Rect,
+        msg: &str,
+    ) {
+        use ratatui::style::{Color, Style};
+        use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
+
+        let Some(rb) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() else {
+            return;
+        };
+        let buf = &mut rb.buffer;
+        Clear.render(area, buf);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::White))
+            .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+        Paragraph::new(msg)
+            .block(block)
+            .wrap(Wrap { trim: true })
+            .render(area, buf);
+    }
+
     /// Render the draw plan to the terminal frame.
     /// This is the ONLY place where Ratatui types are used for rendering.
     pub fn render(
@@ -163,15 +206,39 @@ impl DrawPlanRenderer {
         for region in draw_plan.regions() {
             let area = layout_rect_to_rect(region.bounds);
 
-            // Look up the component for this window key
-            if let Some(component) = wm.component_for_key_mut(region.key) {
-                // TODO: Don't hardcode magic number
-                // For window content, use offscreen compositing
-                if region.z_index < 10 {
-                    self.render_window_composite(frame, area, component, region, hitbox_registry);
-                } else {
-                    // For panels/overlays, render directly to frame
-                    self.render_direct(frame, area, component, region);
+            match &region.region_type {
+                RegionType::Window(key) => {
+                    if let Some(component) = wm.component_for_key_mut(*key) {
+                        // TODO: Don't hardcode magic number
+                        // For window content, use offscreen compositing
+                        if region.z_index < 10 {
+                            self.render_window_composite(
+                                frame,
+                                area,
+                                component,
+                                region,
+                                hitbox_registry,
+                            );
+                        } else {
+                            // For panels/overlays, render directly to frame
+                            self.render_direct(frame, area, component, region);
+                        }
+                    }
+                }
+                RegionType::Notification(msg) => {
+                    use ratatui::style::{Color, Style};
+                    use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
+
+                    let buf = frame.buffer_mut();
+                    Clear.render(area, buf);
+                    let block = Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::White))
+                        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+                    Paragraph::new(msg.as_ref())
+                        .block(block)
+                        .wrap(Wrap { trim: true })
+                        .render(area, buf);
                 }
             }
         }
@@ -313,8 +380,6 @@ pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut W
     let selection_active = wm.selection_active();
     let selection_dragging = wm.selection_dragging();
     let wm_overlay_visible = wm.command_menu_visible();
-    let selection_copy_available = wm.selection_text().is_some();
-    let selection_copied = wm.selection_copied();
 
     // Top panel
     {
@@ -331,8 +396,6 @@ pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut W
                     window_selection_enabled,
                     selection_active,
                     selection_dragging,
-                    selection_copy_available,
-                    selection_copied,
                     menu_open: wm_overlay_visible,
                 },
             )));

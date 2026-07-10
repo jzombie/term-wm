@@ -44,7 +44,6 @@ struct NotificationArea {
     mouse_capture_rect: Option<LayoutRect>,
     clipboard_rect: Option<LayoutRect>,
     selection_rect: Option<LayoutRect>,
-    copy_rect: Option<LayoutRect>,
 }
 
 impl NotificationArea {
@@ -53,7 +52,6 @@ impl NotificationArea {
             mouse_capture_rect: None,
             clipboard_rect: None,
             selection_rect: None,
-            copy_rect: None,
         }
     }
 
@@ -61,7 +59,6 @@ impl NotificationArea {
         self.mouse_capture_rect = None;
         self.clipboard_rect = None;
         self.selection_rect = None;
-        self.copy_rect = None;
     }
 }
 
@@ -84,8 +81,6 @@ pub struct WmTopPanelComponent {
     window_selection_enabled: bool,
     selection_active: bool,
     selection_dragging: bool,
-    selection_copy_available: bool,
-    selection_copied: bool,
     menu_open: bool,
     window_labels: BTreeMap<WindowKey, String>,
 }
@@ -109,8 +104,6 @@ impl WmTopPanelComponent {
             window_selection_enabled: false,
             selection_active: false,
             selection_dragging: false,
-            selection_copy_available: false,
-            selection_copied: false,
             menu_open: false,
             window_labels: BTreeMap::new(),
         }
@@ -189,8 +182,6 @@ impl WmTopPanelComponent {
         window_selection_enabled: bool,
         _selection_active: bool,
         _selection_dragging: bool,
-        selection_copy_available: bool,
-        selection_copied: bool,
         menu_open: bool,
         theme: &term_wm_core::theme::Theme,
     ) {
@@ -295,15 +286,12 @@ impl WmTopPanelComponent {
         }
 
         let selection_chunk = "[ selection ]";
-        let copy_chunk = "[ copy ]";
         let mouse_chunk = "[ mouse ]";
         let clip_chunk = "[ clipboard ]";
         let selection_width = selection_chunk.chars().count() as u16;
-        let copy_width = copy_chunk.chars().count() as u16;
         let mouse_width = mouse_chunk.chars().count() as u16;
         let clip_width = clip_chunk.chars().count() as u16;
         let total_width = selection_width
-            .saturating_add(copy_width)
             .saturating_add(mouse_width)
             .saturating_add(clip_width);
         let indicator_x = if i32::from(total_width) >= i32::from(bounds.width) {
@@ -316,17 +304,6 @@ impl WmTopPanelComponent {
                 Style::default()
                     .fg(color_to_ratatui(theme.success))
                     .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(color_to_ratatui(theme.panel_inactive_fg))
-            };
-            let copy_style = if selection_copy_available && clipboard_enabled {
-                let mut style = Style::default()
-                    .fg(color_to_ratatui(theme.success))
-                    .add_modifier(Modifier::BOLD);
-                if selection_copied {
-                    style = style.fg(color_to_ratatui(theme.accent));
-                }
-                style
             } else {
                 Style::default().fg(color_to_ratatui(theme.panel_inactive_fg))
             };
@@ -365,26 +342,6 @@ impl WmTopPanelComponent {
                 }
             }
             cursor = cursor.saturating_add(i32::from(selection_width));
-            if copy_width > 0 && cursor < max_x {
-                safe_set_string(
-                    buffer,
-                    bounds,
-                    cursor as u16,
-                    y as u16,
-                    copy_chunk,
-                    copy_style,
-                );
-                let width = copy_width.min((max_x.saturating_sub(cursor)) as u16);
-                if width > 0 && selection_copy_available && clipboard_enabled {
-                    self.notifications.copy_rect = Some(LayoutRect {
-                        x: cursor,
-                        y,
-                        width,
-                        height: 1,
-                    });
-                }
-            }
-            cursor = cursor.saturating_add(i32::from(copy_width));
             if mouse_width > 0 && cursor < max_x {
                 safe_set_string(
                     buffer,
@@ -466,19 +423,6 @@ impl WmTopPanelComponent {
         false
     }
 
-    pub fn hit_test_copy(&self, event: &Event) -> bool {
-        let Event::Mouse(mouse) = event else {
-            return false;
-        };
-        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
-            return false;
-        }
-        if let Some(rect) = self.notifications.copy_rect {
-            return rect_contains(rect, mouse.column, mouse.row);
-        }
-        false
-    }
-
     pub fn hit_test_selection(&self, event: &Event) -> bool {
         let Event::Mouse(mouse) = event else {
             return false;
@@ -530,10 +474,6 @@ impl Component<TermWmAction> for WmTopPanelComponent {
             let mc = self.mouse_capture_enabled;
             let cb = self.clipboard_enabled;
             let ws = self.window_selection_enabled;
-            let sa = self.selection_active;
-            let sd = self.selection_dragging;
-            let sca = self.selection_copy_available;
-            let sc = self.selection_copied;
             let mo = self.menu_open;
             self.render_inner(
                 backend,
@@ -544,10 +484,8 @@ impl Component<TermWmAction> for WmTopPanelComponent {
                 mc,
                 cb,
                 ws,
-                sa,
-                sd,
-                sca,
-                sc,
+                self.selection_active,
+                self.selection_dragging,
                 mo,
                 &theme,
             );
@@ -576,9 +514,6 @@ impl Component<TermWmAction> for WmTopPanelComponent {
         }
         if self.hit_test_clipboard(event) {
             return EventResult::Action(TermWmAction::ToggleClipboardMode);
-        }
-        if self.hit_test_copy(event) {
-            return EventResult::Action(TermWmAction::CopySelection);
         }
         if let Some(key) = self.hit_test_window(event) {
             return EventResult::Action(TermWmAction::FocusWindow(key));
@@ -617,8 +552,6 @@ impl WmComponent for WmTopPanelComponent {
                 self.window_selection_enabled = state.window_selection_enabled;
                 self.selection_active = state.selection_active;
                 self.selection_dragging = state.selection_dragging;
-                self.selection_copy_available = state.selection_copy_available;
-                self.selection_copied = state.selection_copied;
                 self.menu_open = state.menu_open;
             }
             ComponentAction::SetWindowLabels(labels) => {
