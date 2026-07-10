@@ -188,6 +188,16 @@ impl HitboxRegistry {
             .map(|entry| entry.area)
     }
 
+    /// Find the screen-space area for a window by key.
+    /// Used for system windows (debug log) that aren't in the tiling layout.
+    pub fn window_area(&self, key: WindowKey) -> Option<LayoutRect> {
+        self.entries
+            .iter()
+            .rev()
+            .find(|entry| matches!(entry.target, HitTarget::Window(k) if k == key))
+            .map(|entry| entry.area)
+    }
+
     /// Atomically swap all entries with another registry.
     ///
     /// O(1) — moves the internal `Vec`s, preserving Z-ordering from the source.

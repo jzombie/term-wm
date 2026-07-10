@@ -1193,6 +1193,8 @@ impl WindowManager {
                         let mut ctx = self.component_context_for(focused, *key);
                         if let Some(area) = self.hitbox_registry.component_area(*key) {
                             ctx = ctx.with_screen_area(area);
+                        } else if let Some(area) = self.hitbox_registry.window_area(*key) {
+                            ctx = ctx.with_screen_area(area);
                         }
                         let core_event = Event::Mouse(MouseEvent {
                             kind: *kind,
