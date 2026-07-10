@@ -4869,7 +4869,10 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         let wm_down = crate::events::core_event_to_wm(&down).unwrap();
-        wm.dispatch_mouse(&wm_down);
+        if let Some((action_key, action)) = wm.dispatch_mouse(&wm_down).into_action() {
+            let k = action_key.unwrap_or(key);
+            wm.process_action(k, action);
+        }
 
         // Verify the action reached update()
         let comp = wm
@@ -5014,7 +5017,10 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         let wm_moved = crate::events::core_event_to_wm(&moved).unwrap();
-        wm.dispatch_mouse(&wm_moved);
+        if let Some((action_key, action)) = wm.dispatch_mouse(&wm_moved).into_action() {
+            let k = action_key.unwrap_or(key);
+            wm.process_action(k, action);
+        }
 
         let comp = wm
             .component_for_key_mut(key)
