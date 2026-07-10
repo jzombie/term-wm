@@ -19,6 +19,10 @@ const STREAMING_POLL_INTERVAL: Duration = Duration::from_millis(16);
 /// Poll interval when idle (blocks on channel, no CPU burn).
 const POWERSAVER_POLL_INTERVAL: Duration = Duration::from_secs(3600);
 
+/// Maximum poll interval on Windows to prevent ConPTY thread starvation.
+#[cfg(target_os = "windows")]
+pub const WINDOWS_MAX_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
 /// Fixed-behavior power profile variant.
 ///
 /// Each variant has a single, predictable `poll_interval`. The active
@@ -232,6 +236,20 @@ mod tests {
         assert_eq!(
             PowerProfile::PowerSaver.poll_interval(),
             POWERSAVER_POLL_INTERVAL
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_max_poll_interval_value() {
+        assert_eq!(
+            WINDOWS_MAX_POLL_INTERVAL,
+            Duration::from_millis(50),
+            "Windows max poll interval must be 50ms to prevent ConPTY starvation"
+        );
+        assert!(
+            WINDOWS_MAX_POLL_INTERVAL < POWERSAVER_POLL_INTERVAL,
+            "Windows max must be less than powersaver interval"
         );
     }
 }

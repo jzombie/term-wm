@@ -122,7 +122,7 @@ pub fn header_buttons(outer_right: u16) -> [(u16, HeaderAction, &'static str); 4
     let min_x = max_x.saturating_sub(HEADER_BUTTON_GAP);
     let kb_x = min_x.saturating_sub(HEADER_BUTTON_GAP);
     [
-        (close_x, HeaderAction::Close, "✖"),
+        (close_x, HeaderAction::Close, "X"),
         (max_x, HeaderAction::Maximize, "▢"),
         (min_x, HeaderAction::Minimize, "_"),
         (kb_x, HeaderAction::ToggleDirectMode, "D"),
@@ -159,5 +159,33 @@ mod tests {
         let dec = DefaultDecorator::new();
         let s = format!("{:?}", dec);
         assert!(s.contains("DefaultDecorator"));
+    }
+
+    #[test]
+    fn header_buttons_returns_four_buttons() {
+        let buttons = header_buttons(80);
+        assert_eq!(buttons.len(), 4);
+        assert!(matches!(buttons[0].1, HeaderAction::Close));
+        assert!(matches!(buttons[1].1, HeaderAction::Maximize));
+        assert!(matches!(buttons[2].1, HeaderAction::Minimize));
+        assert!(matches!(buttons[3].1, HeaderAction::ToggleDirectMode));
+    }
+
+    #[test]
+    fn header_buttons_close_glyph_is_x() {
+        let buttons = header_buttons(80);
+        assert_eq!(buttons[0].2, "X");
+    }
+
+    #[test]
+    fn header_buttons_saturates_at_zero() {
+        let buttons = header_buttons(0);
+        assert_eq!(buttons.len(), 4);
+        for (x, _, _) in &buttons {
+            assert_eq!(
+                *x, 0,
+                "all positions must saturate to 0 when outer_right is 0"
+            );
+        }
     }
 }
