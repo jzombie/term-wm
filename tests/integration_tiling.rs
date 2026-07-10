@@ -1186,7 +1186,7 @@ mod drag_snap_pipeline {
         // Press on the handle — must set LayoutHandle capture (dispatch returns true)
         let down = make_mouse(MouseEventKind::Press(MouseButton::Left), gap_col, gap_row);
         assert!(
-            wm.dispatch_mouse(&down),
+            wm.dispatch_mouse(&down).is_consumed(),
             "Press on split handle must be consumed"
         );
 
@@ -1197,7 +1197,7 @@ mod drag_snap_pipeline {
             gap_row,
         );
         assert!(
-            wm.dispatch_mouse(&drag),
+            wm.dispatch_mouse(&drag).is_consumed(),
             "Drag on split handle must be consumed"
         );
 

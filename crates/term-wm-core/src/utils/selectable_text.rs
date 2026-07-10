@@ -311,6 +311,7 @@ pub fn handle_selection_mouse<H: SelectionHost>(
                 let selection = host.selection_controller();
                 selection.set_pointer(mouse.column, mouse.row);
                 selection.prepare_drag(pos);
+                return true;
             }
             false
         }

@@ -42,6 +42,8 @@ pub trait WindowManagerHost {
     fn on_panic(&mut self) {}
     /// Toggle the debug log window visibility.
     fn toggle_debug_window(&mut self) {}
+    /// Toggle the system panel window visibility.
+    fn toggle_system_panel(&mut self) {}
     /// Called by the runner to check if the app wants to quit.
     /// The app sets this to `true` to exit the event loop.
     fn quit_requested(&self) -> bool {
@@ -70,9 +72,18 @@ fn drain_action_queue<A: WindowManagerHost>(
     queue: &mut VecDeque<(WindowKey, TermWmAction)>,
 ) {
     while let Some((key, action)) = queue.pop_front() {
-        let ctx = app.wm().component_context_for(true, key);
-        if let Some(comp) = app.wm().component_for_key_mut(key) {
-            comp.update(action, &ctx, queue);
+        match action {
+            TermWmAction::SendNotification(msg) => {
+                tracing::info!("drain_action_queue: SendNotification({})", msg);
+                app.wm()
+                    .push_notification(msg, std::time::Duration::from_secs(3));
+            }
+            action => {
+                let ctx = app.wm().component_context_for(true, key);
+                if let Some(comp) = app.wm().component_for_key_mut(key) {
+                    comp.update(action, &ctx, queue);
+                }
+            }
         }
     }
 }
@@ -93,7 +104,17 @@ where
     // O(1) hit-testing — no coordinate mutation, no ad-hoc rect_contains.
     if matches!(event, Event::Mouse(_)) {
         if let Some(wm_event) = core_event_to_wm(event) {
-            return app.wm().dispatch_mouse(&wm_event);
+            let result = app.wm().dispatch_mouse(&wm_event);
+            match result {
+                EventResult::Action((target_key, action)) => {
+                    let key = target_key.unwrap_or_else(|| app.wm().focused_window());
+                    let mut queue = VecDeque::from([(key, action)]);
+                    drain_action_queue(app, &mut queue);
+                    return true;
+                }
+                EventResult::Consumed => return true,
+                EventResult::Ignored => return false,
+            }
         }
         return false;
     }
@@ -180,6 +201,9 @@ where
                     }
                     SystemTask::TemporalDwellTick => {
                         app.wm().on_temporal_dwell_tick();
+                    }
+                    SystemTask::DismissNotification(id) => {
+                        app.wm().dismiss_notification(id);
                     }
                 }
             }
@@ -381,6 +405,15 @@ where
                             }
                             TermWmAction::ToggleDebugWindow => {
                                 app.toggle_debug_window();
+                                app.wm().close_command_menu();
+                            }
+                            TermWmAction::ToggleSystemPanel => {
+                                app.toggle_system_panel();
+                                app.wm().close_command_menu();
+                            }
+                            TermWmAction::SendNotification(msg) => {
+                                app.wm()
+                                    .push_notification(msg, std::time::Duration::from_secs(3));
                                 app.wm().close_command_menu();
                             }
                             TermWmAction::Help => {

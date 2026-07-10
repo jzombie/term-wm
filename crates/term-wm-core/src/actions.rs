@@ -78,6 +78,8 @@ pub enum TermWmAction {
     ToggleDebugWindow,
     BringFloatingFront,
     ExitUi,
+    ToggleSystemPanel,
+    SendNotification(String),
 
     // Clipboard
     ConfirmAction(ConfirmAction),
@@ -123,6 +125,14 @@ impl<Msg> EventResult<Msg> {
             _ => None,
         }
     }
+    /// Transform the inner action value, preserving Ignored/Consumed.
+    pub fn map<U>(self, f: impl FnOnce(Msg) -> U) -> EventResult<U> {
+        match self {
+            Self::Action(msg) => EventResult::Action(f(msg)),
+            Self::Consumed => EventResult::Consumed,
+            Self::Ignored => EventResult::Ignored,
+        }
+    }
 }
 
 impl TermWmAction {
@@ -162,7 +172,9 @@ impl TermWmAction {
             | TermWmAction::MaximizeWindow
             | TermWmAction::ToggleDebugWindow
             | TermWmAction::BringFloatingFront
-            | TermWmAction::ExitUi => Category::Windows,
+            | TermWmAction::ExitUi
+            | TermWmAction::ToggleSystemPanel
+            | TermWmAction::SendNotification(_) => Category::Windows,
 
             TermWmAction::MenuUp
             | TermWmAction::MenuDown
@@ -269,6 +281,8 @@ impl fmt::Display for TermWmAction {
             TermWmAction::ToggleDebugWindow => "Toggle debug window",
             TermWmAction::BringFloatingFront => "Bring floating front",
             TermWmAction::ExitUi => "Exit UI",
+            TermWmAction::ToggleSystemPanel => "Toggle system panel",
+            TermWmAction::SendNotification(_) => "Send notification",
             TermWmAction::ConfirmAction(_) => "Confirm action",
             TermWmAction::ClipboardPaste(_) => "Clipboard paste",
             TermWmAction::ProcessExited => "Process exited",
@@ -297,4 +311,6 @@ pub enum SystemTask {
     /// requiring mouse motion events (which stop flowing when the user holds
     /// the mouse still).
     TemporalDwellTick,
+    /// A notification's TTL has expired — dismiss it from the queue.
+    DismissNotification(u64),
 }
