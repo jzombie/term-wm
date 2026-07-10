@@ -14,3 +14,4 @@ ratatui = { workspace = true }
 term-wm-core = { workspace = true }
 term-wm-layout-engine = { workspace = true }
 term-wm-render = { workspace = true }
+tracing = { workspace = true }

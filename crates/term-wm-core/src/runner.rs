@@ -72,9 +72,17 @@ fn drain_action_queue<A: WindowManagerHost>(
     queue: &mut VecDeque<(WindowKey, TermWmAction)>,
 ) {
     while let Some((key, action)) = queue.pop_front() {
-        let ctx = app.wm().component_context_for(true, key);
-        if let Some(comp) = app.wm().component_for_key_mut(key) {
-            comp.update(action, &ctx, queue);
+        match action {
+            TermWmAction::SendNotification(msg) => {
+                app.wm()
+                    .push_notification(msg, std::time::Duration::from_secs(3));
+            }
+            action => {
+                let ctx = app.wm().component_context_for(true, key);
+                if let Some(comp) = app.wm().component_for_key_mut(key) {
+                    comp.update(action, &ctx, queue);
+                }
+            }
         }
     }
 }

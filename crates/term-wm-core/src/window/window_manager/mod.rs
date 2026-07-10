@@ -2180,6 +2180,8 @@ impl WindowManager {
     pub fn push_notification(&mut self, message: impl Into<String>, ttl: Duration) -> u64 {
         let id = self.notification_queue.push(message);
         tracing::info!("push_notification: id={}, queue_len={}", id, self.notification_queue.len());
+        // Mark layout dirty so the draw plan regenerates with notification regions
+        self.mark_layout_dirty();
         if let Some(handle) = &self.system_task_handle {
             handle.schedule_once(ttl, SystemTask::DismissNotification(id));
         }
@@ -2189,6 +2191,7 @@ impl WindowManager {
     /// Dismiss a notification by ID.
     pub fn dismiss_notification(&mut self, id: u64) {
         self.notification_queue.dismiss(id);
+        self.mark_layout_dirty();
     }
 
     /// Read-only access to the notification queue.

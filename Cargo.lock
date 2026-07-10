@@ -2911,6 +2911,7 @@ dependencies = [
  "term-wm-core",
  "term-wm-layout-engine",
  "term-wm-render",
+ "tracing",
 ]
 
 [[package]]

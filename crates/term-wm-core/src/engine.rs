@@ -121,6 +121,15 @@ fn generate_notification_regions(plan: &mut DrawPlan, wm: &WindowManager) {
     const GAP: u16 = 1;
 
     let managed = wm.managed_area();
+    let notif_count = wm.notifications().len();
+    if notif_count == 0 {
+        return;
+    }
+    tracing::info!(
+        "generate_notification_regions: {} notifications, managed={:?}",
+        notif_count,
+        managed
+    );
 
     // Circuit breaker — terminal too narrow; skip notification layers only.
     if managed.width <= MARGIN.saturating_mul(2).saturating_add(2) {
@@ -129,21 +138,18 @@ fn generate_notification_regions(plan: &mut DrawPlan, wm: &WindowManager) {
 
     let actual_w = TOAST_W.min(managed.width.saturating_sub(MARGIN.saturating_mul(2)));
     let inner_w = actual_w.saturating_sub(2) as usize;
-    // textwrap wraps on word boundaries — matches Ratatui's Wrap behavior
     let wrap_opts = Options::new(inner_w);
 
     let mut y_offset: u16 = MARGIN;
 
-    // .rev() → newest-first stacking at the top
     for notification in wm.notifications().renderable().rev() {
         let lines = textwrap::wrap(&notification.message, &wrap_opts);
-        let h = (lines.len() as u16).saturating_add(2); // +borders
+        let h = (lines.len() as u16).saturating_add(2);
         let h = h.min(managed.height.saturating_sub(y_offset.saturating_add(MARGIN)));
         if h < 3 {
             break;
         }
 
-        // Anchor to managed_area origin, not absolute (0,0)
         let x = managed
             .x
             .saturating_add(managed.width as i32)
