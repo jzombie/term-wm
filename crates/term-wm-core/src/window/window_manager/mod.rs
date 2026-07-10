@@ -83,7 +83,11 @@ pub(crate) enum MouseCaptureState {
     },
     /// A Press hit a Window or Component target — subsequent Drag/Release/Moved
     /// events are forwarded to that component until the Up releases.
-    ComponentInteraction { key: WindowKey },
+    ComponentInteraction {
+        key: WindowKey,
+        /// Immutable snapshot of the hitbox area at Press time.
+        screen_area: LayoutRect,
+    },
     /// A Press hit a tiling layout split handle — Drag/Release events route to
     /// `TilingLayout::handle_event()` for split-ratio adjustment.
     LayoutHandle,
@@ -914,6 +918,7 @@ impl WindowManager {
         self.mouse_capture = if captured {
             Some(MouseCaptureState::ComponentInteraction {
                 key: WindowKey::default(),
+                screen_area: LayoutRect::default(),
             })
         } else {
             None
@@ -1188,14 +1193,10 @@ impl WindowManager {
                         MouseEventKind::Release(_) => (true, false),
                         _ => (false, true),
                     },
-                    MouseCaptureState::ComponentInteraction { key } => {
+                    MouseCaptureState::ComponentInteraction { key, screen_area } => {
                         let focused = *self.focus.current() == *key;
-                        let mut ctx = self.component_context_for(focused, *key);
-                        if let Some(area) = self.hitbox_registry.component_area(*key) {
-                            ctx = ctx.with_screen_area(area);
-                        } else if let Some(area) = self.hitbox_registry.window_area(*key) {
-                            ctx = ctx.with_screen_area(area);
-                        }
+                        let ctx = self.component_context_for(focused, *key)
+                            .with_screen_area(*screen_area);
                         let core_event = Event::Mouse(MouseEvent {
                             kind: *kind,
                             column: col,
@@ -1340,7 +1341,10 @@ impl WindowManager {
                 };
                 // Only capture on Press events when consumed
                 if !result.is_ignored() {
-                    self.mouse_capture = Some(MouseCaptureState::ComponentInteraction { key });
+                    self.mouse_capture = Some(MouseCaptureState::ComponentInteraction {
+                        key,
+                        screen_area: hit_rect,
+                    });
                 }
                 result.map(|action| (Some(key), action))
             }

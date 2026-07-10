@@ -124,6 +124,30 @@ pub fn render_app(
                 wm.hitbox_registry_mut()
                     .register(HitTarget::Window(*key), screen_inner);
 
+                // Collect chrome entries for this window, then register
+                let mut chrome = Vec::new();
+                for h in wm.resize_handles().iter().filter(|h| h.key == *key) {
+                    chrome.push((HitTarget::ChromeResize(h.key, h.edge), h.rect));
+                }
+                for h in wm.floating_headers().iter().filter(|h| h.key == *key) {
+                    chrome.push((HitTarget::ChromeHeader(h.key, HeaderAction::Drag), h.rect));
+                    let outer_right = (h.rect.x.saturating_add(i32::from(h.rect.width))).max(0) as u16;
+                    for (bx, action, _) in header_buttons(outer_right) {
+                        chrome.push((
+                            HitTarget::ChromeHeader(h.key, action),
+                            term_wm_layout_engine::LayoutRect {
+                                x: i32::from(bx),
+                                y: h.rect.y,
+                                width: 1,
+                                height: 1,
+                            },
+                        ));
+                    }
+                }
+                for (target, rect) in chrome {
+                    wm.hitbox_registry_mut().register(target, rect);
+                }
+
                 let title = all_titles.get(key).map(String::as_str).unwrap_or("");
                 let win_ctx = term_wm_core::window::decorator::WindowRenderCtx {
                     title,
@@ -156,45 +180,12 @@ pub fn render_app(
     }
     renderer.put_scratch(scratch_buf);
 
-    // Register chrome hitboxes (resize handles + header drag zones)
-    // Collect data first to avoid simultaneous mutable + immutable borrows on wm.
-    // Order: tiling handles (lowest z), window content (middle), chrome (highest z).
-    // This ensures floating windows block clicks to tiling handles beneath them.
-    let chrome_entries: Vec<(HitTarget, term_wm_layout_engine::LayoutRect)> = {
-        let mut entries = Vec::new();
-        for region in draw_plan.regions() {
-            let k = match region.region_type {
-                term_wm_core::draw_plan::RegionType::Window(k) => k,
-                _ => continue,
-            };
-            for h in wm.resize_handles().iter().filter(|h| h.key == k) {
-                entries.push((HitTarget::ChromeResize(h.key, h.edge), h.rect));
-            }
-            for h in wm.floating_headers().iter().filter(|h| h.key == k) {
-                // Drag zone (full header width) — lower priority in reverse scan
-                entries.push((HitTarget::ChromeHeader(h.key, HeaderAction::Drag), h.rect));
-                // Per-button 1x1 hitboxes at exact button positions — higher priority
-                let outer_right = (h.rect.x.saturating_add(i32::from(h.rect.width))).max(0) as u16;
-                for (bx, action, _) in header_buttons(outer_right) {
-                    let button_rect = term_wm_layout_engine::LayoutRect {
-                        x: i32::from(bx),
-                        y: h.rect.y,
-                        width: 1,
-                        height: 1,
-                    };
-                    entries.push((HitTarget::ChromeHeader(h.key, action), button_rect));
-                }
-            }
-        }
-        // Tiling split handles last — highest priority at split boundaries,
-        // so they intercept clicks that would otherwise hit a Window region.
-        for handle in wm.tiling_handles() {
-            entries.push((HitTarget::LayoutHandle, handle.rect));
-        }
-        entries
-    };
-    for (target, rect) in chrome_entries {
-        wm.hitbox_registry_mut().register(target, rect);
+    // Register tiling split handle hitboxes — keep these after per-window
+    // chrome so they maintain high-priority interception on layout boundaries.
+    let tiling_handles: Vec<_> = wm.tiling_handles().to_vec();
+    for handle in &tiling_handles {
+        wm.hitbox_registry_mut()
+            .register(HitTarget::LayoutHandle, handle.rect);
     }
 
     // Render panels AFTER windows
