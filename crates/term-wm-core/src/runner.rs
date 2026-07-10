@@ -181,6 +181,9 @@ where
                     SystemTask::TemporalDwellTick => {
                         app.wm().on_temporal_dwell_tick();
                     }
+                    SystemTask::DismissNotification(id) => {
+                        app.wm().dismiss_notification(id);
+                    }
                 }
             }
 

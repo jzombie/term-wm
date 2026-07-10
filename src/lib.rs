@@ -85,7 +85,10 @@ pub fn render_app(
     let plan_regions = draw_plan.regions();
     let num_windows = plan_regions.len();
     for (i, region) in plan_regions.iter().enumerate() {
-        let key = region.key;
+        let key = match region.region_type {
+            term_wm_core::draw_plan::RegionType::Window(k) => k,
+            _ => continue,
+        };
         let full = region.bounds;
         if full.width == 0 || full.height == 0 {
             continue;
@@ -158,7 +161,10 @@ pub fn render_app(
     let chrome_entries: Vec<(HitTarget, term_wm_layout_engine::LayoutRect)> = {
         let mut entries = Vec::new();
         for region in draw_plan.regions() {
-            let k = region.key;
+            let k = match region.region_type {
+                term_wm_core::draw_plan::RegionType::Window(k) => k,
+                _ => continue,
+            };
             for h in wm.resize_handles().iter().filter(|h| h.key == k) {
                 entries.push((HitTarget::ChromeResize(h.key, h.edge), h.rect));
             }
@@ -355,6 +361,17 @@ pub fn render_app(
     }
     // Render overlays (command menu, help, exit confirm)
     render_overlays(backend, wm);
+
+    // Register notification hitboxes — swallows mouse events over toast area
+    for region in draw_plan.regions() {
+        if matches!(
+            region.region_type,
+            term_wm_core::draw_plan::RegionType::Notification(_)
+        ) {
+            wm.hitbox_registry_mut()
+                .register(HitTarget::Notification, region.bounds);
+        }
+    }
 
     // Cursor overlay — MUST be last (highest Z-order) so it paints over
     // all previously rendered content including overlays and chrome.

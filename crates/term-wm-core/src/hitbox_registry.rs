@@ -55,6 +55,8 @@ pub enum HitTarget {
     ChromeHeader(WindowKey, HeaderAction),
     /// Click on a tiling layout split handle.
     LayoutHandle,
+    /// Click on a notification toast — event is consumed, no passthrough.
+    Notification,
 }
 
 /// A single entry in the hitbox registry.

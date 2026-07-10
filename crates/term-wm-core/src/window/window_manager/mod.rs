@@ -25,6 +25,7 @@ use crate::components::{
 };
 use crate::hitbox_registry::{HitTarget, HitboxRegistry};
 use crate::keybindings::KeyBindings;
+use crate::notification::NotificationQueue;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
 use crate::power_profile::PowerProfile;
@@ -263,6 +264,8 @@ pub struct WindowManager {
     quit_requested: bool,
     /// Flag indicating the layout has changed and needs re-projection
     layout_dirty: bool,
+    /// Active toast notifications
+    notification_queue: NotificationQueue,
 }
 
 impl WindowManager {
@@ -634,6 +637,7 @@ impl WindowManager {
             reaper: Reaper::default(),
             quit_requested: false,
             layout_dirty: true,
+            notification_queue: NotificationQueue::default(),
         }
     }
 
@@ -1485,6 +1489,10 @@ impl WindowManager {
                     false
                 }
             }
+            HitTarget::Notification => {
+                // Swallow all mouse events over notification area — no passthrough.
+                true
+            }
         }
     }
 
@@ -2163,6 +2171,25 @@ impl WindowManager {
 
     pub fn floating_headers(&self) -> &[DragHandle<WindowKey>] {
         &self.floating_headers
+    }
+
+    /// Push a notification and schedule its auto-dismiss via the system task scheduler.
+    pub fn push_notification(&mut self, message: impl Into<String>, ttl: Duration) -> u64 {
+        let id = self.notification_queue.push(message);
+        if let Some(handle) = &self.system_task_handle {
+            handle.schedule_once(ttl, SystemTask::DismissNotification(id));
+        }
+        id
+    }
+
+    /// Dismiss a notification by ID.
+    pub fn dismiss_notification(&mut self, id: u64) {
+        self.notification_queue.dismiss(id);
+    }
+
+    /// Read-only access to the notification queue.
+    pub fn notifications(&self) -> &NotificationQueue {
+        &self.notification_queue
     }
 }
 

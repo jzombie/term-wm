@@ -1,4 +1,5 @@
-use crate::draw_plan::{DrawPlan, RenderRegion};
+use crate::constants::NOTIFICATION_Z_INDEX;
+use crate::draw_plan::{DrawPlan, RegionType, RenderRegion};
 use crate::window::WindowManager;
 use term_wm_layout_engine::LayoutRect;
 
@@ -72,10 +73,10 @@ impl CoreEngine {
             };
 
             self.draw_plan.push(RenderRegion {
-                key: window_key,
                 bounds: layout_rect,
                 z_index: 0, // Windows at base layer
                 dimmed: !is_focused,
+                region_type: RegionType::Window(window_key),
             });
         }
 
@@ -86,6 +87,9 @@ impl CoreEngine {
         // 3. Generate overlay regions (if active)
         // Overlays are rendered by the WindowManager
         // Their z-index is highest
+
+        // 4. Generate notification toast regions
+        generate_notification_regions(&mut self.draw_plan, wm);
     }
 
     /// Mark the engine as needing re-projection.
@@ -101,6 +105,64 @@ impl CoreEngine {
     /// Get the current draw plan (read-only).
     pub fn draw_plan(&self) -> &DrawPlan {
         &self.draw_plan
+    }
+}
+
+/// Generate notification toast regions and append them to the draw plan.
+///
+/// Extracted as a standalone function so that the geometric circuit-breaker
+/// early return only skips notification layers — not the entire pipeline.
+fn generate_notification_regions(plan: &mut DrawPlan, wm: &WindowManager) {
+    use std::sync::Arc;
+    use textwrap::Options;
+
+    const TOAST_W: u16 = 40;
+    const MARGIN: u16 = 2;
+    const GAP: u16 = 1;
+
+    let managed = wm.managed_area();
+
+    // Circuit breaker — terminal too narrow; skip notification layers only.
+    if managed.width <= MARGIN.saturating_mul(2).saturating_add(2) {
+        return;
+    }
+
+    let actual_w = TOAST_W.min(managed.width.saturating_sub(MARGIN.saturating_mul(2)));
+    let inner_w = actual_w.saturating_sub(2) as usize;
+    // textwrap wraps on word boundaries — matches Ratatui's Wrap behavior
+    let wrap_opts = Options::new(inner_w);
+
+    let mut y_offset: u16 = MARGIN;
+
+    // .rev() → newest-first stacking at the top
+    for notification in wm.notifications().renderable().rev() {
+        let lines = textwrap::wrap(&notification.message, &wrap_opts);
+        let h = (lines.len() as u16).saturating_add(2); // +borders
+        let h = h.min(managed.height.saturating_sub(y_offset.saturating_add(MARGIN)));
+        if h < 3 {
+            break;
+        }
+
+        // Anchor to managed_area origin, not absolute (0,0)
+        let x = managed
+            .x
+            .saturating_add(managed.width as i32)
+            .saturating_sub(actual_w as i32)
+            .saturating_sub(MARGIN as i32);
+
+        plan.push(RenderRegion {
+            bounds: LayoutRect {
+                x,
+                y: managed.y.saturating_add(y_offset as i32),
+                width: actual_w,
+                height: h,
+            },
+            z_index: NOTIFICATION_Z_INDEX,
+            dimmed: false,
+            region_type: RegionType::Notification(Arc::clone(&notification.message)),
+        });
+
+        y_offset = y_offset.saturating_add(h).saturating_add(GAP);
     }
 }
 

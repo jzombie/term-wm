@@ -297,4 +297,6 @@ pub enum SystemTask {
     /// requiring mouse motion events (which stop flowing when the user holds
     /// the mouse still).
     TemporalDwellTick,
+    /// A notification's TTL has expired — dismiss it from the queue.
+    DismissNotification(u64),
 }

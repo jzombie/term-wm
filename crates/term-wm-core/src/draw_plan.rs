@@ -1,19 +1,33 @@
+use std::sync::Arc;
+
 use term_wm_layout_engine::LayoutRect;
 
 use crate::window::WindowKey;
 
+/// Discriminator for the payload carried by a render region.
+///
+/// Moving the `WindowKey` into the `Window` variant makes the illegal
+/// state (a window region without a key) unrepresentable at compile time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegionType {
+    /// A standard window component to render.
+    Window(WindowKey),
+    /// A transient toast notification.
+    Notification(Arc<str>),
+}
+
 /// A single render region in the draw plan.
-/// Contains ONLY spatial geometry — no semantic awareness of component types.
+/// The `region_type` carries the semantic payload; spatial bounds are separate.
 #[derive(Debug, Clone)]
 pub struct RenderRegion {
-    /// The window key identifying which component to render
-    pub key: WindowKey,
     /// Bounding box in screen coordinates
     pub bounds: LayoutRect,
     /// Z-ordering for layering (higher = rendered on top)
     pub z_index: usize,
     /// Whether this region should be dimmed (unfocused windows)
     pub dimmed: bool,
+    /// Semantic discriminator — carries the key for windows, the message for notifications.
+    pub region_type: RegionType,
 }
 
 /// The complete draw plan for a frame.
@@ -78,7 +92,7 @@ impl DrawPlan {
 pub mod tests {
     use super::*;
 
-    /// Test helper: create a simple render region
+    /// Test helper: create a simple render region for a window
     pub fn make_region(
         key: WindowKey,
         x: i32,
@@ -88,7 +102,7 @@ pub mod tests {
         z_index: usize,
     ) -> RenderRegion {
         RenderRegion {
-            key,
+            region_type: RegionType::Window(key),
             bounds: LayoutRect {
                 x,
                 y,
@@ -100,7 +114,7 @@ pub mod tests {
         }
     }
 
-    /// Test helper: create a dimmed render region
+    /// Test helper: create a dimmed render region for a window
     pub fn make_dimmed_region(
         key: WindowKey,
         x: i32,
@@ -110,7 +124,7 @@ pub mod tests {
         z_index: usize,
     ) -> RenderRegion {
         RenderRegion {
-            key,
+            region_type: RegionType::Window(key),
             bounds: LayoutRect {
                 x,
                 y,
