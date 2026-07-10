@@ -248,10 +248,10 @@ impl Pty {
         let fg = self.foreground_title
             .lock()
             .unwrap_or_else(|err| err.into_inner())
-            .take();
+            .clone();
 
         if fg.is_some() {
-            // Purge the stale OSC title to prevent it from bleeding through on the next query
+            // Process name is authoritative. Purge any stale OSC titles.
             let _ = self.pending_title
                 .lock()
                 .unwrap_or_else(|err| err.into_inner())
@@ -272,12 +272,11 @@ impl Pty {
                 && fg_pid != self.last_fg_pid
             {
                 self.last_fg_pid = fg_pid;
-                if let Some(name) = get_process_name(fg_pid) {
-                    *self
-                        .foreground_title
-                        .lock()
-                        .unwrap_or_else(|err| err.into_inner()) = Some(name);
-                }
+                let name = get_process_name(fg_pid);
+                *self
+                    .foreground_title
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner()) = name;
             }
         }
     }
