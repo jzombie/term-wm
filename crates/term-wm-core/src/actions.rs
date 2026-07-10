@@ -49,7 +49,6 @@ pub enum TermWmAction {
     ScrollUp,
     ScrollDown,
     ToggleSelection,
-    CopySelection,
     PasteClipboard,
 
     // --- New component-level actions ---
@@ -76,7 +75,6 @@ pub enum TermWmAction {
     MinimizeWindow,
     MaximizeWindow,
     ToggleDebugWindow,
-    BringFloatingFront,
     ExitUi,
     ToggleSystemPanel,
     SendNotification(String),
@@ -171,7 +169,6 @@ impl TermWmAction {
             | TermWmAction::MinimizeWindow
             | TermWmAction::MaximizeWindow
             | TermWmAction::ToggleDebugWindow
-            | TermWmAction::BringFloatingFront
             | TermWmAction::ExitUi
             | TermWmAction::ToggleSystemPanel
             | TermWmAction::SendNotification(_) => Category::Windows,
@@ -203,7 +200,6 @@ impl TermWmAction {
             | TermWmAction::ScrollToBottom => Category::Scrolling,
 
             TermWmAction::ToggleSelection
-            | TermWmAction::CopySelection
             | TermWmAction::PasteClipboard
             | TermWmAction::ClearSelection
             | TermWmAction::ClipboardPaste(_) => Category::Selection,
@@ -260,7 +256,6 @@ impl fmt::Display for TermWmAction {
             TermWmAction::ScrollUp => "Scroll up",
             TermWmAction::ScrollDown => "Scroll down",
             TermWmAction::ToggleSelection => "Toggle selection",
-            TermWmAction::CopySelection => "Copy selection",
             TermWmAction::PasteClipboard => "Paste clipboard",
             TermWmAction::KeyToBytes(_) => "Key to bytes",
             TermWmAction::Scroll(_) => "Scroll",
@@ -279,7 +274,6 @@ impl fmt::Display for TermWmAction {
             TermWmAction::MinimizeWindow => "Minimize window",
             TermWmAction::MaximizeWindow => "Maximize window",
             TermWmAction::ToggleDebugWindow => "Toggle debug window",
-            TermWmAction::BringFloatingFront => "Bring floating front",
             TermWmAction::ExitUi => "Exit UI",
             TermWmAction::ToggleSystemPanel => "Toggle system panel",
             TermWmAction::SendNotification(_) => "Send notification",

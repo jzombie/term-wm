@@ -380,8 +380,6 @@ pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut W
     let selection_active = wm.selection_active();
     let selection_dragging = wm.selection_dragging();
     let wm_overlay_visible = wm.command_menu_visible();
-    let selection_copy_available = wm.selection_text().is_some();
-    let selection_copied = wm.selection_copied();
 
     // Top panel
     {
@@ -398,8 +396,6 @@ pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut W
                     window_selection_enabled,
                     selection_active,
                     selection_dragging,
-                    selection_copy_available,
-                    selection_copied,
                     menu_open: wm_overlay_visible,
                 },
             )));

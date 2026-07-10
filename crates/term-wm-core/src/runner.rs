@@ -420,10 +420,6 @@ where
                                 app.open_help_overlay();
                                 app.wm().close_command_menu();
                             }
-                            TermWmAction::BringFloatingFront => {
-                                app.wm().bring_all_floating_to_front();
-                                app.wm().close_command_menu();
-                            }
                             TermWmAction::ExitUi => {
                                 app.wm().close_command_menu();
                                 app.open_exit_confirm();

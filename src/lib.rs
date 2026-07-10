@@ -186,7 +186,6 @@ pub fn render_app(
     }
     renderer.put_scratch(scratch_buf);
 
-
     // Render panels AFTER windows
     render_panels(backend, wm);
 

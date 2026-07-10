@@ -226,8 +226,6 @@ pub struct WindowManager {
     selection_active: bool,
     selection_dragging: bool,
     selection_text: Option<String>,
-    selection_copied: bool,
-    selection_copied_text: Option<String>,
     config: WmConfig,
     hint_visibility: HintVisibility,
     command_menu_opened_at: Option<Instant>,
@@ -437,7 +435,11 @@ impl WindowManager {
         self.window(key).and_then(|window| window.floating_rect)
     }
 
-    fn set_floating_rect(&mut self, key: WindowKey, rect: Option<crate::window::FloatRectSpec>) {
+    pub fn set_floating_rect(
+        &mut self,
+        key: WindowKey,
+        rect: Option<crate::window::FloatRectSpec>,
+    ) {
         if let Some(w) = self.windows.get_mut(key) {
             w.floating_rect = rect;
         }
@@ -565,7 +567,6 @@ impl WindowManager {
                 TermWmAction::ToggleMouseCapture,
                 TermWmAction::ToggleClipboardMode,
                 TermWmAction::ToggleWindowSelection,
-                TermWmAction::BringFloatingFront,
                 TermWmAction::NewWindow,
                 TermWmAction::ToggleDebugWindow,
                 TermWmAction::ToggleSystemPanel,
@@ -612,8 +613,6 @@ impl WindowManager {
             selection_active: false,
             selection_dragging: false,
             selection_text: None,
-            selection_copied: false,
-            selection_copied_text: None,
             window_selection_enabled: config.window_selection_enabled,
             window_selection_dirty: false,
             hint_visibility: config.hint_visibility,
@@ -1384,8 +1383,6 @@ impl WindowManager {
 
                     if self.is_window_floating(key) {
                         self.bring_floating_to_front_key(key);
-                    } else {
-                        self.bring_to_front_key(key);
                     }
 
                     let rect = self.visible_region_for_key(key);
@@ -1613,10 +1610,6 @@ impl WindowManager {
                     self.toggle_clipboard_enabled();
                     true
                 }
-                TermWmAction::CopySelection => {
-                    self.copy_selection_to_clipboard();
-                    true
-                }
                 TermWmAction::FocusWindow(key) => {
                     if self.window_state(key) == Some(WindowState::Iconic) {
                         self.transition_window(key, WindowState::Mapped);
@@ -1755,14 +1748,9 @@ impl WindowManager {
     }
 
     pub fn set_selection_snapshot(&mut self, active: bool, dragging: bool, text: Option<String>) {
-        let changed = text.as_ref() != self.selection_text.as_ref();
         self.selection_active = active;
         self.selection_dragging = dragging;
         self.selection_text = text;
-        if !self.selection_active || self.selection_text.is_none() || changed {
-            self.selection_copied = false;
-            self.selection_copied_text = None;
-        }
     }
 
     pub fn selection_active(&self) -> bool {
@@ -1777,10 +1765,6 @@ impl WindowManager {
         self.selection_text.as_deref()
     }
 
-    pub fn selection_copied(&self) -> bool {
-        self.selection_copied
-    }
-
     pub fn copy_selection_to_clipboard(&mut self) {
         if !self.clipboard_enabled() {
             return;
@@ -1791,8 +1775,10 @@ impl WindowManager {
         if let Some(cb) = &mut self.clipboard
             && cb.set(&text).is_ok()
         {
-            self.selection_copied = true;
-            self.selection_copied_text = Some(text);
+            self.push_notification(
+                "Selection copied to clipboard",
+                std::time::Duration::from_secs(2),
+            );
         }
     }
 
@@ -2252,11 +2238,6 @@ pub fn wm_menu_items(
             label: selection_label,
             icon: Some("●"),
             action: crate::actions::TermWmAction::ToggleWindowSelection,
-        },
-        MenuItem {
-            label: "Floating Front",
-            icon: Some("↑"),
-            action: crate::actions::TermWmAction::BringFloatingFront,
         },
         MenuItem {
             label: "New Window",

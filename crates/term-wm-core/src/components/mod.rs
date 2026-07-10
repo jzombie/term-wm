@@ -278,8 +278,6 @@ pub struct TopPanelState {
     pub window_selection_enabled: bool,
     pub selection_active: bool,
     pub selection_dragging: bool,
-    pub selection_copy_available: bool,
-    pub selection_copied: bool,
     pub menu_open: bool,
 }
 
