@@ -245,16 +245,24 @@ impl Pty {
     }
 
     pub fn take_pending_title(&self) -> Option<String> {
-        self.foreground_title
+        let fg = self.foreground_title
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .take();
+
+        if fg.is_some() {
+            // Purge the stale OSC title to prevent it from bleeding through on the next query
+            let _ = self.pending_title
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .take();
+            return fg;
+        }
+
+        self.pending_title
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .take()
-            .or_else(|| {
-                self.pending_title
-                    .lock()
-                    .unwrap_or_else(|err| err.into_inner())
-                    .take()
-            })
     }
 
     fn poll_foreground(&mut self) {
