@@ -95,7 +95,17 @@ where
     // O(1) hit-testing — no coordinate mutation, no ad-hoc rect_contains.
     if matches!(event, Event::Mouse(_)) {
         if let Some(wm_event) = core_event_to_wm(event) {
-            return app.wm().dispatch_mouse(&wm_event);
+            let result = app.wm().dispatch_mouse(&wm_event);
+            match result {
+                EventResult::Action((target_key, action)) => {
+                    let key = target_key.unwrap_or_else(|| app.wm().focused_window());
+                    let mut queue = VecDeque::from([(key, action)]);
+                    drain_action_queue(app, &mut queue);
+                    return true;
+                }
+                EventResult::Consumed => return true,
+                EventResult::Ignored => return false,
+            }
         }
         return false;
     }

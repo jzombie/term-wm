@@ -125,6 +125,14 @@ impl<Msg> EventResult<Msg> {
             _ => None,
         }
     }
+    /// Transform the inner action value, preserving Ignored/Consumed.
+    pub fn map<U>(self, f: impl FnOnce(Msg) -> U) -> EventResult<U> {
+        match self {
+            Self::Action(msg) => EventResult::Action(f(msg)),
+            Self::Consumed => EventResult::Consumed,
+            Self::Ignored => EventResult::Ignored,
+        }
+    }
 }
 
 impl TermWmAction {
