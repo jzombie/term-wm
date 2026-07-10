@@ -19,6 +19,7 @@ use term_wm_console::console_render_target::ConsoleRenderTarget;
 use term_wm_sys_ui_components::wm_debug_log::{
     WmDebugLogComponent, install_panic_hook, set_global_debug_log,
 };
+use term_wm_sys_ui_components::WmSystemPanelComponent;
 
 /// Simple CLI for launching `term-wm` with optional commands / window count.
 #[derive(Parser, Debug)]
@@ -72,6 +73,8 @@ struct App {
     inner: TermWmApp,
     debug_key: Option<WindowKey>,
     debug_visible: bool,
+    system_panel_key: Option<WindowKey>,
+    system_panel_visible: bool,
     pty_wakeup_tx: Sender<UnifiedEvent>,
 }
 
@@ -126,6 +129,8 @@ impl App {
             inner,
             debug_key: None,
             debug_visible: false,
+            system_panel_key: None,
+            system_panel_visible: false,
             pty_wakeup_tx,
         };
 
@@ -142,6 +147,17 @@ impl App {
             app.inner.wm().set_window_title(debug_key, "Debug Log");
             install_panic_hook();
             term_wm::tracing_sub::init_default();
+        }
+
+        // Initialize system panel system window
+        {
+            let component = WmSystemPanelComponent::new();
+            let key = app.inner.wm().set_system_window(Box::new(component));
+            app.inner
+                .wm()
+                .transition_window(key, term_wm::window::WindowState::Unmapped);
+            app.system_panel_key = Some(key);
+            app.inner.wm().set_window_title(key, "System Panel");
         }
 
         // If commands provided, open one per command; otherwise open `num_windows`
@@ -297,6 +313,18 @@ impl WindowManagerHost for App {
         }
     }
 
+    fn toggle_system_panel(&mut self) {
+        self.system_panel_visible = !self.system_panel_visible;
+        if let Some(key) = self.system_panel_key {
+            let state = if self.system_panel_visible {
+                term_wm::window::WindowState::Mapped
+            } else {
+                term_wm::window::WindowState::Unmapped
+            };
+            self.inner.wm().transition_window(key, state);
+        }
+    }
+
     fn wm_new_window(&mut self) -> io::Result<()> {
         let mut pane =
             TerminalComponent::spawn_default(default_shell_command()).map_err(io::Error::other)?;
@@ -343,6 +371,13 @@ impl WindowManagerHost for App {
     fn wm_close_window(&mut self, key: WindowKey) -> io::Result<()> {
         if self.debug_key == Some(key) {
             self.debug_visible = false;
+            self.inner
+                .wm()
+                .transition_window(key, term_wm::window::WindowState::Unmapped);
+            return Ok(());
+        }
+        if self.system_panel_key == Some(key) {
+            self.system_panel_visible = false;
             self.inner
                 .wm()
                 .transition_window(key, term_wm::window::WindowState::Unmapped);

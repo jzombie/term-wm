@@ -42,6 +42,8 @@ pub trait WindowManagerHost {
     fn on_panic(&mut self) {}
     /// Toggle the debug log window visibility.
     fn toggle_debug_window(&mut self) {}
+    /// Toggle the system panel window visibility.
+    fn toggle_system_panel(&mut self) {}
     /// Called by the runner to check if the app wants to quit.
     /// The app sets this to `true` to exit the event loop.
     fn quit_requested(&self) -> bool {
@@ -384,6 +386,14 @@ where
                             }
                             TermWmAction::ToggleDebugWindow => {
                                 app.toggle_debug_window();
+                                app.wm().close_command_menu();
+                            }
+                            TermWmAction::ToggleSystemPanel => {
+                                app.toggle_system_panel();
+                                app.wm().close_command_menu();
+                            }
+                            TermWmAction::SendNotification(msg) => {
+                                app.wm().push_notification(msg, std::time::Duration::from_secs(3));
                                 app.wm().close_command_menu();
                             }
                             TermWmAction::Help => {

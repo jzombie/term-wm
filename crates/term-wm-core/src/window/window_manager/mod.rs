@@ -564,6 +564,7 @@ impl WindowManager {
                 TermWmAction::BringFloatingFront,
                 TermWmAction::NewWindow,
                 TermWmAction::ToggleDebugWindow,
+                TermWmAction::ToggleSystemPanel,
                 TermWmAction::Help,
                 TermWmAction::ExitUi,
             ]
@@ -2248,6 +2249,11 @@ pub fn wm_menu_items(
             label: "Debug Log",
             icon: Some("≣"),
             action: crate::actions::TermWmAction::ToggleDebugWindow,
+        },
+        MenuItem {
+            label: "System Panel",
+            icon: Some("⚙"),
+            action: crate::actions::TermWmAction::ToggleSystemPanel,
         },
         MenuItem {
             label: "Help",
