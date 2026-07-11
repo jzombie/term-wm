@@ -218,3 +218,318 @@ impl Component<TermWmAction> for VerticalStackComponent {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use term_wm_core::events::{
+        Event, KeyCode, KeyEvent, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
+
+    struct FixedHeight {
+        h: u16,
+    }
+
+    impl FixedHeight {
+        fn new(h: u16) -> Self {
+            Self { h }
+        }
+    }
+
+    impl Component<TermWmAction> for FixedHeight {
+        fn desired_height(&self, _width: u16) -> u16 {
+            self.h
+        }
+        fn render(
+            &mut self,
+            _b: &mut dyn term_wm_render::RenderBackend,
+            _a: LayoutRect,
+            _c: &ComponentContext,
+            _r: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+        ) {
+        }
+        fn handle_events(
+            &mut self,
+            _e: &Event,
+            _c: &ComponentContext,
+        ) -> EventResult<TermWmAction> {
+            EventResult::Ignored
+        }
+    }
+
+    #[test]
+    fn vertical_stack_new_default() {
+        let stack = VerticalStackComponent::new();
+        assert_eq!(stack.children.len(), 0);
+        assert_eq!(stack.gap, 0);
+    }
+
+    #[test]
+    fn vertical_stack_with_gap() {
+        let stack = VerticalStackComponent::new().with_gap(2);
+        assert_eq!(stack.gap, 2);
+    }
+
+    #[test]
+    fn vertical_stack_add_child() {
+        let mut stack = VerticalStackComponent::new();
+        stack.add(Box::new(FixedHeight::new(3)));
+        stack.add(Box::new(FixedHeight::new(5)));
+        assert_eq!(stack.children.len(), 2);
+    }
+
+    #[test]
+    fn vertical_stack_desired_height_sums_children() {
+        let mut stack = VerticalStackComponent::new().with_gap(1);
+        stack.add(Box::new(FixedHeight::new(3)));
+        stack.add(Box::new(FixedHeight::new(5)));
+        // 3 + 5 + 1 gap = 9
+        assert_eq!(stack.desired_height(40), 9);
+    }
+
+    #[test]
+    fn vertical_stack_desired_height_empty() {
+        let stack = VerticalStackComponent::new();
+        assert_eq!(stack.desired_height(40), 0);
+    }
+
+    #[test]
+    fn vertical_stack_default_trait() {
+        let stack = VerticalStackComponent::default();
+        assert_eq!(stack.children.len(), 0);
+    }
+
+    #[test]
+    fn vertical_stack_render_skips_zero_area() {
+        let mut stack = VerticalStackComponent::new();
+        stack.add(Box::new(FixedHeight::new(3)));
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 40, 20));
+        let mut backend =
+            term_wm_console::RatatuiBackend::new(buffer, ratatui::layout::Rect::new(0, 0, 40, 20));
+        let ctx = ComponentContext::new(true);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        // zero width
+        stack.render(
+            &mut backend,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 20,
+            },
+            &ctx,
+            &mut registry,
+        );
+        // zero height
+        stack.render(
+            &mut backend,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 0,
+            },
+            &ctx,
+            &mut registry,
+        );
+    }
+
+    #[test]
+    fn vertical_stack_render_normal() {
+        let mut stack = VerticalStackComponent::new().with_gap(1);
+        stack.add(Box::new(FixedHeight::new(3)));
+        stack.add(Box::new(FixedHeight::new(5)));
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 40, 20));
+        let mut backend =
+            term_wm_console::RatatuiBackend::new(buffer, ratatui::layout::Rect::new(0, 0, 40, 20));
+        let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 20,
+        });
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        stack.render(
+            &mut backend,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 20,
+            },
+            &ctx,
+            &mut registry,
+        );
+    }
+
+    #[test]
+    fn vertical_stack_render_stretch_child() {
+        let mut stack = VerticalStackComponent::new();
+        stack.add(Box::new(FixedHeight::new(3)));
+        stack.add(Box::new(FixedHeight::new(0))); // height 0 = stretch
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 40, 20));
+        let mut backend =
+            term_wm_console::RatatuiBackend::new(buffer, ratatui::layout::Rect::new(0, 0, 40, 20));
+        let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 20,
+        });
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        stack.render(
+            &mut backend,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 20,
+            },
+            &ctx,
+            &mut registry,
+        );
+    }
+
+    #[test]
+    fn vertical_stack_render_stretch_child_no_remaining() {
+        let mut stack = VerticalStackComponent::new().with_gap(100);
+        stack.add(Box::new(FixedHeight::new(100))); // exceeds area
+        stack.add(Box::new(FixedHeight::new(0)));
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 40, 10));
+        let mut backend =
+            term_wm_console::RatatuiBackend::new(buffer, ratatui::layout::Rect::new(0, 0, 40, 10));
+        let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 10,
+        });
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        stack.render(
+            &mut backend,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 10,
+            },
+            &ctx,
+            &mut registry,
+        );
+    }
+
+    #[test]
+    fn vertical_stack_handle_events_ignores_non_mouse() {
+        let mut stack = VerticalStackComponent::new();
+        stack.add(Box::new(FixedHeight::new(5)));
+        let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 20,
+        });
+        let event = Event::Key(KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+            KeyKind::Press,
+        ));
+        assert!(stack.handle_events(&event, &ctx).is_ignored());
+    }
+
+    #[test]
+    fn vertical_stack_handle_events_mouse_outside_ignored() {
+        let mut stack = VerticalStackComponent::new();
+        stack.add(Box::new(FixedHeight::new(5)));
+        let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 20,
+        });
+        let event = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            modifiers: KeyModifiers::NONE,
+            column: 100, // way outside
+            row: 100,
+        });
+        assert!(stack.handle_events(&event, &ctx).is_ignored());
+    }
+
+    #[test]
+    fn vertical_stack_handle_events_stretch_child_outside() {
+        let mut stack = VerticalStackComponent::new();
+        stack.add(Box::new(FixedHeight::new(3)));
+        stack.add(Box::new(FixedHeight::new(0)));
+        let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 20,
+        });
+        let event = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            modifiers: KeyModifiers::NONE,
+            column: 100,
+            row: 100,
+        });
+        assert!(stack.handle_events(&event, &ctx).is_ignored());
+    }
+
+    #[test]
+    fn vertical_stack_handle_events_stretch_child_exceeds_area() {
+        let mut stack = VerticalStackComponent::new().with_gap(100);
+        stack.add(Box::new(FixedHeight::new(100)));
+        stack.add(Box::new(FixedHeight::new(0)));
+        let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 10,
+        });
+        let event = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            modifiers: KeyModifiers::NONE,
+            column: 5,
+            row: 5,
+        });
+        // stretch child has 0 remaining, should skip
+        assert!(stack.handle_events(&event, &ctx).is_ignored());
+    }
+
+    #[test]
+    fn vertical_stack_handle_events_child_breaks_when_exceeds_area() {
+        let mut stack = VerticalStackComponent::new().with_gap(100);
+        stack.add(Box::new(FixedHeight::new(100)));
+        stack.add(Box::new(FixedHeight::new(5)));
+        let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 10,
+        });
+        let event = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            modifiers: KeyModifiers::NONE,
+            column: 5,
+            row: 5,
+        });
+        // first child exceeds area, child_virtual_y >= area.height, break
+        assert!(stack.handle_events(&event, &ctx).is_ignored());
+    }
+
+    #[test]
+    fn vertical_stack_update_propagates_to_children() {
+        let mut stack = VerticalStackComponent::new();
+        stack.add(Box::new(FixedHeight::new(3)));
+        let ctx = ComponentContext::new(true);
+        let mut actions = VecDeque::new();
+        stack.update(TermWmAction::Quit, &ctx, &mut actions);
+    }
+
+    #[test]
+    fn vertical_stack_destroy_propagates() {
+        let mut stack = VerticalStackComponent::new();
+        stack.add(Box::new(FixedHeight::new(3)));
+        stack.destroy();
+    }
+}
