@@ -1,0 +1,6 @@
+[package]
+name = "term-session-mock"
+description = "Isolated workspace binary for simulating cross-platform raw virtual terminal streams and ConPTY byte sequences in integration tests."
+version = "0.0.0"
+edition = "2024"
+publish = false
