@@ -383,7 +383,20 @@ impl Pty {
                 let response = format!("\x1b[{};{}R", row.saturating_add(1), col.saturating_add(1));
                 let _ = self.write_bytes(response.as_bytes());
             }
+            // Acquire the lock to prevent lost wakeups on the condition variable
+            let (lock, cvar) = &*self.dirty_cond;
+            let _guard = lock.lock().unwrap();
+            cvar.notify_all();
         }
+    }
+
+    /// Sync dirty state and return the full terminal snapshot.
+    /// Combines screen() (which clears dirty and wakes the reader)
+    /// with a formatted snapshot of the current parser state.
+    pub fn generate_snapshot(&mut self) -> Vec<u8> {
+        self.screen();
+        let parser = self.shared_parser.lock().unwrap();
+        parser.screen().state_formatted()
     }
 
     pub fn bytes_received(&self) -> usize {

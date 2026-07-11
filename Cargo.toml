@@ -8,9 +8,16 @@ repository.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[package.metadata.cargo-udeps.ignore]
+development = ["term-bench", "term-session-client"]
+
 [workspace]
 members = [
     "crates/term-bench",
+    "crates/term-session-client",
+    "crates/term-session-mock",
+    "crates/term-session-muxio-service-definitions",
+    "crates/term-session-server",
     "crates/term-wm-console",
     "crates/term-wm-core",
     "crates/term-wm-layout-engine",
@@ -23,7 +30,7 @@ resolver = "2"
 
 [workspace.package]
 authors = ["Jeremy Harris <jeremy.harris@zenosmosis.com>"]
-version = "0.8.19-alpha"
+version = "0.8.20-alpha"
 edition = "2024"
 repository = "https://github.com/jzombie/term-wm"
 license = "MIT OR Apache-2.0"
@@ -44,6 +51,13 @@ indoc = "2.0.7"
 libc = "0.2.186"
 line-ending = "1.5.1"
 linkify = "0.11.0"
+muxio-core = "0.12.0-alpha"
+muxio-rpc-service = "0.12.0-alpha"
+muxio-rpc-service-caller = "0.12.0-alpha"
+muxio-rpc-service-endpoint = "0.12.0-alpha"
+muxio-tokio-mpsc-adapter = "0.12.0-alpha"
+muxio-tokio-rpc-ipc-client = "0.12.0-alpha"
+muxio-tokio-rpc-ipc-server = "0.12.0-alpha"
 portable-pty = "0.9.0"
 proptest = "1.11.0"
 pulldown-cmark = "0.13.0"
@@ -52,14 +66,17 @@ resvg = "0.47.0"
 shell-words = "1.1.1"
 strum = { version = "0.28", features = ["derive"] }
 tempfile = "3.24.0"
-term-wm = { path = ".", version = "0.8.19-alpha" }
-term-wm-console = { path = "crates/term-wm-console", version = "0.8.19-alpha" }
-term-wm-core = { path = "crates/term-wm-core", version = "0.8.19-alpha" }
-term-wm-layout-engine = { path = "crates/term-wm-layout-engine", version = "0.8.19-alpha" }
-term-wm-pty-engine = { path = "crates/term-wm-pty-engine", version = "0.8.19-alpha" }
-term-wm-render = { path = "crates/term-wm-render", version = "0.8.19-alpha" }
-term-wm-sys-ui-components = { path = "crates/term-wm-sys-ui-components", version = "0.8.19-alpha" }
-term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.8.19-alpha" }
+term-session-client = { path = "crates/term-session-client", version = "0.8.20-alpha" }
+term-session-muxio-service-definitions = { path = "crates/term-session-muxio-service-definitions", version = "0.8.20-alpha" }
+term-session-server = { path = "crates/term-session-server", version = "0.8.20-alpha" }
+term-wm = { path = ".", version = "0.8.20-alpha" }
+term-wm-console = { path = "crates/term-wm-console", version = "0.8.20-alpha" }
+term-wm-core = { path = "crates/term-wm-core", version = "0.8.20-alpha" }
+term-wm-layout-engine = { path = "crates/term-wm-layout-engine", version = "0.8.20-alpha" }
+term-wm-pty-engine = { path = "crates/term-wm-pty-engine", version = "0.8.20-alpha" }
+term-wm-render = { path = "crates/term-wm-render", version = "0.8.20-alpha" }
+term-wm-sys-ui-components = { path = "crates/term-wm-sys-ui-components", version = "0.8.20-alpha" }
+term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.8.20-alpha" }
 textwrap = "0.16.2"
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["full"] }
@@ -98,5 +115,14 @@ webbrowser = { workspace = true }
 indoc = { workspace = true }
 
 [dev-dependencies]
+muxio-rpc-service = { workspace = true }
+muxio-tokio-mpsc-adapter = { workspace = true }
+muxio-tokio-rpc-ipc-client = { workspace = true }
 proptest = { workspace = true }
+tempfile = { workspace = true }
+term-bench = { path = "crates/term-bench" }
+term-session-client = { path = "crates/term-session-client" }
+term-session-muxio-service-definitions = { path = "crates/term-session-muxio-service-definitions" }
+term-session-server = { path = "crates/term-session-server" }
 term-wm-render = { workspace = true }
+tokio = { workspace = true }

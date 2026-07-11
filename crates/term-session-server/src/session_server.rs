@@ -1,0 +1,353 @@
+use std::sync::Arc;
+use std::time::Duration;
+
+use muxio_core::rpc::rpc_internals::RpcStreamEvent;
+use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;
+use muxio_rpc_service_endpoint::{RpcServiceEndpointInterface, StreamResponder};
+use muxio_tokio_rpc_ipc_server::{RpcIpcServer, RpcIpcServerEvent};
+use portable_pty::PtySize;
+use tokio::sync::{Mutex, mpsc, oneshot};
+
+use term_session_muxio_service_definitions::{
+    CloseSession, ListSessions, ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
+    Spawn, WriteInput,
+};
+
+use crate::session::Session;
+
+pub struct SessionServerConfig {
+    pub socket_path: String,
+    pub cmd: Vec<String>,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+struct ClientEntry {
+    conn_id: usize,
+}
+
+struct SubscriberEntry {
+    conn_id: usize,
+    respond: StreamResponder,
+}
+
+struct ServerState {
+    session: Option<Session>,
+    clients: Vec<ClientEntry>,
+    subscribers: Vec<SubscriberEntry>,
+}
+
+impl ServerState {
+    fn new() -> Self {
+        Self {
+            session: None,
+            clients: Vec::new(),
+            subscribers: Vec::new(),
+        }
+    }
+}
+
+type SharedState = Arc<Mutex<ServerState>>;
+
+/// Run the session server. Returns the PTY child's exit code on success.
+pub async fn run_server(
+    config: SessionServerConfig,
+) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
+    let state: SharedState = Arc::new(Mutex::new(ServerState::new()));
+
+    // Spawn initial session
+    {
+        let mut st = state.lock().await;
+        let cmd = if config.cmd.is_empty() {
+            None
+        } else {
+            Some(config.cmd.clone())
+        };
+        let session = Session::spawn(1, cmd, config.cols, config.rows)?;
+        st.session = Some(session);
+    }
+
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    let server = RpcIpcServer::new(Some(event_tx));
+    let endpoint = server.endpoint();
+
+    // Register Spawn
+    let st = Arc::clone(&state);
+    endpoint
+        .register_prebuffered(Spawn::METHOD_ID, move |payload, _ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                let mut guard = state.lock().await;
+
+                let (cmd, cols, rows) = Spawn::decode_request(&payload)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+
+                // If a session already exists and hasn't exited, resize and return it.
+                if let Some(ref mut session) = guard.session
+                    && !session.exited
+                {
+                    let size = PtySize {
+                        rows,
+                        cols,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    };
+                    let _ = session.pty.resize(size);
+                    session.cols = cols;
+                    session.rows = rows;
+
+                    return Spawn::encode_response(session.id)
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
+                }
+
+                let id = 1;
+                let session = Session::spawn(id, cmd, cols, rows)?;
+                guard.session = Some(session);
+                Spawn::encode_response(id)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+            }
+        })
+        .await
+        .map_err(|e| format!("register Spawn: {e:?}"))?;
+
+    // Register ResizePty
+    let st = Arc::clone(&state);
+    endpoint
+        .register_prebuffered(ResizePty::METHOD_ID, move |payload, _ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                let (_id, cols, rows) = ResizePty::decode_request(&payload)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                let mut guard = state.lock().await;
+                if let Some(session) = guard.session.as_mut() {
+                    let size = portable_pty::PtySize {
+                        rows,
+                        cols,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    };
+                    let _ = session.pty.resize(size);
+                }
+                ResizePty::encode_response(())
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+            }
+        })
+        .await
+        .map_err(|e| format!("register ResizePty: {e:?}"))?;
+
+    // Register CloseSession
+    let st = Arc::clone(&state);
+    endpoint
+        .register_prebuffered(CloseSession::METHOD_ID, move |payload, _ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                let _id = CloseSession::decode_request(&payload)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                let mut guard = state.lock().await;
+                if let Some(session) = guard.session.as_mut() {
+                    let _ = session.pty.kill_child();
+                }
+                guard.session = None;
+                CloseSession::encode_response(())
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+            }
+        })
+        .await
+        .map_err(|e| format!("register CloseSession: {e:?}"))?;
+
+    // Register ListSessions
+    let st = Arc::clone(&state);
+    endpoint
+        .register_prebuffered(ListSessions::METHOD_ID, move |_payload, _ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                let guard = state.lock().await;
+                let sessions = match &guard.session {
+                    Some(s) => vec![(s.id, String::new(), s.exited)],
+                    None => vec![],
+                };
+                ListSessions::encode_response(sessions)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+            }
+        })
+        .await
+        .map_err(|e| format!("register ListSessions: {e:?}"))?;
+
+    // Register WriteInput
+    let st = Arc::clone(&state);
+    endpoint
+        .register_prebuffered(WriteInput::METHOD_ID, move |payload, _ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                let (id, data) = WriteInput::decode_request(&payload)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                let mut guard = state.lock().await;
+                if let Some(session) = guard.session.as_mut()
+                    && session.id == id
+                {
+                    let _ = session.pty.write_bytes(&data);
+                }
+                WriteInput::encode_response(())
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+            }
+        })
+        .await
+        .map_err(|e| format!("register WriteInput: {e:?}"))?;
+
+    // Register StreamInput (streaming handler for PTY input)
+    // The channel persists across client disconnects so reconnecting
+    // clients can still send input — we drop it only when the server
+    // shuts down.
+    let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    endpoint
+        .register_stream_handler(STREAM_INPUT_METHOD_ID, move |event, _responder, _ctx| {
+            if let RpcStreamEvent::PayloadChunk { bytes, .. } = event {
+                let _ = input_tx.send(bytes);
+            }
+            // Intentionally ignore End/Error — the channel stays alive.
+        })
+        .await
+        .map_err(|e| format!("register stream handler STREAM_INPUT: {e:?}"))?;
+
+    // Background task: write received input bytes to the PTY session
+    let input_st = Arc::clone(&state);
+    tokio::spawn(async move {
+        while let Some(data) = input_rx.recv().await {
+            let mut guard = input_st.lock().await;
+            if let Some(session) = guard.session.as_mut() {
+                let _ = session.pty.write_bytes(&data);
+            }
+        }
+    });
+
+    // Register SubscribeOutput (streaming handler for PTY output pushes)
+    let st = Arc::clone(&state);
+    endpoint
+        .register_stream_handler(SUBSCRIBE_OUTPUT_METHOD_ID, move |event, respond, ctx| {
+            let is_new = matches!(&event, RpcStreamEvent::Header { .. });
+            if is_new {
+                let st = Arc::clone(&st);
+                tokio::spawn(async move {
+                    let mut guard = st.lock().await;
+
+                    // Drain accumulated PTY output and capture the raw bytes
+                    // so they can be sent to the new subscriber (not just the snapshot).
+                    let early = guard.session.as_mut().and_then(|s| {
+                        let data = s.read_output();
+                        if data.is_empty() { None } else { Some(data) }
+                    });
+                    let snapshot = guard.session.as_mut().map(|s| s.generate_snapshot());
+
+                    guard.subscribers.push(SubscriberEntry {
+                        conn_id: ctx.conn_id,
+                        respond: respond.clone(),
+                    });
+
+                    drop(guard);
+
+                    if let Some(data) = snapshot
+                        && !data.is_empty()
+                    {
+                        respond.respond(data, false);
+                    }
+                    if let Some(data) = early {
+                        respond.respond(data, false);
+                    }
+                });
+            }
+        })
+        .await
+        .map_err(|e| format!("register SubscribeOutput: {e:?}"))?;
+
+    // Connection event handler
+    let st = Arc::clone(&state);
+    tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                RpcIpcServerEvent::ClientConnected(handle) => {
+                    tracing::info!("Client {} connected", handle.0.conn_id);
+
+                    let mut guard = st.lock().await;
+                    guard.clients.push(ClientEntry {
+                        conn_id: handle.0.conn_id,
+                    });
+                }
+                RpcIpcServerEvent::ClientDisconnected(conn_id) => {
+                    tracing::info!("Client {conn_id} disconnected");
+                    let mut guard = st.lock().await;
+                    guard.clients.retain(|c| c.conn_id != conn_id);
+                    guard.subscribers.retain(|s| s.conn_id != conn_id);
+                }
+            }
+        }
+    });
+
+    // Output polling and push via stored StreamResponders.
+    // When the session exits, the exit code is sent back through this
+    // channel so run_server can return it.
+    let (exit_tx, mut exit_rx) = oneshot::channel::<i32>();
+    let st = Arc::clone(&state);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(8));
+        loop {
+            interval.tick().await;
+
+            let mut guard = st.lock().await;
+
+            if guard.subscribers.is_empty() {
+                if let Some(session) = guard.session.as_mut() {
+                    session.sync_screen();
+                }
+                continue;
+            }
+
+            let Some(session) = guard.session.as_mut() else {
+                break;
+            };
+
+            let raw = session.read_output();
+            let exited = session.check_exited();
+            let code = session.exit_code;
+
+            if raw.is_empty() && !guard.subscribers.is_empty() {
+                tracing::debug!(
+                    "PTY output empty with {} subscribers",
+                    guard.subscribers.len()
+                );
+            }
+
+            // Push raw PTY output to all subscribers via StreamResponder
+            if !raw.is_empty() {
+                for sub in &guard.subscribers {
+                    sub.respond.respond(raw.clone(), false);
+                }
+            }
+
+            // On exit: finalize all streams and clean up
+            if exited {
+                for sub in &guard.subscribers {
+                    sub.respond.respond(Vec::new(), true);
+                }
+                guard.subscribers.clear();
+                let _ = exit_tx.send(code.unwrap_or(0));
+                tracing::info!("Session exited with code {:?}", code);
+                break;
+            }
+        }
+    });
+
+    tracing::info!("Session server listening on {}", config.socket_path);
+
+    // Wait for either the server to finish or the session to exit.
+    let exit_code = tokio::select! {
+        result = server.serve(&config.socket_path) => {
+            result.map_err(|e| format!("serve: {e:?}"))?;
+            0
+        }
+        code = &mut exit_rx => {
+            code.unwrap_or(0)
+        }
+    };
+
+    Ok(exit_code)
+}
