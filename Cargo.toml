@@ -8,6 +8,9 @@ repository.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[package.metadata.cargo-udeps.ignore]
+development = ["term-bench", "term-session-client"]
+
 [workspace]
 members = [
     "crates/term-bench",
@@ -90,9 +93,6 @@ required-features = ["sys-ui"]
 default = ["sys-ui"]
 sys-ui = ["dep:term-wm-sys-ui-components"]
 
-[package.metadata.cargo-udeps.ignore]
-development = ["term-bench", "term-session-client"]
-
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
@@ -115,14 +115,14 @@ webbrowser = { workspace = true }
 indoc = { workspace = true }
 
 [dev-dependencies]
+muxio-rpc-service = { workspace = true }
+muxio-tokio-mpsc-adapter = { workspace = true }
+muxio-tokio-rpc-ipc-client = { workspace = true }
 proptest = { workspace = true }
-term-wm-render = { workspace = true }
-term-session-server = { path = "crates/term-session-server" }
+tempfile = { workspace = true }
+term-bench = { path = "crates/term-bench" }
 term-session-client = { path = "crates/term-session-client" }
 term-session-muxio-service-definitions = { path = "crates/term-session-muxio-service-definitions" }
-term-bench = { path = "crates/term-bench" }
-muxio-tokio-rpc-ipc-client = { workspace = true }
-muxio-tokio-mpsc-adapter = { workspace = true }
-muxio-rpc-service = { workspace = true }
+term-session-server = { path = "crates/term-session-server" }
+term-wm-render = { workspace = true }
 tokio = { workspace = true }
-tempfile = { workspace = true }
