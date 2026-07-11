@@ -10,5 +10,4 @@ publish.workspace = true
 
 [dependencies]
 bitcode = { workspace = true }
-muxio-core = { workspace = true }
 muxio-rpc-service = { workspace = true }

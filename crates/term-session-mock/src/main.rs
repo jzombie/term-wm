@@ -99,6 +99,29 @@ fn main() {
             let _ = stdout.flush();
             std::thread::sleep(Duration::from_millis(500));
         }
+        "capture" => {
+            #[cfg(windows)]
+            win_console::enable_raw_vt();
+
+            let mut stdin = io::stdin();
+            let mut stdout = io::stdout();
+            let mut buf = [0u8; 1024];
+
+            loop {
+                match stdin.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let _ = stdout.write_all(b"MOUSE_OK:");
+                        let _ = stdout.write_all(&buf[..n]);
+                        let _ = stdout.flush();
+                        if buf[..n].windows(4).any(|w| w == b"ping") {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
         "sleep" => {
             let ms: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(1000);
             std::thread::sleep(Duration::from_millis(ms));

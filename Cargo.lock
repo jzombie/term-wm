@@ -2859,7 +2859,6 @@ name = "term-session-muxio-service-definitions"
 version = "0.8.20-alpha"
 dependencies = [
  "bitcode",
- "muxio-core",
  "muxio-rpc-service",
 ]
 

@@ -90,6 +90,9 @@ required-features = ["sys-ui"]
 default = ["sys-ui"]
 sys-ui = ["dep:term-wm-sys-ui-components"]
 
+[package.metadata.cargo-udeps.ignore]
+development = ["term-bench", "term-session-client"]
+
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }

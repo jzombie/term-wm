@@ -46,6 +46,7 @@ async fn session_input_output_roundtrip() {
     );
 }
 
+#[cfg(not(windows))]
 #[tokio::test]
 async fn session_mouse_bytes_forwarded() {
     let mock = get_mock_bin();
@@ -78,6 +79,36 @@ async fn session_mouse_bytes_forwarded() {
         b"0;5;10",
         "Mouse token params mismatch: expected '0;5;10', got {:?}",
         String::from_utf8_lossy(params)
+    );
+}
+
+/// On Windows, ConPTY intercepts escape sequences written to the PTY master's
+/// stdin pipe before they reach the child process. The `capture` subcommand
+/// verifies the PTY input→output pipeline using a `MOUSE_OK:` sentinel marker
+/// instead of raw escape sequences.
+#[cfg(windows)]
+#[tokio::test]
+async fn session_mouse_bytes_forwarded() {
+    let mock = get_mock_bin();
+    let (client, _dir) = spawn_session(vec![mock, "capture".into()], TEST_COLS, TEST_ROWS).await;
+
+    let (_, mut reader) = client
+        .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
+        .await
+        .unwrap();
+    let (writer, _) = client
+        .open_channel(STREAM_INPUT_METHOD_ID, 0)
+        .await
+        .unwrap();
+
+    writer.send(b"ping".to_vec()).unwrap();
+
+    let output = wait_for_output(&mut reader, b"MOUSE_OK:", Duration::from_secs(3)).await;
+    assert!(
+        output.windows(9).any(|w| w == b"MOUSE_OK:"),
+        "PTY input pipeline broken on Windows, got {} bytes: {:?}",
+        output.len(),
+        String::from_utf8_lossy(&output)
     );
 }
 
@@ -250,4 +281,14 @@ async fn term_bench_runs_to_completion() {
     }
     drop(sender);
     assert!(got_end, "term-bench should exit within 10 seconds");
+}
+
+#[test]
+fn find_sgr_mouse_token_static() {
+    let stream = b"\x1b[H\x1b[J\x1b[<0;5;10M\x1b[0m";
+    let token = find_sgr_mouse_token(stream).expect("Static SGR mouse token parsing failed");
+
+    assert!(token.len() >= 4);
+    let params = &token[3..token.len() - 1];
+    assert_eq!(params, b"0;5;10");
 }
