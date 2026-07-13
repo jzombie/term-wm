@@ -181,7 +181,6 @@ impl Component<TermWmAction> for WmSessionManagerComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use term_wm_core::components::ComponentContext;
 
     #[test]
     fn session_manager_new_is_not_visible() {

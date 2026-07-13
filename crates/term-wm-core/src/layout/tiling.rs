@@ -187,9 +187,9 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                     if let Some(node) = self.node_at_path_mut(&source_path) {
                         *node = LayoutNode::Leaf(target_id_copy);
                     }
-                    return true;
+                    true
                 }
-                _ => return false,
+                _ => false,
             }
         }
     }

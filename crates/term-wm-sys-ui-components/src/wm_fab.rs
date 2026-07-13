@@ -129,7 +129,6 @@ impl Component<TermWmAction> for WmFabComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use term_wm_core::components::ComponentContext;
 
     #[test]
     fn fab_component_new_is_visible() {
