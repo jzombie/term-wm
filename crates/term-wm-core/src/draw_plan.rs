@@ -358,7 +358,13 @@ pub mod tests {
     }
 
     /// Test helper: create a FAB render region
-    pub fn make_fab_region(x: i32, y: i32, width: u16, height: u16, z_index: usize) -> RenderRegion {
+    pub fn make_fab_region(
+        x: i32,
+        y: i32,
+        width: u16,
+        height: u16,
+        z_index: usize,
+    ) -> RenderRegion {
         RenderRegion {
             region_type: RegionType::Fab,
             bounds: LayoutRect {
@@ -480,14 +486,19 @@ pub mod tests {
         fn test_monocle_culling_resizes_focused_window() {
             let key1 = WindowKey::default();
             let key2 = WindowKey::default();
-            
+
             let mut plan = DrawPlan::with_capacity(4);
             plan.push(make_region(key1, 0, 0, 40, 24, 0));
             plan.push(make_region(key2, 40, 0, 40, 24, 0));
-            
-            let screen = LayoutRect { x: 0, y: 0, width: 80, height: 24 };
+
+            let screen = LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            };
             plan.apply_monocle_culling(key1, screen);
-            
+
             // Focused window should fill the screen
             assert_region_bounds(&plan, 0, 0, 0, 80, 24);
             // Other window should be hidden
@@ -497,15 +508,20 @@ pub mod tests {
         #[test]
         fn test_monocle_culling_hides_panels() {
             let key1 = WindowKey::default();
-            
+
             let mut plan = DrawPlan::with_capacity(4);
             plan.push(make_region(key1, 0, 0, 80, 20, 0));
             plan.push(make_panel_region(PanelPosition::Top, 0, 0, 80, 2, 10));
             plan.push(make_panel_region(PanelPosition::Bottom, 0, 22, 80, 2, 10));
-            
-            let screen = LayoutRect { x: 0, y: 0, width: 80, height: 24 };
+
+            let screen = LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            };
             plan.apply_monocle_culling(key1, screen);
-            
+
             // Panels should be hidden
             assert!(plan.regions()[1].hidden);
             assert!(plan.regions()[2].hidden);
@@ -514,14 +530,19 @@ pub mod tests {
         #[test]
         fn test_monocle_culling_exempt_fab() {
             let key1 = WindowKey::default();
-            
+
             let mut plan = DrawPlan::with_capacity(4);
             plan.push(make_region(key1, 0, 0, 80, 24, 0));
             plan.push(make_fab_region(77, 23, 3, 1, 1000));
-            
-            let screen = LayoutRect { x: 0, y: 0, width: 80, height: 24 };
+
+            let screen = LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            };
             plan.apply_monocle_culling(key1, screen);
-            
+
             // FAB should NOT be hidden (exempt from culling)
             assert!(!plan.regions()[1].hidden);
         }
@@ -529,13 +550,13 @@ pub mod tests {
         #[test]
         fn test_monocle_z_order_places_fab_in_overlays() {
             let key1 = WindowKey::default();
-            
+
             let mut plan = DrawPlan::with_capacity(4);
             plan.push(make_region(key1, 0, 0, 80, 24, 0));
             plan.push(make_fab_region(77, 23, 3, 1, 1000));
-            
+
             plan.apply_monocle_z_order(key1);
-            
+
             // FAB should be in the last position (overlays layer)
             let last = plan.regions().last().unwrap();
             assert!(matches!(last.region_type, RegionType::Fab));

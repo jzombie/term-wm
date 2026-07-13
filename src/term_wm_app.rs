@@ -50,7 +50,7 @@ impl TermWmApp {
         let hostname = app_ctx.hostname.clone();
 
         use term_wm_sys_ui_components::{
-            WmBottomPanelComponent, WmFabComponent, WmCommandPaletteOverlay, WmTopPanelComponent,
+            WmBottomPanelComponent, WmCommandPaletteOverlay, WmFabComponent, WmTopPanelComponent,
         };
 
         let wm = AppBuilder::bare()

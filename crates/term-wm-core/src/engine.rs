@@ -111,9 +111,9 @@ impl CoreEngine {
         if wm.fab_component_mut().is_some() {
             let fab_width = 3;
             let fab_height = 1;
-            let fab_x = width as i32 - fab_width as i32 - 1;  // 1 col margin
+            let fab_x = width as i32 - fab_width as i32 - 1; // 1 col margin
             let fab_y = height as i32 - fab_height as i32 - 1; // 1 row margin
-            
+
             self.draw_plan.push(RenderRegion {
                 bounds: LayoutRect {
                     x: fab_x,
@@ -121,7 +121,7 @@ impl CoreEngine {
                     width: fab_width,
                     height: fab_height,
                 },
-                z_index: 1000,  // Above everything
+                z_index: 1000, // Above everything
                 dimmed: false,
                 region_type: RegionType::Fab,
                 hidden: false,

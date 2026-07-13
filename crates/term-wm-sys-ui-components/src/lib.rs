@@ -14,6 +14,6 @@ pub use wm_fab::WmFabComponent;
 pub use wm_help_overlay::WmHelpOverlayComponent;
 pub use wm_keybinding_overlay::WmKeybindingOverlayComponent;
 pub use wm_menu_overlay::WmCommandPaletteOverlay;
-pub use wm_session_manager::{WmSessionManagerComponent, SessionEntry};
+pub use wm_session_manager::{SessionEntry, WmSessionManagerComponent};
 pub use wm_system_panel::WmSystemPanelComponent;
 pub use wm_top_panel::WmTopPanelComponent;

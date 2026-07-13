@@ -111,10 +111,7 @@ impl Component<TermWmAction> for WmSessionManagerComponent {
 
             // Register each row for hit-testing
             if let Some(_key) = self.window_key {
-                registry.register(
-                    HitTarget::Window(entry.key),
-                    row_rect,
-                );
+                registry.register(HitTarget::Window(entry.key), row_rect);
             }
 
             // Render title with activity indicator

@@ -65,7 +65,7 @@ impl Component<TermWmAction> for WmFabComponent {
         }
 
         let screen_area = ctx.screen_area().unwrap_or(area);
-        
+
         // Compute FAB position: bottom-right 3x1 cells
         let fab_x = screen_area.x + i32::from(screen_area.width).saturating_sub(3);
         let fab_y = screen_area.y + i32::from(screen_area.height).saturating_sub(1);
@@ -92,13 +92,12 @@ impl Component<TermWmAction> for WmFabComponent {
         for yy in bounds.y..bounds.y.saturating_add(bounds.height) {
             for xx in bounds.x..bounds.x.saturating_add(bounds.width) {
                 if let Some(cell) = buffer.cell_mut((xx, yy)) {
-                    cell.set_symbol("≡")
-                        .set_style(
-                            Style::default()
-                                .fg(Color::White)
-                                .bg(Color::DarkGray)
-                                .add_modifier(Modifier::BOLD),
-                        );
+                    cell.set_symbol("≡").set_style(
+                        Style::default()
+                            .fg(Color::White)
+                            .bg(Color::DarkGray)
+                            .add_modifier(Modifier::BOLD),
+                    );
                 }
             }
         }

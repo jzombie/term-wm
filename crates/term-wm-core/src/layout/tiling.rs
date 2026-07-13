@@ -148,14 +148,14 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
         // Find paths to both source and target
         let mut source_path = Vec::new();
         let mut target_path = Vec::new();
-        
+
         if !self.find_leaf_path(source, &mut source_path, &mut Vec::new()) {
             return false;
         }
         if !self.find_leaf_path(target, &mut target_path, &mut Vec::new()) {
             return false;
         }
-        
+
         // Get the source node's ID and replace it with a temporary void
         let source_id = {
             let source_node = self.node_at_path_mut(&source_path);
@@ -164,7 +164,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                 _ => return false,
             }
         };
-        
+
         // Replace source with a temporary void
         {
             let source_node = self.node_at_path_mut(&source_path);
@@ -172,7 +172,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                 *node = LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed));
             }
         }
-        
+
         // Get target node's ID and replace it with source
         {
             let target_node = self.node_at_path_mut(&target_path);
