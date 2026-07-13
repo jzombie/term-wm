@@ -220,6 +220,12 @@ where
             for key in driver.take_exited_windows() {
                 app.wm().close_window(key);
             }
+
+            // Update monocle mode on resize
+            if let Some(Event::Resize(width, _height)) = &event {
+                app.wm().update_monocle_mode(*width);
+            }
+
             let mut flush_state_changes = |app: &mut A, flow: ControlFlow, consume_dirty: bool| {
                 if let Some(enabled) = app.wm().take_mouse_capture_change() {
                     let _ = driver.set_mouse_capture(enabled);
@@ -277,35 +283,10 @@ where
                 // bypass all WM interception and go directly to the terminal,
                 // except when the WM overlay is visible — overlay takes priority.
                 // In direct mode, keys are forwarded immediately without WM processing.
-                if let Event::Key(key) = &evt {
-                    let focus_id = app.wm().focused_window();
-                    if app.wm().direct_mode(focus_id)
-                        && !app.wm().command_menu_visible()
-                        && key.kind == KeyKind::Press
-                    {
-                        // Direct mode — forward to terminal immediately.
-                        let _ = handle_focused_app_event(&evt, app);
-                        update_selection_snapshot(app);
-                        return flush_state_changes(app, ControlFlow::Continue, false);
-                    }
-                }
 
-                // Layer 2a: App-level event handler (before WM actions, after overlays)
-                if app.handle_app_event(&evt) {
-                    update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue, false);
-                }
-
-                // Pre-compute WmMode-layer action for use inside the overlay section.
-                let mapped_action_wm_mode = match &evt {
-                    Event::Key(key) => app
-                        .wm()
-                        .keybindings()
-                        .action_for_key_in_layer(key, crate::keybindings::ActionLayer::WmMode),
-                    _ => None,
-                };
-
-                // WM command menu toggle
+                // Layer 2a: Command palette toggle — ALWAYS interceptable
+                // This MUST happen before the direct mode check so that
+                // Ctrl+Shift+Space works even when a terminal window is in direct mode.
                 let wm_mode = app.wm().config().wm_command_menu_enabled;
                 if wm_mode
                     && let Event::Key(key) = &evt
@@ -323,6 +304,35 @@ where
                     update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Continue, false);
                 }
+
+                // Layer 2b: Direct mode check — intercepts ALL other keys
+                if let Event::Key(key) = &evt {
+                    let focus_id = app.wm().focused_window();
+                    if app.wm().direct_mode(focus_id)
+                        && !app.wm().command_menu_visible()
+                        && key.kind == KeyKind::Press
+                    {
+                        // Direct mode — forward to terminal immediately.
+                        let _ = handle_focused_app_event(&evt, app);
+                        update_selection_snapshot(app);
+                        return flush_state_changes(app, ControlFlow::Continue, false);
+                    }
+                }
+
+                // Layer 2c: App-level event handler (before WM actions, after overlays)
+                if app.handle_app_event(&evt) {
+                    update_selection_snapshot(app);
+                    return flush_state_changes(app, ControlFlow::Continue, false);
+                }
+
+                // Pre-compute WmMode-layer action for use inside the overlay section.
+                let mapped_action_wm_mode = match &evt {
+                    Event::Key(key) => app
+                        .wm()
+                        .keybindings()
+                        .action_for_key_in_layer(key, crate::keybindings::ActionLayer::WmMode),
+                    _ => None,
+                };
                 if wm_mode && app.wm().command_menu_visible() {
                     if let Some(action) = app.wm().handle_wm_menu_event(&evt) {
                         match action {
@@ -718,6 +728,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let key = wm.create_window(Box::new(crate::components::NoopComponent));
         let one = vec![key];
@@ -744,6 +755,7 @@ mod tests {
             None,
             None,
             Some(Box::new(TestMenu)),
+            None,
             None,
         );
         let key = wm.create_window(Box::new(crate::components::NoopComponent));
@@ -811,6 +823,7 @@ mod tests {
                 None,
                 None,
                 Some(Box::new(TestMenu)),
+                None,
                 None,
             ),
         };
@@ -906,6 +919,7 @@ mod tests {
                 None,
                 None,
                 Some(Box::new(TestMenu)),
+                None,
                 None,
             ),
         };
@@ -1029,6 +1043,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         (0..n)
             .map(|_| wm.create_window(Box::new(crate::components::NoopComponent)))
@@ -1087,6 +1102,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let k1 = wm.create_window(Box::new(crate::components::NoopComponent));
         let k2 = wm.create_window(Box::new(crate::components::NoopComponent));
@@ -1110,6 +1126,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let k1 = wm.create_window(Box::new(crate::components::NoopComponent));
         let k2 = wm.create_window(Box::new(crate::components::NoopComponent));
@@ -1126,6 +1143,7 @@ mod tests {
         let mut wm = crate::window::WindowManager::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,

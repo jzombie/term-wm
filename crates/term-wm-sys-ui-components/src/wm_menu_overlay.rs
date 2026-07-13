@@ -22,7 +22,7 @@ use term_wm_ui_components::helpers::{color_to_ratatui, layout_rect_to_rect};
 use term_wm_ui_components::DialogOverlayComponent;
 use term_wm_ui_components::menu::MenuComponent;
 
-pub struct WmMenuOverlay {
+pub struct WmCommandPaletteOverlay {
     menu: MenuComponent,
     outlined: Cell<bool>,
     outlined_at: RefCell<Option<Instant>>,
@@ -34,9 +34,9 @@ pub struct WmMenuOverlay {
     last_action: Option<TermWmAction>,
 }
 
-impl std::fmt::Debug for WmMenuOverlay {
+impl std::fmt::Debug for WmCommandPaletteOverlay {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WmMenuOverlay")
+        f.debug_struct("WmCommandPaletteOverlay")
             .field("outlined", &self.outlined.get())
             .field("anchor", &self.anchor)
             .field("managed_area", &self.managed_area)
@@ -44,13 +44,13 @@ impl std::fmt::Debug for WmMenuOverlay {
     }
 }
 
-impl Default for WmMenuOverlay {
+impl Default for WmCommandPaletteOverlay {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl WmMenuOverlay {
+impl WmCommandPaletteOverlay {
     pub fn new() -> Self {
         Self {
             menu: MenuComponent::new(),
@@ -261,7 +261,7 @@ impl WmMenuOverlay {
     }
 }
 
-impl Component<TermWmAction> for WmMenuOverlay {
+impl Component<TermWmAction> for WmCommandPaletteOverlay {
     fn render(
         &mut self,
         backend: &mut dyn term_wm_render::RenderBackend,
@@ -341,13 +341,13 @@ impl Component<TermWmAction> for WmMenuOverlay {
     fn destroy(&mut self) {}
 }
 
-impl Overlay<TermWmAction> for WmMenuOverlay {
+impl Overlay<TermWmAction> for WmCommandPaletteOverlay {
     fn visible(&self) -> bool {
         !self.outlined.get()
     }
 }
 
-impl WmComponent for WmMenuOverlay {
+impl WmComponent for WmCommandPaletteOverlay {
     fn consume_area(&mut self, available: LayoutRect) -> (LayoutRect, LayoutRect) {
         // Overlays render on top, claim no area
         (LayoutRect::default(), available)
@@ -414,7 +414,7 @@ mod tests {
         })
     }
 
-    fn process(overlay: &mut WmMenuOverlay, event: &Event, ctx: &ComponentContext) {
+    fn process(overlay: &mut WmCommandPaletteOverlay, event: &Event, ctx: &ComponentContext) {
         if let EventResult::Action(action) = overlay.handle_events(event, ctx) {
             overlay.update(action, ctx, &mut VecDeque::new());
         }
@@ -442,7 +442,7 @@ mod tests {
 
     #[test]
     fn menu_up_down_selections() {
-        let mut overlay = WmMenuOverlay::new();
+        let mut overlay = WmCommandPaletteOverlay::new();
         let ctx = ComponentContext::new(true);
         overlay.set_items(make_items());
 
@@ -461,7 +461,7 @@ mod tests {
 
     #[test]
     fn menu_mouse_click_selects_item_and_stores_action() {
-        let mut overlay = WmMenuOverlay::new();
+        let mut overlay = WmCommandPaletteOverlay::new();
         let ctx = ComponentContext::new(true);
         overlay.set_items(make_items());
         overlay.set_anchor(Some((0, 0)));
@@ -507,7 +507,7 @@ mod tests {
 
     #[test]
     fn overlay_keyboard_navigation() {
-        let mut overlay = WmMenuOverlay::new();
+        let mut overlay = WmCommandPaletteOverlay::new();
         let ctx = ComponentContext::new(true);
         overlay.set_items(make_items());
 
@@ -546,7 +546,7 @@ mod tests {
 
     #[test]
     fn overlay_mouse_click_on_item() {
-        let mut overlay = WmMenuOverlay::new();
+        let mut overlay = WmCommandPaletteOverlay::new();
         let ctx = ComponentContext::new(true);
         overlay.set_items(make_items());
         overlay.set_anchor(Some((0, 1)));
@@ -588,7 +588,7 @@ mod tests {
 
     #[test]
     fn overlay_mouse_click_outside_returns_no_action() {
-        let mut overlay = WmMenuOverlay::new();
+        let mut overlay = WmCommandPaletteOverlay::new();
         let ctx = ComponentContext::new(true);
         overlay.set_items(make_items());
         overlay.set_anchor(Some((0, 1)));
@@ -624,7 +624,7 @@ mod tests {
 
     #[test]
     fn overlay_renders_dropdown_when_not_outlined() {
-        let mut overlay = WmMenuOverlay::new();
+        let mut overlay = WmCommandPaletteOverlay::new();
         overlay.set_items(make_items());
         overlay.set_anchor(Some((0, 1)));
         overlay.set_managed_area(LayoutRect {
@@ -659,7 +659,7 @@ mod tests {
 
     #[test]
     fn overlay_renders_nothing_when_no_items() {
-        let mut overlay = WmMenuOverlay::new();
+        let mut overlay = WmCommandPaletteOverlay::new();
         overlay.set_anchor(Some((0, 1)));
 
         let area = LayoutRect {
@@ -687,7 +687,7 @@ mod tests {
 
     #[test]
     fn overlay_outline_then_restore() {
-        let mut overlay = WmMenuOverlay::new();
+        let mut overlay = WmCommandPaletteOverlay::new();
         overlay.set_items(make_items());
         overlay.set_anchor(Some((0, 1)));
         overlay.set_managed_area(LayoutRect {
@@ -754,10 +754,10 @@ mod tests {
 
     #[test]
     fn debug_format() {
-        let overlay = WmMenuOverlay::new();
+        let overlay = WmCommandPaletteOverlay::new();
         let s = format!("{:?}", overlay);
         assert!(
-            s.contains("WmMenuOverlay"),
+            s.contains("WmCommandPaletteOverlay"),
             "Debug should include struct name: {s}"
         );
         assert!(

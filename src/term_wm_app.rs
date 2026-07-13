@@ -50,7 +50,7 @@ impl TermWmApp {
         let hostname = app_ctx.hostname.clone();
 
         use term_wm_sys_ui_components::{
-            WmBottomPanelComponent, WmMenuOverlay, WmTopPanelComponent,
+            WmBottomPanelComponent, WmFabComponent, WmCommandPaletteOverlay, WmTopPanelComponent,
         };
 
         let wm = AppBuilder::bare()
@@ -61,7 +61,8 @@ impl TermWmApp {
                 &app_version,
                 hostname.as_deref(),
             )))
-            .command_menu(Box::new(WmMenuOverlay::new()))
+            .command_menu(Box::new(WmCommandPaletteOverlay::new()))
+            .fab(Box::new(WmFabComponent::new()))
             .supported_menu_actions(vec![
                 TermWmAction::CloseMenu,
                 TermWmAction::ToggleMouseCapture,

@@ -23,7 +23,7 @@ fn mouse_capture_flow_through_window_manager() {
             None,
         ));
     let menu: Box<dyn term_wm_core::components::WmComponent> =
-        Box::new(term_wm_sys_ui_components::WmMenuOverlay::new());
+        Box::new(term_wm_sys_ui_components::WmCommandPaletteOverlay::new());
     let mut wm: term_wm::window::WindowManager = AppBuilder::bare()
         .app_ctx(ctx)
         .top_panel(top)

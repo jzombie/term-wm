@@ -138,6 +138,13 @@ impl DrawPlanRenderer {
                     // Target highlight is a pulsing border overlay
                     // This is a placeholder for now
                 }
+                RegionType::Fab => {
+                    // Delegate to the FAB component's own render method
+                    // This preserves the component's internal presentation logic
+                    if let Some(fab) = wm.fab_component_mut() {
+                        self.render_direct_to_buffer(target_buf, area, fab, region);
+                    }
+                }
             }
         }
     }
@@ -285,6 +292,13 @@ impl DrawPlanRenderer {
                 RegionType::TargetHighlight(_key) => {
                     // Target highlight is a pulsing border overlay
                     // This is a placeholder for now
+                }
+                RegionType::Fab => {
+                    // Delegate to the FAB component's own render method
+                    // This preserves the component's internal presentation logic
+                    if let Some(fab) = wm.fab_component_mut() {
+                        self.render_direct(frame, area, fab, region);
+                    }
                 }
             }
         }
@@ -1434,7 +1448,7 @@ mod tests {
     fn make_wm() -> WindowManager {
         let config = WmConfig::default();
         let app_ctx = Arc::new(AppContext::new("test", "0.1.0"));
-        WindowManager::with_config(config, app_ctx, None, None, None, None)
+        WindowManager::with_config(config, app_ctx, None, None, None, None, None)
     }
 
     fn make_buf(width: u16, height: u16) -> Buffer {

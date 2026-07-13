@@ -43,6 +43,21 @@ impl CoreEngine {
         // Generate new regions from layout state
         self.generate_regions(width, height, wm);
 
+        // Apply monocle mode if active
+        // This hides non-focused windows and reorders Z-indices
+        // without mutating WindowManager.z_order
+        if wm.is_monocle() {
+            let focused_key = wm.focused_window();
+            let screen = LayoutRect {
+                x: 0,
+                y: 0,
+                width: width as u16,
+                height: height as u16,
+            };
+            self.draw_plan.apply_monocle_culling(focused_key, screen);
+            self.draw_plan.apply_monocle_z_order(focused_key);
+        }
+
         // Sort by z-index for correct layering
         self.draw_plan.sort_by_z_index();
 
@@ -54,7 +69,7 @@ impl CoreEngine {
     }
 
     /// Generate render regions from current layout state.
-    fn generate_regions(&mut self, _width: u32, _height: u32, wm: &WindowManager) {
+    fn generate_regions(&mut self, width: u32, height: u32, wm: &mut WindowManager) {
         // 1. Generate terminal window regions
         for &window_key in &wm.managed_draw_order {
             let region = wm.full_region_for_key(window_key);
@@ -91,6 +106,27 @@ impl CoreEngine {
 
         // 4. Generate notification toast regions
         generate_notification_regions(&mut self.draw_plan, wm);
+
+        // 5. Generate FAB region (bottom-right corner, always visible)
+        if wm.fab_component_mut().is_some() {
+            let fab_width = 3;
+            let fab_height = 1;
+            let fab_x = width as i32 - fab_width as i32 - 1;  // 1 col margin
+            let fab_y = height as i32 - fab_height as i32 - 1; // 1 row margin
+            
+            self.draw_plan.push(RenderRegion {
+                bounds: LayoutRect {
+                    x: fab_x,
+                    y: fab_y,
+                    width: fab_width,
+                    height: fab_height,
+                },
+                z_index: 1000,  // Above everything
+                dimmed: false,
+                region_type: RegionType::Fab,
+                hidden: false,
+            });
+        }
     }
 
     /// Mark the engine as needing re-projection.

@@ -97,7 +97,7 @@ impl App {
         let app_name = app_ctx.app_name.clone();
         let app_version = app_ctx.app_version.clone();
 
-        let mut raw_menu = term_wm_sys_ui_components::WmMenuOverlay::new();
+        let mut raw_menu = term_wm_sys_ui_components::WmCommandPaletteOverlay::new();
         raw_menu.set_timeout(std::time::Duration::from_millis(500));
 
         let wm = if embedded {

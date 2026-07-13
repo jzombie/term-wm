@@ -195,6 +195,7 @@ pub struct WindowManager {
     top_component: Option<Box<dyn WmComponent>>,
     bottom_component: Option<Box<dyn WmComponent>>,
     command_menu_component: Option<Box<dyn WmComponent>>,
+    fab_component: Option<Box<dyn WmComponent>>,
     #[allow(dead_code)]
     supported_menu_actions: Vec<TermWmAction>,
     top_claimed: Rect,
@@ -556,6 +557,7 @@ impl WindowManager {
         top_component: Option<Box<dyn WmComponent>>,
         bottom_component: Option<Box<dyn WmComponent>>,
         command_menu_component: Option<Box<dyn WmComponent>>,
+        fab_component: Option<Box<dyn WmComponent>>,
         supported_menu_actions: Option<Vec<TermWmAction>>,
     ) -> Self {
         let supported_menu_actions = supported_menu_actions.unwrap_or_else(|| {
@@ -594,6 +596,7 @@ impl WindowManager {
             top_component,
             bottom_component,
             command_menu_component,
+            fab_component,
             supported_menu_actions,
             top_claimed: Rect::default(),
             bottom_claimed: Rect::default(),
@@ -685,6 +688,11 @@ impl WindowManager {
     /// Set the FAB enabled state.
     pub fn set_fab_enabled(&mut self, enabled: bool) {
         self.fab_enabled = enabled;
+    }
+
+    /// Get a mutable reference to the FAB component.
+    pub fn fab_component_mut(&mut self) -> Option<&mut dyn WmComponent> {
+        self.fab_component.as_mut().map(|c| c.as_mut())
     }
 
     /// Begin tap-to-swap targeting for the given window.
@@ -2419,6 +2427,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let key = wm.create_window(Box::new(crate::components::NoopComponent));
         let node = LayoutNode::leaf(key);
@@ -2448,6 +2457,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -2502,6 +2512,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_floating_resize_offscreen(true);
@@ -2538,6 +2549,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -2579,6 +2591,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.register_managed_layout(LayoutRect {
@@ -2610,6 +2623,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -2673,6 +2687,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         let target_rect = LayoutRect {
@@ -2717,6 +2732,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -2778,6 +2794,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_floating_resize_offscreen(true);
@@ -2818,6 +2835,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -2949,6 +2967,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let debug_key = wm.set_system_window(Box::new(DummyComponent));
         wm.set_panel_visible(false);
@@ -3024,6 +3043,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3105,6 +3125,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3280,6 +3301,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         let full = Rect {
@@ -3318,6 +3340,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3370,6 +3393,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
 
@@ -3410,6 +3434,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3457,6 +3482,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.focus_app_window(keys[0]);
@@ -3469,6 +3495,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3494,6 +3521,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         let key = keys[42];
@@ -3511,6 +3539,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3533,6 +3562,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3632,6 +3662,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -3688,6 +3719,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let _keys = make_keys(&mut wm, 100);
         assert!(wm.drag_snap_remaining().is_none());
@@ -3702,6 +3734,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let _keys = make_keys(&mut wm, 100);
         assert!(wm.drag_snap_remaining().is_none());
@@ -3712,6 +3745,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3748,6 +3782,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.mouse_capture = Some(MouseCaptureState::DraggingWindow {
@@ -3768,6 +3803,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3802,6 +3838,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         wm.apply_drag_snap_if_pending();
         // The method should not panic when there is no drag in progress.
@@ -3817,6 +3854,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3901,6 +3939,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let _keys = make_keys(&mut wm, 100);
         assert_eq!(wm.power_profile, PowerProfile::PowerSaver);
@@ -3918,6 +3957,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3963,6 +4003,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -4047,6 +4088,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -4168,6 +4210,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -4233,6 +4276,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -4354,6 +4398,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let key = wm.create_window(Box::new(crate::components::NoopComponent));
         assert_eq!(wm.window_state(key), Some(WindowState::Realized));
@@ -4385,6 +4430,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -4410,6 +4456,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -4430,6 +4477,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -4476,6 +4524,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -4511,6 +4560,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -4574,6 +4624,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -4610,6 +4661,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -4675,6 +4727,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -4800,6 +4853,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -4953,6 +5007,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         wm.set_panel_visible(false);
 
@@ -5011,6 +5066,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -5190,6 +5246,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         wm.set_panel_visible(false);
         let keys = make_keys(&mut wm, 100);
@@ -5236,6 +5293,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -5292,6 +5350,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -5353,6 +5412,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -5407,6 +5467,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -5493,6 +5554,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert!(!wm.exit_confirm_visible());
 
@@ -5527,6 +5589,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -5569,6 +5632,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let event = Event::Key(crate::events::KeyEvent {
             code: crate::events::KeyCode::Esc,
@@ -5587,6 +5651,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         wm.fold_menu();
     }
@@ -5596,6 +5661,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -5617,6 +5683,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         wm.open_command_menu_no_passthrough();
         assert!(wm.command_menu_visible());
@@ -5628,6 +5695,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -5650,6 +5718,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let event = Event::Key(crate::events::KeyEvent {
             code: crate::events::KeyCode::Esc,
@@ -5664,6 +5733,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,

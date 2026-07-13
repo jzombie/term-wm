@@ -4,7 +4,7 @@ use term_wm_layout_engine::LayoutRect;
 
 use term_wm_core::{
     actions::{EventResult, TermWmAction},
-    components::{Component, ComponentContext},
+    components::{Component, ComponentContext, WmComponent},
     hitbox_registry::{HitTarget, HitboxRegistry},
     window::WindowKey,
 };
@@ -125,6 +125,8 @@ impl Component<TermWmAction> for WmFabComponent {
 
     fn destroy(&mut self) {}
 }
+
+impl WmComponent for WmFabComponent {}
 
 #[cfg(test)]
 mod tests {

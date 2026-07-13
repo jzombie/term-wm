@@ -203,6 +203,10 @@ pub fn render_app(
                 // Target highlight is a pulsing border overlay
                 // This is a placeholder for now
             }
+            term_wm_core::draw_plan::RegionType::Fab => {
+                // FAB is rendered by the draw_plan_renderer
+                // This is a placeholder for now
+            }
         }
     }
     renderer.put_scratch(scratch_buf);
