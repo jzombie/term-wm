@@ -13,7 +13,7 @@ pub type WindowKey = slotmap::DefaultKey;
 pub use entry::WindowState;
 
 pub use window_manager::{
-    DrawTask, OverlayId, ScrollState, SuperPressResult, WindowDrawContext, WindowManager,
+    DrawTask, OverlayId, ScrollState, WindowDrawContext, WindowManager,
     WindowSurface, wm_menu_items,
 };
 

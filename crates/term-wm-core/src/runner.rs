@@ -192,10 +192,6 @@ where
             // Process expired system tasks (super-passthrough, drag-snap)
             for (_id, task) in system_handle.drain_expired() {
                 match task {
-                    SystemTask::SuperPassthrough { event } => {
-                        app.wm().clear_super_pending();
-                        let _ = handle_focused_app_event(&event, app);
-                    }
                     SystemTask::DragSnap => {
                         app.wm().apply_drag_snap_if_pending();
                     }
@@ -257,15 +253,7 @@ where
 
                 // Pre-compute the keybinding action using the configured
                 // KeyBindings from WindowManager (not hardcoded defaults).
-                // Only Global-layer actions are proactively dispatched;
                 // WmMode actions are handled when the WM overlay is open.
-                let mapped_action = match &evt {
-                    Event::Key(key) => app
-                        .wm()
-                        .keybindings()
-                        .action_for_key_in_layer(key, crate::keybindings::ActionLayer::Global),
-                    _ => None,
-                };
 
                 // Layer 1: Active overlays (exit confirm, selection preview, help)
                 if app.wm().exit_confirm_visible() {
@@ -288,38 +276,17 @@ where
                 // If keyboard capture is disabled for the focused window, key events
                 // bypass all WM interception and go directly to the terminal,
                 // except when the WM overlay is visible — overlay takes priority.
-                // Uses the unified double-Super handler: first Super is deferred (panel
-                // shows countdown), second Super within window opens overlay, timeout
-                // (checked in idle path) forwards the first Super to the terminal.
+                // In direct mode, keys are forwarded immediately without WM processing.
                 if let Event::Key(key) = &evt {
                     let focus_id = app.wm().focused_window();
                     if app.wm().direct_mode(focus_id)
                         && !app.wm().command_menu_visible()
                         && key.kind == KeyKind::Press
                     {
-                        let is_wm_key = app
-                            .wm()
-                            .keybindings()
-                            .matches(TermWmAction::WmToggleOverlay, key);
-                        match app.wm().handle_super_press(key, is_wm_key) {
-                            crate::window::SuperPressResult::DoubleSuper => {
-                                app.wm().open_command_menu_no_passthrough();
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
-                            }
-                            crate::window::SuperPressResult::Pending => {
-                                // First Super of a pair — deferred. Panel shows countdown.
-                                // Timeout forwarding happens in the idle path below.
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
-                            }
-                            crate::window::SuperPressResult::Forward => {
-                                // Non-wm-toggle key → forward to terminal immediately.
-                                let _ = handle_focused_app_event(&evt, app);
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
-                            }
-                        }
+                        // Direct mode — forward to terminal immediately.
+                        let _ = handle_focused_app_event(&evt, app);
+                        update_selection_snapshot(app);
+                        return flush_state_changes(app, ControlFlow::Continue, false);
                     }
                 }
 
@@ -327,12 +294,6 @@ where
                 if app.handle_app_event(&evt) {
                     update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Continue, false);
-                }
-
-                // Layer 2b: Global-layer actions (only WmToggleOverlay is Global;
-                // all other actions are WmMode — dispatched when the overlay is open).
-                if let Some(_action) = mapped_action {
-                    // Only WmToggleOverlay reaches here; handled inline below.
                 }
 
                 // Pre-compute WmMode-layer action for use inside the overlay section.
@@ -344,7 +305,7 @@ where
                     _ => None,
                 };
 
-                // WM command menu toggle (special case due to passthrough logic)
+                // WM command menu toggle
                 let wm_mode = app.wm().config().wm_command_menu_enabled;
                 if wm_mode
                     && let Event::Key(key) = &evt
@@ -352,15 +313,10 @@ where
                     && app
                         .wm()
                         .keybindings()
-                        .matches(TermWmAction::WmToggleOverlay, key)
+                        .matches(TermWmAction::OpenCommandPalette, key)
                 {
                     if app.wm().command_menu_visible() {
-                        let passthrough = app.wm().super_passthrough_active();
                         app.wm().close_command_menu();
-                        if passthrough {
-                            let passthrough_event = Event::Key(*key);
-                            let _ = handle_focused_app_event(&passthrough_event, app);
-                        }
                     } else {
                         app.wm().open_command_menu();
                     }

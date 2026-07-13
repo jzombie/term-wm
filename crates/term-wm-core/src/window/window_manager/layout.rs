@@ -170,11 +170,9 @@ impl WindowManager {
 
     pub fn register_managed_layout(&mut self, area: Rect) {
         self.last_frame_area = area;
-        let active_layer = if self.config.wm_command_menu_enabled && self.command_menu_visible() {
-            ActionLayer::WmMode
-        } else {
-            ActionLayer::Global
-        };
+        // All actions are now WmMode — the command palette is triggered
+        // via FAB tap or explicit keyboard shortcut, not a global layer.
+        let active_layer = ActionLayer::WmMode;
         match self.hint_visibility {
             crate::wm_config::HintVisibility::Always => {
                 if self.config.wm_command_menu_enabled {

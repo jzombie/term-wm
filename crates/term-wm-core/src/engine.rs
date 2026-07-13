@@ -77,6 +77,7 @@ impl CoreEngine {
                 z_index: 0, // Windows at base layer
                 dimmed: !is_focused,
                 region_type: RegionType::Window(window_key),
+                hidden: false,
             });
         }
 
@@ -165,6 +166,7 @@ fn generate_notification_regions(plan: &mut DrawPlan, wm: &WindowManager) {
             z_index: NOTIFICATION_Z_INDEX,
             dimmed: false,
             region_type: RegionType::Notification(Arc::clone(&notification.message)),
+            hidden: false,
         });
 
         y_offset = y_offset.saturating_add(h).saturating_add(GAP);

@@ -179,7 +179,7 @@ impl WmHelpOverlayComponent {
                 format!("{a} / {b}")
             };
             let select = kb.combos_for(TermWmAction::MenuSelect).join(" / ");
-            let super_key = kb.combos_for(TermWmAction::WmToggleOverlay).join(" / ");
+            let super_key = kb.combos_for(TermWmAction::OpenCommandPalette).join(" / ");
             let help_combo = kb.combos_for(TermWmAction::OpenHelp).join(" / ");
             let help_label = if help_combo.is_empty() {
                 "Help menu".to_string()

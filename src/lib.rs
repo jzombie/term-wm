@@ -85,6 +85,11 @@ pub fn render_app(
     let plan_regions = draw_plan.regions();
     let num_windows = plan_regions.len();
     for (i, region) in plan_regions.iter().enumerate() {
+        // Skip hidden regions (used for monocle mode culling)
+        if region.hidden {
+            continue;
+        }
+
         match &region.region_type {
             term_wm_core::draw_plan::RegionType::Window(key) => {
                 let full = region.bounds;
@@ -182,6 +187,22 @@ pub fn render_app(
             }
             // Notification rendering deferred to after tiling handles
             term_wm_core::draw_plan::RegionType::Notification(_) => {}
+            term_wm_core::draw_plan::RegionType::FloatingWindow(_) => {
+                // Floating windows are rendered like regular windows
+                // This is a placeholder for now
+            }
+            term_wm_core::draw_plan::RegionType::Panel(_) => {
+                // Panels are rendered by the WindowManager
+                // This is a placeholder for now
+            }
+            term_wm_core::draw_plan::RegionType::Overlay => {
+                // Overlays are rendered by the WindowManager
+                // This is a placeholder for now
+            }
+            term_wm_core::draw_plan::RegionType::TargetHighlight(_) => {
+                // Target highlight is a pulsing border overlay
+                // This is a placeholder for now
+            }
         }
     }
     renderer.put_scratch(scratch_buf);

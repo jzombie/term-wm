@@ -57,6 +57,10 @@ pub enum HitTarget {
     LayoutHandle,
     /// Click on a notification toast — event is consumed, no passthrough.
     Notification,
+    /// Click on the Floating Action Button (FAB) — opens command palette.
+    Fab,
+    /// Click on the session manager overlay.
+    SessionManager,
 }
 
 /// A single entry in the hitbox registry.

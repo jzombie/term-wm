@@ -142,6 +142,91 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
         }
     }
 
+    /// Swap two leaves in the tree by their IDs.
+    /// This preserves split ratios and weights while exchanging positions.
+    pub fn swap_leaves(&mut self, source: &Id, target: &Id) -> bool {
+        // Find paths to both source and target
+        let mut source_path = Vec::new();
+        let mut target_path = Vec::new();
+        
+        if !self.find_leaf_path(source, &mut source_path, &mut Vec::new()) {
+            return false;
+        }
+        if !self.find_leaf_path(target, &mut target_path, &mut Vec::new()) {
+            return false;
+        }
+        
+        // Get the source node's ID and replace it with a temporary void
+        let source_id = {
+            let source_node = self.node_at_path_mut(&source_path);
+            match source_node {
+                Some(LayoutNode::Leaf(id)) => *id,
+                _ => return false,
+            }
+        };
+        
+        // Replace source with a temporary void
+        {
+            let source_node = self.node_at_path_mut(&source_path);
+            if let Some(node) = source_node {
+                *node = LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed));
+            }
+        }
+        
+        // Get target node's ID and replace it with source
+        {
+            let target_node = self.node_at_path_mut(&target_path);
+            match target_node {
+                Some(LayoutNode::Leaf(target_id)) => {
+                    let target_id_copy = *target_id;
+                    // Replace target with source
+                    if let Some(node) = self.node_at_path_mut(&target_path) {
+                        *node = LayoutNode::Leaf(source_id);
+                    }
+                    // Replace the void with target
+                    if let Some(node) = self.node_at_path_mut(&source_path) {
+                        *node = LayoutNode::Leaf(target_id_copy);
+                    }
+                    return true;
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    /// Find the path to a leaf with the given ID.
+    fn find_leaf_path(&self, target: &Id, path: &mut Vec<usize>, current: &mut Vec<usize>) -> bool {
+        match self {
+            LayoutNode::Leaf(id) if id == target => {
+                path.extend_from_slice(current);
+                true
+            }
+            LayoutNode::Split { children, .. } => {
+                for (idx, child) in children.iter().enumerate() {
+                    current.push(idx);
+                    if child.find_leaf_path(target, path, current) {
+                        return true;
+                    }
+                    current.pop();
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// Get a mutable reference to a node at the given path.
+    fn node_at_path_mut(&mut self, path: &[usize]) -> Option<&mut LayoutNode<Id>> {
+        let mut current = self;
+        for &idx in path {
+            let LayoutNode::Split { children, .. } = current else {
+                return None;
+            };
+            current = children.get_mut(idx)?;
+        }
+        Some(current)
+    }
+
     /// Build a flat split node from a list of leaf IDs.
     pub fn build_flat(direction: Direction, ids: Vec<Id>) -> Self {
         if ids.is_empty() {
@@ -655,6 +740,10 @@ pub struct TilingLayout<Id: Copy + Eq + Ord> {
     root: LayoutNode<Id>,
     drag: Option<DragState>,
     hover: Option<(u16, u16)>,
+    /// Whether monocle mode is active (terminal width < threshold)
+    monocle_active: bool,
+    /// Width threshold below which monocle mode activates (default: 80 columns)
+    monocle_width_threshold: u16,
 }
 
 impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
@@ -663,12 +752,37 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
             root,
             drag: None,
             hover: None,
+            monocle_active: false,
+            monocle_width_threshold: 80,
         }
     }
 
     pub fn new_void() -> Self {
         let void_id = VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
         Self::new(LayoutNode::Void(void_id))
+    }
+
+    /// Update monocle mode state based on terminal width.
+    pub fn update_monocle_state(&mut self, terminal_width: u16) {
+        let should_be_monocle = terminal_width < self.monocle_width_threshold;
+        if should_be_monocle != self.monocle_active {
+            self.monocle_active = should_be_monocle;
+        }
+    }
+
+    /// Check if monocle mode is active.
+    pub fn is_monocle(&self) -> bool {
+        self.monocle_active
+    }
+
+    /// Set the monocle width threshold.
+    pub fn set_monocle_width_threshold(&mut self, threshold: u16) {
+        self.monocle_width_threshold = threshold;
+    }
+
+    /// Get the monocle width threshold.
+    pub fn monocle_width_threshold(&self) -> u16 {
+        self.monocle_width_threshold
     }
 
     pub fn root(&self) -> &LayoutNode<Id> {
@@ -950,6 +1064,12 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
 
     pub fn replace_void_by_id(&mut self, void_id: usize, new_leaf: LayoutNode<Id>) -> bool {
         self.root.replace_void_by_id(void_id, new_leaf)
+    }
+
+    /// Swap two nodes in the layout tree by their IDs.
+    /// This preserves split ratios and weights while exchanging positions.
+    pub fn swap_nodes(&mut self, source: &Id, target: &Id) -> bool {
+        self.root.swap_leaves(source, target)
     }
 
     pub fn project_insert_void(&self, insert: Id, void_id: usize, area: Rect) -> Option<Rect> {

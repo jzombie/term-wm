@@ -83,6 +83,11 @@ impl DrawPlanRenderer {
         hitbox_registry: &mut HitboxRegistry,
     ) {
         for region in draw_plan.regions() {
+            // Skip hidden regions (used for monocle mode culling)
+            if region.hidden {
+                continue;
+            }
+
             let area = layout_rect_to_rect(region.bounds);
 
             match &region.region_type {
@@ -114,6 +119,24 @@ impl DrawPlanRenderer {
                         .block(block)
                         .wrap(Wrap { trim: true })
                         .render(area, target_buf);
+                }
+                RegionType::FloatingWindow(key) => {
+                    // Floating windows are rendered like regular windows
+                    if let Some(component) = wm.component_for_key_mut(*key) {
+                        self.render_direct_to_buffer(target_buf, area, component, region);
+                    }
+                }
+                RegionType::Panel(_) => {
+                    // Panels are rendered by the WindowManager
+                    // This is a placeholder for now
+                }
+                RegionType::Overlay => {
+                    // Overlays are rendered by the WindowManager
+                    // This is a placeholder for now
+                }
+                RegionType::TargetHighlight(_key) => {
+                    // Target highlight is a pulsing border overlay
+                    // This is a placeholder for now
                 }
             }
         }
@@ -204,6 +227,11 @@ impl DrawPlanRenderer {
         hitbox_registry: &mut HitboxRegistry,
     ) {
         for region in draw_plan.regions() {
+            // Skip hidden regions (used for monocle mode culling)
+            if region.hidden {
+                continue;
+            }
+
             let area = layout_rect_to_rect(region.bounds);
 
             match &region.region_type {
@@ -239,6 +267,24 @@ impl DrawPlanRenderer {
                         .block(block)
                         .wrap(Wrap { trim: true })
                         .render(area, buf);
+                }
+                RegionType::FloatingWindow(key) => {
+                    // Floating windows are rendered like regular windows
+                    if let Some(component) = wm.component_for_key_mut(*key) {
+                        self.render_direct(frame, area, component, region);
+                    }
+                }
+                RegionType::Panel(_) => {
+                    // Panels are rendered by the WindowManager
+                    // This is a placeholder for now
+                }
+                RegionType::Overlay => {
+                    // Overlays are rendered by the WindowManager
+                    // This is a placeholder for now
+                }
+                RegionType::TargetHighlight(_key) => {
+                    // Target highlight is a pulsing border overlay
+                    // This is a placeholder for now
                 }
             }
         }
@@ -355,19 +401,9 @@ impl Default for DrawPlanRenderer {
 
 pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut WindowManager) {
     let status_line = if wm.command_menu_visible() {
-        let esc_state = if let Some(remaining) = wm.super_passthrough_remaining() {
-            format!("Super passthrough: active ({}ms)", remaining.as_millis())
-        } else {
-            "Super passthrough: inactive".to_string()
-        };
-        Some(format!("{esc_state} · Tab/Shift-Tab: cycle windows"))
+        Some("Tab/Shift-Tab: cycle windows".to_string())
     } else {
-        wm.super_pending_remaining().map(|remaining| {
-            format!(
-                "Super pending: {}ms · press Super again within window to open menu",
-                remaining.as_millis()
-            )
-        })
+        None
     };
     let display = wm.build_display_order();
     let titles_map: std::collections::BTreeMap<WindowKey, String> =

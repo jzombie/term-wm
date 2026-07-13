@@ -14,6 +14,21 @@ pub enum RegionType {
     Window(WindowKey),
     /// A transient toast notification.
     Notification(Arc<str>),
+    /// A floating (draggable) window.
+    FloatingWindow(WindowKey),
+    /// System chrome (top panel, bottom panel).
+    Panel(PanelPosition),
+    /// Transient overlay (help, exit confirm).
+    Overlay,
+    /// Pulsing border highlight for tap-to-swap targeting.
+    TargetHighlight(WindowKey),
+}
+
+/// Position of a panel in the layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelPosition {
+    Top,
+    Bottom,
 }
 
 /// A single render region in the draw plan.
@@ -28,6 +43,8 @@ pub struct RenderRegion {
     pub dimmed: bool,
     /// Semantic discriminator — carries the key for windows, the message for notifications.
     pub region_type: RegionType,
+    /// Whether this region should be hidden (used for monocle mode culling)
+    pub hidden: bool,
 }
 
 /// The complete draw plan for a frame.
@@ -86,6 +103,72 @@ impl DrawPlan {
     pub fn capacity(&self) -> usize {
         self.regions.capacity()
     }
+
+    /// Apply monocle culling: keep focused window at full area,
+    /// mark other windows as hidden but preserve their logical geometry.
+    pub fn apply_monocle_culling(&mut self, focused_key: WindowKey) {
+        for region in &mut self.regions {
+            match &region.region_type {
+                RegionType::Window(key) if *key == focused_key => {
+                    // Focused window gets full area
+                }
+                RegionType::Window(_) => {
+                    region.hidden = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Apply monocle Z-order using stratified layering.
+    /// Partitions regions into topological layers, then concatenates
+    /// them in correct depth order. The focused window is elevated
+    /// within its layer but never above overlays.
+    pub fn apply_monocle_z_order(&mut self, focused_key: WindowKey) {
+        // Partition into strict topological layers
+        let mut hidden_tiled: Vec<RenderRegion> = Vec::new();
+        let mut focused_region: Option<RenderRegion> = None;
+        let mut other_tiled: Vec<RenderRegion> = Vec::new();
+        let mut floating: Vec<RenderRegion> = Vec::new();
+        let mut overlays: Vec<RenderRegion> = Vec::new();
+
+        for region in self.regions.drain(..) {
+            match &region.region_type {
+                RegionType::Window(key) if *key == focused_key => {
+                    focused_region = Some(region);
+                }
+                RegionType::Window(_) if region.hidden => {
+                    hidden_tiled.push(region);
+                }
+                RegionType::Window(_) => {
+                    other_tiled.push(region);
+                }
+                RegionType::FloatingWindow(_) => {
+                    floating.push(region);
+                }
+                RegionType::Panel(_) | RegionType::Overlay | RegionType::TargetHighlight(_) => {
+                    overlays.push(region);
+                }
+                _ => {
+                    other_tiled.push(region);
+                }
+            }
+        }
+
+        // Reassemble in strict depth order:
+        // 1. Hidden tiled windows (background, not rendered)
+        // 2. Other visible tiled windows
+        // 3. Focused window (elevated within tiled layer)
+        // 4. Floating windows (above tiled)
+        // 5. Overlays (panels, FAB, session manager — always on top)
+        self.regions = hidden_tiled;
+        self.regions.append(&mut other_tiled);
+        if let Some(region) = focused_region {
+            self.regions.push(region);
+        }
+        self.regions.append(&mut floating);
+        self.regions.append(&mut overlays);
+    }
 }
 
 #[cfg(test)]
@@ -111,6 +194,7 @@ pub mod tests {
             },
             z_index,
             dimmed: false,
+            hidden: false,
         }
     }
 
@@ -133,6 +217,7 @@ pub mod tests {
             },
             z_index,
             dimmed: true,
+            hidden: false,
         }
     }
 
