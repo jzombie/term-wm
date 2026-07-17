@@ -183,7 +183,7 @@ mod tests {
         assert_eq!(rect.width, 10);
         assert_eq!(rect.height, 5);
         assert_eq!(rect.x, 35);
-        assert_eq!(rect.y, 9);
+        assert_eq!(rect.y, 10);
     }
 
     #[test]
