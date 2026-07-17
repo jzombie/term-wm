@@ -78,6 +78,13 @@ fn drain_action_queue<A: WindowManagerHost>(
                 app.wm()
                     .push_notification(msg, std::time::Duration::from_secs(3));
             }
+            TermWmAction::OpenCommandPalette => {
+                if app.wm().command_menu_visible() {
+                    app.wm().close_command_menu();
+                } else {
+                    app.wm().open_command_menu();
+                }
+            }
             action => {
                 let ctx = app.wm().component_context_for(true, key);
                 if let Some(comp) = app.wm().component_for_key_mut(key) {

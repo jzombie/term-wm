@@ -8,7 +8,7 @@ use term_wm_core::{
     hitbox_registry::{HitTarget, HitboxRegistry},
     window::WindowKey,
 };
-use term_wm_ui_components::helpers::{downcast_ratatui, layout_rect_to_rect};
+use term_wm_ui_components::helpers::downcast_ratatui;
 
 /// Floating Action Button (FAB) component.
 /// Renders a 3x1 touch target at the absolute bottom-right of the terminal buffer.
@@ -17,7 +17,6 @@ use term_wm_ui_components::helpers::{downcast_ratatui, layout_rect_to_rect};
 pub struct WmFabComponent {
     visible: bool,
     fab_rect: LayoutRect,
-    window_key: Option<WindowKey>,
 }
 
 impl WmFabComponent {
@@ -25,7 +24,6 @@ impl WmFabComponent {
         Self {
             visible: true,
             fab_rect: LayoutRect::default(),
-            window_key: None,
         }
     }
 
@@ -49,10 +47,6 @@ impl Default for WmFabComponent {
 }
 
 impl Component<TermWmAction> for WmFabComponent {
-    fn on_mount(&mut self, key: WindowKey, _app: &term_wm_core::app_context::AppContext) {
-        self.window_key = Some(key);
-    }
-
     fn render(
         &mut self,
         backend: &mut dyn term_wm_render::RenderBackend,
@@ -77,20 +71,19 @@ impl Component<TermWmAction> for WmFabComponent {
         };
 
         // Register in hitbox for coordinate-based interception
-        if let Some(_key) = self.window_key {
-            registry.register(HitTarget::Fab, self.fab_rect);
-        }
+        // No window_key guard — FAB is a global singleton mounted via AppBuilder,
+        // not a SlotMap window, so on_mount is never called.
+        registry.register(HitTarget::Fab, self.fab_rect);
 
         // Render "≡" icon into the buffer
         let ratatui_backend = downcast_ratatui(backend);
         let buffer = &mut ratatui_backend.buffer;
-        let ratatui_area = layout_rect_to_rect(self.fab_rect);
-        let bounds = ratatui_area.intersection(buffer.area);
-        if bounds.width == 0 || bounds.height == 0 {
-            return;
-        }
-        for yy in bounds.y..bounds.y.saturating_add(bounds.height) {
-            for xx in bounds.x..bounds.x.saturating_add(bounds.width) {
+        // Iterate over the buffer's actual allocated area.
+        // The buffer uses absolute screen-space coordinates (e.g., x: 77, y: 23).
+        // Using buffer.area.x/y ensures we write to valid cells.
+        let area = buffer.area;
+        for yy in area.y..area.y.saturating_add(area.height) {
+            for xx in area.x..area.x.saturating_add(area.width) {
                 if let Some(cell) = buffer.cell_mut((xx, yy)) {
                     cell.set_symbol("≡").set_style(
                         Style::default()

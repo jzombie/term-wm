@@ -1980,6 +1980,9 @@ impl WindowManager {
     }
 
     pub fn panel_active(&self) -> bool {
+        if self.is_monocle() {
+            return false;
+        }
         self.config.panel_enabled && self.top_component.as_ref().is_some_and(|p| p.visible())
     }
 
