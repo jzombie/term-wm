@@ -1,10 +1,10 @@
 use ratatui::style::{Color, Modifier, Style};
-use term_wm_core::events::MouseButton;
 use term_wm_layout_engine::LayoutRect;
 
 use term_wm_core::{
     actions::{EventResult, TermWmAction},
     components::{Component, ComponentContext, WmComponent},
+    events::Event,
     hitbox_registry::{HitTarget, HitboxRegistry},
     window::WindowKey,
 };
@@ -51,21 +51,16 @@ impl Component<TermWmAction> for WmFabComponent {
         &mut self,
         backend: &mut dyn term_wm_render::RenderBackend,
         area: LayoutRect,
-        ctx: &ComponentContext,
+        _ctx: &ComponentContext,
         registry: &mut HitboxRegistry,
     ) {
         if !self.visible {
             return;
         }
 
-        let screen_area = ctx.screen_area().unwrap_or(area);
-
-        // Compute FAB position: bottom-right 3x1 cells
-        let fab_x = screen_area.x + i32::from(screen_area.width).saturating_sub(3);
-        let fab_y = screen_area.y + i32::from(screen_area.height).saturating_sub(1);
         self.fab_rect = LayoutRect {
-            x: fab_x,
-            y: fab_y,
+            x: area.x + i32::from(area.width).saturating_sub(3),
+            y: area.y + i32::from(area.height).saturating_sub(1),
             width: 3,
             height: 1,
         };
@@ -103,15 +98,20 @@ impl Component<TermWmAction> for WmFabComponent {
         }
     }
 
-    fn on_mouse_press(
+    fn handle_events(
         &mut self,
-        _local_x: u16,
-        _local_y: u16,
-        _button: MouseButton,
-        _modifiers: term_wm_core::events::KeyModifiers,
+        event: &Event,
         _ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
-        EventResult::Action(TermWmAction::OpenCommandPalette)
+        if let Event::Mouse(mouse) = event {
+            if matches!(
+                mouse.kind,
+                term_wm_core::events::MouseEventKind::Press(_)
+            ) {
+                return EventResult::Action(TermWmAction::OpenCommandPalette);
+            }
+        }
+        EventResult::Ignored
     }
 
     fn update(

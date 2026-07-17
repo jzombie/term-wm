@@ -114,6 +114,15 @@ where
             let result = app.wm().dispatch_mouse(&wm_event);
             match result {
                 EventResult::Action((target_key, action)) => {
+                    // Intercept global actions from system chrome (FAB has no WindowKey)
+                    if matches!(action, TermWmAction::OpenCommandPalette) {
+                        if app.wm().command_menu_visible() {
+                            app.wm().close_command_menu();
+                        } else {
+                            app.wm().open_command_menu();
+                        }
+                        return true;
+                    }
                     let key = target_key.unwrap_or_else(|| app.wm().focused_window());
                     let mut queue = VecDeque::from([(key, action)]);
                     drain_action_queue(app, &mut queue);

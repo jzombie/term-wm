@@ -1575,9 +1575,15 @@ impl WindowManager {
                 EventResult::Consumed
             }
             HitTarget::Fab => {
-                // FAB tap is handled by the event loop before dispatch_mouse.
-                // If we reach here, consume the event.
-                EventResult::Consumed
+                let ctx = self
+                    .component_context_for(false, slotmap::DefaultKey::default())
+                    .with_screen_area(hit_rect);
+                if let Some(fab) = self.fab_component_mut() {
+                    fab.handle_events(&core_event, &ctx)
+                        .map(|action| (None, action))
+                } else {
+                    EventResult::Ignored
+                }
             }
             HitTarget::SessionManager => {
                 // Session manager taps are handled by the component.
