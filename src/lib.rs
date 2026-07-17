@@ -42,6 +42,11 @@ pub fn render_app(
         height: ratatui_backend.area.height,
     };
 
+    // Initialize monocle state on every render pass (not just resize).
+    // This ensures the very first frame evaluates terminal width against
+    // the monocle threshold without waiting for a resize event.
+    wm.update_monocle_mode(area.width);
+
     // Update window titles from process names
     let windows: Vec<_> = wm.mapped_windows();
     for &key in &windows {
@@ -69,7 +74,7 @@ pub fn render_app(
     }
 
     // Register tiling split handle hitboxes below windows
-    {
+    if !wm.is_monocle() {
         let handles = wm.tiling_handles().to_vec();
         for handle in &handles {
             wm.hitbox_registry_mut()
@@ -248,13 +253,15 @@ pub fn render_app(
                     .iter()
                     .any(|r| term_wm_core::layout::rect_contains(*r, x, y))
             };
-            render_handles_masked(
-                buf,
-                handles,
-                hovered.as_ref(),
-                &is_obscured,
-                &wm.config().theme,
-            );
+            if !wm.is_monocle() {
+                render_handles_masked(
+                    buf,
+                    handles,
+                    hovered.as_ref(),
+                    &is_obscured,
+                    &wm.config().theme,
+                );
+            }
 
             // Floating resize outlines
             let hovered_resize = wm.hovered_resize_handle();
