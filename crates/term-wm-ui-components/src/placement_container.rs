@@ -6,15 +6,24 @@ use ratatui::widgets::{Clear, Widget};
 use term_wm_core::events::Event;
 use term_wm_layout_engine::LayoutRect;
 
-use crate::helpers::{downcast_ratatui, layout_rect_to_rect};
 use crate::DialogOverlayComponent;
+use crate::helpers::{downcast_ratatui, layout_rect_to_rect};
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext};
 use term_wm_core::window::WindowKey;
 
 pub enum Placement {
-    Centered { width: u16, height: u16 },
-    Anchored { x: u16, y: u16, managed_area: LayoutRect, content_width: u16, content_height: u16 },
+    Centered {
+        width: u16,
+        height: u16,
+    },
+    Anchored {
+        x: u16,
+        y: u16,
+        managed_area: LayoutRect,
+        content_width: u16,
+        content_height: u16,
+    },
 }
 
 pub struct PlacementContainerComponent<C> {
@@ -70,7 +79,13 @@ impl<C: Component<TermWmAction>> PlacementContainerComponent<C> {
                     height: content_rect.height,
                 }
             }
-            Placement::Anchored { x, y, managed_area, content_width, content_height } => {
+            Placement::Anchored {
+                x,
+                y,
+                managed_area,
+                content_width,
+                content_height,
+            } => {
                 let max_w = managed_area
                     .width
                     .saturating_sub(x.saturating_sub(managed_area.x.max(0) as u16))
@@ -176,9 +191,17 @@ mod tests {
     fn centered_placement_in_middle_of_screen() {
         let container = PlacementContainerComponent::new(
             DummyComponent,
-            Placement::Centered { width: 10, height: 5 },
+            Placement::Centered {
+                width: 10,
+                height: 5,
+            },
         );
-        let area = LayoutRect { x: 0, y: 0, width: 80, height: 24 };
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         let rect = container.compute_content_rect(area);
         assert_eq!(rect.width, 10);
         assert_eq!(rect.height, 5);
@@ -190,9 +213,17 @@ mod tests {
     fn centered_placement_clamps_to_area() {
         let container = PlacementContainerComponent::new(
             DummyComponent,
-            Placement::Centered { width: 200, height: 200 },
+            Placement::Centered {
+                width: 200,
+                height: 200,
+            },
         );
-        let area = LayoutRect { x: 0, y: 0, width: 80, height: 24 };
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         let rect = container.compute_content_rect(area);
         assert_eq!(rect.width, 80);
         assert_eq!(rect.height, 24);
@@ -205,12 +236,22 @@ mod tests {
             Placement::Anchored {
                 x: 10,
                 y: 5,
-                managed_area: LayoutRect { x: 0, y: 0, width: 80, height: 24 },
+                managed_area: LayoutRect {
+                    x: 0,
+                    y: 0,
+                    width: 80,
+                    height: 24,
+                },
                 content_width: 30,
                 content_height: 10,
             },
         );
-        let area = LayoutRect { x: 0, y: 0, width: 80, height: 24 };
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         let rect = container.compute_content_rect(area);
         assert_eq!(rect.x, 10);
         assert_eq!(rect.y, 5);
@@ -225,12 +266,22 @@ mod tests {
             Placement::Anchored {
                 x: 70,
                 y: 20,
-                managed_area: LayoutRect { x: 0, y: 0, width: 80, height: 24 },
+                managed_area: LayoutRect {
+                    x: 0,
+                    y: 0,
+                    width: 80,
+                    height: 24,
+                },
                 content_width: 30,
                 content_height: 10,
             },
         );
-        let area = LayoutRect { x: 0, y: 0, width: 80, height: 24 };
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         let rect = container.compute_content_rect(area);
         assert_eq!(rect.x, 70);
         assert_eq!(rect.y, 20);
@@ -242,7 +293,10 @@ mod tests {
     fn render_delegates_to_content() {
         let mut container = PlacementContainerComponent::new(
             DummyComponent,
-            Placement::Centered { width: 10, height: 5 },
+            Placement::Centered {
+                width: 10,
+                height: 5,
+            },
         );
         let buffer = Buffer::empty(Rect::new(0, 0, 80, 24));
         let mut backend = term_wm_console::RatatuiBackend::new(buffer, Rect::new(0, 0, 80, 24));
@@ -250,7 +304,12 @@ mod tests {
         let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
         container.render(
             &mut backend,
-            LayoutRect { x: 0, y: 0, width: 80, height: 24 },
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
             &ctx,
             &mut registry,
         );
@@ -264,7 +323,10 @@ mod tests {
     fn handle_events_delegates_to_content() {
         let mut container = PlacementContainerComponent::new(
             DummyComponent,
-            Placement::Centered { width: 10, height: 5 },
+            Placement::Centered {
+                width: 10,
+                height: 5,
+            },
         );
         let ctx = ComponentContext::new(true);
         let key = Event::Key(term_wm_core::events::KeyEvent::new(
@@ -280,7 +342,10 @@ mod tests {
     fn update_delegates_to_content() {
         let mut container = PlacementContainerComponent::new(
             DummyComponent,
-            Placement::Centered { width: 10, height: 5 },
+            Placement::Centered {
+                width: 10,
+                height: 5,
+            },
         );
         let ctx = ComponentContext::new(true);
         let mut actions = VecDeque::new();
@@ -291,7 +356,10 @@ mod tests {
     fn inner_and_inner_mut_access_content() {
         let mut container = PlacementContainerComponent::new(
             DummyComponent,
-            Placement::Centered { width: 10, height: 5 },
+            Placement::Centered {
+                width: 10,
+                height: 5,
+            },
         );
         let _inner: &DummyComponent = container.inner();
         let _inner_mut: &mut DummyComponent = container.inner_mut();

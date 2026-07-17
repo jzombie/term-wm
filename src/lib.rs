@@ -116,7 +116,11 @@ pub fn render_app(
                 if inner.width == 0 || inner.height == 0 {
                     continue;
                 }
-                let floating = if is_monocle { false } else { wm.is_window_floating(*key) };
+                let floating = if is_monocle {
+                    false
+                } else {
+                    wm.is_window_floating(*key)
+                };
                 let focused = wm.focused_window() == *key;
                 let draw_shadow = floating && wm.config().shadow_enabled;
                 let z_depth = WindowManager::compute_z_depth(i, total);
@@ -223,8 +227,7 @@ pub fn render_app(
     // Render FAB as System Chrome (highest Z-order layer)
     if let Some(fab) = wm.fab_component_mut() {
         let mut local_hb = HitboxRegistry::new();
-        let ctx = term_wm_core::components::ComponentContext::new(true)
-            .with_screen_area(area);
+        let ctx = term_wm_core::components::ComponentContext::new(true).with_screen_area(area);
         fab.render(backend, area, &ctx, &mut local_hb);
         wm.hitbox_registry_mut().merge(local_hb);
     }
