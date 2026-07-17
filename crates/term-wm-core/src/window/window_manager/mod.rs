@@ -1673,6 +1673,14 @@ impl WindowManager {
         };
         match p.handle_events(&down_event, &ctx) {
             crate::actions::EventResult::Action(action) => match action {
+                TermWmAction::OpenCommandPalette => {
+                    if self.command_menu_visible() {
+                        self.close_command_menu();
+                    } else {
+                        self.open_command_menu();
+                    }
+                    true
+                }
                 TermWmAction::ToggleMouseCapture => {
                     self.toggle_mouse_capture();
                     true

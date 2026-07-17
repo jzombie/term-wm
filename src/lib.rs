@@ -96,7 +96,17 @@ pub fn render_app(
                 if full.width == 0 || full.height == 0 {
                     continue;
                 }
-                let dest = wm.window_dest(*key, full);
+                let is_monocle = wm.is_monocle();
+                let dest = if is_monocle {
+                    term_wm_core::window::FloatRect {
+                        x: full.x,
+                        y: full.y,
+                        width: full.width,
+                        height: full.height,
+                    }
+                } else {
+                    wm.window_dest(*key, full)
+                };
                 let inner = decorator.content_area(Rect {
                     x: 0,
                     y: 0,
@@ -106,7 +116,7 @@ pub fn render_app(
                 if inner.width == 0 || inner.height == 0 {
                     continue;
                 }
-                let floating = wm.is_window_floating(*key);
+                let floating = if is_monocle { false } else { wm.is_window_floating(*key) };
                 let focused = wm.focused_window() == *key;
                 let draw_shadow = floating && wm.config().shadow_enabled;
                 let z_depth = WindowManager::compute_z_depth(i, total);
@@ -204,8 +214,13 @@ pub fn render_app(
                 // This is a placeholder for now
             }
             term_wm_core::draw_plan::RegionType::Fab => {
-                // FAB is rendered by the draw_plan_renderer
-                // This is a placeholder for now
+                if let Some(fab) = wm.fab_component_mut() {
+                    let mut local_hb = HitboxRegistry::new();
+                    let ctx = term_wm_core::components::ComponentContext::new(true)
+                        .with_screen_area(region.bounds);
+                    fab.render(backend, region.bounds, &ctx, &mut local_hb);
+                    wm.hitbox_registry_mut().merge(local_hb);
+                }
             }
         }
     }
@@ -243,39 +258,42 @@ pub fn render_app(
             let draw_order = wm.managed_draw_order_all();
             let floating_panes: Vec<
                 term_wm_core::layout::FloatingPane<term_wm_core::window::WindowKey>,
-            > = wm
-                .floating_panes()
-                .into_iter()
-                .map(|(key, rect)| match rect {
-                    term_wm_core::window::FloatRectSpec::Absolute(fr) => {
-                        term_wm_core::layout::FloatingPane {
-                            key,
-                            rect: term_wm_core::layout::RectSpec::Absolute(
-                                term_wm_layout_engine::LayoutRect {
-                                    x: fr.x,
-                                    y: fr.y,
-                                    width: fr.width,
-                                    height: fr.height,
-                                },
-                            ),
+            > = if wm.is_monocle() {
+                Vec::new()
+            } else {
+                wm.floating_panes()
+                    .into_iter()
+                    .map(|(key, rect)| match rect {
+                        term_wm_core::window::FloatRectSpec::Absolute(fr) => {
+                            term_wm_core::layout::FloatingPane {
+                                key,
+                                rect: term_wm_core::layout::RectSpec::Absolute(
+                                    term_wm_layout_engine::LayoutRect {
+                                        x: fr.x,
+                                        y: fr.y,
+                                        width: fr.width,
+                                        height: fr.height,
+                                    },
+                                ),
+                            }
                         }
-                    }
-                    term_wm_core::window::FloatRectSpec::Percent {
-                        x,
-                        y,
-                        width,
-                        height,
-                    } => term_wm_core::layout::FloatingPane {
-                        key,
-                        rect: term_wm_core::layout::RectSpec::Percent {
+                        term_wm_core::window::FloatRectSpec::Percent {
                             x,
                             y,
                             width,
                             height,
+                        } => term_wm_core::layout::FloatingPane {
+                            key,
+                            rect: term_wm_core::layout::RectSpec::Percent {
+                                x,
+                                y,
+                                width,
+                                height,
+                            },
                         },
-                    },
-                })
-                .collect();
+                    })
+                    .collect()
+            };
             render_resize_outline(
                 buf,
                 hovered_resize.copied(),

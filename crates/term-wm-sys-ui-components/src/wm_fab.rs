@@ -8,7 +8,7 @@ use term_wm_core::{
     hitbox_registry::{HitTarget, HitboxRegistry},
     window::WindowKey,
 };
-use term_wm_ui_components::helpers::downcast_ratatui;
+use term_wm_ui_components::helpers::{downcast_ratatui, layout_rect_to_rect};
 
 /// Floating Action Button (FAB) component.
 /// Renders a 3x1 touch target at the absolute bottom-right of the terminal buffer.
@@ -78,12 +78,19 @@ impl Component<TermWmAction> for WmFabComponent {
         // Render "≡" icon into the buffer
         let ratatui_backend = downcast_ratatui(backend);
         let buffer = &mut ratatui_backend.buffer;
-        // Iterate over the buffer's actual allocated area.
-        // The buffer uses absolute screen-space coordinates (e.g., x: 77, y: 23).
-        // Using buffer.area.x/y ensures we write to valid cells.
-        let area = buffer.area;
-        for yy in area.y..area.y.saturating_add(area.height) {
-            for xx in area.x..area.x.saturating_add(area.width) {
+
+        // Intersect the FAB's designated area with the buffer's actual area.
+        // This ensures we only write to valid cells within the FAB's 3x1 bounds,
+        // even when the backend is the global terminal buffer (80x24+).
+        let ratatui_area = layout_rect_to_rect(area);
+        let bounds = ratatui_area.intersection(buffer.area);
+
+        if bounds.width == 0 || bounds.height == 0 {
+            return;
+        }
+
+        for yy in bounds.y..bounds.y.saturating_add(bounds.height) {
+            for xx in bounds.x..bounds.x.saturating_add(bounds.width) {
                 if let Some(cell) = buffer.cell_mut((xx, yy)) {
                     cell.set_symbol("≡").set_style(
                         Style::default()
