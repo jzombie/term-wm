@@ -138,13 +138,6 @@ impl DrawPlanRenderer {
                     // Target highlight is a pulsing border overlay
                     // This is a placeholder for now
                 }
-                RegionType::Fab => {
-                    // Delegate to the FAB component's own render method
-                    // This preserves the component's internal presentation logic
-                    if let Some(fab) = wm.fab_component_mut() {
-                        self.render_direct_to_buffer(target_buf, area, fab, region);
-                    }
-                }
             }
         }
     }
@@ -292,13 +285,6 @@ impl DrawPlanRenderer {
                 RegionType::TargetHighlight(_key) => {
                     // Target highlight is a pulsing border overlay
                     // This is a placeholder for now
-                }
-                RegionType::Fab => {
-                    // Delegate to the FAB component's own render method
-                    // This preserves the component's internal presentation logic
-                    if let Some(fab) = wm.fab_component_mut() {
-                        self.render_direct(frame, area, fab, region);
-                    }
                 }
             }
         }

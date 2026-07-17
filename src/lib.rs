@@ -213,21 +213,21 @@ pub fn render_app(
                 // Target highlight is a pulsing border overlay
                 // This is a placeholder for now
             }
-            term_wm_core::draw_plan::RegionType::Fab => {
-                if let Some(fab) = wm.fab_component_mut() {
-                    let mut local_hb = HitboxRegistry::new();
-                    let ctx = term_wm_core::components::ComponentContext::new(true)
-                        .with_screen_area(region.bounds);
-                    fab.render(backend, region.bounds, &ctx, &mut local_hb);
-                    wm.hitbox_registry_mut().merge(local_hb);
-                }
-            }
         }
     }
     renderer.put_scratch(scratch_buf);
 
     // Render panels AFTER windows
     render_panels(backend, wm);
+
+    // Render FAB as System Chrome (highest Z-order layer)
+    if let Some(fab) = wm.fab_component_mut() {
+        let mut local_hb = HitboxRegistry::new();
+        let ctx = term_wm_core::components::ComponentContext::new(true)
+            .with_screen_area(area);
+        fab.render(backend, area, &ctx, &mut local_hb);
+        wm.hitbox_registry_mut().merge(local_hb);
+    }
 
     // Render tiling split handles
     {

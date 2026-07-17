@@ -22,8 +22,6 @@ pub enum RegionType {
     Overlay,
     /// Pulsing border highlight for tap-to-swap targeting.
     TargetHighlight(WindowKey),
-    /// Floating action button (FAB) — always visible, exempt from monocle culling.
-    Fab,
 }
 
 /// Position of a panel in the layout.
@@ -124,10 +122,6 @@ impl DrawPlan {
                 RegionType::Panel(_) => {
                     region.hidden = true;
                 }
-                // FAB is EXEMPT from monocle culling — always visible
-                RegionType::Fab => {
-                    region.hidden = false;
-                }
                 _ => {}
             }
         }
@@ -158,10 +152,6 @@ impl DrawPlan {
                 }
                 RegionType::FloatingWindow(_) => {
                     floating.push(region);
-                }
-                // FAB goes in overlays layer (above everything)
-                RegionType::Fab => {
-                    overlays.push(region);
                 }
                 RegionType::Panel(_) | RegionType::Overlay | RegionType::TargetHighlight(_) => {
                     overlays.push(region);
@@ -357,28 +347,6 @@ pub mod tests {
         }
     }
 
-    /// Test helper: create a FAB render region
-    pub fn make_fab_region(
-        x: i32,
-        y: i32,
-        width: u16,
-        height: u16,
-        z_index: usize,
-    ) -> RenderRegion {
-        RenderRegion {
-            region_type: RegionType::Fab,
-            bounds: LayoutRect {
-                x,
-                y,
-                width,
-                height,
-            },
-            z_index,
-            dimmed: false,
-            hidden: false,
-        }
-    }
-
     /// Test helper: create a panel render region
     pub fn make_panel_region(
         position: PanelPosition,
@@ -525,41 +493,6 @@ pub mod tests {
             // Panels should be hidden
             assert!(plan.regions()[1].hidden);
             assert!(plan.regions()[2].hidden);
-        }
-
-        #[test]
-        fn test_monocle_culling_exempt_fab() {
-            let key1 = WindowKey::default();
-
-            let mut plan = DrawPlan::with_capacity(4);
-            plan.push(make_region(key1, 0, 0, 80, 24, 0));
-            plan.push(make_fab_region(77, 23, 3, 1, 1000));
-
-            let screen = LayoutRect {
-                x: 0,
-                y: 0,
-                width: 80,
-                height: 24,
-            };
-            plan.apply_monocle_culling(key1, screen);
-
-            // FAB should NOT be hidden (exempt from culling)
-            assert!(!plan.regions()[1].hidden);
-        }
-
-        #[test]
-        fn test_monocle_z_order_places_fab_in_overlays() {
-            let key1 = WindowKey::default();
-
-            let mut plan = DrawPlan::with_capacity(4);
-            plan.push(make_region(key1, 0, 0, 80, 24, 0));
-            plan.push(make_fab_region(77, 23, 3, 1, 1000));
-
-            plan.apply_monocle_z_order(key1);
-
-            // FAB should be in the last position (overlays layer)
-            let last = plan.regions().last().unwrap();
-            assert!(matches!(last.region_type, RegionType::Fab));
         }
     }
 }

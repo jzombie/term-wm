@@ -120,6 +120,7 @@ impl App {
                     ),
                 ))
                 .command_menu(Box::new(raw_menu))
+                .fab(Box::new(term_wm_sys_ui_components::WmFabComponent::new()))
                 .build()
                 .expect("standalone build")
         };
