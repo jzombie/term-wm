@@ -453,7 +453,9 @@ pub mod tests {
         #[test]
         fn test_monocle_culling_resizes_focused_window() {
             let key1 = WindowKey::default();
-            let key2 = WindowKey::default();
+            // DefaultKey::default() = null key for both => would match
+            // as focused. Use KeyData::from_ffi to create a distinct key.
+            let key2 = WindowKey::from(slotmap::KeyData::from_ffi(1));
 
             let mut plan = DrawPlan::with_capacity(4);
             plan.push(make_region(key1, 0, 0, 40, 24, 0));
