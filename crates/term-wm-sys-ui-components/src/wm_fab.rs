@@ -103,13 +103,13 @@ impl Component<TermWmAction> for WmFabComponent {
         event: &Event,
         _ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
-        if let Event::Mouse(mouse) = event {
-            if matches!(
+        if let Event::Mouse(mouse) = event
+            && matches!(
                 mouse.kind,
                 term_wm_core::events::MouseEventKind::Press(_)
-            ) {
-                return EventResult::Action(TermWmAction::OpenCommandPalette);
-            }
+            )
+        {
+            return EventResult::Action(TermWmAction::OpenCommandPalette);
         }
         EventResult::Ignored
     }

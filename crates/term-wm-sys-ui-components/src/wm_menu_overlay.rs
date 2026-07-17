@@ -19,8 +19,9 @@ use term_wm_core::{
 };
 use term_wm_ui_components::helpers::{color_to_ratatui, layout_rect_to_rect};
 
-use term_wm_ui_components::DialogOverlayComponent;
 use term_wm_ui_components::menu::MenuComponent;
+use term_wm_ui_components::modal_container::render_modal;
+use term_wm_ui_components::DialogOverlayComponent;
 
 pub struct WmCommandPaletteOverlay {
     menu: MenuComponent,
@@ -49,6 +50,8 @@ impl Default for WmCommandPaletteOverlay {
         Self::new()
     }
 }
+
+const MIN_MODAL_WIDTH: u16 = 20;
 
 impl WmCommandPaletteOverlay {
     pub fn new() -> Self {
@@ -118,20 +121,10 @@ impl WmCommandPaletteOverlay {
         if item_count == 0 {
             return;
         }
-        let Some(anchor) = self.anchor else {
-            return;
-        };
+
         let bounds_layout = self.managed_area;
         let bounds = layout_rect_to_rect(bounds_layout);
-        let start_x = anchor.0;
-        let start_y = anchor.1;
-        if start_x < bounds.x || start_x >= bounds.x.saturating_add(bounds.width) {
-            return;
-        }
-        let max_width = bounds
-            .width
-            .saturating_sub(start_x.saturating_sub(bounds.x))
-            .max(1);
+
         let label_width = self
             .menu
             .items()
@@ -146,54 +139,92 @@ impl WmCommandPaletteOverlay {
             .map(|item| item.icon.map(|v| v.chars().count() as u16).unwrap_or(0))
             .max()
             .unwrap_or(0);
-        let width = (label_width + icon_width + 6).min(max_width);
-        let max_height = bounds
-            .height
-            .saturating_sub(start_y.saturating_sub(bounds.y))
-            .max(1);
-        let height = (item_count as u16).saturating_add(2).min(max_height);
+        let content_width = (label_width + icon_width + 6).max(MIN_MODAL_WIDTH);
+        let content_height = (item_count as u16).saturating_add(2);
 
-        let drop_rect_layout = LayoutRect {
-            x: i32::from(start_x),
-            y: i32::from(start_y),
-            width,
-            height,
-        };
+        let drop_rect_layout;
 
-        self.menu_bounds_cache.set(Some(drop_rect_layout));
+        if let Some(anchor) = self.anchor {
+            if anchor.0 < bounds.x || anchor.0 >= bounds.x.saturating_add(bounds.width) {
+                return;
+            }
+            let max_width = bounds
+                .width
+                .saturating_sub(anchor.0.saturating_sub(bounds.x))
+                .max(1);
+            let width = content_width.min(max_width);
+            let max_height = bounds
+                .height
+                .saturating_sub(anchor.1.saturating_sub(bounds.y))
+                .max(1);
+            let height = content_height.min(max_height);
 
-        self.render_backdrop(backend, self.managed_area, drop_rect_layout);
+            drop_rect_layout = LayoutRect {
+                x: i32::from(anchor.0),
+                y: i32::from(anchor.1),
+                width,
+                height,
+            };
+
+            self.menu_bounds_cache.set(Some(drop_rect_layout));
+            self.render_backdrop(backend, self.managed_area, drop_rect_layout);
+
+            let drop_rect = layout_rect_to_rect(drop_rect_layout);
+            {
+                let ratatui_backend =
+                    term_wm_ui_components::helpers::downcast_ratatui(backend);
+                let buffer = &ratatui_backend.buffer;
+                let clip = drop_rect.intersection(buffer.area);
+                if clip.width == 0 || clip.height == 0 {
+                    return;
+                }
+
+                let hovered_idx = ctx.hover_pos().and_then(|(mx, my)| {
+                    (my >= drop_rect.y.saturating_add(1)
+                        && my
+                            < drop_rect
+                                .y
+                                .saturating_add((item_count as u16).saturating_add(1))
+                        && mx >= drop_rect.x
+                        && mx < drop_rect.x.saturating_add(drop_rect.width))
+                    .then(|| (my.saturating_sub(drop_rect.y).saturating_sub(1)) as usize)
+                    .filter(|&idx| idx < item_count)
+                });
+                self.menu.render_items(
+                    &mut ratatui_backend.buffer,
+                    drop_rect,
+                    hovered_idx,
+                    &ctx.config().theme,
+                );
+            }
+        } else {
+            drop_rect_layout = render_modal(
+                backend,
+                self.managed_area,
+                content_width,
+                content_height,
+                &mut |buf, rect| {
+                    let hovered_idx = ctx.hover_pos().and_then(|(mx, my)| {
+                        (my >= rect.y.saturating_add(1)
+                            && my
+                                < rect
+                                    .y
+                                    .saturating_add((item_count as u16).saturating_add(1))
+                            && mx >= rect.x
+                            && mx < rect.x.saturating_add(rect.width))
+                        .then(|| (my.saturating_sub(rect.y).saturating_sub(1)) as usize)
+                        .filter(|&idx| idx < item_count)
+                    });
+                    self.menu.render_items(buf, rect, hovered_idx, &ctx.config().theme);
+                },
+            );
+            self.menu_bounds_cache.set(Some(drop_rect_layout));
+        }
 
         let drop_rect = layout_rect_to_rect(drop_rect_layout);
         {
-            let ratatui_backend = term_wm_ui_components::helpers::downcast_ratatui(backend);
-            let buffer = &ratatui_backend.buffer;
-            let clip = drop_rect.intersection(buffer.area);
-            if clip.width == 0 || clip.height == 0 {
-                return;
-            }
-
-            let hovered_idx = ctx.hover_pos().and_then(|(mx, my)| {
-                (my >= drop_rect.y.saturating_add(1)
-                    && my
-                        < drop_rect
-                            .y
-                            .saturating_add((item_count as u16).saturating_add(1))
-                    && mx >= drop_rect.x
-                    && mx < drop_rect.x.saturating_add(drop_rect.width))
-                .then(|| (my.saturating_sub(drop_rect.y).saturating_sub(1)) as usize)
-                .filter(|&idx| idx < item_count)
-            });
-            self.menu.render_items(
-                &mut ratatui_backend.buffer,
-                drop_rect,
-                hovered_idx,
-                &ctx.config().theme,
-            );
-        }
-
-        {
-            let ratatui_backend = term_wm_ui_components::helpers::downcast_ratatui(backend);
+            let ratatui_backend =
+                term_wm_ui_components::helpers::downcast_ratatui(backend);
             let buffer = &ratatui_backend.buffer;
             let clip = drop_rect.intersection(buffer.area);
             let mut hits = self.item_hits.borrow_mut();

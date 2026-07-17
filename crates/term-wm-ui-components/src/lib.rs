@@ -8,6 +8,7 @@ pub mod label;
 pub mod list;
 pub mod markdown_viewer;
 pub mod menu;
+pub mod modal_container;
 pub mod scroll_view;
 
 pub mod svg_image;
