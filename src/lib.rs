@@ -230,13 +230,11 @@ pub fn render_app(
     render_panels(backend, wm);
 
     // Render FAB only in monocle/mobile mode — sole mobile navigation mechanism.
-    if wm.is_monocle() {
-        if let Some(fab) = wm.fab_component_mut() {
-            let mut local_hb = HitboxRegistry::new();
-            let ctx = term_wm_core::components::ComponentContext::new(true).with_screen_area(area);
-            fab.render(backend, area, &ctx, &mut local_hb);
-            wm.hitbox_registry_mut().merge(local_hb);
-        }
+    if wm.is_monocle() && let Some(fab) = wm.fab_component_mut() {
+        let mut local_hb = HitboxRegistry::new();
+        let ctx = term_wm_core::components::ComponentContext::new(true).with_screen_area(area);
+        fab.render(backend, area, &ctx, &mut local_hb);
+        wm.hitbox_registry_mut().merge(local_hb);
     }
 
     // Render tiling split handles
