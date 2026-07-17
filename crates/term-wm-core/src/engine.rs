@@ -96,10 +96,12 @@ impl CoreEngine {
             });
         }
 
+        // TODO: Remove?
         // 2. Generate panel regions (top and bottom)
         // Panels are rendered by the WindowManager, not as window regions
         // Their z-index is higher than windows
 
+        // TODO: Remove?
         // 3. Generate overlay regions (if active)
         // Overlays are rendered by the WindowManager
         // Their z-index is highest
