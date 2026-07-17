@@ -229,12 +229,14 @@ pub fn render_app(
     // Render panels AFTER windows
     render_panels(backend, wm);
 
-    // Render FAB as System Chrome (highest Z-order layer)
-    if let Some(fab) = wm.fab_component_mut() {
-        let mut local_hb = HitboxRegistry::new();
-        let ctx = term_wm_core::components::ComponentContext::new(true).with_screen_area(area);
-        fab.render(backend, area, &ctx, &mut local_hb);
-        wm.hitbox_registry_mut().merge(local_hb);
+    // Render FAB only in monocle/mobile mode — sole mobile navigation mechanism.
+    if wm.is_monocle() {
+        if let Some(fab) = wm.fab_component_mut() {
+            let mut local_hb = HitboxRegistry::new();
+            let ctx = term_wm_core::components::ComponentContext::new(true).with_screen_area(area);
+            fab.render(backend, area, &ctx, &mut local_hb);
+            wm.hitbox_registry_mut().merge(local_hb);
+        }
     }
 
     // Render tiling split handles
