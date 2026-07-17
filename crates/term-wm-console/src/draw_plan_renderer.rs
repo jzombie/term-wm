@@ -479,6 +479,58 @@ pub fn overlay_shadow_data(
 /// Render all active overlays (command menu, help, exit confirm).
 pub fn render_overlays(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut WindowManager) {
     let full_area = wm.managed_area();
+
+    // Panel overlay in monocle mode — render BEFORE command menu so the panel
+    // header (including hamburger icon) appears as a visual context layer.
+    // Use explicit SetPanelActive(true/false) because ComponentContext's active
+    // flag does NOT control WmTopPanelComponent's internal self.active guard
+    // (set at wm_top_panel.rs:462 via SetPanelActive action).
+    if wm.is_monocle() && wm.command_menu_visible() {
+        let display = wm.build_display_order();
+        let titles_map: std::collections::BTreeMap<WindowKey, String> =
+            wm.window_titles().into_iter().collect();
+        let focus_current = wm.focused_window();
+        let mc_enabled = wm.mouse_capture_enabled();
+        let cb_enabled = wm.clipboard_enabled();
+        let ws_enabled = wm.window_selection_enabled();
+        let sel_active = wm.selection_active();
+        let sel_dragging = wm.selection_dragging();
+
+        let (top, registry) = wm.top_and_registry();
+        if let Some(p) = top {
+            p.process_action(&ComponentAction::SetPanelActive(true));
+            p.process_action(&ComponentAction::SetWindowLabels(titles_map));
+            p.process_action(&ComponentAction::SetTopPanelState(Box::new(
+                TopPanelState {
+                    focus_current: Some(focus_current),
+                    display_order: display,
+                    status_line: Some("Tab/Shift-Tab: cycle windows".to_string()),
+                    mouse_capture_enabled: mc_enabled,
+                    clipboard_enabled: cb_enabled,
+                    window_selection_enabled: ws_enabled,
+                    selection_active: sel_active,
+                    selection_dragging: sel_dragging,
+                    menu_open: true,
+                },
+            )));
+
+            let top_area = LayoutRect {
+                x: 0,
+                y: 0,
+                width: full_area.width,
+                height: 1,
+            };
+            let mut local_hb = HitboxRegistry::new();
+            let ctx = ComponentContext::new(false).with_screen_area(top_area);
+            p.render(backend, top_area, &ctx, &mut local_hb);
+            registry.merge(local_hb);
+
+            // Revert to layout-derived state — the next render_panels call will
+            // set the correct active state based on panel_active().
+            p.process_action(&ComponentAction::SetPanelActive(false));
+        }
+    }
+
     let hover_pos = wm.hover_pos();
 
     // Compute anchor from top component
