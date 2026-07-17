@@ -85,13 +85,28 @@ pub fn render_app(
     let plan_regions = draw_plan.regions();
     let num_windows = plan_regions.len();
     for (i, region) in plan_regions.iter().enumerate() {
+        // Skip hidden regions (used for monocle mode culling)
+        if region.hidden {
+            continue;
+        }
+
         match &region.region_type {
             term_wm_core::draw_plan::RegionType::Window(key) => {
                 let full = region.bounds;
                 if full.width == 0 || full.height == 0 {
                     continue;
                 }
-                let dest = wm.window_dest(*key, full);
+                let is_monocle = wm.is_monocle();
+                let dest = if is_monocle {
+                    term_wm_core::window::FloatRect {
+                        x: full.x,
+                        y: full.y,
+                        width: full.width,
+                        height: full.height,
+                    }
+                } else {
+                    wm.window_dest(*key, full)
+                };
                 let inner = decorator.content_area(Rect {
                     x: 0,
                     y: 0,
@@ -101,7 +116,7 @@ pub fn render_app(
                 if inner.width == 0 || inner.height == 0 {
                     continue;
                 }
-                let floating = wm.is_window_floating(*key);
+                let floating = if is_monocle { false } else { wm.is_window_floating(*key) };
                 let focused = wm.focused_window() == *key;
                 let draw_shadow = floating && wm.config().shadow_enabled;
                 let z_depth = WindowManager::compute_z_depth(i, total);
@@ -182,12 +197,37 @@ pub fn render_app(
             }
             // Notification rendering deferred to after tiling handles
             term_wm_core::draw_plan::RegionType::Notification(_) => {}
+            term_wm_core::draw_plan::RegionType::FloatingWindow(_) => {
+                // Floating windows are rendered like regular windows
+                // This is a placeholder for now
+            }
+            term_wm_core::draw_plan::RegionType::Panel(_) => {
+                // Panels are rendered by the WindowManager
+                // This is a placeholder for now
+            }
+            term_wm_core::draw_plan::RegionType::Overlay => {
+                // Overlays are rendered by the WindowManager
+                // This is a placeholder for now
+            }
+            term_wm_core::draw_plan::RegionType::TargetHighlight(_) => {
+                // Target highlight is a pulsing border overlay
+                // This is a placeholder for now
+            }
         }
     }
     renderer.put_scratch(scratch_buf);
 
     // Render panels AFTER windows
     render_panels(backend, wm);
+
+    // Render FAB as System Chrome (highest Z-order layer)
+    if let Some(fab) = wm.fab_component_mut() {
+        let mut local_hb = HitboxRegistry::new();
+        let ctx = term_wm_core::components::ComponentContext::new(true)
+            .with_screen_area(area);
+        fab.render(backend, area, &ctx, &mut local_hb);
+        wm.hitbox_registry_mut().merge(local_hb);
+    }
 
     // Render tiling split handles
     {
@@ -218,39 +258,42 @@ pub fn render_app(
             let draw_order = wm.managed_draw_order_all();
             let floating_panes: Vec<
                 term_wm_core::layout::FloatingPane<term_wm_core::window::WindowKey>,
-            > = wm
-                .floating_panes()
-                .into_iter()
-                .map(|(key, rect)| match rect {
-                    term_wm_core::window::FloatRectSpec::Absolute(fr) => {
-                        term_wm_core::layout::FloatingPane {
-                            key,
-                            rect: term_wm_core::layout::RectSpec::Absolute(
-                                term_wm_layout_engine::LayoutRect {
-                                    x: fr.x,
-                                    y: fr.y,
-                                    width: fr.width,
-                                    height: fr.height,
-                                },
-                            ),
+            > = if wm.is_monocle() {
+                Vec::new()
+            } else {
+                wm.floating_panes()
+                    .into_iter()
+                    .map(|(key, rect)| match rect {
+                        term_wm_core::window::FloatRectSpec::Absolute(fr) => {
+                            term_wm_core::layout::FloatingPane {
+                                key,
+                                rect: term_wm_core::layout::RectSpec::Absolute(
+                                    term_wm_layout_engine::LayoutRect {
+                                        x: fr.x,
+                                        y: fr.y,
+                                        width: fr.width,
+                                        height: fr.height,
+                                    },
+                                ),
+                            }
                         }
-                    }
-                    term_wm_core::window::FloatRectSpec::Percent {
-                        x,
-                        y,
-                        width,
-                        height,
-                    } => term_wm_core::layout::FloatingPane {
-                        key,
-                        rect: term_wm_core::layout::RectSpec::Percent {
+                        term_wm_core::window::FloatRectSpec::Percent {
                             x,
                             y,
                             width,
                             height,
+                        } => term_wm_core::layout::FloatingPane {
+                            key,
+                            rect: term_wm_core::layout::RectSpec::Percent {
+                                x,
+                                y,
+                                width,
+                                height,
+                            },
                         },
-                    },
-                })
-                .collect();
+                    })
+                    .collect()
+            };
             render_resize_outline(
                 buf,
                 hovered_resize.copied(),

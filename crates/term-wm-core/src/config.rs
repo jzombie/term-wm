@@ -37,6 +37,7 @@ pub struct AppBuilder {
     top_panel: Option<Box<dyn WmComponent>>,
     bottom_panel: Option<Box<dyn WmComponent>>,
     command_menu: Option<Box<dyn WmComponent>>,
+    fab_component: Option<Box<dyn WmComponent>>,
     supported_menu_actions: Option<Vec<TermWmAction>>,
 }
 
@@ -50,6 +51,7 @@ impl AppBuilder {
             top_panel: None,
             bottom_panel: None,
             command_menu: None,
+            fab_component: None,
             supported_menu_actions: None,
         }
     }
@@ -99,6 +101,11 @@ impl AppBuilder {
         self
     }
 
+    pub fn fab(mut self, fab: Box<dyn WmComponent>) -> Self {
+        self.fab_component = Some(fab);
+        self
+    }
+
     pub fn supported_menu_actions(mut self, actions: Vec<TermWmAction>) -> Self {
         self.supported_menu_actions = Some(actions);
         self
@@ -134,6 +141,7 @@ impl AppBuilder {
             self.top_panel,
             self.bottom_panel,
             self.command_menu,
+            self.fab_component,
             self.supported_menu_actions,
         ))
     }

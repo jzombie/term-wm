@@ -78,6 +78,13 @@ fn drain_action_queue<A: WindowManagerHost>(
                 app.wm()
                     .push_notification(msg, std::time::Duration::from_secs(3));
             }
+            TermWmAction::OpenCommandPalette => {
+                if app.wm().command_menu_visible() {
+                    app.wm().close_command_menu();
+                } else {
+                    app.wm().open_command_menu();
+                }
+            }
             action => {
                 let ctx = app.wm().component_context_for(true, key);
                 if let Some(comp) = app.wm().component_for_key_mut(key) {
@@ -107,6 +114,15 @@ where
             let result = app.wm().dispatch_mouse(&wm_event);
             match result {
                 EventResult::Action((target_key, action)) => {
+                    // Intercept global actions from system chrome (FAB has no WindowKey)
+                    if matches!(action, TermWmAction::OpenCommandPalette) {
+                        if app.wm().command_menu_visible() {
+                            app.wm().close_command_menu();
+                        } else {
+                            app.wm().open_command_menu();
+                        }
+                        return true;
+                    }
                     let key = target_key.unwrap_or_else(|| app.wm().focused_window());
                     let mut queue = VecDeque::from([(key, action)]);
                     drain_action_queue(app, &mut queue);
@@ -192,10 +208,6 @@ where
             // Process expired system tasks (super-passthrough, drag-snap)
             for (_id, task) in system_handle.drain_expired() {
                 match task {
-                    SystemTask::SuperPassthrough { event } => {
-                        app.wm().clear_super_pending();
-                        let _ = handle_focused_app_event(&event, app);
-                    }
                     SystemTask::DragSnap => {
                         app.wm().apply_drag_snap_if_pending();
                     }
@@ -224,6 +236,12 @@ where
             for key in driver.take_exited_windows() {
                 app.wm().close_window(key);
             }
+
+            // Update monocle mode on resize
+            if let Some(Event::Resize(width, _height)) = &event {
+                app.wm().update_monocle_mode(*width);
+            }
+
             let mut flush_state_changes = |app: &mut A, flow: ControlFlow, consume_dirty: bool| {
                 if let Some(enabled) = app.wm().take_mouse_capture_change() {
                     let _ = driver.set_mouse_capture(enabled);
@@ -257,15 +275,7 @@ where
 
                 // Pre-compute the keybinding action using the configured
                 // KeyBindings from WindowManager (not hardcoded defaults).
-                // Only Global-layer actions are proactively dispatched;
                 // WmMode actions are handled when the WM overlay is open.
-                let mapped_action = match &evt {
-                    Event::Key(key) => app
-                        .wm()
-                        .keybindings()
-                        .action_for_key_in_layer(key, crate::keybindings::ActionLayer::Global),
-                    _ => None,
-                };
 
                 // Layer 1: Active overlays (exit confirm, selection preview, help)
                 if app.wm().exit_confirm_visible() {
@@ -288,51 +298,47 @@ where
                 // If keyboard capture is disabled for the focused window, key events
                 // bypass all WM interception and go directly to the terminal,
                 // except when the WM overlay is visible — overlay takes priority.
-                // Uses the unified double-Super handler: first Super is deferred (panel
-                // shows countdown), second Super within window opens overlay, timeout
-                // (checked in idle path) forwards the first Super to the terminal.
+                // In direct mode, keys are forwarded immediately without WM processing.
+
+                // Layer 2a: Command palette toggle — ALWAYS interceptable
+                // This MUST happen before the direct mode check so that
+                // Ctrl+Shift+Space works even when a terminal window is in direct mode.
+                let wm_mode = app.wm().config().wm_command_menu_enabled;
+                if wm_mode
+                    && let Event::Key(key) = &evt
+                    && key.kind == KeyKind::Press
+                    && app
+                        .wm()
+                        .keybindings()
+                        .matches(TermWmAction::OpenCommandPalette, key)
+                {
+                    if app.wm().command_menu_visible() {
+                        app.wm().close_command_menu();
+                    } else {
+                        app.wm().open_command_menu();
+                    }
+                    update_selection_snapshot(app);
+                    return flush_state_changes(app, ControlFlow::Continue, false);
+                }
+
+                // Layer 2b: Direct mode check — intercepts ALL other keys
                 if let Event::Key(key) = &evt {
                     let focus_id = app.wm().focused_window();
                     if app.wm().direct_mode(focus_id)
                         && !app.wm().command_menu_visible()
                         && key.kind == KeyKind::Press
                     {
-                        let is_wm_key = app
-                            .wm()
-                            .keybindings()
-                            .matches(TermWmAction::WmToggleOverlay, key);
-                        match app.wm().handle_super_press(key, is_wm_key) {
-                            crate::window::SuperPressResult::DoubleSuper => {
-                                app.wm().open_command_menu_no_passthrough();
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
-                            }
-                            crate::window::SuperPressResult::Pending => {
-                                // First Super of a pair — deferred. Panel shows countdown.
-                                // Timeout forwarding happens in the idle path below.
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
-                            }
-                            crate::window::SuperPressResult::Forward => {
-                                // Non-wm-toggle key → forward to terminal immediately.
-                                let _ = handle_focused_app_event(&evt, app);
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
-                            }
-                        }
+                        // Direct mode — forward to terminal immediately.
+                        let _ = handle_focused_app_event(&evt, app);
+                        update_selection_snapshot(app);
+                        return flush_state_changes(app, ControlFlow::Continue, false);
                     }
                 }
 
-                // Layer 2a: App-level event handler (before WM actions, after overlays)
+                // Layer 2c: App-level event handler (before WM actions, after overlays)
                 if app.handle_app_event(&evt) {
                     update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Continue, false);
-                }
-
-                // Layer 2b: Global-layer actions (only WmToggleOverlay is Global;
-                // all other actions are WmMode — dispatched when the overlay is open).
-                if let Some(_action) = mapped_action {
-                    // Only WmToggleOverlay reaches here; handled inline below.
                 }
 
                 // Pre-compute WmMode-layer action for use inside the overlay section.
@@ -343,30 +349,6 @@ where
                         .action_for_key_in_layer(key, crate::keybindings::ActionLayer::WmMode),
                     _ => None,
                 };
-
-                // WM command menu toggle (special case due to passthrough logic)
-                let wm_mode = app.wm().config().wm_command_menu_enabled;
-                if wm_mode
-                    && let Event::Key(key) = &evt
-                    && key.kind == KeyKind::Press
-                    && app
-                        .wm()
-                        .keybindings()
-                        .matches(TermWmAction::WmToggleOverlay, key)
-                {
-                    if app.wm().command_menu_visible() {
-                        let passthrough = app.wm().super_passthrough_active();
-                        app.wm().close_command_menu();
-                        if passthrough {
-                            let passthrough_event = Event::Key(*key);
-                            let _ = handle_focused_app_event(&passthrough_event, app);
-                        }
-                    } else {
-                        app.wm().open_command_menu();
-                    }
-                    update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue, false);
-                }
                 if wm_mode && app.wm().command_menu_visible() {
                     if let Some(action) = app.wm().handle_wm_menu_event(&evt) {
                         match action {
@@ -762,6 +744,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let key = wm.create_window(Box::new(crate::components::NoopComponent));
         let one = vec![key];
@@ -788,6 +771,7 @@ mod tests {
             None,
             None,
             Some(Box::new(TestMenu)),
+            None,
             None,
         );
         let key = wm.create_window(Box::new(crate::components::NoopComponent));
@@ -855,6 +839,7 @@ mod tests {
                 None,
                 None,
                 Some(Box::new(TestMenu)),
+                None,
                 None,
             ),
         };
@@ -950,6 +935,7 @@ mod tests {
                 None,
                 None,
                 Some(Box::new(TestMenu)),
+                None,
                 None,
             ),
         };
@@ -1073,6 +1059,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         (0..n)
             .map(|_| wm.create_window(Box::new(crate::components::NoopComponent)))
@@ -1131,6 +1118,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let k1 = wm.create_window(Box::new(crate::components::NoopComponent));
         let k2 = wm.create_window(Box::new(crate::components::NoopComponent));
@@ -1154,6 +1142,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let k1 = wm.create_window(Box::new(crate::components::NoopComponent));
         let k2 = wm.create_window(Box::new(crate::components::NoopComponent));
@@ -1170,6 +1159,7 @@ mod tests {
         let mut wm = crate::window::WindowManager::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,

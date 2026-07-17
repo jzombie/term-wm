@@ -14,6 +14,21 @@ pub enum RegionType {
     Window(WindowKey),
     /// A transient toast notification.
     Notification(Arc<str>),
+    /// A floating (draggable) window.
+    FloatingWindow(WindowKey),
+    /// System chrome (top panel, bottom panel).
+    Panel(PanelPosition),
+    /// Transient overlay (help, exit confirm).
+    Overlay,
+    /// Pulsing border highlight for tap-to-swap targeting.
+    TargetHighlight(WindowKey),
+}
+
+/// Position of a panel in the layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelPosition {
+    Top,
+    Bottom,
 }
 
 /// A single render region in the draw plan.
@@ -28,6 +43,8 @@ pub struct RenderRegion {
     pub dimmed: bool,
     /// Semantic discriminator — carries the key for windows, the message for notifications.
     pub region_type: RegionType,
+    /// Whether this region should be hidden (used for monocle mode culling)
+    pub hidden: bool,
 }
 
 /// The complete draw plan for a frame.
@@ -86,6 +103,79 @@ impl DrawPlan {
     pub fn capacity(&self) -> usize {
         self.regions.capacity()
     }
+
+    /// Apply monocle culling: resize focused window to fill screen,
+    /// mark other windows as hidden but preserve their logical geometry.
+    /// The FAB is EXEMPT from culling — it's the sole mobile navigation mechanism.
+    pub fn apply_monocle_culling(&mut self, focused_key: WindowKey, screen: LayoutRect) {
+        for region in &mut self.regions {
+            match &region.region_type {
+                RegionType::Window(key) if *key == focused_key => {
+                    // Focused window gets FULL screen area
+                    region.bounds = screen;
+                    region.dimmed = false;
+                }
+                RegionType::Window(_) => {
+                    region.hidden = true;
+                }
+                // Hide panels in monocle mode
+                RegionType::Panel(_) => {
+                    region.hidden = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Apply monocle Z-order using stratified layering.
+    /// Partitions regions into topological layers, then concatenates
+    /// them in correct depth order. The focused window is elevated
+    /// within its layer but never above overlays.
+    pub fn apply_monocle_z_order(&mut self, focused_key: WindowKey) {
+        // Partition into strict topological layers
+        let mut hidden_tiled: Vec<RenderRegion> = Vec::new();
+        let mut focused_region: Option<RenderRegion> = None;
+        let mut other_tiled: Vec<RenderRegion> = Vec::new();
+        let mut floating: Vec<RenderRegion> = Vec::new();
+        let mut overlays: Vec<RenderRegion> = Vec::new();
+
+        for region in self.regions.drain(..) {
+            match &region.region_type {
+                RegionType::Window(key) if *key == focused_key => {
+                    focused_region = Some(region);
+                }
+                RegionType::Window(_) if region.hidden => {
+                    hidden_tiled.push(region);
+                }
+                RegionType::Window(_) => {
+                    other_tiled.push(region);
+                }
+                RegionType::FloatingWindow(_) => {
+                    floating.push(region);
+                }
+                RegionType::Panel(_) | RegionType::Overlay | RegionType::TargetHighlight(_) => {
+                    overlays.push(region);
+                }
+                _ => {
+                    other_tiled.push(region);
+                }
+            }
+        }
+
+        // Reassemble in strict depth order:
+        // 1. Hidden tiled windows (background, not rendered)
+        // 2. Other visible tiled windows
+        // 3. Focused window (elevated within tiled layer)
+        // 4. Floating windows (above tiled)
+        // 5. Overlays (panels, FAB, session manager — always on top)
+        self.regions = hidden_tiled;
+        self.regions.append(&mut other_tiled);
+        if let Some(region) = focused_region {
+            self.regions.push(region);
+        }
+        self.regions.append(&mut floating);
+        self.regions.append(&mut overlays);
+    }
 }
 
 #[cfg(test)]
@@ -111,6 +201,7 @@ pub mod tests {
             },
             z_index,
             dimmed: false,
+            hidden: false,
         }
     }
 
@@ -133,6 +224,7 @@ pub mod tests {
             },
             z_index,
             dimmed: true,
+            hidden: false,
         }
     }
 
@@ -255,6 +347,29 @@ pub mod tests {
         }
     }
 
+    /// Test helper: create a panel render region
+    pub fn make_panel_region(
+        position: PanelPosition,
+        x: i32,
+        y: i32,
+        width: u16,
+        height: u16,
+        z_index: usize,
+    ) -> RenderRegion {
+        RenderRegion {
+            region_type: RegionType::Panel(position),
+            bounds: LayoutRect {
+                x,
+                y,
+                width,
+                height,
+            },
+            z_index,
+            dimmed: false,
+            hidden: false,
+        }
+    }
+
     #[cfg(test)]
     #[allow(clippy::module_inception)]
     mod tests {
@@ -333,6 +448,51 @@ pub mod tests {
 
             // Capacity should be reused
             assert_eq!(plan.regions.capacity(), capacity);
+        }
+
+        #[test]
+        fn test_monocle_culling_resizes_focused_window() {
+            let key1 = WindowKey::default();
+            let key2 = WindowKey::default();
+
+            let mut plan = DrawPlan::with_capacity(4);
+            plan.push(make_region(key1, 0, 0, 40, 24, 0));
+            plan.push(make_region(key2, 40, 0, 40, 24, 0));
+
+            let screen = LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            };
+            plan.apply_monocle_culling(key1, screen);
+
+            // Focused window should fill the screen
+            assert_region_bounds(&plan, 0, 0, 0, 80, 24);
+            // Other window should be hidden
+            assert!(plan.regions()[1].hidden);
+        }
+
+        #[test]
+        fn test_monocle_culling_hides_panels() {
+            let key1 = WindowKey::default();
+
+            let mut plan = DrawPlan::with_capacity(4);
+            plan.push(make_region(key1, 0, 0, 80, 20, 0));
+            plan.push(make_panel_region(PanelPosition::Top, 0, 0, 80, 2, 10));
+            plan.push(make_panel_region(PanelPosition::Bottom, 0, 22, 80, 2, 10));
+
+            let screen = LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            };
+            plan.apply_monocle_culling(key1, screen);
+
+            // Panels should be hidden
+            assert!(plan.regions()[1].hidden);
+            assert!(plan.regions()[2].hidden);
         }
     }
 }

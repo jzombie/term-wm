@@ -504,7 +504,7 @@ impl Component<TermWmAction> for WmTopPanelComponent {
             return EventResult::Ignored;
         }
         if self.menu_icon_contains_point(mouse.column, mouse.row) {
-            return EventResult::Action(TermWmAction::WmToggleOverlay);
+            return EventResult::Action(TermWmAction::OpenCommandPalette);
         }
         if self.hit_test_mouse_capture(event) {
             return EventResult::Action(TermWmAction::ToggleMouseCapture);

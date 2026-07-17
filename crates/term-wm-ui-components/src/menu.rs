@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use term_wm_core::events::{Event, KeyKind};
+use term_wm_core::events::{Event, KeyKind, MouseEventKind};
 
 use crate::helpers::{color_to_ratatui, layout_rect_to_rect, safe_set_string};
 use term_wm_core::actions::{EventResult, TermWmAction};
@@ -190,14 +190,45 @@ impl Component<TermWmAction> for MenuComponent {
     ) {
         let area = layout_rect_to_rect(area);
         let backend = crate::helpers::downcast_ratatui(backend);
-        self.render_items(&mut backend.buffer, area, None, &ctx.config().theme);
+        let hovered_idx = ctx.hover_pos().and_then(|(mx, my)| {
+            if mx < area.x || mx >= area.x.saturating_add(area.width) {
+                return None;
+            }
+            if my < area.y.saturating_add(1) || my >= area.y.saturating_add(area.height) {
+                return None;
+            }
+            let idx = (my.saturating_sub(area.y).saturating_sub(1)) as usize;
+            (idx < self.items.len()).then_some(idx)
+        });
+        self.render_items(&mut backend.buffer, area, hovered_idx, &ctx.config().theme);
     }
 
     fn handle_events(
         &mut self,
         event: &Event,
-        _ctx: &ComponentContext,
+        ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
+        if let Event::Mouse(mouse) = event
+            && matches!(mouse.kind, MouseEventKind::Press(_))
+        {
+            if let Some(area) = ctx.screen_area() {
+                let mx = mouse.column;
+                let my = mouse.row;
+                if mx >= area.x.max(0) as u16
+                    && mx < (area.x.max(0) as u16).saturating_add(area.width)
+                    && my >= (area.y.max(0) as u16).saturating_add(1)
+                    && my < (area.y.max(0) as u16).saturating_add(area.height)
+                {
+                    let idx =
+                        (my.saturating_sub(area.y.max(0) as u16).saturating_sub(1)) as usize;
+                    if idx < self.items.len() {
+                        self.selected = idx;
+                        return EventResult::Consumed;
+                    }
+                }
+            }
+            return EventResult::Ignored;
+        }
         self.handle_key_event(event)
     }
 

@@ -152,17 +152,6 @@ impl ScrollState {
     }
 }
 
-/// Result of a double-Esc press check.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SuperPressResult {
-    /// Second press of WmToggleOverlay within passthrough window → open overlay.
-    DoubleSuper,
-    /// First press of WmToggleOverlay — deferred until timeout or second press.
-    Pending,
-    /// Not a WmToggleOverlay key — forward immediately.
-    Forward,
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct WindowSurface {
     pub full: Rect,
@@ -206,6 +195,7 @@ pub struct WindowManager {
     top_component: Option<Box<dyn WmComponent>>,
     bottom_component: Option<Box<dyn WmComponent>>,
     command_menu_component: Option<Box<dyn WmComponent>>,
+    fab_component: Option<Box<dyn WmComponent>>,
     #[allow(dead_code)]
     supported_menu_actions: Vec<TermWmAction>,
     top_claimed: Rect,
@@ -229,13 +219,6 @@ pub struct WindowManager {
     config: WmConfig,
     hint_visibility: HintVisibility,
     command_menu_opened_at: Option<Instant>,
-    /// The pending super-key event (no timer — managed by the TaskScheduler).
-    super_pending_event: Option<KeyEvent>,
-    /// Timestamp when the super-key timer was armed, used for panel countdown
-    /// display only.  The actual expiry is handled by the TaskScheduler.
-    super_pending_at: Option<Instant>,
-    /// ID of the super-passthrough timer in the TaskScheduler, for cancellation.
-    super_timer_id: Option<TaskId>,
     /// ID of the drag-snap timer in the TaskScheduler, for cancellation.
     drag_timer_id: Option<TaskId>,
     /// ID of the temporal-dwell tick timer, for cancellation and guard.
@@ -268,6 +251,21 @@ pub struct WindowManager {
     layout_dirty: bool,
     /// Active toast notifications
     notification_queue: NotificationQueue,
+    /// Universal input mode state machine
+    pub(crate) input_mode: crate::actions::WmInputMode,
+    /// Whether the FAB component is enabled
+    pub(crate) fab_enabled: bool,
+    /// Tap-swap targeting state
+    pub(crate) tap_swap_state: Option<TapSwapState>,
+}
+
+/// State for tap-to-swap targeting mode.
+#[derive(Debug, Clone)]
+pub(crate) struct TapSwapState {
+    /// The source window being moved
+    pub source_key: WindowKey,
+    /// The target window to swap with (highlighted)
+    pub target_key: Option<WindowKey>,
 }
 
 impl WindowManager {
@@ -559,6 +557,7 @@ impl WindowManager {
         top_component: Option<Box<dyn WmComponent>>,
         bottom_component: Option<Box<dyn WmComponent>>,
         command_menu_component: Option<Box<dyn WmComponent>>,
+        fab_component: Option<Box<dyn WmComponent>>,
         supported_menu_actions: Option<Vec<TermWmAction>>,
     ) -> Self {
         let supported_menu_actions = supported_menu_actions.unwrap_or_else(|| {
@@ -597,6 +596,7 @@ impl WindowManager {
             top_component,
             bottom_component,
             command_menu_component,
+            fab_component,
             supported_menu_actions,
             top_claimed: Rect::default(),
             bottom_claimed: Rect::default(),
@@ -618,9 +618,6 @@ impl WindowManager {
             hint_visibility: config.hint_visibility,
             config,
             command_menu_opened_at: None,
-            super_pending_event: None,
-            super_pending_at: None,
-            super_timer_id: None,
             drag_timer_id: None,
             temporal_timer_id: None,
             system_task_handle: None,
@@ -642,6 +639,9 @@ impl WindowManager {
             quit_requested: false,
             layout_dirty: true,
             notification_queue: NotificationQueue::default(),
+            input_mode: crate::actions::WmInputMode::Passthrough,
+            fab_enabled: true,
+            tap_swap_state: None,
         }
     }
 
@@ -668,6 +668,80 @@ impl WindowManager {
     /// Clear the layout dirty flag (after projection).
     pub fn clear_layout_dirty(&mut self) {
         self.layout_dirty = false;
+    }
+
+    /// Get the current input mode.
+    pub fn input_mode(&self) -> crate::actions::WmInputMode {
+        self.input_mode
+    }
+
+    /// Set the input mode.
+    pub fn set_input_mode(&mut self, mode: crate::actions::WmInputMode) {
+        self.input_mode = mode;
+    }
+
+    /// Check if the FAB is enabled.
+    pub fn fab_enabled(&self) -> bool {
+        self.fab_enabled
+    }
+
+    /// Set the FAB enabled state.
+    pub fn set_fab_enabled(&mut self, enabled: bool) {
+        self.fab_enabled = enabled;
+    }
+
+    /// Get a mutable reference to the FAB component.
+    pub fn fab_component_mut(&mut self) -> Option<&mut dyn WmComponent> {
+        self.fab_component.as_mut().map(|c| c.as_mut())
+    }
+
+    /// Begin tap-to-swap targeting for the given window.
+    pub fn begin_tap_swap(&mut self, source_key: WindowKey) {
+        self.tap_swap_state = Some(TapSwapState {
+            source_key,
+            target_key: None,
+        });
+        self.input_mode = crate::actions::WmInputMode::TapToSwapTargeting;
+    }
+
+    /// Select a target window for tap-to-swap.
+    pub fn select_tap_swap_target(&mut self, target_key: WindowKey) {
+        if let Some(ref mut state) = self.tap_swap_state {
+            state.target_key = Some(target_key);
+        }
+    }
+
+    /// Execute the tap-to-swap operation.
+    pub fn execute_tap_swap(&mut self, target_key: WindowKey) {
+        if let Some(state) = self.tap_swap_state.take() {
+            // Swap the nodes in the layout tree
+            if let Some(ref mut layout) = self.managed_layout {
+                layout.swap_nodes(&state.source_key, &target_key);
+            }
+            self.input_mode = crate::actions::WmInputMode::Passthrough;
+            self.mark_layout_dirty();
+        }
+    }
+
+    /// Cancel the tap-to-swap operation.
+    pub fn cancel_tap_swap(&mut self) {
+        self.tap_swap_state = None;
+        self.input_mode = crate::actions::WmInputMode::Passthrough;
+    }
+
+    /// Check if tap-swap is active.
+    pub fn tap_swap_active(&self) -> bool {
+        self.tap_swap_state.is_some()
+    }
+
+    /// Get the tap-swap source key.
+    pub fn tap_swap_source(&self) -> Option<WindowKey> {
+        self.tap_swap_state.as_ref().map(|s| s.source_key)
+    }
+
+    /// Get the tap-swap target key.
+    pub fn tap_swap_target(&self) -> Option<WindowKey> {
+        self.tap_swap_state.as_ref().and_then(|s| s.target_key)
     }
 
     /// Remove a key from the focus ring's order (called after closing a window).
@@ -1500,6 +1574,21 @@ impl WindowManager {
                 // Swallow all mouse events over notification area — no passthrough.
                 EventResult::Consumed
             }
+            HitTarget::Fab => {
+                let ctx = self
+                    .component_context_for(false, slotmap::DefaultKey::default())
+                    .with_screen_area(hit_rect);
+                if let Some(fab) = self.fab_component_mut() {
+                    fab.handle_events(&core_event, &ctx)
+                        .map(|action| (None, action))
+                } else {
+                    EventResult::Ignored
+                }
+            }
+            HitTarget::SessionManager => {
+                // Session manager taps are handled by the component.
+                EventResult::Consumed
+            }
         }
     }
 
@@ -1590,7 +1679,7 @@ impl WindowManager {
         };
         match p.handle_events(&down_event, &ctx) {
             crate::actions::EventResult::Action(action) => match action {
-                TermWmAction::WmToggleOverlay => {
+                TermWmAction::OpenCommandPalette => {
                     if self.command_menu_visible() {
                         self.close_command_menu();
                     } else {
@@ -1637,15 +1726,10 @@ impl WindowManager {
         self.pending_deadline = None;
         self.command_menu_visible = false;
         self.command_menu_opened_at = None;
-        self.super_pending_event = None;
-        self.super_pending_at = None;
-        if let Some(handle) = &self.system_task_handle {
-            if let Some(id) = self.super_timer_id.take() {
-                handle.cancel(id);
-            }
-            if let Some(id) = self.drag_timer_id.take() {
-                handle.cancel(id);
-            }
+        if let Some(handle) = &self.system_task_handle
+            && let Some(id) = self.drag_timer_id.take()
+        {
+            handle.cancel(id);
         }
         if let Some(menu) = &mut self.command_menu_component {
             menu.process_action(&ComponentAction::Restore);
@@ -1910,6 +1994,9 @@ impl WindowManager {
     }
 
     pub fn panel_active(&self) -> bool {
+        if self.is_monocle() {
+            return false;
+        }
         self.config.panel_enabled && self.top_component.as_ref().is_some_and(|p| p.visible())
     }
 
@@ -1979,81 +2066,6 @@ impl WindowManager {
         self.system_task_handle = Some(handle);
     }
 
-    /// Unified double-Esc press handler.
-    /// - `Pending`: first press of WmToggleOverlay — deferred, timeout will forward.
-    /// - `DoubleSuper`: second press within window — caller should open overlay.
-    /// - `Forward`: not a WmToggleOverlay key — forward immediately.
-    ///
-    /// Timer registration and cancellation are handled via the
-    /// `system_task_handle`.
-    pub fn handle_super_press(
-        &mut self,
-        key: &KeyEvent,
-        is_wm_toggle_key: bool,
-    ) -> SuperPressResult {
-        if is_wm_toggle_key {
-            if self.super_pending_at.is_some()
-                && self
-                    .super_pending_at
-                    .is_some_and(|at| at.elapsed() < self.config.super_passthrough_window)
-            {
-                // Second press within window — cancel timer, clear state
-                if let Some(handle) = &self.system_task_handle
-                    && let Some(id) = self.super_timer_id.take()
-                {
-                    handle.cancel(id);
-                }
-                self.super_pending_event = None;
-                self.super_pending_at = None;
-                return SuperPressResult::DoubleSuper;
-            }
-            // First press — register timer via scheduler
-            self.super_pending_event = Some(*key);
-            self.super_pending_at = Some(Instant::now());
-            if let Some(handle) = &self.system_task_handle {
-                if let Some(old) = self.super_timer_id.take() {
-                    handle.cancel(old);
-                }
-                self.super_timer_id = Some(handle.schedule_once(
-                    self.config.super_passthrough_window,
-                    SystemTask::SuperPassthrough {
-                        event: Event::Key(*key),
-                    },
-                ));
-            }
-            SuperPressResult::Pending
-        } else {
-            // Non-toggle key — clear pending state
-            if let Some(handle) = &self.system_task_handle
-                && let Some(id) = self.super_timer_id.take()
-            {
-                handle.cancel(id);
-            }
-            self.super_pending_event = None;
-            self.super_pending_at = None;
-            SuperPressResult::Forward
-        }
-    }
-
-    /// Clear the pending super-key state (called by the runner when the
-    /// scheduler fires a `SuperPassthrough` task).
-    pub fn clear_super_pending(&mut self) {
-        self.super_pending_event = None;
-        self.super_pending_at = None;
-        self.super_timer_id = None;
-    }
-
-    /// Time remaining for the panel countdown display.
-    /// Returns `None` when no super-key is pending or the timer has expired.
-    pub fn super_pending_remaining(&self) -> Option<Duration> {
-        let at = self.super_pending_at?;
-        let elapsed = at.elapsed();
-        if elapsed >= self.config.super_passthrough_window {
-            return None;
-        }
-        Some(self.config.super_passthrough_window.saturating_sub(elapsed))
-    }
-
     /// Time remaining before the drag snap preview is auto-applied.
     /// Returns `None` when the feature is disabled or no drag is active.
     pub fn drag_snap_remaining(&self) -> Option<Duration> {
@@ -2091,22 +2103,6 @@ impl WindowManager {
         self.drag_snap = None;
         self.snap_preview = None;
         self.snap_projection_cache = None;
-    }
-
-    pub fn super_passthrough_active(&self) -> bool {
-        self.super_passthrough_remaining().is_some()
-    }
-
-    pub fn super_passthrough_remaining(&self) -> Option<Duration> {
-        if !self.command_menu_visible() {
-            return None;
-        }
-        let opened_at = self.command_menu_opened_at?;
-        let elapsed = opened_at.elapsed();
-        if elapsed >= self.config.super_passthrough_window {
-            return None;
-        }
-        Some(self.config.super_passthrough_window.saturating_sub(elapsed))
     }
 
     // ── Event Routing & Update Accessors ─────────────────────────────
@@ -2448,6 +2444,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let key = wm.create_window(Box::new(crate::components::NoopComponent));
         let node = LayoutNode::leaf(key);
@@ -2477,6 +2474,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -2531,6 +2529,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_floating_resize_offscreen(true);
@@ -2567,6 +2566,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -2608,6 +2608,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.register_managed_layout(LayoutRect {
@@ -2639,6 +2640,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -2702,6 +2704,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         let target_rect = LayoutRect {
@@ -2746,6 +2749,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -2807,6 +2811,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_floating_resize_offscreen(true);
@@ -2847,6 +2852,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -2978,6 +2984,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let debug_key = wm.set_system_window(Box::new(DummyComponent));
         wm.set_panel_visible(false);
@@ -3053,6 +3060,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3134,6 +3142,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3309,6 +3318,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         let full = Rect {
@@ -3347,6 +3357,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3399,6 +3410,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
 
@@ -3439,6 +3451,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3486,6 +3499,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.focus_app_window(keys[0]);
@@ -3498,6 +3512,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3523,6 +3538,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         let key = keys[42];
@@ -3540,6 +3556,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3562,6 +3579,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3661,6 +3679,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -3717,6 +3736,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let _keys = make_keys(&mut wm, 100);
         assert!(wm.drag_snap_remaining().is_none());
@@ -3731,6 +3751,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let _keys = make_keys(&mut wm, 100);
         assert!(wm.drag_snap_remaining().is_none());
@@ -3741,6 +3762,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3777,6 +3799,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.mouse_capture = Some(MouseCaptureState::DraggingWindow {
@@ -3797,6 +3820,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3831,6 +3855,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         wm.apply_drag_snap_if_pending();
         // The method should not panic when there is no drag in progress.
@@ -3846,6 +3871,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3930,6 +3956,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let _keys = make_keys(&mut wm, 100);
         assert_eq!(wm.power_profile, PowerProfile::PowerSaver);
@@ -3947,6 +3974,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -3992,6 +4020,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -4076,6 +4105,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -4197,6 +4227,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -4262,6 +4293,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -4383,6 +4415,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let key = wm.create_window(Box::new(crate::components::NoopComponent));
         assert_eq!(wm.window_state(key), Some(WindowState::Realized));
@@ -4414,6 +4447,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -4439,6 +4473,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -4459,6 +4494,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -4505,6 +4541,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -4540,6 +4577,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -4603,6 +4641,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -4639,6 +4678,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -4704,6 +4744,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -4829,6 +4870,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -4982,6 +5024,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         wm.set_panel_visible(false);
 
@@ -5040,6 +5083,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -5219,6 +5263,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         wm.set_panel_visible(false);
         let keys = make_keys(&mut wm, 100);
@@ -5265,6 +5310,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -5321,6 +5367,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -5382,6 +5429,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -5436,6 +5484,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -5522,6 +5571,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert!(!wm.exit_confirm_visible());
 
@@ -5556,6 +5606,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -5598,6 +5649,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let event = Event::Key(crate::events::KeyEvent {
             code: crate::events::KeyCode::Esc,
@@ -5616,6 +5668,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         wm.fold_menu();
     }
@@ -5625,6 +5678,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -5646,6 +5700,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         wm.open_command_menu_no_passthrough();
         assert!(wm.command_menu_visible());
@@ -5657,6 +5712,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -5679,6 +5735,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let event = Event::Key(crate::events::KeyEvent {
             code: crate::events::KeyCode::Esc,
@@ -5693,6 +5750,7 @@ mod tests {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,

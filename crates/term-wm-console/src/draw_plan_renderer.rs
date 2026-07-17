@@ -83,6 +83,11 @@ impl DrawPlanRenderer {
         hitbox_registry: &mut HitboxRegistry,
     ) {
         for region in draw_plan.regions() {
+            // Skip hidden regions (used for monocle mode culling)
+            if region.hidden {
+                continue;
+            }
+
             let area = layout_rect_to_rect(region.bounds);
 
             match &region.region_type {
@@ -114,6 +119,24 @@ impl DrawPlanRenderer {
                         .block(block)
                         .wrap(Wrap { trim: true })
                         .render(area, target_buf);
+                }
+                RegionType::FloatingWindow(key) => {
+                    // Floating windows are rendered like regular windows
+                    if let Some(component) = wm.component_for_key_mut(*key) {
+                        self.render_direct_to_buffer(target_buf, area, component, region);
+                    }
+                }
+                RegionType::Panel(_) => {
+                    // Panels are rendered by the WindowManager
+                    // This is a placeholder for now
+                }
+                RegionType::Overlay => {
+                    // Overlays are rendered by the WindowManager
+                    // This is a placeholder for now
+                }
+                RegionType::TargetHighlight(_key) => {
+                    // Target highlight is a pulsing border overlay
+                    // This is a placeholder for now
                 }
             }
         }
@@ -204,6 +227,11 @@ impl DrawPlanRenderer {
         hitbox_registry: &mut HitboxRegistry,
     ) {
         for region in draw_plan.regions() {
+            // Skip hidden regions (used for monocle mode culling)
+            if region.hidden {
+                continue;
+            }
+
             let area = layout_rect_to_rect(region.bounds);
 
             match &region.region_type {
@@ -239,6 +267,24 @@ impl DrawPlanRenderer {
                         .block(block)
                         .wrap(Wrap { trim: true })
                         .render(area, buf);
+                }
+                RegionType::FloatingWindow(key) => {
+                    // Floating windows are rendered like regular windows
+                    if let Some(component) = wm.component_for_key_mut(*key) {
+                        self.render_direct(frame, area, component, region);
+                    }
+                }
+                RegionType::Panel(_) => {
+                    // Panels are rendered by the WindowManager
+                    // This is a placeholder for now
+                }
+                RegionType::Overlay => {
+                    // Overlays are rendered by the WindowManager
+                    // This is a placeholder for now
+                }
+                RegionType::TargetHighlight(_key) => {
+                    // Target highlight is a pulsing border overlay
+                    // This is a placeholder for now
                 }
             }
         }
@@ -355,19 +401,9 @@ impl Default for DrawPlanRenderer {
 
 pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut WindowManager) {
     let status_line = if wm.command_menu_visible() {
-        let esc_state = if let Some(remaining) = wm.super_passthrough_remaining() {
-            format!("Super passthrough: active ({}ms)", remaining.as_millis())
-        } else {
-            "Super passthrough: inactive".to_string()
-        };
-        Some(format!("{esc_state} · Tab/Shift-Tab: cycle windows"))
+        Some("Tab/Shift-Tab: cycle windows".to_string())
     } else {
-        wm.super_pending_remaining().map(|remaining| {
-            format!(
-                "Super pending: {}ms · press Super again within window to open menu",
-                remaining.as_millis()
-            )
-        })
+        None
     };
     let display = wm.build_display_order();
     let titles_map: std::collections::BTreeMap<WindowKey, String> =
@@ -443,6 +479,58 @@ pub fn overlay_shadow_data(
 /// Render all active overlays (command menu, help, exit confirm).
 pub fn render_overlays(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut WindowManager) {
     let full_area = wm.managed_area();
+
+    // Panel overlay in monocle mode — render BEFORE command menu so the panel
+    // header (including hamburger icon) appears as a visual context layer.
+    // Use explicit SetPanelActive(true/false) because ComponentContext's active
+    // flag does NOT control WmTopPanelComponent's internal self.active guard
+    // (set at wm_top_panel.rs:462 via SetPanelActive action).
+    if wm.is_monocle() && wm.command_menu_visible() {
+        let display = wm.build_display_order();
+        let titles_map: std::collections::BTreeMap<WindowKey, String> =
+            wm.window_titles().into_iter().collect();
+        let focus_current = wm.focused_window();
+        let mc_enabled = wm.mouse_capture_enabled();
+        let cb_enabled = wm.clipboard_enabled();
+        let ws_enabled = wm.window_selection_enabled();
+        let sel_active = wm.selection_active();
+        let sel_dragging = wm.selection_dragging();
+
+        let (top, registry) = wm.top_and_registry();
+        if let Some(p) = top {
+            p.process_action(&ComponentAction::SetPanelActive(true));
+            p.process_action(&ComponentAction::SetWindowLabels(titles_map));
+            p.process_action(&ComponentAction::SetTopPanelState(Box::new(
+                TopPanelState {
+                    focus_current: Some(focus_current),
+                    display_order: display,
+                    status_line: Some("Tab/Shift-Tab: cycle windows".to_string()),
+                    mouse_capture_enabled: mc_enabled,
+                    clipboard_enabled: cb_enabled,
+                    window_selection_enabled: ws_enabled,
+                    selection_active: sel_active,
+                    selection_dragging: sel_dragging,
+                    menu_open: true,
+                },
+            )));
+
+            let top_area = LayoutRect {
+                x: 0,
+                y: 0,
+                width: full_area.width,
+                height: 1,
+            };
+            let mut local_hb = HitboxRegistry::new();
+            let ctx = ComponentContext::new(false).with_screen_area(top_area);
+            p.render(backend, top_area, &ctx, &mut local_hb);
+            registry.merge(local_hb);
+
+            // Revert to layout-derived state — the next render_panels call will
+            // set the correct active state based on panel_active().
+            p.process_action(&ComponentAction::SetPanelActive(false));
+        }
+    }
+
     let hover_pos = wm.hover_pos();
 
     // Compute anchor from top component
@@ -1398,7 +1486,7 @@ mod tests {
     fn make_wm() -> WindowManager {
         let config = WmConfig::default();
         let app_ctx = Arc::new(AppContext::new("test", "0.1.0"));
-        WindowManager::with_config(config, app_ctx, None, None, None, None)
+        WindowManager::with_config(config, app_ctx, None, None, None, None, None)
     }
 
     fn make_buf(width: u16, height: u16) -> Buffer {

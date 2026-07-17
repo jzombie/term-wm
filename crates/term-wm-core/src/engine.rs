@@ -43,6 +43,21 @@ impl CoreEngine {
         // Generate new regions from layout state
         self.generate_regions(width, height, wm);
 
+        // Apply monocle mode if active
+        // This hides non-focused windows and reorders Z-indices
+        // without mutating WindowManager.z_order
+        if wm.is_monocle() {
+            let focused_key = wm.focused_window();
+            let screen = LayoutRect {
+                x: 0,
+                y: 0,
+                width: width as u16,
+                height: height as u16,
+            };
+            self.draw_plan.apply_monocle_culling(focused_key, screen);
+            self.draw_plan.apply_monocle_z_order(focused_key);
+        }
+
         // Sort by z-index for correct layering
         self.draw_plan.sort_by_z_index();
 
@@ -54,7 +69,7 @@ impl CoreEngine {
     }
 
     /// Generate render regions from current layout state.
-    fn generate_regions(&mut self, _width: u32, _height: u32, wm: &WindowManager) {
+    fn generate_regions(&mut self, _width: u32, _height: u32, wm: &mut WindowManager) {
         // 1. Generate terminal window regions
         for &window_key in &wm.managed_draw_order {
             let region = wm.full_region_for_key(window_key);
@@ -77,13 +92,16 @@ impl CoreEngine {
                 z_index: 0, // Windows at base layer
                 dimmed: !is_focused,
                 region_type: RegionType::Window(window_key),
+                hidden: false,
             });
         }
 
+        // TODO: Remove?
         // 2. Generate panel regions (top and bottom)
         // Panels are rendered by the WindowManager, not as window regions
         // Their z-index is higher than windows
 
+        // TODO: Remove?
         // 3. Generate overlay regions (if active)
         // Overlays are rendered by the WindowManager
         // Their z-index is highest
@@ -165,6 +183,7 @@ fn generate_notification_regions(plan: &mut DrawPlan, wm: &WindowManager) {
             z_index: NOTIFICATION_Z_INDEX,
             dimmed: false,
             region_type: RegionType::Notification(Arc::clone(&notification.message)),
+            hidden: false,
         });
 
         y_offset = y_offset.saturating_add(h).saturating_add(GAP);

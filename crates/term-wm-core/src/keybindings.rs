@@ -86,7 +86,7 @@ impl Default for KeyBindings {
             CloseHelp: [ (KeyCode::Esc, KeyModifiers::NONE), (KeyCode::Enter, KeyModifiers::NONE), (KeyCode::Char('q'), KeyModifiers::NONE) ],
             FocusNext: [ (KeyCode::Tab, KeyModifiers::NONE) ],
             FocusPrev: [ (KeyCode::Tab, KeyModifiers { shift: true, control: false, alt: false }) ],
-            WmToggleOverlay: [ (KeyCode::Esc, KeyModifiers::NONE) ],
+            OpenCommandPalette: [ (KeyCode::Char('g'), KeyModifiers { control: true, shift: false, alt: false }) ],
             MenuUp: [ (KeyCode::Up, KeyModifiers::NONE) ],
             MenuDown: [ (KeyCode::Down, KeyModifiers::NONE) ],
             MenuSelect: [ (KeyCode::Enter, KeyModifiers::NONE) ],

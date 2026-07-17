@@ -20,7 +20,7 @@ Filename Conventions
 - Do NOT include the word `component` in filenames (avoid `terminal_component.rs`).
 
 - Window-manager-specific components (in the `term-wm-sys-ui-components` crate) must use the `wm_` filename prefix and `Wm` type prefix.
-	- Example: `WmDebugLogComponent` -> `wm_debug_log.rs`, `WmMenuOverlay` -> `wm_menu_overlay.rs`.
+	- Example: `WmDebugLogComponent` -> `wm_debug_log.rs`, `WmCommandPaletteOverlay` -> `wm_menu_overlay.rs`.
 	- This applies to top-level files and files within category subdirectories (e.g., `sys/wm_help_overlay.rs`).
 	- Internal types (handles, writers, etc.) that are not components do not require the `Wm` prefix.
 

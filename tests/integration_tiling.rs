@@ -36,6 +36,7 @@ fn wm_with_two_windows() -> (WindowManager, [WindowKey; 2]) {
         None,
         None,
         None,
+        None,
     );
     wm.set_panel_visible(false);
     let k0 = wm.create_window(Box::new(NoopComponent));
@@ -481,6 +482,7 @@ mod spatial_isolation {
             None,
             None,
             None,
+            None,
         );
         wm.set_panel_visible(false);
         let k0 = wm.create_window(Box::new(NoopComponent));
@@ -626,6 +628,7 @@ mod drag_snap_pipeline {
         let mut wm = WindowManager::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,
@@ -1236,6 +1239,7 @@ mod drag_snap_pipeline {
             None,
             None,
             None,
+            None,
         );
         wm.set_panel_visible(false);
 
@@ -1680,6 +1684,7 @@ mod floating_tiled_separation {
         let mut wm = WindowManager::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
+            None,
             None,
             None,
             None,

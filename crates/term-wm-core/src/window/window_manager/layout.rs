@@ -158,6 +158,22 @@ impl WindowManager {
         self.managed_layout = None;
     }
 
+    /// Update monocle mode state based on terminal width.
+    /// Called during resize events to auto-activate/deactivate monocle mode.
+    pub fn update_monocle_mode(&mut self, terminal_width: u16) {
+        if let Some(ref mut layout) = self.managed_layout {
+            layout.update_monocle_state(terminal_width);
+        }
+    }
+
+    /// Check if monocle mode is active.
+    pub fn is_monocle(&self) -> bool {
+        self.managed_layout
+            .as_ref()
+            .map(|l| l.is_monocle())
+            .unwrap_or(false)
+    }
+
     pub fn set_panel_visible(&mut self, visible: bool) {
         if let Some(p) = &mut self.top_component {
             p.set_visible(visible);
@@ -170,11 +186,9 @@ impl WindowManager {
 
     pub fn register_managed_layout(&mut self, area: Rect) {
         self.last_frame_area = area;
-        let active_layer = if self.config.wm_command_menu_enabled && self.command_menu_visible() {
-            ActionLayer::WmMode
-        } else {
-            ActionLayer::Global
-        };
+        // All actions are now WmMode — the command palette is triggered
+        // via FAB tap or explicit keyboard shortcut, not a global layer.
+        let active_layer = ActionLayer::WmMode;
         match self.hint_visibility {
             crate::wm_config::HintVisibility::Always => {
                 if self.config.wm_command_menu_enabled {
