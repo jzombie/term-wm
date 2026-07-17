@@ -11,8 +11,8 @@ use term_wm_layout_engine::LayoutRect;
 use term_wm_core::{
     actions::{EventResult, TermWmAction},
     components::{
-        Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse,
-        MenuItem, Overlay, WmComponent,
+        Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse, MenuItem,
+        Overlay, WmComponent,
     },
     layout::rect_contains,
     window::WindowKey,
@@ -56,7 +56,10 @@ impl WmCommandPaletteOverlay {
         Self {
             menu: PlacementContainerComponent::new(
                 MenuComponent::new(),
-                Placement::Centered { width: 20, height: 3 },
+                Placement::Centered {
+                    width: 20,
+                    height: 3,
+                },
             ),
             outlined: Cell::new(false),
             outlined_at: RefCell::new(None),
@@ -160,7 +163,6 @@ impl WmCommandPaletteOverlay {
         );
         block.render(ratatui_menu_bounds, buffer);
     }
-
 }
 
 impl Component<TermWmAction> for WmCommandPaletteOverlay {

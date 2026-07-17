@@ -219,8 +219,7 @@ impl Component<TermWmAction> for MenuComponent {
                     && my >= (area.y.max(0) as u16).saturating_add(1)
                     && my < (area.y.max(0) as u16).saturating_add(area.height)
                 {
-                    let idx =
-                        (my.saturating_sub(area.y.max(0) as u16).saturating_sub(1)) as usize;
+                    let idx = (my.saturating_sub(area.y.max(0) as u16).saturating_sub(1)) as usize;
                     if idx < self.items.len() {
                         self.selected = idx;
                         return EventResult::Consumed;
