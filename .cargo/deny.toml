@@ -2,7 +2,14 @@
 # RUSTSEC-2026-0192: ttf-parser is unmaintained but still a transitive dep of
 # resvg/usvg (used for SVG rasterization in term-wm-ui-components).
 # No safe upgrade available until resvg updates its font crate dependency.
-ignore = ["RUSTSEC-2026-0192"]
+# RUSTSEC-2026-0192: ttf-parser is unmaintained but still a transitive dep of
+# resvg/usvg (used for SVG rasterization in term-wm-ui-components).
+# No safe upgrade available until resvg updates its font crate dependency.
+#
+# RUSTSEC-2026-0206: rustybuzz is unmaintained — same root cause as above.
+# Both are transitive deps of resvg/usvg 0.47.0 (latest).
+# Tracked at: https://github.com/linebender/resvg
+ignore = ["RUSTSEC-2026-0192", "RUSTSEC-2026-0206"]
 
 [licenses]
 allow = [
@@ -14,6 +21,7 @@ allow = [
   "BSL-1.0",
   "MIT",
   "Unicode-3.0",
+  "Unlicense",
   "Zlib",
 ]
 confidence-threshold = 0.8
