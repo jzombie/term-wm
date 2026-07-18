@@ -49,6 +49,10 @@ pub struct ComponentContext {
     /// Set during event dispatch by the WindowManager after a hit-test.
     /// Components use this for self-identification: `ctx.active_hitbox() == Some(self.hitbox_id)`.
     active_hitbox: Option<HitboxId>,
+    /// The HitboxId of the component that currently holds keyboard focus
+    /// within the focused window. Set by the WindowManager when routing
+    /// keyboard events. Components check this to accept/reject key input.
+    keyboard_focus_id: Option<HitboxId>,
 }
 
 /// Viewport metadata describing how the component is projected into a
@@ -228,6 +232,7 @@ impl ComponentContext {
                 .clone(),
             screen_area: None,
             active_hitbox: None,
+            keyboard_focus_id: None,
         }
     }
 
@@ -373,6 +378,20 @@ impl ComponentContext {
     pub fn with_active_hitbox(&self, id: HitboxId) -> Self {
         let mut ctx = self.clone();
         ctx.active_hitbox = Some(id);
+        ctx
+    }
+
+    /// Returns the HitboxId of the component holding keyboard focus
+    /// within the focused window. Set by the WindowManager when routing
+    /// keyboard events.
+    pub fn keyboard_focus_id(&self) -> Option<HitboxId> {
+        self.keyboard_focus_id
+    }
+
+    /// Return a new `ComponentContext` with a keyboard focus ID.
+    pub fn with_keyboard_focus_id(&self, id: HitboxId) -> Self {
+        let mut ctx = self.clone();
+        ctx.keyboard_focus_id = Some(id);
         ctx
     }
 

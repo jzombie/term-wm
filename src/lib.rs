@@ -384,20 +384,19 @@ pub fn render_app(
     render_overlays(backend, wm);
 
     // Register notification hitboxes — swallows mouse events over toast area
-    // Use a static hitbox_id for the notification area
-    {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NOTIFICATION_HITBOX_ID: AtomicU64 = AtomicU64::new(0);
-        let notif_id =
-            term_wm_core::hitbox_registry::HitboxId(NOTIFICATION_HITBOX_ID.load(Ordering::Relaxed));
+    // Uses the notification component's persistent hitbox_id via render.
+    if let Some(nc) = wm.notification_component_mut() {
+        let ctx = term_wm_core::components::ComponentContext::new(false);
+        let mut local_hb = HitboxRegistry::new();
         for region in draw_plan.regions() {
             if matches!(
                 region.region_type,
                 term_wm_core::draw_plan::RegionType::Notification(_)
             ) {
-                wm.hitbox_registry_mut().register(notif_id, region.bounds);
+                nc.render(backend, region.bounds, &ctx, &mut local_hb);
             }
         }
+        wm.hitbox_registry_mut().merge(local_hb);
     }
 
     // Cursor overlay — MUST be last (highest Z-order) so it paints over

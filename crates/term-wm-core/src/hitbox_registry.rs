@@ -8,7 +8,7 @@ use crate::mouse_coord::MousePosition;
 ///
 /// Assigned once at entity construction time and never changes across frames.
 /// The `HitboxRegistry` stores only these IDs — no domain knowledge.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct HitboxId(pub u64);
 
 impl HitboxId {

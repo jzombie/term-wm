@@ -87,6 +87,11 @@ pub(crate) enum MouseCaptureState {
         key: WindowKey,
         /// Immutable snapshot of the hitbox area at Press time.
         screen_area: LayoutRect,
+        /// The exact HitboxId of the component that initiated the capture.
+        /// Used during continuation to inject `active_hitbox` into the context,
+        /// so the component's occlusion check passes even when the mouse leaves
+        /// the original hitbox area.
+        hitbox_id: crate::hitbox_registry::HitboxId,
     },
     /// A Press hit a tiling layout split handle — Drag/Release events route to
     /// `TilingLayout::handle_event()` for split-ratio adjustment.
@@ -251,6 +256,9 @@ pub struct WindowManager {
     layout_dirty: bool,
     /// Active toast notifications
     notification_queue: NotificationQueue,
+    /// Notification area component — swallows mouse events over toast regions.
+    /// Uses blind delegation: WM calls `handle_events` without peeking at ID.
+    notification_component: Option<Box<dyn WmComponent>>,
     /// Universal input mode state machine
     pub(crate) input_mode: crate::actions::WmInputMode,
     /// Whether the FAB component is enabled
@@ -646,6 +654,7 @@ impl WindowManager {
             quit_requested: false,
             layout_dirty: true,
             notification_queue: NotificationQueue::default(),
+            notification_component: None,
             input_mode: crate::actions::WmInputMode::Passthrough,
             fab_enabled: true,
             tap_swap_state: None,
@@ -821,10 +830,16 @@ impl WindowManager {
     /// window's direct-mode state so children (scroll view, terminal) can
     /// adapt their rendering and event handling automatically.
     pub fn component_context_for(&self, focused: bool, key: WindowKey) -> ComponentContext {
-        self.component_context(focused)
+        let mut ctx = self.component_context(focused)
             .with_direct_mode(self.direct_mode(key))
             .with_window_key(key)
-            .with_screen_area(self.region(key))
+            .with_screen_area(self.region(key));
+        // Inject the window's active keyboard focus into the context.
+        if let Some(window) = self.windows.get(key)
+            && let Some(focus_id) = window.active_keyboard_focus {
+                ctx = ctx.with_keyboard_focus_id(focus_id);
+            }
+        ctx
     }
 
     /// Number of overlays that will be rendered this frame.
@@ -992,6 +1007,7 @@ impl WindowManager {
             Some(MouseCaptureState::ComponentInteraction {
                 key: WindowKey::default(),
                 screen_area: LayoutRect::default(),
+                hitbox_id: crate::hitbox_registry::HitboxId::default(),
             })
         } else {
             None
@@ -1274,11 +1290,20 @@ impl WindowManager {
                         MouseEventKind::Release(_) => (true, false),
                         _ => (false, true),
                     },
-                    MouseCaptureState::ComponentInteraction { key, screen_area } => {
+                    MouseCaptureState::ComponentInteraction {
+                        key,
+                        screen_area,
+                        hitbox_id,
+                    } => {
+                        // Invalidate: drop capture if the target window was closed.
+                        if !self.windows.contains_key(*key) {
+                            return EventResult::Ignored;
+                        }
                         let focused = *self.focus.current() == *key;
                         let ctx = self
                             .component_context_for(focused, *key)
-                            .with_screen_area(*screen_area);
+                            .with_screen_area(*screen_area)
+                            .with_active_hitbox(*hitbox_id);
                         let core_event = Event::Mouse(MouseEvent {
                             kind: *kind,
                             column: col,
@@ -1295,6 +1320,8 @@ impl WindowManager {
                         } else {
                             false
                         };
+                        // Retain capture unconditionally unless a release event
+                        // terminates the sequence.
                         (consumed, !matches!(kind, MouseEventKind::Release(_)))
                     }
                     MouseCaptureState::LayoutHandle => match kind {
@@ -1643,7 +1670,21 @@ impl WindowManager {
             return EventResult::Ignored;
         }
 
-        // --- Component routing: windows, panels, fab, overlays, etc. ---
+        // --- Blind delegation: notifications, windows, panels, etc. ---
+
+        // Notification — highest visual Z-order.
+        // Blind delegation: no hitbox_id peek. The component checks
+        // ctx.active_hitbox() == self.hitbox_id internally.
+        {
+            let ctx = self.component_context(false)
+                .with_screen_area(hit_rect)
+                .with_active_hitbox(hitbox_id);
+            if let Some(nc) = self.notification_component.as_mut() {
+                if nc.handle_events(&core_event, &ctx).is_consumed() {
+                    return EventResult::Consumed;
+                }
+            }
+        }
 
         // Windows (front-to-back in draw order)
         for &key in self.managed_draw_order.iter().rev() {
@@ -1666,6 +1707,7 @@ impl WindowManager {
                     self.mouse_capture = Some(MouseCaptureState::ComponentInteraction {
                         key,
                         screen_area: hit_rect,
+                        hitbox_id,
                     });
                 }
                 return result.map(|action| (Some(key), action));
@@ -2234,9 +2276,16 @@ impl WindowManager {
         let mut queue = VecDeque::new();
         queue.push_back((key, action));
         while let Some((k, act)) = queue.pop_front() {
-            let ctx = self.component_context_for(true, k);
-            if let Some(comp) = self.component_for_key_mut(k) {
-                comp.update(act, &ctx, &mut queue);
+            match &act {
+                TermWmAction::RequestKeyboardFocus(id) => {
+                    self.set_keyboard_focus(k, *id);
+                }
+                _ => {
+                    let ctx = self.component_context_for(true, k);
+                    if let Some(comp) = self.component_for_key_mut(k) {
+                        comp.update(act, &ctx, &mut queue);
+                    }
+                }
             }
         }
     }
@@ -2372,6 +2421,24 @@ impl WindowManager {
     /// Read-only access to the notification queue.
     pub fn notifications(&self) -> &NotificationQueue {
         &self.notification_queue
+    }
+
+    /// Set the notification area component (called during app init).
+    pub fn set_notification_component(&mut self, comp: Box<dyn WmComponent>) {
+        self.notification_component = Some(comp);
+    }
+
+    /// Get a mutable reference to the notification component.
+    pub fn notification_component_mut(&mut self) -> Option<&mut dyn WmComponent> {
+        self.notification_component.as_mut().map(|c| c.as_mut())
+    }
+
+    /// Set the keyboard focus for a window. Called when a component returns
+    /// `RequestKeyboardFocus` action.
+    pub fn set_keyboard_focus(&mut self, key: WindowKey, hitbox_id: crate::hitbox_registry::HitboxId) {
+        if let Some(window) = self.windows.get_mut(key) {
+            window.active_keyboard_focus = Some(hitbox_id);
+        }
     }
 }
 

@@ -85,6 +85,9 @@ fn drain_action_queue<A: WindowManagerHost>(
                     app.wm().open_command_menu();
                 }
             }
+            TermWmAction::RequestKeyboardFocus(id) => {
+                app.wm().set_keyboard_focus(key, id);
+            }
             action => {
                 let ctx = app.wm().component_context_for(true, key);
                 if let Some(comp) = app.wm().component_for_key_mut(key) {

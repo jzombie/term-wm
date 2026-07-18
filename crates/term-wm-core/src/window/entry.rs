@@ -41,6 +41,10 @@ pub struct Window {
     pub component: Box<dyn Component<TermWmAction>>,
     /// Persistent HitboxId for the window's content area.
     pub content_hitbox_id: HitboxId,
+    /// Which leaf component within this window currently holds keyboard focus.
+    /// Set when a component returns `TermWmAction::RequestKeyboardFocus`.
+    /// Cleared automatically when `FocusRing` switches to a different window.
+    pub active_keyboard_focus: Option<HitboxId>,
 }
 
 impl Window {
@@ -57,6 +61,7 @@ impl Window {
             is_maximized: false,
             component,
             content_hitbox_id: HitboxId::new(),
+            active_keyboard_focus: None,
         }
     }
 
