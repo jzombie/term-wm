@@ -46,9 +46,9 @@ mod tests {
     fn bitmask_filter_check() {
         let required = ContextMask::HAS_FOCUS | ContextMask::CAN_SPLIT;
         let app = ContextMask::HAS_FOCUS | ContextMask::CAN_SPLIT | ContextMask::HAS_PANES;
-        assert_eq!((app & required) == required, true);
+        assert!((app & required) == required);
 
         let app_partial = ContextMask::HAS_FOCUS | ContextMask::HAS_PANES;
-        assert_eq!((app_partial & required) == required, false);
+        assert!(!((app_partial & required) == required));
     }
 }

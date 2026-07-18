@@ -19,9 +19,11 @@ pub struct WmCommandPaletteComponent {
     palette: PlacementContainerComponent<CommandPaletteComponent>,
     managed_area: LayoutRect,
     last_action: Option<TermWmAction>,
-    // Persistent state — survives palette open/close cycles.
+    // Command registry — stores all available commands in the generational arena.
     // Owned here because WmCommandPaletteComponent has the same lifecycle
     // as WindowManager (created in AppBuilder::build, lives until shutdown).
+    pub registry: CommandRegistry,
+    // Persistent state — survives palette open/close cycles.
     pub matcher: FuzzyMatch,
     pub mru: MruRanker,
 }
@@ -52,9 +54,33 @@ impl WmCommandPaletteComponent {
             ),
             managed_area: LayoutRect::default(),
             last_action: None,
+            registry: CommandRegistry::new(),
             matcher: FuzzyMatch::new(),
             mru: MruRanker::new(),
         }
+    }
+
+    /// Populate the registry from the old-style MenuItem list.
+    /// This provides backward compatibility during the transition.
+    pub fn set_items(&mut self, items: Vec<term_wm_core::components::MenuItem<TermWmAction>>) {
+        use term_wm_core::command_menu::{CommandAction, CommandName, CommandNode, ContextMask};
+        for item in items {
+            let stable_id = format!(
+                "core:{}",
+                item.label.replace(' ', "_").to_lowercase()
+            );
+            let node = CommandNode {
+                stable_id,
+                name: CommandName::Static(item.label.to_string()),
+                description: None,
+                action: CommandAction::AppAction(item.action),
+                icon: item.icon,
+                required_context: ContextMask::NONE,
+                owner_id: None,
+            };
+            self.registry.register(node);
+        }
+        self.palette.inner_mut().mark_data_dirty();
     }
 
     pub fn set_managed_area(&mut self, area: LayoutRect) {
@@ -74,15 +100,14 @@ impl WmCommandPaletteComponent {
     }
 
     /// Rebuild data cache and re-rank if dirty. Called before each render.
-    /// The runner must call this with the CommandRegistry to ensure fresh data.
-    pub fn refresh_if_dirty(&mut self, registry: &CommandRegistry) {
+    /// Uses the internal registry to populate the palette.
+    pub fn refresh_if_dirty(&mut self) {
         let inner = self.palette.inner_mut();
         if inner.data_dirty {
-            inner.rebuild_data_cache(registry);
+            inner.rebuild_data_cache(&self.registry);
         }
         if inner.query_dirty {
-            let inner = self.palette.inner_mut();
-            inner.rerank_with_registry(&mut self.matcher, &self.mru, registry);
+            inner.rerank_with_registry(&mut self.matcher, &self.mru, &self.registry);
         }
     }
 
