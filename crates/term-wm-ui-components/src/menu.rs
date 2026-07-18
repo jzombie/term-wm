@@ -16,6 +16,7 @@ pub struct MenuComponent {
     items: Vec<MenuItem<TermWmAction>>,
     selected: usize,
     nav_keys: KeyBindings,
+    pub show_header: bool,
 }
 
 impl MenuComponent {
@@ -24,6 +25,7 @@ impl MenuComponent {
             items: Vec::new(),
             selected: 0,
             nav_keys: KeyBindings::default(),
+            show_header: true,
         }
     }
 
@@ -94,6 +96,7 @@ impl MenuComponent {
         area: Rect,
         hovered_idx: Option<usize>,
         theme: &term_wm_core::theme::Theme,
+        offset_y: usize,
     ) {
         if self.items.is_empty() || area.width < 3 || area.height < 3 {
             return;
@@ -116,7 +119,10 @@ impl MenuComponent {
 
         let inner_x = area.x.saturating_add(1);
         let inner_width = area.width.saturating_sub(2).max(1);
-        let visible_items = (area.height.saturating_sub(1)).min(self.items.len() as u16) as usize;
+        let header_offset: u16 = if self.show_header { 1 } else { 0 };
+        let visible_items = (area.height.saturating_sub(header_offset))
+            .min(self.items.len().saturating_sub(offset_y).max(0) as u16)
+            as usize;
 
         for row in 0..area.height {
             let y = area.y.saturating_add(row);
@@ -137,12 +143,16 @@ impl MenuComponent {
         }
 
         for idx in 0..visible_items {
-            let y = area.y.saturating_add(idx as u16 + 1);
+            let abs_idx = idx + offset_y;
+            if abs_idx >= self.items.len() {
+                break;
+            }
+            let y = area.y.saturating_add(idx as u16 + header_offset);
             if y < bounds.y || y >= bounds.y.saturating_add(bounds.height) {
                 break;
             }
-            let is_selected = idx == self.selected;
-            let is_hovered = hovered_idx == Some(idx);
+            let is_selected = abs_idx == self.selected;
+            let is_hovered = hovered_idx == Some(abs_idx);
             let row_style = if is_selected {
                 selected_style
             } else if is_hovered {
@@ -190,17 +200,19 @@ impl Component<TermWmAction> for MenuComponent {
     ) {
         let area = layout_rect_to_rect(area);
         let backend = crate::helpers::downcast_ratatui(backend);
+                let offset_y = ctx.viewport().offset_y;
+        let header_offset: u16 = if self.show_header { 1 } else { 0 };
         let hovered_idx = ctx.hover_pos().and_then(|(mx, my)| {
             if mx < area.x || mx >= area.x.saturating_add(area.width) {
                 return None;
             }
-            if my < area.y.saturating_add(1) || my >= area.y.saturating_add(area.height) {
+            if my < area.y.saturating_add(header_offset) || my >= area.y.saturating_add(area.height) {
                 return None;
             }
-            let idx = (my.saturating_sub(area.y).saturating_sub(1)) as usize;
+            let idx = (my.saturating_sub(area.y).saturating_sub(header_offset)) as usize + offset_y;
             (idx < self.items.len()).then_some(idx)
         });
-        self.render_items(&mut backend.buffer, area, hovered_idx, &ctx.config().theme);
+        self.render_items(&mut backend.buffer, area, hovered_idx, &ctx.config().theme, offset_y);
     }
 
     fn handle_events(
@@ -212,14 +224,17 @@ impl Component<TermWmAction> for MenuComponent {
             && matches!(mouse.kind, MouseEventKind::Press(_))
         {
             if let Some(area) = ctx.screen_area() {
+        let offset_y = ctx.viewport().offset_y;
+                let header_offset: u16 = if self.show_header { 1 } else { 0 };
                 let mx = mouse.column;
                 let my = mouse.row;
                 if mx >= area.x.max(0) as u16
                     && mx < (area.x.max(0) as u16).saturating_add(area.width)
-                    && my >= (area.y.max(0) as u16).saturating_add(1)
+                    && my >= (area.y.max(0) as u16).saturating_add(header_offset)
                     && my < (area.y.max(0) as u16).saturating_add(area.height)
                 {
-                    let idx = (my.saturating_sub(area.y.max(0) as u16).saturating_sub(1)) as usize;
+                    let visual_idx = (my.saturating_sub(area.y.max(0) as u16).saturating_sub(header_offset)) as usize;
+                    let idx = visual_idx + offset_y;
                     if idx < self.items.len() {
                         self.selected = idx;
                         return EventResult::Consumed;
@@ -337,12 +352,12 @@ mod tests {
         ]);
         assert_eq!(menu.selected(), 0);
 
-        // j = MenuNext
-        process(&mut menu, &key_event(KeyCode::Char('j')));
+        // Down arrow = MenuDown
+        process(&mut menu, &key_event(KeyCode::Down));
         assert_eq!(menu.selected(), 1);
 
-        // k = MenuPrev
-        process(&mut menu, &key_event(KeyCode::Char('k')));
+        // Up arrow = MenuUp
+        process(&mut menu, &key_event(KeyCode::Up));
         assert_eq!(menu.selected(), 0);
     }
 

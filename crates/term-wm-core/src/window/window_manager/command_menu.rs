@@ -95,7 +95,5 @@ impl WindowManager {
         kb.matches(TermWmAction::MenuUp, key)
             || kb.matches(TermWmAction::MenuDown, key)
             || kb.matches(TermWmAction::MenuSelect, key)
-            || kb.matches(TermWmAction::MenuNext, key)
-            || kb.matches(TermWmAction::MenuPrev, key)
     }
 }

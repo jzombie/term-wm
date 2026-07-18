@@ -8,7 +8,7 @@ use term_wm_core::command_menu::{
     CommandNodeId, CommandRegistry, ContextMask, FuzzyMatch, MruRanker,
 };
 use term_wm_core::components::{Component, ComponentContext, MenuItem};
-use term_wm_core::events::{Event, KeyCode, KeyKind, KeyModifiers, MouseEventKind};
+use term_wm_core::events::{Event, KeyCode, KeyKind, KeyModifiers};
 use term_wm_core::keybindings::{KeyBindings, KeyCombo};
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
@@ -43,6 +43,7 @@ pub struct CommandPaletteComponent {
     display_items: Vec<(String, String)>,
     nav_keys: KeyBindings,
     list_scroll: ScrollViewComponent<MenuComponent>,
+    last_list_area: Option<LayoutRect>,
 }
 
 impl Default for CommandPaletteComponent {
@@ -58,7 +59,9 @@ impl CommandPaletteComponent {
         nav_keys.add(TermWmAction::MenuDown, KeyCombo::new(KeyCode::Down, KeyModifiers::NONE));
         nav_keys.add(TermWmAction::MenuSelect, KeyCombo::new(KeyCode::Enter, KeyModifiers::NONE));
 
-        let mut list_scroll = ScrollViewComponent::new(MenuComponent::new());
+        let mut inner = MenuComponent::new();
+        inner.show_header = false;
+        let mut list_scroll = ScrollViewComponent::new(inner);
         list_scroll.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
 
         Self {
@@ -73,6 +76,7 @@ impl CommandPaletteComponent {
             display_items: Vec::new(),
             nav_keys,
             list_scroll,
+            last_list_area: None,
         }
     }
 
@@ -256,6 +260,7 @@ impl Component<TermWmAction> for CommandPaletteComponent {
             action: p.action.clone(),
         }).collect();
         self.list_scroll.content.borrow_mut().set_items(menu_items);
+        self.list_scroll.content.borrow_mut().set_selected(self.selected);
 
         // Set content height for ScrollViewComponent
         let total = self.filtered_items.len();
@@ -286,6 +291,7 @@ impl Component<TermWmAction> for CommandPaletteComponent {
             width: bounds.width,
             height: bounds.height.saturating_sub(1),
         };
+        self.last_list_area = Some(list_area);
         self.list_scroll.render(backend, list_area, ctx, registry);
     }
 
@@ -294,10 +300,13 @@ impl Component<TermWmAction> for CommandPaletteComponent {
         event: &Event,
         ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
-        // Delegate mouse events to ScrollViewComponent (scroll, click on item)
+        // Delegate mouse events to ScrollViewComponent with correct screen_area
         if matches!(event, Event::Mouse(_)) {
-            let result = self.list_scroll.handle_events(event, ctx);
-            // MenuComponent may have updated its internal selection; sync ours
+            let list_ctx = self
+                .last_list_area
+                .map(|la| ctx.clone().with_screen_area(la))
+                .unwrap_or_else(|| ctx.clone());
+            let result = self.list_scroll.handle_events(event, &list_ctx);
             self.sync_selected();
             return result;
         }
@@ -368,7 +377,7 @@ impl Component<TermWmAction> for CommandPaletteComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use term_wm_core::events::{KeyEvent, MouseButton};
+    use term_wm_core::events::{KeyEvent, MouseButton, MouseEventKind};
 
     fn make_palette_with_items() -> CommandPaletteComponent {
         let mut palette = CommandPaletteComponent::new();
