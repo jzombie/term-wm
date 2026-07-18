@@ -158,6 +158,9 @@ pub trait Component<Msg>: std::any::Any {
     /// Phase 5: Teardown. Called before the component is unmounted.
     fn destroy(&mut self) {}
 
+    /// Clear any active selection. Default no-op.
+    fn clear_selection(&mut self) {}
+
     // Queries
     fn selection_status(&self) -> SelectionStatus {
         SelectionStatus::default()

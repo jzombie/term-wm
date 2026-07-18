@@ -557,6 +557,10 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
         self.content.borrow_mut().take_pending_title()
     }
 
+    fn clear_selection(&mut self) {
+        self.content.borrow_mut().clear_selection();
+    }
+
     fn set_selection_enabled(&mut self, enabled: bool) {
         self.content.borrow_mut().set_selection_enabled(enabled);
     }
