@@ -1,6 +1,6 @@
-use slotmap::new_key_type;
-use crate::actions::TermWmAction;
 use super::context::ContextMask;
+use crate::actions::TermWmAction;
+use slotmap::new_key_type;
 
 new_key_type! {
     pub struct CommandNodeId;
@@ -88,10 +88,7 @@ mod tests {
             on_suffix: "On",
             off_suffix: "Off",
         };
-        assert_eq!(
-            name.format(ContextMask::MOUSE_CAPTURE),
-            "Mouse Capture: On"
-        );
+        assert_eq!(name.format(ContextMask::MOUSE_CAPTURE), "Mouse Capture: On");
     }
 
     #[test]
@@ -102,9 +99,6 @@ mod tests {
             on_suffix: "On",
             off_suffix: "Off",
         };
-        assert_eq!(
-            name.format(ContextMask::NONE),
-            "Mouse Capture: Off"
-        );
+        assert_eq!(name.format(ContextMask::NONE), "Mouse Capture: Off");
     }
 }

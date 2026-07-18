@@ -12,8 +12,8 @@ use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
 
 use crate::helpers::{color_to_ratatui, layout_rect_to_rect, safe_set_string};
+use crate::scroll_view::render_scrollbar;
 
-/// A pre-filtered, scored command item ready for rendering.
 #[derive(Debug, Clone)]
 pub struct PaletteItem {
     pub stable_id: String,
@@ -24,20 +24,16 @@ pub struct PaletteItem {
 }
 
 /// A universal, fuzzy-searchable Command Palette component.
-///
-/// Navigation is resolved through the `KeyBindings` system (same as `MenuComponent`),
-/// ensuring the runner's `wm_menu_consumes_event` stays in sync. Character input
-/// falls through to the search bar when no nav binding matches.
 pub struct CommandPaletteComponent {
     pub query: String,
     pub cursor: usize,
     pub filtered_items: Vec<PaletteItem>,
     pub selected: usize,
-
+    pub scroll_offset: usize,
+    pub visible_height: usize,
     pub data_dirty: bool,
     pub query_dirty: bool,
     pub current_context_mask: ContextMask,
-
     active_ids: Vec<CommandNodeId>,
     display_items: Vec<(String, String)>,
     nav_keys: KeyBindings,
@@ -52,31 +48,39 @@ impl Default for CommandPaletteComponent {
 impl CommandPaletteComponent {
     pub fn new() -> Self {
         let mut nav_keys = KeyBindings::new();
-        nav_keys.add(TermWmAction::MenuUp, KeyCombo::new(KeyCode::Up, KeyModifiers::NONE));
-        nav_keys.add(TermWmAction::MenuDown, KeyCombo::new(KeyCode::Down, KeyModifiers::NONE));
-        nav_keys.add(TermWmAction::MenuSelect, KeyCombo::new(KeyCode::Enter, KeyModifiers::NONE));
+        nav_keys.add(
+            TermWmAction::MenuUp,
+            KeyCombo::new(KeyCode::Up, KeyModifiers::NONE),
+        );
+        nav_keys.add(
+            TermWmAction::MenuDown,
+            KeyCombo::new(KeyCode::Down, KeyModifiers::NONE),
+        );
+        nav_keys.add(
+            TermWmAction::MenuSelect,
+            KeyCombo::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
 
         Self {
             query: String::new(),
             cursor: 0,
             filtered_items: Vec::new(),
             selected: 0,
+            scroll_offset: 0,
+            visible_height: 0,
             data_dirty: true,
             query_dirty: true,
+            current_context_mask: ContextMask::NONE,
             active_ids: Vec::new(),
             display_items: Vec::new(),
-            current_context_mask: ContextMask::NONE,
             nav_keys,
         }
     }
 
-    /// Mark data as dirty (registry mutation or context change).
     pub fn mark_data_dirty(&mut self) {
         self.data_dirty = true;
     }
 
-    /// Rebuild the active_ids and display_items cache from the registry.
-    /// This is the O(N) allocation phase — must only run when data_dirty is true.
     pub fn rebuild_data_cache(&mut self, registry: &CommandRegistry) {
         self.active_ids = registry.build_item_list(self.current_context_mask);
         self.display_items = self
@@ -93,11 +97,8 @@ impl CommandPaletteComponent {
         self.query_dirty = true;
     }
 
-    /// Re-score the existing cache against the current query.
-    /// This is the O(N) compute phase — zero heap allocation.
     pub fn rerank(&mut self, fmatch: &mut FuzzyMatch, mru: &MruRanker) {
         let indices = fmatch.score(&self.query, &self.display_items);
-
         self.filtered_items = indices
             .iter()
             .filter_map(|&i| {
@@ -113,23 +114,17 @@ impl CommandPaletteComponent {
                 })
             })
             .collect();
-
-        // Boost by MRU weight (stable sort by combined score)
         self.filtered_items.sort_by(|a, b| {
             let wa = mru.weight(&a.stable_id);
             let wb = mru.weight(&b.stable_id);
             wb.partial_cmp(&wa).unwrap_or(std::cmp::Ordering::Equal)
         });
-
         self.selected = self
             .selected
             .min(self.filtered_items.len().saturating_sub(1));
         self.query_dirty = false;
     }
 
-    /// Helper: build a tuple of (stable_id, display_name, description, action, icon)
-    /// from a CommandNodeId. Called during re-rank to extract data from the arena.
-    /// The caller must pass the registry to look up the node.
     fn extract_palette_data(
         id: CommandNodeId,
         display_name: &str,
@@ -149,39 +144,32 @@ impl CommandPaletteComponent {
         ))
     }
 
-    /// Placeholder for extracting node data during rerank — uses display_items cache.
-    /// The actual registry lookup happens in the caller (rerank_with_registry).
     fn registry_getter_placeholder(
         &self,
         _id: CommandNodeId,
         node_display: &(String, String),
     ) -> (String, String, String, TermWmAction, Option<&'static str>) {
-        // During rerank we use pre-fetched display_items.
-        // The action must be looked up separately by the caller via registry.
         (
-            String::new(), // stable_id placeholder — filled by caller
+            String::new(),
             node_display.0.clone(),
             node_display.1.clone(),
-            TermWmAction::CloseMenu, // placeholder — filled by caller
+            TermWmAction::CloseMenu,
             None,
         )
     }
 
-    /// Get the currently selected action.
     pub fn selected_action(&self) -> Option<&TermWmAction> {
         self.filtered_items
             .get(self.selected)
             .map(|item| &item.action)
     }
 
-    /// Get the selected stable_id.
     pub fn selected_stable_id(&self) -> Option<&str> {
         self.filtered_items
             .get(self.selected)
             .map(|item| item.stable_id.as_str())
     }
 
-    /// Re-rank with full registry access (for callers that have the registry).
     pub fn rerank_with_registry(
         &mut self,
         fmatch: &mut FuzzyMatch,
@@ -189,7 +177,6 @@ impl CommandPaletteComponent {
         registry: &CommandRegistry,
     ) {
         let indices = fmatch.score(&self.query, &self.display_items);
-
         self.filtered_items = indices
             .iter()
             .filter_map(|&i| {
@@ -205,14 +192,11 @@ impl CommandPaletteComponent {
                 })
             })
             .collect();
-
-        // Boost by MRU weight
         self.filtered_items.sort_by(|a, b| {
             let wa = mru.weight(&a.stable_id);
             let wb = mru.weight(&b.stable_id);
             wb.partial_cmp(&wa).unwrap_or(std::cmp::Ordering::Equal)
         });
-
         self.selected = self
             .selected
             .min(self.filtered_items.len().saturating_sub(1));
@@ -220,7 +204,7 @@ impl CommandPaletteComponent {
     }
 
     pub fn render_content(
-        &self,
+        &mut self,
         buffer: &mut ratatui::buffer::Buffer,
         area: Rect,
         hovered_idx: Option<usize>,
@@ -245,9 +229,6 @@ impl CommandPaletteComponent {
             .bg(color_to_ratatui(theme.panel_active_bg))
             .fg(color_to_ratatui(theme.menu_fg))
             .add_modifier(Modifier::BOLD);
-        let placeholder_style = Style::default()
-            .bg(color_to_ratatui(theme.panel_active_bg))
-            .fg(color_to_ratatui(theme.panel_inactive_fg));
 
         // Clear entire area
         for y in bounds.y..bounds.y.saturating_add(bounds.height) {
@@ -266,7 +247,6 @@ impl CommandPaletteComponent {
         let search_inner_width = (bounds.width as usize).saturating_sub(search_prefix.len());
         let query_display: String = self.query.chars().take(search_inner_width).collect();
 
-        // Draw search prefix
         for (i, ch) in search_prefix.chars().enumerate() {
             let x = bounds.x + i as u16;
             if let Some(cell) = buffer.cell_mut((x, search_y)) {
@@ -275,36 +255,57 @@ impl CommandPaletteComponent {
             }
         }
 
-        // Draw query text
-        for (i, ch) in query_display.chars().enumerate() {
-            let x = bounds.x + search_prefix.len() as u16 + i as u16;
-            if let Some(cell) = buffer.cell_mut((x, search_y)) {
-                cell.set_symbol(&ch.to_string());
-                cell.set_style(search_style);
+        if self.query.is_empty() {
+            let placeholder = "[type to search]";
+            let placeholder_style = Style::default()
+                .bg(color_to_ratatui(theme.panel_active_bg))
+                .fg(color_to_ratatui(theme.panel_inactive_fg));
+            let text: String = placeholder.chars().take(search_inner_width).collect();
+            safe_set_string(
+                buffer,
+                bounds,
+                bounds.x + search_prefix.len() as u16,
+                search_y,
+                &text,
+                placeholder_style,
+            );
+        } else {
+            for (i, ch) in query_display.chars().enumerate() {
+                let x = bounds.x + search_prefix.len() as u16 + i as u16;
+                if let Some(cell) = buffer.cell_mut((x, search_y)) {
+                    cell.set_symbol(&ch.to_string());
+                    cell.set_style(search_style);
+                }
+            }
+            let query_end = bounds.x + search_prefix.len() as u16 + query_display.len() as u16;
+            for x in query_end..bounds.x.saturating_add(bounds.width) {
+                if let Some(cell) = buffer.cell_mut((x, search_y)) {
+                    cell.set_symbol(" ");
+                    cell.set_style(search_style);
+                }
             }
         }
 
-        // Fill rest of search bar
-        let query_end = bounds.x + search_prefix.len() as u16 + query_display.len() as u16;
-        for x in query_end..bounds.x.saturating_add(bounds.width) {
-            if let Some(cell) = buffer.cell_mut((x, search_y)) {
-                cell.set_symbol(" ");
-                cell.set_style(if self.query.is_empty() {
-                    placeholder_style
-                } else {
-                    search_style
-                });
-            }
-        }
-
-        // Rows 1..: Command list
+        // Rows 1..: Command list with scroll
         let list_height = bounds.height.saturating_sub(1) as usize;
-        let visible_count = list_height.min(self.filtered_items.len());
+        self.visible_height = list_height;
+        let total = self.filtered_items.len();
 
-        for idx in 0..visible_count {
-            let y = bounds.y + 1 + idx as u16;
-            let is_selected = idx == self.selected;
-            let is_hovered = hovered_idx == Some(idx);
+        // Clamp scroll_offset
+        if total > list_height && self.scroll_offset + list_height > total {
+            self.scroll_offset = total.saturating_sub(list_height);
+        }
+        if self.scroll_offset > total {
+            self.scroll_offset = 0;
+        }
+
+        let visible_count = list_height.min(total.saturating_sub(self.scroll_offset));
+
+        for rel_idx in 0..visible_count {
+            let abs_idx = rel_idx + self.scroll_offset;
+            let y = bounds.y + 1 + rel_idx as u16;
+            let is_selected = abs_idx == self.selected;
+            let is_hovered = hovered_idx == Some(abs_idx);
             let row_style = if is_selected {
                 selected_style
             } else if is_hovered {
@@ -324,7 +325,7 @@ impl CommandPaletteComponent {
                 }
             }
 
-            let item = &self.filtered_items[idx];
+            let item = &self.filtered_items[abs_idx];
             let marker = if is_selected { ">" } else { " " };
             let line = if let Some(icon) = item.icon {
                 format!("{marker} {icon} {label}", label = item.display_name)
@@ -335,6 +336,17 @@ impl CommandPaletteComponent {
             let text: String = line.chars().take(inner_width).collect();
             let inner_x = bounds.x.saturating_add(2);
             safe_set_string(buffer, bounds, inner_x, y, &text, row_style);
+        }
+
+        // Scrollbar
+        if total > list_height {
+            let sb_area = Rect::new(
+                bounds.x.saturating_add(bounds.width).saturating_sub(1),
+                bounds.y + 1,
+                1,
+                bounds.height.saturating_sub(1),
+            );
+            render_scrollbar(buffer, sb_area, total, list_height, self.scroll_offset);
         }
     }
 }
@@ -356,8 +368,9 @@ impl Component<TermWmAction> for CommandPaletteComponent {
             if my < area.y.saturating_add(1) || my >= area.y.saturating_add(area.height) {
                 return None;
             }
-            let idx = (my.saturating_sub(area.y).saturating_sub(1)) as usize;
-            (idx < self.filtered_items.len()).then_some(idx)
+            let visual_idx = (my.saturating_sub(area.y).saturating_sub(1)) as usize;
+            let abs_idx = visual_idx + self.scroll_offset;
+            (abs_idx < self.filtered_items.len()).then_some(abs_idx)
         });
         self.render_content(&mut backend.buffer, area, hovered_idx, &ctx.config().theme);
     }
@@ -376,20 +389,21 @@ impl Component<TermWmAction> for CommandPaletteComponent {
                 let my = mouse.row;
                 if mx >= area.x.max(0) as u16
                     && mx < (area.x.max(0) as u16).saturating_add(area.width)
-                    && my >= area.y.max(0) as u16 + 1
+                    && my > area.y.max(0) as u16
                     && my < (area.y.max(0) as u16).saturating_add(area.height)
                 {
-                    let idx = (my - area.y.max(0) as u16 - 1) as usize;
-                    if idx < self.filtered_items.len() {
-                        self.selected = idx;
-                        return EventResult::Consumed;
+                    let visual_idx = (my - area.y.max(0) as u16 - 1) as usize;
+                    let actual_idx = visual_idx.saturating_add(self.scroll_offset);
+                    if actual_idx < self.filtered_items.len() {
+                        self.selected = actual_idx;
+                        return EventResult::Action(TermWmAction::MenuSelect);
                     }
                 }
             }
             return EventResult::Ignored;
         }
 
-        // Keyboard handling
+        // Keyboard
         let Event::Key(key) = event else {
             return EventResult::Ignored;
         };
@@ -404,9 +418,7 @@ impl Component<TermWmAction> for CommandPaletteComponent {
         if self.nav_keys.matches(TermWmAction::MenuDown, key) {
             return EventResult::Action(TermWmAction::MenuDown);
         }
-        if self.nav_keys.matches(TermWmAction::MenuSelect, key)
-            && !self.filtered_items.is_empty()
-        {
+        if self.nav_keys.matches(TermWmAction::MenuSelect, key) && !self.filtered_items.is_empty() {
             return EventResult::Action(TermWmAction::MenuSelect);
         }
 
@@ -437,17 +449,34 @@ impl Component<TermWmAction> for CommandPaletteComponent {
             TermWmAction::MenuUp => {
                 let total = self.filtered_items.len();
                 if total > 0 {
-                    self.selected = if self.selected == 0 {
-                        total - 1
-                    } else {
-                        self.selected - 1
-                    };
+                    self.selected = (self.selected + total - 1) % total;
+                }
+                // Adjust scroll when selection wraps outside viewport
+                if self.visible_height > 0 && total > self.visible_height {
+                    if self.selected >= self.scroll_offset + self.visible_height {
+                        self.scroll_offset = self
+                            .selected
+                            .saturating_sub(self.visible_height)
+                            .saturating_add(1);
+                    } else if self.selected < self.scroll_offset {
+                        self.scroll_offset = self.selected;
+                    }
                 }
             }
             TermWmAction::MenuDown => {
                 let total = self.filtered_items.len();
                 if total > 0 {
                     self.selected = (self.selected + 1) % total;
+                }
+                // Push scroll when selection exits bottom of viewport
+                if self.visible_height > 0 {
+                    let bottom = self.scroll_offset.saturating_add(self.visible_height);
+                    if self.selected >= bottom {
+                        self.scroll_offset = self
+                            .selected
+                            .saturating_sub(self.visible_height)
+                            .saturating_add(1);
+                    }
                 }
             }
             _ => {}
@@ -520,7 +549,10 @@ mod tests {
             kind: KeyKind::Press,
         });
         let result = palette.handle_events(&event, &ctx);
-        assert!(matches!(result, EventResult::Action(TermWmAction::MenuDown)));
+        assert!(matches!(
+            result,
+            EventResult::Action(TermWmAction::MenuDown)
+        ));
     }
 
     #[test]
@@ -611,7 +643,10 @@ mod tests {
             kind: KeyKind::Press,
         });
         let result = palette.handle_events(&event, &ctx);
-        assert!(matches!(result, EventResult::Action(TermWmAction::CloseMenu)));
+        assert!(matches!(
+            result,
+            EventResult::Action(TermWmAction::CloseMenu)
+        ));
     }
 
     #[test]
@@ -637,7 +672,10 @@ mod tests {
             kind: KeyKind::Press,
         });
         let result = palette.handle_events(&event, &ctx);
-        assert!(matches!(result, EventResult::Action(TermWmAction::MenuSelect)));
+        assert!(matches!(
+            result,
+            EventResult::Action(TermWmAction::MenuSelect)
+        ));
     }
 
     #[test]
@@ -696,7 +734,7 @@ mod tests {
         });
         palette.handle_events(&event_j, &ctx);
         assert_eq!(palette.query, "j");
-        assert_eq!(palette.selected, 0); // NOT navigated
+        assert_eq!(palette.selected, 0);
 
         let event_k = Event::Key(KeyEvent {
             code: KeyCode::Char('k'),
@@ -705,6 +743,73 @@ mod tests {
         });
         palette.handle_events(&event_k, &ctx);
         assert_eq!(palette.query, "jk");
-        assert_eq!(palette.selected, 0); // NOT navigated
+        assert_eq!(palette.selected, 0);
+    }
+
+    #[test]
+    fn mouse_click_returns_menu_select_action() {
+        let mut palette = make_palette_with_items();
+        palette.scroll_offset = 0;
+        let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 10,
+        });
+        // Click on first item (row 1 in the list, which is at y=1)
+        let event = Event::Mouse(term_wm_core::events::MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            column: 5,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result = palette.handle_events(&event, &ctx);
+        assert!(matches!(
+            result,
+            EventResult::Action(TermWmAction::MenuSelect)
+        ));
+        assert_eq!(palette.selected, 0);
+    }
+
+    #[test]
+    fn update_scroll_offset_clamps_on_menu_up() {
+        let mut palette = CommandPaletteComponent::new();
+        palette.filtered_items = (0..20)
+            .map(|i| PaletteItem {
+                stable_id: format!("item:{i}"),
+                display_name: format!("Item {i}"),
+                description: String::new(),
+                action: TermWmAction::CloseMenu,
+                icon: None,
+            })
+            .collect();
+        palette.visible_height = 5;
+        palette.selected = 0;
+        palette.scroll_offset = 0;
+        let ctx = ComponentContext::new(true);
+        palette.update(TermWmAction::MenuUp, &ctx, &mut VecDeque::new());
+        assert_eq!(palette.selected, 19);
+        assert_eq!(palette.scroll_offset, 15);
+    }
+
+    #[test]
+    fn update_scroll_offset_clamps_on_menu_down() {
+        let mut palette = CommandPaletteComponent::new();
+        palette.filtered_items = (0..20)
+            .map(|i| PaletteItem {
+                stable_id: format!("item:{i}"),
+                display_name: format!("Item {i}"),
+                description: String::new(),
+                action: TermWmAction::CloseMenu,
+                icon: None,
+            })
+            .collect();
+        palette.visible_height = 5;
+        palette.selected = 4;
+        palette.scroll_offset = 0;
+        let ctx = ComponentContext::new(true);
+        palette.update(TermWmAction::MenuDown, &ctx, &mut VecDeque::new());
+        assert_eq!(palette.selected, 5);
+        assert_eq!(palette.scroll_offset, 1);
     }
 }

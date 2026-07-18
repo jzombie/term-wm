@@ -574,6 +574,10 @@ impl WindowManager {
                 TermWmAction::ToggleSystemPanel,
                 TermWmAction::Help,
                 TermWmAction::ExitUi,
+                TermWmAction::MaximizeWindow,
+                TermWmAction::MinimizeWindow,
+                TermWmAction::CloseWindow,
+                TermWmAction::ToggleDirectMode,
             ]
         });
         let mouse_capture_enabled = config.mouse_capture_enabled;
@@ -2201,6 +2205,7 @@ pub fn wm_menu_items(
     mouse_capture_enabled: bool,
     clipboard_enabled: bool,
     window_selection_enabled: bool,
+    has_focused_window: bool,
 ) -> Vec<MenuItem<crate::actions::TermWmAction>> {
     let mouse_label = if mouse_capture_enabled {
         "Mouse Capture: On"
@@ -2217,7 +2222,7 @@ pub fn wm_menu_items(
     } else {
         "Window Selection: Off"
     };
-    vec![
+    let mut items = vec![
         MenuItem {
             label: "Resume",
             icon: Some("▶"),
@@ -2263,7 +2268,34 @@ pub fn wm_menu_items(
             icon: Some("⏻"),
             action: crate::actions::TermWmAction::ExitUi,
         },
-    ]
+    ];
+
+    if has_focused_window {
+        items.extend_from_slice(&[
+            MenuItem {
+                label: "Maximize Window",
+                icon: Some("⊞"),
+                action: crate::actions::TermWmAction::MaximizeWindow,
+            },
+            MenuItem {
+                label: "Minimize Window",
+                icon: Some("⊟"),
+                action: crate::actions::TermWmAction::MinimizeWindow,
+            },
+            MenuItem {
+                label: "Close Window",
+                icon: Some("✕"),
+                action: crate::actions::TermWmAction::CloseWindow,
+            },
+            MenuItem {
+                label: "Toggle Direct Mode",
+                icon: Some("🎯"),
+                action: crate::actions::TermWmAction::ToggleDirectMode,
+            },
+        ]);
+    }
+
+    items
 }
 
 fn clamp_rect(area: Rect, bounds: Rect) -> Rect {

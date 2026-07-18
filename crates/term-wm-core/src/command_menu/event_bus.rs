@@ -1,5 +1,5 @@
-use crossbeam_channel::{Receiver, Sender, bounded};
 use super::arena::{CommandNode, ComponentId};
+use crossbeam_channel::{Receiver, Sender, bounded};
 
 pub enum CommandMenuEvent {
     RegisterCommands {
@@ -40,10 +40,10 @@ impl CommandMenuEventBus {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::actions::TermWmAction;
     use super::super::arena::{CommandAction, CommandName};
     use super::super::context::ContextMask;
+    use super::*;
+    use crate::actions::TermWmAction;
 
     fn make_test_node(stable_id: &str) -> CommandNode {
         CommandNode {

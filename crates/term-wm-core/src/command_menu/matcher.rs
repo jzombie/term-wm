@@ -1,6 +1,9 @@
+use nucleo_matcher::{
+    Config as NucleoConfig, Matcher, Utf32Str,
+    pattern::{AtomKind, CaseMatching, Normalization, Pattern},
+};
 use std::collections::HashMap;
 use std::time::Instant;
-use nucleo_matcher::{Matcher, Config as NucleoConfig, Utf32Str, pattern::{Pattern, AtomKind, CaseMatching, Normalization}};
 
 /// Lightweight wrapper around nucleo-matcher for fuzzy string scoring.
 pub struct FuzzyMatch {
@@ -24,11 +27,7 @@ impl FuzzyMatch {
 
     /// Score a list of (name, description) pairs against a query string.
     /// Returns indices into the input slice, sorted by score descending.
-    pub fn score(
-        &mut self,
-        query: &str,
-        items: &[(String, String)],
-    ) -> Vec<usize> {
+    pub fn score(&mut self, query: &str, items: &[(String, String)]) -> Vec<usize> {
         if query.is_empty() {
             return (0..items.len()).collect();
         }

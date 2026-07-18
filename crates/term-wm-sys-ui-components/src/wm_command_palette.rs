@@ -7,8 +7,8 @@ use term_wm_core::{
     actions::{EventResult, TermWmAction},
     command_menu::{CommandRegistry, ContextMask, FuzzyMatch, MruRanker},
     components::{
-        Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse,
-        Overlay, WmComponent,
+        Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse, Overlay,
+        WmComponent,
     },
     window::WindowKey,
 };
@@ -65,10 +65,7 @@ impl WmCommandPaletteComponent {
     pub fn set_items(&mut self, items: Vec<term_wm_core::components::MenuItem<TermWmAction>>) {
         use term_wm_core::command_menu::{CommandAction, CommandName, CommandNode, ContextMask};
         for item in items {
-            let stable_id = format!(
-                "core:{}",
-                item.label.replace(' ', "_").to_lowercase()
-            );
+            let stable_id = format!("core:{}", item.label.replace(' ', "_").to_lowercase());
             let node = CommandNode {
                 stable_id,
                 name: CommandName::Static(item.label.to_string()),
@@ -220,9 +217,7 @@ impl WmComponent for WmCommandPaletteComponent {
 
     fn query(&self, query: &ComponentQuery) -> ComponentResponse {
         match query {
-            ComponentQuery::SelectedAction => {
-                ComponentResponse::Action(self.last_action.clone())
-            }
+            ComponentQuery::SelectedAction => ComponentResponse::Action(self.last_action.clone()),
             _ => ComponentResponse::None,
         }
     }

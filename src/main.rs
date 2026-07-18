@@ -103,6 +103,7 @@ impl App {
             false, // mouse_capture_enabled
             false, // clipboard_enabled
             false, // window_selection_enabled
+            false, // has_focused_window
         ));
 
         let wm = if embedded {

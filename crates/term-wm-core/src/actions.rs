@@ -83,6 +83,7 @@ pub enum TermWmAction {
     ToggleWindowSelection,
     MinimizeWindow,
     MaximizeWindow,
+    ToggleDirectMode,
     ToggleDebugWindow,
     ExitUi,
     ToggleSystemPanel,
@@ -189,6 +190,7 @@ impl TermWmAction {
             | TermWmAction::ToggleWindowSelection
             | TermWmAction::MinimizeWindow
             | TermWmAction::MaximizeWindow
+            | TermWmAction::ToggleDirectMode
             | TermWmAction::ToggleDebugWindow
             | TermWmAction::ExitUi
             | TermWmAction::ToggleSystemPanel
@@ -299,6 +301,7 @@ impl fmt::Display for TermWmAction {
             TermWmAction::ToggleWindowSelection => "Toggle window selection",
             TermWmAction::MinimizeWindow => "Minimize window",
             TermWmAction::MaximizeWindow => "Maximize window",
+            TermWmAction::ToggleDirectMode => "Toggle direct mode",
             TermWmAction::ToggleDebugWindow => "Toggle debug window",
             TermWmAction::ExitUi => "Exit UI",
             TermWmAction::ToggleSystemPanel => "Toggle system panel",

@@ -1,6 +1,6 @@
-use slotmap::SlotMap;
-use super::arena::{CommandNodeId, CommandNode, ComponentId};
+use super::arena::{CommandNode, CommandNodeId, ComponentId};
 use super::context::ContextMask;
+use slotmap::SlotMap;
 
 pub struct CommandRegistry {
     arena: SlotMap<CommandNodeId, CommandNode>,
@@ -58,9 +58,7 @@ impl CommandRegistry {
     pub fn build_item_list(&self, context_mask: ContextMask) -> Vec<CommandNodeId> {
         self.arena
             .iter()
-            .filter(|(_, node)| {
-                (context_mask & node.required_context) == node.required_context
-            })
+            .filter(|(_, node)| (context_mask & node.required_context) == node.required_context)
             .map(|(id, _)| id)
             .collect()
     }
@@ -68,9 +66,9 @@ impl CommandRegistry {
 
 #[cfg(test)]
 mod tests {
+    use super::super::arena::{CommandAction, CommandName};
     use super::*;
     use crate::actions::TermWmAction;
-    use super::super::arena::{CommandAction, CommandName};
 
     fn make_node(stable_id: &str, required_context: ContextMask) -> CommandNode {
         CommandNode {
