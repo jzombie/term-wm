@@ -3,6 +3,7 @@ mod command_menu;
 mod drag;
 mod focus;
 mod layout;
+pub(crate) mod layer_manager;
 mod overlays;
 
 use std::collections::BTreeMap;
@@ -84,13 +85,10 @@ pub(crate) enum MouseCaptureState {
     /// A Press hit a Window or Component target — subsequent Drag/Release/Moved
     /// events are forwarded to that component until the Up releases.
     ComponentInteraction {
-        key: WindowKey,
+        key: Option<WindowKey>,
         /// Immutable snapshot of the hitbox area at Press time.
         screen_area: LayoutRect,
         /// The exact HitboxId of the component that initiated the capture.
-        /// Used during continuation to inject `active_hitbox` into the context,
-        /// so the component's occlusion check passes even when the mouse leaves
-        /// the original hitbox area.
         hitbox_id: crate::hitbox_registry::HitboxId,
     },
     /// A Press hit a tiling layout split handle — Drag/Release events route to
@@ -185,6 +183,8 @@ pub enum DrawTask {
 
 pub struct WindowManager {
     focus: FocusRing<WindowKey>,
+    macro_focus: layer_manager::MacroFocus,
+    pub(crate) layer_manager: layer_manager::LayerManager,
     windows: SlotMap<WindowKey, Window>,
     pub(crate) regions: RegionMap<WindowKey>,
     scroll: BTreeMap<WindowKey, ScrollState>,
@@ -596,6 +596,8 @@ impl WindowManager {
                 /* placeholder, will be set on first window */
                 slotmap::DefaultKey::default(),
             ),
+            macro_focus: layer_manager::MacroFocus::FocusRing(slotmap::DefaultKey::default()),
+            layer_manager: layer_manager::LayerManager::new(),
             windows: SlotMap::with_capacity(32),
             regions: RegionMap::default(),
             scroll: BTreeMap::new(),
@@ -1005,7 +1007,7 @@ impl WindowManager {
     pub fn set_mouse_captured(&mut self, captured: bool) {
         self.mouse_capture = if captured {
             Some(MouseCaptureState::ComponentInteraction {
-                key: WindowKey::default(),
+                key: None,
                 screen_area: LayoutRect::default(),
                 hitbox_id: crate::hitbox_registry::HitboxId::default(),
             })
@@ -1295,33 +1297,40 @@ impl WindowManager {
                         screen_area,
                         hitbox_id,
                     } => {
-                        // Invalidate: drop capture if the target window was closed.
-                        if !self.windows.contains_key(*key) {
-                            return EventResult::Ignored;
-                        }
-                        let focused = *self.focus.current() == *key;
-                        let ctx = self
-                            .component_context_for(focused, *key)
-                            .with_screen_area(*screen_area)
-                            .with_active_hitbox(*hitbox_id);
                         let core_event = Event::Mouse(MouseEvent {
                             kind: *kind,
                             column: col,
                             row,
                             modifiers: *modifiers,
                         });
-                        let consumed = if let Some(comp) = self.component_for_key_mut(*key) {
-                            let result = comp.handle_events(&core_event, &ctx);
-                            let was_consumed = !result.is_ignored();
-                            if let Some(action) = result.into_action() {
-                                self.process_action(*key, action);
+                        let consumed = if let Some(k) = key {
+                            // Window component routing
+                            if !self.windows.contains_key(*k) {
+                                return EventResult::Ignored;
                             }
-                            was_consumed
+                            let focused = *self.focus.current() == *k;
+                            let ctx = self
+                                .component_context_for(focused, *k)
+                                .with_screen_area(*screen_area)
+                                .with_active_hitbox(*hitbox_id);
+                            if let Some(comp) = self.component_for_key_mut(*k) {
+                                let result = comp.handle_events(&core_event, &ctx);
+                                let was_consumed = !result.is_ignored();
+                                if let Some(action) = result.into_action() {
+                                    self.process_action(*k, action);
+                                }
+                                was_consumed
+                            } else {
+                                false
+                            }
                         } else {
-                            false
+                            // Singleton component routing — dispatch through LayerManager
+                            let ctx = self
+                                .component_context(false)
+                                .with_screen_area(*screen_area)
+                                .with_active_hitbox(*hitbox_id);
+                            self.layer_manager.dispatch_foreground(&core_event, &ctx).is_consumed()
                         };
-                        // Retain capture unconditionally unless a release event
-                        // terminates the sequence.
                         (consumed, !matches!(kind, MouseEventKind::Release(_)))
                     }
                     MouseCaptureState::LayoutHandle => match kind {
@@ -1670,19 +1679,24 @@ impl WindowManager {
             return EventResult::Ignored;
         }
 
-        // --- Blind delegation: notifications, windows, panels, etc. ---
+        // --- Z-plane interleaved dispatch: Foreground → Windows → Background ---
 
-        // Notification — highest visual Z-order.
-        // Blind delegation: no hitbox_id peek. The component checks
-        // ctx.active_hitbox() == self.hitbox_id internally.
+        // Foreground layers (notifications, command palette, FAB, overlays)
+        // Rendered after windows in Z-order, checked first in dispatch.
         {
             let ctx = self.component_context(false)
                 .with_screen_area(hit_rect)
                 .with_active_hitbox(hitbox_id);
-            if let Some(nc) = self.notification_component.as_mut() {
-                if nc.handle_events(&core_event, &ctx).is_consumed() {
-                    return EventResult::Consumed;
+            let result = self.layer_manager.dispatch_foreground(&core_event, &ctx);
+            if result.is_consumed() {
+                if matches!(kind, MouseEventKind::Press(_)) {
+                    self.mouse_capture = Some(MouseCaptureState::ComponentInteraction {
+                        key: None,
+                        screen_area: hit_rect,
+                        hitbox_id,
+                    });
                 }
+                return EventResult::Consumed;
             }
         }
 
@@ -1705,7 +1719,7 @@ impl WindowManager {
                 };
                 if !result.is_ignored() {
                     self.mouse_capture = Some(MouseCaptureState::ComponentInteraction {
-                        key,
+                        key: Some(key),
                         screen_area: hit_rect,
                         hitbox_id,
                     });
@@ -1714,96 +1728,25 @@ impl WindowManager {
             }
         }
 
-        // Command palette
-        if self
-            .command_menu_component
-            .as_ref()
-            .is_some_and(|m| m.hitbox_id() == Some(hitbox_id))
+        // Background layers (top panel, bottom panel)
+        // Rendered before windows in Z-order, checked last in dispatch.
         {
-            let ctx = self
-                .component_context(false)
-                .with_overlay(true)
+            let ctx = self.component_context(false)
                 .with_screen_area(hit_rect)
                 .with_active_hitbox(hitbox_id);
-            if let Some(menu) = &mut self.command_menu_component {
-                return menu
-                    .handle_events(&core_event, &ctx)
-                    .map(|action| (None, action));
-            }
-        }
-
-        // FAB
-        if self
-            .fab_component
-            .as_ref()
-            .is_some_and(|f| f.hitbox_id() == Some(hitbox_id))
-        {
-            let ctx = self
-                .component_context(false)
-                .with_screen_area(hit_rect)
-                .with_active_hitbox(hitbox_id);
-            if let Some(fab) = self.fab_component_mut() {
-                return fab
-                    .handle_events(&core_event, &ctx)
-                    .map(|action| (None, action));
-            }
-        }
-
-        // Overlays
-        let overlay_ctx = self
-            .component_context_for(false, slotmap::DefaultKey::default())
-            .with_screen_area(hit_rect)
-            .with_active_hitbox(hitbox_id);
-        for overlay in self.overlays.values_mut() {
-            let result = overlay.handle_events(&core_event, &overlay_ctx);
-            if !result.is_ignored() {
-                return result.map(|action| (None, action));
-            }
-        }
-
-        // Top panel
-        if self
-            .top_component
-            .as_ref()
-            .is_some_and(|t| t.hitbox_id() == Some(hitbox_id))
-        {
-            if self.config.wm_command_menu_enabled && self.panel_active() {
-                let panel_handled = self.handle_panel_click(col, row);
-                if panel_handled {
-                    return EventResult::Consumed;
+            let result = self.layer_manager.dispatch_background(&core_event, &ctx);
+            if result.is_consumed() {
+                if matches!(kind, MouseEventKind::Press(_)) {
+                    self.mouse_capture = Some(MouseCaptureState::ComponentInteraction {
+                        key: None,
+                        screen_area: hit_rect,
+                        hitbox_id,
+                    });
                 }
-            }
-            if self.config.wm_command_menu_enabled {
-                self.focus_window_at(col, row);
-            }
-            return EventResult::Ignored;
-        }
-
-        // Bottom panel
-        if self
-            .bottom_component
-            .as_ref()
-            .is_some_and(|b| b.hitbox_id() == Some(hitbox_id))
-        {
-            let ctx = self.component_context(false).with_active_hitbox(hitbox_id);
-            if let Some(p) = &mut self.bottom_component
-                && let crate::actions::EventResult::Action(action) =
-                    p.handle_events(&core_event, &ctx)
-                && let Some(combo) = self.keybindings().first_combo(action)
-            {
-                self.synthetic_event = Some(Event::Key(KeyEvent {
-                    code: combo.code,
-                    modifiers: combo.mods,
-                    kind: KeyKind::Press,
-                }));
                 return EventResult::Consumed;
             }
-            return EventResult::Ignored;
         }
 
-        // Notification (swallow)
-        // Session manager (consume)
-        // If hitbox didn't match anything, fall through
         EventResult::Ignored
     }
 
