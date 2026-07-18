@@ -196,7 +196,7 @@ pub fn render_app(
 
     // Render FAB only in monocle/mobile mode — sole mobile navigation mechanism.
     if wm.is_monocle()
-        && let Some(fab) = wm.fab_component_mut()
+        && let Some(fab) = wm.get_semantic_component_mut(term_wm_core::window::ComponentTag::FloatingActionButton)
     {
         let mut local_hb = HitboxRegistry::new();
         let ctx = term_wm_core::components::ComponentContext::new(true).with_screen_area(area);

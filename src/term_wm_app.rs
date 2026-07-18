@@ -75,7 +75,6 @@ impl TermWmApp {
             .expect("standalone build");
         let mut wm = wm;
         wm.set_notification_component(Box::new(WmNotificationAreaComponent::new()));
-        wm.finalize_layers();
         Self::from_wm(wm)
     }
 
@@ -106,8 +105,7 @@ impl TermWmApp {
     }
 
     /// Create from an already-constructed WindowManager.
-    pub fn from_wm(mut wm: WindowManager) -> Self {
-        wm.finalize_layers();
+    pub fn from_wm(wm: WindowManager) -> Self {
         Self {
             wm,
             window_keys: Vec::new(),

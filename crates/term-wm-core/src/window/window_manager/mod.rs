@@ -878,12 +878,13 @@ impl WindowManager {
     }
 
     pub fn begin_frame(&mut self) {
-        if let Some(p) = &mut self.top_component {
+        if let Some(p) = self.get_semantic_component_mut(layer_manager::ComponentTag::TopPanel) {
             p.begin_frame();
         }
-        if let Some(p) = &mut self.bottom_component {
+        let power_profile = self.power_profile;
+        if let Some(p) = self.get_semantic_component_mut(layer_manager::ComponentTag::BottomPanel) {
             p.begin_frame();
-            p.process_action(&ComponentAction::SetPowerProfile(self.power_profile));
+            p.process_action(&ComponentAction::SetPowerProfile(power_profile));
         }
         if !self.config.wm_command_menu_enabled {
             self.clear_capture();
@@ -1035,20 +1036,6 @@ impl WindowManager {
         key: WindowKey,
     ) -> Option<crate::hitbox_registry::HitboxId> {
         self.windows.get(key).map(|w| w.content_hitbox_id)
-    }
-
-    /// Split borrow: return a mutable ref to the hitbox registry and
-    /// a mutable ref to the top component simultaneously.
-    pub fn top_and_registry(&mut self) -> (&mut Option<Box<dyn WmComponent>>, &mut HitboxRegistry) {
-        (&mut self.top_component, &mut self.hitbox_registry)
-    }
-
-    /// Split borrow: return a mutable ref to the hitbox registry and
-    /// a mutable ref to the bottom component simultaneously.
-    pub fn bottom_and_registry(
-        &mut self,
-    ) -> (&mut Option<Box<dyn WmComponent>>, &mut HitboxRegistry) {
-        (&mut self.bottom_component, &mut self.hitbox_registry)
     }
 
     /// Dispatch a mouse event through the hitbox registry.
@@ -1383,8 +1370,7 @@ impl WindowManager {
                 });
                 // Command palette (highest Z)
                 if self
-                    .command_menu_component
-                    .as_ref()
+                    .get_semantic_component(layer_manager::ComponentTag::CommandPalette)
                     .is_some_and(|m| m.hitbox_id() == Some(hitbox_id))
                 {
                     let ctx = self
@@ -1392,7 +1378,7 @@ impl WindowManager {
                         .with_overlay(true)
                         .with_screen_area(hit_rect)
                         .with_active_hitbox(hitbox_id);
-                    if let Some(menu) = &mut self.command_menu_component {
+                    if let Some(menu) = self.get_semantic_component_mut(layer_manager::ComponentTag::CommandPalette) {
                         let result = menu.handle_events(&core_event, &ctx);
                         return result.map(|action| (None, action));
                     }
@@ -1418,15 +1404,14 @@ impl WindowManager {
                 }
                 // FAB
                 if self
-                    .fab_component
-                    .as_ref()
+                    .get_semantic_component(layer_manager::ComponentTag::FloatingActionButton)
                     .is_some_and(|f| f.hitbox_id() == Some(hitbox_id))
                 {
                     let ctx = self
                         .component_context(false)
                         .with_screen_area(hit_rect)
                         .with_active_hitbox(hitbox_id);
-                    if let Some(fab) = &mut self.fab_component {
+                    if let Some(fab) = self.get_semantic_component_mut(layer_manager::ComponentTag::FloatingActionButton) {
                         let result = fab.handle_events(&core_event, &ctx);
                         return result.map(|action| (None, action));
                     }
@@ -1829,7 +1814,7 @@ impl WindowManager {
     /// Handle clicks on top-panel icons (menu, mouse capture, selection, etc.).
     /// Returns true if the click was consumed.
     fn handle_panel_click(&mut self, col: u16, row: u16) -> bool {
-        if self.top_component.is_none() {
+        if self.get_semantic_component(layer_manager::ComponentTag::TopPanel).is_none() {
             return false;
         }
         if !crate::layout::rect_contains(self.top_claimed, col, row) {
@@ -1843,7 +1828,7 @@ impl WindowManager {
             modifiers: KeyModifiers::NONE,
         });
         let ctx = self.component_context(false);
-        let Some(p) = self.top_component.as_mut() else {
+        let Some(p) = self.get_semantic_component_mut(layer_manager::ComponentTag::TopPanel) else {
             return false;
         };
         match p.handle_events(&down_event, &ctx) {
@@ -1900,7 +1885,7 @@ impl WindowManager {
         {
             handle.cancel(id);
         }
-        if let Some(menu) = &mut self.command_menu_component {
+        if let Some(menu) = self.get_semantic_component_mut(layer_manager::ComponentTag::CommandPalette) {
             menu.process_action(&ComponentAction::Restore);
         }
     }
@@ -2166,19 +2151,19 @@ impl WindowManager {
         if self.is_monocle() {
             return false;
         }
-        self.config.panel_enabled && self.top_component.as_ref().is_some_and(|p| p.visible())
+        self.config.panel_enabled && self.get_semantic_component(layer_manager::ComponentTag::TopPanel).is_some_and(|p| p.visible())
     }
 
     /// Register panel hitboxes (top and bottom) into the draw-time registry.
     /// Called before the window loop so panels are at the lowest Z-order.
     pub fn register_panel_hitboxes(&mut self) {
-        if let Some(top) = &self.top_component
+        if let Some(top) = self.get_semantic_component(layer_manager::ComponentTag::TopPanel)
             && !self.top_claimed.is_empty()
             && let Some(id) = top.hitbox_id()
         {
             self.hitbox_registry.register(id, self.top_claimed);
         }
-        if let Some(bottom) = &self.bottom_component
+        if let Some(bottom) = self.get_semantic_component(layer_manager::ComponentTag::BottomPanel)
             && !self.bottom_claimed.is_empty()
             && let Some(id) = bottom.hitbox_id()
         {
