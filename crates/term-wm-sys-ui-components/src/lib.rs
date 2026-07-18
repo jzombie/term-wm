@@ -1,4 +1,5 @@
 pub mod wm_bottom_panel;
+pub mod wm_command_palette;
 pub mod wm_debug_log;
 pub mod wm_fab;
 pub mod wm_help_overlay;
@@ -9,6 +10,7 @@ pub mod wm_system_panel;
 pub mod wm_top_panel;
 
 pub use wm_bottom_panel::WmBottomPanelComponent;
+pub use wm_command_palette::WmCommandPaletteComponent;
 pub use wm_debug_log::{WmDebugLogComponent, install_panic_hook, set_global_debug_log};
 pub use wm_fab::WmFabComponent;
 pub use wm_help_overlay::WmHelpOverlayComponent;

@@ -2,6 +2,7 @@ pub mod actions;
 pub mod app_context;
 pub use app_context::AppContext;
 pub mod component_context;
+pub mod command_menu;
 pub mod components;
 pub mod constants;
 pub mod debug_event_flags;
