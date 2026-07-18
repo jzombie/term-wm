@@ -2224,47 +2224,47 @@ pub fn wm_menu_items(
     };
     let mut items = vec![
         MenuItem {
-            label: "Resume",
+            label: "Resume".into(),
             icon: Some("▶"),
             action: crate::actions::TermWmAction::CloseMenu,
         },
         MenuItem {
-            label: mouse_label,
+            label: mouse_label.into(),
             icon: Some("◆"),
             action: crate::actions::TermWmAction::ToggleMouseCapture,
         },
         MenuItem {
-            label: clipboard_label,
+            label: clipboard_label.into(),
             icon: Some("■"),
             action: crate::actions::TermWmAction::ToggleClipboardMode,
         },
         MenuItem {
-            label: selection_label,
+            label: selection_label.into(),
             icon: Some("●"),
             action: crate::actions::TermWmAction::ToggleWindowSelection,
         },
         MenuItem {
-            label: "New Window",
+            label: "New Window".into(),
             icon: Some("+"),
             action: crate::actions::TermWmAction::NewWindow,
         },
         MenuItem {
-            label: "Debug Log",
+            label: "Debug Log".into(),
             icon: Some("≣"),
             action: crate::actions::TermWmAction::ToggleDebugWindow,
         },
         MenuItem {
-            label: "System Panel",
+            label: "System Panel".into(),
             icon: Some("⚙"),
             action: crate::actions::TermWmAction::ToggleSystemPanel,
         },
         MenuItem {
-            label: "Help",
+            label: "Help".into(),
             icon: Some("?"),
             action: crate::actions::TermWmAction::Help,
         },
         MenuItem {
-            label: "Exit UI",
+            label: "Exit UI".into(),
             icon: Some("⏻"),
             action: crate::actions::TermWmAction::ExitUi,
         },
@@ -2273,22 +2273,22 @@ pub fn wm_menu_items(
     if has_focused_window {
         items.extend_from_slice(&[
             MenuItem {
-                label: "Maximize Window",
+                label: "Maximize Window".into(),
                 icon: Some("⊞"),
                 action: crate::actions::TermWmAction::MaximizeWindow,
             },
             MenuItem {
-                label: "Minimize Window",
+                label: "Minimize Window".into(),
                 icon: Some("⊟"),
                 action: crate::actions::TermWmAction::MinimizeWindow,
             },
             MenuItem {
-                label: "Close Window",
+                label: "Close Window".into(),
                 icon: Some("✕"),
                 action: crate::actions::TermWmAction::CloseWindow,
             },
             MenuItem {
-                label: "Toggle Direct Mode",
+                label: "Toggle Direct Mode".into(),
                 icon: Some("🎯"),
                 action: crate::actions::TermWmAction::ToggleDirectMode,
             },
