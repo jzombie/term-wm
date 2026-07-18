@@ -5115,7 +5115,7 @@ mod tests {
         };
         wm.hitbox_registry.register(
             wm.window_content_hitbox_id(key)
-                .unwrap_or_else(HitboxId::new),
+                .unwrap_or_default(),
             hit_rect,
         );
 
@@ -5267,7 +5267,7 @@ mod tests {
         };
         wm.hitbox_registry.register(
             wm.window_content_hitbox_id(key)
-                .unwrap_or_else(HitboxId::new),
+                .unwrap_or_default(),
             hit_rect,
         );
 
