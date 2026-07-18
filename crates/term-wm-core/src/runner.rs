@@ -374,6 +374,11 @@ where
                                 app.wm().toggle_maximize(id);
                                 app.wm().close_command_menu();
                             }
+                            TermWmAction::ToggleDirectMode => {
+                                let id = app.wm().focused_window();
+                                app.wm().toggle_direct_mode(id);
+                                app.wm().close_command_menu();
+                            }
                             TermWmAction::CloseWindow => {
                                 let id = app.wm().focused_window();
                                 app.wm().close_window(id);

@@ -97,8 +97,14 @@ impl App {
         let app_name = app_ctx.app_name.clone();
         let app_version = app_ctx.app_version.clone();
 
-        let mut raw_menu = term_wm_sys_ui_components::WmCommandPaletteOverlay::new();
-        raw_menu.set_timeout(std::time::Duration::from_millis(500));
+        let mut raw_menu = term_wm_sys_ui_components::WmCommandPaletteComponent::new();
+        // Populate the initial command palette with standard WM actions.
+        raw_menu.set_items(term_wm_core::window::wm_menu_items(
+            false, // mouse_capture_enabled
+            false, // clipboard_enabled
+            false, // window_selection_enabled
+            false, // has_focused_window
+        ));
 
         let wm = if embedded {
             AppBuilder::bare()

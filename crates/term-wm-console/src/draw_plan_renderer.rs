@@ -550,10 +550,11 @@ pub fn render_overlays(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut
     let mc_enabled = wm.mouse_capture_enabled();
     let cb_enabled = wm.clipboard_enabled();
     let ws_enabled = wm.window_selection_enabled();
+    let has_focused = wm.window_count() > 0;
     let supported = wm.supported_menu_actions().to_vec();
 
     if menu_visible && let Some(menu) = wm.command_menu_component_mut() {
-        let items = wm_menu_items(mc_enabled, cb_enabled, ws_enabled);
+        let items = wm_menu_items(mc_enabled, cb_enabled, ws_enabled, has_focused);
         let items: Vec<MenuItem<TermWmAction>> = items
             .into_iter()
             .filter(|item| supported.contains(&item.action))
