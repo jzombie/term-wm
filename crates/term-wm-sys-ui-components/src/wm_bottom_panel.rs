@@ -8,6 +8,7 @@ use term_wm_core::{
         Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse,
         WmComponent,
     },
+    hitbox_registry::HitboxId,
     layout::rect_contains,
     power_profile::PowerProfile,
     utils::truncate_to_width,
@@ -23,6 +24,7 @@ pub struct WmBottomPanelComponent {
     keybinding_hints: Vec<(TermWmAction, Vec<String>)>,
     hint_rects: Vec<(LayoutRect, TermWmAction)>,
     power_profile: PowerProfile,
+    hitbox_id: HitboxId,
 }
 
 impl WmBottomPanelComponent {
@@ -35,6 +37,7 @@ impl WmBottomPanelComponent {
             keybinding_hints: Vec::new(),
             hint_rects: Vec::new(),
             power_profile: PowerProfile::PowerSaver,
+            hitbox_id: HitboxId::new(),
         }
     }
 
@@ -285,6 +288,10 @@ impl WmBottomPanelComponent {
 }
 
 impl Component<TermWmAction> for WmBottomPanelComponent {
+    fn hitbox_id(&self) -> Option<HitboxId> {
+        Some(self.hitbox_id)
+    }
+
     fn render(
         &mut self,
         backend: &mut dyn term_wm_render::RenderBackend,

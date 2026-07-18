@@ -10,6 +10,7 @@ use term_wm_core::{
         Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse,
         WmComponent,
     },
+    hitbox_registry::HitboxId,
     layout::rect_contains,
     utils::truncate_to_width,
     window::WindowKey,
@@ -83,6 +84,7 @@ pub struct WmTopPanelComponent {
     selection_dragging: bool,
     menu_open: bool,
     window_labels: BTreeMap<WindowKey, String>,
+    hitbox_id: HitboxId,
 }
 
 impl WmTopPanelComponent {
@@ -106,6 +108,7 @@ impl WmTopPanelComponent {
             selection_dragging: false,
             menu_open: false,
             window_labels: BTreeMap::new(),
+            hitbox_id: HitboxId::new(),
         }
     }
 
@@ -452,6 +455,10 @@ impl WmTopPanelComponent {
 }
 
 impl Component<TermWmAction> for WmTopPanelComponent {
+    fn hitbox_id(&self) -> Option<HitboxId> {
+        Some(self.hitbox_id)
+    }
+
     fn render(
         &mut self,
         backend: &mut dyn term_wm_render::RenderBackend,
