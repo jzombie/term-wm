@@ -226,7 +226,7 @@ impl CommandPaletteComponent {
         hovered_idx: Option<usize>,
         theme: &term_wm_core::theme::Theme,
     ) {
-        if area.width < 5 || area.height < 3 {
+        if area.width < 5 || area.height < 2 {
             return;
         }
         let bounds = area.intersection(buffer.area);
