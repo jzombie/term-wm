@@ -90,8 +90,6 @@ impl Default for KeyBindings {
             MenuUp: [ (KeyCode::Up, KeyModifiers::NONE) ],
             MenuDown: [ (KeyCode::Down, KeyModifiers::NONE) ],
             MenuSelect: [ (KeyCode::Enter, KeyModifiers::NONE) ],
-            MenuNext: [ (KeyCode::Char('j'), KeyModifiers::NONE) ],
-            MenuPrev: [ (KeyCode::Char('k'), KeyModifiers::NONE) ],
             ConfirmToggle: [ (KeyCode::Tab, KeyModifiers::NONE), (KeyCode::Tab, KeyModifiers { shift: true, control: false, alt: false }) ],
             ConfirmLeft: [ (KeyCode::Left, KeyModifiers::NONE) ],
             ConfirmRight: [ (KeyCode::Right, KeyModifiers::NONE) ],
