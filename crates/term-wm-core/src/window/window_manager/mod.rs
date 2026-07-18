@@ -474,6 +474,9 @@ impl WindowManager {
     pub fn set_direct_mode(&mut self, key: WindowKey, value: bool) {
         if let Some(w) = self.windows.get_mut(key) {
             w.direct_mode = value;
+            if value {
+                w.component.clear_selection();
+            }
         }
     }
 

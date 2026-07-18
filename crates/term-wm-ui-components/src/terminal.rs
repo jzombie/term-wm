@@ -308,6 +308,10 @@ impl Component<TermWmAction> for TerminalComponent {
         self.selection_text_for_range(range)
     }
 
+    fn clear_selection(&mut self) {
+        self.selection.get_mut().clear();
+    }
+
     fn paste(&mut self, text: &str) -> bool {
         if text.is_empty() {
             return false;
