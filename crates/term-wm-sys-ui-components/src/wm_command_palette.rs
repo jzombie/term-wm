@@ -136,10 +136,10 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
         ctx: &ComponentContext,
         registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
-        // Note: We can't pass registry here for refresh_if_dirty because the registry
-        // is a hitbox registry, not the CommandRegistry. The CommandRegistry must be
-        // set up separately. For now, the refresh happens via the runner calling
-        // `refresh_if_dirty` before render.
+        // Refresh data cache and re-rank before rendering.
+        // This is safe because we own the CommandRegistry internally.
+        self.refresh_if_dirty();
+
         let (content_width, content_height) = self.compute_content_dimensions();
         self.palette.set_placement(Placement::Centered {
             width: content_width,
@@ -212,6 +212,12 @@ impl WmComponent for WmCommandPaletteComponent {
                 inner.selected = 0;
                 inner.data_dirty = true;
                 inner.query_dirty = true;
+            }
+            ComponentAction::SetMenuItems(items) => {
+                // Rebuild the registry from the item list (called every frame by the renderer).
+                // Clear and re-register to stay in sync with the WM's state.
+                self.registry = CommandRegistry::new();
+                self.set_items(items.clone());
             }
             ComponentAction::SetManagedArea(area) => self.set_managed_area(*area),
             _ => {}
