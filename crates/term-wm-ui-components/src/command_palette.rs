@@ -43,7 +43,7 @@ pub struct CommandPaletteComponent {
     display_items: Vec<(String, String)>,
     nav_keys: KeyBindings,
     list_scroll: ScrollViewComponent<MenuComponent>,
-    last_list_area: Option<LayoutRect>,
+    last_list_area: LayoutRect,
 }
 
 impl Default for CommandPaletteComponent {
@@ -85,7 +85,7 @@ impl CommandPaletteComponent {
             display_items: Vec::new(),
             nav_keys,
             list_scroll,
-            last_list_area: None,
+            last_list_area: LayoutRect::default(),
         }
     }
 
@@ -339,7 +339,7 @@ impl Component<TermWmAction> for CommandPaletteComponent {
             width: bounds.width,
             height: bounds.height.saturating_sub(1),
         };
-        self.last_list_area = Some(list_area);
+        self.last_list_area = list_area;
         self.list_scroll.render(backend, list_area, ctx, registry);
     }
 
@@ -348,12 +348,9 @@ impl Component<TermWmAction> for CommandPaletteComponent {
         event: &Event,
         ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
-        // Delegate mouse events to ScrollViewComponent with correct screen_area
+        // Delegate all mouse events to ScrollViewComponent with the correct area
         if matches!(event, Event::Mouse(_)) {
-            let list_ctx = self
-                .last_list_area
-                .map(|la| ctx.clone().with_screen_area(la))
-                .unwrap_or_else(|| ctx.clone());
+            let list_ctx = ctx.clone().with_screen_area(self.last_list_area);
             let result = self.list_scroll.handle_events(event, &list_ctx);
             self.sync_selected();
             return result;
