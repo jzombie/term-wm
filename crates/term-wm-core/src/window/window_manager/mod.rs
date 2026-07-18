@@ -1325,25 +1325,44 @@ impl WindowManager {
             }
         }
 
-        // Phase 2 — Scroll events: hover-to-scroll to the window under cursor.
+        // Phase 2 — Scroll events: hover-to-scroll to the window or palette under cursor.
         if matches!(kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) {
             // Use registry hit-test for scroll dispatch.
-            if let Some((target, hit_rect)) = self.hitbox_registry.hit_test(*position)
-                && let HitTarget::Window(key) | HitTarget::Component(key, ..) = target
-            {
-                let focused = *self.focus.current() == key;
-                let ctx = self
-                    .component_context_for(focused, key)
-                    .with_screen_area(hit_rect);
-                let core_event = Event::Mouse(MouseEvent {
-                    kind: *kind,
-                    column: col,
-                    row,
-                    modifiers: *modifiers,
-                });
-                if let Some(comp) = self.component_for_key_mut(key) {
-                    let result = comp.handle_events(&core_event, &ctx);
-                    return result.map(|action| (Some(key), action));
+            if let Some((target, hit_rect)) = self.hitbox_registry.hit_test(*position) {
+                match target {
+                    HitTarget::Window(key) | HitTarget::Component(key, ..) => {
+                        let focused = *self.focus.current() == key;
+                        let ctx = self
+                            .component_context_for(focused, key)
+                            .with_screen_area(hit_rect);
+                        let core_event = Event::Mouse(MouseEvent {
+                            kind: *kind,
+                            column: col,
+                            row,
+                            modifiers: *modifiers,
+                        });
+                        if let Some(comp) = self.component_for_key_mut(key) {
+                            let result = comp.handle_events(&core_event, &ctx);
+                            return result.map(|action| (Some(key), action));
+                        }
+                    }
+                    HitTarget::CommandPalette => {
+                        let ctx = self
+                            .component_context(false)
+                            .with_overlay(true)
+                            .with_screen_area(hit_rect);
+                        let core_event = Event::Mouse(MouseEvent {
+                            kind: *kind,
+                            column: col,
+                            row,
+                            modifiers: *modifiers,
+                        });
+                        if let Some(menu) = &mut self.command_menu_component {
+                            let result = menu.handle_events(&core_event, &ctx);
+                            return result.map(|action| (None, action));
+                        }
+                    }
+                    _ => {}
                 }
             }
             return EventResult::Ignored;
@@ -1595,6 +1614,18 @@ impl WindowManager {
             HitTarget::SessionManager => {
                 // Session manager taps are handled by the component.
                 EventResult::Consumed
+            }
+            HitTarget::CommandPalette => {
+                let ctx = self
+                    .component_context_for(false, slotmap::DefaultKey::default())
+                    .with_overlay(true)
+                    .with_screen_area(hit_rect);
+                if let Some(menu) = &mut self.command_menu_component {
+                    menu.handle_events(&core_event, &ctx)
+                        .map(|action| (None, action))
+                } else {
+                    EventResult::Ignored
+                }
             }
         }
     }

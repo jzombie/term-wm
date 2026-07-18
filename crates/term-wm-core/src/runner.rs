@@ -427,11 +427,9 @@ where
                     if app.wm().handle_focus_event(&evt) {
                         if matches!(&evt, Event::Key(_)) {
                             app.wm().fold_menu();
-                        } else {
-                            app.wm().close_command_menu();
+                            update_selection_snapshot(app);
+                            return flush_state_changes(app, ControlFlow::Continue, false);
                         }
-                        update_selection_snapshot(app);
-                        return flush_state_changes(app, ControlFlow::Continue, false);
                     }
                     // Dispatch remaining WmMode actions (Quit, OpenHelp, etc.)
                     // while the WM overlay is open.

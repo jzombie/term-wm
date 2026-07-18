@@ -246,7 +246,7 @@ impl Component<TermWmAction> for MenuComponent {
                     let idx = visual_idx + offset_y;
                     if idx < self.items.len() {
                         self.selected = idx;
-                        return EventResult::Consumed;
+                        return EventResult::Action(TermWmAction::MenuSelect);
                     }
                 }
             }
