@@ -1,4 +1,5 @@
 use crate::Rect;
+use crate::hitbox_registry::HitboxId;
 use term_wm_layout_engine::LayoutRect;
 
 pub use term_wm_layout_engine::{FLOATING_MIN_HEIGHT, FLOATING_MIN_WIDTH, ResizeEdge};
@@ -8,6 +9,7 @@ pub struct ResizeHandle<K: Copy + Eq + Ord> {
     pub key: K,
     pub rect: Rect,
     pub edge: ResizeEdge,
+    pub hitbox_id: HitboxId,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -36,6 +38,7 @@ pub struct HeaderDrag<K: Copy + Eq + Ord> {
 pub struct DragHandle<K: Copy + Eq + Ord> {
     pub key: K,
     pub rect: Rect,
+    pub hitbox_id: HitboxId,
 }
 
 pub fn resize_handles_for_region<K: Copy + Eq + Ord>(
@@ -66,6 +69,7 @@ pub fn resize_handles_for_region<K: Copy + Eq + Ord>(
             height: 1,
         },
         edge: ResizeEdge::TopLeft,
+        hitbox_id: HitboxId::new(),
     });
     handles.push(ResizeHandle {
         key,
@@ -76,6 +80,7 @@ pub fn resize_handles_for_region<K: Copy + Eq + Ord>(
             height: 1,
         },
         edge: ResizeEdge::TopRight,
+        hitbox_id: HitboxId::new(),
     });
     handles.push(ResizeHandle {
         key,
@@ -86,6 +91,7 @@ pub fn resize_handles_for_region<K: Copy + Eq + Ord>(
             height: 1,
         },
         edge: ResizeEdge::BottomLeft,
+        hitbox_id: HitboxId::new(),
     });
     handles.push(ResizeHandle {
         key,
@@ -96,6 +102,7 @@ pub fn resize_handles_for_region<K: Copy + Eq + Ord>(
             height: 1,
         },
         edge: ResizeEdge::BottomRight,
+        hitbox_id: HitboxId::new(),
     });
     if rect.width > 2 && can_top {
         handles.push(ResizeHandle {
@@ -107,6 +114,7 @@ pub fn resize_handles_for_region<K: Copy + Eq + Ord>(
                 height: 1,
             },
             edge: ResizeEdge::Top,
+            hitbox_id: HitboxId::new(),
         });
     }
     if rect.width > 2 && can_bottom {
@@ -119,6 +127,7 @@ pub fn resize_handles_for_region<K: Copy + Eq + Ord>(
                 height: 1,
             },
             edge: ResizeEdge::Bottom,
+            hitbox_id: HitboxId::new(),
         });
     }
     if rect.height > 2 && can_left {
@@ -131,6 +140,7 @@ pub fn resize_handles_for_region<K: Copy + Eq + Ord>(
                 height: rect.height.saturating_sub(2),
             },
             edge: ResizeEdge::Left,
+            hitbox_id: HitboxId::new(),
         });
     }
     if rect.height > 2 && can_right {
@@ -143,6 +153,7 @@ pub fn resize_handles_for_region<K: Copy + Eq + Ord>(
                 height: rect.height.saturating_sub(2),
             },
             edge: ResizeEdge::Right,
+            hitbox_id: HitboxId::new(),
         });
     }
     handles.retain(|handle| match handle.edge {
@@ -178,6 +189,7 @@ pub fn floating_header_for_region<K: Copy + Eq + Ord>(
             width: rect.width.saturating_sub(2),
             height: 1,
         },
+        hitbox_id: HitboxId::new(),
     })
 }
 

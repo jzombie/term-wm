@@ -1,6 +1,7 @@
 use super::FloatRectSpec;
 use crate::actions::TermWmAction;
 use crate::components::Component;
+use crate::hitbox_registry::HitboxId;
 
 /// Canonical window lifecycle states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +39,8 @@ pub struct Window {
     /// The renderable component. Every window has one.
     /// For chrome-only windows, use `NoopComponent`.
     pub component: Box<dyn Component<TermWmAction>>,
+    /// Persistent HitboxId for the window's content area.
+    pub content_hitbox_id: HitboxId,
 }
 
 impl Window {
@@ -53,6 +56,7 @@ impl Window {
             is_system_window: false,
             is_maximized: false,
             component,
+            content_hitbox_id: HitboxId::new(),
         }
     }
 

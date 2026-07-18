@@ -580,6 +580,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                             path: path.clone(),
                             index,
                             direction: *direction,
+                            hitbox_id: crate::hitbox_registry::HitboxId::new(),
                         });
                     }
                 }
@@ -724,6 +725,7 @@ pub struct SplitHandle {
     pub path: Vec<usize>,
     pub index: usize,
     pub direction: Direction,
+    pub hitbox_id: crate::hitbox_registry::HitboxId,
 }
 
 #[derive(Debug)]

@@ -15,8 +15,7 @@ use term_wm_console::draw_plan_renderer::{
     render_drop_shadow, render_ghost_preview, render_handles_masked, render_overlays,
     render_panels, render_resize_outline,
 };
-use term_wm_core::hitbox_registry::{HitTarget, HitboxRegistry};
-use term_wm_core::window::decorator::{HeaderAction, header_buttons};
+use term_wm_core::hitbox_registry::HitboxRegistry;
 use term_wm_core::window::{WindowManager, WindowSurface};
 
 /// Default rendering implementation for the window manager.
@@ -62,24 +61,11 @@ pub fn render_app(
     let total = num_windows + wm.visible_overlay_count();
 
     // Register panel hitboxes BEFORE the window loop (lowest Z-order)
-    let top_claimed = wm.top_claimed_area();
-    if wm.top_component_mut().is_some() && !top_claimed.is_empty() {
-        wm.hitbox_registry_mut()
-            .register(HitTarget::TopPanel, top_claimed);
-    }
-    let bottom_claimed = wm.bottom_claimed_area();
-    if wm.bottom_component_mut().is_some() && !bottom_claimed.is_empty() {
-        wm.hitbox_registry_mut()
-            .register(HitTarget::BottomPanel, bottom_claimed);
-    }
+    wm.register_panel_hitboxes();
 
     // Register tiling split handle hitboxes below windows
     if !wm.is_monocle() {
-        let handles = wm.tiling_handles().to_vec();
-        for handle in &handles {
-            wm.hitbox_registry_mut()
-                .register(HitTarget::LayoutHandle, handle.rect);
-        }
+        wm.register_layout_handle_hitboxes();
     }
 
     let decorator = wm.decorator();
@@ -145,33 +131,13 @@ pub fn render_app(
                     width: surface.dest.width,
                     height: surface.dest.height,
                 });
+                let content_hitbox_id = wm.window_content_hitbox_id(*key)
+                    .unwrap_or_default();
                 wm.hitbox_registry_mut()
-                    .register(HitTarget::Window(*key), screen_inner);
+                    .register(content_hitbox_id, screen_inner);
 
-                // Collect chrome entries for this window, then register
-                let mut chrome = Vec::new();
-                for h in wm.resize_handles().iter().filter(|h| h.key == *key) {
-                    chrome.push((HitTarget::ChromeResize(h.key, h.edge), h.rect));
-                }
-                for h in wm.floating_headers().iter().filter(|h| h.key == *key) {
-                    chrome.push((HitTarget::ChromeHeader(h.key, HeaderAction::Drag), h.rect));
-                    let outer_right =
-                        (h.rect.x.saturating_add(i32::from(h.rect.width))).max(0) as u16;
-                    for (bx, action, _) in header_buttons(outer_right) {
-                        chrome.push((
-                            HitTarget::ChromeHeader(h.key, action),
-                            term_wm_layout_engine::LayoutRect {
-                                x: i32::from(bx),
-                                y: h.rect.y,
-                                width: 1,
-                                height: 1,
-                            },
-                        ));
-                    }
-                }
-                for (target, rect) in chrome {
-                    wm.hitbox_registry_mut().register(target, rect);
-                }
+                // Register chrome hitboxes (resize handles + header)
+                wm.register_window_chrome_hitboxes(*key);
 
                 let title = all_titles.get(key).map(String::as_str).unwrap_or("");
                 let win_ctx = term_wm_core::window::decorator::WindowRenderCtx {
@@ -419,13 +385,21 @@ pub fn render_app(
     render_overlays(backend, wm);
 
     // Register notification hitboxes — swallows mouse events over toast area
-    for region in draw_plan.regions() {
-        if matches!(
-            region.region_type,
-            term_wm_core::draw_plan::RegionType::Notification(_)
-        ) {
-            wm.hitbox_registry_mut()
-                .register(HitTarget::Notification, region.bounds);
+    // Use a static hitbox_id for the notification area
+    {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NOTIFICATION_HITBOX_ID: AtomicU64 = AtomicU64::new(0);
+        let notif_id = term_wm_core::hitbox_registry::HitboxId(
+            NOTIFICATION_HITBOX_ID.load(Ordering::Relaxed)
+        );
+        for region in draw_plan.regions() {
+            if matches!(
+                region.region_type,
+                term_wm_core::draw_plan::RegionType::Notification(_)
+            ) {
+                wm.hitbox_registry_mut()
+                    .register(notif_id, region.bounds);
+            }
         }
     }
 

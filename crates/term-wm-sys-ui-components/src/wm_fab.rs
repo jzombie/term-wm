@@ -5,7 +5,7 @@ use term_wm_core::{
     actions::{EventResult, TermWmAction},
     components::{Component, ComponentContext, WmComponent},
     events::Event,
-    hitbox_registry::{HitTarget, HitboxRegistry},
+    hitbox_registry::{HitboxId, HitboxRegistry},
     window::WindowKey,
 };
 use term_wm_ui_components::helpers::{downcast_ratatui, layout_rect_to_rect};
@@ -17,6 +17,7 @@ use term_wm_ui_components::helpers::{downcast_ratatui, layout_rect_to_rect};
 pub struct WmFabComponent {
     visible: bool,
     fab_rect: LayoutRect,
+    hitbox_id: HitboxId,
 }
 
 impl WmFabComponent {
@@ -24,6 +25,7 @@ impl WmFabComponent {
         Self {
             visible: true,
             fab_rect: LayoutRect::default(),
+            hitbox_id: HitboxId::new(),
         }
     }
 
@@ -68,7 +70,7 @@ impl Component<TermWmAction> for WmFabComponent {
         // Register in hitbox for coordinate-based interception
         // No window_key guard — FAB is a global singleton mounted via AppBuilder,
         // not a SlotMap window, so on_mount is never called.
-        registry.register(HitTarget::Fab, self.fab_rect);
+        registry.register(self.hitbox_id, self.fab_rect);
 
         // Render "≡" icon into the buffer
         let ratatui_backend = downcast_ratatui(backend);
@@ -117,6 +119,10 @@ impl Component<TermWmAction> for WmFabComponent {
         _ctx: &ComponentContext,
         _actions: &mut std::collections::VecDeque<(WindowKey, TermWmAction)>,
     ) {
+    }
+
+    fn hitbox_id(&self) -> Option<HitboxId> {
+        Some(self.hitbox_id)
     }
 
     fn destroy(&mut self) {}

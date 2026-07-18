@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::app_context::AppContext;
 use crate::events::{Event, MouseButton, MouseEventKind};
+use crate::hitbox_registry::HitboxId;
 use crate::keybindings::KeyBindings;
 use crate::window::WindowKey;
 use crate::wm_config::WmConfig;
@@ -44,6 +45,10 @@ pub struct ComponentContext {
     /// Set during render so that components can convert screen-space mouse
     /// positions to local coordinates via `position.to_local(screen_area)`.
     screen_area: Option<term_wm_layout_engine::LayoutRect>,
+    /// The HitboxId of the topmost hitbox under the mouse cursor.
+    /// Set during event dispatch by the WindowManager after a hit-test.
+    /// Components use this for self-identification: `ctx.active_hitbox() == Some(self.hitbox_id)`.
+    active_hitbox: Option<HitboxId>,
 }
 
 /// Viewport metadata describing how the component is projected into a
@@ -222,6 +227,7 @@ impl ComponentContext {
                 .get_or_init(|| Arc::new(WmConfig::standalone()))
                 .clone(),
             screen_area: None,
+            active_hitbox: None,
         }
     }
 
@@ -354,6 +360,19 @@ impl ComponentContext {
     pub fn with_screen_area(&self, area: term_wm_layout_engine::LayoutRect) -> Self {
         let mut ctx = self.clone();
         ctx.screen_area = Some(area);
+        ctx
+    }
+
+    /// Returns the HitboxId of the topmost hitbox under the cursor.
+    /// Set by the WindowManager after a spatial hit-test.
+    pub fn active_hitbox(&self) -> Option<HitboxId> {
+        self.active_hitbox
+    }
+
+    /// Return a new `ComponentContext` with an active hitbox ID.
+    pub fn with_active_hitbox(&self, id: HitboxId) -> Self {
+        let mut ctx = self.clone();
+        ctx.active_hitbox = Some(id);
         ctx
     }
 

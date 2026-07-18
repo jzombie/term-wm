@@ -424,13 +424,12 @@ where
                     }
                     // Focus routing in WM mode (Tab/Shift+Tab)
                     // Fold menu to outline so user can see the window they focused.
-                    if app.wm().handle_focus_event(&evt) {
-                        if matches!(&evt, Event::Key(_)) {
+                    if app.wm().handle_focus_event(&evt)
+                        && matches!(&evt, Event::Key(_)) {
                             app.wm().fold_menu();
                             update_selection_snapshot(app);
                             return flush_state_changes(app, ControlFlow::Continue, false);
                         }
-                    }
                     // Dispatch remaining WmMode actions (Quit, OpenHelp, etc.)
                     // while the WM overlay is open.
                     if let Some(action) = mapped_action_wm_mode {

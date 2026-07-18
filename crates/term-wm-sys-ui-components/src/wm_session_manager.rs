@@ -5,7 +5,7 @@ use term_wm_layout_engine::LayoutRect;
 use term_wm_core::{
     actions::{EventResult, TermWmAction},
     components::{Component, ComponentContext},
-    hitbox_registry::{HitTarget, HitboxRegistry},
+    hitbox_registry::{HitboxId, HitboxRegistry},
     window::WindowKey,
 };
 use term_wm_ui_components::helpers::{downcast_ratatui, layout_rect_to_rect};
@@ -26,6 +26,7 @@ pub struct WmSessionManagerComponent {
     visible: bool,
     sessions: Vec<SessionEntry>,
     window_key: Option<WindowKey>,
+    hitbox_id: HitboxId,
 }
 
 impl WmSessionManagerComponent {
@@ -34,6 +35,7 @@ impl WmSessionManagerComponent {
             visible: false,
             sessions: Vec::new(),
             window_key: None,
+            hitbox_id: HitboxId::new(),
         }
     }
 
@@ -111,7 +113,7 @@ impl Component<TermWmAction> for WmSessionManagerComponent {
 
             // Register each row for hit-testing
             if let Some(_key) = self.window_key {
-                registry.register(HitTarget::Window(entry.key), row_rect);
+                registry.register(self.hitbox_id, row_rect);
             }
 
             // Render title with activity indicator
@@ -170,6 +172,10 @@ impl Component<TermWmAction> for WmSessionManagerComponent {
         _ctx: &ComponentContext,
         _actions: &mut std::collections::VecDeque<(WindowKey, TermWmAction)>,
     ) {
+    }
+
+    fn hitbox_id(&self) -> Option<HitboxId> {
+        Some(self.hitbox_id)
     }
 
     fn destroy(&mut self) {}
