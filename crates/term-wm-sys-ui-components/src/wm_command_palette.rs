@@ -156,25 +156,19 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
         self.last_action = None;
         let result = self.palette.handle_events(event, ctx);
         match result {
-            EventResult::Action(action) => {
-                self.palette.update(action.clone(), ctx, &mut VecDeque::new());
-                if action == TermWmAction::CloseMenu {
-                    return EventResult::Consumed;
+            EventResult::Action(action) => match action {
+                TermWmAction::CloseMenu => EventResult::Action(action),
+                TermWmAction::MenuSelect => {
+                    self.palette.update(action, ctx, &mut VecDeque::new());
+                    self.last_action = self.palette.inner().selected_action().cloned();
+                    EventResult::Consumed
                 }
-                // For non-close actions, the selected action is retrieved via query
-                if let Some(action) = self.palette.inner().selected_action() {
-                    self.last_action = Some(action.clone());
-                    return EventResult::Consumed;
+                _ => {
+                    self.palette.update(action, ctx, &mut VecDeque::new());
+                    EventResult::Consumed
                 }
-                EventResult::Consumed
-            }
-            EventResult::Consumed => {
-                // If Enter was pressed, grab the selected action
-                if let Some(action) = self.palette.inner().selected_action() {
-                    self.last_action = Some(action.clone());
-                }
-                EventResult::Consumed
-            }
+            },
+            EventResult::Consumed => EventResult::Consumed,
             EventResult::Ignored => EventResult::Ignored,
         }
     }

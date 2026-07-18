@@ -6,7 +6,8 @@ use term_wm_core::command_menu::{
     CommandNodeId, CommandRegistry, ContextMask, FuzzyMatch, MruRanker,
 };
 use term_wm_core::components::{Component, ComponentContext};
-use term_wm_core::events::{Event, KeyCode, KeyKind, MouseEventKind};
+use term_wm_core::events::{Event, KeyCode, KeyKind, KeyModifiers, MouseEventKind};
+use term_wm_core::keybindings::{KeyBindings, KeyCombo};
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
 
@@ -24,23 +25,22 @@ pub struct PaletteItem {
 
 /// A universal, fuzzy-searchable Command Palette component.
 ///
-/// This component acts as a dumb rendering terminal. The `Matcher` and `MruRanker`
-/// are owned by the WindowManager and passed as `&mut` references during event
-/// handling — they survive palette open/close cycles.
+/// Navigation is resolved through the `KeyBindings` system (same as `MenuComponent`),
+/// ensuring the runner's `wm_menu_consumes_event` stays in sync. Character input
+/// falls through to the search bar when no nav binding matches.
 pub struct CommandPaletteComponent {
     pub query: String,
     pub cursor: usize,
     pub filtered_items: Vec<PaletteItem>,
     pub selected: usize,
 
-    // Granular dirty flags — see event flow for lifecycle
     pub data_dirty: bool,
     pub query_dirty: bool,
-
-    // Cached state rebuilt on data_dirty
-    active_ids: Vec<CommandNodeId>,
-    display_items: Vec<(String, String)>, // (name, description), 1:1 with active_ids
     pub current_context_mask: ContextMask,
+
+    active_ids: Vec<CommandNodeId>,
+    display_items: Vec<(String, String)>,
+    nav_keys: KeyBindings,
 }
 
 impl Default for CommandPaletteComponent {
@@ -51,6 +51,11 @@ impl Default for CommandPaletteComponent {
 
 impl CommandPaletteComponent {
     pub fn new() -> Self {
+        let mut nav_keys = KeyBindings::new();
+        nav_keys.add(TermWmAction::MenuUp, KeyCombo::new(KeyCode::Up, KeyModifiers::NONE));
+        nav_keys.add(TermWmAction::MenuDown, KeyCombo::new(KeyCode::Down, KeyModifiers::NONE));
+        nav_keys.add(TermWmAction::MenuSelect, KeyCombo::new(KeyCode::Enter, KeyModifiers::NONE));
+
         Self {
             query: String::new(),
             cursor: 0,
@@ -61,6 +66,7 @@ impl CommandPaletteComponent {
             active_ids: Vec::new(),
             display_items: Vec::new(),
             current_context_mask: ContextMask::NONE,
+            nav_keys,
         }
     }
 
@@ -84,7 +90,7 @@ impl CommandPaletteComponent {
             })
             .collect();
         self.data_dirty = false;
-        self.query_dirty = true; // ensure re-rank with new cache
+        self.query_dirty = true;
     }
 
     /// Re-score the existing cache against the current query.
@@ -370,10 +376,10 @@ impl Component<TermWmAction> for CommandPaletteComponent {
                 let my = mouse.row;
                 if mx >= area.x.max(0) as u16
                     && mx < (area.x.max(0) as u16).saturating_add(area.width)
-                    && my >= (area.y.max(0) as u16).saturating_add(1)
+                    && my >= area.y.max(0) as u16 + 1
                     && my < (area.y.max(0) as u16).saturating_add(area.height)
                 {
-                    let idx = (my.saturating_sub(area.y.max(0) as u16).saturating_sub(1)) as usize;
+                    let idx = (my - area.y.max(0) as u16 - 1) as usize;
                     if idx < self.filtered_items.len() {
                         self.selected = idx;
                         return EventResult::Consumed;
@@ -391,33 +397,29 @@ impl Component<TermWmAction> for CommandPaletteComponent {
             return EventResult::Ignored;
         }
 
-        // TODO: Do not hardocde key codes for menu selection here. Use registered key bindings.
+        // Navigation via keybindings (Up, Down, Enter)
+        if self.nav_keys.matches(TermWmAction::MenuUp, key) {
+            return EventResult::Action(TermWmAction::MenuUp);
+        }
+        if self.nav_keys.matches(TermWmAction::MenuDown, key) {
+            return EventResult::Action(TermWmAction::MenuDown);
+        }
+        if self.nav_keys.matches(TermWmAction::MenuSelect, key)
+            && !self.filtered_items.is_empty()
+        {
+            return EventResult::Action(TermWmAction::MenuSelect);
+        }
+
+        // Fallback: character input for search bar
         match key.code {
             KeyCode::Esc => EventResult::Action(TermWmAction::CloseMenu),
-            KeyCode::Enter if !self.filtered_items.is_empty() => EventResult::Consumed,
-            KeyCode::Up | KeyCode::Char('k') if !self.filtered_items.is_empty() => {
-                let total = self.filtered_items.len();
-                self.selected = if self.selected == 0 {
-                    total - 1
-                } else {
-                    self.selected - 1
-                };
-                EventResult::Consumed
-            }
-            KeyCode::Down | KeyCode::Char('j') if !self.filtered_items.is_empty() => {
-                let total = self.filtered_items.len();
-                self.selected = (self.selected + 1) % total;
-                EventResult::Consumed
-            }
             KeyCode::Char(ch) if !key.modifiers.control => {
                 self.query.push(ch);
-                self.cursor += 1;
                 self.query_dirty = true;
                 EventResult::Consumed
             }
-            KeyCode::Backspace if !self.query.is_empty() => {
+            KeyCode::Backspace => {
                 self.query.pop();
-                self.cursor = self.cursor.saturating_sub(1);
                 self.query_dirty = true;
                 EventResult::Consumed
             }
@@ -427,17 +429,36 @@ impl Component<TermWmAction> for CommandPaletteComponent {
 
     fn update(
         &mut self,
-        _action: TermWmAction,
+        action: TermWmAction,
         _ctx: &ComponentContext,
         _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
     ) {
+        match action {
+            TermWmAction::MenuUp => {
+                let total = self.filtered_items.len();
+                if total > 0 {
+                    self.selected = if self.selected == 0 {
+                        total - 1
+                    } else {
+                        self.selected - 1
+                    };
+                }
+            }
+            TermWmAction::MenuDown => {
+                let total = self.filtered_items.len();
+                if total > 0 {
+                    self.selected = (self.selected + 1) % total;
+                }
+            }
+            _ => {}
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use term_wm_core::events::{KeyEvent, KeyModifiers, MouseButton};
+    use term_wm_core::events::{KeyEvent, MouseButton};
 
     fn make_palette_with_items() -> CommandPaletteComponent {
         let mut palette = CommandPaletteComponent::new();
@@ -490,7 +511,7 @@ mod tests {
     }
 
     #[test]
-    fn navigation_down() {
+    fn down_arrow_returns_menu_down_action() {
         let mut palette = make_palette_with_items();
         let ctx = ComponentContext::new(true);
         let event = Event::Key(KeyEvent {
@@ -498,12 +519,12 @@ mod tests {
             modifiers: KeyModifiers::NONE,
             kind: KeyKind::Press,
         });
-        palette.handle_events(&event, &ctx);
-        assert_eq!(palette.selected, 1);
+        let result = palette.handle_events(&event, &ctx);
+        assert!(matches!(result, EventResult::Action(TermWmAction::MenuDown)));
     }
 
     #[test]
-    fn navigation_up_wraps() {
+    fn up_arrow_returns_menu_up_action() {
         let mut palette = make_palette_with_items();
         let ctx = ComponentContext::new(true);
         let event = Event::Key(KeyEvent {
@@ -511,26 +532,46 @@ mod tests {
             modifiers: KeyModifiers::NONE,
             kind: KeyKind::Press,
         });
-        palette.handle_events(&event, &ctx);
-        assert_eq!(palette.selected, 2); // wraps to last
+        let result = palette.handle_events(&event, &ctx);
+        assert!(matches!(result, EventResult::Action(TermWmAction::MenuUp)));
     }
 
     #[test]
-    fn navigation_down_wraps() {
+    fn update_menu_down_increments_selection() {
+        let mut palette = make_palette_with_items();
+        let ctx = ComponentContext::new(true);
+        palette.update(TermWmAction::MenuDown, &ctx, &mut VecDeque::new());
+        assert_eq!(palette.selected, 1);
+    }
+
+    #[test]
+    fn update_menu_up_decrements_selection() {
+        let mut palette = make_palette_with_items();
+        let ctx = ComponentContext::new(true);
+        palette.selected = 1;
+        palette.update(TermWmAction::MenuUp, &ctx, &mut VecDeque::new());
+        assert_eq!(palette.selected, 0);
+    }
+
+    #[test]
+    fn update_menu_down_wraps() {
         let mut palette = make_palette_with_items();
         let ctx = ComponentContext::new(true);
         palette.selected = 2;
-        let event = Event::Key(KeyEvent {
-            code: KeyCode::Down,
-            modifiers: KeyModifiers::NONE,
-            kind: KeyKind::Press,
-        });
-        palette.handle_events(&event, &ctx);
-        assert_eq!(palette.selected, 0); // wraps to first
+        palette.update(TermWmAction::MenuDown, &ctx, &mut VecDeque::new());
+        assert_eq!(palette.selected, 0);
     }
 
     #[test]
-    fn typing_query_sets_dirty() {
+    fn update_menu_up_wraps() {
+        let mut palette = make_palette_with_items();
+        let ctx = ComponentContext::new(true);
+        palette.update(TermWmAction::MenuUp, &ctx, &mut VecDeque::new());
+        assert_eq!(palette.selected, 2);
+    }
+
+    #[test]
+    fn typing_char_appends_to_query() {
         let mut palette = make_palette_with_items();
         palette.query_dirty = false;
         let ctx = ComponentContext::new(true);
@@ -548,7 +589,6 @@ mod tests {
     fn backspace_removes_from_query() {
         let mut palette = make_palette_with_items();
         palette.query = "abc".to_string();
-        palette.cursor = 3;
         palette.query_dirty = false;
         let ctx = ComponentContext::new(true);
         let event = Event::Key(KeyEvent {
@@ -571,10 +611,7 @@ mod tests {
             kind: KeyKind::Press,
         });
         let result = palette.handle_events(&event, &ctx);
-        assert!(matches!(
-            result,
-            EventResult::Action(TermWmAction::CloseMenu)
-        ));
+        assert!(matches!(result, EventResult::Action(TermWmAction::CloseMenu)));
     }
 
     #[test]
@@ -591,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_on_populated_list_is_consumed() {
+    fn enter_on_populated_list_returns_menu_select() {
         let mut palette = make_palette_with_items();
         let ctx = ComponentContext::new(true);
         let event = Event::Key(KeyEvent {
@@ -600,7 +637,7 @@ mod tests {
             kind: KeyKind::Press,
         });
         let result = palette.handle_events(&event, &ctx);
-        assert!(result.is_consumed());
+        assert!(matches!(result, EventResult::Action(TermWmAction::MenuSelect)));
     }
 
     #[test]
@@ -648,8 +685,9 @@ mod tests {
     }
 
     #[test]
-    fn j_k_navigation_works() {
+    fn j_k_are_char_input_not_navigation() {
         let mut palette = make_palette_with_items();
+        palette.query_dirty = false;
         let ctx = ComponentContext::new(true);
         let event_j = Event::Key(KeyEvent {
             code: KeyCode::Char('j'),
@@ -657,7 +695,8 @@ mod tests {
             kind: KeyKind::Press,
         });
         palette.handle_events(&event_j, &ctx);
-        assert_eq!(palette.selected, 1);
+        assert_eq!(palette.query, "j");
+        assert_eq!(palette.selected, 0); // NOT navigated
 
         let event_k = Event::Key(KeyEvent {
             code: KeyCode::Char('k'),
@@ -665,6 +704,7 @@ mod tests {
             kind: KeyKind::Press,
         });
         palette.handle_events(&event_k, &ctx);
-        assert_eq!(palette.selected, 0);
+        assert_eq!(palette.query, "jk");
+        assert_eq!(palette.selected, 0); // NOT navigated
     }
 }
