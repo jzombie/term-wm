@@ -8,7 +8,6 @@ use term_wm_layout_engine::LayoutRect;
 use term_wm_render::RenderBackend;
 use crate::hitbox_registry::HitboxRegistry;
 
-use super::FocusRing;
 use slotmap::DefaultKey;
 
 /// Opaque identifier for a layer component (singleton, overlay, panel).
@@ -38,6 +37,20 @@ pub enum MacroFocus {
     FocusRing(DefaultKey),
     /// Layer-level focus — a singleton component has keyboard focus.
     Layer(LayerId),
+}
+
+/// Semantic tag for identifying layer components without hardcoded fields.
+/// Used with `WindowManager::semantic_registry` for programmatic lookup.
+/// Third-party plugins register via `Custom(&str)` — no core modification needed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ComponentTag {
+    TopPanel,
+    BottomPanel,
+    CommandPalette,
+    FloatingActionButton,
+    NotificationArea,
+    /// Open-ended extension vector for third-party plugins.
+    Custom(&'static str),
 }
 
 /// Unified storage for singleton UI components (panels, FAB, overlays, etc.).
@@ -74,6 +87,7 @@ impl LayerManager {
     }
 
     /// Insert a component into the specified Z-plane.
+    #[allow(dead_code)]
     pub fn insert(&mut self, comp: Box<dyn WmComponent>, plane: ZPlane) -> LayerId {
         let id = LayerId::new();
         self.layers.insert(id, comp);
@@ -89,6 +103,11 @@ impl LayerManager {
         self.layers.remove(&id);
         self.background_order.retain(|l| *l != id);
         self.foreground_order.retain(|l| *l != id);
+    }
+
+    /// Get an immutable reference to a layer component.
+    pub fn get(&self, id: LayerId) -> Option<&dyn WmComponent> {
+        self.layers.get(&id).map(|c| c.as_ref())
     }
 
     /// Get a mutable reference to a layer component.
@@ -108,11 +127,10 @@ impl LayerManager {
             layer_ctx = layer_ctx.with_keyboard_focus_id(focus_id);
         }
         for id in self.foreground_order.iter().rev() {
-            if let Some(comp) = self.layers.get_mut(id) {
-                if comp.handle_events(event, &layer_ctx).is_consumed() {
+            if let Some(comp) = self.layers.get_mut(id)
+                && comp.handle_events(event, &layer_ctx).is_consumed() {
                     return EventResult::Consumed;
                 }
-            }
         }
         EventResult::Ignored
     }
@@ -128,11 +146,10 @@ impl LayerManager {
             layer_ctx = layer_ctx.with_keyboard_focus_id(focus_id);
         }
         for id in self.background_order.iter().rev() {
-            if let Some(comp) = self.layers.get_mut(id) {
-                if comp.handle_events(event, &layer_ctx).is_consumed() {
+            if let Some(comp) = self.layers.get_mut(id)
+                && comp.handle_events(event, &layer_ctx).is_consumed() {
                     return EventResult::Consumed;
                 }
-            }
         }
         EventResult::Ignored
     }

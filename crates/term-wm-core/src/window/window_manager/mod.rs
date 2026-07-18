@@ -2,18 +2,16 @@ mod chrome;
 mod command_menu;
 mod drag;
 mod focus;
-mod layout;
 pub(crate) mod layer_manager;
+mod layout;
 mod overlays;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::Rect;
-use crate::events::{
-    Event, KeyEvent, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
-};
+use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use slotmap::SlotMap;
 
 use super::WindowKey;
@@ -182,6 +180,7 @@ pub enum DrawTask {
 }
 
 pub struct WindowManager {
+    #[allow(dead_code)]
     focus: FocusRing<WindowKey>,
     macro_focus: layer_manager::MacroFocus,
     pub(crate) layer_manager: layer_manager::LayerManager,
@@ -195,12 +194,8 @@ pub struct WindowManager {
     pub(crate) managed_layout: Option<TilingLayout<WindowKey>>,
     closed_windows: Vec<WindowKey>,
     pub(crate) managed_area: Rect,
-    pub(crate) hitbox_registry: HitboxRegistry,
+    pub(crate)     hitbox_registry: HitboxRegistry,
     app_ctx: Arc<AppContext>,
-    top_component: Option<Box<dyn WmComponent>>,
-    bottom_component: Option<Box<dyn WmComponent>>,
-    command_menu_component: Option<Box<dyn WmComponent>>,
-    fab_component: Option<Box<dyn WmComponent>>,
     #[allow(dead_code)]
     supported_menu_actions: Vec<TermWmAction>,
     top_claimed: Rect,
@@ -263,6 +258,9 @@ pub struct WindowManager {
     pub(crate) input_mode: crate::actions::WmInputMode,
     /// Whether the FAB component is enabled
     pub(crate) fab_enabled: bool,
+    /// Namespaced semantic registry for programmatic component lookup.
+    /// Hotkeys and structural routing query this instead of hardcoded fields.
+    pub semantic_registry: HashMap<layer_manager::ComponentTag, layer_manager::LayerId>,
     /// Tap-swap targeting state
     pub(crate) tap_swap_state: Option<TapSwapState>,
 }
@@ -565,11 +563,9 @@ impl WindowManager {
     pub fn with_config(
         config: WmConfig,
         app_ctx: Arc<AppContext>,
-        top_component: Option<Box<dyn WmComponent>>,
-        bottom_component: Option<Box<dyn WmComponent>>,
-        command_menu_component: Option<Box<dyn WmComponent>>,
-        fab_component: Option<Box<dyn WmComponent>>,
         supported_menu_actions: Option<Vec<TermWmAction>>,
+        mut layer_manager: layer_manager::LayerManager,
+        semantic_registry: HashMap<layer_manager::ComponentTag, layer_manager::LayerId>,
     ) -> Self {
         let supported_menu_actions = supported_menu_actions.unwrap_or_else(|| {
             vec![
@@ -597,7 +593,7 @@ impl WindowManager {
                 slotmap::DefaultKey::default(),
             ),
             macro_focus: layer_manager::MacroFocus::FocusRing(slotmap::DefaultKey::default()),
-            layer_manager: layer_manager::LayerManager::new(),
+            layer_manager,
             windows: SlotMap::with_capacity(32),
             regions: RegionMap::default(),
             scroll: BTreeMap::new(),
@@ -610,10 +606,6 @@ impl WindowManager {
             managed_area: Rect::default(),
             hitbox_registry: HitboxRegistry::new(),
             app_ctx,
-            top_component,
-            bottom_component,
-            command_menu_component,
-            fab_component,
             supported_menu_actions,
             top_claimed: Rect::default(),
             bottom_claimed: Rect::default(),
@@ -639,7 +631,6 @@ impl WindowManager {
             temporal_timer_id: None,
             system_task_handle: None,
             last_frame_area: Rect::default(),
-            overlays: BTreeMap::new(),
             scroll_keyboard_enabled_default: true,
             floating_resize_offscreen,
             z_order: Vec::new(),
@@ -655,8 +646,10 @@ impl WindowManager {
             reaper: Reaper::default(),
             quit_requested: false,
             layout_dirty: true,
-            notification_queue: NotificationQueue::default(),
-            notification_component: None,
+    notification_queue: NotificationQueue::default(),
+    semantic_registry,
+    overlays: BTreeMap::new(),
+    notification_component: None,
             input_mode: crate::actions::WmInputMode::Passthrough,
             fab_enabled: true,
             tap_swap_state: None,
@@ -709,8 +702,21 @@ impl WindowManager {
     }
 
     /// Get a mutable reference to the FAB component.
-    pub fn fab_component_mut(&mut self) -> Option<&mut dyn WmComponent> {
-        self.fab_component.as_mut().map(|c| c.as_mut())
+    /// Uniform, open-ended component locator via semantic tag.
+    /// Replaces all hardcoded `*_component_mut()` methods.
+    pub fn get_semantic_component_mut(&mut self, tag: layer_manager::ComponentTag) -> Option<&mut dyn WmComponent> {
+        self.semantic_registry
+            .get(&tag)
+            .copied()
+            .and_then(|id| self.layer_manager.get_mut(id))
+    }
+
+    /// Immutable component locator via semantic tag.
+    pub fn get_semantic_component(&self, tag: layer_manager::ComponentTag) -> Option<&dyn WmComponent> {
+        self.semantic_registry
+            .get(&tag)
+            .copied()
+            .and_then(|id| self.layer_manager.get(id))
     }
 
     /// Begin tap-to-swap targeting for the given window.
@@ -832,15 +838,17 @@ impl WindowManager {
     /// window's direct-mode state so children (scroll view, terminal) can
     /// adapt their rendering and event handling automatically.
     pub fn component_context_for(&self, focused: bool, key: WindowKey) -> ComponentContext {
-        let mut ctx = self.component_context(focused)
+        let mut ctx = self
+            .component_context(focused)
             .with_direct_mode(self.direct_mode(key))
             .with_window_key(key)
             .with_screen_area(self.region(key));
         // Inject the window's active keyboard focus into the context.
         if let Some(window) = self.windows.get(key)
-            && let Some(focus_id) = window.active_keyboard_focus {
-                ctx = ctx.with_keyboard_focus_id(focus_id);
-            }
+            && let Some(focus_id) = window.active_keyboard_focus
+        {
+            ctx = ctx.with_keyboard_focus_id(focus_id);
+        }
         ctx
     }
 
@@ -1329,7 +1337,9 @@ impl WindowManager {
                                 .component_context(false)
                                 .with_screen_area(*screen_area)
                                 .with_active_hitbox(*hitbox_id);
-                            self.layer_manager.dispatch_foreground(&core_event, &ctx).is_consumed()
+                            self.layer_manager
+                                .dispatch_foreground(&core_event, &ctx)
+                                .is_consumed()
                         };
                         (consumed, !matches!(kind, MouseEventKind::Release(_)))
                     }
@@ -1681,10 +1691,10 @@ impl WindowManager {
 
         // --- Z-plane interleaved dispatch: Foreground → Windows → Background ---
 
-        // Foreground layers (notifications, command palette, FAB, overlays)
-        // Rendered after windows in Z-order, checked first in dispatch.
+        // Foreground layers (LayerManager) — notifications, command palette, FAB
         {
-            let ctx = self.component_context(false)
+            let ctx = self
+                .component_context(false)
                 .with_screen_area(hit_rect)
                 .with_active_hitbox(hitbox_id);
             let result = self.layer_manager.dispatch_foreground(&core_event, &ctx);
@@ -1731,7 +1741,8 @@ impl WindowManager {
         // Background layers (top panel, bottom panel)
         // Rendered before windows in Z-order, checked last in dispatch.
         {
-            let ctx = self.component_context(false)
+            let ctx = self
+                .component_context(false)
                 .with_screen_area(hit_rect)
                 .with_active_hitbox(hitbox_id);
             let result = self.layer_manager.dispatch_background(&core_event, &ctx);
@@ -2280,34 +2291,8 @@ impl WindowManager {
 
     // ── Event Routing & Update Accessors ─────────────────────────────
 
-    pub fn top_component_mut(&mut self) -> &mut Option<Box<dyn WmComponent>> {
-        &mut self.top_component
-    }
-
-    pub fn bottom_component_mut(&mut self) -> &mut Option<Box<dyn WmComponent>> {
-        &mut self.bottom_component
-    }
-
-    pub fn command_menu_component_mut(&mut self) -> &mut Option<Box<dyn WmComponent>> {
-        &mut self.command_menu_component
-    }
-
     pub fn overlays_mut(&mut self) -> &mut BTreeMap<OverlayId, Box<dyn Overlay<TermWmAction>>> {
         &mut self.overlays
-    }
-
-    // ── Immutable state queries (used by both rendering and event dispatch) ─
-
-    pub fn top_component(&self) -> Option<&dyn WmComponent> {
-        self.top_component.as_deref()
-    }
-
-    pub fn bottom_component(&self) -> Option<&dyn WmComponent> {
-        self.bottom_component.as_deref()
-    }
-
-    pub fn command_menu_component(&self) -> Option<&dyn WmComponent> {
-        self.command_menu_component.as_deref()
     }
 
     pub fn top_claimed_area(&self) -> LayoutRect {
@@ -2367,18 +2352,28 @@ impl WindowManager {
     }
 
     /// Set the notification area component (called during app init).
+    /// Pushes into LayerManager with ZPlane::Foreground.
     pub fn set_notification_component(&mut self, comp: Box<dyn WmComponent>) {
-        self.notification_component = Some(comp);
+        let id = self.layer_manager.insert(comp, layer_manager::ZPlane::Foreground);
+        self.semantic_registry
+            .insert(layer_manager::ComponentTag::NotificationArea, id);
     }
 
     /// Get a mutable reference to the notification component.
     pub fn notification_component_mut(&mut self) -> Option<&mut dyn WmComponent> {
-        self.notification_component.as_mut().map(|c| c.as_mut())
+        self.semantic_registry
+            .get(&layer_manager::ComponentTag::NotificationArea)
+            .copied()
+            .and_then(|id| self.layer_manager.get_mut(id))
     }
 
     /// Set the keyboard focus for a window. Called when a component returns
     /// `RequestKeyboardFocus` action.
-    pub fn set_keyboard_focus(&mut self, key: WindowKey, hitbox_id: crate::hitbox_registry::HitboxId) {
+    pub fn set_keyboard_focus(
+        &mut self,
+        key: WindowKey,
+        hitbox_id: crate::hitbox_registry::HitboxId,
+    ) {
         if let Some(window) = self.windows.get_mut(key) {
             window.active_keyboard_focus = Some(hitbox_id);
         }
@@ -5742,6 +5737,7 @@ mod tests {
             height: 15,
         };
 
+        #[derive(Debug)]
         struct TestOverlay {
             got_screen_area: std::cell::Cell<bool>,
         }
@@ -5773,14 +5769,18 @@ mod tests {
             }
         }
         impl crate::components::Overlay<TermWmAction> for TestOverlay {}
+        impl crate::components::WmComponent for TestOverlay {}
 
-        wm.open_overlay(
-            OverlayId::Help,
-            Some(Box::new(TestOverlay {
-                got_screen_area: std::cell::Cell::new(false),
-            })),
-        );
-
+        let overlay_obj = TestOverlay {
+            got_screen_area: std::cell::Cell::new(false),
+        };
+        let overlay_hitbox_id = layer_manager::LayerId::new();
+        // Register overlay's hitbox and store it
+        let _overlay_id = wm
+            .layer_manager
+            .insert(Box::new(overlay_obj), layer_manager::ZPlane::Foreground);
+        // The foreground dispatch calls handle_events on all layers.
+        // Register the hitbox with the correct overlay area.
         wm.hitbox_registry.register(HitboxId::new(), overlay_rect);
 
         let click = Event::Mouse(MouseEvent {
