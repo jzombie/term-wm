@@ -121,7 +121,7 @@ impl MenuComponent {
         let inner_width = area.width.saturating_sub(2).max(1);
         let header_offset: u16 = if self.show_header { 1 } else { 0 };
         let visible_items = (area.height.saturating_sub(header_offset))
-            .min(self.items.len().saturating_sub(offset_y).max(0) as u16)
+            .min(self.items.len().saturating_sub(offset_y) as u16)
             as usize;
 
         for row in 0..area.height {
