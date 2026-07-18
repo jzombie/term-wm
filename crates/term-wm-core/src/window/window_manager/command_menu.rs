@@ -60,9 +60,7 @@ impl WindowManager {
             .component_context(false)
             .with_overlay(true)
             .with_screen_area(self.managed_area());
-        let Some(menu) = self.get_semantic_component_mut(super::layer_manager::ComponentTag::CommandPalette) else {
-            return None;
-        };
+        let menu = self.get_semantic_component_mut(super::layer_manager::ComponentTag::CommandPalette)?;
 
         match menu.handle_events(event, &ctx) {
             EventResult::Action(action) => return Some(action),

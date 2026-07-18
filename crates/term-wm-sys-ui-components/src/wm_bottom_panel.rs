@@ -307,7 +307,7 @@ impl Component<TermWmAction> for WmBottomPanelComponent {
     fn handle_events(
         &mut self,
         event: &Event,
-        _ctx: &ComponentContext,
+        ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
         if let Some(action) = self.hit_test_hint(event) {
             return EventResult::Action(action);

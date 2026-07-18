@@ -182,6 +182,7 @@ pub enum DrawTask {
 pub struct WindowManager {
     #[allow(dead_code)]
     focus: FocusRing<WindowKey>,
+    #[allow(dead_code)]
     macro_focus: layer_manager::MacroFocus,
     pub(crate) layer_manager: layer_manager::LayerManager,
     windows: SlotMap<WindowKey, Window>,
@@ -251,9 +252,6 @@ pub struct WindowManager {
     layout_dirty: bool,
     /// Active toast notifications
     notification_queue: NotificationQueue,
-    /// Notification area component — swallows mouse events over toast regions.
-    /// Uses blind delegation: WM calls `handle_events` without peeking at ID.
-    notification_component: Option<Box<dyn WmComponent>>,
     /// Universal input mode state machine
     pub(crate) input_mode: crate::actions::WmInputMode,
     /// Whether the FAB component is enabled
@@ -564,7 +562,7 @@ impl WindowManager {
         config: WmConfig,
         app_ctx: Arc<AppContext>,
         supported_menu_actions: Option<Vec<TermWmAction>>,
-        mut layer_manager: layer_manager::LayerManager,
+        layer_manager: layer_manager::LayerManager,
         semantic_registry: HashMap<layer_manager::ComponentTag, layer_manager::LayerId>,
     ) -> Self {
         let supported_menu_actions = supported_menu_actions.unwrap_or_else(|| {
@@ -649,8 +647,7 @@ impl WindowManager {
     notification_queue: NotificationQueue::default(),
     semantic_registry,
     overlays: BTreeMap::new(),
-    notification_component: None,
-            input_mode: crate::actions::WmInputMode::Passthrough,
+    input_mode: crate::actions::WmInputMode::Passthrough,
             fab_enabled: true,
             tap_swap_state: None,
         }
@@ -1740,6 +1737,9 @@ impl WindowManager {
                     });
                 }
                 return EventResult::Consumed;
+            }
+            if let EventResult::Action(action) = result {
+                return EventResult::Action((None, action));
             }
         }
 
@@ -5653,7 +5653,7 @@ mod tests {
         let overlay_obj = TestOverlay {
             got_screen_area: std::cell::Cell::new(false),
         };
-        let overlay_hitbox_id = layer_manager::LayerId::new();
+        let _overlay_hitbox_id = layer_manager::LayerId::new();
         // Register overlay's hitbox and store it
         let _overlay_id = wm
             .layer_manager

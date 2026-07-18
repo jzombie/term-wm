@@ -1170,6 +1170,7 @@ mod tests {
     use crate::components::Overlay;
 
     #[derive(Debug)]
+    #[allow(dead_code)]
     struct TestMenu;
     impl Component<TermWmAction> for TestMenu {
         fn render(

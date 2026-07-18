@@ -14,6 +14,12 @@ use slotmap::DefaultKey;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LayerId(pub u64);
 
+impl Default for LayerId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LayerId {
     pub fn new() -> Self {
         static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -127,10 +133,12 @@ impl LayerManager {
             layer_ctx = layer_ctx.with_keyboard_focus_id(focus_id);
         }
         for id in self.foreground_order.iter().rev() {
-            if let Some(comp) = self.layers.get_mut(id)
-                && comp.handle_events(event, &layer_ctx).is_consumed() {
-                    return EventResult::Consumed;
+            if let Some(comp) = self.layers.get_mut(id) {
+                let result = comp.handle_events(event, &layer_ctx);
+                if !result.is_ignored() {
+                    return result;
                 }
+            }
         }
         EventResult::Ignored
     }
@@ -146,10 +154,12 @@ impl LayerManager {
             layer_ctx = layer_ctx.with_keyboard_focus_id(focus_id);
         }
         for id in self.background_order.iter().rev() {
-            if let Some(comp) = self.layers.get_mut(id)
-                && comp.handle_events(event, &layer_ctx).is_consumed() {
-                    return EventResult::Consumed;
+            if let Some(comp) = self.layers.get_mut(id) {
+                let result = comp.handle_events(event, &layer_ctx);
+                if !result.is_ignored() {
+                    return result;
                 }
+            }
         }
         EventResult::Ignored
     }

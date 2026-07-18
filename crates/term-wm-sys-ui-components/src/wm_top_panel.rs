@@ -502,7 +502,7 @@ impl Component<TermWmAction> for WmTopPanelComponent {
     fn handle_events(
         &mut self,
         event: &Event,
-        _ctx: &ComponentContext,
+        ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
         let Event::Mouse(mouse) = event else {
             return EventResult::Ignored;
