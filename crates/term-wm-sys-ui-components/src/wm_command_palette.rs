@@ -165,7 +165,14 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
                     EventResult::Consumed
                 }
             },
-            EventResult::Consumed => EventResult::Consumed,
+            EventResult::Consumed => {
+                // MenuComponent may have selected an item via mouse click.
+                // Capture the selected action so query(SelectedAction) works.
+                if let Some(action) = self.palette.inner().selected_action().cloned() {
+                    self.last_action = Some(action);
+                }
+                EventResult::Consumed
+            }
             EventResult::Ignored => EventResult::Ignored,
         }
     }

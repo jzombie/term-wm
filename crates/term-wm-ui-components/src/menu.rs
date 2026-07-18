@@ -288,17 +288,17 @@ mod tests {
         menu.set_items(vec![
             MenuItem {
                 icon: None,
-                label: "First",
+                label: "First".into(),
                 action: TermWmAction::Quit,
             },
             MenuItem {
                 icon: None,
-                label: "Second",
+                label: "Second".into(),
                 action: TermWmAction::NewWindow,
             },
             MenuItem {
                 icon: None,
-                label: "Third",
+                label: "Third".into(),
                 action: TermWmAction::OpenHelp,
             },
         ]);
@@ -326,12 +326,12 @@ mod tests {
         menu.set_items(vec![
             MenuItem {
                 icon: None,
-                label: "One",
+                label: "One".into(),
                 action: TermWmAction::Quit,
             },
             MenuItem {
                 icon: None,
-                label: "Two",
+                label: "Two".into(),
                 action: TermWmAction::NewWindow,
             },
         ]);
@@ -352,12 +352,12 @@ mod tests {
         menu.set_items(vec![
             MenuItem {
                 icon: None,
-                label: "Zero",
+                label: "Zero".into(),
                 action: TermWmAction::Quit,
             },
             MenuItem {
                 icon: None,
-                label: "One",
+                label: "One".into(),
                 action: TermWmAction::NewWindow,
             },
         ]);
@@ -381,12 +381,12 @@ mod tests {
         menu.set_items(vec![
             MenuItem {
                 icon: None,
-                label: "Item A",
+                label: "Item A".into(),
                 action: TermWmAction::Quit,
             },
             MenuItem {
                 icon: Some("\u{2713}"),
-                label: "Item B",
+                label: "Item B".into(),
                 action: TermWmAction::NewWindow,
             },
         ]);

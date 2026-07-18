@@ -1,6 +1,5 @@
-use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
-use std::rc::Rc;
+use std::borrow::Cow;
 
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -8,13 +7,14 @@ use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::command_menu::{
     CommandNodeId, CommandRegistry, ContextMask, FuzzyMatch, MruRanker,
 };
-use term_wm_core::components::{Component, ComponentContext};
+use term_wm_core::components::{Component, ComponentContext, MenuItem};
 use term_wm_core::events::{Event, KeyCode, KeyKind, KeyModifiers, MouseEventKind};
 use term_wm_core::keybindings::{KeyBindings, KeyCombo};
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
 
 use crate::helpers::{color_to_ratatui, layout_rect_to_rect, safe_set_string};
+use crate::menu::MenuComponent;
 use crate::scroll_view::{ScrollKeyMode, ScrollViewComponent};
 
 #[derive(Debug, Clone)]
@@ -26,148 +26,11 @@ pub struct PaletteItem {
     pub icon: Option<&'static str>,
 }
 
-/// Inner list component that renders filtered items.
-/// Wrapped by ScrollViewComponent for scroll handling.
-struct CommandListComponent {
-    items: Rc<RefCell<Vec<PaletteItem>>>,
-    selected: Rc<Cell<usize>>,
-}
-
-impl CommandListComponent {
-    fn new(items: Rc<RefCell<Vec<PaletteItem>>>, selected: Rc<Cell<usize>>) -> Self {
-        Self { items, selected }
-    }
-}
-
-impl Component<TermWmAction> for CommandListComponent {
-    fn render(
-        &mut self,
-        backend: &mut dyn term_wm_render::RenderBackend,
-        area: LayoutRect,
-        ctx: &ComponentContext,
-        _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
-    ) {
-        let rect = layout_rect_to_rect(area);
-        let backend = crate::helpers::downcast_ratatui(backend);
-        let buffer = &mut backend.buffer;
-        let theme = &ctx.config().theme;
-
-        let offset_y = ctx.viewport().offset_y;
-        let selected = self.selected.get();
-        let items = self.items.borrow();
-        let total = items.len();
-
-        // Set content height on the ScrollViewComponent
-        if let Some(handle) = ctx.scroll_handle() {
-            handle.scroll.borrow_mut().content_height = total;
-        }
-
-        let menu_style = Style::default()
-            .bg(color_to_ratatui(theme.menu_bg))
-            .fg(color_to_ratatui(theme.menu_fg));
-        let selected_style = Style::default()
-            .bg(color_to_ratatui(theme.menu_selected_bg))
-            .fg(color_to_ratatui(theme.menu_selected_fg))
-            .add_modifier(Modifier::BOLD);
-        let hover_style = Style::default()
-            .bg(color_to_ratatui(theme.panel_active_bg))
-            .fg(color_to_ratatui(theme.menu_fg));
-
-        let hovered = ctx.hover_pos().and_then(|(mx, my)| {
-            if mx >= rect.x && mx < rect.x.saturating_add(rect.width)
-                && my >= rect.y && my < rect.y.saturating_add(rect.height)
-            {
-                let r = (my - rect.y) as usize;
-                let idx = r + offset_y;
-                (idx < total).then_some(idx)
-            } else {
-                None
-            }
-        });
-
-        let view_h = rect.height as usize;
-        let visible_count = view_h.min(total.saturating_sub(offset_y));
-
-        for r in 0..visible_count {
-            let idx = r + offset_y;
-            let y = rect.y + r as u16;
-            let is_sel = idx == selected;
-            let is_hov = hovered == Some(idx);
-            let row_style = if is_sel {
-                selected_style
-            } else if is_hov {
-                hover_style
-            } else {
-                menu_style
-            };
-
-            for x in rect.x..rect.x.saturating_add(rect.width) {
-                if let Some(cell) = buffer.cell_mut((x, y)) {
-                    cell.reset();
-                    cell.set_symbol(" ");
-                    cell.set_style(row_style);
-                }
-            }
-
-            if let Some(item) = items.get(idx) {
-                let marker = if is_sel { ">" } else { " " };
-                let line = if let Some(icon) = item.icon {
-                    format!("{marker} {icon} {label}", label = item.display_name)
-                } else {
-                    format!("{marker}   {label}", label = item.display_name)
-                };
-                let inner_w = rect.width.saturating_sub(2) as usize;
-                let text: String = line.chars().take(inner_w).collect();
-                safe_set_string(buffer, rect, rect.x + 2, y, &text, row_style);
-            }
-        }
-    }
-
-    fn handle_events(
-        &mut self,
-        event: &Event,
-        ctx: &ComponentContext,
-    ) -> EventResult<TermWmAction> {
-        if let Event::Mouse(mouse) = event
-            && matches!(mouse.kind, MouseEventKind::Press(_))
-        {
-            if let Some(area) = ctx.screen_area() {
-                let mx = mouse.column;
-                let my = mouse.row;
-                if mx >= area.x.max(0) as u16
-                    && mx < (area.x.max(0) as u16).saturating_add(area.width)
-                    && my >= area.y.max(0) as u16
-                    && my < (area.y.max(0) as u16).saturating_add(area.height)
-                {
-                    let offset_y = ctx.viewport().offset_y;
-                    let idx = (my - area.y.max(0) as u16) as usize + offset_y;
-                    if idx < self.items.borrow().len() {
-                        self.selected.set(idx);
-                        return EventResult::Action(TermWmAction::MenuSelect);
-                    }
-                }
-            }
-        }
-        EventResult::Ignored
-    }
-
-    fn update(
-        &mut self,
-        _action: TermWmAction,
-        _ctx: &ComponentContext,
-        _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
-    ) {
-    }
-
-    fn desired_height(&self, _width: u16) -> u16 {
-        self.items.borrow().len() as u16
-    }
-}
-
 /// A universal, fuzzy-searchable Command Palette component.
 ///
 /// The search bar is rendered directly; the item list is wrapped in a
-/// ScrollViewComponent which handles all scroll events and scrollbar rendering.
+/// ScrollViewComponent<MenuComponent> which handles rendering, hover,
+/// click, and scroll.
 pub struct CommandPaletteComponent {
     pub query: String,
     pub cursor: usize,
@@ -179,11 +42,7 @@ pub struct CommandPaletteComponent {
     active_ids: Vec<CommandNodeId>,
     display_items: Vec<(String, String)>,
     nav_keys: KeyBindings,
-
-    // Shared with CommandListComponent via Rc
-    items_rc: Rc<RefCell<Vec<PaletteItem>>>,
-    selected_rc: Rc<Cell<usize>>,
-    list_scroll: ScrollViewComponent<CommandListComponent>,
+    list_scroll: ScrollViewComponent<MenuComponent>,
 }
 
 impl Default for CommandPaletteComponent {
@@ -199,10 +58,7 @@ impl CommandPaletteComponent {
         nav_keys.add(TermWmAction::MenuDown, KeyCombo::new(KeyCode::Down, KeyModifiers::NONE));
         nav_keys.add(TermWmAction::MenuSelect, KeyCombo::new(KeyCode::Enter, KeyModifiers::NONE));
 
-        let items_rc = Rc::new(RefCell::new(Vec::new()));
-        let selected_rc = Rc::new(Cell::new(0));
-        let inner = CommandListComponent::new(Rc::clone(&items_rc), Rc::clone(&selected_rc));
-        let mut list_scroll = ScrollViewComponent::new(inner);
+        let mut list_scroll = ScrollViewComponent::new(MenuComponent::new());
         list_scroll.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
 
         Self {
@@ -216,35 +72,13 @@ impl CommandPaletteComponent {
             active_ids: Vec::new(),
             display_items: Vec::new(),
             nav_keys,
-            items_rc,
-            selected_rc,
             list_scroll,
         }
     }
 
-    fn sync_state(&mut self) {
-        *self.items_rc.borrow_mut() = self.filtered_items.clone();
-        self.selected_rc.set(self.selected);
-        // Update content height on the scroll handle
-        let handle = self.list_scroll.scroll_handle();
-        handle.scroll.borrow_mut().content_height = self.filtered_items.len();
-    }
-
-    fn scroll_to_selection(&self) {
-        let handle = self.list_scroll.scroll_handle();
-        let mut st = handle.scroll.borrow_mut();
-        let total = self.filtered_items.len();
-        let view = st.height;
-        let selected = self.selected;
-        if total > view && view > 0 {
-            if selected >= st.offset_y + view {
-                st.offset_y = selected.saturating_sub(view).saturating_add(1);
-                st.pending_offset_y = Some(st.offset_y);
-            } else if selected < st.offset_y {
-                st.offset_y = selected;
-                st.pending_offset_y = Some(st.offset_y);
-            }
-        }
+    /// Sync CommandPaletteComponent's selected index from the inner MenuComponent.
+    fn sync_selected(&mut self) {
+        self.selected = self.list_scroll.content.borrow().selected();
     }
 
     pub fn mark_data_dirty(&mut self) {
@@ -359,7 +193,6 @@ impl CommandPaletteComponent {
             .fg(color_to_ratatui(theme.menu_fg))
             .add_modifier(Modifier::BOLD);
 
-        // Clear bar area
         for x in area.x..area.x.saturating_add(area.width) {
             if let Some(cell) = buffer.cell_mut((x, area.y)) {
                 cell.reset();
@@ -416,10 +249,20 @@ impl Component<TermWmAction> for CommandPaletteComponent {
             return;
         }
 
-        // Sync shared state
-        self.sync_state();
+        // Build MenuItems from filtered_items and set on the inner MenuComponent
+        let menu_items: Vec<MenuItem<TermWmAction>> = self.filtered_items.iter().map(|p| MenuItem {
+            icon: p.icon,
+            label: Cow::Owned(p.display_name.clone()),
+            action: p.action.clone(),
+        }).collect();
+        self.list_scroll.content.borrow_mut().set_items(menu_items);
 
-        // Render search bar (row 0)
+        // Set content height for ScrollViewComponent
+        let total = self.filtered_items.len();
+        let handle = self.list_scroll.scroll_handle();
+        handle.scroll.borrow_mut().content_height = total;
+
+        // Clear background
         let menu_style = Style::default()
             .bg(color_to_ratatui(ctx.config().theme.menu_bg))
             .fg(color_to_ratatui(ctx.config().theme.menu_fg));
@@ -432,9 +275,11 @@ impl Component<TermWmAction> for CommandPaletteComponent {
                 }
             }
         }
+
+        // Render search bar (row 0)
         self.render_search_bar(&mut backend.buffer, bounds, &ctx.config().theme);
 
-        // Render list (rows 1..) via ScrollViewComponent
+        // Render list (rows 1..) via ScrollViewComponent<MenuComponent>
         let list_area = LayoutRect {
             x: bounds.x as i32,
             y: (bounds.y + 1) as i32,
@@ -451,7 +296,10 @@ impl Component<TermWmAction> for CommandPaletteComponent {
     ) -> EventResult<TermWmAction> {
         // Delegate mouse events to ScrollViewComponent (scroll, click on item)
         if matches!(event, Event::Mouse(_)) {
-            return self.list_scroll.handle_events(event, ctx);
+            let result = self.list_scroll.handle_events(event, ctx);
+            // MenuComponent may have updated its internal selection; sync ours
+            self.sync_selected();
+            return result;
         }
 
         // Keyboard
@@ -493,31 +341,24 @@ impl Component<TermWmAction> for CommandPaletteComponent {
     fn update(
         &mut self,
         action: TermWmAction,
-        ctx: &ComponentContext,
-        actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+        _ctx: &ComponentContext,
+        _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
     ) {
         match action {
             TermWmAction::MenuUp => {
                 let total = self.filtered_items.len();
                 if total > 0 {
                     self.selected = (self.selected + total - 1) % total;
-                    self.selected_rc.set(self.selected);
-                    self.scroll_to_selection();
                 }
             }
             TermWmAction::MenuDown => {
                 let total = self.filtered_items.len();
                 if total > 0 {
                     self.selected = (self.selected + 1) % total;
-                    self.selected_rc.set(self.selected);
-                    self.scroll_to_selection();
                 }
             }
-            TermWmAction::MenuSelect => {
-                self.selected = self.selected_rc.get();
-            }
             TermWmAction::ScrollView(_) => {
-                self.list_scroll.update(action, ctx, actions);
+                self.list_scroll.update(action, _ctx, _actions);
             }
             _ => {}
         }
@@ -757,8 +598,6 @@ mod tests {
     #[test]
     fn mouse_click_outside_is_ignored() {
         let mut palette = make_palette_with_items();
-        // Mouse events are delegated to scroll view; scroll view's inner component
-        // receives the click check. Outside = no screen_area → ignored.
         let ctx = ComponentContext::new(true);
         let event = Event::Mouse(term_wm_core::events::MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
