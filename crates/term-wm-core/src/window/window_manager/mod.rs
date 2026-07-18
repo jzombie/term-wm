@@ -3160,7 +3160,7 @@ mod tests {
         assert!(!wm.is_window_floating(debug_key));
 
         wm.hitbox_registry.register(
-            HitboxId::new(),
+            wm.floating_headers.iter().find(|h| h.key == debug_key).unwrap().hitbox_id,
             header_rect,
         );
 
@@ -3772,21 +3772,12 @@ mod tests {
         let kb_y = full_rect.y.saturating_add(1) as u16; // header row
         assert!(!wm.direct_mode(win_key), "starts off");
 
-        // Register header hitboxes matching the render-pass arrangement:
-        // Drag zone for the full header, per-button hitbox for "D".
+        // Register header hitbox matching the render-pass arrangement:
+        // Single DragHandle hitbox for the full header area.
+        // Button detection is handled by position in the dispatch code.
         wm.hitbox_registry.register(
-            HitboxId::new(),
+            wm.floating_headers.iter().find(|h| h.key == win_key).unwrap().hitbox_id,
             full_rect,
-        );
-        let button_rect = term_wm_layout_engine::LayoutRect {
-            x: i32::from(kb_x),
-            y: full_rect.y.saturating_add(1),
-            width: 1,
-            height: 1,
-        };
-        wm.hitbox_registry.register(
-            HitboxId::new(),
-            button_rect,
         );
 
         let click = Event::Mouse(MouseEvent {
@@ -3860,7 +3851,7 @@ mod tests {
         let drag_y = header.rect.y as u16;
 
         wm.hitbox_registry.register(
-            HitboxId::new(),
+            wm.floating_headers.iter().find(|h| h.key == win_key).unwrap().hitbox_id,
             header.rect,
         );
 
@@ -4206,18 +4197,8 @@ mod tests {
         let kb_x = min_x.saturating_sub(2) as u16;
         let kb_y = full_rect.y.saturating_add(1) as u16; // header row
         wm.hitbox_registry.register(
-            HitboxId::new(),
+            wm.floating_headers.iter().find(|h| h.key == win_key).unwrap().hitbox_id,
             full_rect,
-        );
-        let button_rect = term_wm_layout_engine::LayoutRect {
-            x: i32::from(kb_x),
-            y: full_rect.y.saturating_add(1),
-            width: 1,
-            height: 1,
-        };
-        wm.hitbox_registry.register(
-            HitboxId::new(),
-            button_rect,
         );
 
         assert!(wm.direct_mode(win_key), "direct mode enabled before click");
@@ -4297,7 +4278,7 @@ mod tests {
             .rect;
 
         wm.hitbox_registry.register(
-            HitboxId::new(),
+            wm.floating_headers.iter().find(|h| h.key == win_key).unwrap().hitbox_id,
             header_rect,
         );
 
@@ -4467,7 +4448,7 @@ mod tests {
             .rect;
 
         wm.hitbox_registry.register(
-            HitboxId::new(),
+            wm.floating_headers.iter().find(|h| h.key == debug_key).unwrap().hitbox_id,
             header_rect,
         );
 
@@ -5050,7 +5031,7 @@ mod tests {
             height: 10,
         };
         wm.hitbox_registry
-            .register(HitboxId::new(), hit_rect);
+            .register(wm.window_content_hitbox_id(key).unwrap_or_else(HitboxId::new), hit_rect);
 
         // Send Down at (15, 8) — inside the hitbox
         let down = Event::Mouse(MouseEvent {
@@ -5199,7 +5180,7 @@ mod tests {
             height: 10,
         };
         wm.hitbox_registry
-            .register(HitboxId::new(), hit_rect);
+            .register(wm.window_content_hitbox_id(key).unwrap_or_else(HitboxId::new), hit_rect);
 
         // Send Moved at (15, 8) — no active capture, so Phase 3 runs
         let moved = Event::Mouse(MouseEvent {
@@ -5255,10 +5236,10 @@ mod tests {
             height: 24,
         });
         // Manually register hitboxes (tests bypass the render pipeline).
-        let handle_rects: Vec<_> = wm.handles.iter().map(|h| h.rect).collect();
-        for rect in handle_rects {
-            wm.hitbox_registry
-                .register(crate::hitbox_registry::HitboxId::new(), rect);
+        for handle in &wm.handles {
+            let id = handle.hitbox_id;
+            let rect = handle.rect;
+            wm.hitbox_registry.register(id, rect);
         }
         let handles = wm.handles.clone();
         assert!(!handles.is_empty(), "tiling must produce split handles");
@@ -5485,7 +5466,7 @@ mod tests {
         let close_y = full_rect.y.saturating_add(1) as u16;
 
         wm.hitbox_registry.register(
-            HitboxId::new(),
+            wm.floating_headers.iter().find(|h| h.key == win_key).unwrap().hitbox_id,
             LayoutRect {
                 x: i32::from(close_x),
                 y: i32::from(close_y),
@@ -5543,7 +5524,7 @@ mod tests {
         let max_y = full_rect.y.saturating_add(1) as u16;
 
         wm.hitbox_registry.register(
-            HitboxId::new(),
+            wm.floating_headers.iter().find(|h| h.key == win_key).unwrap().hitbox_id,
             LayoutRect {
                 x: i32::from(max_x),
                 y: i32::from(max_y),
@@ -5602,7 +5583,7 @@ mod tests {
         let min_y = full_rect.y.saturating_add(1) as u16;
 
         wm.hitbox_registry.register(
-            HitboxId::new(),
+            wm.floating_headers.iter().find(|h| h.key == win_key).unwrap().hitbox_id,
             LayoutRect {
                 x: i32::from(min_x),
                 y: i32::from(min_y),
