@@ -346,17 +346,17 @@ mod tests {
         vec![
             MenuItem {
                 icon: Some("A"),
-                label: "Alpha",
+                label: "Alpha".into(),
                 action: TermWmAction::CloseWindow,
             },
             MenuItem {
                 icon: Some("B"),
-                label: "Beta",
+                label: "Beta".into(),
                 action: TermWmAction::NewWindow,
             },
             MenuItem {
                 icon: Some("C"),
-                label: "Gamma",
+                label: "Gamma".into(),
                 action: TermWmAction::Help,
             },
         ]

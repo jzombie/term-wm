@@ -1325,25 +1325,44 @@ impl WindowManager {
             }
         }
 
-        // Phase 2 — Scroll events: hover-to-scroll to the window under cursor.
+        // Phase 2 — Scroll events: hover-to-scroll to the window or palette under cursor.
         if matches!(kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) {
             // Use registry hit-test for scroll dispatch.
-            if let Some((target, hit_rect)) = self.hitbox_registry.hit_test(*position)
-                && let HitTarget::Window(key) | HitTarget::Component(key, ..) = target
-            {
-                let focused = *self.focus.current() == key;
-                let ctx = self
-                    .component_context_for(focused, key)
-                    .with_screen_area(hit_rect);
-                let core_event = Event::Mouse(MouseEvent {
-                    kind: *kind,
-                    column: col,
-                    row,
-                    modifiers: *modifiers,
-                });
-                if let Some(comp) = self.component_for_key_mut(key) {
-                    let result = comp.handle_events(&core_event, &ctx);
-                    return result.map(|action| (Some(key), action));
+            if let Some((target, hit_rect)) = self.hitbox_registry.hit_test(*position) {
+                match target {
+                    HitTarget::Window(key) | HitTarget::Component(key, ..) => {
+                        let focused = *self.focus.current() == key;
+                        let ctx = self
+                            .component_context_for(focused, key)
+                            .with_screen_area(hit_rect);
+                        let core_event = Event::Mouse(MouseEvent {
+                            kind: *kind,
+                            column: col,
+                            row,
+                            modifiers: *modifiers,
+                        });
+                        if let Some(comp) = self.component_for_key_mut(key) {
+                            let result = comp.handle_events(&core_event, &ctx);
+                            return result.map(|action| (Some(key), action));
+                        }
+                    }
+                    HitTarget::CommandPalette => {
+                        let ctx = self
+                            .component_context(false)
+                            .with_overlay(true)
+                            .with_screen_area(hit_rect);
+                        let core_event = Event::Mouse(MouseEvent {
+                            kind: *kind,
+                            column: col,
+                            row,
+                            modifiers: *modifiers,
+                        });
+                        if let Some(menu) = &mut self.command_menu_component {
+                            let result = menu.handle_events(&core_event, &ctx);
+                            return result.map(|action| (None, action));
+                        }
+                    }
+                    _ => {}
                 }
             }
             return EventResult::Ignored;
@@ -1595,6 +1614,18 @@ impl WindowManager {
             HitTarget::SessionManager => {
                 // Session manager taps are handled by the component.
                 EventResult::Consumed
+            }
+            HitTarget::CommandPalette => {
+                let ctx = self
+                    .component_context_for(false, slotmap::DefaultKey::default())
+                    .with_overlay(true)
+                    .with_screen_area(hit_rect);
+                if let Some(menu) = &mut self.command_menu_component {
+                    menu.handle_events(&core_event, &ctx)
+                        .map(|action| (None, action))
+                } else {
+                    EventResult::Ignored
+                }
             }
         }
     }
@@ -2224,47 +2255,47 @@ pub fn wm_menu_items(
     };
     let mut items = vec![
         MenuItem {
-            label: "Resume",
+            label: "Resume".into(),
             icon: Some("▶"),
             action: crate::actions::TermWmAction::CloseMenu,
         },
         MenuItem {
-            label: mouse_label,
+            label: mouse_label.into(),
             icon: Some("◆"),
             action: crate::actions::TermWmAction::ToggleMouseCapture,
         },
         MenuItem {
-            label: clipboard_label,
+            label: clipboard_label.into(),
             icon: Some("■"),
             action: crate::actions::TermWmAction::ToggleClipboardMode,
         },
         MenuItem {
-            label: selection_label,
+            label: selection_label.into(),
             icon: Some("●"),
             action: crate::actions::TermWmAction::ToggleWindowSelection,
         },
         MenuItem {
-            label: "New Window",
+            label: "New Window".into(),
             icon: Some("+"),
             action: crate::actions::TermWmAction::NewWindow,
         },
         MenuItem {
-            label: "Debug Log",
+            label: "Debug Log".into(),
             icon: Some("≣"),
             action: crate::actions::TermWmAction::ToggleDebugWindow,
         },
         MenuItem {
-            label: "System Panel",
+            label: "System Panel".into(),
             icon: Some("⚙"),
             action: crate::actions::TermWmAction::ToggleSystemPanel,
         },
         MenuItem {
-            label: "Help",
+            label: "Help".into(),
             icon: Some("?"),
             action: crate::actions::TermWmAction::Help,
         },
         MenuItem {
-            label: "Exit UI",
+            label: "Exit UI".into(),
             icon: Some("⏻"),
             action: crate::actions::TermWmAction::ExitUi,
         },
@@ -2273,22 +2304,22 @@ pub fn wm_menu_items(
     if has_focused_window {
         items.extend_from_slice(&[
             MenuItem {
-                label: "Maximize Window",
+                label: "Maximize Window".into(),
                 icon: Some("⊞"),
                 action: crate::actions::TermWmAction::MaximizeWindow,
             },
             MenuItem {
-                label: "Minimize Window",
+                label: "Minimize Window".into(),
                 icon: Some("⊟"),
                 action: crate::actions::TermWmAction::MinimizeWindow,
             },
             MenuItem {
-                label: "Close Window",
+                label: "Close Window".into(),
                 icon: Some("✕"),
                 action: crate::actions::TermWmAction::CloseWindow,
             },
             MenuItem {
-                label: "Toggle Direct Mode",
+                label: "Toggle Direct Mode".into(),
                 icon: Some("🎯"),
                 action: crate::actions::TermWmAction::ToggleDirectMode,
             },

@@ -1,5 +1,6 @@
 // TODO: Refactor; it looks like "components" are in the core
 
+use std::borrow::Cow;
 use std::collections::VecDeque;
 
 use term_wm_layout_engine::LayoutRect;
@@ -249,7 +250,7 @@ pub trait Overlay<Msg>: Component<Msg> + std::any::Any {
 #[derive(Debug, Clone)]
 pub struct MenuItem<R> {
     pub icon: Option<&'static str>,
-    pub label: &'static str,
+    pub label: Cow<'static, str>,
     pub action: R,
 }
 

@@ -59,6 +59,8 @@ pub enum HitTarget {
     Notification,
     /// Click on the Floating Action Button (FAB) — opens command palette.
     Fab,
+    /// Click on the command palette overlay.
+    CommandPalette,
     /// Click on the session manager overlay.
     SessionManager,
 }

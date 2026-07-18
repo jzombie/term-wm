@@ -10,6 +10,7 @@ use term_wm_core::{
         Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse, Overlay,
         WmComponent,
     },
+    hitbox_registry::HitTarget,
     window::WindowKey,
 };
 use term_wm_ui_components::command_palette::CommandPaletteComponent;
@@ -143,6 +144,9 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
             height: content_height,
         });
         self.palette.render(backend, _area, ctx, registry);
+        if let Some(content_rect) = self.palette.content_rect() {
+            registry.register(HitTarget::CommandPalette, content_rect);
+        }
     }
 
     fn handle_events(
