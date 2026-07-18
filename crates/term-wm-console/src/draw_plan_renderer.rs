@@ -1486,7 +1486,7 @@ mod tests {
     fn make_wm() -> WindowManager {
         let config = WmConfig::default();
         let app_ctx = Arc::new(AppContext::new("test", "0.1.0"));
-        WindowManager::with_config(config, app_ctx, None, None, None, None, None)
+        WindowManager::with_config(config, app_ctx, None, term_wm_core::window::LayerManager::new(), std::collections::HashMap::new())
     }
 
     fn make_buf(width: u16, height: u16) -> Buffer {
