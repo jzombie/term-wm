@@ -171,7 +171,7 @@ impl MenuComponent {
                     cell.set_style(row_style);
                 }
             }
-            let item = &self.items[idx];
+            let item = &self.items[abs_idx];
             let marker = if is_selected {
                 ">"
             } else if is_hovered {

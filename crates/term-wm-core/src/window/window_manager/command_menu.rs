@@ -88,12 +88,17 @@ impl WindowManager {
         if !self.command_menu_visible() {
             return false;
         }
-        let Event::Key(key) = event else {
-            return false;
-        };
-        let kb = self.keybindings();
-        kb.matches(TermWmAction::MenuUp, key)
-            || kb.matches(TermWmAction::MenuDown, key)
-            || kb.matches(TermWmAction::MenuSelect, key)
+        match event {
+            Event::Key(key) => {
+                let kb = self.keybindings();
+                kb.matches(TermWmAction::MenuUp, key)
+                    || kb.matches(TermWmAction::MenuDown, key)
+                    || kb.matches(TermWmAction::MenuSelect, key)
+            }
+            Event::Mouse(mouse) => {
+                matches!(mouse.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown)
+            }
+            _ => false,
+        }
     }
 }
