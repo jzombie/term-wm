@@ -69,6 +69,21 @@ impl Component<TermWmAction> for CommandListComponent {
             .bg(color_to_ratatui(theme.menu_selected_bg))
             .fg(color_to_ratatui(theme.menu_selected_fg))
             .add_modifier(Modifier::BOLD);
+        let hover_style = Style::default()
+            .bg(color_to_ratatui(theme.panel_active_bg))
+            .fg(color_to_ratatui(theme.menu_fg));
+
+        let hovered = ctx.hover_pos().and_then(|(mx, my)| {
+            if mx >= rect.x && mx < rect.x.saturating_add(rect.width)
+                && my >= rect.y && my < rect.y.saturating_add(rect.height)
+            {
+                let r = (my - rect.y) as usize;
+                let idx = r + offset_y;
+                (idx < total).then_some(idx)
+            } else {
+                None
+            }
+        });
 
         let view_h = rect.height as usize;
         let visible_count = view_h.min(total.saturating_sub(offset_y));
@@ -77,12 +92,20 @@ impl Component<TermWmAction> for CommandListComponent {
             let idx = r + offset_y;
             let y = rect.y + r as u16;
             let is_sel = idx == selected;
+            let is_hov = hovered == Some(idx);
+            let row_style = if is_sel {
+                selected_style
+            } else if is_hov {
+                hover_style
+            } else {
+                menu_style
+            };
 
             for x in rect.x..rect.x.saturating_add(rect.width) {
                 if let Some(cell) = buffer.cell_mut((x, y)) {
                     cell.reset();
                     cell.set_symbol(" ");
-                    cell.set_style(if is_sel { selected_style } else { menu_style });
+                    cell.set_style(row_style);
                 }
             }
 
@@ -95,7 +118,7 @@ impl Component<TermWmAction> for CommandListComponent {
                 };
                 let inner_w = rect.width.saturating_sub(2) as usize;
                 let text: String = line.chars().take(inner_w).collect();
-                safe_set_string(buffer, rect, rect.x + 2, y, &text, if is_sel { selected_style } else { menu_style });
+                safe_set_string(buffer, rect, rect.x + 2, y, &text, row_style);
             }
         }
     }
@@ -489,6 +512,9 @@ impl Component<TermWmAction> for CommandPaletteComponent {
                     self.selected_rc.set(self.selected);
                     self.scroll_to_selection();
                 }
+            }
+            TermWmAction::MenuSelect => {
+                self.selected = self.selected_rc.get();
             }
             TermWmAction::ScrollView(_) => {
                 self.list_scroll.update(action, ctx, actions);
