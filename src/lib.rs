@@ -131,8 +131,7 @@ pub fn render_app(
                     width: surface.dest.width,
                     height: surface.dest.height,
                 });
-                let content_hitbox_id = wm.window_content_hitbox_id(*key)
-                    .unwrap_or_default();
+                let content_hitbox_id = wm.window_content_hitbox_id(*key).unwrap_or_default();
                 wm.hitbox_registry_mut()
                     .register(content_hitbox_id, screen_inner);
 
@@ -389,16 +388,14 @@ pub fn render_app(
     {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NOTIFICATION_HITBOX_ID: AtomicU64 = AtomicU64::new(0);
-        let notif_id = term_wm_core::hitbox_registry::HitboxId(
-            NOTIFICATION_HITBOX_ID.load(Ordering::Relaxed)
-        );
+        let notif_id =
+            term_wm_core::hitbox_registry::HitboxId(NOTIFICATION_HITBOX_ID.load(Ordering::Relaxed));
         for region in draw_plan.regions() {
             if matches!(
                 region.region_type,
                 term_wm_core::draw_plan::RegionType::Notification(_)
             ) {
-                wm.hitbox_registry_mut()
-                    .register(notif_id, region.bounds);
+                wm.hitbox_registry_mut().register(notif_id, region.bounds);
             }
         }
     }

@@ -96,7 +96,10 @@ impl WindowManager {
                     || kb.matches(TermWmAction::MenuSelect, key)
             }
             Event::Mouse(mouse) => {
-                matches!(mouse.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown)
+                matches!(
+                    mouse.kind,
+                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                )
             }
             _ => false,
         }

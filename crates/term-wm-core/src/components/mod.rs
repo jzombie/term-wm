@@ -57,9 +57,10 @@ pub trait Component<Msg>: std::any::Any {
             // Container components override handle_events entirely and
             // implement "delegate first, self-identify second" manually.
             if let Some(my_id) = self.hitbox_id()
-                && ctx.active_hitbox() != Some(my_id) {
-                    return EventResult::Ignored;
-                }
+                && ctx.active_hitbox() != Some(my_id)
+            {
+                return EventResult::Ignored;
+            }
             if let Some(screen_area) = ctx.screen_area() {
                 let local_x = (i32::from(mouse.column) - screen_area.x).max(0) as u16;
                 let local_y = (i32::from(mouse.row) - screen_area.y).max(0) as u16;
