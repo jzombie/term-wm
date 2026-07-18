@@ -200,19 +200,26 @@ impl Component<TermWmAction> for MenuComponent {
     ) {
         let area = layout_rect_to_rect(area);
         let backend = crate::helpers::downcast_ratatui(backend);
-                let offset_y = ctx.viewport().offset_y;
+        let offset_y = ctx.viewport().offset_y;
         let header_offset: u16 = if self.show_header { 1 } else { 0 };
         let hovered_idx = ctx.hover_pos().and_then(|(mx, my)| {
             if mx < area.x || mx >= area.x.saturating_add(area.width) {
                 return None;
             }
-            if my < area.y.saturating_add(header_offset) || my >= area.y.saturating_add(area.height) {
+            if my < area.y.saturating_add(header_offset) || my >= area.y.saturating_add(area.height)
+            {
                 return None;
             }
             let idx = (my.saturating_sub(area.y).saturating_sub(header_offset)) as usize + offset_y;
             (idx < self.items.len()).then_some(idx)
         });
-        self.render_items(&mut backend.buffer, area, hovered_idx, &ctx.config().theme, offset_y);
+        self.render_items(
+            &mut backend.buffer,
+            area,
+            hovered_idx,
+            &ctx.config().theme,
+            offset_y,
+        );
     }
 
     fn handle_events(
@@ -224,7 +231,7 @@ impl Component<TermWmAction> for MenuComponent {
             && matches!(mouse.kind, MouseEventKind::Press(_))
         {
             if let Some(area) = ctx.screen_area() {
-        let offset_y = ctx.viewport().offset_y;
+                let offset_y = ctx.viewport().offset_y;
                 let header_offset: u16 = if self.show_header { 1 } else { 0 };
                 let mx = mouse.column;
                 let my = mouse.row;
@@ -233,7 +240,9 @@ impl Component<TermWmAction> for MenuComponent {
                     && my >= (area.y.max(0) as u16).saturating_add(header_offset)
                     && my < (area.y.max(0) as u16).saturating_add(area.height)
                 {
-                    let visual_idx = (my.saturating_sub(area.y.max(0) as u16).saturating_sub(header_offset)) as usize;
+                    let visual_idx =
+                        (my.saturating_sub(area.y.max(0) as u16)
+                            .saturating_sub(header_offset)) as usize;
                     let idx = visual_idx + offset_y;
                     if idx < self.items.len() {
                         self.selected = idx;

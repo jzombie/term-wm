@@ -1,5 +1,5 @@
-use std::collections::VecDeque;
 use std::borrow::Cow;
+use std::collections::VecDeque;
 
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -55,9 +55,18 @@ impl Default for CommandPaletteComponent {
 impl CommandPaletteComponent {
     pub fn new() -> Self {
         let mut nav_keys = KeyBindings::new();
-        nav_keys.add(TermWmAction::MenuUp, KeyCombo::new(KeyCode::Up, KeyModifiers::NONE));
-        nav_keys.add(TermWmAction::MenuDown, KeyCombo::new(KeyCode::Down, KeyModifiers::NONE));
-        nav_keys.add(TermWmAction::MenuSelect, KeyCombo::new(KeyCode::Enter, KeyModifiers::NONE));
+        nav_keys.add(
+            TermWmAction::MenuUp,
+            KeyCombo::new(KeyCode::Up, KeyModifiers::NONE),
+        );
+        nav_keys.add(
+            TermWmAction::MenuDown,
+            KeyCombo::new(KeyCode::Down, KeyModifiers::NONE),
+        );
+        nav_keys.add(
+            TermWmAction::MenuSelect,
+            KeyCombo::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
 
         let mut inner = MenuComponent::new();
         inner.show_header = false;
@@ -127,7 +136,9 @@ impl CommandPaletteComponent {
             let wb = mru.weight(&b.stable_id);
             wb.partial_cmp(&wa).unwrap_or(std::cmp::Ordering::Equal)
         });
-        self.selected = self.selected.min(self.filtered_items.len().saturating_sub(1));
+        self.selected = self
+            .selected
+            .min(self.filtered_items.len().saturating_sub(1));
         self.query_dirty = false;
     }
 
@@ -141,7 +152,13 @@ impl CommandPaletteComponent {
         let action = match &node.action {
             term_wm_core::command_menu::CommandAction::AppAction(a) => a.clone(),
         };
-        Some((node.stable_id.clone(), display_name.to_string(), description.to_string(), action, node.icon))
+        Some((
+            node.stable_id.clone(),
+            display_name.to_string(),
+            description.to_string(),
+            action,
+            node.icon,
+        ))
     }
 
     fn registry_getter_placeholder(
@@ -149,15 +166,25 @@ impl CommandPaletteComponent {
         _id: CommandNodeId,
         node_display: &(String, String),
     ) -> (String, String, String, TermWmAction, Option<&'static str>) {
-        (String::new(), node_display.0.clone(), node_display.1.clone(), TermWmAction::CloseMenu, None)
+        (
+            String::new(),
+            node_display.0.clone(),
+            node_display.1.clone(),
+            TermWmAction::CloseMenu,
+            None,
+        )
     }
 
     pub fn selected_action(&self) -> Option<&TermWmAction> {
-        self.filtered_items.get(self.selected).map(|item| &item.action)
+        self.filtered_items
+            .get(self.selected)
+            .map(|item| &item.action)
     }
 
     pub fn selected_stable_id(&self) -> Option<&str> {
-        self.filtered_items.get(self.selected).map(|item| item.stable_id.as_str())
+        self.filtered_items
+            .get(self.selected)
+            .map(|item| item.stable_id.as_str())
     }
 
     pub fn rerank_with_registry(
@@ -187,11 +214,18 @@ impl CommandPaletteComponent {
             let wb = mru.weight(&b.stable_id);
             wb.partial_cmp(&wa).unwrap_or(std::cmp::Ordering::Equal)
         });
-        self.selected = self.selected.min(self.filtered_items.len().saturating_sub(1));
+        self.selected = self
+            .selected
+            .min(self.filtered_items.len().saturating_sub(1));
         self.query_dirty = false;
     }
 
-    fn render_search_bar(&self, buffer: &mut ratatui::buffer::Buffer, area: Rect, theme: &term_wm_core::theme::Theme) {
+    fn render_search_bar(
+        &self,
+        buffer: &mut ratatui::buffer::Buffer,
+        area: Rect,
+        theme: &term_wm_core::theme::Theme,
+    ) {
         let search_style = Style::default()
             .bg(color_to_ratatui(theme.panel_active_bg))
             .fg(color_to_ratatui(theme.menu_fg))
@@ -221,7 +255,14 @@ impl CommandPaletteComponent {
                 .bg(color_to_ratatui(theme.panel_active_bg))
                 .fg(color_to_ratatui(theme.panel_inactive_fg));
             let text: String = placeholder.chars().take(inner_w).collect();
-            safe_set_string(buffer, area, area.x + prefix.len() as u16, area.y, &text, style);
+            safe_set_string(
+                buffer,
+                area,
+                area.x + prefix.len() as u16,
+                area.y,
+                &text,
+                style,
+            );
         } else {
             let x0 = area.x + prefix.len() as u16;
             for (i, ch) in query_display.chars().enumerate() {
@@ -254,13 +295,20 @@ impl Component<TermWmAction> for CommandPaletteComponent {
         }
 
         // Build MenuItems from filtered_items and set on the inner MenuComponent
-        let menu_items: Vec<MenuItem<TermWmAction>> = self.filtered_items.iter().map(|p| MenuItem {
-            icon: p.icon,
-            label: Cow::Owned(p.display_name.clone()),
-            action: p.action.clone(),
-        }).collect();
+        let menu_items: Vec<MenuItem<TermWmAction>> = self
+            .filtered_items
+            .iter()
+            .map(|p| MenuItem {
+                icon: p.icon,
+                label: Cow::Owned(p.display_name.clone()),
+                action: p.action.clone(),
+            })
+            .collect();
         self.list_scroll.content.borrow_mut().set_items(menu_items);
-        self.list_scroll.content.borrow_mut().set_selected(self.selected);
+        self.list_scroll
+            .content
+            .borrow_mut()
+            .set_selected(self.selected);
 
         // Set content height for ScrollViewComponent
         let total = self.filtered_items.len();
@@ -439,7 +487,10 @@ mod tests {
             kind: KeyKind::Press,
         });
         let result = palette.handle_events(&event, &ctx);
-        assert!(matches!(result, EventResult::Action(TermWmAction::MenuDown)));
+        assert!(matches!(
+            result,
+            EventResult::Action(TermWmAction::MenuDown)
+        ));
     }
 
     #[test]
@@ -530,7 +581,10 @@ mod tests {
             kind: KeyKind::Press,
         });
         let result = palette.handle_events(&event, &ctx);
-        assert!(matches!(result, EventResult::Action(TermWmAction::CloseMenu)));
+        assert!(matches!(
+            result,
+            EventResult::Action(TermWmAction::CloseMenu)
+        ));
     }
 
     #[test]
@@ -556,7 +610,10 @@ mod tests {
             kind: KeyKind::Press,
         });
         let result = palette.handle_events(&event, &ctx);
-        assert!(matches!(result, EventResult::Action(TermWmAction::MenuSelect)));
+        assert!(matches!(
+            result,
+            EventResult::Action(TermWmAction::MenuSelect)
+        ));
     }
 
     #[test]
@@ -572,7 +629,11 @@ mod tests {
         let ctx = ComponentContext::new(true);
         let event = Event::Key(KeyEvent {
             code: KeyCode::Char('c'),
-            modifiers: KeyModifiers { control: true, shift: false, alt: false },
+            modifiers: KeyModifiers {
+                control: true,
+                shift: false,
+                alt: false,
+            },
             kind: KeyKind::Press,
         });
         let result = palette.handle_events(&event, &ctx);
