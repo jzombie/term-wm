@@ -91,12 +91,13 @@ pub trait Component<Msg>: std::any::Any {
         // Components without a hitbox_id forward unconditionally (backward compat).
         // Components with a hitbox_id only receive key events when focused.
         if let Event::Key(_) = event
-            && let Some(my_id) = self.hitbox_id() {
-                if ctx.keyboard_focus_id() == Some(my_id) {
-                    return self.on_key(event, ctx);
-                }
-                return EventResult::Ignored;
+            && let Some(my_id) = self.hitbox_id()
+        {
+            if ctx.keyboard_focus_id() == Some(my_id) {
+                return self.on_key(event, ctx);
             }
+            return EventResult::Ignored;
+        }
         self.on_key(event, ctx)
     }
 

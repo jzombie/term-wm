@@ -8,7 +8,9 @@ impl WindowManager {
     pub fn open_command_menu(&mut self) {
         self.command_menu_visible = true;
         self.command_menu_opened_at = Some(std::time::Instant::now());
-        if let Some(menu) = self.get_semantic_component_mut(super::layer_manager::ComponentTag::CommandPalette) {
+        if let Some(menu) =
+            self.get_semantic_component_mut(super::layer_manager::ComponentTag::CommandPalette)
+        {
             menu.process_action(&ComponentAction::Restore);
         }
     }
@@ -16,7 +18,9 @@ impl WindowManager {
     pub fn open_command_menu_no_passthrough(&mut self) {
         self.command_menu_visible = true;
         self.command_menu_opened_at = None;
-        if let Some(menu) = self.get_semantic_component_mut(super::layer_manager::ComponentTag::CommandPalette) {
+        if let Some(menu) =
+            self.get_semantic_component_mut(super::layer_manager::ComponentTag::CommandPalette)
+        {
             menu.process_action(&ComponentAction::Restore);
         }
     }
@@ -24,7 +28,9 @@ impl WindowManager {
     pub fn close_command_menu(&mut self) {
         self.command_menu_visible = false;
         self.command_menu_opened_at = None;
-        if let Some(menu) = self.get_semantic_component_mut(super::layer_manager::ComponentTag::CommandPalette) {
+        if let Some(menu) =
+            self.get_semantic_component_mut(super::layer_manager::ComponentTag::CommandPalette)
+        {
             menu.process_action(&ComponentAction::Restore);
         }
     }
@@ -34,7 +40,9 @@ impl WindowManager {
     }
 
     pub fn fold_menu(&mut self) {
-        if let Some(menu) = self.get_semantic_component_mut(super::layer_manager::ComponentTag::CommandPalette) {
+        if let Some(menu) =
+            self.get_semantic_component_mut(super::layer_manager::ComponentTag::CommandPalette)
+        {
             menu.process_action(&ComponentAction::Outline);
         }
     }
@@ -48,7 +56,8 @@ impl WindowManager {
             && matches!(mouse.kind, MouseEventKind::Press(_))
         {
             // Check if click is on the top panel's menu icon
-            if let Some(p) = self.get_semantic_component(super::layer_manager::ComponentTag::TopPanel)
+            if let Some(p) =
+                self.get_semantic_component(super::layer_manager::ComponentTag::TopPanel)
                 && let ComponentResponse::Rect(Some(rect)) = p.query(&ComponentQuery::MenuIconRect)
                 && crate::layout::rect_contains(rect, mouse.column, mouse.row)
             {
@@ -60,7 +69,8 @@ impl WindowManager {
             .component_context(false)
             .with_overlay(true)
             .with_screen_area(self.managed_area());
-        let menu = self.get_semantic_component_mut(super::layer_manager::ComponentTag::CommandPalette)?;
+        let menu =
+            self.get_semantic_component_mut(super::layer_manager::ComponentTag::CommandPalette)?;
 
         match menu.handle_events(event, &ctx) {
             EventResult::Action(action) => return Some(action),

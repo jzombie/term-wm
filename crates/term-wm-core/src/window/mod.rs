@@ -12,11 +12,11 @@ pub type WindowKey = slotmap::DefaultKey;
 
 pub use entry::WindowState;
 
+pub use window_manager::layer_manager::{ComponentTag, LayerId, LayerManager, MacroFocus, ZPlane};
 pub use window_manager::{
     DrawTask, OverlayId, ScrollState, WindowDrawContext, WindowManager, WindowSurface,
     wm_menu_items,
 };
-pub use window_manager::layer_manager::{ComponentTag, LayerId, LayerManager, MacroFocus, ZPlane};
 
 /// Signed floating rectangle (alias for engine `LayoutRect`).
 pub type FloatRect = LayoutRect;

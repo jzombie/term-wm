@@ -476,7 +476,7 @@ mod spatial_isolation {
         let mut wm = WindowManager::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
-None,
+            None,
             term_wm_core::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
@@ -624,7 +624,7 @@ mod drag_snap_pipeline {
         let mut wm = WindowManager::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
-None,
+            None,
             term_wm_core::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
@@ -1229,7 +1229,7 @@ None,
         let mut wm = WindowManager::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
-None,
+            None,
             term_wm_core::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
@@ -1676,7 +1676,7 @@ mod floating_tiled_separation {
         let mut wm = WindowManager::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
-None,
+            None,
             term_wm_core::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );

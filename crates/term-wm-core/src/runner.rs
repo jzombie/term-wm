@@ -100,7 +100,8 @@ fn drain_action_queue<A: WindowManagerHost>(
             TermWmAction::FocusWindow(k) => {
                 let state = app.wm().window_state(k);
                 if state == Some(crate::window::WindowState::Iconic) {
-                    app.wm().transition_window(k, crate::window::WindowState::Mapped);
+                    app.wm()
+                        .transition_window(k, crate::window::WindowState::Mapped);
                 }
                 app.wm().focus_window_key(k);
             }
@@ -761,8 +762,8 @@ mod tests {
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let key = wm.create_window(Box::new(crate::components::NoopComponent));
         let one = vec![key];
@@ -787,8 +788,8 @@ mod tests {
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let key = wm.create_window(Box::new(crate::components::NoopComponent));
         wm.transition_window(key, crate::window::WindowState::Mapped);
@@ -853,8 +854,8 @@ mod tests {
                 crate::wm_config::WmConfig::standalone(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
-                    crate::window::LayerManager::new(),
-                    std::collections::HashMap::new(),
+                crate::window::LayerManager::new(),
+                std::collections::HashMap::new(),
             ),
         };
         // Store the KeyRecorder directly in the WindowManager — no sidecar.
@@ -947,8 +948,8 @@ mod tests {
                 crate::wm_config::WmConfig::standalone(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
-                    crate::window::LayerManager::new(),
-                    std::collections::HashMap::new(),
+                crate::window::LayerManager::new(),
+                std::collections::HashMap::new(),
             ),
         };
         let key = app.wm.create_window(Box::new(KeyRecorder {
@@ -1068,8 +1069,8 @@ mod tests {
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         (0..n)
             .map(|_| wm.create_window(Box::new(crate::components::NoopComponent)))
@@ -1125,8 +1126,8 @@ mod tests {
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let k1 = wm.create_window(Box::new(crate::components::NoopComponent));
         let k2 = wm.create_window(Box::new(crate::components::NoopComponent));
@@ -1147,8 +1148,8 @@ mod tests {
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let k1 = wm.create_window(Box::new(crate::components::NoopComponent));
         let k2 = wm.create_window(Box::new(crate::components::NoopComponent));
@@ -1166,8 +1167,8 @@ mod tests {
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         // Use 4 windows — this reliably works within 80x24 default area
         let keys: Vec<WindowKey> = (0..4)

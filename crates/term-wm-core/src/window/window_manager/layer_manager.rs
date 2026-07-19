@@ -4,9 +4,9 @@ use crate::actions::{EventResult, TermWmAction};
 use crate::components::{ComponentContext, WmComponent};
 use crate::events::Event;
 use crate::hitbox_registry::HitboxId;
+use crate::hitbox_registry::HitboxRegistry;
 use term_wm_layout_engine::LayoutRect;
 use term_wm_render::RenderBackend;
-use crate::hitbox_registry::HitboxRegistry;
 
 use slotmap::DefaultKey;
 

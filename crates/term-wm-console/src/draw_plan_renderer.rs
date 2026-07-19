@@ -533,13 +533,15 @@ pub fn render_overlays(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut
     let hover_pos = wm.hover_pos();
 
     // Compute anchor from top component
-    let anchor = wm.get_semantic_component(ComponentTag::TopPanel).and_then(|p| {
-        if let ComponentResponse::Rect(r) = p.query(&ComponentQuery::MenuIconRect) {
-            r.map(|r| (r.x.max(0) as u16, (r.y + i32::from(r.height)).max(0) as u16))
-        } else {
-            None
-        }
-    });
+    let anchor = wm
+        .get_semantic_component(ComponentTag::TopPanel)
+        .and_then(|p| {
+            if let ComponentResponse::Rect(r) = p.query(&ComponentQuery::MenuIconRect) {
+                r.map(|r| (r.x.max(0) as u16, (r.y + i32::from(r.height)).max(0) as u16))
+            } else {
+                None
+            }
+        });
 
     // Pre-compute overlay IDs
     let overlay_ids: Vec<OverlayId> = wm.overlays().keys().copied().collect();
@@ -552,7 +554,8 @@ pub fn render_overlays(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut
     let has_focused = wm.window_count() > 0;
     let supported = wm.supported_menu_actions().to_vec();
 
-    if menu_visible && let Some(menu) = wm.get_semantic_component_mut(ComponentTag::CommandPalette) {
+    if menu_visible && let Some(menu) = wm.get_semantic_component_mut(ComponentTag::CommandPalette)
+    {
         let items = wm_menu_items(mc_enabled, cb_enabled, ws_enabled, has_focused);
         let items: Vec<MenuItem<TermWmAction>> = items
             .into_iter()
@@ -1486,7 +1489,13 @@ mod tests {
     fn make_wm() -> WindowManager {
         let config = WmConfig::default();
         let app_ctx = Arc::new(AppContext::new("test", "0.1.0"));
-        WindowManager::with_config(config, app_ctx, None, term_wm_core::window::LayerManager::new(), std::collections::HashMap::new())
+        WindowManager::with_config(
+            config,
+            app_ctx,
+            None,
+            term_wm_core::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        )
     }
 
     fn make_buf(width: u16, height: u16) -> Buffer {

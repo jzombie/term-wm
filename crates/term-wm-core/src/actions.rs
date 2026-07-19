@@ -175,7 +175,7 @@ impl TermWmAction {
             | TermWmAction::CloseHelp
             | TermWmAction::OpenHelp
             | TermWmAction::OpenKeybindings
-            |             TermWmAction::LinkClicked(_)
+            | TermWmAction::LinkClicked(_)
             | TermWmAction::ProcessExited
             | TermWmAction::ProfileChange(_)
             | TermWmAction::RequestKeyboardFocus(_) => Category::System,

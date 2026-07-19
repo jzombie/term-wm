@@ -195,7 +195,7 @@ pub struct WindowManager {
     pub(crate) managed_layout: Option<TilingLayout<WindowKey>>,
     closed_windows: Vec<WindowKey>,
     pub(crate) managed_area: Rect,
-    pub(crate)     hitbox_registry: HitboxRegistry,
+    pub(crate) hitbox_registry: HitboxRegistry,
     app_ctx: Arc<AppContext>,
     #[allow(dead_code)]
     supported_menu_actions: Vec<TermWmAction>,
@@ -644,10 +644,10 @@ impl WindowManager {
             reaper: Reaper::default(),
             quit_requested: false,
             layout_dirty: true,
-    notification_queue: NotificationQueue::default(),
-    semantic_registry,
-    overlays: BTreeMap::new(),
-    input_mode: crate::actions::WmInputMode::Passthrough,
+            notification_queue: NotificationQueue::default(),
+            semantic_registry,
+            overlays: BTreeMap::new(),
+            input_mode: crate::actions::WmInputMode::Passthrough,
             fab_enabled: true,
             tap_swap_state: None,
         }
@@ -701,7 +701,10 @@ impl WindowManager {
     /// Get a mutable reference to the FAB component.
     /// Uniform, open-ended component locator via semantic tag.
     /// Replaces all hardcoded `*_component_mut()` methods.
-    pub fn get_semantic_component_mut(&mut self, tag: layer_manager::ComponentTag) -> Option<&mut dyn WmComponent> {
+    pub fn get_semantic_component_mut(
+        &mut self,
+        tag: layer_manager::ComponentTag,
+    ) -> Option<&mut dyn WmComponent> {
         self.semantic_registry
             .get(&tag)
             .copied()
@@ -709,7 +712,10 @@ impl WindowManager {
     }
 
     /// Immutable component locator via semantic tag.
-    pub fn get_semantic_component(&self, tag: layer_manager::ComponentTag) -> Option<&dyn WmComponent> {
+    pub fn get_semantic_component(
+        &self,
+        tag: layer_manager::ComponentTag,
+    ) -> Option<&dyn WmComponent> {
         self.semantic_registry
             .get(&tag)
             .copied()
@@ -1375,7 +1381,9 @@ impl WindowManager {
                         .with_overlay(true)
                         .with_screen_area(hit_rect)
                         .with_active_hitbox(hitbox_id);
-                    if let Some(menu) = self.get_semantic_component_mut(layer_manager::ComponentTag::CommandPalette) {
+                    if let Some(menu) =
+                        self.get_semantic_component_mut(layer_manager::ComponentTag::CommandPalette)
+                    {
                         let result = menu.handle_events(&core_event, &ctx);
                         return result.map(|action| (None, action));
                     }
@@ -1408,7 +1416,9 @@ impl WindowManager {
                         .component_context(false)
                         .with_screen_area(hit_rect)
                         .with_active_hitbox(hitbox_id);
-                    if let Some(fab) = self.get_semantic_component_mut(layer_manager::ComponentTag::FloatingActionButton) {
+                    if let Some(fab) = self.get_semantic_component_mut(
+                        layer_manager::ComponentTag::FloatingActionButton,
+                    ) {
                         let result = fab.handle_events(&core_event, &ctx);
                         return result.map(|action| (None, action));
                     }
@@ -1725,7 +1735,7 @@ impl WindowManager {
         {
             let ctx = self
                 .component_context(false)
-                                .with_screen_area(hit_rect)
+                .with_screen_area(hit_rect)
                 .with_active_hitbox(hitbox_id);
             let result = self.layer_manager.dispatch_background(&core_event, &ctx);
             if !result.is_ignored() {
@@ -1811,7 +1821,10 @@ impl WindowManager {
     /// Handle clicks on top-panel icons (menu, mouse capture, selection, etc.).
     /// Returns true if the click was consumed.
     fn handle_panel_click(&mut self, col: u16, row: u16) -> bool {
-        if self.get_semantic_component(layer_manager::ComponentTag::TopPanel).is_none() {
+        if self
+            .get_semantic_component(layer_manager::ComponentTag::TopPanel)
+            .is_none()
+        {
             return false;
         }
         if !crate::layout::rect_contains(self.top_claimed, col, row) {
@@ -1882,7 +1895,9 @@ impl WindowManager {
         {
             handle.cancel(id);
         }
-        if let Some(menu) = self.get_semantic_component_mut(layer_manager::ComponentTag::CommandPalette) {
+        if let Some(menu) =
+            self.get_semantic_component_mut(layer_manager::ComponentTag::CommandPalette)
+        {
             menu.process_action(&ComponentAction::Restore);
         }
     }
@@ -2148,7 +2163,10 @@ impl WindowManager {
         if self.is_monocle() {
             return false;
         }
-        self.config.panel_enabled && self.get_semantic_component(layer_manager::ComponentTag::TopPanel).is_some_and(|p| p.visible())
+        self.config.panel_enabled
+            && self
+                .get_semantic_component(layer_manager::ComponentTag::TopPanel)
+                .is_some_and(|p| p.visible())
     }
 
     /// Register panel hitboxes (top and bottom) into the draw-time registry.
@@ -2336,7 +2354,9 @@ impl WindowManager {
     /// Set the notification area component (called during app init).
     /// Pushes into LayerManager with ZPlane::Foreground.
     pub fn set_notification_component(&mut self, comp: Box<dyn WmComponent>) {
-        let id = self.layer_manager.insert(comp, layer_manager::ZPlane::Foreground);
+        let id = self
+            .layer_manager
+            .insert(comp, layer_manager::ZPlane::Foreground);
         self.semantic_registry
             .insert(layer_manager::ComponentTag::NotificationArea, id);
     }
@@ -2638,8 +2658,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let key = wm.create_window(Box::new(crate::components::NoopComponent));
         let node = LayoutNode::leaf(key);
@@ -2670,8 +2690,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
 
@@ -2719,8 +2739,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_floating_resize_offscreen(true);
@@ -2758,8 +2778,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_floating_resize_offscreen(true);
@@ -2794,8 +2814,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.register_managed_layout(LayoutRect {
@@ -2828,8 +2848,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         // Map all windows first — minimize requires Mapped state
@@ -2886,8 +2906,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         let target_rect = LayoutRect {
@@ -2933,8 +2953,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_floating_resize_offscreen(true);
@@ -2989,8 +3009,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_floating_resize_offscreen(true);
@@ -3032,8 +3052,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.regions.set(
@@ -3162,8 +3182,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let debug_key = wm.set_system_window(Box::new(DummyComponent));
         wm.set_panel_visible(false);
@@ -3244,8 +3264,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -3324,8 +3344,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.set_panel_visible(false);
         let keys = make_keys(&mut wm, 100);
@@ -3494,8 +3514,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         let full = Rect {
@@ -3535,8 +3555,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
 
@@ -3582,8 +3602,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
 
@@ -3625,8 +3645,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
 
@@ -3667,8 +3687,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.focus_app_window(keys[0]);
@@ -3682,8 +3702,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.focus_app_window(keys[0]);
@@ -3702,8 +3722,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         let key = keys[42];
@@ -3722,8 +3742,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         let id_a = keys[1];
@@ -3743,8 +3763,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -3829,8 +3849,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -3888,8 +3908,8 @@ mod tests {
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let _keys = make_keys(&mut wm, 100);
         assert!(wm.drag_snap_remaining().is_none());
@@ -3901,8 +3921,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let _keys = make_keys(&mut wm, 100);
         assert!(wm.drag_snap_remaining().is_none());
@@ -3914,8 +3934,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.mouse_capture = Some(MouseCaptureState::DraggingWindow {
@@ -3945,8 +3965,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.mouse_capture = Some(MouseCaptureState::DraggingWindow {
@@ -3968,8 +3988,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.mouse_capture = Some(MouseCaptureState::DraggingWindow {
@@ -3997,8 +4017,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.apply_drag_snap_if_pending();
         // The method should not panic when there is no drag in progress.
@@ -4015,8 +4035,8 @@ mod tests {
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -4094,8 +4114,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let _keys = make_keys(&mut wm, 100);
         assert_eq!(wm.power_profile, PowerProfile::PowerSaver);
@@ -4114,8 +4134,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -4158,8 +4178,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -4232,8 +4252,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -4352,8 +4372,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -4420,8 +4440,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
 
         let debug_key = wm.set_system_window(Box::new(DummyComponent));
@@ -4540,8 +4560,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let key = wm.create_window(Box::new(crate::components::NoopComponent));
         assert_eq!(wm.window_state(key), Some(WindowState::Realized));
@@ -4570,8 +4590,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -4594,8 +4614,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -4617,8 +4637,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -4658,8 +4678,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -4696,8 +4716,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         struct Dummy;
         impl crate::components::Component<TermWmAction> for Dummy {
@@ -4754,8 +4774,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -4793,8 +4813,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -4857,8 +4877,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.set_panel_visible(false);
 
@@ -4981,8 +5001,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.set_panel_visible(false);
 
@@ -5131,8 +5151,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.set_panel_visible(false);
 
@@ -5194,8 +5214,8 @@ mod tests {
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.set_panel_visible(false);
         let keys = make_keys(&mut wm, 100);
@@ -5368,8 +5388,8 @@ mod tests {
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.set_panel_visible(false);
         let keys = make_keys(&mut wm, 100);
@@ -5410,8 +5430,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -5469,8 +5489,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -5529,8 +5549,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -5590,8 +5610,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -5675,8 +5695,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         assert!(!wm.exit_confirm_visible());
 
@@ -5712,8 +5732,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         assert!(!wm.help_overlay_visible());
 
@@ -5749,8 +5769,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let event = Event::Key(crate::events::KeyEvent {
             code: crate::events::KeyCode::Esc,
@@ -5766,8 +5786,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.fold_menu();
     }
@@ -5778,8 +5798,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         assert!(!wm.command_menu_visible());
         wm.open_command_menu();
@@ -5794,8 +5814,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.open_command_menu_no_passthrough();
         assert!(wm.command_menu_visible());
@@ -5808,8 +5828,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let event = Event::Key(crate::events::KeyEvent {
             code: crate::events::KeyCode::Esc,
@@ -5825,8 +5845,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let event = Event::Key(crate::events::KeyEvent {
             code: crate::events::KeyCode::Esc,
@@ -5842,8 +5862,8 @@ mod tests {
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-                crate::window::LayerManager::new(),
-                std::collections::HashMap::new(),
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.open_command_menu();
         let event = Event::Mouse(crate::events::MouseEvent {

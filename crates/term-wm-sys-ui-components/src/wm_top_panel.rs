@@ -473,7 +473,13 @@ impl Component<TermWmAction> for WmTopPanelComponent {
         if !matches!(mouse.kind, MouseEventKind::Press(_)) {
             return EventResult::Ignored;
         }
-        self.on_mouse_press(mouse.column, mouse.row, MouseButton::Left, mouse.modifiers, ctx)
+        self.on_mouse_press(
+            mouse.column,
+            mouse.row,
+            MouseButton::Left,
+            mouse.modifiers,
+            ctx,
+        )
     }
 
     fn on_mouse_press(
