@@ -1818,64 +1818,6 @@ impl WindowManager {
         }
     }
 
-    /// Handle clicks on top-panel icons (menu, mouse capture, selection, etc.).
-    /// Returns true if the click was consumed.
-    fn handle_panel_click(&mut self, col: u16, row: u16) -> bool {
-        if self
-            .get_semantic_component(layer_manager::ComponentTag::TopPanel)
-            .is_none()
-        {
-            return false;
-        }
-        if !crate::layout::rect_contains(self.top_claimed, col, row) {
-            return false;
-        }
-        // Use handle_event which routes through all hit-test methods
-        let down_event = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Press(MouseButton::Left),
-            column: col,
-            row,
-            modifiers: KeyModifiers::NONE,
-        });
-        let ctx = self.component_context(false);
-        let Some(p) = self.get_semantic_component_mut(layer_manager::ComponentTag::TopPanel) else {
-            return false;
-        };
-        match p.handle_events(&down_event, &ctx) {
-            crate::actions::EventResult::Action(action) => match action {
-                TermWmAction::OpenCommandPalette => {
-                    if self.command_menu_visible() {
-                        self.close_command_menu();
-                    } else {
-                        self.open_command_menu();
-                    }
-                    true
-                }
-                TermWmAction::ToggleMouseCapture => {
-                    self.toggle_mouse_capture();
-                    true
-                }
-                TermWmAction::ToggleWindowSelection => {
-                    self.toggle_window_selection();
-                    true
-                }
-                TermWmAction::ToggleClipboardMode => {
-                    self.toggle_clipboard_enabled();
-                    true
-                }
-                TermWmAction::FocusWindow(key) => {
-                    if self.window_state(key) == Some(WindowState::Iconic) {
-                        self.transition_window(key, WindowState::Mapped);
-                    }
-                    self.focus_window_key(key);
-                    true
-                }
-                _ => false,
-            },
-            _ => false,
-        }
-    }
-
     pub fn arm_capture(&mut self, timeout: Duration) {
         self.capture_deadline = Some(Instant::now() + timeout);
         self.pending_deadline = None;
