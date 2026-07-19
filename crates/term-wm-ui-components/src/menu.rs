@@ -98,7 +98,9 @@ impl MenuComponent {
         theme: &term_wm_core::theme::Theme,
         offset_y: usize,
     ) {
-        if self.items.is_empty() || area.width < 3 || area.height < 3 {
+        let header_offset: u16 = if self.show_header { 1 } else { 0 };
+        let min_height = 1 + header_offset;
+        if self.items.is_empty() || area.width < 3 || area.height < min_height {
             return;
         }
         let bounds = area.intersection(buffer.area);
@@ -119,7 +121,6 @@ impl MenuComponent {
 
         let inner_x = area.x.saturating_add(1);
         let inner_width = area.width.saturating_sub(2).max(1);
-        let header_offset: u16 = if self.show_header { 1 } else { 0 };
         let visible_items = (area.height.saturating_sub(header_offset))
             .min(self.items.len().saturating_sub(offset_y) as u16)
             as usize;
