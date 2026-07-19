@@ -186,8 +186,8 @@ impl WmBottomPanelComponent {
                     safe_set_string(buffer, bounds, cursor_x, area.y as u16, &text, style);
                     self.hint_rects.push((
                         LayoutRect {
-                            x: i32::from(cursor_x).saturating_sub(area.x),
-                            y: 0,
+                            x: i32::from(cursor_x),
+                            y: area.y,
                             width: available_w,
                             height: 1,
                         },
@@ -198,8 +198,8 @@ impl WmBottomPanelComponent {
 
                 self.hint_rects.push((
                     LayoutRect {
-                        x: i32::from(cursor_x).saturating_sub(area.x),
-                        y: 0,
+                        x: i32::from(cursor_x),
+                        y: area.y,
                         width: entry_width,
                         height: 1,
                     },
