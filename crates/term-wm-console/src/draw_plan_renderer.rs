@@ -6,9 +6,7 @@ use term_wm_layout_engine::LayoutRect;
 use crate::RatatuiBackend;
 use term_wm_core::actions::TermWmAction;
 use term_wm_core::component_context::ComponentContext;
-use term_wm_core::components::{
-    Component, ComponentAction, MenuItem, TopPanelState,
-};
+use term_wm_core::components::{Component, ComponentAction, MenuItem, TopPanelState};
 use term_wm_core::constants::{SHADOW_OFFSET_X, SHADOW_OFFSET_Y};
 use term_wm_core::draw_plan::{DrawPlan, RegionType, RenderRegion};
 use term_wm_core::hitbox_registry::HitboxRegistry;

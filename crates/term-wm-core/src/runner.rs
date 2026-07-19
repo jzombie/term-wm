@@ -361,17 +361,33 @@ where
                 if wm_mode && app.wm().command_menu_visible() {
                     if let Some(action) = app.wm().handle_command_palette_event(&evt) {
                         match action {
-                            TermWmAction::CloseMenu => { app.wm().close_command_palette(); }
-                            TermWmAction::ToggleDebugWindow => { app.toggle_debug_window(); app.wm().close_command_palette(); }
-                            TermWmAction::ToggleSystemPanel => { app.toggle_system_panel(); app.wm().close_command_palette(); }
-                            TermWmAction::Help | TermWmAction::OpenHelp => { app.open_help_overlay(); app.wm().close_command_palette(); }
-                            TermWmAction::Quit | TermWmAction::ExitUi => { app.open_exit_confirm(); }
+                            TermWmAction::CloseMenu => {
+                                app.wm().close_command_palette();
+                            }
+                            TermWmAction::ToggleDebugWindow => {
+                                app.toggle_debug_window();
+                                app.wm().close_command_palette();
+                            }
+                            TermWmAction::ToggleSystemPanel => {
+                                app.toggle_system_panel();
+                                app.wm().close_command_palette();
+                            }
+                            TermWmAction::Help | TermWmAction::OpenHelp => {
+                                app.open_help_overlay();
+                                app.wm().close_command_palette();
+                            }
+                            TermWmAction::Quit | TermWmAction::ExitUi => {
+                                app.open_exit_confirm();
+                            }
                             TermWmAction::CloseWindow => {
                                 let id = app.wm().focused_window();
                                 app.wm().close_window(id);
                                 app.wm().close_command_palette();
                             }
-                            TermWmAction::NewWindow => { app.wm_new_window()?; app.wm().close_command_palette(); }
+                            TermWmAction::NewWindow => {
+                                app.wm_new_window()?;
+                                app.wm().close_command_palette();
+                            }
                             TermWmAction::MinimizeWindow => {
                                 let id = app.wm().focused_window();
                                 app.wm().minimize_window(id);
@@ -387,10 +403,20 @@ where
                                 app.wm().toggle_direct_mode(id);
                                 app.wm().close_command_palette();
                             }
-                            TermWmAction::ToggleMouseCapture => { app.wm().toggle_mouse_capture(); }
-                            TermWmAction::ToggleClipboardMode => { app.wm().toggle_clipboard_enabled(); }
-                            TermWmAction::ToggleWindowSelection => { app.wm().toggle_window_selection(); }
-                            TermWmAction::SendNotification(msg) => { app.wm().push_notification(msg, std::time::Duration::from_secs(3)); app.wm().close_command_palette(); }
+                            TermWmAction::ToggleMouseCapture => {
+                                app.wm().toggle_mouse_capture();
+                            }
+                            TermWmAction::ToggleClipboardMode => {
+                                app.wm().toggle_clipboard_enabled();
+                            }
+                            TermWmAction::ToggleWindowSelection => {
+                                app.wm().toggle_window_selection();
+                            }
+                            TermWmAction::SendNotification(msg) => {
+                                app.wm()
+                                    .push_notification(msg, std::time::Duration::from_secs(3));
+                                app.wm().close_command_palette();
+                            }
                             _ => {}
                         }
                     }

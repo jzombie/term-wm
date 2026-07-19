@@ -15,9 +15,9 @@ use term_wm_core::{
     hitbox_registry::HitboxId,
     window::WindowKey,
 };
+use term_wm_ui_components::DialogOverlayComponent;
 use term_wm_ui_components::command_palette::CommandPaletteComponent;
 use term_wm_ui_components::helpers::{downcast_ratatui, layout_rect_to_rect};
-use term_wm_ui_components::DialogOverlayComponent;
 
 pub struct WmCommandPaletteComponent {
     area: Cell<LayoutRect>,
@@ -153,7 +153,8 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
             return;
         }
 
-        self.dialog.render_backdrop(backend, area, Some(content_rect));
+        self.dialog
+            .render_backdrop(backend, area, Some(content_rect));
         {
             let ratatui = downcast_ratatui(backend);
             Clear.render(rect, &mut ratatui.buffer);
