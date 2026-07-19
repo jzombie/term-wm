@@ -88,6 +88,22 @@ fn drain_action_queue<A: WindowManagerHost>(
             TermWmAction::RequestKeyboardFocus(id) => {
                 app.wm().set_keyboard_focus(key, id);
             }
+            TermWmAction::ToggleMouseCapture => {
+                app.wm().toggle_mouse_capture();
+            }
+            TermWmAction::ToggleWindowSelection => {
+                app.wm().toggle_window_selection();
+            }
+            TermWmAction::ToggleClipboardMode => {
+                app.wm().toggle_clipboard_enabled();
+            }
+            TermWmAction::FocusWindow(k) => {
+                let state = app.wm().window_state(k);
+                if state == Some(crate::window::WindowState::Iconic) {
+                    app.wm().transition_window(k, crate::window::WindowState::Mapped);
+                }
+                app.wm().focus_window_key(k);
+            }
             action => {
                 let ctx = app.wm().component_context_for(true, key);
                 if let Some(comp) = app.wm().component_for_key_mut(key) {

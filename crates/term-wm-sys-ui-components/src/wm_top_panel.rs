@@ -234,8 +234,8 @@ impl WmTopPanelComponent {
                 menu_style,
             );
             self.menu_rect = Some(LayoutRect {
-                x: x.saturating_sub(area.x),
-                y: y.saturating_sub(area.y),
+                x,
+                y,
                 width: menu_width,
                 height: 1,
             });
@@ -278,8 +278,8 @@ impl WmTopPanelComponent {
                 self.list.window_hits.push(PanelWindowHit {
                     id,
                     rect: LayoutRect {
-                        x: x.saturating_sub(area.x),
-                        y: y.saturating_sub(area.y),
+                        x,
+                        y,
                         width: chunk_width,
                         height: 1,
                     },
@@ -337,8 +337,8 @@ impl WmTopPanelComponent {
                 let width = selection_width.min((max_x.saturating_sub(cursor)) as u16);
                 if width > 0 {
                     self.notifications.selection_rect = Some(LayoutRect {
-                        x: cursor.saturating_sub(area.x),
-                        y: y.saturating_sub(area.y),
+                        x: cursor,
+                        y,
                         width,
                         height: 1,
                     });
@@ -357,8 +357,8 @@ impl WmTopPanelComponent {
                 let width = mouse_width.min((max_x.saturating_sub(cursor)) as u16);
                 if width > 0 {
                     self.notifications.mouse_capture_rect = Some(LayoutRect {
-                        x: cursor.saturating_sub(area.x),
-                        y: y.saturating_sub(area.y),
+                        x: cursor,
+                        y,
                         width,
                         height: 1,
                     });
@@ -377,8 +377,8 @@ impl WmTopPanelComponent {
                 let width = clip_width.min((max_x.saturating_sub(cursor)) as u16);
                 if width > 0 {
                     self.notifications.clipboard_rect = Some(LayoutRect {
-                        x: cursor.saturating_sub(area.x),
-                        y: y.saturating_sub(area.y),
+                        x: cursor,
+                        y,
                         width,
                         height: 1,
                     });
@@ -484,22 +484,19 @@ impl Component<TermWmAction> for WmTopPanelComponent {
         _modifiers: KeyModifiers,
         _ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
-        // Convert screen coordinates to local coordinates relative to panel origin
-        let local_x = column.saturating_sub(self.area.x as u16);
-        let local_y = row.saturating_sub(self.area.y as u16);
-        if self.menu_icon_contains_point(local_x, local_y) {
+        if self.menu_icon_contains_point(column, row) {
             return EventResult::Action(TermWmAction::OpenCommandPalette);
         }
-        if self.hit_test_mouse_capture(local_x, local_y) {
+        if self.hit_test_mouse_capture(column, row) {
             return EventResult::Action(TermWmAction::ToggleMouseCapture);
         }
-        if self.hit_test_selection(local_x, local_y) {
+        if self.hit_test_selection(column, row) {
             return EventResult::Action(TermWmAction::ToggleWindowSelection);
         }
-        if self.hit_test_clipboard(local_x, local_y) {
+        if self.hit_test_clipboard(column, row) {
             return EventResult::Action(TermWmAction::ToggleClipboardMode);
         }
-        if let Some(key) = self.hit_test_window(local_x, local_y) {
+        if let Some(key) = self.hit_test_window(column, row) {
             return EventResult::Action(TermWmAction::FocusWindow(key));
         }
         EventResult::Ignored

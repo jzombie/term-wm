@@ -320,8 +320,7 @@ impl Component<TermWmAction> for WmBottomPanelComponent {
         _modifiers: KeyModifiers,
         _ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
-        let local_x = column.saturating_sub(self.area.x as u16);
-        if let Some(action) = self.hit_test_hint(local_x, row) {
+        if let Some(action) = self.hit_test_hint(column, row) {
             return EventResult::Action(action);
         }
         EventResult::Ignored

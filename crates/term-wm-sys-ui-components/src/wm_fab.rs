@@ -103,8 +103,11 @@ impl Component<TermWmAction> for WmFabComponent {
     fn handle_events(
         &mut self,
         event: &Event,
-        _ctx: &ComponentContext,
+        ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
+        if ctx.active_hitbox() != Some(self.hitbox_id) {
+            return EventResult::Ignored;
+        }
         if let Event::Mouse(mouse) = event
             && matches!(mouse.kind, term_wm_core::events::MouseEventKind::Press(_))
         {
