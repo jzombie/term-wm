@@ -84,10 +84,15 @@ impl WindowManager {
             return None;
         }
 
+        if let Event::Mouse(mouse) = event {
+            self.hover = Some((mouse.column, mouse.row));
+        }
+
         let ctx = self
             .component_context(false)
             .with_overlay(true)
-            .with_screen_area(self.managed_area());
+            .with_screen_area(self.managed_area())
+            .with_hover_pos(self.hover);
         let menu =
             self.get_semantic_component_mut(super::layer_manager::ComponentTag::CommandPalette)?;
 
