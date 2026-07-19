@@ -31,10 +31,6 @@ pub trait WindowManagerHost {
     fn open_help_overlay(&mut self) {
         self.wm().open_overlay(crate::window::OverlayId::Help, None);
     }
-    fn open_keybindings_overlay(&mut self) {
-        self.wm()
-            .open_overlay(crate::window::OverlayId::Keybindings, None);
-    }
     fn open_exit_confirm(&mut self) {
         self.wm().request_quit();
     }
@@ -460,12 +456,6 @@ where
                             }
                             TermWmAction::OpenHelp => {
                                 app.open_help_overlay();
-                                app.wm().close_command_menu();
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
-                            }
-                            TermWmAction::OpenKeybindings => {
-                                app.open_keybindings_overlay();
                                 app.wm().close_command_menu();
                                 update_selection_snapshot(app);
                                 return flush_state_changes(app, ControlFlow::Continue, false);

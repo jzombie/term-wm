@@ -36,7 +36,6 @@ pub enum TermWmAction {
     CyclePrevWindow,
     FocusWindow(WindowKey),
     OpenHelp,
-    OpenKeybindings,
     FocusNext,
     FocusPrev,
     NewWindow,
@@ -174,7 +173,6 @@ impl TermWmAction {
             TermWmAction::Quit
             | TermWmAction::CloseHelp
             | TermWmAction::OpenHelp
-            | TermWmAction::OpenKeybindings
             | TermWmAction::LinkClicked(_)
             | TermWmAction::ProcessExited
             | TermWmAction::ProfileChange(_)
@@ -246,7 +244,6 @@ impl TermWmAction {
             TermWmAction::OpenCommandPalette => Some(100),
             TermWmAction::Quit => Some(90),
             TermWmAction::OpenHelp => Some(80),
-            TermWmAction::OpenKeybindings => Some(75),
             TermWmAction::FocusNext => Some(70),
             TermWmAction::FocusPrev => Some(65),
             TermWmAction::CycleNextWindow => Some(60),
@@ -268,7 +265,6 @@ impl fmt::Display for TermWmAction {
             TermWmAction::CyclePrevWindow => "Cycle previous window",
             TermWmAction::FocusWindow(_) => "Focus window",
             TermWmAction::OpenHelp => "Open help",
-            TermWmAction::OpenKeybindings => "Open keybindings",
             TermWmAction::FocusNext => "Focus next",
             TermWmAction::FocusPrev => "Focus previous",
             TermWmAction::NewWindow => "New window",

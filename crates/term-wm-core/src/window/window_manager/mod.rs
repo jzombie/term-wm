@@ -115,7 +115,6 @@ pub(crate) enum SnapPreviewState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum OverlayId {
     Help,
-    Keybindings,
     ExitConfirm,
     SelectionPreview,
 }
