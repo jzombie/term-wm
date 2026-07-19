@@ -32,9 +32,14 @@ impl FuzzyMatch {
             return (0..items.len()).collect();
         }
 
+        // Create a fresh Matcher for each score call to ensure no stale
+        // internal buffers (pattern_buf, pattern_stack, indices) from
+        // previous calls affect scoring for the current query.
+        self.matcher = Matcher::new(NucleoConfig::DEFAULT.match_paths());
+
         let pattern = Pattern::new(
             query,
-            CaseMatching::Smart,
+            CaseMatching::Ignore,
             Normalization::Smart,
             AtomKind::Fuzzy,
         );
@@ -43,6 +48,11 @@ impl FuzzyMatch {
             .iter()
             .enumerate()
             .filter_map(|(i, (name, _desc))| {
+                // Clear the buffer before use. Utf32Str::new appends to the
+                // buffer for non-ASCII strings. Without this, the buffer grows
+                // indefinitely until it breaches nucleo's max haystack length
+                // and returns None.
+                self.char_buf.clear();
                 let haystack = Utf32Str::new(name, &mut self.char_buf);
                 let score = pattern.score(haystack, &mut self.matcher);
                 score.map(|s| (s, i))
