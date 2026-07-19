@@ -145,6 +145,73 @@ mod tests {
         assert!(results.is_empty());
     }
 
+    /// Regression test: successive score() calls on the same FuzzyMatch
+    /// must not accumulate stale internal state. Simulates the real-world
+    /// pattern: empty query → single char → two chars → three chars.
+    #[test]
+    fn fuzzy_multiple_successive_scores() {
+        let mut fmatch = FuzzyMatch::new();
+        let items = vec![
+            ("New Window".to_string(), String::new()),
+            ("Close Window".to_string(), String::new()),
+        ];
+
+        // Empty query → all items
+        let r0 = fmatch.score("", &items);
+        assert_eq!(r0.len(), 2, "empty query should return all items");
+
+        // Single char — both items contain 'n' (New, Window)
+        let r1 = fmatch.score("n", &items);
+        assert_eq!(r1.len(), 2, "'n' should match both items");
+
+        // Two chars — only New Window has 'n' followed by 'e'
+        let r2 = fmatch.score("ne", &items);
+        assert_eq!(r2.len(), 1, "'ne' should match 'New Window'");
+        assert_eq!(r2[0], 0);
+
+        // Three chars (the reported failing case)
+        let r3 = fmatch.score("new", &items);
+        assert_eq!(r3.len(), 1, "'new' should match 'New Window'");
+        assert_eq!(r3[0], 0);
+
+        // Verify non-matching still works after successive calls
+        let r4 = fmatch.score("zzz", &items);
+        assert!(r4.is_empty(), "'zzz' should match nothing");
+    }
+
+    /// Reproduce the user-reported bug scenarios:
+    /// - lowercase "ex" (2 chars) should match "Exit UI"
+    /// - case sensitivity with Smart mode
+    #[test]
+    fn fuzzy_case_and_multi_char() {
+        let mut fmatch = FuzzyMatch::new();
+        let items = vec![
+            ("Resume".to_string(), String::new()),
+            ("Exit UI".to_string(), String::new()),
+        ];
+
+        // All queries are case-insensitive with CaseMatching::Ignore
+        let r1 = fmatch.score("e", &items);
+        assert_eq!(r1.len(), 2, "'e' should match both items");
+
+        let r2 = fmatch.score("E", &items);
+        assert_eq!(r2.len(), 2, "'E' should match both items (case-insensitive)");
+
+        // Two lowercase chars — "ex" only matches "Exit UI"
+        let r3 = fmatch.score("ex", &items);
+        assert_eq!(r3.len(), 1, "'ex' should match 'Exit UI'");
+        assert_eq!(r3[0], 1);
+
+        // Test successive calls on same FuzzyMatch
+        let r4 = fmatch.score("exi", &items);
+        assert_eq!(r4.len(), 1, "'exi' should match 'Exit UI'");
+        assert_eq!(r4[0], 1);
+
+        let r5 = fmatch.score("Res", &items);
+        assert_eq!(r5.len(), 1, "'Res' should match 'Resume'");
+        assert_eq!(r5[0], 0);
+    }
+
     #[test]
     fn mru_weight_starts_at_zero() {
         let ranker = MruRanker::new();
