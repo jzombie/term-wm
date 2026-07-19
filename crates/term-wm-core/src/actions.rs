@@ -97,6 +97,11 @@ pub enum TermWmAction {
     ProcessExited,
     ProfileChange(crate::power_profile::PowerProfile),
 
+    // Component-level keyboard focus
+    /// A component requests keyboard focus. The WindowManager stores the
+    /// HitboxId on the focused Window's `active_keyboard_focus` field.
+    RequestKeyboardFocus(crate::hitbox_registry::HitboxId),
+
     // --- Universal input mode actions (replaces WmToggleOverlay) ---
     /// Open the command palette. Triggered by FAB tap or Ctrl+Shift+Space.
     OpenCommandPalette,
@@ -172,7 +177,8 @@ impl TermWmAction {
             | TermWmAction::OpenKeybindings
             | TermWmAction::LinkClicked(_)
             | TermWmAction::ProcessExited
-            | TermWmAction::ProfileChange(_) => Category::System,
+            | TermWmAction::ProfileChange(_)
+            | TermWmAction::RequestKeyboardFocus(_) => Category::System,
 
             TermWmAction::CycleNextWindow
             | TermWmAction::CyclePrevWindow
@@ -310,6 +316,7 @@ impl fmt::Display for TermWmAction {
             TermWmAction::ClipboardPaste(_) => "Clipboard paste",
             TermWmAction::ProcessExited => "Process exited",
             TermWmAction::ProfileChange(_) => "Profile change",
+            TermWmAction::RequestKeyboardFocus(_) => "Request keyboard focus",
             TermWmAction::OpenCommandPalette => "Open command palette",
             TermWmAction::CloseCommandPalette => "Close command palette",
             TermWmAction::BeginTapSwap(_) => "Begin tap-to-swap",

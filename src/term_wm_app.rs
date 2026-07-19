@@ -50,7 +50,8 @@ impl TermWmApp {
         let hostname = app_ctx.hostname.clone();
 
         use term_wm_sys_ui_components::{
-            WmBottomPanelComponent, WmCommandPaletteComponent, WmFabComponent, WmTopPanelComponent,
+            WmBottomPanelComponent, WmCommandPaletteComponent, WmFabComponent,
+            WmNotificationAreaComponent, WmTopPanelComponent,
         };
 
         let wm = AppBuilder::bare()
@@ -72,6 +73,8 @@ impl TermWmApp {
             ])
             .build()
             .expect("standalone build");
+        let mut wm = wm;
+        wm.set_notification_component(Box::new(WmNotificationAreaComponent::new()));
         Self::from_wm(wm)
     }
 

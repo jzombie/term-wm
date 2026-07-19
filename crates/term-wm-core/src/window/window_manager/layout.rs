@@ -175,7 +175,9 @@ impl WindowManager {
     }
 
     pub fn set_panel_visible(&mut self, visible: bool) {
-        if let Some(p) = &mut self.top_component {
+        if let Some(p) =
+            self.get_semantic_component_mut(super::layer_manager::ComponentTag::TopPanel)
+        {
             p.set_visible(visible);
         }
     }
@@ -195,7 +197,9 @@ impl WindowManager {
                     let hints = self
                         .keybindings()
                         .bottom_hints_for_layer(crate::constants::MAX_BOTTOM_HINTS, active_layer);
-                    if let Some(p) = &mut self.bottom_component {
+                    if let Some(p) = self
+                        .get_semantic_component_mut(super::layer_manager::ComponentTag::BottomPanel)
+                    {
                         p.process_action(&crate::components::ComponentAction::SetKeybindingHints(
                             hints,
                         ));
@@ -204,7 +208,9 @@ impl WindowManager {
                     let hints = self
                         .keybindings()
                         .bottom_hints(crate::constants::MAX_BOTTOM_HINTS);
-                    if let Some(p) = &mut self.bottom_component {
+                    if let Some(p) = self
+                        .get_semantic_component_mut(super::layer_manager::ComponentTag::BottomPanel)
+                    {
                         p.process_action(&crate::components::ComponentAction::SetKeybindingHints(
                             hints,
                         ));
@@ -212,7 +218,9 @@ impl WindowManager {
                 }
             }
             _ => {
-                if let Some(p) = &mut self.bottom_component {
+                if let Some(p) =
+                    self.get_semantic_component_mut(super::layer_manager::ComponentTag::BottomPanel)
+                {
                     p.process_action(&crate::components::ComponentAction::SetKeybindingHints(
                         Vec::new(),
                     ));
@@ -221,15 +229,21 @@ impl WindowManager {
         }
         // Compute whether the panel should be active from config + visibility,
         // BEFORE calling consume_area (which needs this state to claim space).
-        let panel_active =
-            self.config.panel_enabled && self.top_component.as_ref().is_some_and(|p| p.visible());
+        let panel_active = self.config.panel_enabled
+            && self
+                .get_semantic_component(super::layer_manager::ComponentTag::TopPanel)
+                .is_some_and(|p| p.visible());
         // Push active state to the component so consume_area claims the right space
-        if let Some(p) = &mut self.top_component {
+        if let Some(p) =
+            self.get_semantic_component_mut(super::layer_manager::ComponentTag::TopPanel)
+        {
             p.process_action(&crate::components::ComponentAction::SetPanelActive(
                 panel_active,
             ));
         }
-        let has_hints = if let Some(p) = self.bottom_component.as_ref() {
+        let has_hints = if let Some(p) =
+            self.get_semantic_component(super::layer_manager::ComponentTag::BottomPanel)
+        {
             if let crate::components::ComponentResponse::Hints(h) =
                 p.query(&crate::components::ComponentQuery::KeybindingHints)
             {
@@ -241,14 +255,18 @@ impl WindowManager {
             false
         };
         let bottom_h = if has_hints || panel_active { 1u16 } else { 0 };
-        let (top_rect, after_top) = if let Some(p) = &mut self.top_component {
+        let (top_rect, after_top) = if let Some(p) =
+            self.get_semantic_component_mut(super::layer_manager::ComponentTag::TopPanel)
+        {
             let (claimed, rest) = p.consume_area(area);
             (claimed, rest)
         } else {
             (Rect::default(), area)
         };
         self.top_claimed = top_rect;
-        let (bottom_rect, managed_area) = if let Some(p) = &mut self.bottom_component {
+        let (bottom_rect, managed_area) = if let Some(p) =
+            self.get_semantic_component_mut(super::layer_manager::ComponentTag::BottomPanel)
+        {
             let bottom = Rect {
                 x: after_top.x,
                 y: after_top

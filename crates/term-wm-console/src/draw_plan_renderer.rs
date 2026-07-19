@@ -20,7 +20,7 @@ use term_wm_core::term_color::lerp_color;
 use term_wm_core::theme::{Color, Theme};
 use term_wm_core::window::decorator::WindowRenderCtx;
 use term_wm_core::window::wm_menu_items;
-use term_wm_core::window::{OverlayId, WindowKey, WindowManager, WindowSurface};
+use term_wm_core::window::{ComponentTag, OverlayId, WindowKey, WindowManager, WindowSurface};
 
 /// Convert LayoutRect to Ratatui Rect
 fn layout_rect_to_rect(layout: LayoutRect) -> Rect {
@@ -419,7 +419,7 @@ pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut W
 
     // Top panel
     {
-        if let Some(p) = wm.top_component_mut() {
+        if let Some(p) = wm.get_semantic_component_mut(ComponentTag::TopPanel) {
             p.process_action(&ComponentAction::SetPanelActive(panel_active));
             p.process_action(&ComponentAction::SetWindowLabels(titles_map));
             p.process_action(&ComponentAction::SetTopPanelState(Box::new(
@@ -441,7 +441,7 @@ pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut W
     let top_ctx = wm.component_context(false);
     {
         let mut local_hb = HitboxRegistry::new();
-        if let Some(p) = wm.top_component_mut() {
+        if let Some(p) = wm.get_semantic_component_mut(ComponentTag::TopPanel) {
             p.render(backend, top_area, &top_ctx, &mut local_hb);
         }
         wm.hitbox_registry_mut().merge(local_hb);
@@ -451,7 +451,7 @@ pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut W
     let bottom_ctx = wm.component_context(panel_active);
     {
         let mut local_hb = HitboxRegistry::new();
-        if let Some(p) = wm.bottom_component_mut() {
+        if let Some(p) = wm.get_semantic_component_mut(ComponentTag::BottomPanel) {
             p.render(backend, bottom_area, &bottom_ctx, &mut local_hb);
         }
         wm.hitbox_registry_mut().merge(local_hb);
@@ -496,8 +496,14 @@ pub fn render_overlays(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut
         let sel_active = wm.selection_active();
         let sel_dragging = wm.selection_dragging();
 
-        let (top, registry) = wm.top_and_registry();
-        if let Some(p) = top {
+        let top_area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: full_area.width,
+            height: 1,
+        };
+        let mut top_hb = HitboxRegistry::new();
+        if let Some(p) = wm.get_semantic_component_mut(ComponentTag::TopPanel) {
             p.process_action(&ComponentAction::SetPanelActive(true));
             p.process_action(&ComponentAction::SetWindowLabels(titles_map));
             p.process_action(&ComponentAction::SetTopPanelState(Box::new(
@@ -514,33 +520,28 @@ pub fn render_overlays(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut
                 },
             )));
 
-            let top_area = LayoutRect {
-                x: 0,
-                y: 0,
-                width: full_area.width,
-                height: 1,
-            };
-            let mut local_hb = HitboxRegistry::new();
             let ctx = ComponentContext::new(false).with_screen_area(top_area);
-            p.render(backend, top_area, &ctx, &mut local_hb);
-            registry.merge(local_hb);
+            p.render(backend, top_area, &ctx, &mut top_hb);
 
             // Revert to layout-derived state — the next render_panels call will
             // set the correct active state based on panel_active().
             p.process_action(&ComponentAction::SetPanelActive(false));
         }
+        wm.hitbox_registry_mut().merge(top_hb);
     }
 
     let hover_pos = wm.hover_pos();
 
     // Compute anchor from top component
-    let anchor = wm.top_component().and_then(|p| {
-        if let ComponentResponse::Rect(r) = p.query(&ComponentQuery::MenuIconRect) {
-            r.map(|r| (r.x.max(0) as u16, (r.y + i32::from(r.height)).max(0) as u16))
-        } else {
-            None
-        }
-    });
+    let anchor = wm
+        .get_semantic_component(ComponentTag::TopPanel)
+        .and_then(|p| {
+            if let ComponentResponse::Rect(r) = p.query(&ComponentQuery::MenuIconRect) {
+                r.map(|r| (r.x.max(0) as u16, (r.y + i32::from(r.height)).max(0) as u16))
+            } else {
+                None
+            }
+        });
 
     // Pre-compute overlay IDs
     let overlay_ids: Vec<OverlayId> = wm.overlays().keys().copied().collect();
@@ -553,7 +554,8 @@ pub fn render_overlays(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut
     let has_focused = wm.window_count() > 0;
     let supported = wm.supported_menu_actions().to_vec();
 
-    if menu_visible && let Some(menu) = wm.command_menu_component_mut() {
+    if menu_visible && let Some(menu) = wm.get_semantic_component_mut(ComponentTag::CommandPalette)
+    {
         let items = wm_menu_items(mc_enabled, cb_enabled, ws_enabled, has_focused);
         let items: Vec<MenuItem<TermWmAction>> = items
             .into_iter()
@@ -1487,7 +1489,13 @@ mod tests {
     fn make_wm() -> WindowManager {
         let config = WmConfig::default();
         let app_ctx = Arc::new(AppContext::new("test", "0.1.0"));
-        WindowManager::with_config(config, app_ctx, None, None, None, None, None)
+        WindowManager::with_config(
+            config,
+            app_ctx,
+            None,
+            term_wm_core::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        )
     }
 
     fn make_buf(width: u16, height: u16) -> Buffer {

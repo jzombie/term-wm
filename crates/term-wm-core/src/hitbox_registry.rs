@@ -1,27 +1,27 @@
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use term_wm_layout_engine::LayoutRect;
 
 use crate::mouse_coord::MousePosition;
-use crate::window::OverlayId;
-use crate::window::WindowKey;
-use crate::window::decorator::HeaderAction;
 
-/// Opaque identifier for a component instance that registered a hitbox.
+/// Globally unique opaque identifier for a clickable surface / widget.
 ///
-/// Assigned once per interactive component (e.g. in `new()` or on first
-/// render). Unique within a window, but two components in different windows
-/// may share the same ID without conflict because `HitTarget::Component`
-/// pairs it with a `WindowKey`.
-pub type ComponentId = u32;
+/// Assigned once at entity construction time and never changes across frames.
+/// The `HitboxRegistry` stores only these IDs — no domain knowledge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct HitboxId(pub u64);
 
-/// Generate a globally unique component ID.
-///
-/// Uses an atomic counter so IDs are unique across all windows and frames.
-pub fn next_component_id() -> ComponentId {
-    static NEXT_CID: AtomicU32 = AtomicU32::new(1);
-    NEXT_CID.fetch_add(1, Ordering::Relaxed)
+impl HitboxId {
+    pub fn new() -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+        Self(NEXT_ID.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl Default for HitboxId {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Maximum depth of nested clipping containers (ScrollViews, overlay bounds,
@@ -36,39 +36,10 @@ pub fn next_component_id() -> ComponentId {
 /// stack-allocated in the common case.
 const CLIP_STACK_INLINE_CAPACITY: usize = 8;
 
-/// Target identified by a hit-test result.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HitTarget {
-    /// Click on a window's content area (not chrome).
-    Window(WindowKey),
-    /// Click on a specific component inside a window.
-    Component(WindowKey, ComponentId),
-    /// Click on an overlay (help, exit confirm, etc.).
-    Overlay(OverlayId),
-    /// Click on the top panel area.
-    TopPanel,
-    /// Click on the bottom panel area.
-    BottomPanel,
-    /// Click on a window's resize edge.
-    ChromeResize(WindowKey, crate::layout::floating::ResizeEdge),
-    /// Click on a window's header button (close, maximize, etc.).
-    ChromeHeader(WindowKey, HeaderAction),
-    /// Click on a tiling layout split handle.
-    LayoutHandle,
-    /// Click on a notification toast — event is consumed, no passthrough.
-    Notification,
-    /// Click on the Floating Action Button (FAB) — opens command palette.
-    Fab,
-    /// Click on the command palette overlay.
-    CommandPalette,
-    /// Click on the session manager overlay.
-    SessionManager,
-}
-
 /// A single entry in the hitbox registry.
 #[derive(Debug, Clone, Copy)]
 pub struct HitboxEntry {
-    pub target: HitTarget,
+    pub id: HitboxId,
     /// Absolute screen coordinates (post-clip intersection).
     pub area: LayoutRect,
 }
@@ -111,7 +82,7 @@ impl HitboxRegistry {
     /// If the intersection yields an empty rect, the entry is skipped entirely.
     /// This means scrolled-off components simply don't appear in the registry
     /// — no `rect_contains` needed at event time.
-    pub fn register(&mut self, target: HitTarget, area: LayoutRect) {
+    pub fn register(&mut self, id: HitboxId, area: LayoutRect) {
         let mut clipped = area;
         for clip in &self.clip_stack {
             clipped = clipped.clamp(*clip);
@@ -119,10 +90,7 @@ impl HitboxRegistry {
         if clipped.width == 0 || clipped.height == 0 {
             return;
         }
-        self.entries.push(HitboxEntry {
-            target,
-            area: clipped,
-        });
+        self.entries.push(HitboxEntry { id, area: clipped });
     }
 
     /// Push a clip rect (called by `ScrollViewComponent` before rendering
@@ -144,32 +112,17 @@ impl HitboxRegistry {
     }
 
     /// Query: reverse scan (front-to-back = top-most first) for the top-most
-    /// entry whose area contains `position`. Returns the `HitTarget` and its
+    /// entry whose area contains `position`. Returns the `HitboxId` and its
     /// exact screen-space `Rect` if found.
     ///
     /// Entries are registered in render order (back-to-front), so iterating
     /// in reverse yields the top-most (last-rendered, highest z-order) match.
-    pub fn hit_test(&self, position: MousePosition) -> Option<(HitTarget, LayoutRect)> {
+    pub fn hit_test(&self, position: MousePosition) -> Option<(HitboxId, LayoutRect)> {
         self.entries
             .iter()
             .rev()
             .find(|entry| position.is_inside(entry.area))
-            .map(|entry| (entry.target, entry.area))
-    }
-
-    /// Build a dispatch map from `(WindowKey, ComponentId)` pairs to entry
-    /// indices in the entries vec.  Used by the window manager to route
-    /// `HitTarget::Component` hits to the correct component.
-    ///
-    /// Returns `None` if no component entries exist (avoids allocating the map).
-    pub fn build_component_map(&self) -> Option<HashMap<(WindowKey, ComponentId), usize>> {
-        let mut map = HashMap::new();
-        for (idx, entry) in self.entries.iter().enumerate() {
-            if let HitTarget::Component(key, id) = entry.target {
-                map.insert((key, id), idx);
-            }
-        }
-        if map.is_empty() { None } else { Some(map) }
+            .map(|entry| (entry.id, entry.area))
     }
 
     /// Returns the number of registered entries (for diagnostics / metrics).
@@ -180,28 +133,6 @@ impl HitboxRegistry {
     /// Returns `true` if no entries are registered.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
-    }
-
-    /// Find the screen-space area for a specific component by key.
-    /// Used by Phase 1 (ComponentInteraction) capture to inject
-    /// `screen_area` into the context when routing events to the
-    /// captured component.
-    pub fn component_area(&self, key: WindowKey) -> Option<LayoutRect> {
-        self.entries
-            .iter()
-            .rev()
-            .find(|entry| matches!(entry.target, HitTarget::Component(k, _) if k == key))
-            .map(|entry| entry.area)
-    }
-
-    /// Find the screen-space area for a window by key.
-    /// Used for system windows (debug log) that aren't in the tiling layout.
-    pub fn window_area(&self, key: WindowKey) -> Option<LayoutRect> {
-        self.entries
-            .iter()
-            .rev()
-            .find(|entry| matches!(entry.target, HitTarget::Window(k) if k == key))
-            .map(|entry| entry.area)
     }
 
     /// Atomically swap all entries with another registry.
@@ -245,8 +176,9 @@ mod tests {
     #[test]
     fn register_and_hit() {
         let mut reg = HitboxRegistry::new();
+        let id = HitboxId::new();
         reg.register(
-            HitTarget::Window(WindowKey::default()),
+            id,
             LayoutRect {
                 x: 0,
                 y: 0,
@@ -260,8 +192,9 @@ mod tests {
     #[test]
     fn miss_outside_area() {
         let mut reg = HitboxRegistry::new();
+        let id = HitboxId::new();
         reg.register(
-            HitTarget::Window(WindowKey::default()),
+            id,
             LayoutRect {
                 x: 0,
                 y: 0,
@@ -275,11 +208,11 @@ mod tests {
     #[test]
     fn front_to_back_priority() {
         let mut reg = HitboxRegistry::new();
-        let key1 = WindowKey::default();
-        let key2 = WindowKey::default();
+        let id1 = HitboxId::new();
+        let id2 = HitboxId::new();
         // Register back rect first
         reg.register(
-            HitTarget::Window(key1),
+            id1,
             LayoutRect {
                 x: 0,
                 y: 0,
@@ -289,7 +222,7 @@ mod tests {
         );
         // Register smaller front rect second
         reg.register(
-            HitTarget::Window(key2),
+            id2,
             LayoutRect {
                 x: 5,
                 y: 5,
@@ -300,7 +233,7 @@ mod tests {
 
         // Point inside both rects should hit the front (last-registered)
         let (hit, _rect) = reg.hit_test(screen_pos(7, 7)).unwrap();
-        assert_eq!(hit, HitTarget::Window(key2));
+        assert_eq!(hit, id2);
     }
 
     #[test]
@@ -313,8 +246,9 @@ mod tests {
             height: 10,
         });
         // Register a rect that is entirely outside the clip
+        let id = HitboxId::new();
         reg.register(
-            HitTarget::Window(WindowKey::default()),
+            id,
             LayoutRect {
                 x: 20,
                 y: 20,
@@ -336,8 +270,9 @@ mod tests {
             height: 10,
         });
         // Register a rect that partially overlaps the clip
+        let id = HitboxId::new();
         reg.register(
-            HitTarget::Window(WindowKey::default()),
+            id,
             LayoutRect {
                 x: 5,
                 y: 5,
@@ -348,7 +283,7 @@ mod tests {
         assert_eq!(reg.len(), 1);
         // The registered area should be clipped to (5,5,5,5) — the overlap
         let (hit, _rect) = reg.hit_test(screen_pos(7, 7)).unwrap();
-        assert_eq!(hit, HitTarget::Window(WindowKey::default()));
+        assert_eq!(hit, id);
         // Point in the original rect but outside the clip should miss
         assert!(reg.hit_test(screen_pos(15, 15)).is_none());
         reg.pop_clip();
@@ -370,8 +305,9 @@ mod tests {
             height: 20,
         });
         // This rect is inside the first clip but completely outside the second
+        let id = HitboxId::new();
         reg.register(
-            HitTarget::Window(WindowKey::default()),
+            id,
             LayoutRect {
                 x: 0,
                 y: 0,
@@ -400,8 +336,9 @@ mod tests {
             height: 20,
         });
         // This rect partially overlaps the second clip — should be clipped
+        let id = HitboxId::new();
         reg.register(
-            HitTarget::Window(WindowKey::default()),
+            id,
             LayoutRect {
                 x: 5,
                 y: 5,
@@ -429,8 +366,9 @@ mod tests {
             width: 10,
             height: 10,
         });
+        let id = HitboxId::new();
         reg.register(
-            HitTarget::Window(WindowKey::default()),
+            id,
             LayoutRect {
                 x: 0,
                 y: 0,
@@ -442,38 +380,6 @@ mod tests {
         reg.clear();
         assert!(reg.is_empty());
         assert!(reg.clip_stack.is_empty());
-    }
-
-    #[test]
-    fn build_component_map_empty_when_no_components() {
-        let mut reg = HitboxRegistry::new();
-        reg.register(
-            HitTarget::Window(WindowKey::default()),
-            LayoutRect {
-                x: 0,
-                y: 0,
-                width: 10,
-                height: 10,
-            },
-        );
-        assert!(reg.build_component_map().is_none());
-    }
-
-    #[test]
-    fn build_component_map_returns_component_entries() {
-        let mut reg = HitboxRegistry::new();
-        reg.register(
-            HitTarget::Component(WindowKey::default(), 42),
-            LayoutRect {
-                x: 0,
-                y: 0,
-                width: 10,
-                height: 10,
-            },
-        );
-        let map = reg.build_component_map().unwrap();
-        assert_eq!(map.len(), 1);
-        assert!(map.contains_key(&(WindowKey::default(), 42)));
     }
 
     #[test]

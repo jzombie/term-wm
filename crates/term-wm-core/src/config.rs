@@ -133,16 +133,36 @@ impl AppBuilder {
 
     /// Build a [`WindowManager`] from the accumulated configuration.
     pub fn build(self) -> Result<WindowManager, ConfigError> {
+        use crate::window::{ComponentTag, LayerManager, ZPlane};
+        use std::collections::HashMap;
+
         let app_ctx = self.app_ctx.ok_or(ConfigError::MissingAppContext)?;
+        let mut layer_manager = LayerManager::new();
+        let mut semantic_registry = HashMap::new();
+
+        if let Some(comp) = self.top_panel {
+            let id = layer_manager.insert(comp, ZPlane::Background);
+            semantic_registry.insert(ComponentTag::TopPanel, id);
+        }
+        if let Some(comp) = self.bottom_panel {
+            let id = layer_manager.insert(comp, ZPlane::Background);
+            semantic_registry.insert(ComponentTag::BottomPanel, id);
+        }
+        if let Some(comp) = self.command_menu {
+            let id = layer_manager.insert(comp, ZPlane::Foreground);
+            semantic_registry.insert(ComponentTag::CommandPalette, id);
+        }
+        if let Some(comp) = self.fab_component {
+            let id = layer_manager.insert(comp, ZPlane::Foreground);
+            semantic_registry.insert(ComponentTag::FloatingActionButton, id);
+        }
 
         Ok(WindowManager::with_config(
             self.config,
             app_ctx,
-            self.top_panel,
-            self.bottom_panel,
-            self.command_menu,
-            self.fab_component,
             self.supported_menu_actions,
+            layer_manager,
+            semantic_registry,
         ))
     }
 }

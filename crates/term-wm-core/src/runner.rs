@@ -85,6 +85,26 @@ fn drain_action_queue<A: WindowManagerHost>(
                     app.wm().open_command_menu();
                 }
             }
+            TermWmAction::RequestKeyboardFocus(id) => {
+                app.wm().set_keyboard_focus(key, id);
+            }
+            TermWmAction::ToggleMouseCapture => {
+                app.wm().toggle_mouse_capture();
+            }
+            TermWmAction::ToggleWindowSelection => {
+                app.wm().toggle_window_selection();
+            }
+            TermWmAction::ToggleClipboardMode => {
+                app.wm().toggle_clipboard_enabled();
+            }
+            TermWmAction::FocusWindow(k) => {
+                let state = app.wm().window_state(k);
+                if state == Some(crate::window::WindowState::Iconic) {
+                    app.wm()
+                        .transition_window(k, crate::window::WindowState::Mapped);
+                }
+                app.wm().focus_window_key(k);
+            }
             action => {
                 let ctx = app.wm().component_context_for(true, key);
                 if let Some(comp) = app.wm().component_for_key_mut(key) {
@@ -424,12 +444,10 @@ where
                     }
                     // Focus routing in WM mode (Tab/Shift+Tab)
                     // Fold menu to outline so user can see the window they focused.
-                    if app.wm().handle_focus_event(&evt) {
-                        if matches!(&evt, Event::Key(_)) {
-                            app.wm().fold_menu();
-                            update_selection_snapshot(app);
-                            return flush_state_changes(app, ControlFlow::Continue, false);
-                        }
+                    if app.wm().handle_focus_event(&evt) && matches!(&evt, Event::Key(_)) {
+                        app.wm().fold_menu();
+                        update_selection_snapshot(app);
+                        return flush_state_changes(app, ControlFlow::Continue, false);
                     }
                     // Dispatch remaining WmMode actions (Quit, OpenHelp, etc.)
                     // while the WM overlay is open.
@@ -744,10 +762,8 @@ mod tests {
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let key = wm.create_window(Box::new(crate::components::NoopComponent));
         let one = vec![key];
@@ -772,10 +788,8 @@ mod tests {
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
-            None,
-            Some(Box::new(TestMenu)),
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let key = wm.create_window(Box::new(crate::components::NoopComponent));
         wm.transition_window(key, crate::window::WindowState::Mapped);
@@ -840,10 +854,8 @@ mod tests {
                 crate::wm_config::WmConfig::standalone(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
-                None,
-                Some(Box::new(TestMenu)),
-                None,
-                None,
+                crate::window::LayerManager::new(),
+                std::collections::HashMap::new(),
             ),
         };
         // Store the KeyRecorder directly in the WindowManager — no sidecar.
@@ -936,10 +948,8 @@ mod tests {
                 crate::wm_config::WmConfig::standalone(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
-                None,
-                Some(Box::new(TestMenu)),
-                None,
-                None,
+                crate::window::LayerManager::new(),
+                std::collections::HashMap::new(),
             ),
         };
         let key = app.wm.create_window(Box::new(KeyRecorder {
@@ -1059,10 +1069,8 @@ mod tests {
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         (0..n)
             .map(|_| wm.create_window(Box::new(crate::components::NoopComponent)))
@@ -1118,10 +1126,8 @@ mod tests {
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let k1 = wm.create_window(Box::new(crate::components::NoopComponent));
         let k2 = wm.create_window(Box::new(crate::components::NoopComponent));
@@ -1142,10 +1148,8 @@ mod tests {
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let k1 = wm.create_window(Box::new(crate::components::NoopComponent));
         let k2 = wm.create_window(Box::new(crate::components::NoopComponent));
@@ -1163,10 +1167,8 @@ mod tests {
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         // Use 4 windows — this reliably works within 80x24 default area
         let keys: Vec<WindowKey> = (0..4)
@@ -1185,6 +1187,7 @@ mod tests {
     use crate::components::Overlay;
 
     #[derive(Debug)]
+    #[allow(dead_code)]
     struct TestMenu;
     impl Component<TermWmAction> for TestMenu {
         fn render(

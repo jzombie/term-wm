@@ -10,7 +10,7 @@ use term_wm_core::{
         Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse, Overlay,
         WmComponent,
     },
-    hitbox_registry::HitTarget,
+    hitbox_registry::HitboxId,
     window::WindowKey,
 };
 use term_wm_ui_components::command_palette::CommandPaletteComponent;
@@ -20,6 +20,7 @@ pub struct WmCommandPaletteComponent {
     palette: PlacementContainerComponent<CommandPaletteComponent>,
     managed_area: LayoutRect,
     last_action: Option<TermWmAction>,
+    hitbox_id: HitboxId,
     // Command registry — stores all available commands in the generational arena.
     // Owned here because WmCommandPaletteComponent has the same lifecycle
     // as WindowManager (created in AppBuilder::build, lives until shutdown).
@@ -55,6 +56,7 @@ impl WmCommandPaletteComponent {
             ),
             managed_area: LayoutRect::default(),
             last_action: None,
+            hitbox_id: HitboxId::new(),
             registry: CommandRegistry::new(),
             matcher: FuzzyMatch::new(),
             mru: MruRanker::new(),
@@ -145,7 +147,7 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
         });
         self.palette.render(backend, _area, ctx, registry);
         if let Some(content_rect) = self.palette.content_rect() {
-            registry.register(HitTarget::CommandPalette, content_rect);
+            registry.register(self.hitbox_id, content_rect);
         }
     }
 
@@ -181,6 +183,10 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
         actions: &mut VecDeque<(WindowKey, TermWmAction)>,
     ) {
         self.palette.update(action, ctx, actions);
+    }
+
+    fn hitbox_id(&self) -> Option<HitboxId> {
+        Some(self.hitbox_id)
     }
 
     fn destroy(&mut self) {}

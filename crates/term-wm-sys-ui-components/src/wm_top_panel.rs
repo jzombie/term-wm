@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use ratatui::style::{Modifier, Style};
-use term_wm_core::events::{Event, MouseEventKind};
+use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEventKind};
 use term_wm_layout_engine::LayoutRect;
 
 use term_wm_core::{
@@ -10,6 +10,7 @@ use term_wm_core::{
         Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse,
         WmComponent,
     },
+    hitbox_registry::HitboxId,
     layout::rect_contains,
     utils::truncate_to_width,
     window::WindowKey,
@@ -83,6 +84,7 @@ pub struct WmTopPanelComponent {
     selection_dragging: bool,
     menu_open: bool,
     window_labels: BTreeMap<WindowKey, String>,
+    hitbox_id: HitboxId,
 }
 
 impl WmTopPanelComponent {
@@ -106,6 +108,7 @@ impl WmTopPanelComponent {
             selection_dragging: false,
             menu_open: false,
             window_labels: BTreeMap::new(),
+            hitbox_id: HitboxId::new(),
         }
     }
 
@@ -384,74 +387,41 @@ impl WmTopPanelComponent {
         }
     }
 
-    pub fn hit_test_menu(&self, event: &Event) -> bool {
-        let Event::Mouse(mouse) = event else {
-            return false;
-        };
-        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
-            return false;
-        }
-        if let Some(rect) = self.menu_rect {
-            return rect_contains(rect, mouse.column, mouse.row);
-        }
-        false
-    }
-
-    pub fn hit_test_mouse_capture(&self, event: &Event) -> bool {
-        let Event::Mouse(mouse) = event else {
-            return false;
-        };
-        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
-            return false;
-        }
+    pub fn hit_test_mouse_capture(&self, column: u16, row: u16) -> bool {
         if let Some(rect) = self.notifications.mouse_capture_rect {
-            return rect_contains(rect, mouse.column, mouse.row);
+            return rect_contains(rect, column, row);
         }
         false
     }
 
-    pub fn hit_test_clipboard(&self, event: &Event) -> bool {
-        let Event::Mouse(mouse) = event else {
-            return false;
-        };
-        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
-            return false;
-        }
+    pub fn hit_test_clipboard(&self, column: u16, row: u16) -> bool {
         if let Some(rect) = self.notifications.clipboard_rect {
-            return rect_contains(rect, mouse.column, mouse.row);
+            return rect_contains(rect, column, row);
         }
         false
     }
 
-    pub fn hit_test_selection(&self, event: &Event) -> bool {
-        let Event::Mouse(mouse) = event else {
-            return false;
-        };
-        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
-            return false;
-        }
+    pub fn hit_test_selection(&self, column: u16, row: u16) -> bool {
         if let Some(rect) = self.notifications.selection_rect {
-            return rect_contains(rect, mouse.column, mouse.row);
+            return rect_contains(rect, column, row);
         }
         false
     }
 
-    pub fn hit_test_window(&self, event: &Event) -> Option<WindowKey> {
-        let Event::Mouse(mouse) = event else {
-            return None;
-        };
-        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
-            return None;
-        }
+    pub fn hit_test_window(&self, column: u16, row: u16) -> Option<WindowKey> {
         self.list
             .window_hits
             .iter()
-            .find(|hit| rect_contains(hit.rect, mouse.column, mouse.row))
+            .find(|hit| rect_contains(hit.rect, column, row))
             .map(|hit| hit.id)
     }
 }
 
 impl Component<TermWmAction> for WmTopPanelComponent {
+    fn hitbox_id(&self) -> Option<HitboxId> {
+        Some(self.hitbox_id)
+    }
+
     fn render(
         &mut self,
         backend: &mut dyn term_wm_render::RenderBackend,
@@ -495,7 +465,7 @@ impl Component<TermWmAction> for WmTopPanelComponent {
     fn handle_events(
         &mut self,
         event: &Event,
-        _ctx: &ComponentContext,
+        ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
         let Event::Mouse(mouse) = event else {
             return EventResult::Ignored;
@@ -503,19 +473,36 @@ impl Component<TermWmAction> for WmTopPanelComponent {
         if !matches!(mouse.kind, MouseEventKind::Press(_)) {
             return EventResult::Ignored;
         }
-        if self.menu_icon_contains_point(mouse.column, mouse.row) {
+        self.on_mouse_press(
+            mouse.column,
+            mouse.row,
+            MouseButton::Left,
+            mouse.modifiers,
+            ctx,
+        )
+    }
+
+    fn on_mouse_press(
+        &mut self,
+        column: u16,
+        row: u16,
+        _button: MouseButton,
+        _modifiers: KeyModifiers,
+        _ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        if self.menu_icon_contains_point(column, row) {
             return EventResult::Action(TermWmAction::OpenCommandPalette);
         }
-        if self.hit_test_mouse_capture(event) {
+        if self.hit_test_mouse_capture(column, row) {
             return EventResult::Action(TermWmAction::ToggleMouseCapture);
         }
-        if self.hit_test_selection(event) {
+        if self.hit_test_selection(column, row) {
             return EventResult::Action(TermWmAction::ToggleWindowSelection);
         }
-        if self.hit_test_clipboard(event) {
+        if self.hit_test_clipboard(column, row) {
             return EventResult::Action(TermWmAction::ToggleClipboardMode);
         }
-        if let Some(key) = self.hit_test_window(event) {
+        if let Some(key) = self.hit_test_window(column, row) {
             return EventResult::Action(TermWmAction::FocusWindow(key));
         }
         EventResult::Ignored
@@ -597,7 +584,6 @@ impl Default for WmTopPanelComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
     #[test]
     fn top_panel_basic_methods_and_split_area() {
@@ -617,14 +603,8 @@ mod tests {
         assert_eq!(panel_rect.width, 10);
         assert_eq!(managed.width, 10);
 
-        let ev = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Press(MouseButton::Left),
-            column: 0,
-            row: 0,
-            modifiers: KeyModifiers::NONE,
-        });
-        assert!(!p.hit_test_mouse_capture(&ev));
-        assert!(p.hit_test_window(&ev).is_none());
+        assert!(!p.hit_test_mouse_capture(0, 0));
+        assert!(p.hit_test_window(0, 0).is_none());
     }
 
     #[test]

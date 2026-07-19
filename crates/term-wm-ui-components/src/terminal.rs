@@ -13,7 +13,7 @@ use vt100::MouseProtocolEncoding;
 use crate::helpers::{color_to_ratatui, decorate_link_style, layout_rect_to_rect};
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
-use term_wm_core::hitbox_registry::{HitTarget, next_component_id};
+use term_wm_core::hitbox_registry::HitboxId;
 use term_wm_core::layout::rect_contains;
 use term_wm_core::utils::linkifier::{LinkHandler, LinkOverlay, Linkifier, OverlaySignature};
 use term_wm_core::utils::selectable_text::{
@@ -82,7 +82,7 @@ fn convert_pty_mouse_event(mouse: &MouseEvent) -> term_wm_pty_engine::input_enco
 }
 
 pub struct TerminalComponent {
-    id: term_wm_core::hitbox_registry::ComponentId,
+    hitbox_id: HitboxId,
     pane: RefCell<Box<dyn Pane>>,
     last_size: Cell<(u16, u16)>,
     linkifier: Linkifier,
@@ -275,8 +275,8 @@ impl Component<TermWmAction> for TerminalComponent {
         let _exited = self.pane.borrow_mut().has_exited();
         // Register this terminal's clickable area in the hitbox registry.
         // Use screen coordinates so hit_test matches screen-space mouse positions.
-        if let Some(key) = ctx.window_key() {
-            registry.register(HitTarget::Component(key, self.id), screen_area_lr);
+        if let Some(_key) = ctx.window_key() {
+            registry.register(self.hitbox_id, screen_area_lr);
         }
         self.render_screen(backend, area, ctx);
     }
@@ -332,6 +332,10 @@ impl Component<TermWmAction> for TerminalComponent {
             self.selection.get_mut().clear();
         }
     }
+
+    fn hitbox_id(&self) -> Option<HitboxId> {
+        Some(self.hitbox_id)
+    }
 }
 
 impl TerminalComponent {
@@ -354,7 +358,7 @@ impl TerminalComponent {
     /// Construct a terminal wrapper around any Pane implementation.
     pub fn from_pane(pane: Box<dyn Pane>) -> Self {
         Self {
-            id: next_component_id(),
+            hitbox_id: HitboxId::new(),
             pane: RefCell::new(pane),
             last_size: Cell::new((80, 24)),
             linkifier: Linkifier::new(),
@@ -377,7 +381,7 @@ impl TerminalComponent {
             DEFAULT_SCROLLBACK_LEN,
         )?);
         let comp = Self {
-            id: next_component_id(),
+            hitbox_id: HitboxId::new(),
             pane: RefCell::new(pane),
             last_size: Cell::new((size.cols, size.rows)),
             linkifier: Linkifier::new(),

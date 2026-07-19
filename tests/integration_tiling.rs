@@ -33,10 +33,8 @@ fn wm_with_two_windows() -> (WindowManager, [WindowKey; 2]) {
         config,
         Arc::new(AppContext::new("test", "0.0.0")),
         None,
-        None,
-        None,
-        None,
-        None,
+        term_wm_core::window::LayerManager::new(),
+        std::collections::HashMap::new(),
     );
     wm.set_panel_visible(false);
     let k0 = wm.create_window(Box::new(NoopComponent));
@@ -479,10 +477,8 @@ mod spatial_isolation {
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
-            None,
+            term_wm_core::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.set_panel_visible(false);
         let k0 = wm.create_window(Box::new(NoopComponent));
@@ -629,10 +625,8 @@ mod drag_snap_pipeline {
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
-            None,
+            term_wm_core::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.set_panel_visible(false);
         let k0 = wm.create_window(Box::new(NoopComponent));
@@ -1236,10 +1230,8 @@ mod drag_snap_pipeline {
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
-            None,
+            term_wm_core::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.set_panel_visible(false);
 
@@ -1685,10 +1677,8 @@ mod floating_tiled_separation {
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
-            None,
+            term_wm_core::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.set_panel_visible(false);
 

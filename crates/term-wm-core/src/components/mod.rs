@@ -9,6 +9,7 @@ pub use crate::actions::EventResult;
 use crate::actions::TermWmAction;
 pub use crate::component_context::ComponentContext;
 use crate::events::{Event, KeyModifiers, MouseButton, MouseEventKind};
+use crate::hitbox_registry::HitboxId;
 use crate::power_profile::PowerProfile;
 use crate::window::WindowKey;
 use crate::wm_config::HintVisibility;
@@ -39,11 +40,27 @@ pub trait Component<Msg>: std::any::Any {
     /// circularity without `Arc<Mutex<Option<WindowKey>>>` hacks.
     fn on_mount(&mut self, _key: WindowKey, _app: &crate::app_context::AppContext) {}
 
+    /// Returns the component's hitbox ID, if any.
+    /// Components that register their clickable area in `render()` should
+    /// override this to return their persistent `HitboxId`. The default
+    /// `handle_events` uses this for leaf-component occlusion convenience.
+    fn hitbox_id(&self) -> Option<HitboxId> {
+        None
+    }
+
     /// Phase 2: Evaluate raw events, return EventResult.
     /// Does NOT mutate state.
     /// Dispatches mouse events to semantic handlers by MouseEventKind.
     fn handle_events(&mut self, event: &Event, ctx: &ComponentContext) -> EventResult<Msg> {
         if let Event::Mouse(mouse) = event {
+            // Leaf-component convenience: skip if our ID doesn't match.
+            // Container components override handle_events entirely and
+            // implement "delegate first, self-identify second" manually.
+            if let Some(my_id) = self.hitbox_id()
+                && ctx.active_hitbox() != Some(my_id)
+            {
+                return EventResult::Ignored;
+            }
             if let Some(screen_area) = ctx.screen_area() {
                 let local_x = (i32::from(mouse.column) - screen_area.x).max(0) as u16;
                 let local_y = (i32::from(mouse.row) - screen_area.y).max(0) as u16;
@@ -67,6 +84,17 @@ pub trait Component<Msg>: std::any::Any {
                         self.on_mouse_move(local_x, local_y, mouse.modifiers, ctx)
                     }
                 };
+            }
+            return EventResult::Ignored;
+        }
+        // Keyboard events: route to on_key if this component owns keyboard focus.
+        // Components without a hitbox_id forward unconditionally (backward compat).
+        // Components with a hitbox_id only receive key events when focused.
+        if let Event::Key(_) = event
+            && let Some(my_id) = self.hitbox_id()
+        {
+            if ctx.keyboard_focus_id() == Some(my_id) {
+                return self.on_key(event, ctx);
             }
             return EventResult::Ignored;
         }
