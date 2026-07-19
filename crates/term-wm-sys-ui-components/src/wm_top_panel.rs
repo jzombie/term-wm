@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use ratatui::style::{Modifier, Style};
-use term_wm_core::events::{Event, MouseEventKind};
+use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEventKind};
 use term_wm_layout_engine::LayoutRect;
 
 use term_wm_core::{
@@ -234,8 +234,8 @@ impl WmTopPanelComponent {
                 menu_style,
             );
             self.menu_rect = Some(LayoutRect {
-                x,
-                y,
+                x: x.saturating_sub(area.x),
+                y: y.saturating_sub(area.y),
                 width: menu_width,
                 height: 1,
             });
@@ -278,8 +278,8 @@ impl WmTopPanelComponent {
                 self.list.window_hits.push(PanelWindowHit {
                     id,
                     rect: LayoutRect {
-                        x,
-                        y,
+                        x: x.saturating_sub(area.x),
+                        y: y.saturating_sub(area.y),
                         width: chunk_width,
                         height: 1,
                     },
@@ -337,8 +337,8 @@ impl WmTopPanelComponent {
                 let width = selection_width.min((max_x.saturating_sub(cursor)) as u16);
                 if width > 0 {
                     self.notifications.selection_rect = Some(LayoutRect {
-                        x: cursor,
-                        y,
+                        x: cursor.saturating_sub(area.x),
+                        y: y.saturating_sub(area.y),
                         width,
                         height: 1,
                     });
@@ -357,8 +357,8 @@ impl WmTopPanelComponent {
                 let width = mouse_width.min((max_x.saturating_sub(cursor)) as u16);
                 if width > 0 {
                     self.notifications.mouse_capture_rect = Some(LayoutRect {
-                        x: cursor,
-                        y,
+                        x: cursor.saturating_sub(area.x),
+                        y: y.saturating_sub(area.y),
                         width,
                         height: 1,
                     });
@@ -377,8 +377,8 @@ impl WmTopPanelComponent {
                 let width = clip_width.min((max_x.saturating_sub(cursor)) as u16);
                 if width > 0 {
                     self.notifications.clipboard_rect = Some(LayoutRect {
-                        x: cursor,
-                        y,
+                        x: cursor.saturating_sub(area.x),
+                        y: y.saturating_sub(area.y),
                         width,
                         height: 1,
                     });
@@ -387,69 +387,32 @@ impl WmTopPanelComponent {
         }
     }
 
-    pub fn hit_test_menu(&self, event: &Event) -> bool {
-        let Event::Mouse(mouse) = event else {
-            return false;
-        };
-        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
-            return false;
-        }
-        if let Some(rect) = self.menu_rect {
-            return rect_contains(rect, mouse.column, mouse.row);
-        }
-        false
-    }
-
-    pub fn hit_test_mouse_capture(&self, event: &Event) -> bool {
-        let Event::Mouse(mouse) = event else {
-            return false;
-        };
-        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
-            return false;
-        }
+    pub fn hit_test_mouse_capture(&self, column: u16, row: u16) -> bool {
         if let Some(rect) = self.notifications.mouse_capture_rect {
-            return rect_contains(rect, mouse.column, mouse.row);
+            return rect_contains(rect, column, row);
         }
         false
     }
 
-    pub fn hit_test_clipboard(&self, event: &Event) -> bool {
-        let Event::Mouse(mouse) = event else {
-            return false;
-        };
-        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
-            return false;
-        }
+    pub fn hit_test_clipboard(&self, column: u16, row: u16) -> bool {
         if let Some(rect) = self.notifications.clipboard_rect {
-            return rect_contains(rect, mouse.column, mouse.row);
+            return rect_contains(rect, column, row);
         }
         false
     }
 
-    pub fn hit_test_selection(&self, event: &Event) -> bool {
-        let Event::Mouse(mouse) = event else {
-            return false;
-        };
-        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
-            return false;
-        }
+    pub fn hit_test_selection(&self, column: u16, row: u16) -> bool {
         if let Some(rect) = self.notifications.selection_rect {
-            return rect_contains(rect, mouse.column, mouse.row);
+            return rect_contains(rect, column, row);
         }
         false
     }
 
-    pub fn hit_test_window(&self, event: &Event) -> Option<WindowKey> {
-        let Event::Mouse(mouse) = event else {
-            return None;
-        };
-        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
-            return None;
-        }
+    pub fn hit_test_window(&self, column: u16, row: u16) -> Option<WindowKey> {
         self.list
             .window_hits
             .iter()
-            .find(|hit| rect_contains(hit.rect, mouse.column, mouse.row))
+            .find(|hit| rect_contains(hit.rect, column, row))
             .map(|hit| hit.id)
     }
 }
@@ -510,19 +473,33 @@ impl Component<TermWmAction> for WmTopPanelComponent {
         if !matches!(mouse.kind, MouseEventKind::Press(_)) {
             return EventResult::Ignored;
         }
-        if self.menu_icon_contains_point(mouse.column, mouse.row) {
+        self.on_mouse_press(mouse.column, mouse.row, MouseButton::Left, mouse.modifiers, ctx)
+    }
+
+    fn on_mouse_press(
+        &mut self,
+        column: u16,
+        row: u16,
+        _button: MouseButton,
+        _modifiers: KeyModifiers,
+        _ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        // Convert screen coordinates to local coordinates relative to panel origin
+        let local_x = column.saturating_sub(self.area.x as u16);
+        let local_y = row.saturating_sub(self.area.y as u16);
+        if self.menu_icon_contains_point(local_x, local_y) {
             return EventResult::Action(TermWmAction::OpenCommandPalette);
         }
-        if self.hit_test_mouse_capture(event) {
+        if self.hit_test_mouse_capture(local_x, local_y) {
             return EventResult::Action(TermWmAction::ToggleMouseCapture);
         }
-        if self.hit_test_selection(event) {
+        if self.hit_test_selection(local_x, local_y) {
             return EventResult::Action(TermWmAction::ToggleWindowSelection);
         }
-        if self.hit_test_clipboard(event) {
+        if self.hit_test_clipboard(local_x, local_y) {
             return EventResult::Action(TermWmAction::ToggleClipboardMode);
         }
-        if let Some(key) = self.hit_test_window(event) {
+        if let Some(key) = self.hit_test_window(local_x, local_y) {
             return EventResult::Action(TermWmAction::FocusWindow(key));
         }
         EventResult::Ignored
@@ -604,7 +581,6 @@ impl Default for WmTopPanelComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
     #[test]
     fn top_panel_basic_methods_and_split_area() {
@@ -624,14 +600,8 @@ mod tests {
         assert_eq!(panel_rect.width, 10);
         assert_eq!(managed.width, 10);
 
-        let ev = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Press(MouseButton::Left),
-            column: 0,
-            row: 0,
-            modifiers: KeyModifiers::NONE,
-        });
-        assert!(!p.hit_test_mouse_capture(&ev));
-        assert!(p.hit_test_window(&ev).is_none());
+        assert!(!p.hit_test_mouse_capture(0, 0));
+        assert!(p.hit_test_window(0, 0).is_none());
     }
 
     #[test]

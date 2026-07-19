@@ -1,5 +1,5 @@
 use ratatui::style::Style;
-use term_wm_core::events::{Event, MouseEventKind};
+use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEventKind};
 use term_wm_layout_engine::LayoutRect;
 
 use term_wm_core::{
@@ -186,8 +186,8 @@ impl WmBottomPanelComponent {
                     safe_set_string(buffer, bounds, cursor_x, area.y as u16, &text, style);
                     self.hint_rects.push((
                         LayoutRect {
-                            x: i32::from(cursor_x),
-                            y: area.y,
+                            x: i32::from(cursor_x).saturating_sub(area.x),
+                            y: 0,
                             width: available_w,
                             height: 1,
                         },
@@ -198,8 +198,8 @@ impl WmBottomPanelComponent {
 
                 self.hint_rects.push((
                     LayoutRect {
-                        x: i32::from(cursor_x),
-                        y: area.y,
+                        x: i32::from(cursor_x).saturating_sub(area.x),
+                        y: 0,
                         width: entry_width,
                         height: 1,
                     },
@@ -271,15 +271,9 @@ impl WmBottomPanelComponent {
         }
     }
 
-    pub fn hit_test_hint(&self, event: &Event) -> Option<TermWmAction> {
-        let Event::Mouse(mouse) = event else {
-            return None;
-        };
-        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
-            return None;
-        }
+    pub fn hit_test_hint(&self, column: u16, row: u16) -> Option<TermWmAction> {
         for (rect, action) in &self.hint_rects {
-            if rect_contains(*rect, mouse.column, mouse.row) {
+            if rect_contains(*rect, column, row) {
                 return Some(action.clone());
             }
         }
@@ -309,7 +303,25 @@ impl Component<TermWmAction> for WmBottomPanelComponent {
         event: &Event,
         ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
-        if let Some(action) = self.hit_test_hint(event) {
+        let Event::Mouse(mouse) = event else {
+            return EventResult::Ignored;
+        };
+        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
+            return EventResult::Ignored;
+        }
+        self.on_mouse_press(mouse.column, mouse.row, MouseButton::Left, mouse.modifiers, ctx)
+    }
+
+    fn on_mouse_press(
+        &mut self,
+        column: u16,
+        row: u16,
+        _button: MouseButton,
+        _modifiers: KeyModifiers,
+        _ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        let local_x = column.saturating_sub(self.area.x as u16);
+        if let Some(action) = self.hit_test_hint(local_x, row) {
             return EventResult::Action(action);
         }
         EventResult::Ignored

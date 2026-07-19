@@ -1727,6 +1727,18 @@ impl WindowManager {
                 .component_context(false)
                 .with_screen_area(hit_rect)
                 .with_active_hitbox(hitbox_id);
+            // Top panel — use handle_panel_click for WM-level action routing
+            if self.handle_panel_click(col, row) {
+                if matches!(kind, MouseEventKind::Press(_)) {
+                    self.mouse_capture = Some(MouseCaptureState::ComponentInteraction {
+                        key: None,
+                        screen_area: hit_rect,
+                        hitbox_id,
+                    });
+                }
+                return EventResult::Consumed;
+            }
+            // Bottom panel — dispatch through LayerManager
             let result = self.layer_manager.dispatch_background(&core_event, &ctx);
             if result.is_consumed() {
                 if matches!(kind, MouseEventKind::Press(_)) {
