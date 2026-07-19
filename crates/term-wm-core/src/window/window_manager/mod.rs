@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::Rect;
-use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crate::events::{Event, MouseEvent, MouseEventKind};
 use slotmap::SlotMap;
 
 use super::WindowKey;
@@ -2509,6 +2509,7 @@ fn make_keys(wm: &mut WindowManager, n: usize) -> Vec<WindowKey> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events::KeyModifiers;
     use crate::hitbox_registry::HitboxId;
     use crate::layout::{Constraint, Direction};
     use std::collections::VecDeque;
