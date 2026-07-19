@@ -127,14 +127,17 @@ impl DrawPlanRenderer {
                     }
                 }
                 RegionType::Panel(_) => {
+                    // TOOD: Address
                     // Panels are rendered by the WindowManager
                     // This is a placeholder for now
                 }
                 RegionType::Overlay => {
+                    // TOOD: Address
                     // Overlays are rendered by the WindowManager
                     // This is a placeholder for now
                 }
                 RegionType::TargetHighlight(_key) => {
+                    // TOOD: Address
                     // Target highlight is a pulsing border overlay
                     // This is a placeholder for now
                 }
