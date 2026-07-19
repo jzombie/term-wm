@@ -288,7 +288,6 @@ pub enum ComponentAction {
     Restore,
     Outline,
     SetMenuItems(Vec<MenuItem<TermWmAction>>),
-    SetMenuAnchor(Option<(u16, u16)>),
     SetManagedArea(LayoutRect),
     SetKeybindingHints(Vec<(TermWmAction, Vec<String>)>),
     SetPowerProfile(PowerProfile),

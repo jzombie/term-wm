@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::collections::VecDeque;
 
 use ratatui::widgets::{Clear, Widget};
@@ -22,7 +21,6 @@ use term_wm_ui_components::DialogOverlayComponent;
 pub struct WmCommandPaletteComponent {
     dialog: DialogOverlayComponent,
     palette: CommandPaletteComponent,
-    content_rect_cache: Cell<Option<LayoutRect>>,
     managed_area: LayoutRect,
     last_action: Option<TermWmAction>,
     hitbox_id: HitboxId,
@@ -49,10 +47,10 @@ impl WmCommandPaletteComponent {
     pub fn new() -> Self {
         let mut dialog = DialogOverlayComponent::new();
         dialog.set_dim_backdrop(true);
+        dialog.set_auto_close_on_outside_click(true);
         Self {
             dialog,
             palette: CommandPaletteComponent::new(),
-            content_rect_cache: Cell::new(None),
             managed_area: LayoutRect::default(),
             last_action: None,
             hitbox_id: HitboxId::new(),
@@ -153,7 +151,6 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
             Clear.render(rect, &mut ratatui.buffer);
         }
 
-        self.content_rect_cache.set(Some(content_rect));
         registry.register(self.hitbox_id, content_rect);
         self.palette.render(backend, content_rect, ctx, registry);
     }
@@ -165,36 +162,59 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
     ) -> EventResult<TermWmAction> {
         self.last_action = None;
 
-        let result = if matches!(event, Event::Mouse(_)) {
-            let area = self.managed_area;
-            if self.dialog.handle_click_outside(event, layout_rect_to_rect(area)) {
-                return EventResult::Consumed;
+        if let Event::Mouse(_) = event {
+            let screen_area = ctx.screen_area().unwrap_or_default();
+            let ratatui_area = layout_rect_to_rect(screen_area);
+
+            if self.dialog.handle_click_outside(event, ratatui_area) {
+                return EventResult::Action(TermWmAction::CloseMenu);
             }
-            if let Some(content_rect) = self.content_rect_cache.get() {
-                let adjusted_ctx = ctx.with_screen_area(content_rect);
-                self.palette.handle_events(event, &adjusted_ctx)
-            } else {
-                self.palette.handle_events(event, ctx)
+
+            let rect = self.dialog.rect_for(ratatui_area);
+            let content_rect = LayoutRect {
+                x: rect.x as i32,
+                y: rect.y as i32,
+                width: rect.width,
+                height: rect.height,
+            };
+            let adjusted_ctx = ctx.with_screen_area(content_rect);
+            let result = self.palette.handle_events(event, &adjusted_ctx);
+
+            match result {
+                EventResult::Action(action) => match action {
+                    TermWmAction::CloseMenu => EventResult::Action(action),
+                    TermWmAction::MenuSelect => {
+                        self.palette.update(action, ctx, &mut VecDeque::new());
+                        self.last_action = self.palette.selected_action().cloned();
+                        EventResult::Consumed
+                    }
+                    _ => {
+                        self.palette.update(action, ctx, &mut VecDeque::new());
+                        EventResult::Consumed
+                    }
+                },
+                EventResult::Consumed => EventResult::Consumed,
+                EventResult::Ignored => EventResult::Ignored,
             }
         } else {
-            self.palette.handle_events(event, ctx)
-        };
+            let result = self.palette.handle_events(event, ctx);
 
-        match result {
-            EventResult::Action(action) => match action {
-                TermWmAction::CloseMenu => EventResult::Action(action),
-                TermWmAction::MenuSelect => {
-                    self.palette.update(action, ctx, &mut VecDeque::new());
-                    self.last_action = self.palette.selected_action().cloned();
-                    EventResult::Consumed
-                }
-                _ => {
-                    self.palette.update(action, ctx, &mut VecDeque::new());
-                    EventResult::Consumed
-                }
-            },
-            EventResult::Consumed => EventResult::Consumed,
-            EventResult::Ignored => EventResult::Ignored,
+            match result {
+                EventResult::Action(action) => match action {
+                    TermWmAction::CloseMenu => EventResult::Action(action),
+                    TermWmAction::MenuSelect => {
+                        self.palette.update(action, ctx, &mut VecDeque::new());
+                        self.last_action = self.palette.selected_action().cloned();
+                        EventResult::Consumed
+                    }
+                    _ => {
+                        self.palette.update(action, ctx, &mut VecDeque::new());
+                        EventResult::Consumed
+                    }
+                },
+                EventResult::Consumed => EventResult::Consumed,
+                EventResult::Ignored => EventResult::Ignored,
+            }
         }
     }
 
@@ -228,6 +248,7 @@ impl WmComponent for WmCommandPaletteComponent {
     fn process_action(&mut self, action: &ComponentAction) {
         match action {
             ComponentAction::Restore => {
+                self.dialog.set_visible(true);
                 let inner = &mut self.palette;
                 inner.query.clear();
                 inner.cursor = 0;

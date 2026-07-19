@@ -7,7 +7,7 @@ use crate::RatatuiBackend;
 use term_wm_core::actions::TermWmAction;
 use term_wm_core::component_context::ComponentContext;
 use term_wm_core::components::{
-    Component, ComponentAction, ComponentQuery, ComponentResponse, MenuItem, TopPanelState,
+    Component, ComponentAction, MenuItem, TopPanelState,
 };
 use term_wm_core::constants::{SHADOW_OFFSET_X, SHADOW_OFFSET_Y};
 use term_wm_core::draw_plan::{DrawPlan, RegionType, RenderRegion};
@@ -535,17 +535,6 @@ pub fn render_overlays(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut
 
     let hover_pos = wm.hover_pos();
 
-    // Compute anchor from top component
-    let anchor = wm
-        .get_semantic_component(ComponentTag::TopPanel)
-        .and_then(|p| {
-            if let ComponentResponse::Rect(r) = p.query(&ComponentQuery::MenuIconRect) {
-                r.map(|r| (r.x.max(0) as u16, (r.y + i32::from(r.height)).max(0) as u16))
-            } else {
-                None
-            }
-        });
-
     // Pre-compute overlay IDs
     let overlay_ids: Vec<OverlayId> = wm.overlays().keys().copied().collect();
 
@@ -566,8 +555,6 @@ pub fn render_overlays(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut
             .collect();
         menu.process_action(&ComponentAction::SetMenuItems(items));
         menu.process_action(&ComponentAction::SetManagedArea(full_area));
-        menu.process_action(&ComponentAction::SetMenuAnchor(anchor));
-
         let mut hitbox = HitboxRegistry::new();
         let ctx = ComponentContext::new(false)
             .with_overlay(true)
