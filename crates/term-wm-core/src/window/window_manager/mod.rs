@@ -115,7 +115,7 @@ pub(crate) enum SnapPreviewState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum OverlayId {
     Help,
-    Keybindings,
+    CommandPalette,
     ExitConfirm,
     SelectionPreview,
 }
@@ -5607,7 +5607,11 @@ mod tests {
             ) {
             }
         }
-        impl crate::components::Overlay<TermWmAction> for TestOverlay {}
+        impl crate::components::Overlay<TermWmAction> for TestOverlay {
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
         impl crate::components::WmComponent for TestOverlay {}
 
         let overlay_obj = TestOverlay {
@@ -5661,7 +5665,11 @@ mod tests {
             ) {
             }
         }
-        impl crate::components::Overlay<TermWmAction> for StubOverlay {}
+        impl crate::components::Overlay<TermWmAction> for StubOverlay {
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
 
         wm.open_overlay(OverlayId::ExitConfirm, Some(Box::new(StubOverlay)));
         assert!(wm.exit_confirm_visible());
@@ -5698,7 +5706,11 @@ mod tests {
             ) {
             }
         }
-        impl crate::components::Overlay<TermWmAction> for StubOverlay {}
+        impl crate::components::Overlay<TermWmAction> for StubOverlay {
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
 
         wm.open_overlay(OverlayId::Help, Some(Box::new(StubOverlay)));
         assert!(wm.help_overlay_visible());
@@ -5732,7 +5744,7 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        wm.fold_menu();
+        wm.open_command_menu();
     }
 
     #[test]
@@ -5762,60 +5774,6 @@ mod tests {
         );
         wm.open_command_menu_no_passthrough();
         assert!(wm.command_menu_visible());
-        wm.close_command_menu();
-    }
-
-    #[test]
-    fn handle_wm_menu_event_returns_none_when_not_visible() {
-        let mut wm = WindowManager::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        let event = Event::Key(crate::events::KeyEvent {
-            code: crate::events::KeyCode::Esc,
-            modifiers: crate::events::KeyModifiers::NONE,
-            kind: crate::events::KeyKind::Press,
-        });
-        assert!(wm.handle_wm_menu_event(&event).is_none());
-    }
-
-    #[test]
-    fn wm_menu_consumes_event_returns_false_when_not_visible() {
-        let wm = WindowManager::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        let event = Event::Key(crate::events::KeyEvent {
-            code: crate::events::KeyCode::Esc,
-            modifiers: crate::events::KeyModifiers::NONE,
-            kind: crate::events::KeyKind::Press,
-        });
-        assert!(!wm.wm_menu_consumes_event(&event));
-    }
-
-    #[test]
-    fn wm_menu_consumes_event_returns_false_for_mouse_event() {
-        let mut wm = WindowManager::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        wm.open_command_menu();
-        let event = Event::Mouse(crate::events::MouseEvent {
-            column: 0,
-            row: 0,
-            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
-            modifiers: crate::events::KeyModifiers::NONE,
-        });
-        assert!(!wm.wm_menu_consumes_event(&event));
         wm.close_command_menu();
     }
 }

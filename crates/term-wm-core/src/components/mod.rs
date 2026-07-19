@@ -265,6 +265,7 @@ pub trait Overlay<Msg>: Component<Msg> + std::any::Any {
     fn visible(&self) -> bool {
         true
     }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
     /// Optional terminal-area rect behind which a drop-shadow should be
     /// rendered.  The overlay is drawn on top of the shadow.
     fn shadow_rect(&self, _area: LayoutRect) -> Option<LayoutRect> {
@@ -288,7 +289,6 @@ pub enum ComponentAction {
     Restore,
     Outline,
     SetMenuItems(Vec<MenuItem<TermWmAction>>),
-    SetMenuAnchor(Option<(u16, u16)>),
     SetManagedArea(LayoutRect),
     SetKeybindingHints(Vec<(TermWmAction, Vec<String>)>),
     SetPowerProfile(PowerProfile),

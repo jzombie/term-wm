@@ -126,6 +126,10 @@ impl Overlay<TermWmAction> for WmHelpOverlayComponent {
         self.dialog.visible()
     }
 
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
     fn shadow_rect(&self, area: LayoutRect) -> Option<LayoutRect> {
         if !self.dialog.visible() {
             return None;

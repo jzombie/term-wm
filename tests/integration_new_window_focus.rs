@@ -15,7 +15,7 @@ fn new_window_is_focused() {
             None,
         ));
     let menu: Box<dyn term_wm_core::components::WmComponent> =
-        Box::new(term_wm_sys_ui_components::WmCommandPaletteOverlay::new());
+        Box::new(term_wm_sys_ui_components::WmCommandPaletteComponent::new());
     let mut wm = AppBuilder::bare()
         .app_ctx(ctx)
         .top_panel(top)

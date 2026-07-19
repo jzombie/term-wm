@@ -278,15 +278,6 @@ impl WindowManagerHost for App {
         wm.open_overlay(OverlayId::Help, Some(Box::new(h)));
     }
 
-    fn open_keybindings_overlay(&mut self) {
-        use term_wm_sys_ui_components::wm_keybinding_overlay::WmKeybindingOverlayComponent;
-        let wm = self.inner.wm();
-        let kb = wm.keybindings().clone();
-        let mut o = WmKeybindingOverlayComponent::new(wm.app_ctx(), kb);
-        o.show();
-        wm.open_overlay(OverlayId::Keybindings, Some(Box::new(o)));
-    }
-
     fn open_exit_confirm(&mut self) {
         use term_wm_ui_components::confirm_overlay::ConfirmOverlayComponent;
         let mut confirm = ConfirmOverlayComponent::new();

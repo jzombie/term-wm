@@ -1,8 +1,5 @@
-use crate::events::{Event, MouseEventKind};
-
 use super::WindowManager;
-use crate::actions::{EventResult, TermWmAction};
-use crate::components::{ComponentAction, ComponentQuery, ComponentResponse};
+use crate::components::ComponentAction;
 
 impl WindowManager {
     pub fn open_command_menu(&mut self) {
@@ -16,100 +13,16 @@ impl WindowManager {
     }
 
     pub fn open_command_menu_no_passthrough(&mut self) {
-        self.command_menu_visible = true;
+        self.open_command_menu();
         self.command_menu_opened_at = None;
-        if let Some(menu) =
-            self.get_semantic_component_mut(super::layer_manager::ComponentTag::CommandPalette)
-        {
-            menu.process_action(&ComponentAction::Restore);
-        }
     }
 
     pub fn close_command_menu(&mut self) {
         self.command_menu_visible = false;
         self.command_menu_opened_at = None;
-        if let Some(menu) =
-            self.get_semantic_component_mut(super::layer_manager::ComponentTag::CommandPalette)
-        {
-            menu.process_action(&ComponentAction::Restore);
-        }
     }
 
     pub fn command_menu_visible(&self) -> bool {
         self.command_menu_visible
-    }
-
-    pub fn fold_menu(&mut self) {
-        if let Some(menu) =
-            self.get_semantic_component_mut(super::layer_manager::ComponentTag::CommandPalette)
-        {
-            menu.process_action(&ComponentAction::Outline);
-        }
-    }
-
-    pub fn handle_wm_menu_event(&mut self, event: &Event) -> Option<TermWmAction> {
-        if !self.command_menu_visible() {
-            return None;
-        }
-
-        if let Event::Mouse(mouse) = event
-            && matches!(mouse.kind, MouseEventKind::Press(_))
-        {
-            // Check if click is on the top panel's menu icon
-            if let Some(p) =
-                self.get_semantic_component(super::layer_manager::ComponentTag::TopPanel)
-                && let ComponentResponse::Rect(Some(rect)) = p.query(&ComponentQuery::MenuIconRect)
-                && crate::layout::rect_contains(rect, mouse.column, mouse.row)
-            {
-                return None; // handled by chrome overlay toggle
-            }
-        }
-
-        let ctx = self
-            .component_context(false)
-            .with_overlay(true)
-            .with_screen_area(self.managed_area());
-        let menu =
-            self.get_semantic_component_mut(super::layer_manager::ComponentTag::CommandPalette)?;
-
-        match menu.handle_events(event, &ctx) {
-            EventResult::Action(action) => return Some(action),
-            EventResult::Consumed => {}
-            EventResult::Ignored => {}
-        }
-
-        if let ComponentResponse::Action(Some(action)) = menu.query(&ComponentQuery::SelectedAction)
-        {
-            return Some(action);
-        }
-
-        if let Event::Mouse(mouse) = event
-            && matches!(mouse.kind, MouseEventKind::Press(_))
-        {
-            return None; // handled by chrome layer
-        }
-
-        None
-    }
-
-    pub fn wm_menu_consumes_event(&self, event: &Event) -> bool {
-        if !self.command_menu_visible() {
-            return false;
-        }
-        match event {
-            Event::Key(key) => {
-                let kb = self.keybindings();
-                kb.matches(TermWmAction::MenuUp, key)
-                    || kb.matches(TermWmAction::MenuDown, key)
-                    || kb.matches(TermWmAction::MenuSelect, key)
-            }
-            Event::Mouse(mouse) => {
-                matches!(
-                    mouse.kind,
-                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
-                )
-            }
-            _ => false,
-        }
     }
 }
