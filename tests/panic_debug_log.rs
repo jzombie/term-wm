@@ -116,7 +116,7 @@ fn render_panic_shows_in_debug_log() {
     term_wm_sys_ui_components::install_panic_hook();
 
     let menu: Box<dyn term_wm_core::components::WmComponent> =
-        Box::new(term_wm_sys_ui_components::WmCommandPaletteOverlay::new());
+        Box::new(term_wm_sys_ui_components::WmCommandPaletteComponent::new());
     let mut wm = AppBuilder::bare()
         .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
         .command_menu(menu)

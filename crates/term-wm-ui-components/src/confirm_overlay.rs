@@ -186,6 +186,9 @@ impl Overlay<TermWmAction> for ConfirmOverlayComponent {
     fn visible(&self) -> bool {
         self.visible
     }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
     fn handle_confirm_event(&mut self, event: &Event) -> Option<ConfirmAction> {
         self.handle_confirm_event(event)
     }

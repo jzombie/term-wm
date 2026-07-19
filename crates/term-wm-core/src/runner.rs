@@ -357,143 +357,45 @@ where
                     return flush_state_changes(app, ControlFlow::Continue, false);
                 }
 
-                // Pre-compute WmMode-layer action for use inside the overlay section.
-                let mapped_action_wm_mode = match &evt {
-                    Event::Key(key) => app
-                        .wm()
-                        .keybindings()
-                        .action_for_key_in_layer(key, crate::keybindings::ActionLayer::WmMode),
-                    _ => None,
-                };
+                // Command palette overlay event routing
                 if wm_mode && app.wm().command_menu_visible() {
-                    if let Some(action) = app.wm().handle_wm_menu_event(&evt) {
+                    if let Some(action) = app.wm().handle_command_palette_event(&evt) {
                         match action {
-                            TermWmAction::CloseMenu => {
-                                app.wm().close_command_menu();
+                            TermWmAction::CloseMenu => { app.wm().close_command_palette(); }
+                            TermWmAction::ToggleDebugWindow => { app.toggle_debug_window(); app.wm().close_command_palette(); }
+                            TermWmAction::ToggleSystemPanel => { app.toggle_system_panel(); app.wm().close_command_palette(); }
+                            TermWmAction::Help | TermWmAction::OpenHelp => { app.open_help_overlay(); app.wm().close_command_palette(); }
+                            TermWmAction::Quit | TermWmAction::ExitUi => { app.open_exit_confirm(); }
+                            TermWmAction::CloseWindow => {
+                                let id = app.wm().focused_window();
+                                app.wm().close_window(id);
+                                app.wm().close_command_palette();
                             }
-                            TermWmAction::ToggleMouseCapture => {
-                                app.wm().toggle_mouse_capture();
-                            }
-                            TermWmAction::ToggleClipboardMode => {
-                                app.wm().toggle_clipboard_enabled();
-                            }
-                            TermWmAction::ToggleWindowSelection => {
-                                app.wm().toggle_window_selection();
-                            }
+                            TermWmAction::NewWindow => { app.wm_new_window()?; app.wm().close_command_palette(); }
                             TermWmAction::MinimizeWindow => {
                                 let id = app.wm().focused_window();
                                 app.wm().minimize_window(id);
-                                app.wm().close_command_menu();
+                                app.wm().close_command_palette();
                             }
                             TermWmAction::MaximizeWindow => {
                                 let id = app.wm().focused_window();
                                 app.wm().toggle_maximize(id);
-                                app.wm().close_command_menu();
+                                app.wm().close_command_palette();
                             }
                             TermWmAction::ToggleDirectMode => {
                                 let id = app.wm().focused_window();
                                 app.wm().toggle_direct_mode(id);
-                                app.wm().close_command_menu();
+                                app.wm().close_command_palette();
                             }
-                            TermWmAction::CloseWindow => {
-                                let id = app.wm().focused_window();
-                                app.wm().close_window(id);
-                                app.wm().close_command_menu();
-                                // System windows queued by close_window are
-                                // cleaned up by take_closed_windows below.
-                            }
-                            TermWmAction::NewWindow => {
-                                app.wm_new_window()?;
-                                app.wm().close_command_menu();
-                            }
-                            TermWmAction::ToggleDebugWindow => {
-                                app.toggle_debug_window();
-                                app.wm().close_command_menu();
-                            }
-                            TermWmAction::ToggleSystemPanel => {
-                                app.toggle_system_panel();
-                                app.wm().close_command_menu();
-                            }
-                            TermWmAction::SendNotification(msg) => {
-                                app.wm()
-                                    .push_notification(msg, std::time::Duration::from_secs(3));
-                                app.wm().close_command_menu();
-                            }
-                            TermWmAction::Help => {
-                                app.open_help_overlay();
-                                app.wm().close_command_menu();
-                            }
-                            TermWmAction::ExitUi => {
-                                app.wm().close_command_menu();
-                                app.open_exit_confirm();
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
-                            }
-                            _ => {}
-                        }
-                        update_selection_snapshot(app);
-                        return flush_state_changes(app, ControlFlow::Continue, false);
-                    }
-                    if app.wm().wm_menu_consumes_event(&evt) {
-                        update_selection_snapshot(app);
-                        return flush_state_changes(app, ControlFlow::Continue, false);
-                    }
-                    // Focus routing in WM mode (Tab/Shift+Tab)
-                    // Fold menu to outline so user can see the window they focused.
-                    if app.wm().handle_focus_event(&evt) && matches!(&evt, Event::Key(_)) {
-                        app.wm().fold_menu();
-                        update_selection_snapshot(app);
-                        return flush_state_changes(app, ControlFlow::Continue, false);
-                    }
-                    // Dispatch remaining WmMode actions (Quit, OpenHelp, etc.)
-                    // while the WM overlay is open.
-                    if let Some(action) = mapped_action_wm_mode {
-                        match action {
-                            TermWmAction::Quit => {
-                                app.open_exit_confirm();
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
-                            }
-                            TermWmAction::OpenHelp => {
-                                app.open_help_overlay();
-                                app.wm().close_command_menu();
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
-                            }
-                            TermWmAction::CycleNextWindow => {
-                                app.wm().advance_focus(true);
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
-                            }
-                            TermWmAction::CyclePrevWindow => {
-                                app.wm().advance_focus(false);
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
-                            }
-                            TermWmAction::HintToggle => {
-                                let current = app.wm().hint_visibility();
-                                let next = match current {
-                                    crate::wm_config::HintVisibility::Always => {
-                                        crate::wm_config::HintVisibility::Never
-                                    }
-                                    crate::wm_config::HintVisibility::OnDemand => {
-                                        crate::wm_config::HintVisibility::Always
-                                    }
-                                    crate::wm_config::HintVisibility::Never => {
-                                        crate::wm_config::HintVisibility::Always
-                                    }
-                                };
-                                app.wm().set_hint_visibility(next);
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
-                            }
+                            TermWmAction::ToggleMouseCapture => { app.wm().toggle_mouse_capture(); }
+                            TermWmAction::ToggleClipboardMode => { app.wm().toggle_clipboard_enabled(); }
+                            TermWmAction::ToggleWindowSelection => { app.wm().toggle_window_selection(); }
+                            TermWmAction::SendNotification(msg) => { app.wm().push_notification(msg, std::time::Duration::from_secs(3)); app.wm().close_command_palette(); }
                             _ => {}
                         }
                     }
-                    if let Event::Key(_) = &evt {
-                        update_selection_snapshot(app);
-                        return flush_state_changes(app, ControlFlow::Continue, false);
-                    }
+                    update_selection_snapshot(app);
+                    return flush_state_changes(app, ControlFlow::Continue, false);
                 }
 
                 if matches!(evt, Event::Mouse(_)) && !app.wm().mouse_capture_enabled() {
@@ -1213,6 +1115,9 @@ mod tests {
         }
         fn visible(&self) -> bool {
             false
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
         }
     }
     impl crate::components::WmComponent for TestMenu {}

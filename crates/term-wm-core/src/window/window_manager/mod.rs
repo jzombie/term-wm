@@ -115,6 +115,7 @@ pub(crate) enum SnapPreviewState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum OverlayId {
     Help,
+    CommandPalette,
     ExitConfirm,
     SelectionPreview,
 }
@@ -5606,7 +5607,11 @@ mod tests {
             ) {
             }
         }
-        impl crate::components::Overlay<TermWmAction> for TestOverlay {}
+        impl crate::components::Overlay<TermWmAction> for TestOverlay {
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
         impl crate::components::WmComponent for TestOverlay {}
 
         let overlay_obj = TestOverlay {
@@ -5660,7 +5665,11 @@ mod tests {
             ) {
             }
         }
-        impl crate::components::Overlay<TermWmAction> for StubOverlay {}
+        impl crate::components::Overlay<TermWmAction> for StubOverlay {
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
 
         wm.open_overlay(OverlayId::ExitConfirm, Some(Box::new(StubOverlay)));
         assert!(wm.exit_confirm_visible());
@@ -5697,7 +5706,11 @@ mod tests {
             ) {
             }
         }
-        impl crate::components::Overlay<TermWmAction> for StubOverlay {}
+        impl crate::components::Overlay<TermWmAction> for StubOverlay {
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
 
         wm.open_overlay(OverlayId::Help, Some(Box::new(StubOverlay)));
         assert!(wm.help_overlay_visible());

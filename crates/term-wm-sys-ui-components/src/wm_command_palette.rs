@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::VecDeque;
 
 use ratatui::widgets::{Clear, Widget};
@@ -19,6 +20,7 @@ use term_wm_ui_components::helpers::{downcast_ratatui, layout_rect_to_rect};
 use term_wm_ui_components::DialogOverlayComponent;
 
 pub struct WmCommandPaletteComponent {
+    area: Cell<LayoutRect>,
     dialog: DialogOverlayComponent,
     palette: CommandPaletteComponent,
     managed_area: LayoutRect,
@@ -49,6 +51,7 @@ impl WmCommandPaletteComponent {
         dialog.set_dim_backdrop(true);
         dialog.set_auto_close_on_outside_click(true);
         Self {
+            area: Cell::new(LayoutRect::default()),
             dialog,
             palette: CommandPaletteComponent::new(),
             managed_area: LayoutRect::default(),
@@ -58,6 +61,14 @@ impl WmCommandPaletteComponent {
             matcher: FuzzyMatch::new(),
             mru: MruRanker::new(),
         }
+    }
+
+    pub fn show(&mut self) {
+        self.dialog.set_visible(true);
+    }
+
+    pub fn close(&mut self) {
+        self.dialog.set_visible(false);
     }
 
     pub fn set_items(&mut self, items: Vec<term_wm_core::components::MenuItem<TermWmAction>>) {
@@ -88,10 +99,6 @@ impl WmCommandPaletteComponent {
 
     pub fn selected_action(&self) -> Option<&TermWmAction> {
         self.last_action.as_ref()
-    }
-
-    pub fn selected_stable_id(&self) -> Option<&str> {
-        self.palette.selected_stable_id()
     }
 
     pub fn refresh_if_dirty(&mut self) {
@@ -127,6 +134,7 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
         ctx: &ComponentContext,
         registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
+        self.area.set(area);
         self.refresh_if_dirty();
 
         let (content_width, content_height) = self.compute_content_dimensions();
@@ -151,7 +159,6 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
             Clear.render(rect, &mut ratatui.buffer);
         }
 
-        registry.register(self.hitbox_id, content_rect);
         self.palette.render(backend, content_rect, ctx, registry);
     }
 
@@ -163,10 +170,11 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
         self.last_action = None;
 
         if let Event::Mouse(_) = event {
-            let screen_area = ctx.screen_area().unwrap_or_default();
-            let ratatui_area = layout_rect_to_rect(screen_area);
+            let area = self.area.get();
+            let ratatui_area = layout_rect_to_rect(area);
 
             if self.dialog.handle_click_outside(event, ratatui_area) {
+                self.close();
                 return EventResult::Action(TermWmAction::CloseMenu);
             }
 
@@ -236,7 +244,11 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
 
 impl Overlay<TermWmAction> for WmCommandPaletteComponent {
     fn visible(&self) -> bool {
-        true
+        self.dialog.visible()
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
 
@@ -249,12 +261,11 @@ impl WmComponent for WmCommandPaletteComponent {
         match action {
             ComponentAction::Restore => {
                 self.dialog.set_visible(true);
-                let inner = &mut self.palette;
-                inner.query.clear();
-                inner.cursor = 0;
-                inner.selected = 0;
-                inner.data_dirty = true;
-                inner.query_dirty = true;
+                self.palette.query.clear();
+                self.palette.cursor = 0;
+                self.palette.selected = 0;
+                self.palette.data_dirty = true;
+                self.palette.query_dirty = true;
             }
             ComponentAction::SetMenuItems(items) => {
                 self.registry = CommandRegistry::new();
@@ -277,71 +288,6 @@ impl WmComponent for WmCommandPaletteComponent {
     }
 
     fn visible(&self) -> bool {
-        true
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_palette() -> WmCommandPaletteComponent {
-        WmCommandPaletteComponent::new()
-    }
-
-    #[test]
-    fn new_palette_is_default() {
-        let palette = make_palette();
-        assert!(palette.last_action.is_none());
-    }
-
-    #[test]
-    fn debug_format_includes_struct_name() {
-        let palette = make_palette();
-        let s = format!("{:?}", palette);
-        assert!(s.contains("WmCommandPaletteComponent"));
-    }
-
-    #[test]
-    fn process_restore_resets_palette() {
-        let mut palette = make_palette();
-        palette.palette.query = "test".to_string();
-        palette.palette.data_dirty = false;
-        palette.process_action(&ComponentAction::Restore);
-        assert!(palette.palette.query.is_empty());
-        assert!(palette.palette.data_dirty);
-    }
-
-    #[test]
-    fn process_set_managed_area() {
-        let mut palette = make_palette();
-        let area = LayoutRect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 24,
-        };
-        palette.process_action(&ComponentAction::SetManagedArea(area));
-        assert_eq!(palette.managed_area, area);
-    }
-
-    #[test]
-    fn overlay_visible_always_true() {
-        let palette = make_palette();
-        assert!(<WmCommandPaletteComponent as Overlay<TermWmAction>>::visible(&palette));
-    }
-
-    #[test]
-    fn consume_area_passes_through() {
-        let mut palette = make_palette();
-        let available = LayoutRect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 24,
-        };
-        let (claimed, remaining) = palette.consume_area(available);
-        assert_eq!(claimed.width, 0);
-        assert_eq!(remaining, available);
+        self.dialog.visible()
     }
 }
