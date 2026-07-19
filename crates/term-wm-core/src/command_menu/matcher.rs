@@ -205,7 +205,11 @@ mod tests {
         assert_eq!(r1.len(), 2, "'e' should match both items");
 
         let r2 = fmatch.score("E", &items);
-        assert_eq!(r2.len(), 2, "'E' should match both items (case-insensitive)");
+        assert_eq!(
+            r2.len(),
+            2,
+            "'E' should match both items (case-insensitive)"
+        );
 
         // Two lowercase chars — "ex" only matches "Exit UI"
         let r3 = fmatch.score("ex", &items);
