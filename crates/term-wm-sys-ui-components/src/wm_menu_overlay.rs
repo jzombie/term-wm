@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::Widget as _;
-use ratatui::widgets::{Block, Borders};
+use ratatui::widgets::{Block, Borders, Clear};
 use term_wm_core::events::Event;
 use term_wm_layout_engine::LayoutRect;
 
@@ -17,13 +17,14 @@ use term_wm_core::{
     layout::rect_contains,
     window::WindowKey,
 };
-use term_wm_ui_components::helpers::{color_to_ratatui, layout_rect_to_rect};
+use term_wm_ui_components::helpers::{color_to_ratatui, downcast_ratatui, layout_rect_to_rect};
 
 use term_wm_ui_components::menu::MenuComponent;
-use term_wm_ui_components::{Placement, PlacementContainerComponent};
+use term_wm_ui_components::DialogOverlayComponent;
 
 pub struct WmCommandPaletteOverlay {
-    menu: PlacementContainerComponent<MenuComponent>,
+    dialog: DialogOverlayComponent,
+    menu: MenuComponent,
     outlined: Cell<bool>,
     outlined_at: RefCell<Option<Instant>>,
     outline_timeout: Duration,
@@ -53,14 +54,11 @@ const MIN_MODAL_WIDTH: u16 = 20;
 
 impl WmCommandPaletteOverlay {
     pub fn new() -> Self {
+        let mut dialog = DialogOverlayComponent::new();
+        dialog.set_dim_backdrop(true);
         Self {
-            menu: PlacementContainerComponent::new(
-                MenuComponent::new(),
-                Placement::Centered {
-                    width: 20,
-                    height: 3,
-                },
-            ),
+            dialog,
+            menu: MenuComponent::new(),
             outlined: Cell::new(false),
             outlined_at: RefCell::new(None),
             outline_timeout: Duration::ZERO,
@@ -96,7 +94,7 @@ impl WmCommandPaletteOverlay {
     }
 
     pub fn set_items(&mut self, items: Vec<MenuItem<TermWmAction>>) {
-        self.menu.inner_mut().set_items(items);
+        self.menu.set_items(items);
     }
 
     pub fn set_anchor(&mut self, pos: Option<(u16, u16)>) {
@@ -116,10 +114,9 @@ impl WmCommandPaletteOverlay {
     }
 
     fn compute_content_dimensions(&self) -> (u16, u16) {
-        let item_count = self.menu.inner().items().len();
+        let item_count = self.menu.items().len();
         let label_width = self
             .menu
-            .inner()
             .items()
             .iter()
             .map(|item| item.label.chars().count() as u16)
@@ -127,7 +124,6 @@ impl WmCommandPaletteOverlay {
             .unwrap_or(1);
         let icon_width = self
             .menu
-            .inner()
             .items()
             .iter()
             .map(|item| item.icon.map(|v| v.chars().count() as u16).unwrap_or(0))
@@ -169,7 +165,7 @@ impl Component<TermWmAction> for WmCommandPaletteOverlay {
     fn render(
         &mut self,
         backend: &mut dyn term_wm_render::RenderBackend,
-        _area: LayoutRect,
+        area: LayoutRect,
         ctx: &ComponentContext,
         registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
@@ -179,7 +175,7 @@ impl Component<TermWmAction> for WmCommandPaletteOverlay {
             return;
         }
 
-        let item_count = self.menu.inner().items().len();
+        let item_count = self.menu.items().len();
         if item_count == 0 {
             return;
         }
@@ -187,7 +183,7 @@ impl Component<TermWmAction> for WmCommandPaletteOverlay {
         let (content_width, content_height) = self.compute_content_dimensions();
         let managed = self.managed_area;
 
-        if let Some(anchor) = self.anchor {
+        let content_rect = if let Some(anchor) = self.anchor {
             if anchor.0 < managed.x.max(0) as u16
                 || anchor.0 >= (managed.x.max(0) as u16).saturating_add(managed.width)
             {
@@ -203,25 +199,35 @@ impl Component<TermWmAction> for WmCommandPaletteOverlay {
                 .max(1);
             let w = content_width.min(max_w);
             let h = content_height.min(max_h);
-            self.menu.set_placement(Placement::Anchored {
-                x: anchor.0,
-                y: anchor.1,
-                managed_area: managed,
-                content_width: w,
-                content_height: h,
-            });
+            LayoutRect {
+                x: i32::from(anchor.0),
+                y: i32::from(anchor.1),
+                width: w,
+                height: h,
+            }
         } else {
-            self.menu.set_placement(Placement::Centered {
-                width: content_width,
-                height: content_height,
-            });
+            self.dialog.set_size(content_width, content_height);
+            let rect = self.dialog.rect_for(layout_rect_to_rect(area));
+            LayoutRect {
+                x: i32::from(rect.x),
+                y: i32::from(rect.y),
+                width: rect.width,
+                height: rect.height,
+            }
+        };
+
+        if content_rect.width == 0 || content_rect.height == 0 {
+            return;
         }
 
-        self.menu.render(backend, _area, ctx, registry);
-
-        if let Some(content_rect) = self.menu.content_rect() {
-            self.menu_bounds_cache.set(Some(content_rect));
+        self.dialog.render_backdrop(backend, area, Some(content_rect));
+        {
+            let ratatui = downcast_ratatui(backend);
+            Clear.render(layout_rect_to_rect(content_rect), &mut ratatui.buffer);
         }
+
+        self.menu_bounds_cache.set(Some(content_rect));
+        self.menu.render(backend, content_rect, ctx, registry);
     }
 
     fn handle_events(
@@ -232,19 +238,34 @@ impl Component<TermWmAction> for WmCommandPaletteOverlay {
         self.auto_restore();
         self.last_action = None;
 
-        let result = self.menu.handle_events(event, ctx);
+        let result = if matches!(event, Event::Mouse(_)) {
+            let area = layout_rect_to_rect(self.managed_area);
+            if self.dialog.handle_click_outside(event, area) {
+                self.restore();
+                return EventResult::Consumed;
+            }
+            if let Some(content_rect) = self.menu_bounds_cache.get() {
+                let adjusted_ctx = ctx.with_screen_area(content_rect);
+                self.menu.handle_events(event, &adjusted_ctx)
+            } else {
+                self.menu.handle_events(event, ctx)
+            }
+        } else {
+            self.menu.handle_events(event, ctx)
+        };
+
         match result {
             EventResult::Action(action) => {
                 let mut actions = VecDeque::new();
                 self.menu.update(action.clone(), ctx, &mut actions);
                 if action == TermWmAction::MenuSelect {
-                    self.last_action = self.menu.inner().selected_action().cloned();
+                    self.last_action = self.menu.selected_action().cloned();
                     self.restore();
                 }
                 EventResult::Consumed
             }
             EventResult::Consumed => {
-                self.last_action = self.menu.inner().selected_action().cloned();
+                self.last_action = self.menu.selected_action().cloned();
                 self.restore();
                 EventResult::Consumed
             }
@@ -370,21 +391,21 @@ mod tests {
 
         process(&mut overlay, &key_event(KeyCode::Down), &ctx);
         assert_eq!(
-            overlay.menu.inner().selected(),
+            overlay.menu.selected(),
             1,
             "Down should select item 1"
         );
 
         process(&mut overlay, &key_event(KeyCode::Up), &ctx);
         assert_eq!(
-            overlay.menu.inner().selected(),
+            overlay.menu.selected(),
             0,
             "Up should select item 0"
         );
 
         process(&mut overlay, &key_event(KeyCode::Up), &ctx);
         assert_eq!(
-            overlay.menu.inner().selected(),
+            overlay.menu.selected(),
             2,
             "Up at top should wrap to last"
         );
@@ -422,7 +443,7 @@ mod tests {
         // Click on first item at row 1 (header is row 0)
         process(&mut overlay, &mouse_click(1, 1), &ctx);
         assert_eq!(
-            overlay.menu.inner().selected(),
+            overlay.menu.selected(),
             0,
             "click should select item 0"
         );
@@ -452,7 +473,7 @@ mod tests {
                 .is_consumed(),
             "Down should be consumed"
         );
-        assert_eq!(overlay.menu.inner().selected(), 1);
+        assert_eq!(overlay.menu.selected(), 1);
 
         assert!(
             overlay
@@ -460,7 +481,7 @@ mod tests {
                 .is_consumed(),
             "Down should be consumed"
         );
-        assert_eq!(overlay.menu.inner().selected(), 2);
+        assert_eq!(overlay.menu.selected(), 2);
 
         assert!(
             overlay
@@ -468,7 +489,7 @@ mod tests {
                 .is_consumed(),
             "Down should be consumed"
         );
-        assert_eq!(overlay.menu.inner().selected(), 0);
+        assert_eq!(overlay.menu.selected(), 0);
 
         assert!(
             overlay
@@ -476,7 +497,7 @@ mod tests {
                 .is_consumed(),
             "Up should be consumed"
         );
-        assert_eq!(overlay.menu.inner().selected(), 2);
+        assert_eq!(overlay.menu.selected(), 2);
     }
 
     #[test]
