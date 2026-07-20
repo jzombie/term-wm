@@ -173,12 +173,7 @@ pub fn render_app(
                         if let Some(component) = wm.component_for_key_mut(*key) {
                             let mut local_hb =
                                 HitboxRegistry::with_owner(ComponentOwner::Window(*key));
-                            component.render(
-                                backend,
-                                surface.inner,
-                                &ctx,
-                                &mut local_hb,
-                            );
+                            component.render(backend, surface.inner, &ctx, &mut local_hb);
                             wm.hitbox_registry_mut().merge(local_hb);
                         }
                     },

@@ -153,7 +153,11 @@ impl HitboxRegistry {
         if clipped.width == 0 || clipped.height == 0 {
             return;
         }
-        self.entries.push(HitboxEntry { id, owner, area: clipped });
+        self.entries.push(HitboxEntry {
+            id,
+            owner,
+            area: clipped,
+        });
     }
 
     /// Push a clip rect (called by `ScrollViewComponent` before rendering
@@ -180,7 +184,10 @@ impl HitboxRegistry {
     ///
     /// Entries are registered in render order (back-to-front), so iterating
     /// in reverse yields the top-most (last-rendered, highest z-order) match.
-    pub fn hit_test(&self, position: MousePosition) -> Option<(HitboxId, ComponentOwner, LayoutRect)> {
+    pub fn hit_test(
+        &self,
+        position: MousePosition,
+    ) -> Option<(HitboxId, ComponentOwner, LayoutRect)> {
         self.entries
             .iter()
             .rev()
@@ -252,7 +259,10 @@ mod tests {
                 },
             );
         }));
-        assert!(result.is_err(), "register() without active_owner should panic");
+        assert!(
+            result.is_err(),
+            "register() without active_owner should panic"
+        );
     }
 
     #[test]
@@ -486,7 +496,10 @@ mod tests {
                 },
             );
         }));
-        assert!(result.is_err(), "register() after clear() without set_active_owner should panic");
+        assert!(
+            result.is_err(),
+            "register() after clear() without set_active_owner should panic"
+        );
     }
 
     #[test]

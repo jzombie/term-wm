@@ -259,8 +259,10 @@ pub struct WindowManager {
     /// Tap-swap targeting state
     pub(crate) tap_swap_state: Option<TapSwapState>,
     /// O(1) chrome handle lookups — rebuilt every frame.
-    resize_map: HashMap<crate::hitbox_registry::HitboxId, crate::layout::floating::ResizeHandle<WindowKey>>,
-    drag_map: HashMap<crate::hitbox_registry::HitboxId, crate::layout::floating::DragHandle<WindowKey>>,
+    resize_map:
+        HashMap<crate::hitbox_registry::HitboxId, crate::layout::floating::ResizeHandle<WindowKey>>,
+    drag_map:
+        HashMap<crate::hitbox_registry::HitboxId, crate::layout::floating::DragHandle<WindowKey>>,
     /// Split handles only need existence check — the event is forwarded to
     /// TilingLayout::handle_event which stores its own handle data.
     split_ids: std::collections::HashSet<crate::hitbox_registry::HitboxId>,
@@ -1446,15 +1448,23 @@ impl WindowManager {
                 self.bring_floating_to_front_key(h_key);
                 let rect = self.full_region_for_key(h_key);
                 let (start_x, start_y, start_width, start_height) =
-                    if let Some(crate::window::FloatRectSpec::Absolute(fr)) = self.floating_rect(h_key) {
+                    if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
+                        self.floating_rect(h_key)
+                    {
                         (fr.x, fr.y, fr.width, fr.height)
                     } else {
                         (rect.x, rect.y, rect.width, rect.height)
                     };
                 self.mouse_capture = Some(MouseCaptureState::ResizingWindow {
-                    key: h_key, edge: h_edge, start_rect: rect,
-                    start_col: col, start_row: row,
-                    start_x, start_y, start_width, start_height,
+                    key: h_key,
+                    edge: h_edge,
+                    start_rect: rect,
+                    start_col: col,
+                    start_row: row,
+                    start_x,
+                    start_y,
+                    start_width,
+                    start_height,
                 });
                 return EventResult::Consumed;
             }
@@ -1465,38 +1475,78 @@ impl WindowManager {
                     (handle.rect.x.saturating_add(i32::from(handle.rect.width))).max(0) as u16;
                 let buttons = crate::window::decorator::header_buttons(outer_right);
                 let row_i32 = i32::from(row);
-                let clicked_action = buttons.iter().find(|(bx, _, _)| {
-                    col >= *bx && col < bx.saturating_add(1)
-                        && row_i32 >= handle.rect.y && row_i32 < handle.rect.y + 1
-                }).map(|(_, action, _)| *action);
+                let clicked_action = buttons
+                    .iter()
+                    .find(|(bx, _, _)| {
+                        col >= *bx
+                            && col < bx.saturating_add(1)
+                            && row_i32 >= handle.rect.y
+                            && row_i32 < handle.rect.y + 1
+                    })
+                    .map(|(_, action, _)| *action);
 
                 if let Some(action) = clicked_action {
                     return match action {
-                        HeaderAction::Close => { self.close_window(key); self.last_header_click = None; EventResult::Consumed }
-                        HeaderAction::Maximize => { self.toggle_maximize(key); self.last_header_click = None; EventResult::Consumed }
-                        HeaderAction::Minimize => { self.minimize_window(key); self.last_header_click = None; EventResult::Consumed }
-                        HeaderAction::ToggleDirectMode => { self.toggle_direct_mode(key); self.last_header_click = None; EventResult::Consumed }
+                        HeaderAction::Close => {
+                            self.close_window(key);
+                            self.last_header_click = None;
+                            EventResult::Consumed
+                        }
+                        HeaderAction::Maximize => {
+                            self.toggle_maximize(key);
+                            self.last_header_click = None;
+                            EventResult::Consumed
+                        }
+                        HeaderAction::Minimize => {
+                            self.minimize_window(key);
+                            self.last_header_click = None;
+                            EventResult::Consumed
+                        }
+                        HeaderAction::ToggleDirectMode => {
+                            self.toggle_direct_mode(key);
+                            self.last_header_click = None;
+                            EventResult::Consumed
+                        }
                         HeaderAction::Drag => {
                             let now = Instant::now();
                             if let Some((prev_key, prev)) = self.last_header_click
-                                && prev_key == key && now.duration_since(prev) <= Duration::from_millis(500)
+                                && prev_key == key
+                                && now.duration_since(prev) <= Duration::from_millis(500)
                             {
                                 self.toggle_maximize(key);
                                 self.last_header_click = None;
                                 return EventResult::Consumed;
                             }
                             self.last_header_click = Some((key, now));
-                            if self.is_window_floating(key) { self.bring_floating_to_front_key(key); }
+                            if self.is_window_floating(key) {
+                                self.bring_floating_to_front_key(key);
+                            }
                             let rect = self.visible_region_for_key(key);
                             let (initial_x, initial_y) =
-                                if let Some(crate::window::FloatRectSpec::Absolute(fr)) = self.floating_rect(key) { (fr.x, fr.y) }
-                                else { (rect.x, rect.y) };
+                                if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
+                                    self.floating_rect(key)
+                                {
+                                    (fr.x, fr.y)
+                                } else {
+                                    (rect.x, rect.y)
+                                };
                             self.mouse_capture = Some(MouseCaptureState::DraggingWindow {
-                                key, resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
-                                anchor_x: col, anchor_y: row, initial_x, initial_y,
-                                start_x: col, start_y: row, prev_col: col, prev_row: row,
-                                prev_time_ns: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0),
-                                detach_coordinate: None, snap_applied: false,
+                                key,
+                                resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
+                                anchor_x: col,
+                                anchor_y: row,
+                                initial_x,
+                                initial_y,
+                                start_x: col,
+                                start_y: row,
+                                prev_col: col,
+                                prev_row: row,
+                                prev_time_ns: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_nanos() as u64)
+                                    .unwrap_or(0),
+                                detach_coordinate: None,
+                                snap_applied: false,
                             });
                             self.drag_last_event = Some(Instant::now());
                             self.arm_drag_snap_timer();
@@ -1507,24 +1557,43 @@ impl WindowManager {
                 // Drag area (not a button) — initiate window drag
                 let now = Instant::now();
                 if let Some((prev_key, prev)) = self.last_header_click
-                    && prev_key == key && now.duration_since(prev) <= Duration::from_millis(500)
+                    && prev_key == key
+                    && now.duration_since(prev) <= Duration::from_millis(500)
                 {
                     self.toggle_maximize(key);
                     self.last_header_click = None;
                     return EventResult::Consumed;
                 }
                 self.last_header_click = Some((key, now));
-                if self.is_window_floating(key) { self.bring_floating_to_front_key(key); }
+                if self.is_window_floating(key) {
+                    self.bring_floating_to_front_key(key);
+                }
                 let rect = self.visible_region_for_key(key);
                 let (initial_x, initial_y) =
-                    if let Some(crate::window::FloatRectSpec::Absolute(fr)) = self.floating_rect(key) { (fr.x, fr.y) }
-                    else { (rect.x, rect.y) };
+                    if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
+                        self.floating_rect(key)
+                    {
+                        (fr.x, fr.y)
+                    } else {
+                        (rect.x, rect.y)
+                    };
                 self.mouse_capture = Some(MouseCaptureState::DraggingWindow {
-                    key, resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
-                    anchor_x: col, anchor_y: row, initial_x, initial_y,
-                    start_x: col, start_y: row, prev_col: col, prev_row: row,
-                    prev_time_ns: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0),
-                    detach_coordinate: None, snap_applied: false,
+                    key,
+                    resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
+                    anchor_x: col,
+                    anchor_y: row,
+                    initial_x,
+                    initial_y,
+                    start_x: col,
+                    start_y: row,
+                    prev_col: col,
+                    prev_row: row,
+                    prev_time_ns: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos() as u64)
+                        .unwrap_or(0),
+                    detach_coordinate: None,
+                    snap_applied: false,
                 });
                 self.drag_last_event = Some(Instant::now());
                 self.arm_drag_snap_timer();
@@ -3031,7 +3100,8 @@ mod tests {
             .rect;
         assert!(!wm.is_window_floating(debug_key));
 
-        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(debug_key));
+        wm.hitbox_registry_mut()
+            .set_active_owner(ComponentOwner::Window(debug_key));
         wm.register_window_chrome_hitboxes(debug_key);
 
         let down = Event::Mouse(MouseEvent {
@@ -3623,7 +3693,8 @@ mod tests {
         // Register header hitbox matching the render-pass arrangement:
         // Single DragHandle hitbox for the full header area.
         // Button detection is handled by position in the dispatch code.
-        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(win_key));
+        wm.hitbox_registry_mut()
+            .set_active_owner(ComponentOwner::Window(win_key));
         wm.register_window_chrome_hitboxes(win_key);
 
         let click = Event::Mouse(MouseEvent {
@@ -3694,7 +3765,8 @@ mod tests {
         let drag_x = (header.rect.x.saturating_add(i32::from(header.rect.width)) / 2) as u16;
         let drag_y = header.rect.y as u16;
 
-        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(win_key));
+        wm.hitbox_registry_mut()
+            .set_active_owner(ComponentOwner::Window(win_key));
         wm.register_window_chrome_hitboxes(win_key);
 
         assert!(!wm.direct_mode(win_key));
@@ -4018,7 +4090,8 @@ mod tests {
         let min_x = max_x.saturating_sub(2);
         let kb_x = min_x.saturating_sub(2) as u16;
         let kb_y = full_rect.y.saturating_add(1) as u16; // header row
-        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(win_key));
+        wm.hitbox_registry_mut()
+            .set_active_owner(ComponentOwner::Window(win_key));
         wm.register_window_chrome_hitboxes(win_key);
 
         assert!(wm.direct_mode(win_key), "direct mode enabled before click");
@@ -4095,7 +4168,8 @@ mod tests {
             .expect("floating header should exist")
             .rect;
 
-        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(win_key));
+        wm.hitbox_registry_mut()
+            .set_active_owner(ComponentOwner::Window(win_key));
         wm.register_window_chrome_hitboxes(win_key);
 
         // Press on the header — should start a drag via chrome.
@@ -4259,7 +4333,8 @@ mod tests {
             .expect("header should exist")
             .rect;
 
-        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(debug_key));
+        wm.hitbox_registry_mut()
+            .set_active_owner(ComponentOwner::Window(debug_key));
         wm.register_window_chrome_hitboxes(debug_key);
 
         let down = Event::Mouse(MouseEvent {
@@ -4820,7 +4895,8 @@ mod tests {
             width: 20,
             height: 10,
         };
-        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(key));
+        wm.hitbox_registry_mut()
+            .set_active_owner(ComponentOwner::Window(key));
         wm.hitbox_registry.register(
             wm.window_content_hitbox_id(key).unwrap_or_default(),
             hit_rect,
@@ -4970,7 +5046,8 @@ mod tests {
             width: 20,
             height: 10,
         };
-        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(key));
+        wm.hitbox_registry_mut()
+            .set_active_owner(ComponentOwner::Window(key));
         wm.hitbox_registry.register(
             wm.window_content_hitbox_id(key).unwrap_or_default(),
             hit_rect,
@@ -5027,7 +5104,8 @@ mod tests {
             width: 80,
             height: 24,
         });
-        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::System);
+        wm.hitbox_registry_mut()
+            .set_active_owner(ComponentOwner::System);
         wm.register_layout_handle_hitboxes();
         let handles = wm.handles.clone();
         assert!(!handles.is_empty(), "tiling must produce split handles");
@@ -5230,7 +5308,8 @@ mod tests {
             height: 24,
         });
 
-        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::System);
+        wm.hitbox_registry_mut()
+            .set_active_owner(ComponentOwner::System);
         wm.register_layout_handle_hitboxes();
 
         // Verify at least one entry exists at the gap position.
@@ -5281,10 +5360,13 @@ mod tests {
             .x
             .saturating_add(i32::from(full_rect.width))
             .saturating_sub(1);
-        let close_x = outer_right.saturating_sub(i32::from(crate::window::decorator::HEADER_BUTTON_GAP)) as u16;
+        let close_x = outer_right
+            .saturating_sub(i32::from(crate::window::decorator::HEADER_BUTTON_GAP))
+            as u16;
         let close_y = full_rect.y.saturating_add(1) as u16;
 
-        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(win_key));
+        wm.hitbox_registry_mut()
+            .set_active_owner(ComponentOwner::Window(win_key));
         wm.register_window_chrome_hitboxes(win_key);
 
         let click = Event::Mouse(MouseEvent {
@@ -5333,7 +5415,8 @@ mod tests {
         let max_x = close_x as u16;
         let max_y = full_rect.y.saturating_add(1) as u16;
 
-        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(win_key));
+        wm.hitbox_registry_mut()
+            .set_active_owner(ComponentOwner::Window(win_key));
         wm.register_window_chrome_hitboxes(win_key);
 
         let click = Event::Mouse(MouseEvent {
@@ -5383,7 +5466,8 @@ mod tests {
         let min_x = max_x as u16;
         let min_y = full_rect.y.saturating_add(1) as u16;
 
-        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(win_key));
+        wm.hitbox_registry_mut()
+            .set_active_owner(ComponentOwner::Window(win_key));
         wm.register_window_chrome_hitboxes(win_key);
 
         let click = Event::Mouse(MouseEvent {
@@ -5476,7 +5560,8 @@ mod tests {
             .insert(Box::new(overlay_obj), layer_manager::ZPlane::Foreground);
         // The foreground dispatch calls handle_events on all layers.
         // Register the hitbox with the correct overlay area.
-        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Layer(_overlay_id));
+        wm.hitbox_registry_mut()
+            .set_active_owner(ComponentOwner::Layer(_overlay_id));
         wm.hitbox_registry.register(HitboxId::new(), overlay_rect);
 
         let click = Event::Mouse(MouseEvent {
