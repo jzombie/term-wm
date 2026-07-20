@@ -374,6 +374,18 @@ where
                             TermWmAction::ToggleWindowSelection => {
                                 app.wm().toggle_window_selection()
                             }
+                            TermWmAction::FocusWindow(k) => {
+                                let state = app.wm().window_state(k);
+                                if state
+                                    == Some(crate::window::WindowState::Iconic)
+                                {
+                                    app.wm().transition_window(
+                                        k,
+                                        crate::window::WindowState::Mapped,
+                                    );
+                                }
+                                app.wm().focus_window_key(k);
+                            }
                             TermWmAction::SendNotification(msg) => {
                                 app.wm()
                                     .push_notification(msg, std::time::Duration::from_secs(3));
