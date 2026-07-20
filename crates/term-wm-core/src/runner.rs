@@ -382,7 +382,7 @@ where
                         }
                     }
                     // Focus routing while menu is open (Tab/Shift+Tab)
-                    if app.wm().handle_focus_event(&evt) && matches!(&evt, Event::Key(_)) {
+                    if matches!(&evt, Event::Key(_)) && app.wm().handle_focus_event(&evt) {
                         update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue, false);
                     }
