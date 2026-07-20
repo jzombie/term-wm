@@ -1444,7 +1444,9 @@ impl WindowManager {
                         let crate::chrome::ChromeTarget::Resize(h_key, h_edge) = target else {
                             unreachable!()
                         };
-                        if !self.config.floating_windows_enabled || !self.is_window_floating(*h_key)
+                        if self.is_monocle()
+                            || !self.config.floating_windows_enabled
+                            || !self.is_window_floating(*h_key)
                         {
                             return EventResult::Ignored;
                         }
@@ -1606,6 +1608,9 @@ impl WindowManager {
         col: u16,
         row: u16,
     ) -> EventResult<(Option<WindowKey>, TermWmAction)> {
+        if self.is_monocle() {
+            return EventResult::Ignored;
+        }
         let now = Instant::now();
         if let Some((prev_key, prev)) = self.last_header_click
             && prev_key == key
