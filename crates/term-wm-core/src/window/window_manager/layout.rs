@@ -173,6 +173,29 @@ impl WindowManager {
             .unwrap_or(false)
     }
 
+    /// Handle mouse-click focus switching.
+    ///
+    /// In non-monocle mode, finds the topmost window under `(col, row)` and
+    /// focuses it.  In monocle mode this is a no-op because the focused window
+    /// fills the screen and clicking should not switch to a different window.
+    /// Must only be called for `MouseEventKind::Press` events.
+    pub fn handle_mouse_focus_click(&mut self, col: u16, row: u16) {
+        if self.is_monocle() || !self.mouse_focus_click_enabled() {
+            return;
+        }
+        let targets = self.managed_draw_order_all().to_vec();
+        for &key in targets.iter().rev() {
+            let rect = self.full_region_for_key(key);
+            if rect.width > 0
+                && rect.height > 0
+                && crate::layout::rect_contains(rect, col, row)
+            {
+                self.focus_app_window(key);
+                break;
+            }
+        }
+    }
+
     pub fn set_panel_visible(&mut self, visible: bool) {
         if let Some(p) =
             self.get_semantic_component_mut(super::layer_manager::ComponentTag::TopPanel)

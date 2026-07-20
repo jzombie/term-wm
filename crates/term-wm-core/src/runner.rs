@@ -421,24 +421,10 @@ where
                 // Direct focus switching for mouse clicks.  Uses the live window
                 // set from managed_draw_order (repopulated every draw) instead of
                 // the static focus_regions snapshot captured at startup.
-                if !app.wm().is_monocle()
-                    && app.wm().mouse_focus_click_enabled()
-                    && let Event::Mouse(mouse) = &evt
+                if let Event::Mouse(mouse) = &evt
                     && matches!(mouse.kind, MouseEventKind::Press(_))
                 {
-                    let targets = app.wm().managed_draw_order_all().to_vec();
-                    // managed_draw_order is bottom-to-top; iterate in reverse
-                    // to find the topmost window under the cursor.
-                    for &key in targets.iter().rev() {
-                        let rect = app.wm().full_region_for_key(key);
-                        if rect.width > 0
-                            && rect.height > 0
-                            && crate::layout::rect_contains(rect, mouse.column, mouse.row)
-                        {
-                            app.wm().focus_app_window(key);
-                            break;
-                        }
-                    }
+                    app.wm().handle_mouse_focus_click(mouse.column, mouse.row);
                 }
                 // Route Tab/Shift+Tab through focus routing for embedded mode only.
                 // In standalone mode without the open overlay, Tab passes through.
