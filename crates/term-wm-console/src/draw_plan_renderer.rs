@@ -1619,6 +1619,76 @@ mod tests {
         );
     }
 
+    #[test]
+    fn content_hitbox_clipped_when_dest_x_negative() {
+        // A 30-col window at dest.x=-5 should have its content hitbox
+        // clipped from x=-4,width=28 to x=0,width=24 (managed_area is
+        // {0,0,50,20} from screen_bounds in ChromeCtx).
+        let main_area = RatatuiRect {
+            x: 0, y: 0, width: 50, height: 20,
+        };
+        let main_buffer = Buffer::empty(main_area);
+        let mut backend = RatatuiBackend::new(main_buffer, main_area);
+
+        let surface = WindowSurface {
+            full: term_wm_core::Rect { x: 0, y: 0, width: 30, height: 8 },
+            inner: term_wm_core::Rect { x: 0, y: 0, width: 30, height: 8 },
+            dest: FloatRect { x: -5, y: 0, width: 30, height: 8 },
+            draw_shadow: false,
+            z_depth: 0.5,
+        };
+
+        let ctx = ChromeCtx {
+            title: "test",
+            focused: false,
+            floating: false,
+            direct_mode: false,
+            hover_pos: None,
+            theme: NOIR,
+            screen_bounds: LayoutRect { x: 0, y: 0, width: 50, height: 20 },
+        };
+
+        let mut scratch = Buffer::empty(RatatuiRect {
+            x: 0, y: 0, width: 30, height: 8,
+        });
+        let (_, chrome_hb) = composite_window(
+            &mut backend,
+            &surface,
+            term_wm_core::window::WindowKey::default(),
+            HitboxId::new(),
+            ctx,
+            |_, _| {},
+            &mut scratch,
+        );
+
+        use term_wm_core::mouse_coord::{CoordSpace, MousePosition};
+        let screen = |col, row| MousePosition { column: col, row, space: CoordSpace::Screen };
+
+        // Column 0 is inside the visible window content → must hit
+        assert!(
+            chrome_hb.hit_test(screen(0, 3)).is_some(),
+            "click at col 0 should hit the floating window (visible content)"
+        );
+
+        // Column 23 is inside visible content (width=24 covers [0,24))
+        assert!(
+            chrome_hb.hit_test(screen(23, 3)).is_some(),
+            "click at col 23 should hit the floating window (right edge of content)"
+        );
+
+        // Column 25 is right beyond the visible window edge (dest.x=-5, width=30,
+        // right edge at screen col 25, content hitbox clipped to [0,24), right
+        // resize edge sits at col 24). Column 25 must NOT hit the floating window.
+        assert!(
+            chrome_hb.hit_test(screen(25, 3)).is_none(),
+            "click at col 25 should NOT hit the floating window (one past right edge)"
+        );
+        assert!(
+            chrome_hb.hit_test(screen(30, 3)).is_none(),
+            "click at col 30 should NOT hit the floating window (way past right edge)"
+        );
+    }
+
     // ── render_cursor_overlay tests ──────────────────────────────────────
 
     fn make_wm() -> WindowManager {

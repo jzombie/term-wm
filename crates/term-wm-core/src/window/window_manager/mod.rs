@@ -2839,6 +2839,82 @@ mod tests {
     }
 
     #[test]
+    fn floating_window_offscreen_click_past_right_edge_hits_window_behind() {
+        use crate::window::{FloatRect, FloatRectSpec};
+
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 100);
+        wm.set_floating_resize_offscreen(true);
+        wm.register_managed_layout(Rect {
+            x: 0, y: 0, width: 80, height: 24,
+        });
+
+        // Float key[1]: 50-col window, 30 columns off-screen left.
+        // Visible portion: cols 0–19 (20 columns). Right edge at x=20.
+        wm.set_floating_rect(
+            keys[1],
+            Some(FloatRectSpec::Absolute(FloatRect {
+                x: -30, y: 0, width: 50, height: 20,
+            })),
+        );
+        // key[2] stays tiled behind it at the full managed area.
+        wm.regions.set(
+            keys[2],
+            Rect { x: 0, y: 0, width: 80, height: 24 },
+        );
+        wm.managed_draw_order = vec![keys[2], keys[1]];
+
+        // Simulate render pipeline: tiled (back) first, floating (front) last.
+        // Tiled window behind (registered first = lower z-order)
+        wm.hitbox_registry_mut().register(
+            HitboxId::new(),
+            ComponentOwner::Window(keys[2]),
+            Rect { x: 0, y: 0, width: 80, height: 24 },
+        );
+
+        // Floating window on top (registered last = higher z-order),
+        // hitboxes clipped to visible area by the active clip rect.
+        let managed = wm.managed_area();
+        wm.hitbox_registry_mut().push_clip(managed);
+        wm.hitbox_registry_mut().register(
+            HitboxId::new(),
+            ComponentOwner::Chrome(crate::chrome::ChromeTarget::Drag(keys[1])),
+            Rect { x: 0, y: 1, width: 19, height: 1 },
+        );
+        wm.hitbox_registry_mut().register(
+            HitboxId::new(),
+            ComponentOwner::Window(keys[1]),
+            Rect { x: 0, y: 2, width: 19, height: 17 },
+        );
+        wm.hitbox_registry_mut().pop_clip();
+
+        use crate::mouse_coord::{CoordSpace, MousePosition};
+        let screen = |col, row| MousePosition { column: col, row, space: CoordSpace::Screen };
+
+        // Click past floating window's right edge (19) → must hit tiled window
+        let hit = wm.hitbox_registry.hit_test(screen(25, 10));
+        assert!(
+            matches!(hit, Some((_, ComponentOwner::Window(k), _)) if k == keys[2]),
+            "click at col 25 (past floating window's right edge) should hit tiled window keys[2], got {:?}",
+            hit,
+        );
+
+        // Click inside floating window's area → must hit floating window
+        let hit_inside = wm.hitbox_registry.hit_test(screen(10, 10));
+        assert!(
+            matches!(hit_inside, Some((_, ComponentOwner::Window(k), _)) if k == keys[1]),
+            "click at col 10 (inside floating window) should hit floating window keys[1], got {:?}",
+            hit_inside,
+        );
+    }
+
+    #[test]
     fn hit_test_uses_visible_bounds_for_floating_windows() {
         use crate::window::{FloatRect, FloatRectSpec};
         let mut wm = WindowManager::with_config(

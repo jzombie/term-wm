@@ -380,6 +380,48 @@ mod tests {
     }
 
     #[test]
+    fn merge_clips_against_active_clip_stack() {
+        let mut main = HitboxRegistry::new();
+        // Push a managed-area clip (x=0, width=20)
+        main.push_clip(LayoutRect {
+            x: 0, y: 0, width: 20, height: 20,
+        });
+
+        // Create a sub-registry with an entry that extends off-screen left
+        let mut sub = HitboxRegistry::new();
+        sub.register(
+            HitboxId::new(),
+            ComponentOwner::Test,
+            LayoutRect {
+                x: -5, y: 2, width: 30, height: 10,
+            },
+        );
+
+        // Merge — the entry should be clipped to x=0, width=15 (right edge
+        // at -5+30=25, clipped to min(25,20)=20, width = 20-0 = 15)
+        main.merge(sub);
+
+        assert_eq!(main.len(), 1, "clipped entry should survive merge");
+        // Column 0 (inside clipped area) → must hit
+        assert!(main.hit_test(screen_pos(0, 5)).is_some());
+        // Column 14 (inside clipped area, 20-1... actually 15-1=14)
+        assert!(main.hit_test(screen_pos(14, 5)).is_some());
+        // Column 15 IS inside the clipped area [0, 20)
+        assert!(
+            main.hit_test(screen_pos(15, 5)).is_some(),
+            "click at col 15 SHOULD hit; clipped width is 20 (right edge at 20)"
+        );
+
+        // Column 20 is at the right edge of clipped area (semi-open [0,20))
+        assert!(
+            main.hit_test(screen_pos(20, 5)).is_none(),
+            "click at col 20 should NOT hit; width was clipped from 30 to 20"
+        );
+
+        main.pop_clip();
+    }
+
+    #[test]
     fn nested_clip_stack_culls_fully_occluded() {
         let mut reg = HitboxRegistry::new();
         reg.push_clip(LayoutRect {
