@@ -151,6 +151,18 @@ impl HitboxRegistry {
         }
     }
 
+    /// Register a clickable area using the registry's `active_owner`.
+    ///
+    /// Panics if `active_owner` is `None` — callers must ensure the registry
+    /// was created via `with_owner()` or had `set_active_owner()` called.
+    /// The `area` is clipped and culled identically to [`register`].
+    pub fn register_active(&mut self, id: HitboxId, area: LayoutRect) {
+        let owner = self
+            .active_owner
+            .expect("register_active called without active_owner");
+        self.register(id, owner, area);
+    }
+
     /// Push a clip rect (called by `ScrollViewComponent` before rendering
     /// children).  All subsequent `register()` calls will intersect their
     /// area with this rect.  Stacks: `ScrollView → child → grandchild`.
