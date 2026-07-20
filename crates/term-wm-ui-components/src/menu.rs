@@ -47,7 +47,9 @@ impl MenuComponent {
     }
 
     pub fn selected_action(&self) -> Option<&TermWmAction> {
-        self.items.get(self.selected).map(|item| &item.action)
+        self.items
+            .get(self.selected)
+            .and_then(|item| if item.disabled { None } else { Some(&item.action) })
     }
 
     pub fn handle_key_event(&mut self, event: &Event) -> EventResult<TermWmAction> {
@@ -70,7 +72,15 @@ impl MenuComponent {
         {
             EventResult::Action(TermWmAction::MenuDown)
         } else if self.nav_keys.matches(TermWmAction::MenuSelect, key) {
-            EventResult::Action(TermWmAction::MenuSelect)
+            let is_disabled = self
+                .items
+                .get(self.selected)
+                .map_or(true, |item| item.disabled);
+            if is_disabled {
+                EventResult::Ignored
+            } else {
+                EventResult::Action(TermWmAction::MenuSelect)
+            }
         } else {
             EventResult::Ignored
         }
@@ -253,6 +263,9 @@ impl Component<TermWmAction> for MenuComponent {
                     let idx = visual_idx + offset_y;
                     if idx < self.items.len() {
                         self.selected = idx;
+                        if self.items[idx].disabled {
+                            return EventResult::Consumed;
+                        }
                         return EventResult::Action(TermWmAction::MenuSelect);
                     }
                 }
@@ -300,7 +313,7 @@ impl Default for MenuComponent {
 mod tests {
     use super::*;
     use ratatui::buffer::Buffer;
-    use term_wm_core::events::{Event, KeyCode, KeyEvent, KeyKind, KeyModifiers};
+    use term_wm_core::events::{Event, KeyCode, KeyEvent, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
     fn key_event(code: KeyCode) -> Event {
         Event::Key(KeyEvent::new(code, KeyModifiers::NONE, KeyKind::Press))
@@ -450,5 +463,138 @@ mod tests {
             &ctx,
             &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
         );
+    }
+
+    #[test]
+    fn selected_action_returns_none_for_disabled_item() {
+        let mut menu = MenuComponent::new();
+        menu.set_items(vec![
+            MenuItem {
+                icon: None,
+                label: "Enabled".into(),
+                action: TermWmAction::Quit,
+                disabled: false,
+            },
+            MenuItem {
+                icon: None,
+                label: "Disabled".into(),
+                action: TermWmAction::NewWindow,
+                disabled: true,
+            },
+        ]);
+        assert_eq!(menu.selected_action(), Some(&TermWmAction::Quit));
+        menu.set_selected(1);
+        assert_eq!(menu.selected_action(), None);
+    }
+
+    #[test]
+    fn enter_on_disabled_item_returns_ignored() {
+        let mut menu = MenuComponent::new();
+        menu.set_items(vec![
+            MenuItem {
+                icon: None,
+                label: "Enabled".into(),
+                action: TermWmAction::Quit,
+                disabled: false,
+            },
+            MenuItem {
+                icon: None,
+                label: "Disabled".into(),
+                action: TermWmAction::NewWindow,
+                disabled: true,
+            },
+        ]);
+        menu.set_selected(1);
+        let result = menu.handle_key_event(&key_event(KeyCode::Enter));
+        assert!(result.is_ignored());
+    }
+
+    #[test]
+    fn enter_on_enabled_item_returns_menu_select() {
+        let mut menu = MenuComponent::new();
+        menu.set_items(vec![
+            MenuItem {
+                icon: None,
+                label: "Enabled".into(),
+                action: TermWmAction::Quit,
+                disabled: false,
+            },
+            MenuItem {
+                icon: None,
+                label: "Disabled".into(),
+                action: TermWmAction::NewWindow,
+                disabled: true,
+            },
+        ]);
+        let result = menu.handle_key_event(&key_event(KeyCode::Enter));
+        assert!(matches!(result, EventResult::Action(TermWmAction::MenuSelect)));
+    }
+
+    #[test]
+    fn mouse_click_on_disabled_item_returns_consumed() {
+        let mut menu = MenuComponent::new();
+        menu.set_items(vec![
+            MenuItem {
+                icon: None,
+                label: "Enabled".into(),
+                action: TermWmAction::Quit,
+                disabled: false,
+            },
+            MenuItem {
+                icon: None,
+                label: "Disabled".into(),
+                action: TermWmAction::NewWindow,
+                disabled: true,
+            },
+        ]);
+        let ctx = ComponentContext::new(false).with_screen_area(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 10,
+        });
+        let event = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            column: 5,
+            row: 2,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result = menu.handle_events(&event, &ctx);
+        assert!(matches!(result, EventResult::Consumed));
+        assert_eq!(menu.selected(), 1);
+    }
+
+    #[test]
+    fn mouse_click_on_enabled_item_returns_menu_select() {
+        let mut menu = MenuComponent::new();
+        menu.set_items(vec![
+            MenuItem {
+                icon: None,
+                label: "Enabled".into(),
+                action: TermWmAction::Quit,
+                disabled: false,
+            },
+            MenuItem {
+                icon: None,
+                label: "Disabled".into(),
+                action: TermWmAction::NewWindow,
+                disabled: true,
+            },
+        ]);
+        let ctx = ComponentContext::new(false).with_screen_area(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 10,
+        });
+        let event = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            column: 5,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result = menu.handle_events(&event, &ctx);
+        assert!(matches!(result, EventResult::Action(TermWmAction::MenuSelect)));
+        assert_eq!(menu.selected(), 0);
     }
 }
