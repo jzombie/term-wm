@@ -22,13 +22,10 @@ fn mouse_capture_flow_through_window_manager() {
             &ctx.app_version,
             None,
         ));
-    let menu: Box<dyn term_wm_core::components::WmComponent> =
-        Box::new(term_wm_sys_ui_components::WmCommandPaletteComponent::new());
     let mut wm: term_wm::window::WindowManager = AppBuilder::bare()
         .app_ctx(ctx)
         .top_panel(top)
         .bottom_panel(bottom)
-        .command_menu(menu)
         .build()
         .expect("test build");
     // default starts enabled (from config)

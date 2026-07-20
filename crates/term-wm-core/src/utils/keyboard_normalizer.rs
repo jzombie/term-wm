@@ -16,7 +16,7 @@ impl KeyboardNormalizer {
 
     pub fn normalize(&mut self, evt: Event) -> Option<Event> {
         match evt {
-            Event::Key(mut key) => {
+            Event::Key(key) => {
                 // Convert Shift+Tab to BackTab
                 if key.code == KeyCode::Tab && key.modifiers.shift {
                     // Pass through as-is — FocusPrev keybinding matches Tab+Shift.

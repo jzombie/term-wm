@@ -14,13 +14,10 @@ fn new_window_is_focused() {
             &ctx.app_version,
             None,
         ));
-    let menu: Box<dyn term_wm_core::components::WmComponent> =
-        Box::new(term_wm_sys_ui_components::WmCommandPaletteComponent::new());
     let mut wm = AppBuilder::bare()
         .app_ctx(ctx)
         .top_panel(top)
         .bottom_panel(bottom)
-        .command_menu(menu)
         .build()
         .expect("test build");
 
