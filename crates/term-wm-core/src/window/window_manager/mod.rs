@@ -5172,6 +5172,38 @@ mod tests {
     }
 
     #[test]
+    fn moved_over_split_handle_does_not_set_capture() {
+        // Regression test: chrome maps (resize/drag/split) must only fire
+        // on Press events. A Moved event over a split handle must NOT
+        // initiate MouseCaptureState — only the tiling layout hover
+        // should be updated.
+        use crate::events::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+        let (mut wm, _keys, gap_col, gap_row) = setup_tiling_with_gap();
+
+        // Moved over the gap — no Down, just hover
+        let moved = crate::events::core_event_to_wm(&Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: gap_col,
+            row: gap_row,
+            modifiers: KeyModifiers::NONE,
+        }))
+        .unwrap();
+        wm.dispatch_mouse(&moved);
+
+        // The event must not set capture state
+        assert!(
+            wm.mouse_capture.is_none(),
+            "Moved over split handle must not set capture"
+        );
+        // Hover state should still be updated (layout handle hover)
+        let layout = wm.managed_layout.as_ref().unwrap();
+        assert!(
+            layout.hovered_handle(wm.managed_area).is_some(),
+            "Moved must update hover feedback on split handles"
+        );
+    }
+
+    #[test]
     fn register_layout_handle_hitboxes_registers_entries() {
         use crate::layout::Constraint;
         let mut wm = WindowManager::with_config(
