@@ -1,4 +1,5 @@
 - [ ] if a window is dragged off the left side of the screen, it's not possible to activate the window behind it unless moving the cursor the full-width of the window from the left axis.
+- [ ] if a window is dragged off the left side of the screen, and performing a text selection, the text selection is offset by the same amount.
 - [ ] stop duplicating multiple intersects across the codebase.  put them in the layout crate.
 - [ ] floating window handles bleed through help overlay
 - [ ] command palette overlay doesn't close when clicking "Exit"
