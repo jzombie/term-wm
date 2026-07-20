@@ -111,11 +111,6 @@ impl DrawPlan {
         self.regions.sort_by_key(|r| r.layer);
     }
 
-    /// Backward-compatibility alias for `sort_by_layer`.
-    pub fn sort_by_z_index(&mut self) {
-        self.sort_by_layer();
-    }
-
     /// Current number of regions.
     pub fn len(&self) -> usize {
         self.regions.len()
