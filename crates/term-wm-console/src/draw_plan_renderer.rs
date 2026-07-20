@@ -6,7 +6,7 @@ use term_wm_layout_engine::LayoutRect;
 use crate::RatatuiBackend;
 use term_wm_core::actions::TermWmAction;
 use term_wm_core::component_context::ComponentContext;
-use term_wm_core::components::{Component, ComponentAction, MenuItem, TopPanelState};
+use term_wm_core::components::{Component, ComponentAction, TopPanelState};
 use term_wm_core::constants::{SHADOW_OFFSET_X, SHADOW_OFFSET_Y};
 use term_wm_core::draw_plan::{DrawPlan, RegionType, RenderRegion};
 use term_wm_core::hitbox_registry::HitboxRegistry;
@@ -17,7 +17,6 @@ use term_wm_core::layout::{Direction, FloatingPane, RectSpec, RegionMap};
 use term_wm_core::term_color::lerp_color;
 use term_wm_core::theme::{Color, Theme};
 use term_wm_core::window::decorator::WindowRenderCtx;
-use term_wm_core::window::wm_menu_items;
 use term_wm_core::window::{ComponentTag, OverlayId, WindowKey, WindowManager, WindowSurface};
 
 /// Convert LayoutRect to Ratatui Rect
@@ -536,29 +535,16 @@ pub fn render_overlays(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut
     // Pre-compute overlay IDs
     let overlay_ids: Vec<OverlayId> = wm.overlays().keys().copied().collect();
 
-    // Command menu — extract all bools before mutable borrow
-    let menu_visible = wm.command_menu_visible();
-    let mc_enabled = wm.mouse_capture_enabled();
-    let cb_enabled = wm.clipboard_enabled();
-    let ws_enabled = wm.window_selection_enabled();
-    let has_focused = wm.window_count() > 0;
-    let supported = wm.supported_menu_actions().to_vec();
-
-    if menu_visible && let Some(menu) = wm.get_semantic_component_mut(ComponentTag::CommandPalette)
+    // Command palette — render from overlays BTreeMap (same as help/exit confirm)
+    if wm.command_palette_visible()
+        && let Some(palette) = wm.overlays_mut().get_mut(&OverlayId::CommandPalette)
     {
-        let items = wm_menu_items(mc_enabled, cb_enabled, ws_enabled, has_focused);
-        let items: Vec<MenuItem<TermWmAction>> = items
-            .into_iter()
-            .filter(|item| supported.contains(&item.action))
-            .collect();
-        menu.process_action(&ComponentAction::SetMenuItems(items));
-        menu.process_action(&ComponentAction::SetManagedArea(full_area));
         let mut hitbox = HitboxRegistry::new();
         let ctx = ComponentContext::new(false)
             .with_overlay(true)
             .with_screen_area(full_area)
             .with_hover_pos(hover_pos);
-        menu.render(backend, full_area, &ctx, &mut hitbox);
+        palette.render(backend, full_area, &ctx, &mut hitbox);
         wm.hitbox_registry_mut().merge(hitbox);
     }
 
