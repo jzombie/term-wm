@@ -1324,9 +1324,25 @@ impl WindowManager {
                                     false
                                 } else {
                                     let focused = *self.focus.current() == *key;
+                                    // Reconstruct the true mathematical area including
+                                    // negative origin. The hitbox registry clips hitboxes
+                                    // to the screen bounds, so screen_area.x may be 0
+                                    // instead of the true (negative) x. Components need
+                                    // the signed origin to compute correct local coords.
+                                    let mut true_area = *screen_area;
+                                    let dest = self.window_dest(*key, Rect::default());
+                                    let full = self.full_region_for_key(*key);
+                                    true_area.x += dest.x - full.x;
+                                    true_area.y += dest.y - full.y;
+                                    if true_area.width == full.width {
+                                        true_area.width = dest.width;
+                                    }
+                                    if true_area.height == full.height {
+                                        true_area.height = dest.height;
+                                    }
                                     let ctx = self
                                         .component_context_for(focused, *key)
-                                        .with_screen_area(*screen_area)
+                                        .with_screen_area(true_area)
                                         .with_active_hitbox(*hitbox_id);
                                     if let Some(comp) = self.component_for_key_mut(*key) {
                                         let res = comp.handle_events(&core_event, &ctx);
@@ -1537,16 +1553,33 @@ impl WindowManager {
                     self.bring_floating_to_front_key(key);
                 }
                 let focused = *self.focus.current() == key;
+                // Reconstruct the true mathematical area including negative origin.
+                // The hitbox registry clips hitboxes to screen bounds, so hit_rect.x
+                // may be 0 instead of the true (negative) x. Components need the
+                // signed origin to compute correct local coordinates.
+                let mut true_area = hit_rect;
+                if let Some(spec) = self.floating_rect(key) {
+                    let dest = spec.resolve_signed(self.managed_area);
+                    let full = self.full_region_for_key(key);
+                    true_area.x += dest.x - full.x;
+                    true_area.y += dest.y - full.y;
+                    if true_area.width == full.width {
+                        true_area.width = dest.width;
+                    }
+                    if true_area.height == full.height {
+                        true_area.height = dest.height;
+                    }
+                }
                 let ctx = self
                     .component_context_for(focused, key)
-                    .with_screen_area(hit_rect)
+                    .with_screen_area(true_area)
                     .with_active_hitbox(hitbox_id);
                 if let Some(comp) = self.component_for_key_mut(key) {
                     let result = comp.handle_events(&core_event, &ctx);
                     if !result.is_ignored() && matches!(kind, MouseEventKind::Press(_)) {
                         self.mouse_capture = Some(MouseCaptureState::ComponentInteraction {
                             owner: ComponentOwner::Window(key),
-                            screen_area: hit_rect,
+                            screen_area: true_area,
                             hitbox_id,
                         });
                     }
