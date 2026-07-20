@@ -421,7 +421,8 @@ where
                 // Direct focus switching for mouse clicks.  Uses the live window
                 // set from managed_draw_order (repopulated every draw) instead of
                 // the static focus_regions snapshot captured at startup.
-                if app.wm().mouse_focus_click_enabled()
+                if !app.wm().is_monocle()
+                    && app.wm().mouse_focus_click_enabled()
                     && let Event::Mouse(mouse) = &evt
                     && matches!(mouse.kind, MouseEventKind::Press(_))
                 {
