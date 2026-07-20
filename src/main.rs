@@ -279,6 +279,8 @@ impl WindowManagerHost for App {
     }
 
     fn open_command_palette(&mut self) {
+        use term_wm::actions::TermWmAction;
+        use term_wm::components::MenuItem;
         use term_wm_sys_ui_components::wm_command_palette::WmCommandPaletteComponent;
         let wm = self.inner.wm();
         let mut palette = WmCommandPaletteComponent::new();
@@ -291,10 +293,25 @@ impl WindowManagerHost for App {
             wm.window_count() > 0,
         );
         let supported = wm.supported_menu_actions();
-        let items: Vec<_> = items
+        let mut items: Vec<_> = items
             .into_iter()
             .filter(|item| supported.contains(&item.action))
             .collect();
+        if wm.is_monocle() {
+            items.retain(|item| {
+                !matches!(
+                    item.action,
+                    TermWmAction::MaximizeWindow | TermWmAction::MinimizeWindow
+                )
+            });
+            for (key, title) in wm.window_titles() {
+                items.push(MenuItem {
+                    label: format!("Switch to: {}", title).into(),
+                    icon: Some("\u{2192}"),
+                    action: TermWmAction::FocusWindow(key),
+                });
+            }
+        }
         palette.set_items(items);
         wm.open_command_palette_overlay(Box::new(palette));
     }
