@@ -258,6 +258,9 @@ pub struct WindowManager {
     // Chrome metrics managers (pure synchronous pipelines, zero allocation).
     // resize_map/drag_map/split_ids removed — chrome routing now uses
     // ComponentOwner::Chrome(target) directly from HitboxRegistry.
+    /// Saved per-window border state for restoration when exiting monocle mode.
+    #[allow(dead_code)]
+    saved_borders: Vec<(WindowKey, bool)>,
 }
 
 /// State for tap-to-swap targeting mode.
@@ -647,6 +650,7 @@ impl WindowManager {
             input_mode: crate::actions::WmInputMode::Passthrough,
             fab_enabled: true,
             tap_swap_state: None,
+            saved_borders: Vec::new(),
         }
     }
 

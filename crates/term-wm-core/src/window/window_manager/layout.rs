@@ -182,8 +182,32 @@ impl WindowManager {
     /// Update monocle mode state based on terminal width.
     /// Called during resize events to auto-activate/deactivate monocle mode.
     pub fn update_monocle_mode(&mut self, terminal_width: u16) {
+        let prev = self.is_monocle();
         if let Some(ref mut layout) = self.managed_layout {
             layout.update_monocle_state(terminal_width);
+        }
+        let curr = self.is_monocle();
+        if prev == curr {
+            return;
+        }
+        // Monocle state changed: toggle borders on all windows
+        if curr {
+            // Entering monocle: save border state and disable
+            self.saved_borders = self
+                .windows
+                .iter()
+                .map(|(k, w)| (k, w.borders_enabled))
+                .collect();
+            for (_, window) in self.windows.iter_mut() {
+                window.borders_enabled = false;
+            }
+        } else {
+            // Exiting monocle: restore saved border state
+            for (key, saved) in self.saved_borders.drain(..) {
+                if let Some(window) = self.windows.get_mut(key) {
+                    window.borders_enabled = saved;
+                }
+            }
         }
     }
 
