@@ -12,7 +12,7 @@ use term_wm_core::app_context::AppContext;
 use term_wm_core::components::{Component, ComponentContext, Overlay, SelectionStatus};
 use term_wm_core::keybindings::KeyBindings;
 use term_wm_core::window::WindowKey;
-use term_wm_ui_components::helpers::layout_rect_to_rect;
+use term_wm_ui_components::helpers::layout_rect_to_clipped_rect;
 use term_wm_ui_components::{
     DialogOverlayComponent, MarkdownViewerComponent, ScrollKeyMode, ScrollViewComponent,
 };
@@ -43,7 +43,7 @@ impl Component<TermWmAction> for WmHelpOverlayComponent {
         }
         let title = format!("{} \u{2014} About / Help", self.app_ctx.app_name);
         self.dialog.render_backdrop(backend, area, None);
-        let ratatui_area = layout_rect_to_rect(area);
+        let ratatui_area = layout_rect_to_clipped_rect(area);
         let rect = self.dialog.rect_for(ratatui_area);
         {
             let backend = term_wm_ui_components::helpers::downcast_ratatui(backend);
@@ -82,7 +82,7 @@ impl Component<TermWmAction> for WmHelpOverlayComponent {
             }
             Event::Mouse(_) => {
                 let area = self.area.get();
-                let ratatui_area = layout_rect_to_rect(area);
+                let ratatui_area = layout_rect_to_clipped_rect(area);
                 if self.dialog.handle_click_outside(event, ratatui_area) {
                     self.close();
                     return EventResult::Consumed;
@@ -134,7 +134,7 @@ impl Overlay<TermWmAction> for WmHelpOverlayComponent {
         if !self.dialog.visible() {
             return None;
         }
-        let ratatui_area = layout_rect_to_rect(area);
+        let ratatui_area = layout_rect_to_clipped_rect(area);
         let rect = self.dialog.rect_for(ratatui_area);
         Some(LayoutRect {
             x: rect.x as i32,

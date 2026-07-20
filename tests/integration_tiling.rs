@@ -51,13 +51,23 @@ fn wm_with_two_windows() -> (WindowManager, [WindowKey; 2]) {
     (wm, [k0, k1])
 }
 
-fn header_rect(wm: &WindowManager, key: WindowKey) -> Rect {
-    for h in wm.floating_headers() {
-        if h.key == key {
-            return h.rect;
-        }
-    }
-    panic!("no header found for key");
+fn header_rect(wm: &mut WindowManager, key: WindowKey) -> Rect {
+    use term_wm::chrome::ChromeTarget;
+    use term_wm::hitbox_registry::{ComponentOwner, HitboxId};
+    let bounds = wm.full_region_for_key(key);
+    let rect = Rect {
+        x: bounds.x + 1,
+        y: bounds.y + 1,
+        width: bounds.width.saturating_sub(2),
+        height: 1,
+    };
+    // Register a drag hitbox so dispatch_mouse can route header clicks
+    wm.hitbox_registry_mut().register(
+        HitboxId::new(),
+        ComponentOwner::Chrome(ChromeTarget::Drag(key)),
+        rect,
+    );
+    rect
 }
 
 fn make_mouse(
@@ -663,7 +673,7 @@ mod drag_snap_pipeline {
     fn drag_to_right_edge_snaps() {
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
         let down = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header.x as u16,
@@ -713,7 +723,7 @@ mod drag_snap_pipeline {
         advance_frame(&mut wm, &mut engine, &mut renderer);
         assert!(!wm.is_window_floating(keys[0]), "starts tiled");
 
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
         let down = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header.x as u16,
@@ -748,7 +758,7 @@ mod drag_snap_pipeline {
     fn drag_to_top_maximizes() {
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
         let down = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header.x as u16,
@@ -794,7 +804,7 @@ mod drag_snap_pipeline {
         advance_frame(&mut wm, &mut engine, &mut renderer);
         assert!(!wm.is_window_floating(keys[0]), "starts tiled");
 
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
         let col = header.x as u16;
         let row = header.y as u16;
 
@@ -828,7 +838,7 @@ mod drag_snap_pipeline {
     fn drag_to_corner_quadrant() {
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
         let down = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header.x as u16,
@@ -869,7 +879,7 @@ mod drag_snap_pipeline {
     fn drag_away_restores_float_geometry() {
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
 
         let down = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
@@ -907,7 +917,7 @@ mod drag_snap_pipeline {
         let pre_w = snapped.width;
         let pre_h = snapped.height;
 
-        let header2 = header_rect(&wm, keys[0]);
+        let header2 = header_rect(&mut wm, keys[0]);
         let cursor_x = header2.x as u16;
         let cursor_y = header2.y as u16;
         let cursor_offset_x = cursor_x as i32 - snapped.x;
@@ -951,7 +961,7 @@ mod drag_snap_pipeline {
     fn double_snap_converges() {
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
 
         // Phase 1: snap right
         let down = make_mouse(
@@ -992,7 +1002,7 @@ mod drag_snap_pipeline {
         assert_eq!(r1.width, AREA.width / 2, "phase 1: right-snapped width");
 
         // Phase 2: drag away from edge
-        let header2 = header_rect(&wm, keys[0]);
+        let header2 = header_rect(&mut wm, keys[0]);
         let cursor_x = header2.x as u16;
         let cursor_y = header2.y as u16;
         let cursor_offset_x = cursor_x as i32 - r1.x;
@@ -1039,7 +1049,7 @@ mod drag_snap_pipeline {
         }
 
         // Phase 3: snap left
-        let header3 = header_rect(&wm, keys[0]);
+        let header3 = header_rect(&mut wm, keys[0]);
         let down3 = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header3.x as u16,
@@ -1091,7 +1101,7 @@ mod drag_snap_pipeline {
         assert_eq!(r_before, AREA, "sole leaf must fill the full area");
 
         // Drag the header to the right edge to trigger a snap preview.
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
         let press = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header.x as u16,
@@ -1447,7 +1457,7 @@ mod floating_tiled_separation {
         advance_frame(&mut wm, &mut engine, &mut renderer);
         assert_bifurcation_invariant(&wm);
 
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
         let down = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header.x as u16,
@@ -1579,7 +1589,7 @@ mod floating_tiled_separation {
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
         let down = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header.x as u16,
@@ -1602,7 +1612,7 @@ mod floating_tiled_separation {
         assert_bifurcation_invariant(&wm);
         assert!(!wm.is_window_floating(keys[0]), "after first snap: tiled");
 
-        let header2 = header_rect(&wm, keys[0]);
+        let header2 = header_rect(&mut wm, keys[0]);
         let down2 = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header2.x as u16,
@@ -1621,7 +1631,7 @@ mod floating_tiled_separation {
         assert_bifurcation_invariant(&wm);
         assert!(wm.is_window_floating(keys[0]), "after float: floating");
 
-        let header3 = header_rect(&wm, keys[0]);
+        let header3 = header_rect(&mut wm, keys[0]);
         let down3 = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header3.x as u16,
@@ -1742,7 +1752,7 @@ mod floating_tiled_separation {
 
         let corner_x = (AREA.x + i32::from(AREA.width) - 1) as u16;
         let corner_y = (AREA.y + i32::from(AREA.height) - 1) as u16;
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
         let down = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header.x as u16,
@@ -1769,7 +1779,7 @@ mod floating_tiled_separation {
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
         let down = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header.x as u16,

@@ -13,7 +13,9 @@ use term_wm_core::{
     power_profile::PowerProfile,
     utils::truncate_to_width,
 };
-use term_wm_ui_components::helpers::{color_to_ratatui, layout_rect_to_rect, safe_set_string};
+use term_wm_ui_components::helpers::{
+    color_to_ratatui, layout_rect_to_clipped_rect, safe_set_string,
+};
 
 #[derive(Debug)]
 pub struct WmBottomPanelComponent {
@@ -111,7 +113,7 @@ impl WmBottomPanelComponent {
         }
         let ratatui_backend = term_wm_ui_components::helpers::downcast_ratatui(backend);
         let buffer = &mut ratatui_backend.buffer;
-        let ratatui_area = layout_rect_to_rect(area);
+        let ratatui_area = layout_rect_to_clipped_rect(area);
         let bounds = ratatui_area.intersection(buffer.area);
         if bounds.width == 0 || bounds.height == 0 {
             return;
@@ -391,7 +393,7 @@ mod tests {
             height: 1,
         };
         p.area = area;
-        let ratatui_area = layout_rect_to_rect(area);
+        let ratatui_area = layout_rect_to_clipped_rect(area);
         let buf = Buffer::empty(ratatui_area);
         let mut backend = term_wm_console::RatatuiBackend::new(buf, ratatui_area);
 
@@ -421,7 +423,7 @@ mod tests {
             height: 1,
         };
         p.area = area;
-        let ratatui_area = layout_rect_to_rect(area);
+        let ratatui_area = layout_rect_to_clipped_rect(area);
         let buf = Buffer::empty(ratatui_area);
         let mut backend = term_wm_console::RatatuiBackend::new(buf, ratatui_area);
 
@@ -471,7 +473,7 @@ mod tests {
             height: 1,
         };
         p.area = area;
-        let ratatui_area = layout_rect_to_rect(area);
+        let ratatui_area = layout_rect_to_clipped_rect(area);
         let buf = Buffer::empty(ratatui_area);
         let mut backend = term_wm_console::RatatuiBackend::new(buf, ratatui_area);
 

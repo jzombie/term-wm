@@ -3,7 +3,6 @@ use crate::events::{Event, MouseEvent};
 
 use super::WindowManager;
 use crate::keybindings::ActionLayer;
-use crate::layout::floating::*;
 use crate::layout::{LayoutNode, LayoutPlan, RegionMap, SplitHandle, TilingLayout};
 use crate::window::{FloatRectSpec, WindowKey, WindowState};
 
@@ -335,9 +334,6 @@ impl WindowManager {
                     continue;
                 }
                 self.regions.set(*key, *rect);
-                if let Some(header) = floating_header_for_region(*key, *rect, self.managed_area) {
-                    self.floating_headers.push(header);
-                }
                 active_keys.push(*key);
             }
             let filtered_handles: Vec<SplitHandle> = handles
@@ -379,27 +375,11 @@ impl WindowManager {
             let Some(spec) = self.floating_rect(floating_key) else {
                 continue;
             };
-            let rect = spec.resolve(self.managed_area);
-            self.regions.set(floating_key, rect);
+
             let visible = self.visible_rect_from_spec(spec);
-            if visible.width > 0 && visible.height > 0 {
-                let is_maximized = self
-                    .windows
-                    .get(floating_key)
-                    .is_some_and(|w| w.is_maximized);
-                if !is_maximized {
-                    self.resize_handles.extend(resize_handles_for_region(
-                        floating_key,
-                        visible,
-                        self.managed_area,
-                    ));
-                }
-                if let Some(header) =
-                    floating_header_for_region(floating_key, visible, self.managed_area)
-                {
-                    self.floating_headers.push(header);
-                }
-            }
+            self.regions.set(floating_key, visible);
+            //
+            // Resize handle hitboxes are registered by the console during render.
             active_keys.push(floating_key);
         }
 
@@ -502,7 +482,6 @@ impl WindowManager {
     ) -> Vec<super::DrawTask> {
         let mut plan = Vec::new();
         let focused_window = self.focus.current();
-        let decorator = self.decorator();
         let _total = self.managed_draw_order.len() as f32;
         let num_app = self.managed_draw_order.len();
         for (i, &key) in self.managed_draw_order.iter().enumerate() {
@@ -511,12 +490,9 @@ impl WindowManager {
                 continue;
             }
             let dest = self.window_dest(key, full);
-            let inner = decorator.content_area(Rect {
-                x: 0,
-                y: 0,
-                width: full.width,
-                height: full.height,
-            });
+            // Content area equals full area — the console crate clips
+            // chrome regions during its own rendering pass.
+            let inner = full;
             if inner.width == 0 || inner.height == 0 {
                 continue;
             }
@@ -538,22 +514,16 @@ impl WindowManager {
     }
 
     #[allow(dead_code)]
-    pub(super) fn hover_targets(&self) -> (Option<&SplitHandle>, Option<&ResizeHandle<WindowKey>>) {
-        let Some((column, row)) = self.hover else {
-            return (None, None);
-        };
+    pub(super) fn hover_targets(&self) -> Option<&SplitHandle> {
+        let (column, row) = self.hover?;
         let topmost = self.hit_test_region_topmost(column, row, &self.managed_draw_order);
-        let hovered = if topmost.is_none() {
+        if topmost.is_none() {
             self.handles
                 .iter()
                 .find(|handle| crate::layout::rect_contains(handle.rect, column, row))
         } else {
             None
-        };
-        let hovered_resize = self.resize_handles.iter().find(|handle| {
-            crate::layout::rect_contains(handle.rect, column, row) && topmost == Some(handle.key)
-        });
-        (hovered, hovered_resize)
+        }
     }
 
     pub fn window_dest(&self, key: WindowKey, fallback: Rect) -> crate::window::FloatRect {

@@ -3,18 +3,17 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use portable_pty::{CommandBuilder, PtySize};
-use ratatui::{
-    layout::Rect,
-    style::{Color as TColor, Modifier, Style},
-};
+use ratatui::style::{Color as TColor, Modifier, Style};
 use term_wm_core::events::{Event, KeyCode, KeyKind, MouseButton, MouseEvent, MouseEventKind};
 use vt100::MouseProtocolEncoding;
 
-use crate::helpers::{color_to_ratatui, decorate_link_style, layout_rect_to_rect};
+use crate::helpers::{
+    color_to_ratatui, decorate_link_style, layout_rect_to_clipped_rect, localize_coordinate,
+    localize_coordinate_clamped,
+};
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::hitbox_registry::HitboxId;
-use term_wm_core::layout::rect_contains;
 use term_wm_core::utils::linkifier::{LinkHandler, LinkOverlay, Linkifier, OverlaySignature};
 use term_wm_core::utils::selectable_text::{
     LogicalPosition, SelectionController, SelectionHost, SelectionRange, SelectionViewport,
@@ -169,14 +168,11 @@ impl Component<TermWmAction> for TerminalComponent {
                     if handle_selection_mouse(self, selection_ready, mouse, area) {
                         return EventResult::Consumed;
                     }
-                    if self.try_handle_link_click(layout_rect_to_rect(area), mouse) {
+                    if self.try_handle_link_click(area, mouse) {
                         return EventResult::Consumed;
                     }
                 }
                 let area = ctx.screen_area().unwrap_or_default();
-                if !rect_contains(area, mouse.column, mouse.row) {
-                    return EventResult::Ignored;
-                }
                 let mut pane = self.pane.borrow_mut();
                 let parser_arc = pane.shared_parser();
                 let parser = parser_arc.lock().unwrap();
@@ -193,9 +189,14 @@ impl Component<TermWmAction> for TerminalComponent {
                 if !mouse_event_allowed(mode, pty_kind) {
                     return EventResult::Ignored;
                 }
+                let Some((local_col, local_row)) =
+                    localize_coordinate(area, mouse.column, mouse.row)
+                else {
+                    return EventResult::Ignored;
+                };
                 let local = MouseEvent {
-                    column: mouse.column.saturating_sub(area.x as u16),
-                    row: mouse.row.saturating_sub(area.y as u16),
+                    column: local_col,
+                    row: local_row,
                     kind: mouse.kind,
                     modifiers: mouse.modifiers,
                 };
@@ -271,12 +272,15 @@ impl Component<TermWmAction> for TerminalComponent {
             width: area.width,
             height: area.height,
         });
-        let _screen_area = layout_rect_to_rect(screen_area_lr);
         let _exited = self.pane.borrow_mut().has_exited();
         // Register this terminal's clickable area in the hitbox registry.
         // Use screen coordinates so hit_test matches screen-space mouse positions.
-        if let Some(_key) = ctx.window_key() {
-            registry.register(self.hitbox_id, screen_area_lr);
+        if let Some(key) = ctx.window_key() {
+            registry.register(
+                self.hitbox_id,
+                term_wm_core::hitbox_registry::ComponentOwner::Window(key),
+                screen_area_lr,
+            );
         }
         self.render_screen(backend, area, ctx);
     }
@@ -472,60 +476,71 @@ impl TerminalComponent {
         area: LayoutRect,
         ctx: &ComponentContext,
     ) {
-        let area = layout_rect_to_rect(area);
-        // Drag maintenance via RefCell borrow_mut (safe interior mutability
-        // during the otherwise-immutable render phase).
+        let screen_area = ctx.screen_area().unwrap_or(area);
+
+        // 1. PULL EXTERNAL SCROLL STATE FIRST — apply scroll wheel changes
+        //    to internal scrollback before drag maintenance uses them.
+        let sb_before_drag = {
+            let clipped = layout_rect_to_clipped_rect(area);
+            let mut pane = self.pane.borrow_mut();
+            if !pane.alternate_screen()
+                && let Some(handle) = ctx.scroll_handle()
+            {
+                let used = pane.max_scrollback();
+                handle.set_content_size(clipped.width as usize, used + clipped.height as usize);
+
+                let current_sb = pane.scrollback();
+                let view_offset = ctx.viewport().offset_y;
+                if current_sb == 0 {
+                    if view_offset < self.last_max_scrollback.get().saturating_sub(1) {
+                        let target_sb = used.saturating_sub(view_offset);
+                        pane.set_scrollback(target_sb);
+                    } else {
+                        handle.scroll_vertical_to(usize::MAX);
+                    }
+                } else if current_sb != self.last_scrollback.get() {
+                    let new_offset = used.saturating_sub(current_sb);
+                    handle.scroll_vertical_to(new_offset);
+                } else {
+                    let target_sb = used.saturating_sub(view_offset);
+                    if target_sb != current_sb {
+                        pane.set_scrollback(target_sb);
+                    }
+                }
+                self.last_max_scrollback.set(used);
+            }
+            pane.scrollback()
+        };
+
+        // 2. MAINTAIN DRAG SELECTION — using accurate, freshly-pulled scroll state
         {
-            let screen_area_lr = ctx.screen_area().unwrap_or(LayoutRect {
-                x: area.x as i32,
-                y: area.y as i32,
-                width: area.width,
-                height: area.height,
-            });
-            let _screen_area = layout_rect_to_rect(screen_area_lr);
             let mut sel_guard = self.selection.borrow_mut();
             let mut dh = RenderDragHost {
                 selection: &mut sel_guard,
                 pane: &self.pane,
+                viewport_width: area.width,
+                viewport_height: area.height,
             };
-            maintain_selection_drag(&mut dh, screen_area_lr);
+            maintain_selection_drag(&mut dh, screen_area);
         }
 
+        // 3. PUSH INTERNAL AUTO-SCROLLS back to parent ScrollView
+        //    (only if scrollback changed during drag maintenance above)
         let mut pane = self.pane.borrow_mut();
-
-        // Synchronize scroll state with the shared Viewport
-        if !pane.alternate_screen()
+        let new_sb = pane.scrollback();
+        if new_sb != sb_before_drag
+            && !pane.alternate_screen()
             && let Some(handle) = ctx.scroll_handle()
         {
             let used = pane.max_scrollback();
-            let view_height = area.height as usize;
-            let total_height = used + view_height;
-            handle.set_content_size(area.width as usize, total_height);
-
-            let current_sb = pane.scrollback();
-            let view_offset = ctx.viewport().offset_y;
-            if current_sb == 0 {
-                if view_offset < self.last_max_scrollback.get().saturating_sub(1) {
-                    let target_sb = used.saturating_sub(view_offset);
-                    pane.set_scrollback(target_sb);
-                } else {
-                    handle.scroll_vertical_to(usize::MAX);
-                }
-            } else if current_sb != self.last_scrollback.get() {
-                let new_offset = used.saturating_sub(current_sb);
-                handle.scroll_vertical_to(new_offset);
-            } else {
-                let target_sb = used.saturating_sub(view_offset);
-                if target_sb != current_sb {
-                    pane.set_scrollback(target_sb);
-                }
-            }
-            self.last_max_scrollback.set(used);
+            handle.scroll_vertical_to(used.saturating_sub(new_sb));
         }
+        self.last_scrollback.set(new_sb);
 
-        let scrollback_value = pane.scrollback();
-        self.last_scrollback.set(scrollback_value);
+        // 4. Shadow to clipped Rect for ratatui rendering
+        let area = layout_rect_to_clipped_rect(area);
 
+        let scrollback_value = new_sb;
         let show_cursor = scrollback_value == 0;
         let used = pane.max_scrollback();
         let selection_row_base = used.saturating_sub(scrollback_value);
@@ -724,7 +739,6 @@ impl SelectionViewport for TerminalComponent {
         column: u16,
         row: u16,
     ) -> Option<LogicalPosition> {
-        let area = layout_rect_to_rect(area);
         TerminalComponent::logical_position_from_point(self, area, column, row)
     }
 
@@ -775,26 +789,18 @@ impl TerminalComponent {
 
     fn logical_position_from_point(
         &mut self,
-        area: Rect,
+        area: LayoutRect,
         column: u16,
         row: u16,
     ) -> Option<LogicalPosition> {
-        if area.width == 0 || area.height == 0 {
-            return None;
-        }
-        let max_x = area.x.saturating_add(area.width).saturating_sub(1);
-        let max_y = area.y.saturating_add(area.height).saturating_sub(1);
-        let clamped_col = column.clamp(area.x, max_x);
-        let clamped_row = row.clamp(area.y, max_y);
-        let local_col = clamped_col.saturating_sub(area.x) as usize;
-        let local_row = clamped_row.saturating_sub(area.y) as usize;
+        let (local_col, local_row) = localize_coordinate_clamped(area, column, row)?;
         let pane = self.pane.get_mut();
         let scrollback_value = pane.scrollback();
         let used = pane.max_scrollback();
         let row_base = used.saturating_sub(scrollback_value);
         Some(LogicalPosition::new(
-            row_base.saturating_add(local_row),
-            local_col,
+            row_base.saturating_add(local_row as usize),
+            local_col as usize,
         ))
     }
 
@@ -898,23 +904,14 @@ impl TerminalComponent {
         self.pane.get_mut().set_status_callback(cb);
     }
 
-    fn link_at_position(&self, area: Rect, mouse: &MouseEvent) -> Option<String> {
-        if area.width == 0 || area.height == 0 {
-            return None;
-        }
-        if mouse.column < area.x
-            || mouse.column >= area.x.saturating_add(area.width)
-            || mouse.row < area.y
-            || mouse.row >= area.y.saturating_add(area.height)
-        {
-            return None;
-        }
-        let local_x = mouse.column.saturating_sub(area.x) as usize;
-        let local_y = mouse.row.saturating_sub(area.y) as usize;
-        self.link_overlay.borrow().link_at(local_y, local_x)
+    fn link_at_position(&self, area: LayoutRect, mouse: &MouseEvent) -> Option<String> {
+        let (local_x, local_y) = localize_coordinate(area, mouse.column, mouse.row)?;
+        self.link_overlay
+            .borrow()
+            .link_at(local_y as usize, local_x as usize)
     }
 
-    fn try_handle_link_click(&mut self, area: Rect, mouse: &MouseEvent) -> bool {
+    fn try_handle_link_click(&mut self, area: LayoutRect, mouse: &MouseEvent) -> bool {
         if !matches!(mouse.kind, MouseEventKind::Press(MouseButton::Left)) {
             return false;
         }
@@ -943,11 +940,29 @@ impl TerminalComponent {
 struct RenderDragHost<'a> {
     selection: &'a mut SelectionController,
     pane: &'a RefCell<Box<dyn Pane>>,
+    viewport_width: u16,
+    viewport_height: u16,
 }
 
 impl SelectionViewport for RenderDragHost<'_> {
     fn selection_viewport(&self, area: LayoutRect) -> LayoutRect {
         area
+    }
+
+    fn selection_viewport_offsets(&self) -> (usize, usize) {
+        let mut pane = self.pane.borrow_mut();
+        let scrollback = pane.scrollback();
+        let used = pane.max_scrollback();
+        (0, used.saturating_sub(scrollback))
+    }
+
+    fn selection_content_size(&self) -> (usize, usize) {
+        let mut pane = self.pane.borrow_mut();
+        let used = pane.max_scrollback();
+        (
+            self.viewport_width as usize,
+            used + self.viewport_height as usize,
+        )
     }
 
     fn logical_position_from_point(
@@ -956,23 +971,14 @@ impl SelectionViewport for RenderDragHost<'_> {
         column: u16,
         row: u16,
     ) -> Option<LogicalPosition> {
-        let area = layout_rect_to_rect(area);
-        if area.width == 0 || area.height == 0 {
-            return None;
-        }
-        let max_x = area.x.saturating_add(area.width).saturating_sub(1);
-        let max_y = area.y.saturating_add(area.height).saturating_sub(1);
-        let clamped_col = column.clamp(area.x, max_x);
-        let clamped_row = row.clamp(area.y, max_y);
-        let local_col = clamped_col.saturating_sub(area.x) as usize;
-        let local_row = clamped_row.saturating_sub(area.y) as usize;
+        let (local_col, local_row) = localize_coordinate_clamped(area, column, row)?;
         let mut pane = self.pane.borrow_mut();
         let scrollback_value = pane.scrollback();
         let used = pane.max_scrollback();
         let row_base = used.saturating_sub(scrollback_value);
         Some(LogicalPosition::new(
-            row_base.saturating_add(local_row),
-            local_col,
+            row_base.saturating_add(local_row as usize),
+            local_col as usize,
         ))
     }
 
@@ -1177,6 +1183,7 @@ impl Pane for TestPane {
 mod tests {
     use super::*;
     use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
     use std::cell::RefCell;
     use std::rc::Rc;
     use term_wm_core::component_context::ScrollHandle;

@@ -15,7 +15,9 @@ use term_wm_core::{
     utils::truncate_to_width,
     window::WindowKey,
 };
-use term_wm_ui_components::helpers::{color_to_ratatui, layout_rect_to_rect, safe_set_string};
+use term_wm_ui_components::helpers::{
+    color_to_ratatui, layout_rect_to_clipped_rect, safe_set_string,
+};
 
 #[derive(Debug, Clone, Copy)]
 struct PanelWindowHit {
@@ -197,7 +199,7 @@ impl WmTopPanelComponent {
         }
         let ratatui_backend = term_wm_ui_components::helpers::downcast_ratatui(backend);
         let buffer = &mut ratatui_backend.buffer;
-        let ratatui_area = layout_rect_to_rect(area);
+        let ratatui_area = layout_rect_to_clipped_rect(area);
         let bounds = ratatui_area.intersection(buffer.area);
         if bounds.width == 0 || bounds.height == 0 {
             return;
