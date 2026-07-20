@@ -117,20 +117,6 @@ impl HitboxRegistry {
         }
     }
 
-    /// Set the active component owner. All subsequent `register()` calls
-    /// will inherit this owner. Panics if `register()` is called without a
-    /// prior `set_active_owner` call.
-    pub fn set_active_owner(&mut self, owner: ComponentOwner) {
-        self.active_owner = Some(owner);
-    }
-
-    /// Clear the active owner. Primarily for test isolation.
-    /// The production render pipeline does NOT call this between
-    /// render units — it overwrites via sequential `set_active_owner()`.
-    pub fn clear_active_owner(&mut self) {
-        self.active_owner = None;
-    }
-
     /// Reset for a new frame.  Clears entries, clip stack, and active owner.
     pub fn clear(&mut self) {
         self.entries.clear();
