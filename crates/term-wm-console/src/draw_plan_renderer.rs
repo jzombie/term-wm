@@ -749,6 +749,20 @@ pub fn render_overlays(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut
             p.process_action(&ComponentAction::SetPanelActive(false));
         }
         wm.hitbox_registry_mut().merge(top_hb);
+
+        // Bottom panel overlay in monocle mode — keybinding hints
+        let bottom_area = LayoutRect {
+            x: 0,
+            y: i32::from(full_area.height.saturating_sub(1)),
+            width: full_area.width,
+            height: 1,
+        };
+        let mut bottom_hb = HitboxRegistry::new();
+        if let Some(p) = wm.get_semantic_component_mut(ComponentTag::BottomPanel) {
+            let ctx = ComponentContext::new(false).with_screen_area(bottom_area);
+            p.render(backend, bottom_area, &ctx, &mut bottom_hb);
+        }
+        wm.hitbox_registry_mut().merge(bottom_hb);
     }
 
     let hover_pos = wm.hover_pos();

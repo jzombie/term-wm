@@ -293,7 +293,15 @@ impl WindowManager {
         } else {
             false
         };
-        let bottom_h = if has_hints || panel_active { 1u16 } else { 0 };
+        let bottom_h = if self.is_monocle() {
+            // In monocle mode, panels only show when the command palette is
+            // open — rendered as overlays, never claiming permanent space.
+            0
+        } else if has_hints || panel_active {
+            1u16
+        } else {
+            0
+        };
         let (top_rect, after_top) = if let Some(p) =
             self.get_semantic_component_mut(super::layer_manager::ComponentTag::TopPanel)
         {
