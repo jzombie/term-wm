@@ -29,7 +29,7 @@ pub struct PaletteItem {
 /// A universal, fuzzy-searchable Command Palette component.
 ///
 /// The search bar is rendered directly; the item list is wrapped in a
-/// ScrollViewComponent<MenuComponent> which handles rendering, hover,
+/// `ScrollViewComponent<MenuComponent>` which handles rendering, hover,
 /// click, and scroll.
 pub struct CommandPaletteComponent {
     pub query: String,

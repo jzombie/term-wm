@@ -10,7 +10,7 @@ use term_wm::io::RenderTarget;
 use term_wm::runner::WindowManagerHost;
 use term_wm::term_wm_app::TermWmApp;
 use term_wm::unified_event_source::{UnifiedEvent, UnifiedEventSource};
-use term_wm::window::{OverlayId, WindowKey};
+use term_wm::window::{OverlayId, WindowKey, wm_menu_items};
 use term_wm::wm_config::WmConfig;
 use term_wm::{
     PtyStatus, ScrollKeyMode, ScrollViewComponent, TerminalComponent, default_shell_command,
@@ -97,15 +97,6 @@ impl App {
         let app_name = app_ctx.app_name.clone();
         let app_version = app_ctx.app_version.clone();
 
-        let mut raw_menu = term_wm_sys_ui_components::WmCommandPaletteComponent::new();
-        // Populate the initial command palette with standard WM actions.
-        raw_menu.set_items(term_wm_core::window::wm_menu_items(
-            false, // mouse_capture_enabled
-            false, // clipboard_enabled
-            false, // window_selection_enabled
-            false, // has_focused_window
-        ));
-
         let wm = if embedded {
             AppBuilder::bare()
                 .config(WmConfig::minimal())
@@ -125,7 +116,6 @@ impl App {
                         hostname,
                     ),
                 ))
-                .command_menu(Box::new(raw_menu))
                 .fab(Box::new(term_wm_sys_ui_components::WmFabComponent::new()))
                 .build()
                 .expect("standalone build")
@@ -288,6 +278,27 @@ impl WindowManagerHost for App {
         self.inner
             .wm()
             .open_overlay(OverlayId::ExitConfirm, Some(Box::new(confirm)));
+    }
+
+    fn open_command_palette(&mut self) {
+        use term_wm_sys_ui_components::wm_command_palette::WmCommandPaletteComponent;
+        let wm = self.inner.wm();
+        let mut palette = WmCommandPaletteComponent::new();
+        palette.show();
+        // Set menu items based on current state
+        let items = wm_menu_items(
+            wm.mouse_capture_enabled(),
+            wm.clipboard_enabled(),
+            wm.window_selection_enabled(),
+            wm.window_count() > 0,
+        );
+        let supported = wm.supported_menu_actions();
+        let items: Vec<_> = items
+            .into_iter()
+            .filter(|item| supported.contains(&item.action))
+            .collect();
+        palette.set_items(items);
+        wm.open_overlay(OverlayId::CommandPalette, Some(Box::new(palette)));
     }
 
     fn on_panic(&mut self) {

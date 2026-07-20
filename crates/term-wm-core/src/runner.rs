@@ -34,6 +34,7 @@ pub trait WindowManagerHost {
     fn open_exit_confirm(&mut self) {
         self.wm().request_quit();
     }
+    fn open_command_palette(&mut self) {}
     /// Called when a panic is detected.
     fn on_panic(&mut self) {}
     /// Toggle the debug log window visibility.
@@ -76,9 +77,9 @@ fn drain_action_queue<A: WindowManagerHost>(
             }
             TermWmAction::OpenCommandPalette => {
                 if app.wm().command_menu_visible() {
-                    app.wm().close_command_menu();
+                    app.wm().close_command_palette();
                 } else {
-                    app.wm().open_command_menu();
+                    app.open_command_palette();
                 }
             }
             TermWmAction::RequestKeyboardFocus(id) => {
@@ -133,9 +134,9 @@ where
                     // Intercept global actions from system chrome (FAB has no WindowKey)
                     if matches!(action, TermWmAction::OpenCommandPalette) {
                         if app.wm().command_menu_visible() {
-                            app.wm().close_command_menu();
+                            app.wm().close_command_palette();
                         } else {
-                            app.wm().open_command_menu();
+                            app.open_command_palette();
                         }
                         return true;
                     }
@@ -311,14 +312,7 @@ where
                     return flush_state_changes(app, ControlFlow::Continue, false);
                 }
 
-                // If keyboard capture is disabled for the focused window, key events
-                // bypass all WM interception and go directly to the terminal,
-                // except when the WM overlay is visible — overlay takes priority.
-                // In direct mode, keys are forwarded immediately without WM processing.
-
-                // Layer 2a: Command palette toggle — ALWAYS interceptable
-                // This MUST happen before the direct mode check so that
-                // Ctrl+Shift+Space works even when a terminal window is in direct mode.
+                // Command palette toggle (runs BEFORE the barrier so toggle works)
                 let wm_mode = app.wm().config().wm_command_menu_enabled;
                 if wm_mode
                     && let Event::Key(key) = &evt
@@ -328,14 +322,75 @@ where
                         .keybindings()
                         .matches(TermWmAction::OpenCommandPalette, key)
                 {
-                    if app.wm().command_menu_visible() {
-                        app.wm().close_command_menu();
+                    if app.wm().command_palette_visible() {
+                        app.wm().close_command_palette();
                     } else {
-                        app.wm().open_command_menu();
+                        app.open_command_palette();
                     }
                     update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Continue, false);
                 }
+
+                // Command palette absolute event barrier (same pattern as help overlay)
+                if app.wm().command_palette_visible() {
+                    if let Some(action) = app.wm().handle_command_palette_event(&evt) {
+                        match action {
+                            TermWmAction::CloseMenu => {}
+                            TermWmAction::ToggleDebugWindow => {
+                                app.toggle_debug_window();
+                            }
+                            TermWmAction::ToggleSystemPanel => {
+                                app.toggle_system_panel();
+                            }
+                            TermWmAction::Help | TermWmAction::OpenHelp => {
+                                app.open_help_overlay();
+                            }
+                            TermWmAction::Quit | TermWmAction::ExitUi => {
+                                app.open_exit_confirm();
+                            }
+                            TermWmAction::CloseWindow => {
+                                let id = app.wm().focused_window();
+                                app.wm().close_window(id);
+                            }
+                            TermWmAction::NewWindow => {
+                                app.wm_new_window()?;
+                            }
+                            TermWmAction::MinimizeWindow => {
+                                let id = app.wm().focused_window();
+                                app.wm().minimize_window(id);
+                            }
+                            TermWmAction::MaximizeWindow => {
+                                let id = app.wm().focused_window();
+                                app.wm().toggle_maximize(id);
+                            }
+                            TermWmAction::ToggleDirectMode => {
+                                let id = app.wm().focused_window();
+                                app.wm().toggle_direct_mode(id);
+                            }
+                            TermWmAction::ToggleMouseCapture => app.wm().toggle_mouse_capture(),
+                            TermWmAction::ToggleClipboardMode => {
+                                app.wm().toggle_clipboard_enabled()
+                            }
+                            TermWmAction::ToggleWindowSelection => {
+                                app.wm().toggle_window_selection()
+                            }
+                            TermWmAction::SendNotification(msg) => {
+                                app.wm()
+                                    .push_notification(msg, std::time::Duration::from_secs(3));
+                            }
+                            _ => {}
+                        }
+                    }
+                    // Focus routing while menu is open (Tab/Shift+Tab)
+                    if app.wm().handle_focus_event(&evt) && matches!(&evt, Event::Key(_)) {
+                        update_selection_snapshot(app);
+                        return flush_state_changes(app, ControlFlow::Continue, false);
+                    }
+                    update_selection_snapshot(app);
+                    return flush_state_changes(app, ControlFlow::Continue, false);
+                }
+
+                // If keyboard capture is disabled for the focused window, key events
 
                 // Layer 2b: Direct mode check — intercepts ALL other keys
                 if let Event::Key(key) = &evt {
@@ -357,77 +412,7 @@ where
                     return flush_state_changes(app, ControlFlow::Continue, false);
                 }
 
-                // Command palette overlay event routing
-                if wm_mode && app.wm().command_menu_visible() {
-                    if let Some(action) = app.wm().handle_command_palette_event(&evt) {
-                        match action {
-                            TermWmAction::CloseMenu => {
-                                app.wm().close_command_palette();
-                            }
-                            TermWmAction::ToggleDebugWindow => {
-                                app.toggle_debug_window();
-                                app.wm().close_command_palette();
-                            }
-                            TermWmAction::ToggleSystemPanel => {
-                                app.toggle_system_panel();
-                                app.wm().close_command_palette();
-                            }
-                            TermWmAction::Help | TermWmAction::OpenHelp => {
-                                app.open_help_overlay();
-                                app.wm().close_command_palette();
-                            }
-                            TermWmAction::Quit | TermWmAction::ExitUi => {
-                                app.open_exit_confirm();
-                            }
-                            TermWmAction::CloseWindow => {
-                                let id = app.wm().focused_window();
-                                app.wm().close_window(id);
-                                app.wm().close_command_palette();
-                            }
-                            TermWmAction::NewWindow => {
-                                app.wm_new_window()?;
-                                app.wm().close_command_palette();
-                            }
-                            TermWmAction::MinimizeWindow => {
-                                let id = app.wm().focused_window();
-                                app.wm().minimize_window(id);
-                                app.wm().close_command_palette();
-                            }
-                            TermWmAction::MaximizeWindow => {
-                                let id = app.wm().focused_window();
-                                app.wm().toggle_maximize(id);
-                                app.wm().close_command_palette();
-                            }
-                            TermWmAction::ToggleDirectMode => {
-                                let id = app.wm().focused_window();
-                                app.wm().toggle_direct_mode(id);
-                                app.wm().close_command_palette();
-                            }
-                            TermWmAction::ToggleMouseCapture => {
-                                app.wm().toggle_mouse_capture();
-                            }
-                            TermWmAction::ToggleClipboardMode => {
-                                app.wm().toggle_clipboard_enabled();
-                            }
-                            TermWmAction::ToggleWindowSelection => {
-                                app.wm().toggle_window_selection();
-                            }
-                            TermWmAction::SendNotification(msg) => {
-                                app.wm()
-                                    .push_notification(msg, std::time::Duration::from_secs(3));
-                                app.wm().close_command_palette();
-                            }
-                            _ => {}
-                        }
-                    }
-                    // Focus routing while menu is open (Tab/Shift+Tab)
-                    if app.wm().handle_focus_event(&evt) && matches!(&evt, Event::Key(_)) {
-                        update_selection_snapshot(app);
-                        return flush_state_changes(app, ControlFlow::Continue, false);
-                    }
-                    update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue, false);
-                }
+                // Mouse capture check
 
                 if matches!(evt, Event::Mouse(_)) && !app.wm().mouse_capture_enabled() {
                     update_selection_snapshot(app);

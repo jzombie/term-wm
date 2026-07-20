@@ -213,7 +213,6 @@ pub struct WindowManager {
     window_selection_dirty: bool,
     clipboard_enabled: bool,
     clipboard_dirty: bool,
-    command_menu_visible: bool,
     selection_active: bool,
     selection_dragging: bool,
     selection_text: Option<String>,
@@ -616,7 +615,6 @@ impl WindowManager {
             mouse_capture_dirty: false,
             clipboard_enabled: config.clipboard_enabled,
             clipboard_dirty: false,
-            command_menu_visible: false,
             selection_active: false,
             selection_dragging: false,
             selection_text: None,
@@ -1830,7 +1828,7 @@ impl WindowManager {
     pub fn clear_capture(&mut self) {
         self.capture_deadline = None;
         self.pending_deadline = None;
-        self.command_menu_visible = false;
+        self.close_command_menu();
         self.command_menu_opened_at = None;
         if let Some(handle) = &self.system_task_handle
             && let Some(id) = self.drag_timer_id.take()
@@ -1848,7 +1846,7 @@ impl WindowManager {
         if !self.mouse_capture_enabled {
             return false;
         }
-        if self.config.wm_command_menu_enabled && self.command_menu_visible {
+        if self.config.wm_command_menu_enabled && self.command_menu_visible() {
             return true;
         }
         self.refresh_capture();
@@ -5736,19 +5734,7 @@ mod tests {
     }
 
     #[test]
-    fn fold_menu_is_noop_without_component() {
-        let mut wm = WindowManager::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        wm.open_command_menu();
-    }
-
-    #[test]
-    fn command_menu_open_close_visibility() {
+    fn command_palette_empty_map_returns_no_action() {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
@@ -5757,14 +5743,16 @@ mod tests {
             std::collections::HashMap::new(),
         );
         assert!(!wm.command_menu_visible());
-        wm.open_command_menu();
-        assert!(wm.command_menu_visible());
-        wm.close_command_menu();
-        assert!(!wm.command_menu_visible());
+        let event = crate::events::Event::Key(crate::events::KeyEvent {
+            code: crate::events::KeyCode::Esc,
+            modifiers: crate::events::KeyModifiers::NONE,
+            kind: crate::events::KeyKind::Press,
+        });
+        assert!(wm.handle_command_palette_event(&event).is_none());
     }
 
     #[test]
-    fn command_menu_open_no_passthrough_sets_opened_at_none() {
+    fn command_menu_visible_derived_from_overlay_map() {
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
@@ -5772,8 +5760,8 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        wm.open_command_menu_no_passthrough();
-        assert!(wm.command_menu_visible());
+        assert!(!wm.command_menu_visible());
         wm.close_command_menu();
+        assert!(!wm.command_menu_visible());
     }
 }
