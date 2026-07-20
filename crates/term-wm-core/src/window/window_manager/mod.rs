@@ -2222,6 +2222,9 @@ pub fn wm_menu_items(
     clipboard_enabled: bool,
     window_selection_enabled: bool,
     has_focused_window: bool,
+    is_monocle: bool,
+    window_titles: &[(crate::window::WindowKey, String)],
+    focused_window: crate::window::WindowKey,
 ) -> Vec<MenuItem<crate::actions::TermWmAction>> {
     let mouse_label = if mouse_capture_enabled {
         "Mouse Capture: On"
@@ -2296,32 +2299,43 @@ pub fn wm_menu_items(
     ];
 
     if has_focused_window {
-        items.extend_from_slice(&[
-            MenuItem {
-                label: "Maximize Window".into(),
-                icon: Some("⊞"),
-                action: crate::actions::TermWmAction::MaximizeWindow,
-                disabled: false,
-            },
-            MenuItem {
-                label: "Minimize Window".into(),
-                icon: Some("⊟"),
-                action: crate::actions::TermWmAction::MinimizeWindow,
-                disabled: false,
-            },
-            MenuItem {
-                label: "Close Window".into(),
-                icon: Some("✕"),
-                action: crate::actions::TermWmAction::CloseWindow,
-                disabled: false,
-            },
-            MenuItem {
-                label: "Toggle Direct Mode".into(),
-                icon: Some("🎯"),
-                action: crate::actions::TermWmAction::ToggleDirectMode,
-                disabled: false,
-            },
-        ]);
+        if is_monocle {
+            for (key, title) in window_titles {
+                items.push(MenuItem {
+                    label: format!("Switch to: {}", title).into(),
+                    icon: Some("\u{2192}"),
+                    action: crate::actions::TermWmAction::FocusWindow(*key),
+                    disabled: *key == focused_window,
+                });
+            }
+        } else {
+            items.extend_from_slice(&[
+                MenuItem {
+                    label: "Maximize Window".into(),
+                    icon: Some("⊞"),
+                    action: crate::actions::TermWmAction::MaximizeWindow,
+                    disabled: false,
+                },
+                MenuItem {
+                    label: "Minimize Window".into(),
+                    icon: Some("⊟"),
+                    action: crate::actions::TermWmAction::MinimizeWindow,
+                    disabled: false,
+                },
+                MenuItem {
+                    label: "Close Window".into(),
+                    icon: Some("✕"),
+                    action: crate::actions::TermWmAction::CloseWindow,
+                    disabled: false,
+                },
+                MenuItem {
+                    label: "Toggle Direct Mode".into(),
+                    icon: Some("🎯"),
+                    action: crate::actions::TermWmAction::ToggleDirectMode,
+                    disabled: false,
+                },
+            ]);
+        }
     }
 
     items

@@ -280,41 +280,28 @@ impl WindowManagerHost for App {
 
     fn open_command_palette(&mut self) {
         use term_wm::actions::TermWmAction;
-        use term_wm::components::MenuItem;
         use term_wm_sys_ui_components::wm_command_palette::WmCommandPaletteComponent;
         let wm = self.inner.wm();
+        let titles = wm.window_titles();
         let mut palette = WmCommandPaletteComponent::new();
         palette.show();
-        // Set menu items based on current state
         let items = wm_menu_items(
             wm.mouse_capture_enabled(),
             wm.clipboard_enabled(),
             wm.window_selection_enabled(),
             wm.window_count() > 0,
+            wm.is_monocle(),
+            &titles,
+            wm.focused_window(),
         );
         let supported = wm.supported_menu_actions();
-        let mut items: Vec<_> = items
+        let items: Vec<_> = items
             .into_iter()
-            .filter(|item| supported.contains(&item.action))
+            .filter(|item| {
+                supported.contains(&item.action)
+                    || matches!(item.action, TermWmAction::FocusWindow(_))
+            })
             .collect();
-        if wm.is_monocle() {
-            let focused = wm.focused_window();
-            items.retain(|item| {
-                !matches!(
-                    item.action,
-                    TermWmAction::MaximizeWindow | TermWmAction::MinimizeWindow
-                )
-            });
-            for (key, title) in wm.window_titles() {
-                let is_current = key == focused;
-                items.push(MenuItem {
-                    label: format!("Switch to: {}", title).into(),
-                    icon: Some("\u{2192}"),
-                    action: TermWmAction::FocusWindow(key),
-                    disabled: is_current,
-                });
-            }
-        }
         palette.set_items(items);
         wm.open_command_palette_overlay(Box::new(palette));
     }
