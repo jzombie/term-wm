@@ -284,6 +284,7 @@ impl WindowManagerHost for App {
         use term_wm_sys_ui_components::wm_command_palette::WmCommandPaletteComponent;
         let wm = self.inner.wm();
         let mut palette = WmCommandPaletteComponent::new();
+        palette.show();
         // Set menu items based on current state
         let items = wm_menu_items(
             wm.mouse_capture_enabled(),
