@@ -2218,24 +2218,29 @@ impl WindowManager {
 
     /// Returns the window management buttons appropriate for the current mode.
     /// In monocle mode, minimize/maximize are excluded (meaningless when
-    /// the focused window fills the screen). Close and DirectMode always appear.
+    /// the focused window fills the screen). All window-specific buttons are
+    /// excluded when there is no focused window.
     pub fn window_management_buttons(&self) -> Vec<WmButton> {
-        let mut btns = vec![WmButton {
-            action: TermWmAction::CloseWindow,
-            label: "Close Window",
-            symbol: "X",
-        }];
-        if !self.is_monocle() {
+        let has_focused = self.window(self.focused_window()).is_some();
+        let mut btns = Vec::new();
+        if has_focused {
             btns.push(WmButton {
-                action: TermWmAction::MaximizeWindow,
-                label: "Maximize Window",
-                symbol: "▢",
+                action: TermWmAction::CloseWindow,
+                label: "Close Window",
+                symbol: "X",
             });
-            btns.push(WmButton {
-                action: TermWmAction::MinimizeWindow,
-                label: "Minimize Window",
-                symbol: "_",
-            });
+            if !self.is_monocle() {
+                btns.push(WmButton {
+                    action: TermWmAction::MaximizeWindow,
+                    label: "Maximize Window",
+                    symbol: "▢",
+                });
+                btns.push(WmButton {
+                    action: TermWmAction::MinimizeWindow,
+                    label: "Minimize Window",
+                    symbol: "_",
+                });
+            }
         }
         btns.push(WmButton {
             action: TermWmAction::ToggleDirectMode,
