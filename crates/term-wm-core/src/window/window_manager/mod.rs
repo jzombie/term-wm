@@ -2222,25 +2222,25 @@ impl WindowManager {
     /// excluded when there is no focused window.
     pub fn window_management_buttons(&self) -> Vec<WmButton> {
         let has_focused = self.window(self.focused_window()).is_some();
-        let mut btns = Vec::new();
-        if has_focused {
+        if !has_focused {
+            return Vec::new();
+        }
+        let mut btns = vec![WmButton {
+            action: TermWmAction::CloseWindow,
+            label: "Close Window",
+            symbol: "X",
+        }];
+        if !self.is_monocle() {
             btns.push(WmButton {
-                action: TermWmAction::CloseWindow,
-                label: "Close Window",
-                symbol: "X",
+                action: TermWmAction::MaximizeWindow,
+                label: "Maximize Window",
+                symbol: "▢",
             });
-            if !self.is_monocle() {
-                btns.push(WmButton {
-                    action: TermWmAction::MaximizeWindow,
-                    label: "Maximize Window",
-                    symbol: "▢",
-                });
-                btns.push(WmButton {
-                    action: TermWmAction::MinimizeWindow,
-                    label: "Minimize Window",
-                    symbol: "_",
-                });
-            }
+            btns.push(WmButton {
+                action: TermWmAction::MinimizeWindow,
+                label: "Minimize Window",
+                symbol: "_",
+            });
         }
         btns.push(WmButton {
             action: TermWmAction::ToggleDirectMode,
