@@ -19,9 +19,7 @@ impl KeyboardNormalizer {
             Event::Key(mut key) => {
                 // Convert Shift+Tab to BackTab
                 if key.code == KeyCode::Tab && key.modifiers.shift {
-                    // Note: We don't have BackTab in our KeyCode enum, so we'll keep it as Tab
-                    // but remove the shift modifier. The keybindings system handles this.
-                    key.modifiers.shift = false;
+                    // Pass through as-is — FocusPrev keybinding matches Tab+Shift.
                 }
                 if cfg!(windows) {
                     match key.kind {
@@ -59,7 +57,7 @@ mod tests {
         let out = norm.normalize(evt).expect("should return event");
         if let Event::Key(k) = out {
             assert!(matches!(k.code, KeyCode::Tab));
-            assert!(!k.modifiers.shift);
+            assert!(k.modifiers.shift);
         } else {
             panic!("expected key event");
         }
@@ -101,7 +99,7 @@ mod tests {
         let out = norm.normalize(evt).expect("should return event");
         if let Event::Key(k) = out {
             assert!(matches!(k.code, KeyCode::Tab));
-            assert!(!k.modifiers.shift);
+            assert!(k.modifiers.shift);
         } else {
             panic!("expected key event");
         }
