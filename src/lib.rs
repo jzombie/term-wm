@@ -60,14 +60,17 @@ pub fn render_app(
     let total = num_windows + wm.visible_overlay_count();
 
     // Register panel hitboxes BEFORE the window loop (lowest Z-order)
-    if let Some(&panel_layer_id) = wm
+    let top_panel_owner = wm
         .semantic_registry
         .get(&term_wm_core::window::ComponentTag::TopPanel)
-    {
-        wm.hitbox_registry_mut()
-            .set_active_owner(ComponentOwner::Layer(panel_layer_id));
-    }
-    wm.register_panel_hitboxes();
+        .map(|&id| ComponentOwner::Layer(id))
+        .unwrap_or(ComponentOwner::Test);
+    let bottom_panel_owner = wm
+        .semantic_registry
+        .get(&term_wm_core::window::ComponentTag::BottomPanel)
+        .map(|&id| ComponentOwner::Layer(id))
+        .unwrap_or(ComponentOwner::Test);
+    wm.register_panel_hitboxes(top_panel_owner, bottom_panel_owner);
 
     // Register tiling split handle hitboxes below windows
     if !wm.is_monocle() {
@@ -222,10 +225,11 @@ pub fn render_app(
                 );
                 // Register split handle hitboxes for mouse dispatch
                 for handle in &handles {
-                    wm.hitbox_registry_mut().set_active_owner(
+                    wm.hitbox_registry_mut().register(
+                        handle.hitbox_id,
                         ComponentOwner::Chrome(term_wm_core::chrome::ChromeTarget::SplitHandle(handle.hitbox_id)),
+                        handle.rect,
                     );
-                    wm.hitbox_registry_mut().register(handle.hitbox_id, handle.rect);
                 }
             }
 

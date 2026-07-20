@@ -275,8 +275,8 @@ impl Component<TermWmAction> for TerminalComponent {
         let _exited = self.pane.borrow_mut().has_exited();
         // Register this terminal's clickable area in the hitbox registry.
         // Use screen coordinates so hit_test matches screen-space mouse positions.
-        if let Some(_key) = ctx.window_key() {
-            registry.register(self.hitbox_id, screen_area_lr);
+        if let Some(key) = ctx.window_key() {
+            registry.register(self.hitbox_id, term_wm_core::hitbox_registry::ComponentOwner::Window(key), screen_area_lr);
         }
         self.render_screen(backend, area, ctx);
     }

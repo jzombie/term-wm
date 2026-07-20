@@ -2033,18 +2033,18 @@ impl WindowManager {
 
     /// Register panel hitboxes (top and bottom) into the draw-time registry.
     /// Called before the window loop so panels are at the lowest Z-order.
-    pub fn register_panel_hitboxes(&mut self) {
+    pub fn register_panel_hitboxes(&mut self, top_owner: ComponentOwner, bottom_owner: ComponentOwner) {
         if let Some(top) = self.get_semantic_component(layer_manager::ComponentTag::TopPanel)
             && !self.top_claimed.is_empty()
             && let Some(id) = top.hitbox_id()
         {
-            self.hitbox_registry.register(id, self.top_claimed);
+            self.hitbox_registry.register(id, top_owner, self.top_claimed);
         }
         if let Some(bottom) = self.get_semantic_component(layer_manager::ComponentTag::BottomPanel)
             && !self.bottom_claimed.is_empty()
             && let Some(id) = bottom.hitbox_id()
         {
-            self.hitbox_registry.register(id, self.bottom_claimed);
+            self.hitbox_registry.register(id, bottom_owner, self.bottom_claimed);
         }
     }
 
@@ -2995,6 +2995,7 @@ mod tests {
         );
         wm.hitbox_registry_mut().register(
             hitbox_id,
+            ComponentOwner::Test,
             Rect {
                 x: i32::from(header_pos),
                 y: start_rect.y,
@@ -3663,6 +3664,7 @@ mod tests {
         );
         wm.hitbox_registry_mut().register(
             hitbox_id,
+            ComponentOwner::Test,
             Rect { x: 10, y: 5, width: 5, height: 1 },
         );
 
@@ -4062,7 +4064,7 @@ mod tests {
         wm.hitbox_registry_mut().set_active_owner(
             ComponentOwner::Chrome(crate::chrome::ChromeTarget::Drag(win_key)),
         );
-        wm.hitbox_registry_mut().register(hitbox_id, header_rect);
+        wm.hitbox_registry_mut().register(hitbox_id, ComponentOwner::Test, header_rect);
 
         // Press on the header — should start a drag via chrome.
         let click_col = header_rect.x;
@@ -4223,7 +4225,7 @@ mod tests {
         wm.hitbox_registry_mut().set_active_owner(
             ComponentOwner::Chrome(crate::chrome::ChromeTarget::Drag(debug_key)),
         );
-        wm.hitbox_registry_mut().register(hitbox_id, header_rect);
+        wm.hitbox_registry_mut().register(hitbox_id, ComponentOwner::Test, header_rect);
 
         let down = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
@@ -4787,6 +4789,7 @@ mod tests {
             .set_active_owner(ComponentOwner::Window(key));
         wm.hitbox_registry.register(
             wm.window_content_hitbox_id(key).unwrap_or_default(),
+            ComponentOwner::Test,
             hit_rect,
         );
 
@@ -4934,10 +4937,9 @@ mod tests {
             width: 20,
             height: 10,
         };
-        wm.hitbox_registry_mut()
-            .set_active_owner(ComponentOwner::Window(key));
         wm.hitbox_registry.register(
             wm.window_content_hitbox_id(key).unwrap_or_default(),
+            ComponentOwner::Window(key),
             hit_rect,
         );
 
@@ -5242,6 +5244,7 @@ mod tests {
         );
         wm.hitbox_registry_mut().register(
             hitbox_id,
+            ComponentOwner::Test,
             Rect { x: 0, y: 0, width: 1, height: 1 },
         );
 
@@ -5290,6 +5293,7 @@ mod tests {
         );
         wm.hitbox_registry_mut().register(
             hitbox_id,
+            ComponentOwner::Test,
             Rect { x: 0, y: 0, width: 1, height: 1 },
         );
 
@@ -5387,7 +5391,7 @@ mod tests {
         // Register the hitbox with the correct overlay area.
         wm.hitbox_registry_mut()
             .set_active_owner(ComponentOwner::Layer(_overlay_id));
-        wm.hitbox_registry.register(HitboxId::new(), overlay_rect);
+        wm.hitbox_registry.register(HitboxId::new(), ComponentOwner::Test, overlay_rect);
 
         let click = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),

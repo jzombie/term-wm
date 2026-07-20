@@ -38,133 +38,123 @@ const HEADER_BUTTON_GAP: u16 = 2;
 const EDGE_INDEX_ADJUST: u16 = 1;
 
 /// Register chrome hitboxes for a window (resize, drag, close, maximize buttons).
-/// `local_bounds` is in offscreen-buffer coordinates. `dest_offset` translates to screen space.
-/// Also registers a content-area hitbox (`ComponentOwner::Window`) over the inner bounds.
+/// `frame_size` is (width, height) of the window frame. `screen_origin` is the screen-space
+/// top-left coordinate (x, y). Also registers a content-area hitbox.
 fn register_window_chrome_hitboxes(
     registry: &mut HitboxRegistry,
     key: WindowKey,
-    local_bounds: LayoutRect,
-    dest_offset: (i32, i32),
+    frame_size: (u16, u16),
+    screen_origin: (i16, i16),
     content_hitbox_id: HitboxId,
 ) {
     use term_wm_core::chrome::ChromeTarget;
     use term_wm_core::hitbox_registry::ComponentOwner;
     use term_wm_core::layout::floating::ResizeEdge;
 
-    let (dx, dy) = dest_offset;
-    let screen = |r: LayoutRect| LayoutRect {
-        x: r.x.saturating_add(dx),
-        y: r.y.saturating_add(dy),
-        width: r.width,
-        height: r.height,
+    let (width, height) = frame_size;
+    let (ox, oy) = screen_origin;
+
+    // Build screen-space rect from local offsets — no double-translation risk
+    let to_screen = |lx: u16, ly: u16, lw: u16, lh: u16| -> LayoutRect {
+        LayoutRect {
+            x: i32::from(ox) + i32::from(lx),
+            y: i32::from(oy) + i32::from(ly),
+            width: lw,
+            height: lh,
+        }
     };
 
-    let outer_right = (local_bounds.x as u16)
-        .saturating_add(local_bounds.width)
-        .saturating_sub(EDGE_INDEX_ADJUST);
-    let header_y = (local_bounds.y as u16).saturating_add(TOP_BORDER_HEIGHT);
+    let outer_right = width.saturating_sub(EDGE_INDEX_ADJUST);
+    let bottom_y = height.saturating_sub(EDGE_INDEX_ADJUST);
 
     // Resize handles at each edge
-    let right_x = outer_right;
-    let bottom_y = (local_bounds.y as u16)
-        .saturating_add(local_bounds.height)
-        .saturating_sub(EDGE_INDEX_ADJUST);
-    for (edge, local_rect) in [
-        (ResizeEdge::Left, LayoutRect { x: local_bounds.x, y: local_bounds.y.saturating_add(1), width: 1, height: local_bounds.height.saturating_sub(2) }),
-        (ResizeEdge::Right, LayoutRect { x: i32::from(right_x), y: local_bounds.y.saturating_add(1), width: 1, height: local_bounds.height.saturating_sub(2) }),
-        (ResizeEdge::Top, LayoutRect { x: local_bounds.x.saturating_add(1), y: local_bounds.y, width: local_bounds.width.saturating_sub(2), height: 1 }),
-        (ResizeEdge::Bottom, LayoutRect { x: local_bounds.x.saturating_add(1), y: i32::from(bottom_y), width: local_bounds.width.saturating_sub(2), height: 1 }),
+    for (edge, lx, ly, lw, lh) in [
+        (ResizeEdge::Left, 0u16, 1u16, 1u16, height.saturating_sub(2)),
+        (ResizeEdge::Right, outer_right, 1u16, 1u16, height.saturating_sub(2)),
+        (ResizeEdge::Top, 1u16, 0u16, width.saturating_sub(2), 1u16),
+        (ResizeEdge::Bottom, 1u16, bottom_y, width.saturating_sub(2), 1u16),
     ] {
-        let id = HitboxId::new();
-        registry.set_active_owner(ComponentOwner::Chrome(ChromeTarget::Resize(key, edge)));
-        registry.register(id, screen(local_rect));
+        registry.register(
+            HitboxId::new(),
+            ComponentOwner::Chrome(ChromeTarget::Resize(key, edge)),
+            to_screen(lx, ly, lw, lh),
+        );
     }
 
-    // Drag handle at the header area
-    let drag_rect = LayoutRect {
-        x: local_bounds.x.saturating_add(i32::from(LEFT_BORDER_WIDTH)),
-        y: i32::from(header_y),
-        width: local_bounds.width.saturating_sub(LEFT_BORDER_WIDTH.saturating_add(RIGHT_BORDER_WIDTH)),
-        height: 1,
-    };
-    let id = HitboxId::new();
-    registry.set_active_owner(ComponentOwner::Chrome(ChromeTarget::Drag(key)));
-    registry.register(id, screen(drag_rect));
+    // Drag handle at the header area (row 1 local)
+    registry.register(
+        HitboxId::new(),
+        ComponentOwner::Chrome(ChromeTarget::Drag(key)),
+        to_screen(1, 1, width.saturating_sub(2), 1),
+    );
 
     // Close, maximize, minimize, and direct-mode buttons
     let close_x = outer_right.saturating_sub(HEADER_BUTTON_GAP);
     let max_x = close_x.saturating_sub(HEADER_BUTTON_GAP);
     let min_x = max_x.saturating_sub(HEADER_BUTTON_GAP);
     let dm_x = min_x.saturating_sub(HEADER_BUTTON_GAP);
-    for (target, x) in [
+    for (target, bx) in [
         (ChromeTarget::CloseButton(key), close_x),
         (ChromeTarget::MaximizeButton(key), max_x),
         (ChromeTarget::MinimizeButton(key), min_x),
         (ChromeTarget::ToggleDirectMode(key), dm_x),
     ] {
-        let id = HitboxId::new();
-        registry.set_active_owner(ComponentOwner::Chrome(target));
         registry.register(
-            id,
-            screen(LayoutRect { x: i32::from(x), y: i32::from(header_y), width: 1, height: 1 }),
+            HitboxId::new(),
+            ComponentOwner::Chrome(target),
+            to_screen(bx, 1u16, 1, 1),
         );
     }
 
     // Corner resize hitboxes (registered after edges for LIFO priority)
-    for (edge, local_rect) in [
-        (ResizeEdge::TopLeft, LayoutRect { x: local_bounds.x, y: local_bounds.y, width: 1, height: 1 }),
-        (ResizeEdge::TopRight, LayoutRect { x: i32::from(right_x), y: local_bounds.y, width: 1, height: 1 }),
-        (ResizeEdge::BottomLeft, LayoutRect { x: local_bounds.x, y: i32::from(bottom_y), width: 1, height: 1 }),
-        (ResizeEdge::BottomRight, LayoutRect { x: i32::from(right_x), y: i32::from(bottom_y), width: 1, height: 1 }),
+    for (edge, lx, ly) in [
+        (ResizeEdge::TopLeft, 0u16, 0u16),
+        (ResizeEdge::TopRight, outer_right, 0u16),
+        (ResizeEdge::BottomLeft, 0u16, bottom_y),
+        (ResizeEdge::BottomRight, outer_right, bottom_y),
     ] {
-        let id = HitboxId::new();
-        registry.set_active_owner(ComponentOwner::Chrome(ChromeTarget::Resize(key, edge)));
-        registry.register(id, screen(local_rect));
+        registry.register(
+            HitboxId::new(),
+            ComponentOwner::Chrome(ChromeTarget::Resize(key, edge)),
+            to_screen(lx, ly, 1, 1),
+        );
     }
 
     // Content area hitbox (inner bounds, screen-space)
-    let border_w = i32::from(LEFT_BORDER_WIDTH);
-    let header_h = i32::from(TOP_BORDER_HEIGHT.saturating_add(HEADER_HEIGHT));
-    let inner = LayoutRect {
-        x: local_bounds.x.saturating_add(border_w),
-        y: local_bounds.y.saturating_add(header_h),
-        width: local_bounds.width.saturating_sub(LEFT_BORDER_WIDTH.saturating_add(RIGHT_BORDER_WIDTH)),
-        height: local_bounds.height.saturating_sub(TOP_BORDER_HEIGHT.saturating_add(HEADER_HEIGHT.saturating_add(BOTTOM_BORDER_HEIGHT))),
-    };
-    registry.set_active_owner(ComponentOwner::Window(key));
-    registry.register(content_hitbox_id, screen(inner));
+    registry.register(
+        content_hitbox_id,
+        ComponentOwner::Window(key),
+        to_screen(1, 2, width.saturating_sub(2), height.saturating_sub(3)),
+    );
 }
 
 /// Single-pass window chrome rendering: draw chrome, register hitboxes (chrome + content),
-/// return inner content bounds. `dest_offset` translates local hitbox coords to screen space.
-/// `content_hitbox_id` is the ID for the window's content area hitbox.
+/// return inner content bounds. `frame_size` is (width, height) of the window frame.
+/// `screen_origin` is the screen-space top-left coordinate (x as i16, y as i16).
 pub fn render_window_chrome(
     buffer: &mut Buffer,
     registry: &mut HitboxRegistry,
     key: WindowKey,
-    full_bounds: LayoutRect,
-    dest_offset: (i32, i32),
+    frame_size: (u16, u16),
+    screen_origin: (i16, i16),
     content_hitbox_id: HitboxId,
     ctx: &ChromeCtx<'_>,
 ) -> LayoutRect {
+    let (width, height) = frame_size;
+    let local_bounds = LayoutRect { x: 0, y: 0, width, height };
+
     // Draw chrome using existing renderer
-    render_window(buffer, full_bounds, ChromeCtx { ..*ctx });
+    render_window(buffer, local_bounds, ChromeCtx { ..*ctx });
 
     // Register chrome hitboxes + content hitbox (atomic)
-    register_window_chrome_hitboxes(registry, key, full_bounds, dest_offset, content_hitbox_id);
+    register_window_chrome_hitboxes(registry, key, frame_size, screen_origin, content_hitbox_id);
 
     // Return inner content bounds
-    let border_w = i32::from(LEFT_BORDER_WIDTH);
-    let header_h = i32::from(TOP_BORDER_HEIGHT.saturating_add(HEADER_HEIGHT));
     LayoutRect {
-        x: full_bounds.x.saturating_add(border_w),
-        y: full_bounds.y.saturating_add(header_h),
-        width: full_bounds
-            .width
-            .saturating_sub(LEFT_BORDER_WIDTH.saturating_add(RIGHT_BORDER_WIDTH)),
-        height: full_bounds
-            .height
-            .saturating_sub(TOP_BORDER_HEIGHT.saturating_add(HEADER_HEIGHT.saturating_add(BOTTOM_BORDER_HEIGHT))),
+        x: i32::from(LEFT_BORDER_WIDTH),
+        y: i32::from(TOP_BORDER_HEIGHT.saturating_add(HEADER_HEIGHT)),
+        width: width.saturating_sub(LEFT_BORDER_WIDTH.saturating_add(RIGHT_BORDER_WIDTH)),
+        height: height.saturating_sub(TOP_BORDER_HEIGHT.saturating_add(HEADER_HEIGHT.saturating_add(BOTTOM_BORDER_HEIGHT))),
     }
 }
 
@@ -764,19 +754,13 @@ where
     let mut chrome_registry = HitboxRegistry::new();
     {
         let mut offscreen = RatatuiBackend::new(buffer, local_area);
-        let full_local = LayoutRect {
-            x: 0,
-            y: 0,
-            width: surface.dest.width,
-            height: surface.dest.height,
-        };
         // Atomic single-pass: draw chrome + register hitboxes + get inner bounds
         inner_bounds = render_window_chrome(
             &mut offscreen.buffer,
             &mut chrome_registry,
             key,
-            full_local,
-            (surface.dest.x, surface.dest.y),
+            (surface.dest.width, surface.dest.height),
+            (surface.dest.x as i16, surface.dest.y as i16),
             content_hitbox_id,
             &ctx,
         );

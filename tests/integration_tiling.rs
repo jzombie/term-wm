@@ -52,15 +52,16 @@ fn wm_with_two_windows() -> (WindowManager, [WindowKey; 2]) {
 }
 
 fn header_rect(wm: &mut WindowManager, key: WindowKey) -> Rect {
-    use term_wm::hitbox_registry::{ComponentOwner, HitboxId};
     use term_wm::chrome::ChromeTarget;
+    use term_wm::hitbox_registry::{ComponentOwner, HitboxId};
     let bounds = wm.full_region_for_key(key);
     let rect = Rect { x: bounds.x + 1, y: bounds.y + 1, width: bounds.width.saturating_sub(2), height: 1 };
     // Register a drag hitbox so dispatch_mouse can route header clicks
-    let hitbox_id = HitboxId::new();
-    wm.hitbox_registry_mut()
-        .set_active_owner(ComponentOwner::Chrome(ChromeTarget::Drag(key)));
-    wm.hitbox_registry_mut().register(hitbox_id, rect);
+    wm.hitbox_registry_mut().register(
+        HitboxId::new(),
+        ComponentOwner::Chrome(ChromeTarget::Drag(key)),
+        rect,
+    );
     rect
 }
 
