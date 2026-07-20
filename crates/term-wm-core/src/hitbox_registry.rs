@@ -155,7 +155,7 @@ impl HitboxRegistry {
     ///
     /// Panics if `active_owner` is `None` — callers must ensure the registry
     /// was created via `with_owner()` or had `set_active_owner()` called.
-    /// The `area` is clipped and culled identically to [`register`].
+    /// The `area` is clipped and culled identically to [`Self::register`].
     pub fn register_active(&mut self, id: HitboxId, area: LayoutRect) {
         let owner = self
             .active_owner

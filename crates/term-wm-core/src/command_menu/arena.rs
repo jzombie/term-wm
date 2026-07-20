@@ -60,6 +60,7 @@ pub struct CommandNode {
     pub icon: Option<&'static str>,
     pub required_context: ContextMask,
     pub owner_id: Option<ComponentId>,
+    pub disabled: bool,
 }
 
 impl CommandNode {

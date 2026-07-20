@@ -25,9 +25,9 @@ impl FuzzyMatch {
         }
     }
 
-    /// Score a list of (name, description) pairs against a query string.
+    /// Score a list of (name, description, disabled) triples against a query string.
     /// Returns indices into the input slice, sorted by score descending.
-    pub fn score(&mut self, query: &str, items: &[(String, String)]) -> Vec<usize> {
+    pub fn score(&mut self, query: &str, items: &[(String, String, bool)]) -> Vec<usize> {
         if query.is_empty() {
             return (0..items.len()).collect();
         }
@@ -47,7 +47,7 @@ impl FuzzyMatch {
         let mut scored: Vec<(u32, usize)> = items
             .iter()
             .enumerate()
-            .filter_map(|(i, (name, _desc))| {
+            .filter_map(|(i, (name, _desc, _disabled))| {
                 // Clear the buffer before use. Utf32Str::new appends to the
                 // buffer for non-ASCII strings. Without this, the buffer grows
                 // indefinitely until it breaches nucleo's max haystack length
@@ -125,8 +125,8 @@ mod tests {
     fn fuzzy_empty_query_returns_all() {
         let mut fmatch = FuzzyMatch::new();
         let items = vec![
-            ("New Window".to_string(), String::new()),
-            ("Close Window".to_string(), String::new()),
+            ("New Window".to_string(), String::new(), false),
+            ("Close Window".to_string(), String::new(), false),
         ];
         let results = fmatch.score("", &items);
         assert_eq!(results, vec![0, 1]);
@@ -136,8 +136,8 @@ mod tests {
     fn fuzzy_matching_prefix() {
         let mut fmatch = FuzzyMatch::new();
         let items = vec![
-            ("New Window".to_string(), String::new()),
-            ("Close Window".to_string(), String::new()),
+            ("New Window".to_string(), String::new(), false),
+            ("Close Window".to_string(), String::new(), false),
         ];
         let results = fmatch.score("new", &items);
         assert_eq!(results.len(), 1);
@@ -148,8 +148,8 @@ mod tests {
     fn fuzzy_no_match_returns_empty() {
         let mut fmatch = FuzzyMatch::new();
         let items = vec![
-            ("New Window".to_string(), String::new()),
-            ("Close Window".to_string(), String::new()),
+            ("New Window".to_string(), String::new(), false),
+            ("Close Window".to_string(), String::new(), false),
         ];
         let results = fmatch.score("zzzzz", &items);
         assert!(results.is_empty());
@@ -162,8 +162,8 @@ mod tests {
     fn fuzzy_multiple_successive_scores() {
         let mut fmatch = FuzzyMatch::new();
         let items = vec![
-            ("New Window".to_string(), String::new()),
-            ("Close Window".to_string(), String::new()),
+            ("New Window".to_string(), String::new(), false),
+            ("Close Window".to_string(), String::new(), false),
         ];
 
         // Empty query → all items
@@ -196,8 +196,8 @@ mod tests {
     fn fuzzy_case_and_multi_char() {
         let mut fmatch = FuzzyMatch::new();
         let items = vec![
-            ("Resume".to_string(), String::new()),
-            ("Exit UI".to_string(), String::new()),
+            ("Resume".to_string(), String::new(), false),
+            ("Exit UI".to_string(), String::new(), false),
         ];
 
         // All queries are case-insensitive with CaseMatching::Ignore

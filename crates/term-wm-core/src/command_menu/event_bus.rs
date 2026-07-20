@@ -54,6 +54,7 @@ mod tests {
             icon: None,
             required_context: ContextMask::NONE,
             owner_id: Some(1),
+            disabled: false,
         }
     }
 

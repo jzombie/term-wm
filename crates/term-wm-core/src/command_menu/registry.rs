@@ -79,6 +79,7 @@ mod tests {
             icon: None,
             required_context,
             owner_id: None,
+            disabled: false,
         }
     }
 

@@ -118,6 +118,9 @@ impl MenuComponent {
         let hovered_style = Style::default()
             .bg(color_to_ratatui(theme.panel_active_bg))
             .fg(color_to_ratatui(theme.menu_fg));
+        let disabled_style = Style::default()
+            .bg(color_to_ratatui(theme.menu_bg))
+            .fg(color_to_ratatui(theme.text_disabled));
 
         let inner_x = area.x.saturating_add(1);
         let inner_width = area.width.saturating_sub(2).max(1);
@@ -152,9 +155,12 @@ impl MenuComponent {
             if y < bounds.y || y >= bounds.y.saturating_add(bounds.height) {
                 break;
             }
+            let item = &self.items[abs_idx];
             let is_selected = abs_idx == self.selected;
             let is_hovered = hovered_idx == Some(abs_idx);
-            let row_style = if is_selected {
+            let row_style = if item.disabled && !is_selected {
+                disabled_style
+            } else if is_selected {
                 selected_style
             } else if is_hovered {
                 hovered_style
@@ -172,7 +178,6 @@ impl MenuComponent {
                     cell.set_style(row_style);
                 }
             }
-            let item = &self.items[abs_idx];
             let marker = if is_selected {
                 ">"
             } else if is_hovered {
@@ -316,16 +321,19 @@ mod tests {
                 icon: None,
                 label: "First".into(),
                 action: TermWmAction::Quit,
+                disabled: false,
             },
             MenuItem {
                 icon: None,
                 label: "Second".into(),
                 action: TermWmAction::NewWindow,
+                disabled: false,
             },
             MenuItem {
                 icon: None,
                 label: "Third".into(),
                 action: TermWmAction::OpenHelp,
+                disabled: false,
             },
         ]);
         assert_eq!(menu.selected(), 0);
@@ -354,11 +362,13 @@ mod tests {
                 icon: None,
                 label: "One".into(),
                 action: TermWmAction::Quit,
+                disabled: false,
             },
             MenuItem {
                 icon: None,
                 label: "Two".into(),
                 action: TermWmAction::NewWindow,
+                disabled: false,
             },
         ]);
         assert_eq!(menu.selected(), 0);
@@ -380,11 +390,13 @@ mod tests {
                 icon: None,
                 label: "Zero".into(),
                 action: TermWmAction::Quit,
+                disabled: false,
             },
             MenuItem {
                 icon: None,
                 label: "One".into(),
                 action: TermWmAction::NewWindow,
+                disabled: false,
             },
         ]);
         assert_eq!(menu.selected_action(), Some(&TermWmAction::Quit));
@@ -409,11 +421,13 @@ mod tests {
                 icon: None,
                 label: "Item A".into(),
                 action: TermWmAction::Quit,
+                disabled: false,
             },
             MenuItem {
                 icon: Some("\u{2713}"),
                 label: "Item B".into(),
                 action: TermWmAction::NewWindow,
+                disabled: false,
             },
         ]);
         let area = Rect {

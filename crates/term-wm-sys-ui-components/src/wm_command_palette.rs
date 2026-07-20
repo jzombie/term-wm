@@ -83,6 +83,7 @@ impl WmCommandPaletteComponent {
                 icon: item.icon,
                 required_context: ContextMask::NONE,
                 owner_id: None,
+                disabled: item.disabled,
             };
             self.registry.register(node);
         }
