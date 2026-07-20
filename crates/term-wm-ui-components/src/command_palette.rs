@@ -24,6 +24,7 @@ pub struct PaletteItem {
     pub description: String,
     pub action: TermWmAction,
     pub icon: Option<&'static str>,
+    pub disabled: bool,
 }
 
 /// A universal, fuzzy-searchable Command Palette component.
@@ -40,7 +41,7 @@ pub struct CommandPaletteComponent {
     pub query_dirty: bool,
     pub current_context_mask: ContextMask,
     active_ids: Vec<CommandNodeId>,
-    display_items: Vec<(String, String)>,
+    display_items: Vec<(String, String, bool)>,
     nav_keys: KeyBindings,
     list_scroll: ScrollViewComponent<MenuComponent>,
     last_list_area: LayoutRect,
@@ -107,7 +108,7 @@ impl CommandPaletteComponent {
                 let node = registry.get(*id)?;
                 let display_name = node.name.format(self.current_context_mask);
                 let desc = node.description.clone().unwrap_or_default();
-                Some((display_name, desc))
+                Some((display_name, desc, node.disabled))
             })
             .collect();
         self.data_dirty = false;
@@ -120,14 +121,15 @@ impl CommandPaletteComponent {
             .iter()
             .filter_map(|&i| {
                 let id = self.active_ids.get(i)?;
-                let node_display = self.display_items.get(i)?;
-                let node_ref = self.registry_getter_placeholder(*id, node_display);
+                let (display_name, description, is_disabled) = self.display_items.get(i)?;
+                let node_ref = self.registry_getter_placeholder(*id, display_name, description);
                 Some(PaletteItem {
                     stable_id: node_ref.0,
                     display_name: node_ref.1,
                     description: node_ref.2,
                     action: node_ref.3,
                     icon: node_ref.4,
+                    disabled: *is_disabled,
                 })
             })
             .collect();
@@ -164,12 +166,13 @@ impl CommandPaletteComponent {
     fn registry_getter_placeholder(
         &self,
         _id: CommandNodeId,
-        node_display: &(String, String),
+        display_name: &str,
+        description: &str,
     ) -> (String, String, String, TermWmAction, Option<&'static str>) {
         (
             String::new(),
-            node_display.0.clone(),
-            node_display.1.clone(),
+            display_name.to_string(),
+            description.to_string(),
             TermWmAction::CloseMenu,
             None,
         )
@@ -198,7 +201,7 @@ impl CommandPaletteComponent {
             .iter()
             .filter_map(|&i| {
                 let id = *self.active_ids.get(i)?;
-                let (ref display_name, ref desc) = self.display_items[i];
+                let (ref display_name, ref desc, _disabled) = self.display_items[i];
                 let data = Self::extract_palette_data(id, display_name, desc, registry)?;
                 Some(PaletteItem {
                     stable_id: data.0,
@@ -206,6 +209,7 @@ impl CommandPaletteComponent {
                     description: data.2,
                     action: data.3,
                     icon: data.4,
+                    disabled: _disabled,
                 })
             })
             .collect();
@@ -302,7 +306,7 @@ impl Component<TermWmAction> for CommandPaletteComponent {
                 icon: p.icon,
                 label: Cow::Owned(p.display_name.clone()),
                 action: p.action.clone(),
-                disabled: false,
+                disabled: p.disabled,
             })
             .collect();
         self.list_scroll.content.borrow_mut().set_items(menu_items);
@@ -436,6 +440,7 @@ mod tests {
                 description: String::new(),
                 action: TermWmAction::NewWindow,
                 icon: Some("+"),
+                disabled: false,
             },
             PaletteItem {
                 stable_id: "core:close_window".to_string(),
@@ -443,6 +448,7 @@ mod tests {
                 description: String::new(),
                 action: TermWmAction::CloseWindow,
                 icon: Some("x"),
+                disabled: false,
             },
             PaletteItem {
                 stable_id: "core:help".to_string(),
@@ -450,6 +456,7 @@ mod tests {
                 description: String::new(),
                 action: TermWmAction::Help,
                 icon: Some("?"),
+                disabled: false,
             },
         ];
         palette
