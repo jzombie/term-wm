@@ -297,3 +297,145 @@ impl WmComponent for WmCommandPaletteComponent {
         self.dialog.visible()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use term_wm_core::components::MenuItem;
+
+    #[test]
+    fn new_default_state() {
+        let palette = WmCommandPaletteComponent::new();
+        assert!(!<WmCommandPaletteComponent as Overlay<TermWmAction>>::visible(&palette));
+        assert!(palette.registry.arena().is_empty());
+        assert_eq!(palette.selected_action(), None);
+    }
+
+    #[test]
+    fn show_and_close_toggle_visibility() {
+        let mut palette = WmCommandPaletteComponent::new();
+        palette.show();
+        assert!(<WmCommandPaletteComponent as Overlay<TermWmAction>>::visible(&palette));
+        palette.close();
+        assert!(!<WmCommandPaletteComponent as Overlay<TermWmAction>>::visible(&palette));
+    }
+
+    #[test]
+    fn set_items_populates_registry() {
+        let mut palette = WmCommandPaletteComponent::new();
+        palette.set_items(vec![
+            MenuItem {
+                icon: None,
+                label: "New Window".into(),
+                action: TermWmAction::NewWindow,
+                disabled: false,
+            },
+            MenuItem {
+                icon: None,
+                label: "Close".into(),
+                action: TermWmAction::CloseWindow,
+                disabled: false,
+            },
+        ]);
+        assert!(!palette.registry.arena().is_empty());
+    }
+
+    #[test]
+    fn selected_action_none_initially() {
+        let palette = WmCommandPaletteComponent::new();
+        assert_eq!(palette.selected_action(), None);
+    }
+
+    #[test]
+    fn set_managed_area_stores_area() {
+        let mut palette = WmCommandPaletteComponent::new();
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 50,
+        };
+        palette.set_managed_area(area);
+        assert_eq!(palette.managed_area, area);
+    }
+
+    #[test]
+    fn set_context_mask_applies_to_inner_palette() {
+        let mut palette = WmCommandPaletteComponent::new();
+        let mask = ContextMask::HAS_FOCUS | ContextMask::CAN_SPLIT;
+        palette.set_context_mask(mask);
+        assert_eq!(palette.palette.current_context_mask, mask);
+    }
+
+    #[test]
+    fn hitbox_id_always_present() {
+        let palette = WmCommandPaletteComponent::new();
+        assert!(palette.hitbox_id().is_some());
+    }
+
+    #[test]
+    fn selecting_disabled_item_returns_no_action() {
+        let mut palette = WmCommandPaletteComponent::new();
+        palette.set_items(vec![
+            MenuItem {
+                icon: None,
+                label: "Enabled".into(),
+                action: TermWmAction::NewWindow,
+                disabled: false,
+            },
+            MenuItem {
+                icon: None,
+                label: "Disabled".into(),
+                action: TermWmAction::CloseWindow,
+                disabled: true,
+            },
+        ]);
+        palette.show();
+        palette.refresh_if_dirty();
+        assert_eq!(palette.selected_action(), None);
+    }
+
+    #[test]
+    fn process_action_restore_resets_state() {
+        let mut palette = WmCommandPaletteComponent::new();
+        palette.show();
+        palette.palette.query = "test".to_string();
+        palette.palette.selected = 5;
+        palette.palette.data_dirty = false;
+        palette.palette.query_dirty = false;
+
+        palette.process_action(&ComponentAction::Restore);
+
+        assert!(<WmCommandPaletteComponent as Overlay<TermWmAction>>::visible(&palette));
+        assert!(palette.palette.query.is_empty());
+        assert_eq!(palette.palette.selected, 0);
+        assert!(palette.palette.data_dirty);
+        assert!(palette.palette.query_dirty);
+    }
+
+    #[test]
+    fn process_action_set_menu_items_replaces_registry() {
+        let mut palette = WmCommandPaletteComponent::new();
+        palette.process_action(&ComponentAction::SetMenuItems(vec![MenuItem {
+            icon: None,
+            label: "Test".into(),
+            action: TermWmAction::NewWindow,
+            disabled: false,
+        }]));
+        assert!(!palette.registry.arena().is_empty());
+    }
+
+    #[test]
+    fn consume_area_returns_default_and_available() {
+        let mut palette = WmCommandPaletteComponent::new();
+        let available = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 50,
+        };
+        let (consumed, remaining) = palette.consume_area(available);
+        assert_eq!(consumed, LayoutRect::default());
+        assert_eq!(remaining, available);
+    }
+}

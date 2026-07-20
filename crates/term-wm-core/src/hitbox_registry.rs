@@ -550,4 +550,110 @@ mod tests {
         let mut reg = HitboxRegistry::new();
         reg.pop_clip();
     }
+
+    #[test]
+    #[should_panic(expected = "register_active called without active_owner")]
+    fn register_active_panics_without_owner() {
+        let mut reg = HitboxRegistry::new();
+        reg.register_active(
+            HitboxId::new(),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
+        );
+    }
+
+    #[test]
+    fn register_active_with_owner_succeeds() {
+        let mut reg = HitboxRegistry::with_owner(ComponentOwner::Test);
+        let id = HitboxId::new();
+        reg.register_active(
+            id,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
+        );
+        assert_eq!(reg.len(), 1);
+        let (hit_id, owner, _rect) = reg.hit_test(screen_pos(5, 5)).unwrap();
+        assert_eq!(hit_id, id);
+        assert_eq!(owner, ComponentOwner::Test);
+    }
+
+    #[test]
+    fn overlay_entries_hit_before_standard() {
+        let mut reg = HitboxRegistry::new();
+        let standard_id = HitboxId::new();
+        let overlay_id = HitboxId::new();
+        let mut slotmap = slotmap::SlotMap::<OverlayKey, ()>::with_key();
+        let overlay_key = slotmap.insert(());
+        reg.register(
+            standard_id,
+            ComponentOwner::Test,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 20,
+                height: 20,
+            },
+        );
+        reg.register(
+            overlay_id,
+            ComponentOwner::Overlay(overlay_key),
+            LayoutRect {
+                x: 5,
+                y: 5,
+                width: 10,
+                height: 10,
+            },
+        );
+        let (hit_id, owner, _rect) = reg.hit_test(screen_pos(7, 7)).unwrap();
+        assert_eq!(hit_id, overlay_id);
+        assert!(matches!(owner, ComponentOwner::Overlay(_)));
+    }
+
+    #[test]
+    fn swap_entries_exchanges_registries() {
+        let mut a = HitboxRegistry::new();
+        let mut b = HitboxRegistry::new();
+        let id_a = HitboxId::new();
+        let id_b = HitboxId::new();
+        a.register(
+            id_a,
+            ComponentOwner::Test,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 5,
+                height: 5,
+            },
+        );
+        b.register(
+            id_b,
+            ComponentOwner::Test,
+            LayoutRect {
+                x: 10,
+                y: 10,
+                width: 5,
+                height: 5,
+            },
+        );
+        a.swap_entries(&mut b);
+        assert!(a.hit_test(screen_pos(2, 2)).is_none());
+        assert!(a.hit_test(screen_pos(12, 12)).is_some());
+        assert!(b.hit_test(screen_pos(2, 2)).is_some());
+        assert!(b.hit_test(screen_pos(12, 12)).is_none());
+    }
+
+    #[test]
+    fn with_owner_sets_active_owner() {
+        let reg = HitboxRegistry::with_owner(ComponentOwner::Test);
+        assert!(reg.active_owner.is_some());
+        assert_eq!(reg.active_owner.unwrap(), ComponentOwner::Test);
+    }
 }
