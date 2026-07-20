@@ -51,6 +51,3 @@ pub const TEXT_SELECTION_DRAG_IDLE_TIMEOUT_HORIZONTAL: Duration = Duration::from
 pub const SHADOW_OFFSET_X: i32 = 2;
 /// Vertical offset (in rows) for floating window drop shadow.
 pub const SHADOW_OFFSET_Y: i32 = 1;
-
-/// Z-index for notification toast regions — above overlays (10), below cursor.
-pub const NOTIFICATION_Z_INDEX: usize = 20;

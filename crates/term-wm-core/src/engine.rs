@@ -1,5 +1,4 @@
-use crate::constants::NOTIFICATION_Z_INDEX;
-use crate::draw_plan::{DrawPlan, RegionType, RenderRegion};
+use crate::draw_plan::{DrawPlan, RegionType, RenderRegion, ZLayer};
 use crate::window::WindowManager;
 use term_wm_layout_engine::LayoutRect;
 
@@ -33,7 +32,7 @@ impl CoreEngine {
     ) -> &DrawPlan {
         // Check if either the engine or the WindowManager has changed
         if !self.is_dirty && !wm.layout_dirty() {
-            self.draw_plan.sort_by_z_index();
+            self.draw_plan.sort_by_layer();
             return &self.draw_plan;
         }
 
@@ -58,8 +57,8 @@ impl CoreEngine {
             self.draw_plan.apply_monocle_z_order(focused_key);
         }
 
-        // Sort by z-index for correct layering
-        self.draw_plan.sort_by_z_index();
+        // Sort by layer for correct layering
+        self.draw_plan.sort_by_layer();
 
         // Mark as clean
         self.is_dirty = false;
@@ -89,7 +88,7 @@ impl CoreEngine {
 
             self.draw_plan.push(RenderRegion {
                 bounds: layout_rect,
-                z_index: 0, // Windows at base layer
+                layer: ZLayer::TiledWindow,
                 dimmed: !is_focused,
                 region_type: RegionType::Window(window_key),
                 hidden: false,
@@ -180,7 +179,7 @@ fn generate_notification_regions(plan: &mut DrawPlan, wm: &WindowManager) {
                 width: actual_w,
                 height: h,
             },
-            z_index: NOTIFICATION_Z_INDEX,
+            layer: ZLayer::Notification,
             dimmed: false,
             region_type: RegionType::Notification(Arc::clone(&notification.message)),
             hidden: false,

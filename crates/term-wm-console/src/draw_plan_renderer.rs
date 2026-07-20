@@ -8,7 +8,7 @@ use term_wm_core::actions::TermWmAction;
 use term_wm_core::component_context::ComponentContext;
 use term_wm_core::components::{Component, ComponentAction, TopPanelState};
 use term_wm_core::constants::{SHADOW_OFFSET_X, SHADOW_OFFSET_Y};
-use term_wm_core::draw_plan::{DrawPlan, RegionType, RenderRegion};
+use term_wm_core::draw_plan::{DrawPlan, RegionType, RenderRegion, ZLayer};
 use term_wm_core::hitbox_registry::HitboxRegistry;
 use term_wm_core::layout::floating::{ResizeEdge, ResizeHandle};
 use term_wm_core::layout::rect_contains;
@@ -90,7 +90,7 @@ impl DrawPlanRenderer {
             match &region.region_type {
                 RegionType::Window(key) => {
                     if let Some(component) = wm.component_for_key_mut(*key) {
-                        if region.z_index < 10 {
+                        if region.layer <= ZLayer::TiledWindow {
                             self.render_window_composite_to_buffer(
                                 target_buf,
                                 area,
@@ -237,9 +237,7 @@ impl DrawPlanRenderer {
             match &region.region_type {
                 RegionType::Window(key) => {
                     if let Some(component) = wm.component_for_key_mut(*key) {
-                        // TODO: Don't hardcode magic number
-                        // For window content, use offscreen compositing
-                        if region.z_index < 10 {
+                        if region.layer <= ZLayer::TiledWindow {
                             self.render_window_composite(
                                 frame,
                                 area,
@@ -248,7 +246,6 @@ impl DrawPlanRenderer {
                                 hitbox_registry,
                             );
                         } else {
-                            // For panels/overlays, render directly to frame
                             self.render_direct(frame, area, component, region);
                         }
                     }
