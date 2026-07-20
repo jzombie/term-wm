@@ -5320,9 +5320,17 @@ mod tests {
         });
 
         wm.register_layout_handle_hitboxes();
+        let handles = wm.handles.clone();
+        for handle in &handles {
+            wm.hitbox_registry.register(
+                handle.hitbox_id,
+                ComponentOwner::Chrome(crate::chrome::ChromeTarget::SplitHandle(handle.hitbox_id)),
+                handle.rect,
+            );
+        }
 
         // Verify at least one entry exists at the gap position.
-        let gap = &wm.handles[0].rect;
+        let gap = &handles[0].rect;
         let pos = crate::mouse_coord::MousePosition {
             column: (gap.x + i32::from(gap.width) / 2) as i16,
             row: (gap.y + i32::from(gap.height) / 2) as i16,
