@@ -35,8 +35,7 @@ pub fn content_rect(full: Rect, borders_enabled: bool, header_enabled: bool) -> 
         full.x
     };
     let y = if borders_enabled && header_enabled {
-        full.y + i32::from(TOP_BORDER_HEIGHT)
-            + i32::from(HEADER_HEIGHT)
+        full.y + i32::from(TOP_BORDER_HEIGHT) + i32::from(HEADER_HEIGHT)
     } else if header_enabled {
         full.y + i32::from(HEADER_HEIGHT)
     } else if borders_enabled {
@@ -45,16 +44,19 @@ pub fn content_rect(full: Rect, borders_enabled: bool, header_enabled: bool) -> 
         full.y
     };
     let width = if borders_enabled {
-        full.width.saturating_sub(LEFT_BORDER_WIDTH + RIGHT_BORDER_WIDTH)
+        full.width
+            .saturating_sub(LEFT_BORDER_WIDTH + RIGHT_BORDER_WIDTH)
     } else {
         full.width
     };
     let height = if borders_enabled && header_enabled {
-        full.height.saturating_sub(TOP_BORDER_HEIGHT + HEADER_HEIGHT + BOTTOM_BORDER_HEIGHT)
+        full.height
+            .saturating_sub(TOP_BORDER_HEIGHT + HEADER_HEIGHT + BOTTOM_BORDER_HEIGHT)
     } else if header_enabled {
         full.height.saturating_sub(HEADER_HEIGHT)
     } else if borders_enabled {
-        full.height.saturating_sub(TOP_BORDER_HEIGHT + BOTTOM_BORDER_HEIGHT)
+        full.height
+            .saturating_sub(TOP_BORDER_HEIGHT + BOTTOM_BORDER_HEIGHT)
     } else {
         full.height
     };

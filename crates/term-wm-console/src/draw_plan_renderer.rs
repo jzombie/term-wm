@@ -54,10 +54,7 @@ struct ChromeHitboxParams {
 /// Register chrome hitboxes for a window (resize, drag, close, maximize buttons).
 /// `frame_size` is (width, height) of the window frame. `screen_origin` is the screen-space
 /// top-left coordinate (x, y). Also registers a content-area hitbox.
-fn register_window_chrome_hitboxes(
-    registry: &mut HitboxRegistry,
-    params: &ChromeHitboxParams,
-) {
+fn register_window_chrome_hitboxes(registry: &mut HitboxRegistry, params: &ChromeHitboxParams) {
     use term_wm_core::chrome::ChromeTarget;
     use term_wm_core::hitbox_registry::ComponentOwner;
     use term_wm_core::layout::floating::ResizeEdge;
@@ -122,7 +119,11 @@ fn register_window_chrome_hitboxes(
         } else {
             0
         };
-        let drag_x = if *borders_enabled { LEFT_BORDER_WIDTH } else { 0 };
+        let drag_x = if *borders_enabled {
+            LEFT_BORDER_WIDTH
+        } else {
+            0
+        };
         let drag_w = if *borders_enabled {
             width.saturating_sub(LEFT_BORDER_WIDTH + RIGHT_BORDER_WIDTH)
         } else {
@@ -1011,9 +1012,7 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
                     let is_hovered = hover_pos == Some((bx, header_y));
                     let style = if is_hovered {
                         let (hover_bg, hover_fg) = match btn.action {
-                            TermWmAction::CloseWindow => {
-                                (theme.error.to_ratatui(), contrast_fg)
-                            }
+                            TermWmAction::CloseWindow => (theme.error.to_ratatui(), contrast_fg),
                             TermWmAction::MinimizeWindow => {
                                 (theme.warning.to_ratatui(), contrast_fg)
                             }
@@ -1627,10 +1626,26 @@ mod tests {
 
     fn test_wm_buttons() -> Vec<WmButton> {
         vec![
-            WmButton { action: TermWmAction::CloseWindow, label: "Close Window", symbol: "X" },
-            WmButton { action: TermWmAction::MaximizeWindow, label: "Maximize Window", symbol: "▢" },
-            WmButton { action: TermWmAction::MinimizeWindow, label: "Minimize Window", symbol: "_" },
-            WmButton { action: TermWmAction::ToggleDirectMode, label: "Toggle Direct Mode", symbol: "D" },
+            WmButton {
+                action: TermWmAction::CloseWindow,
+                label: "Close Window",
+                symbol: "X",
+            },
+            WmButton {
+                action: TermWmAction::MaximizeWindow,
+                label: "Maximize Window",
+                symbol: "▢",
+            },
+            WmButton {
+                action: TermWmAction::MinimizeWindow,
+                label: "Minimize Window",
+                symbol: "_",
+            },
+            WmButton {
+                action: TermWmAction::ToggleDirectMode,
+                label: "Toggle Direct Mode",
+                symbol: "D",
+            },
         ]
     }
 
