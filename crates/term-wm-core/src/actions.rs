@@ -23,6 +23,9 @@ pub enum WmInputMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ActionLayer {
+    /// Global actions available regardless of overlay state
+    /// (window management, navigation, system commands).
+    Global,
     /// Only active when the WM overlay (menu) is visible.
     WmMode,
 }
@@ -165,7 +168,10 @@ impl TermWmAction {
     pub fn layer(&self) -> ActionLayer {
         // All actions are WmMode — the command palette is triggered
         // via FAB tap or explicit keyboard shortcut, not a global layer.
-        ActionLayer::WmMode
+        match self {
+            TermWmAction::OpenCommandPalette => ActionLayer::Global,
+            _ => ActionLayer::WmMode,
+        }
     }
 
     pub fn category(&self) -> Category {
