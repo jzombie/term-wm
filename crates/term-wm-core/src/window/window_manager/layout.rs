@@ -375,9 +375,10 @@ impl WindowManager {
             let Some(spec) = self.floating_rect(floating_key) else {
                 continue;
             };
-            let rect = spec.resolve(self.managed_area);
-            self.regions.set(floating_key, rect);
-            let _visible = self.visible_rect_from_spec(spec);
+
+            let visible = self.visible_rect_from_spec(spec);
+            self.regions.set(floating_key, visible);
+            //
             // Resize handle hitboxes are registered by the console during render.
             active_keys.push(floating_key);
         }
