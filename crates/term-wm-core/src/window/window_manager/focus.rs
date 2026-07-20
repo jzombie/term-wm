@@ -74,6 +74,7 @@ impl WindowManager {
             }
             if let Some(w) = self.windows.get_mut(key) {
                 w.is_maximized = false;
+                w.borders_enabled = true;
             }
         }
     }

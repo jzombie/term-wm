@@ -27,6 +27,7 @@ impl WindowManager {
                 }
                 if let Some(w) = self.windows.get_mut(key) {
                     w.is_maximized = false;
+                    w.borders_enabled = true;
                 }
             } else {
                 // Maximize: save current and expand
@@ -34,6 +35,7 @@ impl WindowManager {
                 self.set_floating_rect(key, Some(full));
                 if let Some(w) = self.windows.get_mut(key) {
                     w.is_maximized = true;
+                    w.borders_enabled = false;
                 }
             }
             self.bring_floating_to_front_key(key);
@@ -63,6 +65,7 @@ impl WindowManager {
         self.set_floating_rect(key, Some(full));
         if let Some(w) = self.windows.get_mut(key) {
             w.is_maximized = true;
+            w.borders_enabled = false;
         }
         self.bring_floating_to_front_key(key);
     }

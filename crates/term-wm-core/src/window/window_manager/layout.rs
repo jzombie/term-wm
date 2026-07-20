@@ -190,24 +190,9 @@ impl WindowManager {
         if prev == curr {
             return;
         }
-        // Monocle state changed: toggle borders on all windows
-        if curr {
-            // Entering monocle: save border state and disable
-            self.saved_borders = self
-                .windows
-                .iter()
-                .map(|(k, w)| (k, w.borders_enabled))
-                .collect();
-            for (_, window) in self.windows.iter_mut() {
-                window.borders_enabled = false;
-            }
-        } else {
-            // Exiting monocle: restore saved border state
-            for (key, saved) in self.saved_borders.drain(..) {
-                if let Some(window) = self.windows.get_mut(key) {
-                    window.borders_enabled = saved;
-                }
-            }
+        // Monocle state changed: turn borders off in monocle, on otherwise
+        for (_, window) in self.windows.iter_mut() {
+            window.borders_enabled = !curr;
         }
     }
 
