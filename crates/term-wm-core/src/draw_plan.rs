@@ -503,8 +503,22 @@ pub mod tests {
 
             let mut plan = DrawPlan::with_capacity(4);
             plan.push(make_region(key1, 0, 0, 80, 20, ZLayer::TiledWindow));
-            plan.push(make_panel_region(PanelPosition::Top, 0, 0, 80, 2, ZLayer::Panel));
-            plan.push(make_panel_region(PanelPosition::Bottom, 0, 22, 80, 2, ZLayer::Panel));
+            plan.push(make_panel_region(
+                PanelPosition::Top,
+                0,
+                0,
+                80,
+                2,
+                ZLayer::Panel,
+            ));
+            plan.push(make_panel_region(
+                PanelPosition::Bottom,
+                0,
+                22,
+                80,
+                2,
+                ZLayer::Panel,
+            ));
 
             let screen = LayoutRect {
                 x: 0,
