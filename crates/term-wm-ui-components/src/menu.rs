@@ -214,6 +214,7 @@ impl Component<TermWmAction> for MenuComponent {
             let idx = (my.saturating_sub(area.y).saturating_sub(header_offset)) as usize + offset_y;
             (idx < self.items.len()).then_some(idx)
         });
+
         self.render_items(
             &mut backend.buffer,
             area,

@@ -532,29 +532,15 @@ pub fn render_overlays(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut
 
     let hover_pos = wm.hover_pos();
 
-    // Pre-compute overlay IDs
+    // Overlays (help, exit confirm, command palette)
     let overlay_ids: Vec<OverlayId> = wm.overlays().keys().copied().collect();
-
-    // Command palette — render from overlays BTreeMap (same as help/exit confirm)
-    if wm.command_palette_visible()
-        && let Some(palette) = wm.overlays_mut().get_mut(&OverlayId::CommandPalette)
-    {
-        let mut hitbox = HitboxRegistry::new();
-        let ctx = ComponentContext::new(false)
-            .with_overlay(true)
-            .with_screen_area(full_area)
-            .with_hover_pos(hover_pos);
-        palette.render(backend, full_area, &ctx, &mut hitbox);
-        wm.hitbox_registry_mut().merge(hitbox);
-    }
-
-    // Overlays (help, exit confirm)
     for id in overlay_ids {
         if let Some(overlay) = wm.overlays_mut().get_mut(&id) {
             let mut hitbox = HitboxRegistry::new();
             let ctx = ComponentContext::new(false)
                 .with_overlay(true)
-                .with_screen_area(full_area);
+                .with_screen_area(full_area)
+                .with_hover_pos(hover_pos);
             overlay.render(backend, full_area, &ctx, &mut hitbox);
             wm.hitbox_registry_mut().merge(hitbox);
         }
