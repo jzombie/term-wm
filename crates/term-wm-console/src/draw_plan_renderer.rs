@@ -161,10 +161,19 @@ fn register_window_chrome_hitboxes(
     }
 
     // Content area hitbox (inner bounds, screen-space)
+    let (cx, cy, cw, ch) = if *borders_enabled && *header_enabled {
+        (1u16, 2u16, width.saturating_sub(2), height.saturating_sub(3))
+    } else if *header_enabled {
+        (0u16, 2u16, width, height.saturating_sub(2))
+    } else if *borders_enabled {
+        (1u16, 1u16, width.saturating_sub(2), height.saturating_sub(2))
+    } else {
+        (0u16, 0u16, width, height)
+    };
     registry.register(
         *content_hitbox_id,
         ComponentOwner::Window(*key),
-        to_screen(1, 2, width.saturating_sub(2), height.saturating_sub(3)),
+        to_screen(cx, cy, cw, ch),
     );
 }
 
@@ -220,13 +229,39 @@ pub fn render_window_chrome(
     );
 
     // Return inner content bounds
-    LayoutRect {
-        x: i32::from(LEFT_BORDER_WIDTH),
-        y: i32::from(TOP_BORDER_HEIGHT.saturating_add(HEADER_HEIGHT)),
-        width: width.saturating_sub(LEFT_BORDER_WIDTH.saturating_add(RIGHT_BORDER_WIDTH)),
-        height: height.saturating_sub(
+    let content_x = if ctx.borders_enabled {
+        LEFT_BORDER_WIDTH
+    } else {
+        0
+    };
+    let content_y = if ctx.header_enabled {
+        TOP_BORDER_HEIGHT.saturating_add(HEADER_HEIGHT)
+    } else if ctx.borders_enabled {
+        TOP_BORDER_HEIGHT
+    } else {
+        0
+    };
+    let content_width = if ctx.borders_enabled {
+        width.saturating_sub(LEFT_BORDER_WIDTH.saturating_add(RIGHT_BORDER_WIDTH))
+    } else {
+        width
+    };
+    let content_height = if ctx.header_enabled && ctx.borders_enabled {
+        height.saturating_sub(
             TOP_BORDER_HEIGHT.saturating_add(HEADER_HEIGHT.saturating_add(BOTTOM_BORDER_HEIGHT)),
-        ),
+        )
+    } else if ctx.header_enabled {
+        height.saturating_sub(TOP_BORDER_HEIGHT.saturating_add(HEADER_HEIGHT))
+    } else if ctx.borders_enabled {
+        height.saturating_sub(TOP_BORDER_HEIGHT.saturating_add(BOTTOM_BORDER_HEIGHT))
+    } else {
+        height
+    };
+    LayoutRect {
+        x: i32::from(content_x),
+        y: i32::from(content_y),
+        width: content_width,
+        height: content_height,
     }
 }
 
@@ -929,7 +964,11 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
     let outer_bottom = outer_top
         .saturating_add(rect.height)
         .saturating_sub(EDGE_INDEX_ADJUST);
-    let header_y = outer_top.saturating_add(TOP_BORDER_HEIGHT);
+    let header_y = if borders_enabled {
+        outer_top.saturating_add(TOP_BORDER_HEIGHT)
+    } else {
+        outer_top
+    };
 
     if header_enabled {
         for x in outer_left.saturating_add(LEFT_BORDER_WIDTH)..outer_right {
