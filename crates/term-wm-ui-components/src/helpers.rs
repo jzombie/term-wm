@@ -22,6 +22,7 @@ pub fn layout_rect_to_clipped_rect(area: LayoutRect) -> Rect {
 /// Translates a global screen coordinate into a component-local coordinate.
 /// Returns None if the coordinate falls outside the component's bounds.
 /// Use this for click targets, link hits, and other "reject if outside" cases.
+#[inline]
 pub fn localize_coordinate(
     area: LayoutRect,
     global_col: u16,
@@ -41,6 +42,7 @@ pub fn localize_coordinate(
 /// clamping to the nearest edge if it falls outside bounds.
 /// Use this for text selection dragging or scrollbar dragging where
 /// dragging past the edge means "select to the edge".
+#[inline]
 pub fn localize_coordinate_clamped(
     area: LayoutRect,
     global_col: u16,
@@ -49,13 +51,17 @@ pub fn localize_coordinate_clamped(
     if area.width == 0 || area.height == 0 {
         return None;
     }
-    let g_col = i32::from(global_col);
-    let g_row = i32::from(global_row);
-    let max_x = area.x.saturating_add(i32::from(area.width)).saturating_sub(1);
-    let max_y = area.y.saturating_add(i32::from(area.height)).saturating_sub(1);
-    let clamped_col = g_col.clamp(area.x, max_x);
-    let clamped_row = g_row.clamp(area.y, max_y);
-    Some(((clamped_col - area.x) as u16, (clamped_row - area.y) as u16))
+    let max_x = area
+        .x
+        .saturating_add(i32::from(area.width))
+        .saturating_sub(1);
+    let max_y = area
+        .y
+        .saturating_add(i32::from(area.height))
+        .saturating_sub(1);
+    let clamped_col = i32::from(global_col).clamp(area.x, max_x) as u16;
+    let clamped_row = i32::from(global_row).clamp(area.y, max_y) as u16;
+    localize_coordinate(area, clamped_col, clamped_row)
 }
 
 pub fn color_to_ratatui(c: term_wm_core::theme::Color) -> Color {
