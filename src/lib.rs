@@ -143,9 +143,15 @@ pub fn render_app(
                     content_hitbox_id,
                     win_ctx,
                     |backend, content_bounds| {
+                        let screen_area = Rect {
+                            x: content_bounds.x + surface.dest.x,
+                            y: content_bounds.y + surface.dest.y,
+                            width: content_bounds.width,
+                            height: content_bounds.height,
+                        };
                         let ctx = wm
                             .component_context_for(focused, *key)
-                            .with_screen_area(content_bounds);
+                            .with_screen_area(screen_area);
                         if let Some(component) = wm.component_for_key_mut(*key) {
                             let mut local_hb =
                                 HitboxRegistry::with_owner(ComponentOwner::Window(*key));
