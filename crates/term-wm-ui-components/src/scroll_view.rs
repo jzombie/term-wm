@@ -6,6 +6,9 @@ use ratatui::prelude::Rect;
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 use term_wm_core::events::{Event, MouseEvent, MouseEventKind};
 
+// NOTE: Only used in the render() path where coordinates are always on-screen
+// (safe to convert to unsigned Rect). Event handling paths must never use this
+// because screen_area() may contain negative coordinates.
 use crate::helpers::layout_rect_to_rect;
 use ratatui::widgets::StatefulWidget;
 use term_wm_core::actions::{EventResult, TermWmAction};
@@ -36,7 +39,7 @@ impl ScrollbarDrag {
     pub fn handle_mouse(
         &mut self,
         mouse: &MouseEvent,
-        area: Rect,
+        area: LayoutRect,
         total: usize,
         view: usize,
         axis: ScrollbarAxis,
@@ -52,12 +55,12 @@ impl ScrollbarDrag {
 
         let on_scrollbar = match axis {
             ScrollbarAxis::Vertical => {
-                let scrollbar_x = area.x.saturating_add(area.width.saturating_sub(1));
-                rect_contains(area, mouse.column, mouse.row) && mouse.column == scrollbar_x
+                let scrollbar_x = area.x.saturating_add(i32::from(area.width.saturating_sub(1)));
+                rect_contains(area, mouse.column, mouse.row) && i32::from(mouse.column) == scrollbar_x
             }
             ScrollbarAxis::Horizontal => {
-                let scrollbar_y = area.y.saturating_add(area.height.saturating_sub(1));
-                rect_contains(area, mouse.column, mouse.row) && mouse.row == scrollbar_y
+                let scrollbar_y = area.y.saturating_add(i32::from(area.height.saturating_sub(1)));
+                rect_contains(area, mouse.column, mouse.row) && i32::from(mouse.row) == scrollbar_y
             }
         };
 
@@ -129,37 +132,41 @@ pub fn render_scrollbar_oriented(
 
 // --- Internal Math ---
 
-fn scrollbar_offset_from_row(row: u16, area: Rect, total: usize, view: usize) -> usize {
+fn scrollbar_offset_from_row(row: u16, area: LayoutRect, total: usize, view: usize) -> usize {
     let content_len = total.saturating_sub(view).saturating_add(1).max(1);
     let max_offset = content_len.saturating_sub(1);
     if max_offset == 0 || area.height <= 1 {
         return 0;
     }
-    let rel = row
+    let rel = i32::from(row)
         .saturating_sub(area.y)
-        .min(area.height.saturating_sub(1));
-    let ratio = rel as f64 / (area.height.saturating_sub(1)) as f64;
+        .min(i32::from(area.height.saturating_sub(1))) as u16;
+    let ratio = f64::from(rel) / f64::from(area.height.saturating_sub(1));
     (ratio * max_offset as f64).round() as usize
 }
 
-fn scrollbar_offset_from_col(col: u16, area: Rect, total: usize, view: usize) -> usize {
+fn scrollbar_offset_from_col(col: u16, area: LayoutRect, total: usize, view: usize) -> usize {
     let content_len = total.saturating_sub(view).saturating_add(1).max(1);
     let max_offset = content_len.saturating_sub(1);
     if max_offset == 0 || area.width <= 1 {
         return 0;
     }
-    let rel = col.saturating_sub(area.x).min(area.width.saturating_sub(1));
-    let ratio = rel as f64 / (area.width.saturating_sub(1)) as f64;
+    let rel = i32::from(col)
+        .saturating_sub(area.x)
+        .min(i32::from(area.width.saturating_sub(1))) as u16;
+    let ratio = f64::from(rel) / f64::from(area.width.saturating_sub(1));
     (ratio * max_offset as f64).round() as usize
 }
 
-fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
+fn rect_contains(rect: LayoutRect, column: u16, row: u16) -> bool {
     if rect.width == 0 || rect.height == 0 {
         return false;
     }
-    let max_x = rect.x.saturating_add(rect.width);
-    let max_y = rect.y.saturating_add(rect.height);
-    column >= rect.x && column < max_x && row >= rect.y && row < max_y
+    let col = i32::from(column);
+    let row_val = i32::from(row);
+    let max_x = rect.x.saturating_add(i32::from(rect.width));
+    let max_y = rect.y.saturating_add(i32::from(rect.height));
+    col >= rect.x && col < max_x && row_val >= rect.y && row_val < max_y
 }
 
 // --- ScrollView Component Wrapper ---
@@ -250,27 +257,41 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
         };
         let state = self.scroll_state.borrow();
         let content_h = state.content_height;
-        let view_h = state.height;
         let content_w = state.content_width;
-        let view_w = state.width;
         drop(state);
 
-        let va = ctx
-            .screen_area()
-            .map(|sa| self.compute_layout(layout_rect_to_rect(sa)))
-            .unwrap_or_default();
+        // Compute viewport area using LayoutRect (signed i32 coordinates).
+        // This duplicates compute_layout logic to avoid converting screen_area()
+        // to Rect, which truncates negative coordinates.
+        let sa = ctx.screen_area().unwrap_or_default();
+        let vp_w = sa.width;
+        let vp_h = sa.height;
+        let mut vp_inner_w = vp_w;
+        let mut vp_inner_h = vp_h;
+        if content_h > vp_h as usize && vp_w > 0 {
+            vp_inner_w = vp_w.saturating_sub(1);
+        }
+        if content_w > vp_w as usize && vp_h > 0 {
+            vp_inner_h = vp_h.saturating_sub(1);
+        }
+        let va = LayoutRect {
+            x: sa.x,
+            y: sa.y,
+            width: vp_inner_w,
+            height: vp_inner_h,
+        };
 
         // Vertical scrollbar: assumes it is immediately to the right of viewport
-        if content_h > view_h {
-            let sb_area = Rect {
-                x: va.x.saturating_add(va.width),
+        if content_h > vp_h as usize {
+            let sb_area = LayoutRect {
+                x: va.x.saturating_add(i32::from(va.width)),
                 y: va.y,
                 width: 1,
                 height: va.height,
             };
             if let Some(new_off) =
                 self.v_drag
-                    .handle_mouse(mouse, sb_area, content_h, view_h, ScrollbarAxis::Vertical)
+                    .handle_mouse(mouse, sb_area, content_h, vp_h as usize, ScrollbarAxis::Vertical)
             {
                 let mut st = self.scroll_state.borrow_mut();
                 st.offset_y = new_off;
@@ -279,10 +300,10 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
             }
         }
 
-        if content_w > view_w {
-            let sb_area = Rect {
+        if content_w > vp_w as usize {
+            let sb_area = LayoutRect {
                 x: va.x,
-                y: va.y.saturating_add(va.height),
+                y: va.y.saturating_add(i32::from(va.height)),
                 width: va.width,
                 height: 1,
             };
@@ -290,7 +311,7 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
                 mouse,
                 sb_area,
                 content_w,
-                view_w,
+                vp_w as usize,
                 ScrollbarAxis::Horizontal,
             ) {
                 let mut st = self.scroll_state.borrow_mut();
@@ -573,12 +594,12 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::prelude::Rect;
     use term_wm_core::events::{MouseButton, MouseEvent, MouseEventKind};
+    use term_wm_layout_engine::LayoutRect;
 
     #[test]
     fn scrollbar_offset_from_row_edges() {
-        let area = Rect {
+        let area = LayoutRect {
             x: 0,
             y: 0,
             width: 5,
@@ -587,7 +608,7 @@ mod tests {
         let total = 100usize;
         let view = 10usize;
         let top = scrollbar_offset_from_row(0, area, total, view);
-        let bottom = scrollbar_offset_from_row(area.y + area.height - 1, area, total, view);
+        let bottom = scrollbar_offset_from_row(area.height - 1, area, total, view);
         assert_eq!(top, 0);
         let max_offset = total
             .saturating_sub(view)
@@ -599,7 +620,7 @@ mod tests {
     #[test]
     fn drag_handle_mouse_lifecycle() {
         let mut drag = ScrollbarDrag::new();
-        let area = Rect {
+        let area = LayoutRect {
             x: 0,
             y: 0,
             width: 4,
@@ -607,12 +628,12 @@ mod tests {
         };
         let total = 20usize;
         let view = 5usize;
-        let scrollbar_x = area.x.saturating_add(area.width.saturating_sub(1));
+        let scrollbar_x = area.x.saturating_add(i32::from(area.width.saturating_sub(1))) as u16;
         use term_wm_core::events::KeyModifiers;
         let down = MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
             column: scrollbar_x,
-            row: area.y + 1,
+            row: (area.y + 1) as u16,
             modifiers: KeyModifiers::NONE,
         };
         let resp = drag.handle_mouse(&down, area, total, view, ScrollbarAxis::Vertical);
@@ -622,7 +643,7 @@ mod tests {
         let drag_evt = MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
             column: scrollbar_x,
-            row: area.y + 2,
+            row: (area.y + 2) as u16,
             modifiers: KeyModifiers::NONE,
         };
         let resp2 = drag.handle_mouse(&drag_evt, area, total, view, ScrollbarAxis::Vertical);
@@ -632,7 +653,7 @@ mod tests {
         let up = MouseEvent {
             kind: MouseEventKind::Release(MouseButton::Left),
             column: scrollbar_x,
-            row: area.y + 2,
+            row: (area.y + 2) as u16,
             modifiers: KeyModifiers::NONE,
         };
         let resp3 = drag.handle_mouse(&up, area, total, view, ScrollbarAxis::Vertical);
@@ -643,7 +664,7 @@ mod tests {
     #[test]
     fn horizontal_drag_handle_mouse_lifecycle() {
         let mut drag = ScrollbarDrag::new();
-        let area = Rect {
+        let area = LayoutRect {
             x: 0,
             y: 0,
             width: 8,
@@ -651,11 +672,11 @@ mod tests {
         };
         let total = 40usize;
         let view = 6usize;
-        let scrollbar_y = area.y.saturating_add(area.height.saturating_sub(1));
+        let scrollbar_y = area.y.saturating_add(i32::from(area.height.saturating_sub(1))) as u16;
         use term_wm_core::events::KeyModifiers;
         let down = MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
-            column: area.x + 2,
+            column: (area.x + 2) as u16,
             row: scrollbar_y,
             modifiers: KeyModifiers::NONE,
         };
@@ -665,7 +686,7 @@ mod tests {
 
         let drag_evt = MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
-            column: area.x + 4,
+            column: (area.x + 4) as u16,
             row: scrollbar_y,
             modifiers: KeyModifiers::NONE,
         };
@@ -675,7 +696,7 @@ mod tests {
 
         let up = MouseEvent {
             kind: MouseEventKind::Release(MouseButton::Left),
-            column: area.x + 4,
+            column: (area.x + 4) as u16,
             row: scrollbar_y,
             modifiers: KeyModifiers::NONE,
         };
@@ -686,14 +707,14 @@ mod tests {
 
     #[test]
     fn rect_contains_edge_cases() {
-        let r = Rect {
+        let r = LayoutRect {
             x: 0,
             y: 0,
             width: 0,
             height: 3,
         };
         assert!(!rect_contains(r, 0, 0));
-        let r2 = Rect {
+        let r2 = LayoutRect {
             x: 1,
             y: 1,
             width: 2,

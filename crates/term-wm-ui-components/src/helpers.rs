@@ -3,6 +3,9 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use term_wm_layout_engine::LayoutRect;
 
+/// NOTE: Only used in the render() path where coordinates are always on-screen
+/// (safe to convert to unsigned Rect). Event handling paths must never use this
+/// because screen_area() may contain negative coordinates.
 pub fn layout_rect_to_rect(area: LayoutRect) -> Rect {
     Rect {
         x: area.x as u16,
