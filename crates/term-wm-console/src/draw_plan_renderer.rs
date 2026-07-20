@@ -1663,12 +1663,6 @@ mod tests {
             direct_mode: false,
             hover_pos: None,
             theme: NOIR,
-            screen_bounds: LayoutRect {
-                x: 0,
-                y: 0,
-                width: 50,
-                height: 20,
-            },
         };
 
         let mut scratch = Buffer::empty(RatatuiRect {
