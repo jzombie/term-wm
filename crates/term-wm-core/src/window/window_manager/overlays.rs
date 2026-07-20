@@ -21,6 +21,7 @@ impl WindowManager {
         self.overlays.remove(&super::OverlayId::Help);
     }
 
+    // TODO: Drag handling/clipboard selection, etc. should be moved into the component
     pub fn handle_help_event(&mut self, event: &Event) -> bool {
         if let Event::Mouse(mouse) = event {
             self.hover = Some((mouse.column, mouse.row));
