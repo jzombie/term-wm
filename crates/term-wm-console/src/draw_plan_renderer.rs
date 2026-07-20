@@ -26,7 +26,7 @@ pub struct ChromeCtx<'a> {
     pub direct_mode: bool,
     pub hover_pos: Option<(u16, u16)>,
     pub theme: term_wm_core::theme::Theme,
-    pub wm_buttons: Vec<term_wm_core::window::window_manager::WmButton>,
+    pub wm_buttons: Vec<term_wm_core::window::WmButton>,
 }
 
 // ── Chrome metric constants (owned by console) ─────────────
@@ -47,7 +47,7 @@ fn register_window_chrome_hitboxes(
     frame_size: (u16, u16),
     screen_origin: (i16, i16),
     content_hitbox_id: HitboxId,
-    wm_buttons: &[term_wm_core::window::window_manager::WmButton],
+    wm_buttons: &[term_wm_core::window::WmButton],
 ) {
     use term_wm_core::chrome::ChromeTarget;
     use term_wm_core::hitbox_registry::ComponentOwner;
@@ -164,7 +164,19 @@ pub fn render_window_chrome(
     };
 
     // Draw chrome using existing renderer
-    render_window(buffer, local_bounds, ChromeCtx { ..*ctx });
+    render_window(
+        buffer,
+        local_bounds,
+        ChromeCtx {
+            title: ctx.title,
+            focused: ctx.focused,
+            floating: ctx.floating,
+            direct_mode: ctx.direct_mode,
+            hover_pos: ctx.hover_pos,
+            theme: ctx.theme,
+            wm_buttons: ctx.wm_buttons.clone(),
+        },
+    );
 
     // Register chrome hitboxes + content hitbox (atomic)
     register_window_chrome_hitboxes(
@@ -909,7 +921,6 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
     {
         let contrast_fg = theme.menu_selected_fg.to_ratatui();
         // Buttons are laid out right-to-left from outer_right
-        let num_buttons = wm_buttons.len();
         for (i, btn) in wm_buttons.iter().enumerate() {
             let bx = outer_right
                 .saturating_sub(HEADER_BUTTON_GAP)
@@ -1533,7 +1544,7 @@ mod tests {
     use term_wm_core::app_context::AppContext;
     use term_wm_core::theme::NOIR;
     use term_wm_core::window::FloatRect;
-    use term_wm_core::window::window_manager::WmButton;
+    use term_wm_core::window::WmButton;
     use term_wm_core::wm_config::WmConfig;
 
     fn test_wm_buttons() -> Vec<WmButton> {

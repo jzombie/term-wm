@@ -10,7 +10,7 @@ use term_wm::io::RenderTarget;
 use term_wm::runner::WindowManagerHost;
 use term_wm::term_wm_app::TermWmApp;
 use term_wm::unified_event_source::{UnifiedEvent, UnifiedEventSource};
-use term_wm::window::{WindowKey, wm_menu_items};
+use term_wm::window::WindowKey;
 use term_wm::wm_config::WmConfig;
 use term_wm::{
     PtyStatus, ScrollKeyMode, ScrollViewComponent, TerminalComponent, default_shell_command,

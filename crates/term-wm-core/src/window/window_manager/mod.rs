@@ -2346,6 +2346,7 @@ impl WindowManager {
     }
 }
 
+#[derive(Clone)]
 pub struct WmButton {
     pub action: TermWmAction,
     pub label: &'static str,
