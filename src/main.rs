@@ -10,7 +10,7 @@ use term_wm::io::RenderTarget;
 use term_wm::runner::WindowManagerHost;
 use term_wm::term_wm_app::TermWmApp;
 use term_wm::unified_event_source::{UnifiedEvent, UnifiedEventSource};
-use term_wm::window::{OverlayId, WindowKey, wm_menu_items};
+use term_wm::window::{WindowKey, wm_menu_items};
 use term_wm::wm_config::WmConfig;
 use term_wm::{
     PtyStatus, ScrollKeyMode, ScrollViewComponent, TerminalComponent, default_shell_command,
@@ -265,7 +265,7 @@ impl WindowManagerHost for App {
         let mut h = WmHelpOverlayComponent::new(wm.app_ctx(), kb);
         h.show();
         h.set_selection_enabled(wm.clipboard_enabled());
-        wm.open_overlay(OverlayId::Help, Some(Box::new(h)));
+        wm.open_help_overlay(Box::new(h));
     }
 
     fn open_exit_confirm(&mut self) {
@@ -277,7 +277,7 @@ impl WindowManagerHost for App {
         );
         self.inner
             .wm()
-            .open_overlay(OverlayId::ExitConfirm, Some(Box::new(confirm)));
+            .open_exit_confirm_overlay(Box::new(confirm));
     }
 
     fn open_command_palette(&mut self) {
@@ -298,7 +298,7 @@ impl WindowManagerHost for App {
             .filter(|item| supported.contains(&item.action))
             .collect();
         palette.set_items(items);
-        wm.open_overlay(OverlayId::CommandPalette, Some(Box::new(palette)));
+        wm.open_command_palette_overlay(Box::new(palette));
     }
 
     fn on_panic(&mut self) {

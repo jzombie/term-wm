@@ -14,6 +14,7 @@ use crate::Rect;
 use crate::events::{Event, MouseEvent, MouseEventKind};
 use slotmap::SlotMap;
 
+use super::OverlayKey;
 use super::WindowKey;
 use super::decorator::WindowDecorator;
 use super::entry::{Window, WindowState};
@@ -110,14 +111,6 @@ pub(crate) enum SnapPreviewState {
     /// Drop into an empty void placeholder (stores void ID).
     #[allow(dead_code)]
     VoidInsert(usize),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum OverlayId {
-    Help,
-    CommandPalette,
-    ExitConfirm,
-    SelectionPreview,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -227,7 +220,10 @@ pub struct WindowManager {
     /// system-level timers (super-passthrough, drag-snap).
     system_task_handle: Option<TaskHandle<SystemTask>>,
     pub(crate) last_frame_area: LayoutRect,
-    overlays: BTreeMap<OverlayId, Box<dyn Overlay<TermWmAction>>>,
+    overlays: SlotMap<OverlayKey, Box<dyn Overlay<TermWmAction>>>,
+    help_key: Option<OverlayKey>,
+    exit_confirm_key: Option<OverlayKey>,
+    command_palette_key: Option<OverlayKey>,
     scroll_keyboard_enabled_default: bool,
     floating_resize_offscreen: bool,
     pub(crate) z_order: Vec<WindowKey>,
@@ -644,7 +640,10 @@ impl WindowManager {
             layout_dirty: true,
             notification_queue: NotificationQueue::default(),
             semantic_registry,
-            overlays: BTreeMap::new(),
+            overlays: SlotMap::with_key(),
+            help_key: None,
+            exit_confirm_key: None,
+            command_palette_key: None,
             input_mode: crate::actions::WmInputMode::Passthrough,
             fab_enabled: true,
             tap_swap_state: None,
@@ -859,10 +858,10 @@ impl WindowManager {
         if self.command_menu_visible() {
             n += 1;
         }
-        if self.overlays.contains_key(&OverlayId::ExitConfirm) {
+        if self.exit_confirm_visible() {
             n += 1;
         }
-        if self.overlays.contains_key(&OverlayId::Help) {
+        if self.help_overlay_visible() {
             n += 1;
         }
         n
@@ -2089,10 +2088,28 @@ impl WindowManager {
             .and_then(|c| c.take_pending_title())
     }
 
-    pub fn open_overlay(&mut self, id: OverlayId, overlay: Option<Box<dyn Overlay<TermWmAction>>>) {
-        if let Some(o) = overlay {
-            self.overlays.insert(id, o);
-        }
+    pub fn overlay_for_key_mut(&mut self, key: OverlayKey) -> Option<&mut Box<dyn Overlay<TermWmAction>>> {
+        self.overlays.get_mut(key)
+    }
+
+    pub fn close_overlay(&mut self, key: OverlayKey) {
+        self.overlays.remove(key);
+    }
+
+    pub fn overlay_keys(&self) -> Vec<OverlayKey> {
+        self.overlays.keys().collect()
+    }
+
+    pub fn open_help_overlay(&mut self, overlay: Box<dyn Overlay<TermWmAction>>) {
+        self.help_key = Some(self.overlays.insert(overlay));
+    }
+
+    pub fn open_exit_confirm_overlay(&mut self, overlay: Box<dyn Overlay<TermWmAction>>) {
+        self.exit_confirm_key = Some(self.overlays.insert(overlay));
+    }
+
+    pub fn open_command_palette_overlay(&mut self, overlay: Box<dyn Overlay<TermWmAction>>) {
+        self.command_palette_key = Some(self.overlays.insert(overlay));
     }
 
     pub fn set_scroll_keyboard_enabled(&mut self, enabled: bool) {
@@ -2231,7 +2248,7 @@ impl WindowManager {
 
     // ── Event Routing & Update Accessors ─────────────────────────────
 
-    pub fn overlays_mut(&mut self) -> &mut BTreeMap<OverlayId, Box<dyn Overlay<TermWmAction>>> {
+    pub fn overlays_mut(&mut self) -> &mut SlotMap<OverlayKey, Box<dyn Overlay<TermWmAction>>> {
         &mut self.overlays
     }
 
@@ -2247,7 +2264,7 @@ impl WindowManager {
         self.managed_area
     }
 
-    pub fn overlays(&self) -> &BTreeMap<OverlayId, Box<dyn Overlay<TermWmAction>>> {
+    pub fn overlays(&self) -> &SlotMap<OverlayKey, Box<dyn Overlay<TermWmAction>>> {
         &self.overlays
     }
 
@@ -5669,7 +5686,7 @@ mod tests {
             }
         }
 
-        wm.open_overlay(OverlayId::ExitConfirm, Some(Box::new(StubOverlay)));
+        wm.open_exit_confirm_overlay(Box::new(StubOverlay));
         assert!(wm.exit_confirm_visible());
         wm.close_exit_confirm();
         assert!(!wm.exit_confirm_visible());
@@ -5710,7 +5727,7 @@ mod tests {
             }
         }
 
-        wm.open_overlay(OverlayId::Help, Some(Box::new(StubOverlay)));
+        wm.open_help_overlay(Box::new(StubOverlay));
         assert!(wm.help_overlay_visible());
         wm.close_help_overlay();
         assert!(!wm.help_overlay_visible());
