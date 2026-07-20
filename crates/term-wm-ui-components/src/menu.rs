@@ -75,7 +75,7 @@ impl MenuComponent {
             let is_disabled = self
                 .items
                 .get(self.selected)
-                .map_or(true, |item| item.disabled);
+                .is_none_or(|item| item.disabled);
             if is_disabled {
                 EventResult::Ignored
             } else {
