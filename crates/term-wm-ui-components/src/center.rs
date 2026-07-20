@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use ratatui::prelude::Rect;
 use term_wm_core::events::Event;
 
-use crate::helpers::layout_rect_to_rect;
+use crate::helpers::layout_rect_to_clipped_rect;
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext};
 use term_wm_core::window::WindowKey;
@@ -44,7 +44,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for CenterComponent<C> 
         ctx: &ComponentContext,
         registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
-        let inner = self.inner_rect(layout_rect_to_rect(area));
+        let inner = self.inner_rect(layout_rect_to_clipped_rect(area));
         let inner_lr = LayoutRect {
             x: inner.x as i32,
             y: inner.y as i32,

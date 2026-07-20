@@ -9,7 +9,7 @@ use term_wm_core::events::{Event, MouseEvent, MouseEventKind};
 // NOTE: Only used in the render() path where coordinates are always on-screen
 // (safe to convert to unsigned Rect). Event handling paths must never use this
 // because screen_area() may contain negative coordinates.
-use crate::helpers::layout_rect_to_rect;
+use crate::helpers::layout_rect_to_clipped_rect;
 use ratatui::widgets::StatefulWidget;
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::component_context::{ScrollBounds, ScrollHandle};
@@ -218,7 +218,7 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
         }
     }
 
-    pub(crate) fn compute_layout(&self, area: Rect) -> Rect {
+    pub(crate) fn compute_layout(&self, area: LayoutRect) -> LayoutRect {
         // Simple reservation strategy:
         // Use previous frame's content size to decide on scrollbars.
         let state = self.scroll_state.borrow();
@@ -243,7 +243,7 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
             view_h = view_h.saturating_sub(1);
         }
 
-        Rect {
+        LayoutRect {
             x: area.x,
             y: area.y,
             width: view_w,
@@ -260,29 +260,11 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
         let content_w = state.content_width;
         drop(state);
 
-        // Compute viewport area using LayoutRect (signed i32 coordinates).
-        // This duplicates compute_layout logic to avoid converting screen_area()
-        // to Rect, which truncates negative coordinates.
         let sa = ctx.screen_area().unwrap_or_default();
-        let vp_w = sa.width;
-        let vp_h = sa.height;
-        let mut vp_inner_w = vp_w;
-        let mut vp_inner_h = vp_h;
-        if content_h > vp_h as usize && vp_w > 0 {
-            vp_inner_w = vp_w.saturating_sub(1);
-        }
-        if content_w > vp_w as usize && vp_h > 0 {
-            vp_inner_h = vp_h.saturating_sub(1);
-        }
-        let va = LayoutRect {
-            x: sa.x,
-            y: sa.y,
-            width: vp_inner_w,
-            height: vp_inner_h,
-        };
+        let va = self.compute_layout(sa);
 
         // Vertical scrollbar: assumes it is immediately to the right of viewport
-        if content_h > vp_h as usize {
+        if content_h > sa.height as usize {
             let sb_area = LayoutRect {
                 x: va.x.saturating_add(i32::from(va.width)),
                 y: va.y,
@@ -291,7 +273,7 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
             };
             if let Some(new_off) =
                 self.v_drag
-                    .handle_mouse(mouse, sb_area, content_h, vp_h as usize, ScrollbarAxis::Vertical)
+                    .handle_mouse(mouse, sb_area, content_h, sa.height as usize, ScrollbarAxis::Vertical)
             {
                 let mut st = self.scroll_state.borrow_mut();
                 st.offset_y = new_off;
@@ -300,7 +282,7 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
             }
         }
 
-        if content_w > vp_w as usize {
+        if content_w > sa.width as usize {
             let sb_area = LayoutRect {
                 x: va.x,
                 y: va.y.saturating_add(i32::from(va.height)),
@@ -311,7 +293,7 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
                 mouse,
                 sb_area,
                 content_w,
-                vp_w as usize,
+                sa.width as usize,
                 ScrollbarAxis::Horizontal,
             ) {
                 let mut st = self.scroll_state.borrow_mut();
@@ -387,7 +369,6 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
         ctx: &ComponentContext,
         registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
-        let area = layout_rect_to_rect(area);
         let backend = crate::helpers::downcast_ratatui(backend);
         if area.width == 0 || area.height == 0 {
             return;
@@ -422,20 +403,10 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
             let child_ctx = ctx.with_viewport(info, Some(handle));
 
             // 4. Render Child
-            registry.push_clip(LayoutRect {
-                x: inner_area.x as i32,
-                y: inner_area.y as i32,
-                width: inner_area.width,
-                height: inner_area.height,
-            });
+            registry.push_clip(inner_area);
             self.content.borrow_mut().render(
                 backend,
-                LayoutRect {
-                    x: inner_area.x as i32,
-                    y: inner_area.y as i32,
-                    width: inner_area.width,
-                    height: inner_area.height,
-                },
+                inner_area,
                 &child_ctx,
                 registry,
             );
@@ -472,10 +443,12 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
             }
 
             if !ctx.direct_mode() {
+                // Clipped Rect for scrollbar rendering (ratatui Scrollbar needs unsigned Rect)
+                let area_rect = layout_rect_to_clipped_rect(area);
                 if needs_vertical {
                     let sb_area = Rect {
-                        x: area.x + area.width.saturating_sub(1),
-                        y: area.y,
+                        x: area_rect.x + area_rect.width.saturating_sub(1),
+                        y: area_rect.y,
                         width: 1,
                         height: inner_area.height,
                     };
@@ -491,8 +464,8 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
 
                 if needs_horizontal {
                     let sb_area = Rect {
-                        x: area.x,
-                        y: area.y + area.height.saturating_sub(1),
+                        x: area_rect.x,
+                        y: area_rect.y + area_rect.height.saturating_sub(1),
                         width: inner_area.width,
                         height: 1,
                     };

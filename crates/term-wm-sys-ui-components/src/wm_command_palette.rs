@@ -17,7 +17,7 @@ use term_wm_core::{
 };
 use term_wm_ui_components::DialogOverlayComponent;
 use term_wm_ui_components::command_palette::CommandPaletteComponent;
-use term_wm_ui_components::helpers::{downcast_ratatui, layout_rect_to_rect};
+use term_wm_ui_components::helpers::{downcast_ratatui, layout_rect_to_clipped_rect};
 
 pub struct WmCommandPaletteComponent {
     area: Cell<LayoutRect>,
@@ -140,7 +140,7 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
         let (content_width, content_height) = self.compute_content_dimensions();
         self.dialog.set_size(content_width, content_height);
 
-        let ratatui_area = layout_rect_to_rect(area);
+        let ratatui_area = layout_rect_to_clipped_rect(area);
         let rect = self.dialog.rect_for(ratatui_area);
         let content_rect = LayoutRect {
             x: i32::from(rect.x),
@@ -172,7 +172,7 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
 
         if let Event::Mouse(_) = event {
             let area = self.area.get();
-            let ratatui_area = layout_rect_to_rect(area);
+            let ratatui_area = layout_rect_to_clipped_rect(area);
 
             if self.dialog.handle_click_outside(event, ratatui_area) {
                 self.close();

@@ -178,7 +178,7 @@ pub fn render_window_chrome(
 }
 
 /// Convert LayoutRect to Ratatui Rect
-fn layout_rect_to_rect(layout: LayoutRect) -> Rect {
+fn layout_rect_to_clipped_rect(layout: LayoutRect) -> Rect {
     Rect {
         x: layout.x as u16,
         y: layout.y as u16,
@@ -243,7 +243,7 @@ impl DrawPlanRenderer {
                 continue;
             }
 
-            let area = layout_rect_to_rect(region.bounds);
+            let area = layout_rect_to_clipped_rect(region.bounds);
 
             match &region.region_type {
                 RegionType::Window(key) => {
@@ -390,7 +390,7 @@ impl DrawPlanRenderer {
                 continue;
             }
 
-            let area = layout_rect_to_rect(region.bounds);
+            let area = layout_rect_to_clipped_rect(region.bounds);
 
             match &region.region_type {
                 RegionType::Window(key) => {
@@ -1391,7 +1391,7 @@ pub fn render_resize_outline(
 /// Used during drag operations to show where a window will land when released.
 pub fn render_ghost_preview(buf: &mut Buffer, preview_rect: LayoutRect, theme: &Theme) {
     use ratatui::style::Modifier;
-    let rect = layout_rect_to_rect(preview_rect);
+    let rect = layout_rect_to_clipped_rect(preview_rect);
     let clip = rect.intersection(buf.area);
     if clip.width < 2 || clip.height < 2 {
         return;

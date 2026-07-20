@@ -13,7 +13,7 @@ use term_wm_core::keybindings::{KeyBindings, KeyCombo};
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
 
-use crate::helpers::{color_to_ratatui, layout_rect_to_rect, safe_set_string};
+use crate::helpers::{color_to_ratatui, layout_rect_to_clipped_rect, safe_set_string};
 use crate::menu::MenuComponent;
 use crate::scroll_view::{ScrollKeyMode, ScrollViewComponent};
 
@@ -283,7 +283,7 @@ impl Component<TermWmAction> for CommandPaletteComponent {
         ctx: &ComponentContext,
         registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
-        let rect = layout_rect_to_rect(area);
+        let rect = layout_rect_to_clipped_rect(area);
         let backend = crate::helpers::downcast_ratatui(backend);
         if rect.width < 5 || rect.height < 2 {
             return;

@@ -8,7 +8,7 @@ use term_wm_core::{
     hitbox_registry::{HitboxId, HitboxRegistry},
     window::WindowKey,
 };
-use term_wm_ui_components::helpers::{downcast_ratatui, layout_rect_to_rect};
+use term_wm_ui_components::helpers::{downcast_ratatui, layout_rect_to_clipped_rect};
 
 /// Entry in the session manager list.
 #[derive(Debug, Clone)]
@@ -81,7 +81,7 @@ impl Component<TermWmAction> for WmSessionManagerComponent {
         let screen_area = ctx.screen_area().unwrap_or(area);
         let ratatui_backend = downcast_ratatui(backend);
         let buffer = &mut ratatui_backend.buffer;
-        let ratatui_area = layout_rect_to_rect(screen_area);
+        let ratatui_area = layout_rect_to_clipped_rect(screen_area);
         let bounds = ratatui_area.intersection(buffer.area);
         if bounds.width == 0 || bounds.height == 0 {
             return;

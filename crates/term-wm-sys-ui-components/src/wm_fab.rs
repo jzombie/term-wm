@@ -8,7 +8,7 @@ use term_wm_core::{
     hitbox_registry::{HitboxId, HitboxRegistry},
     window::WindowKey,
 };
-use term_wm_ui_components::helpers::{downcast_ratatui, layout_rect_to_rect};
+use term_wm_ui_components::helpers::{downcast_ratatui, layout_rect_to_clipped_rect};
 
 /// Floating Action Button (FAB) component.
 /// Renders a 3x1 touch target at the absolute bottom-right of the terminal buffer.
@@ -83,7 +83,7 @@ impl Component<TermWmAction> for WmFabComponent {
         // Intersect the FAB's designated area with the buffer's actual area.
         // This ensures we only write to valid cells within the FAB's 3x1 bounds,
         // even when the backend is the global terminal buffer (80x24+).
-        let ratatui_area = layout_rect_to_rect(self.fab_rect);
+        let ratatui_area = layout_rect_to_clipped_rect(self.fab_rect);
         let bounds = ratatui_area.intersection(buffer.area);
 
         if bounds.width == 0 || bounds.height == 0 {

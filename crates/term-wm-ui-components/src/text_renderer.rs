@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 use term_wm_core::events::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-use crate::helpers::{color_to_ratatui, layout_rect_to_rect, linkified_to_text};
+use crate::helpers::{color_to_ratatui, layout_rect_to_clipped_rect, linkified_to_text};
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::component_context::{ScrollHandle, ScrollViewport};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
@@ -48,7 +48,7 @@ impl Component<TermWmAction> for TextRendererComponent {
         ctx: &ComponentContext,
         _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
-        let area = layout_rect_to_rect(area);
+        let area = layout_rect_to_clipped_rect(area);
         self.apply_focus_state(ctx.focused());
         if area.width == 0 || area.height == 0 {
             return;

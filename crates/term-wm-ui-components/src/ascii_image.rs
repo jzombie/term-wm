@@ -5,7 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use resvg::{tiny_skia, usvg};
 
-use crate::helpers::{layout_rect_to_rect, map_rgb_to_ratatui};
+use crate::helpers::{layout_rect_to_clipped_rect, map_rgb_to_ratatui};
 use term_wm_core::actions::TermWmAction;
 use term_wm_core::components::{Component, ComponentContext};
 use term_wm_layout_engine::LayoutRect;
@@ -49,7 +49,7 @@ impl Component<TermWmAction> for AsciiImageComponent {
         _ctx: &ComponentContext,
         _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
-        let area = layout_rect_to_rect(area);
+        let area = layout_rect_to_clipped_rect(area);
         if area.width == 0 || area.height == 0 {
             return;
         }

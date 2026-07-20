@@ -4,7 +4,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use term_wm_core::events::{Event, KeyKind, MouseEventKind};
 
-use crate::helpers::{color_to_ratatui, layout_rect_to_rect, safe_set_string};
+use crate::helpers::{color_to_ratatui, layout_rect_to_clipped_rect, safe_set_string};
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext, MenuItem};
 use term_wm_core::keybindings::KeyBindings;
@@ -199,7 +199,7 @@ impl Component<TermWmAction> for MenuComponent {
         ctx: &ComponentContext,
         _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
-        let area = layout_rect_to_rect(area);
+        let area = layout_rect_to_clipped_rect(area);
         let backend = crate::helpers::downcast_ratatui(backend);
         let offset_y = ctx.viewport().offset_y;
         let header_offset: u16 = if self.show_header { 1 } else { 0 };

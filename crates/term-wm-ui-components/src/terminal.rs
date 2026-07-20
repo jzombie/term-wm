@@ -7,11 +7,13 @@ use ratatui::style::{Color as TColor, Modifier, Style};
 use term_wm_core::events::{Event, KeyCode, KeyKind, MouseButton, MouseEvent, MouseEventKind};
 use vt100::MouseProtocolEncoding;
 
-use crate::helpers::{color_to_ratatui, decorate_link_style, layout_rect_to_rect};
+use crate::helpers::{
+    color_to_ratatui, decorate_link_style, layout_rect_to_clipped_rect, localize_coordinate,
+    localize_coordinate_clamped,
+};
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::hitbox_registry::HitboxId;
-use term_wm_core::layout::rect_contains;
 use term_wm_core::utils::linkifier::{LinkHandler, LinkOverlay, Linkifier, OverlaySignature};
 use term_wm_core::utils::selectable_text::{
     LogicalPosition, SelectionController, SelectionHost, SelectionRange, SelectionViewport,
@@ -171,9 +173,6 @@ impl Component<TermWmAction> for TerminalComponent {
                     }
                 }
                 let area = ctx.screen_area().unwrap_or_default();
-                if !rect_contains(area, mouse.column, mouse.row) {
-                    return EventResult::Ignored;
-                }
                 let mut pane = self.pane.borrow_mut();
                 let parser_arc = pane.shared_parser();
                 let parser = parser_arc.lock().unwrap();
@@ -190,9 +189,14 @@ impl Component<TermWmAction> for TerminalComponent {
                 if !mouse_event_allowed(mode, pty_kind) {
                     return EventResult::Ignored;
                 }
+                let Some((local_col, local_row)) =
+                    localize_coordinate(area, mouse.column, mouse.row)
+                else {
+                    return EventResult::Ignored;
+                };
                 let local = MouseEvent {
-                    column: i32::from(mouse.column).saturating_sub(area.x).max(0) as u16,
-                    row: i32::from(mouse.row).saturating_sub(area.y).max(0) as u16,
+                    column: local_col,
+                    row: local_row,
                     kind: mouse.kind,
                     modifiers: mouse.modifiers,
                 };
@@ -472,23 +476,18 @@ impl TerminalComponent {
         area: LayoutRect,
         ctx: &ComponentContext,
     ) {
-        let area = layout_rect_to_rect(area);
-        // Drag maintenance via RefCell borrow_mut (safe interior mutability
-        // during the otherwise-immutable render phase).
+        // Drag maintenance uses the original signed LayoutRect
         {
-            let screen_area_lr = ctx.screen_area().unwrap_or(LayoutRect {
-                x: area.x as i32,
-                y: area.y as i32,
-                width: area.width,
-                height: area.height,
-            });
             let mut sel_guard = self.selection.borrow_mut();
             let mut dh = RenderDragHost {
                 selection: &mut sel_guard,
                 pane: &self.pane,
             };
-            maintain_selection_drag(&mut dh, screen_area_lr);
+            maintain_selection_drag(&mut dh, area);
         }
+
+        // Shadow area to clipped Rect for ratatui rendering
+        let area = layout_rect_to_clipped_rect(area);
 
         let mut pane = self.pane.borrow_mut();
 
@@ -777,22 +776,14 @@ impl TerminalComponent {
         column: u16,
         row: u16,
     ) -> Option<LogicalPosition> {
-        if area.width == 0 || area.height == 0 {
-            return None;
-        }
-        let max_x = area.x.saturating_add(i32::from(area.width)).saturating_sub(1);
-        let max_y = area.y.saturating_add(i32::from(area.height)).saturating_sub(1);
-        let clamped_col = i32::from(column).clamp(area.x, max_x);
-        let clamped_row = i32::from(row).clamp(area.y, max_y);
-        let local_col = clamped_col.saturating_sub(area.x) as usize;
-        let local_row = clamped_row.saturating_sub(area.y) as usize;
+        let (local_col, local_row) = localize_coordinate_clamped(area, column, row)?;
         let pane = self.pane.get_mut();
         let scrollback_value = pane.scrollback();
         let used = pane.max_scrollback();
         let row_base = used.saturating_sub(scrollback_value);
         Some(LogicalPosition::new(
-            row_base.saturating_add(local_row),
-            local_col,
+            row_base.saturating_add(local_row as usize),
+            local_col as usize,
         ))
     }
 
@@ -897,21 +888,8 @@ impl TerminalComponent {
     }
 
     fn link_at_position(&self, area: LayoutRect, mouse: &MouseEvent) -> Option<String> {
-        if area.width == 0 || area.height == 0 {
-            return None;
-        }
-        let mouse_col = i32::from(mouse.column);
-        let mouse_row = i32::from(mouse.row);
-        if mouse_col < area.x
-            || mouse_col >= area.x.saturating_add(i32::from(area.width))
-            || mouse_row < area.y
-            || mouse_row >= area.y.saturating_add(i32::from(area.height))
-        {
-            return None;
-        }
-        let local_x = mouse_col.saturating_sub(area.x) as usize;
-        let local_y = mouse_row.saturating_sub(area.y) as usize;
-        self.link_overlay.borrow().link_at(local_y, local_x)
+        let (local_x, local_y) = localize_coordinate(area, mouse.column, mouse.row)?;
+        self.link_overlay.borrow().link_at(local_y as usize, local_x as usize)
     }
 
     fn try_handle_link_click(&mut self, area: LayoutRect, mouse: &MouseEvent) -> bool {
@@ -956,22 +934,14 @@ impl SelectionViewport for RenderDragHost<'_> {
         column: u16,
         row: u16,
     ) -> Option<LogicalPosition> {
-        if area.width == 0 || area.height == 0 {
-            return None;
-        }
-        let max_x = area.x.saturating_add(i32::from(area.width)).saturating_sub(1);
-        let max_y = area.y.saturating_add(i32::from(area.height)).saturating_sub(1);
-        let clamped_col = i32::from(column).clamp(area.x, max_x);
-        let clamped_row = i32::from(row).clamp(area.y, max_y);
-        let local_col = clamped_col.saturating_sub(area.x) as usize;
-        let local_row = clamped_row.saturating_sub(area.y) as usize;
+        let (local_col, local_row) = localize_coordinate_clamped(area, column, row)?;
         let mut pane = self.pane.borrow_mut();
         let scrollback_value = pane.scrollback();
         let used = pane.max_scrollback();
         let row_base = used.saturating_sub(scrollback_value);
         Some(LogicalPosition::new(
-            row_base.saturating_add(local_row),
-            local_col,
+            row_base.saturating_add(local_row as usize),
+            local_col as usize,
         ))
     }
 
