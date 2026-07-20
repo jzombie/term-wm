@@ -15,7 +15,7 @@ use term_wm_console::draw_plan_renderer::{
     render_drop_shadow, render_ghost_preview, render_handles_masked, render_overlays,
     render_panels, render_resize_outline,
 };
-use term_wm_core::hitbox_registry::HitboxRegistry;
+use term_wm_core::hitbox_registry::{ComponentOwner, HitboxRegistry};
 use term_wm_core::window::{WindowManager, WindowSurface};
 
 /// Default rendering implementation for the window manager.
@@ -61,10 +61,19 @@ pub fn render_app(
     let total = num_windows + wm.visible_overlay_count();
 
     // Register panel hitboxes BEFORE the window loop (lowest Z-order)
+    if let Some(&panel_layer_id) = wm
+        .semantic_registry
+        .get(&term_wm_core::window::ComponentTag::TopPanel)
+    {
+        wm.hitbox_registry_mut()
+            .set_active_owner(ComponentOwner::Layer(panel_layer_id));
+    }
     wm.register_panel_hitboxes();
 
     // Register tiling split handle hitboxes below windows
     if !wm.is_monocle() {
+        wm.hitbox_registry_mut()
+            .set_active_owner(ComponentOwner::System);
         wm.register_layout_handle_hitboxes();
     }
 
@@ -123,7 +132,11 @@ pub fn render_app(
                     z_depth,
                 };
 
-                // Register window content hitbox
+                // Register window content + chrome hitboxes
+                // All inherit ComponentOwner::Window(key) — chrome maps
+                // (resize_map/drag_map) intercept before the owner match.
+                wm.hitbox_registry_mut()
+                    .set_active_owner(ComponentOwner::Window(*key));
                 let decorator_ref = wm.decorator();
                 let screen_inner = decorator_ref.content_area(Rect {
                     x: surface.dest.x,
@@ -158,12 +171,15 @@ pub fn render_app(
                             .component_context_for(focused, *key)
                             .with_screen_area(screen_inner);
                         if let Some(component) = wm.component_for_key_mut(*key) {
+                            let mut local_hb =
+                                HitboxRegistry::with_owner(ComponentOwner::Window(*key));
                             component.render(
                                 backend,
                                 surface.inner,
                                 &ctx,
-                                &mut HitboxRegistry::new(),
+                                &mut local_hb,
                             );
+                            wm.hitbox_registry_mut().merge(local_hb);
                         }
                     },
                     &mut scratch_buf,
@@ -195,11 +211,16 @@ pub fn render_app(
     render_panels(backend, wm);
 
     // Render FAB only in monocle/mobile mode — sole mobile navigation mechanism.
+    let fab_layer_id = wm
+        .semantic_registry
+        .get(&term_wm_core::window::ComponentTag::FloatingActionButton)
+        .copied();
     if wm.is_monocle()
         && let Some(fab) =
             wm.get_semantic_component_mut(term_wm_core::window::ComponentTag::FloatingActionButton)
+        && let Some(layer_id) = fab_layer_id
     {
-        let mut local_hb = HitboxRegistry::new();
+        let mut local_hb = HitboxRegistry::with_owner(ComponentOwner::Layer(layer_id));
         let ctx = term_wm_core::components::ComponentContext::new(true).with_screen_area(area);
         fab.render(backend, area, &ctx, &mut local_hb);
         wm.hitbox_registry_mut().merge(local_hb);
@@ -385,10 +406,14 @@ pub fn render_app(
     render_overlays(backend, wm);
 
     // Register notification hitboxes — swallows mouse events over toast area
-    // Uses the notification component's persistent hitbox_id via render.
+    let notif_layer_id = wm
+        .semantic_registry
+        .get(&term_wm_core::window::ComponentTag::NotificationArea)
+        .copied();
     if let Some(nc) = wm.notification_component_mut() {
         let ctx = term_wm_core::components::ComponentContext::new(false);
-        let mut local_hb = HitboxRegistry::new();
+        let layer_id = notif_layer_id.unwrap_or(term_wm_core::window::LayerId::new());
+        let mut local_hb = HitboxRegistry::with_owner(ComponentOwner::Layer(layer_id));
         for region in draw_plan.regions() {
             if matches!(
                 region.region_type,

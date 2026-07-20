@@ -3087,15 +3087,8 @@ mod tests {
             .rect;
         assert!(!wm.is_window_floating(debug_key));
 
-        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Test);
-        wm.hitbox_registry.register(
-            wm.floating_headers
-                .iter()
-                .find(|h| h.key == debug_key)
-                .unwrap()
-                .hitbox_id,
-            header_rect,
-        );
+        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(debug_key));
+        wm.register_window_chrome_hitboxes(debug_key);
 
         let down = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
@@ -3686,14 +3679,8 @@ mod tests {
         // Register header hitbox matching the render-pass arrangement:
         // Single DragHandle hitbox for the full header area.
         // Button detection is handled by position in the dispatch code.
-        wm.hitbox_registry.register(
-            wm.floating_headers
-                .iter()
-                .find(|h| h.key == win_key)
-                .unwrap()
-                .hitbox_id,
-            full_rect,
-        );
+        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(win_key));
+        wm.register_window_chrome_hitboxes(win_key);
 
         let click = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
@@ -3762,15 +3749,11 @@ mod tests {
 
         let drag_x = (header.rect.x.saturating_add(i32::from(header.rect.width)) / 2) as u16;
         let drag_y = header.rect.y as u16;
+        let header_hitbox_id = header.hitbox_id;
+        let header_rect = header.rect;
 
-        wm.hitbox_registry.register(
-            wm.floating_headers
-                .iter()
-                .find(|h| h.key == win_key)
-                .unwrap()
-                .hitbox_id,
-            header.rect,
-        );
+        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(win_key));
+        wm.register_window_chrome_hitboxes(win_key);
 
         assert!(!wm.direct_mode(win_key));
 
@@ -4093,14 +4076,8 @@ mod tests {
         let min_x = max_x.saturating_sub(2);
         let kb_x = min_x.saturating_sub(2) as u16;
         let kb_y = full_rect.y.saturating_add(1) as u16; // header row
-        wm.hitbox_registry.register(
-            wm.floating_headers
-                .iter()
-                .find(|h| h.key == win_key)
-                .unwrap()
-                .hitbox_id,
-            full_rect,
-        );
+        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(win_key));
+        wm.register_window_chrome_hitboxes(win_key);
 
         assert!(wm.direct_mode(win_key), "direct mode enabled before click");
 
@@ -4176,14 +4153,8 @@ mod tests {
             .expect("floating header should exist")
             .rect;
 
-        wm.hitbox_registry.register(
-            wm.floating_headers
-                .iter()
-                .find(|h| h.key == win_key)
-                .unwrap()
-                .hitbox_id,
-            header_rect,
-        );
+        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(win_key));
+        wm.register_window_chrome_hitboxes(win_key);
 
         // Press on the header — should start a drag via chrome.
         let click_col = header_rect.x;
@@ -4346,14 +4317,8 @@ mod tests {
             .expect("header should exist")
             .rect;
 
-        wm.hitbox_registry.register(
-            wm.floating_headers
-                .iter()
-                .find(|h| h.key == debug_key)
-                .unwrap()
-                .hitbox_id,
-            header_rect,
-        );
+        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(debug_key));
+        wm.register_window_chrome_hitboxes(debug_key);
 
         let down = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
@@ -4913,6 +4878,7 @@ mod tests {
             width: 20,
             height: 10,
         };
+        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(key));
         wm.hitbox_registry.register(
             wm.window_content_hitbox_id(key).unwrap_or_default(),
             hit_rect,
@@ -5062,6 +5028,7 @@ mod tests {
             width: 20,
             height: 10,
         };
+        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(key));
         wm.hitbox_registry.register(
             wm.window_content_hitbox_id(key).unwrap_or_default(),
             hit_rect,
@@ -5118,12 +5085,8 @@ mod tests {
             width: 80,
             height: 24,
         });
-        // Manually register hitboxes (tests bypass the render pipeline).
-        for handle in &wm.handles {
-            let id = handle.hitbox_id;
-            let rect = handle.rect;
-            wm.hitbox_registry.register(id, rect);
-        }
+        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::System);
+        wm.register_layout_handle_hitboxes();
         let handles = wm.handles.clone();
         assert!(!handles.is_empty(), "tiling must produce split handles");
         let gap = handles[0].rect;
@@ -5293,6 +5256,7 @@ mod tests {
             height: 24,
         });
 
+        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::System);
         wm.register_layout_handle_hitboxes();
 
         // Verify at least one entry exists at the gap position.
@@ -5343,22 +5307,11 @@ mod tests {
             .x
             .saturating_add(i32::from(full_rect.width))
             .saturating_sub(1);
-        let close_x = outer_right as u16;
+        let close_x = outer_right.saturating_sub(i32::from(crate::window::decorator::HEADER_BUTTON_GAP)) as u16;
         let close_y = full_rect.y.saturating_add(1) as u16;
 
-        wm.hitbox_registry.register(
-            wm.floating_headers
-                .iter()
-                .find(|h| h.key == win_key)
-                .unwrap()
-                .hitbox_id,
-            LayoutRect {
-                x: i32::from(close_x),
-                y: i32::from(close_y),
-                width: 1,
-                height: 1,
-            },
-        );
+        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(win_key));
+        wm.register_window_chrome_hitboxes(win_key);
 
         let click = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
@@ -5406,19 +5359,8 @@ mod tests {
         let max_x = close_x as u16;
         let max_y = full_rect.y.saturating_add(1) as u16;
 
-        wm.hitbox_registry.register(
-            wm.floating_headers
-                .iter()
-                .find(|h| h.key == win_key)
-                .unwrap()
-                .hitbox_id,
-            LayoutRect {
-                x: i32::from(max_x),
-                y: i32::from(max_y),
-                width: 1,
-                height: 1,
-            },
-        );
+        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(win_key));
+        wm.register_window_chrome_hitboxes(win_key);
 
         let click = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
@@ -5467,19 +5409,8 @@ mod tests {
         let min_x = max_x as u16;
         let min_y = full_rect.y.saturating_add(1) as u16;
 
-        wm.hitbox_registry.register(
-            wm.floating_headers
-                .iter()
-                .find(|h| h.key == win_key)
-                .unwrap()
-                .hitbox_id,
-            LayoutRect {
-                x: i32::from(min_x),
-                y: i32::from(min_y),
-                width: 1,
-                height: 1,
-            },
-        );
+        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(win_key));
+        wm.register_window_chrome_hitboxes(win_key);
 
         let click = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
@@ -5571,6 +5502,7 @@ mod tests {
             .insert(Box::new(overlay_obj), layer_manager::ZPlane::Foreground);
         // The foreground dispatch calls handle_events on all layers.
         // Register the hitbox with the correct overlay area.
+        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Layer(_overlay_id));
         wm.hitbox_registry.register(HitboxId::new(), overlay_rect);
 
         let click = Event::Mouse(MouseEvent {
