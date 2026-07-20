@@ -3749,8 +3749,6 @@ mod tests {
 
         let drag_x = (header.rect.x.saturating_add(i32::from(header.rect.width)) / 2) as u16;
         let drag_y = header.rect.y as u16;
-        let header_hitbox_id = header.hitbox_id;
-        let header_rect = header.rect;
 
         wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Window(win_key));
         wm.register_window_chrome_hitboxes(win_key);
