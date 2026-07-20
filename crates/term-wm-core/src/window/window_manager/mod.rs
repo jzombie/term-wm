@@ -1434,175 +1434,119 @@ impl WindowManager {
         });
 
         // --- Chrome interception (O(1) maps) ---
-        // These fire BEFORE the owner match because chrome handles require
-        // WindowManager-level capture state (resize, drag, layout split).
-
-        if let Some(handle) = self.resize_map.get(&hitbox_id) {
-            // Copy handle data to avoid borrow conflicts with self methods
-            let h_key = handle.key;
-            let h_edge = handle.edge;
-            if !self.config.floating_windows_enabled || !self.is_window_floating(h_key) {
-                return EventResult::Ignored;
-            }
-            self.bring_floating_to_front_key(h_key);
-            let rect = self.full_region_for_key(h_key);
-            let (start_x, start_y, start_width, start_height) =
-                if let Some(crate::window::FloatRectSpec::Absolute(fr)) = self.floating_rect(h_key) {
-                    (fr.x, fr.y, fr.width, fr.height)
-                } else {
-                    (rect.x, rect.y, rect.width, rect.height)
-                };
-            self.mouse_capture = Some(MouseCaptureState::ResizingWindow {
-                key: h_key,
-                edge: h_edge,
-                start_rect: rect,
-                start_col: col,
-                start_row: row,
-                start_x,
-                start_y,
-                start_width,
-                start_height,
-            });
-            return EventResult::Consumed;
-        }
-
-        if let Some(handle) = self.drag_map.get(&hitbox_id) {
-            let key = handle.key;
-            // Determine which header button was clicked
-            let outer_right =
-                (handle.rect.x.saturating_add(i32::from(handle.rect.width))).max(0) as u16;
-            let buttons = crate::window::decorator::header_buttons(outer_right);
-            let row_i32 = i32::from(row);
-            let clicked_action = buttons
-                .iter()
-                .find(|(bx, _, _)| {
-                    col >= *bx
-                        && col < bx.saturating_add(1)
-                        && row_i32 >= handle.rect.y
-                        && row_i32 < handle.rect.y + 1
-                })
-                .map(|(_, action, _)| *action);
-
-            if let Some(action) = clicked_action {
-                return match action {
-                    HeaderAction::Close => {
-                        self.close_window(key);
-                        self.last_header_click = None;
-                        EventResult::Consumed
-                    }
-                    HeaderAction::Maximize => {
-                        self.toggle_maximize(key);
-                        self.last_header_click = None;
-                        EventResult::Consumed
-                    }
-                    HeaderAction::Minimize => {
-                        self.minimize_window(key);
-                        self.last_header_click = None;
-                        EventResult::Consumed
-                    }
-                    HeaderAction::ToggleDirectMode => {
-                        self.toggle_direct_mode(key);
-                        self.last_header_click = None;
-                        EventResult::Consumed
-                    }
-                    HeaderAction::Drag => {
-                        let now = Instant::now();
-                        if let Some((prev_key, prev)) = self.last_header_click
-                            && prev_key == key
-                            && now.duration_since(prev) <= Duration::from_millis(500)
-                        {
-                            self.toggle_maximize(key);
-                            self.last_header_click = None;
-                            return EventResult::Consumed;
-                        }
-                        self.last_header_click = Some((key, now));
-                        if self.is_window_floating(key) {
-                            self.bring_floating_to_front_key(key);
-                        }
-                        let rect = self.visible_region_for_key(key);
-                        let (initial_x, initial_y) =
-                            if let Some(crate::window::FloatRectSpec::Absolute(fr)) = self.floating_rect(key) {
-                                (fr.x, fr.y)
-                            } else {
-                                (rect.x, rect.y)
-                            };
-                        self.mouse_capture = Some(MouseCaptureState::DraggingWindow {
-                            key,
-                            resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
-                            anchor_x: col,
-                            anchor_y: row,
-                            initial_x,
-                            initial_y,
-                            start_x: col,
-                            start_y: row,
-                            prev_col: col,
-                            prev_row: row,
-                            prev_time_ns: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_nanos() as u64)
-                                .unwrap_or(0),
-                            detach_coordinate: None,
-                            snap_applied: false,
-                        });
-                        self.drag_last_event = Some(Instant::now());
-                        self.arm_drag_snap_timer();
-                        EventResult::Consumed
-                    }
-                };
-            }
-            // Drag area (not a specific button) — initiate window drag
-            let now = Instant::now();
-            if let Some((prev_key, prev)) = self.last_header_click
-                && prev_key == key
-                && now.duration_since(prev) <= Duration::from_millis(500)
-            {
-                self.toggle_maximize(key);
-                self.last_header_click = None;
+        // Only on Press events — chrome handles initiate capture state.
+        // For Moved events, the tiling layout handles hover feedback directly.
+        if matches!(kind, MouseEventKind::Press(_)) {
+            if let Some(handle) = self.resize_map.get(&hitbox_id) {
+                let h_key = handle.key;
+                let h_edge = handle.edge;
+                if !self.config.floating_windows_enabled || !self.is_window_floating(h_key) {
+                    return EventResult::Ignored;
+                }
+                self.bring_floating_to_front_key(h_key);
+                let rect = self.full_region_for_key(h_key);
+                let (start_x, start_y, start_width, start_height) =
+                    if let Some(crate::window::FloatRectSpec::Absolute(fr)) = self.floating_rect(h_key) {
+                        (fr.x, fr.y, fr.width, fr.height)
+                    } else {
+                        (rect.x, rect.y, rect.width, rect.height)
+                    };
+                self.mouse_capture = Some(MouseCaptureState::ResizingWindow {
+                    key: h_key, edge: h_edge, start_rect: rect,
+                    start_col: col, start_row: row,
+                    start_x, start_y, start_width, start_height,
+                });
                 return EventResult::Consumed;
             }
-            self.last_header_click = Some((key, now));
-            if self.is_window_floating(key) {
-                self.bring_floating_to_front_key(key);
-            }
-            let rect = self.visible_region_for_key(key);
-            let (initial_x, initial_y) =
-                if let Some(crate::window::FloatRectSpec::Absolute(fr)) = self.floating_rect(key) {
-                    (fr.x, fr.y)
-                } else {
-                    (rect.x, rect.y)
-                };
-            self.mouse_capture = Some(MouseCaptureState::DraggingWindow {
-                key,
-                resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
-                anchor_x: col,
-                anchor_y: row,
-                initial_x,
-                initial_y,
-                start_x: col,
-                start_y: row,
-                prev_col: col,
-                prev_row: row,
-                prev_time_ns: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos() as u64)
-                    .unwrap_or(0),
-                detach_coordinate: None,
-                snap_applied: false,
-            });
-            self.drag_last_event = Some(Instant::now());
-            self.arm_drag_snap_timer();
-            return EventResult::Consumed;
-        }
 
-        if self.split_ids.contains(&hitbox_id) {
-            self.mouse_capture = Some(MouseCaptureState::LayoutHandle);
-            if let Some(layout) = self.managed_layout.as_mut() {
-                let consumed = layout.handle_event(&core_event, self.managed_area);
-                if consumed {
+            if let Some(handle) = self.drag_map.get(&hitbox_id) {
+                let key = handle.key;
+                let outer_right =
+                    (handle.rect.x.saturating_add(i32::from(handle.rect.width))).max(0) as u16;
+                let buttons = crate::window::decorator::header_buttons(outer_right);
+                let row_i32 = i32::from(row);
+                let clicked_action = buttons.iter().find(|(bx, _, _)| {
+                    col >= *bx && col < bx.saturating_add(1)
+                        && row_i32 >= handle.rect.y && row_i32 < handle.rect.y + 1
+                }).map(|(_, action, _)| *action);
+
+                if let Some(action) = clicked_action {
+                    return match action {
+                        HeaderAction::Close => { self.close_window(key); self.last_header_click = None; EventResult::Consumed }
+                        HeaderAction::Maximize => { self.toggle_maximize(key); self.last_header_click = None; EventResult::Consumed }
+                        HeaderAction::Minimize => { self.minimize_window(key); self.last_header_click = None; EventResult::Consumed }
+                        HeaderAction::ToggleDirectMode => { self.toggle_direct_mode(key); self.last_header_click = None; EventResult::Consumed }
+                        HeaderAction::Drag => {
+                            let now = Instant::now();
+                            if let Some((prev_key, prev)) = self.last_header_click
+                                && prev_key == key && now.duration_since(prev) <= Duration::from_millis(500)
+                            {
+                                self.toggle_maximize(key);
+                                self.last_header_click = None;
+                                return EventResult::Consumed;
+                            }
+                            self.last_header_click = Some((key, now));
+                            if self.is_window_floating(key) { self.bring_floating_to_front_key(key); }
+                            let rect = self.visible_region_for_key(key);
+                            let (initial_x, initial_y) =
+                                if let Some(crate::window::FloatRectSpec::Absolute(fr)) = self.floating_rect(key) { (fr.x, fr.y) }
+                                else { (rect.x, rect.y) };
+                            self.mouse_capture = Some(MouseCaptureState::DraggingWindow {
+                                key, resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
+                                anchor_x: col, anchor_y: row, initial_x, initial_y,
+                                start_x: col, start_y: row, prev_col: col, prev_row: row,
+                                prev_time_ns: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0),
+                                detach_coordinate: None, snap_applied: false,
+                            });
+                            self.drag_last_event = Some(Instant::now());
+                            self.arm_drag_snap_timer();
+                            EventResult::Consumed
+                        }
+                    };
+                }
+                // Drag area (not a button) — initiate window drag
+                let now = Instant::now();
+                if let Some((prev_key, prev)) = self.last_header_click
+                    && prev_key == key && now.duration_since(prev) <= Duration::from_millis(500)
+                {
+                    self.toggle_maximize(key);
+                    self.last_header_click = None;
                     return EventResult::Consumed;
                 }
+                self.last_header_click = Some((key, now));
+                if self.is_window_floating(key) { self.bring_floating_to_front_key(key); }
+                let rect = self.visible_region_for_key(key);
+                let (initial_x, initial_y) =
+                    if let Some(crate::window::FloatRectSpec::Absolute(fr)) = self.floating_rect(key) { (fr.x, fr.y) }
+                    else { (rect.x, rect.y) };
+                self.mouse_capture = Some(MouseCaptureState::DraggingWindow {
+                    key, resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
+                    anchor_x: col, anchor_y: row, initial_x, initial_y,
+                    start_x: col, start_y: row, prev_col: col, prev_row: row,
+                    prev_time_ns: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0),
+                    detach_coordinate: None, snap_applied: false,
+                });
+                self.drag_last_event = Some(Instant::now());
+                self.arm_drag_snap_timer();
+                return EventResult::Consumed;
             }
-            return EventResult::Ignored;
+
+            if self.split_ids.contains(&hitbox_id) {
+                self.mouse_capture = Some(MouseCaptureState::LayoutHandle);
+                if let Some(layout) = self.managed_layout.as_mut() {
+                    if layout.handle_event(&core_event, self.managed_area) {
+                        return EventResult::Consumed;
+                    }
+                }
+                return EventResult::Ignored;
+            }
+        }
+
+        // Forward Moved events to tiling layout for hover feedback on split handles.
+        if matches!(kind, MouseEventKind::Moved) {
+            if let Some(layout) = self.managed_layout.as_mut() {
+                layout.handle_event(&core_event, self.managed_area);
+            }
         }
 
         // --- Exhaustive owner match ---
