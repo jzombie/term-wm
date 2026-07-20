@@ -25,7 +25,11 @@ impl WmNotificationAreaComponent {
     /// Called from the render pass for each notification region.
     pub fn register_hitbox(&self, rect: LayoutRect, registry: &mut HitboxRegistry) {
         if rect.width > 0 && rect.height > 0 {
-            registry.register(self.hitbox_id, term_wm_core::hitbox_registry::ComponentOwner::Test, rect);
+            registry.register(
+                self.hitbox_id,
+                term_wm_core::hitbox_registry::ComponentOwner::Test,
+                rect,
+            );
         }
     }
 }
@@ -43,7 +47,11 @@ impl Component<TermWmAction> for WmNotificationAreaComponent {
         registry: &mut HitboxRegistry,
     ) {
         if area.width > 0 && area.height > 0 {
-            registry.register(self.hitbox_id, term_wm_core::hitbox_registry::ComponentOwner::Test, area);
+            registry.register(
+                self.hitbox_id,
+                term_wm_core::hitbox_registry::ComponentOwner::Test,
+                area,
+            );
         }
     }
 }

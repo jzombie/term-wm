@@ -70,9 +70,21 @@ fn register_window_chrome_hitboxes(
     // Resize handles at each edge
     for (edge, lx, ly, lw, lh) in [
         (ResizeEdge::Left, 0u16, 1u16, 1u16, height.saturating_sub(2)),
-        (ResizeEdge::Right, outer_right, 1u16, 1u16, height.saturating_sub(2)),
+        (
+            ResizeEdge::Right,
+            outer_right,
+            1u16,
+            1u16,
+            height.saturating_sub(2),
+        ),
         (ResizeEdge::Top, 1u16, 0u16, width.saturating_sub(2), 1u16),
-        (ResizeEdge::Bottom, 1u16, bottom_y, width.saturating_sub(2), 1u16),
+        (
+            ResizeEdge::Bottom,
+            1u16,
+            bottom_y,
+            width.saturating_sub(2),
+            1u16,
+        ),
     ] {
         registry.register(
             HitboxId::new(),
@@ -141,7 +153,12 @@ pub fn render_window_chrome(
     ctx: &ChromeCtx<'_>,
 ) -> LayoutRect {
     let (width, height) = frame_size;
-    let local_bounds = LayoutRect { x: 0, y: 0, width, height };
+    let local_bounds = LayoutRect {
+        x: 0,
+        y: 0,
+        width,
+        height,
+    };
 
     // Draw chrome using existing renderer
     render_window(buffer, local_bounds, ChromeCtx { ..*ctx });
@@ -154,7 +171,9 @@ pub fn render_window_chrome(
         x: i32::from(LEFT_BORDER_WIDTH),
         y: i32::from(TOP_BORDER_HEIGHT.saturating_add(HEADER_HEIGHT)),
         width: width.saturating_sub(LEFT_BORDER_WIDTH.saturating_add(RIGHT_BORDER_WIDTH)),
-        height: height.saturating_sub(TOP_BORDER_HEIGHT.saturating_add(HEADER_HEIGHT.saturating_add(BOTTOM_BORDER_HEIGHT))),
+        height: height.saturating_sub(
+            TOP_BORDER_HEIGHT.saturating_add(HEADER_HEIGHT.saturating_add(BOTTOM_BORDER_HEIGHT)),
+        ),
     }
 }
 
@@ -879,7 +898,12 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
     {
         let contrast_fg = theme.menu_selected_fg.to_ratatui();
         #[derive(Clone, Copy)]
-        enum Btn { Close, Max, Min, DirectMode }
+        enum Btn {
+            Close,
+            Max,
+            Min,
+            DirectMode,
+        }
         let buttons: [(u16, Btn, &str); 4] = {
             let close_x = outer_right.saturating_sub(HEADER_BUTTON_GAP);
             let max_x = close_x.saturating_sub(HEADER_BUTTON_GAP);

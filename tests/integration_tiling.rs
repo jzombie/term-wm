@@ -55,7 +55,12 @@ fn header_rect(wm: &mut WindowManager, key: WindowKey) -> Rect {
     use term_wm::chrome::ChromeTarget;
     use term_wm::hitbox_registry::{ComponentOwner, HitboxId};
     let bounds = wm.full_region_for_key(key);
-    let rect = Rect { x: bounds.x + 1, y: bounds.y + 1, width: bounds.width.saturating_sub(2), height: 1 };
+    let rect = Rect {
+        x: bounds.x + 1,
+        y: bounds.y + 1,
+        width: bounds.width.saturating_sub(2),
+        height: 1,
+    };
     // Register a drag hitbox so dispatch_mouse can route header clicks
     wm.hitbox_registry_mut().register(
         HitboxId::new(),

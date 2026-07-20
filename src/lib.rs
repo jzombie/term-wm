@@ -227,7 +227,9 @@ pub fn render_app(
                 for handle in &handles {
                     wm.hitbox_registry_mut().register(
                         handle.hitbox_id,
-                        ComponentOwner::Chrome(term_wm_core::chrome::ChromeTarget::SplitHandle(handle.hitbox_id)),
+                        ComponentOwner::Chrome(term_wm_core::chrome::ChromeTarget::SplitHandle(
+                            handle.hitbox_id,
+                        )),
                         handle.rect,
                     );
                 }

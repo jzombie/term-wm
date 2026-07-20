@@ -70,7 +70,11 @@ impl Component<TermWmAction> for WmFabComponent {
         // Register in hitbox for coordinate-based interception
         // No window_key guard — FAB is a global singleton mounted via AppBuilder,
         // not a SlotMap window, so on_mount is never called.
-        registry.register(self.hitbox_id, term_wm_core::hitbox_registry::ComponentOwner::Test, self.fab_rect);
+        registry.register(
+            self.hitbox_id,
+            term_wm_core::hitbox_registry::ComponentOwner::Test,
+            self.fab_rect,
+        );
 
         // Render "≡" icon into the buffer
         let ratatui_backend = downcast_ratatui(backend);
