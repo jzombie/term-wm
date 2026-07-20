@@ -384,7 +384,10 @@ mod tests {
         let mut main = HitboxRegistry::new();
         // Push a managed-area clip (x=0, width=20)
         main.push_clip(LayoutRect {
-            x: 0, y: 0, width: 20, height: 20,
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 20,
         });
 
         // Create a sub-registry with an entry that extends off-screen left
@@ -393,7 +396,10 @@ mod tests {
             HitboxId::new(),
             ComponentOwner::Test,
             LayoutRect {
-                x: -5, y: 2, width: 30, height: 10,
+                x: -5,
+                y: 2,
+                width: 30,
+                height: 10,
             },
         );
 

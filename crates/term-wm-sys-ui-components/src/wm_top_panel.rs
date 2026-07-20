@@ -15,7 +15,9 @@ use term_wm_core::{
     utils::truncate_to_width,
     window::WindowKey,
 };
-use term_wm_ui_components::helpers::{color_to_ratatui, layout_rect_to_clipped_rect, safe_set_string};
+use term_wm_ui_components::helpers::{
+    color_to_ratatui, layout_rect_to_clipped_rect, safe_set_string,
+};
 
 #[derive(Debug, Clone, Copy)]
 struct PanelWindowHit {

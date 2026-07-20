@@ -55,11 +55,16 @@ impl ScrollbarDrag {
 
         let on_scrollbar = match axis {
             ScrollbarAxis::Vertical => {
-                let scrollbar_x = area.x.saturating_add(i32::from(area.width.saturating_sub(1)));
-                rect_contains(area, mouse.column, mouse.row) && i32::from(mouse.column) == scrollbar_x
+                let scrollbar_x = area
+                    .x
+                    .saturating_add(i32::from(area.width.saturating_sub(1)));
+                rect_contains(area, mouse.column, mouse.row)
+                    && i32::from(mouse.column) == scrollbar_x
             }
             ScrollbarAxis::Horizontal => {
-                let scrollbar_y = area.y.saturating_add(i32::from(area.height.saturating_sub(1)));
+                let scrollbar_y = area
+                    .y
+                    .saturating_add(i32::from(area.height.saturating_sub(1)));
                 rect_contains(area, mouse.column, mouse.row) && i32::from(mouse.row) == scrollbar_y
             }
         };
@@ -271,10 +276,13 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
                 width: 1,
                 height: va.height,
             };
-            if let Some(new_off) =
-                self.v_drag
-                    .handle_mouse(mouse, sb_area, content_h, sa.height as usize, ScrollbarAxis::Vertical)
-            {
+            if let Some(new_off) = self.v_drag.handle_mouse(
+                mouse,
+                sb_area,
+                content_h,
+                sa.height as usize,
+                ScrollbarAxis::Vertical,
+            ) {
                 let mut st = self.scroll_state.borrow_mut();
                 st.offset_y = new_off;
                 st.pending_offset_y = Some(new_off);
@@ -404,12 +412,9 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
 
             // 4. Render Child
             registry.push_clip(inner_area);
-            self.content.borrow_mut().render(
-                backend,
-                inner_area,
-                &child_ctx,
-                registry,
-            );
+            self.content
+                .borrow_mut()
+                .render(backend, inner_area, &child_ctx, registry);
             registry.pop_clip();
 
             let state = self.scroll_state.borrow();
@@ -601,7 +606,9 @@ mod tests {
         };
         let total = 20usize;
         let view = 5usize;
-        let scrollbar_x = area.x.saturating_add(i32::from(area.width.saturating_sub(1))) as u16;
+        let scrollbar_x =
+            area.x
+                .saturating_add(i32::from(area.width.saturating_sub(1))) as u16;
         use term_wm_core::events::KeyModifiers;
         let down = MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
@@ -645,7 +652,9 @@ mod tests {
         };
         let total = 40usize;
         let view = 6usize;
-        let scrollbar_y = area.y.saturating_add(i32::from(area.height.saturating_sub(1))) as u16;
+        let scrollbar_y =
+            area.y
+                .saturating_add(i32::from(area.height.saturating_sub(1))) as u16;
         use term_wm_core::events::KeyModifiers;
         let down = MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),

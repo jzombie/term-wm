@@ -1625,15 +1625,33 @@ mod tests {
         // clipped from x=-4,width=28 to x=0,width=24 (managed_area is
         // {0,0,50,20} from screen_bounds in ChromeCtx).
         let main_area = RatatuiRect {
-            x: 0, y: 0, width: 50, height: 20,
+            x: 0,
+            y: 0,
+            width: 50,
+            height: 20,
         };
         let main_buffer = Buffer::empty(main_area);
         let mut backend = RatatuiBackend::new(main_buffer, main_area);
 
         let surface = WindowSurface {
-            full: term_wm_core::Rect { x: 0, y: 0, width: 30, height: 8 },
-            inner: term_wm_core::Rect { x: 0, y: 0, width: 30, height: 8 },
-            dest: FloatRect { x: -5, y: 0, width: 30, height: 8 },
+            full: term_wm_core::Rect {
+                x: 0,
+                y: 0,
+                width: 30,
+                height: 8,
+            },
+            inner: term_wm_core::Rect {
+                x: 0,
+                y: 0,
+                width: 30,
+                height: 8,
+            },
+            dest: FloatRect {
+                x: -5,
+                y: 0,
+                width: 30,
+                height: 8,
+            },
             draw_shadow: false,
             z_depth: 0.5,
         };
@@ -1645,11 +1663,19 @@ mod tests {
             direct_mode: false,
             hover_pos: None,
             theme: NOIR,
-            screen_bounds: LayoutRect { x: 0, y: 0, width: 50, height: 20 },
+            screen_bounds: LayoutRect {
+                x: 0,
+                y: 0,
+                width: 50,
+                height: 20,
+            },
         };
 
         let mut scratch = Buffer::empty(RatatuiRect {
-            x: 0, y: 0, width: 30, height: 8,
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 8,
         });
         let (_, chrome_hb) = composite_window(
             &mut backend,
@@ -1662,7 +1688,11 @@ mod tests {
         );
 
         use term_wm_core::mouse_coord::{CoordSpace, MousePosition};
-        let screen = |col, row| MousePosition { column: col, row, space: CoordSpace::Screen };
+        let screen = |col, row| MousePosition {
+            column: col,
+            row,
+            space: CoordSpace::Screen,
+        };
 
         // Column 0 is inside the visible window content → must hit
         assert!(

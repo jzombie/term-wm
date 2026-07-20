@@ -375,7 +375,8 @@ pub fn render_app(
     {
         for region in draw_plan.regions() {
             if let term_wm_core::draw_plan::RegionType::Notification(msg) = &region.region_type {
-                let area = term_wm_ui_components::helpers::layout_rect_to_clipped_rect(region.bounds);
+                let area =
+                    term_wm_ui_components::helpers::layout_rect_to_clipped_rect(region.bounds);
                 renderer.render_notification(backend, area, msg);
             }
         }

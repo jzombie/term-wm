@@ -13,7 +13,9 @@ use term_wm_core::{
     power_profile::PowerProfile,
     utils::truncate_to_width,
 };
-use term_wm_ui_components::helpers::{color_to_ratatui, layout_rect_to_clipped_rect, safe_set_string};
+use term_wm_ui_components::helpers::{
+    color_to_ratatui, layout_rect_to_clipped_rect, safe_set_string,
+};
 
 #[derive(Debug)]
 pub struct WmBottomPanelComponent {

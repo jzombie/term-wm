@@ -2852,7 +2852,10 @@ mod tests {
         let keys = make_keys(&mut wm, 100);
         wm.set_floating_resize_offscreen(true);
         wm.register_managed_layout(Rect {
-            x: 0, y: 0, width: 80, height: 24,
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
         });
 
         // Float key[1]: 50-col window, 30 columns off-screen left.
@@ -2860,13 +2863,21 @@ mod tests {
         wm.set_floating_rect(
             keys[1],
             Some(FloatRectSpec::Absolute(FloatRect {
-                x: -30, y: 0, width: 50, height: 20,
+                x: -30,
+                y: 0,
+                width: 50,
+                height: 20,
             })),
         );
         // key[2] stays tiled behind it at the full managed area.
         wm.regions.set(
             keys[2],
-            Rect { x: 0, y: 0, width: 80, height: 24 },
+            Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
         );
         wm.managed_draw_order = vec![keys[2], keys[1]];
 
@@ -2875,7 +2886,12 @@ mod tests {
         wm.hitbox_registry_mut().register(
             HitboxId::new(),
             ComponentOwner::Window(keys[2]),
-            Rect { x: 0, y: 0, width: 80, height: 24 },
+            Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
         );
 
         // Floating window on top (registered last = higher z-order),
@@ -2885,17 +2901,31 @@ mod tests {
         wm.hitbox_registry_mut().register(
             HitboxId::new(),
             ComponentOwner::Chrome(crate::chrome::ChromeTarget::Drag(keys[1])),
-            Rect { x: 0, y: 1, width: 19, height: 1 },
+            Rect {
+                x: 0,
+                y: 1,
+                width: 19,
+                height: 1,
+            },
         );
         wm.hitbox_registry_mut().register(
             HitboxId::new(),
             ComponentOwner::Window(keys[1]),
-            Rect { x: 0, y: 2, width: 19, height: 17 },
+            Rect {
+                x: 0,
+                y: 2,
+                width: 19,
+                height: 17,
+            },
         );
         wm.hitbox_registry_mut().pop_clip();
 
         use crate::mouse_coord::{CoordSpace, MousePosition};
-        let screen = |col, row| MousePosition { column: col, row, space: CoordSpace::Screen };
+        let screen = |col, row| MousePosition {
+            column: col,
+            row,
+            space: CoordSpace::Screen,
+        };
 
         // Click past floating window's right edge (19) → must hit tiled window
         let hit = wm.hitbox_registry.hit_test(screen(25, 10));

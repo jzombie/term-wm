@@ -487,10 +487,7 @@ impl TerminalComponent {
                 && let Some(handle) = ctx.scroll_handle()
             {
                 let used = pane.max_scrollback();
-                handle.set_content_size(
-                    clipped.width as usize,
-                    used + clipped.height as usize,
-                );
+                handle.set_content_size(clipped.width as usize, used + clipped.height as usize);
 
                 let current_sb = pane.scrollback();
                 let view_offset = ctx.viewport().offset_y;
@@ -909,7 +906,9 @@ impl TerminalComponent {
 
     fn link_at_position(&self, area: LayoutRect, mouse: &MouseEvent) -> Option<String> {
         let (local_x, local_y) = localize_coordinate(area, mouse.column, mouse.row)?;
-        self.link_overlay.borrow().link_at(local_y as usize, local_x as usize)
+        self.link_overlay
+            .borrow()
+            .link_at(local_y as usize, local_x as usize)
     }
 
     fn try_handle_link_click(&mut self, area: LayoutRect, mouse: &MouseEvent) -> bool {
@@ -960,7 +959,10 @@ impl SelectionViewport for RenderDragHost<'_> {
     fn selection_content_size(&self) -> (usize, usize) {
         let mut pane = self.pane.borrow_mut();
         let used = pane.max_scrollback();
-        (self.viewport_width as usize, used + self.viewport_height as usize)
+        (
+            self.viewport_width as usize,
+            used + self.viewport_height as usize,
+        )
     }
 
     fn logical_position_from_point(
