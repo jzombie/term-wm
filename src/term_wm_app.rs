@@ -50,7 +50,7 @@ impl TermWmApp {
         let hostname = app_ctx.hostname.clone();
 
         use term_wm_sys_ui_components::{
-            WmBottomPanelComponent, WmCommandPaletteComponent, WmFabComponent,
+            WmBottomPanelComponent, WmFabComponent,
             WmNotificationAreaComponent, WmTopPanelComponent,
         };
 
@@ -62,7 +62,6 @@ impl TermWmApp {
                 &app_version,
                 hostname.as_deref(),
             )))
-            .command_menu(Box::new(WmCommandPaletteComponent::new()))
             .fab(Box::new(WmFabComponent::new()))
             .supported_menu_actions(vec![
                 TermWmAction::CloseMenu,

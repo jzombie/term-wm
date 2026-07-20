@@ -36,7 +36,6 @@ pub struct AppBuilder {
     app_ctx: Option<Arc<AppContext>>,
     top_panel: Option<Box<dyn WmComponent>>,
     bottom_panel: Option<Box<dyn WmComponent>>,
-    command_menu: Option<Box<dyn WmComponent>>,
     fab_component: Option<Box<dyn WmComponent>>,
     supported_menu_actions: Option<Vec<TermWmAction>>,
 }
@@ -50,7 +49,6 @@ impl AppBuilder {
             app_ctx: None,
             top_panel: None,
             bottom_panel: None,
-            command_menu: None,
             fab_component: None,
             supported_menu_actions: None,
         }
@@ -93,11 +91,6 @@ impl AppBuilder {
 
     pub fn bottom_panel(mut self, panel: Box<dyn WmComponent>) -> Self {
         self.bottom_panel = Some(panel);
-        self
-    }
-
-    pub fn command_menu(mut self, menu: Box<dyn WmComponent>) -> Self {
-        self.command_menu = Some(menu);
         self
     }
 
@@ -147,10 +140,6 @@ impl AppBuilder {
         if let Some(comp) = self.bottom_panel {
             let id = layer_manager.insert(comp, ZPlane::Background);
             semantic_registry.insert(ComponentTag::BottomPanel, id);
-        }
-        if let Some(comp) = self.command_menu {
-            let id = layer_manager.insert(comp, ZPlane::Foreground);
-            semantic_registry.insert(ComponentTag::CommandPalette, id);
         }
         if let Some(comp) = self.fab_component {
             let id = layer_manager.insert(comp, ZPlane::Foreground);

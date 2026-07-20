@@ -2,7 +2,7 @@ use crate::events::Event;
 
 use super::WindowManager;
 use crate::actions::{ConfirmAction, EventResult, TermWmAction};
-use crate::components::{ComponentAction, ComponentQuery, ComponentResponse, Overlay};
+use crate::components::Overlay;
 
 impl WindowManager {
     pub fn close_exit_confirm(&mut self) {
@@ -73,53 +73,33 @@ impl WindowManager {
     }
 
     pub fn command_palette_visible(&self) -> bool {
-        self.command_menu_visible()
+        self.overlays
+            .contains_key(&super::OverlayId::CommandPalette)
     }
 
     pub fn close_command_palette(&mut self) {
-        self.close_command_menu();
+        self.overlays.remove(&super::OverlayId::CommandPalette);
     }
 
     pub fn handle_command_palette_event(&mut self, event: &Event) -> Option<TermWmAction> {
-        if !self.command_menu_visible() {
-            return None;
-        }
-
+        // Build context BEFORE mutable borrow of overlays
         if let Event::Mouse(mouse) = event {
             self.hover = Some((mouse.column, mouse.row));
         }
-
         let ctx = self
             .component_context(false)
             .with_overlay(true)
             .with_screen_area(self.managed_area())
             .with_hover_pos(self.hover);
-        let menu =
-            self.get_semantic_component_mut(super::layer_manager::ComponentTag::CommandPalette)?;
 
-        match menu.handle_events(event, &ctx) {
-            EventResult::Action(action) => Some(action),
-            EventResult::Consumed => {
-                if let ComponentResponse::Action(Some(action)) =
-                    menu.query(&ComponentQuery::SelectedAction)
-                {
-                    Some(action)
-                } else {
-                    None
-                }
+        let palette = self.overlays.get_mut(&super::OverlayId::CommandPalette)?;
+        // handle_events is on Component (supertrait of Overlay)
+        match palette.handle_events(event, &ctx) {
+            EventResult::Action(action) => {
+                self.close_command_palette();
+                Some(action)
             }
-            EventResult::Ignored => None,
-        }
-    }
-
-    pub fn set_command_palette_items(
-        &mut self,
-        items: Vec<crate::components::MenuItem<TermWmAction>>,
-    ) {
-        if let Some(menu) =
-            self.get_semantic_component_mut(super::layer_manager::ComponentTag::CommandPalette)
-        {
-            menu.process_action(&ComponentAction::SetMenuItems(items));
+            _ => None,
         }
     }
 }
