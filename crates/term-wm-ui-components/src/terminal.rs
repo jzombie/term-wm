@@ -476,54 +476,74 @@ impl TerminalComponent {
         area: LayoutRect,
         ctx: &ComponentContext,
     ) {
-        // Drag maintenance uses the original signed LayoutRect
+        let screen_area = ctx.screen_area().unwrap_or(area);
+
+        // 1. PULL EXTERNAL SCROLL STATE FIRST — apply scroll wheel changes
+        //    to internal scrollback before drag maintenance uses them.
+        let sb_before_drag = {
+            let clipped = layout_rect_to_clipped_rect(area);
+            let mut pane = self.pane.borrow_mut();
+            if !pane.alternate_screen()
+                && let Some(handle) = ctx.scroll_handle()
+            {
+                let used = pane.max_scrollback();
+                handle.set_content_size(
+                    clipped.width as usize,
+                    used + clipped.height as usize,
+                );
+
+                let current_sb = pane.scrollback();
+                let view_offset = ctx.viewport().offset_y;
+                if current_sb == 0 {
+                    if view_offset < self.last_max_scrollback.get().saturating_sub(1) {
+                        let target_sb = used.saturating_sub(view_offset);
+                        pane.set_scrollback(target_sb);
+                    } else {
+                        handle.scroll_vertical_to(usize::MAX);
+                    }
+                } else if current_sb != self.last_scrollback.get() {
+                    let new_offset = used.saturating_sub(current_sb);
+                    handle.scroll_vertical_to(new_offset);
+                } else {
+                    let target_sb = used.saturating_sub(view_offset);
+                    if target_sb != current_sb {
+                        pane.set_scrollback(target_sb);
+                    }
+                }
+                self.last_max_scrollback.set(used);
+            }
+            pane.scrollback()
+        };
+
+        // 2. MAINTAIN DRAG SELECTION — using accurate, freshly-pulled scroll state
         {
             let mut sel_guard = self.selection.borrow_mut();
             let mut dh = RenderDragHost {
                 selection: &mut sel_guard,
                 pane: &self.pane,
+                viewport_width: area.width,
+                viewport_height: area.height,
             };
-            maintain_selection_drag(&mut dh, area);
+            maintain_selection_drag(&mut dh, screen_area);
         }
 
-        // Shadow area to clipped Rect for ratatui rendering
-        let area = layout_rect_to_clipped_rect(area);
-
+        // 3. PUSH INTERNAL AUTO-SCROLLS back to parent ScrollView
+        //    (only if scrollback changed during drag maintenance above)
         let mut pane = self.pane.borrow_mut();
-
-        // Synchronize scroll state with the shared Viewport
-        if !pane.alternate_screen()
+        let new_sb = pane.scrollback();
+        if new_sb != sb_before_drag
+            && !pane.alternate_screen()
             && let Some(handle) = ctx.scroll_handle()
         {
             let used = pane.max_scrollback();
-            let view_height = area.height as usize;
-            let total_height = used + view_height;
-            handle.set_content_size(area.width as usize, total_height);
-
-            let current_sb = pane.scrollback();
-            let view_offset = ctx.viewport().offset_y;
-            if current_sb == 0 {
-                if view_offset < self.last_max_scrollback.get().saturating_sub(1) {
-                    let target_sb = used.saturating_sub(view_offset);
-                    pane.set_scrollback(target_sb);
-                } else {
-                    handle.scroll_vertical_to(usize::MAX);
-                }
-            } else if current_sb != self.last_scrollback.get() {
-                let new_offset = used.saturating_sub(current_sb);
-                handle.scroll_vertical_to(new_offset);
-            } else {
-                let target_sb = used.saturating_sub(view_offset);
-                if target_sb != current_sb {
-                    pane.set_scrollback(target_sb);
-                }
-            }
-            self.last_max_scrollback.set(used);
+            handle.scroll_vertical_to(used.saturating_sub(new_sb));
         }
+        self.last_scrollback.set(new_sb);
 
-        let scrollback_value = pane.scrollback();
-        self.last_scrollback.set(scrollback_value);
+        // 4. Shadow to clipped Rect for ratatui rendering
+        let area = layout_rect_to_clipped_rect(area);
 
+        let scrollback_value = new_sb;
         let show_cursor = scrollback_value == 0;
         let used = pane.max_scrollback();
         let selection_row_base = used.saturating_sub(scrollback_value);
@@ -921,11 +941,26 @@ impl TerminalComponent {
 struct RenderDragHost<'a> {
     selection: &'a mut SelectionController,
     pane: &'a RefCell<Box<dyn Pane>>,
+    viewport_width: u16,
+    viewport_height: u16,
 }
 
 impl SelectionViewport for RenderDragHost<'_> {
     fn selection_viewport(&self, area: LayoutRect) -> LayoutRect {
         area
+    }
+
+    fn selection_viewport_offsets(&self) -> (usize, usize) {
+        let mut pane = self.pane.borrow_mut();
+        let scrollback = pane.scrollback();
+        let used = pane.max_scrollback();
+        (0, used.saturating_sub(scrollback))
+    }
+
+    fn selection_content_size(&self) -> (usize, usize) {
+        let mut pane = self.pane.borrow_mut();
+        let used = pane.max_scrollback();
+        (self.viewport_width as usize, used + self.viewport_height as usize)
     }
 
     fn logical_position_from_point(
