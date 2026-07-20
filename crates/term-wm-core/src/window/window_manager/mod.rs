@@ -23,7 +23,7 @@ use crate::app_context::AppContext;
 use crate::components::{
     Component, ComponentAction, ComponentContext, MenuItem, Overlay, WmComponent,
 };
-use crate::hitbox_registry::HitboxRegistry;
+use crate::hitbox_registry::{ComponentOwner, HitboxRegistry};
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
@@ -84,7 +84,9 @@ pub(crate) enum MouseCaptureState {
     /// A Press hit a Window or Component target — subsequent Drag/Release/Moved
     /// events are forwarded to that component until the Up releases.
     ComponentInteraction {
-        key: Option<WindowKey>,
+        /// The component that owns this interaction. Direct dispatch —
+        /// no layer array scan or equality checks needed.
+        owner: ComponentOwner,
         /// Immutable snapshot of the hitbox area at Press time.
         screen_area: LayoutRect,
         /// The exact HitboxId of the component that initiated the capture.
@@ -256,6 +258,12 @@ pub struct WindowManager {
     pub semantic_registry: HashMap<layer_manager::ComponentTag, layer_manager::LayerId>,
     /// Tap-swap targeting state
     pub(crate) tap_swap_state: Option<TapSwapState>,
+    /// O(1) chrome handle lookups — rebuilt every frame.
+    resize_map: HashMap<crate::hitbox_registry::HitboxId, crate::layout::floating::ResizeHandle<WindowKey>>,
+    drag_map: HashMap<crate::hitbox_registry::HitboxId, crate::layout::floating::DragHandle<WindowKey>>,
+    /// Split handles only need existence check — the event is forwarded to
+    /// TilingLayout::handle_event which stores its own handle data.
+    split_ids: std::collections::HashSet<crate::hitbox_registry::HitboxId>,
 }
 
 /// State for tap-to-swap targeting mode.
@@ -647,6 +655,9 @@ impl WindowManager {
             input_mode: crate::actions::WmInputMode::Passthrough,
             fab_enabled: true,
             tap_swap_state: None,
+            resize_map: HashMap::new(),
+            drag_map: HashMap::new(),
+            split_ids: std::collections::HashSet::new(),
         }
     }
 
@@ -903,6 +914,9 @@ impl WindowManager {
         self.floating_headers.clear();
         self.managed_draw_order.clear();
         self.hitbox_registry.clear();
+        self.resize_map.clear();
+        self.drag_map.clear();
+        self.split_ids.clear();
     }
 
     /// Dispatch a mouse event using the hitbox registry.
@@ -1016,7 +1030,7 @@ impl WindowManager {
     pub fn set_mouse_captured(&mut self, captured: bool) {
         self.mouse_capture = if captured {
             Some(MouseCaptureState::ComponentInteraction {
-                key: None,
+                owner: ComponentOwner::Test,
                 screen_area: LayoutRect::default(),
                 hitbox_id: crate::hitbox_registry::HitboxId::default(),
             })
@@ -1076,6 +1090,10 @@ impl WindowManager {
         // Phase 1 — Active capture: extract-operate-restore pattern.
         if !matches!(kind, MouseEventKind::Press(_)) {
             if let Some(mut capture) = self.mouse_capture.take() {
+                // Stores an action generated during active capture (e.g., button
+                // release inside a captured component) that must be returned to
+                // the runner rather than swallowed.
+                let mut capture_action: Option<(Option<WindowKey>, TermWmAction)> = None;
                 let (result, restore) = match &mut capture {
                     MouseCaptureState::DraggingWindow {
                         key,
@@ -1288,7 +1306,7 @@ impl WindowManager {
                         _ => (false, true),
                     },
                     MouseCaptureState::ComponentInteraction {
-                        key,
+                        owner,
                         screen_area,
                         hitbox_id,
                     } => {
@@ -1298,36 +1316,61 @@ impl WindowManager {
                             row,
                             modifiers: *modifiers,
                         });
-                        let consumed = if let Some(k) = key {
-                            // Window component routing
-                            if !self.windows.contains_key(*k) {
-                                return EventResult::Ignored;
-                            }
-                            let focused = *self.focus.current() == *k;
-                            let ctx = self
-                                .component_context_for(focused, *k)
-                                .with_screen_area(*screen_area)
-                                .with_active_hitbox(*hitbox_id);
-                            if let Some(comp) = self.component_for_key_mut(*k) {
-                                let result = comp.handle_events(&core_event, &ctx);
-                                let was_consumed = !result.is_ignored();
-                                if let Some(action) = result.into_action() {
-                                    self.process_action(*k, action);
+
+                        let consumed = match owner {
+                            ComponentOwner::Window(key) => {
+                                if !self.windows.contains_key(*key) {
+                                    false
+                                } else {
+                                    let focused = *self.focus.current() == *key;
+                                    let ctx = self
+                                        .component_context_for(focused, *key)
+                                        .with_screen_area(*screen_area)
+                                        .with_active_hitbox(*hitbox_id);
+                                    if let Some(comp) = self.component_for_key_mut(*key) {
+                                        let res = comp.handle_events(&core_event, &ctx);
+                                        if let Some(action) = res.clone().into_action() {
+                                            capture_action = Some((Some(*key), action));
+                                        }
+                                        !res.is_ignored()
+                                    } else {
+                                        false
+                                    }
                                 }
-                                was_consumed
-                            } else {
-                                false
                             }
-                        } else {
-                            // Singleton component routing — dispatch through LayerManager
-                            let ctx = self
-                                .component_context(false)
-                                .with_screen_area(*screen_area)
-                                .with_active_hitbox(*hitbox_id);
-                            self.layer_manager
-                                .dispatch_foreground(&core_event, &ctx)
-                                .is_consumed()
+                            ComponentOwner::Overlay(key) => {
+                                let ctx = self
+                                    .component_context(false)
+                                    .with_screen_area(*screen_area)
+                                    .with_active_hitbox(*hitbox_id);
+                                if let Some(overlay) = self.overlays.get_mut(*key) {
+                                    let res = overlay.handle_events(&core_event, &ctx);
+                                    if let Some(action) = res.clone().into_action() {
+                                        capture_action = Some((None, action));
+                                    }
+                                    !res.is_ignored()
+                                } else {
+                                    false
+                                }
+                            }
+                            ComponentOwner::Layer(id) => {
+                                let ctx = self
+                                    .component_context(false)
+                                    .with_screen_area(*screen_area)
+                                    .with_active_hitbox(*hitbox_id);
+                                if let Some(layer_comp) = self.layer_manager.get_mut(*id) {
+                                    let res = layer_comp.handle_events(&core_event, &ctx);
+                                    if let Some(action) = res.clone().into_action() {
+                                        capture_action = Some((None, action));
+                                    }
+                                    !res.is_ignored()
+                                } else {
+                                    false
+                                }
+                            }
+                            ComponentOwner::System | ComponentOwner::Test => false,
                         };
+
                         (consumed, !matches!(kind, MouseEventKind::Release(_)))
                     }
                     MouseCaptureState::LayoutHandle => match kind {
@@ -1351,6 +1394,11 @@ impl WindowManager {
                 if restore {
                     self.mouse_capture = Some(capture);
                 }
+                // If active capture produced an action (e.g., button release),
+                // return it to the runner rather than swallowing it.
+                if let Some((capture_key, capture_act)) = capture_action {
+                    return EventResult::Action((capture_key, capture_act));
+                }
                 return if result {
                     EventResult::Consumed
                 } else {
@@ -1359,131 +1407,25 @@ impl WindowManager {
             }
         }
 
-        // Phase 2 — Scroll events: hover-to-scroll to the window or palette under cursor.
-        if matches!(kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) {
-            if let Some((hitbox_id, hit_rect)) = self.hitbox_registry.hit_test(*position) {
-                let core_event = Event::Mouse(MouseEvent {
-                    kind: *kind,
-                    column: col,
-                    row,
-                    modifiers: *modifiers,
-                });
-                // Command palette (highest Z)
-                if self
-                    .get_semantic_component(layer_manager::ComponentTag::CommandPalette)
-                    .is_some_and(|m| m.hitbox_id() == Some(hitbox_id))
-                {
-                    let ctx = self
-                        .component_context(false)
-                        .with_overlay(true)
-                        .with_screen_area(hit_rect)
-                        .with_active_hitbox(hitbox_id);
-                    if let Some(menu) =
-                        self.get_semantic_component_mut(layer_manager::ComponentTag::CommandPalette)
-                    {
-                        let result = menu.handle_events(&core_event, &ctx);
-                        return result.map(|action| (None, action));
-                    }
-                }
-                // Windows (front-to-back in draw order)
-                let draw_order: Vec<_> = self.managed_draw_order.iter().rev().copied().collect();
-                for key in draw_order {
-                    if self
-                        .windows
-                        .get(key)
-                        .is_some_and(|w| w.content_hitbox_id == hitbox_id)
-                    {
-                        let focused = *self.focus.current() == key;
-                        let ctx = self
-                            .component_context_for(focused, key)
-                            .with_screen_area(hit_rect)
-                            .with_active_hitbox(hitbox_id);
-                        if let Some(comp) = self.component_for_key_mut(key) {
-                            let result = comp.handle_events(&core_event, &ctx);
-                            return result.map(|action| (Some(key), action));
-                        }
-                    }
-                }
-                // FAB
-                if self
-                    .get_semantic_component(layer_manager::ComponentTag::FloatingActionButton)
-                    .is_some_and(|f| f.hitbox_id() == Some(hitbox_id))
-                {
-                    let ctx = self
-                        .component_context(false)
-                        .with_screen_area(hit_rect)
-                        .with_active_hitbox(hitbox_id);
-                    if let Some(fab) = self.get_semantic_component_mut(
-                        layer_manager::ComponentTag::FloatingActionButton,
-                    ) {
-                        let result = fab.handle_events(&core_event, &ctx);
-                        return result.map(|action| (None, action));
-                    }
-                }
-            }
-            return EventResult::Ignored;
-        }
+        // Phase 2 — Unified hit-test dispatch: single pass, exhaustive match.
+        //
+        // After this point, NO event routing is based on content_hitbox_id
+        // equality checks, layer iteration, or handle list scanning.
+        //
+        // 1. Chrome maps (O(1) — resize, drag, split) intercept before
+        //    the owner match, because these require WindowManager-level
+        //    MouseCaptureState management.
+        // 2. Exhaustive match on ComponentOwner routes to the exact
+        //    component that registered the hitbox during rendering.
 
-        // Phase 3 — Moved events: forward to component.
-        if matches!(kind, MouseEventKind::Moved) {
-            if let Some((hitbox_id, hit_rect)) = self.hitbox_registry.hit_test(*position) {
-                let core_event = Event::Mouse(MouseEvent {
-                    kind: *kind,
-                    column: col,
-                    row,
-                    modifiers: *modifiers,
-                });
-                // Windows (front-to-back in draw order)
-                let draw_order: Vec<_> = self.managed_draw_order.iter().rev().copied().collect();
-                for key in draw_order {
-                    if self
-                        .windows
-                        .get(key)
-                        .is_some_and(|w| w.content_hitbox_id == hitbox_id)
-                    {
-                        let focused = *self.focus.current() == key;
-                        let ctx = self
-                            .component_context_for(focused, key)
-                            .with_screen_area(hit_rect)
-                            .with_active_hitbox(hitbox_id);
-                        if let Some(comp) = self.component_for_key_mut(key) {
-                            let result = comp.handle_events(&core_event, &ctx);
-                            return result.map(|action| (Some(key), action));
-                        }
-                    }
-                }
-            }
-            // Forward Moved to tiling layout for hover feedback on split handles.
-            {
-                let event = Event::Mouse(MouseEvent {
-                    kind: *kind,
-                    column: col,
-                    row,
-                    modifiers: *modifiers,
-                });
-                if let Some(layout) = self.managed_layout.as_mut() {
-                    layout.handle_event(&event, self.managed_area);
-                }
-            }
-            return EventResult::Ignored;
-        }
-
-        // Phase 4 — Press events hit-test the registry.
-        if !matches!(kind, MouseEventKind::Press(_)) {
-            return EventResult::Ignored;
-        }
-
-        // Hover already recorded at function entry.
-
-        let Some((hitbox_id, hit_rect)) = self.hitbox_registry.hit_test(*position) else {
-            // No hitbox — try focus-on-click, then fall through
-            if self.config.wm_command_menu_enabled {
+        let Some((hitbox_id, owner, hit_rect)) = self.hitbox_registry.hit_test(*position) else {
+            // No hitbox — try focus-on-click for Press events, then fall through
+            if matches!(kind, MouseEventKind::Press(_)) && self.config.wm_command_menu_enabled {
                 self.focus_window_at(col, row);
             }
             return EventResult::Ignored;
         };
 
-        // Build core Event for Component::handle_events.
         let core_event = Event::Mouse(MouseEvent {
             kind: *kind,
             column: col,
@@ -1491,30 +1433,28 @@ impl WindowManager {
             modifiers: *modifiers,
         });
 
-        // --- Structural chrome: resize handles, drag handles, layout handles ---
+        // --- Chrome interception (O(1) maps) ---
+        // These fire BEFORE the owner match because chrome handles require
+        // WindowManager-level capture state (resize, drag, layout split).
 
-        // Resize handles
-        if let Some(handle) = self
-            .resize_handles
-            .iter()
-            .find(|h| h.hitbox_id == hitbox_id)
-        {
-            let key = handle.key;
-            let edge = handle.edge;
-            if !self.config.floating_windows_enabled || !self.is_window_floating(key) {
+        if let Some(handle) = self.resize_map.get(&hitbox_id) {
+            // Copy handle data to avoid borrow conflicts with self methods
+            let h_key = handle.key;
+            let h_edge = handle.edge;
+            if !self.config.floating_windows_enabled || !self.is_window_floating(h_key) {
                 return EventResult::Ignored;
             }
-            self.bring_floating_to_front_key(key);
-            let rect = self.full_region_for_key(key);
+            self.bring_floating_to_front_key(h_key);
+            let rect = self.full_region_for_key(h_key);
             let (start_x, start_y, start_width, start_height) =
-                if let Some(crate::window::FloatRectSpec::Absolute(fr)) = self.floating_rect(key) {
+                if let Some(crate::window::FloatRectSpec::Absolute(fr)) = self.floating_rect(h_key) {
                     (fr.x, fr.y, fr.width, fr.height)
                 } else {
                     (rect.x, rect.y, rect.width, rect.height)
                 };
             self.mouse_capture = Some(MouseCaptureState::ResizingWindow {
-                key,
-                edge,
+                key: h_key,
+                edge: h_edge,
                 start_rect: rect,
                 start_col: col,
                 start_row: row,
@@ -1526,12 +1466,7 @@ impl WindowManager {
             return EventResult::Consumed;
         }
 
-        // Drag handles (header buttons and drag area)
-        if let Some(handle) = self
-            .floating_headers
-            .iter()
-            .find(|h| h.hitbox_id == hitbox_id)
-        {
+        if let Some(handle) = self.drag_map.get(&hitbox_id) {
             let key = handle.key;
             // Determine which header button was clicked
             let outer_right =
@@ -1581,16 +1516,12 @@ impl WindowManager {
                             return EventResult::Consumed;
                         }
                         self.last_header_click = Some((key, now));
-
                         if self.is_window_floating(key) {
                             self.bring_floating_to_front_key(key);
                         }
-
                         let rect = self.visible_region_for_key(key);
                         let (initial_x, initial_y) =
-                            if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
-                                self.floating_rect(key)
-                            {
+                            if let Some(crate::window::FloatRectSpec::Absolute(fr)) = self.floating_rect(key) {
                                 (fr.x, fr.y)
                             } else {
                                 (rect.x, rect.y)
@@ -1620,7 +1551,6 @@ impl WindowManager {
                 };
             }
             // Drag area (not a specific button) — initiate window drag
-            let key = handle.key;
             let now = Instant::now();
             if let Some((prev_key, prev)) = self.last_header_click
                 && prev_key == key
@@ -1631,11 +1561,9 @@ impl WindowManager {
                 return EventResult::Consumed;
             }
             self.last_header_click = Some((key, now));
-
             if self.is_window_floating(key) {
                 self.bring_floating_to_front_key(key);
             }
-
             let rect = self.visible_region_for_key(key);
             let (initial_x, initial_y) =
                 if let Some(crate::window::FloatRectSpec::Absolute(fr)) = self.floating_rect(key) {
@@ -1666,8 +1594,7 @@ impl WindowManager {
             return EventResult::Consumed;
         }
 
-        // Split handles
-        if self.handles.iter().any(|h| h.hitbox_id == hitbox_id) {
+        if self.split_ids.contains(&hitbox_id) {
             self.mouse_capture = Some(MouseCaptureState::LayoutHandle);
             if let Some(layout) = self.managed_layout.as_mut() {
                 let consumed = layout.handle_event(&core_event, self.managed_area);
@@ -1678,76 +1605,69 @@ impl WindowManager {
             return EventResult::Ignored;
         }
 
-        // --- Z-plane interleaved dispatch: Foreground → Windows → Background ---
-
-        // Foreground layers (LayerManager) — notifications, command palette, FAB
-        {
-            let ctx = self
-                .component_context(false)
-                .with_screen_area(hit_rect)
-                .with_active_hitbox(hitbox_id);
-            let result = self.layer_manager.dispatch_foreground(&core_event, &ctx);
-            if !result.is_ignored() {
-                if matches!(kind, MouseEventKind::Press(_)) && result.is_consumed() {
-                    self.mouse_capture = Some(MouseCaptureState::ComponentInteraction {
-                        key: None,
-                        screen_area: hit_rect,
-                        hitbox_id,
-                    });
-                }
-                return result.map(|action| (None, action));
-            }
-        }
-
-        // Windows (front-to-back in draw order)
-        for &key in self.managed_draw_order.iter().rev() {
-            if self
-                .windows
-                .get(key)
-                .is_some_and(|w| w.content_hitbox_id == hitbox_id)
-            {
+        // --- Exhaustive owner match ---
+        // Every hitbox has exactly one owner. No iteration, no fallback.
+        match owner {
+            ComponentOwner::Window(key) => {
                 let focused = *self.focus.current() == key;
                 let ctx = self
                     .component_context_for(focused, key)
                     .with_screen_area(hit_rect)
                     .with_active_hitbox(hitbox_id);
-                let result = if let Some(comp) = self.component_for_key_mut(key) {
-                    comp.handle_events(&core_event, &ctx)
+                if let Some(comp) = self.component_for_key_mut(key) {
+                    let result = comp.handle_events(&core_event, &ctx);
+                    if !result.is_ignored() && matches!(kind, MouseEventKind::Press(_)) {
+                        self.mouse_capture = Some(MouseCaptureState::ComponentInteraction {
+                            owner: ComponentOwner::Window(key),
+                            screen_area: hit_rect,
+                            hitbox_id,
+                        });
+                    }
+                    result.map(|action| (Some(key), action))
                 } else {
                     EventResult::Ignored
-                };
-                if !result.is_ignored() {
-                    self.mouse_capture = Some(MouseCaptureState::ComponentInteraction {
-                        key: Some(key),
-                        screen_area: hit_rect,
-                        hitbox_id,
-                    });
                 }
-                return result.map(|action| (Some(key), action));
             }
-        }
-
-        // Background layers (top panel, bottom panel)
-        // Rendered before windows in Z-order, checked last in dispatch.
-        {
-            let ctx = self
-                .component_context(false)
-                .with_screen_area(hit_rect)
-                .with_active_hitbox(hitbox_id);
-            let result = self.layer_manager.dispatch_background(&core_event, &ctx);
-            if !result.is_ignored() {
-                if matches!(kind, MouseEventKind::Press(_)) && result.is_consumed() {
-                    self.mouse_capture = Some(MouseCaptureState::ComponentInteraction {
-                        key: None,
-                        screen_area: hit_rect,
-                        hitbox_id,
-                    });
+            ComponentOwner::Overlay(key) => {
+                let ctx = self
+                    .component_context(false)
+                    .with_screen_area(hit_rect)
+                    .with_active_hitbox(hitbox_id);
+                if let Some(overlay) = self.overlays.get_mut(key) {
+                    let result = overlay.handle_events(&core_event, &ctx);
+                    if !result.is_ignored() && matches!(kind, MouseEventKind::Press(_)) {
+                        self.mouse_capture = Some(MouseCaptureState::ComponentInteraction {
+                            owner: ComponentOwner::Overlay(key),
+                            screen_area: hit_rect,
+                            hitbox_id,
+                        });
+                    }
+                    result.map(|action| (None, action))
+                } else {
+                    EventResult::Ignored
                 }
-                return result.map(|action| (None, action));
             }
+            ComponentOwner::Layer(layer_id) => {
+                let ctx = self
+                    .component_context(false)
+                    .with_screen_area(hit_rect)
+                    .with_active_hitbox(hitbox_id);
+                if let Some(layer_comp) = self.layer_manager.get_mut(layer_id) {
+                    let result = layer_comp.handle_events(&core_event, &ctx);
+                    if !result.is_ignored() && matches!(kind, MouseEventKind::Press(_)) {
+                        self.mouse_capture = Some(MouseCaptureState::ComponentInteraction {
+                            owner: ComponentOwner::Layer(layer_id),
+                            screen_area: hit_rect,
+                            hitbox_id,
+                        });
+                    }
+                    result.map(|action| (None, action))
+                } else {
+                    EventResult::Ignored
+                }
+            }
+            ComponentOwner::System | ComponentOwner::Test => EventResult::Ignored,
         }
-
-        EventResult::Ignored
     }
 
     fn reset_drag_snap_timer(&mut self) {
@@ -2153,6 +2073,7 @@ impl WindowManager {
         for handle in &self.handles {
             let id = handle.hitbox_id;
             let rect = handle.rect;
+            self.split_ids.insert(id);
             self.hitbox_registry.register(id, rect);
         }
     }
@@ -2165,18 +2086,20 @@ impl WindowManager {
             .resize_handles
             .iter()
             .filter(|h| h.key == key)
-            .map(|h| (h.hitbox_id, h.rect))
+            .map(|h| (h.hitbox_id, h.rect, *h))
             .collect();
         let header_data: Vec<_> = self
             .floating_headers
             .iter()
             .filter(|h| h.key == key)
-            .map(|h| (h.hitbox_id, h.rect))
+            .map(|h| (h.hitbox_id, h.rect, *h))
             .collect();
-        for (id, rect) in resize_data {
+        for (id, rect, handle) in resize_data {
+            self.resize_map.insert(id, handle);
             self.hitbox_registry.register(id, rect);
         }
-        for (id, rect) in header_data {
+        for (id, rect, handle) in header_data {
+            self.drag_map.insert(id, handle);
             self.hitbox_registry.register(id, rect);
         }
     }
@@ -3164,6 +3087,7 @@ mod tests {
             .rect;
         assert!(!wm.is_window_floating(debug_key));
 
+        wm.hitbox_registry_mut().set_active_owner(ComponentOwner::Test);
         wm.hitbox_registry.register(
             wm.floating_headers
                 .iter()
@@ -5373,6 +5297,11 @@ mod tests {
 
         // Verify at least one entry exists at the gap position.
         let gap = &wm.handles[0].rect;
+        // After register_layout_handle_hitboxes, split_ids should be populated
+        assert!(
+            wm.split_ids.contains(&wm.handles[0].hitbox_id),
+            "split_ids must contain the handle's hitbox_id"
+        );
         let pos = crate::mouse_coord::MousePosition {
             column: (gap.x + i32::from(gap.width) / 2) as i16,
             row: (gap.y + i32::from(gap.height) / 2) as i16,

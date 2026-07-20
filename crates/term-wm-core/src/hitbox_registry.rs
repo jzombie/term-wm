@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use term_wm_layout_engine::LayoutRect;
 
 use crate::mouse_coord::MousePosition;
+use crate::window::{LayerId, OverlayKey, WindowKey};
 
 /// Globally unique opaque identifier for a clickable surface / widget.
 ///
@@ -24,6 +25,28 @@ impl Default for HitboxId {
     }
 }
 
+/// Identifies which component instance owns a hitbox entry.
+///
+/// Every registered hitbox must have exactly one owner. The `dispatch_mouse`
+/// function uses this tag to route events directly to the owning component
+/// in O(1) — no iteration over handle lists, no `content_hitbox_id == id`
+/// equality checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComponentOwner {
+    /// Hitbox belongs to a window's component tree.
+    Window(WindowKey),
+    /// Hitbox belongs to an overlay (command palette, help, confirm dialog).
+    Overlay(OverlayKey),
+    /// Hitbox belongs to a system layer (panels, FAB, notification area).
+    Layer(LayerId),
+    /// Structural chrome (split handles) intercepted by O(1) maps
+    /// before the owner match in dispatch_mouse.
+    System,
+    /// Test-only owner for standalone component unit tests.
+    /// Unconditional so integration tests in tests/*.rs can reference it.
+    Test,
+}
+
 /// Maximum depth of nested clipping containers (ScrollViews, overlay bounds,
 /// etc.) that the registry supports without heap allocation.
 ///
@@ -40,6 +63,8 @@ const CLIP_STACK_INLINE_CAPACITY: usize = 8;
 #[derive(Debug, Clone, Copy)]
 pub struct HitboxEntry {
     pub id: HitboxId,
+    /// The component that owns this hitbox — NEVER optional.
+    pub owner: ComponentOwner,
     /// Absolute screen coordinates (post-clip intersection).
     pub area: LayoutRect,
 }
@@ -60,6 +85,10 @@ pub struct HitboxRegistry {
     /// heap allocation for the common case (depth ≤ 5). Falls back to heap
     /// only in pathological nesting > CLIP_STACK_INLINE_CAPACITY levels deep.
     clip_stack: smallvec::SmallVec<[LayoutRect; CLIP_STACK_INLINE_CAPACITY]>,
+    /// The component owner currently being populated. Set via
+    /// `set_active_owner()` before each render unit. `register()` panics
+    /// if this is `None`, ensuring every entry has a concrete owner.
+    active_owner: Option<ComponentOwner>,
 }
 
 impl HitboxRegistry {
@@ -67,13 +96,40 @@ impl HitboxRegistry {
         Self {
             entries: Vec::new(),
             clip_stack: smallvec::SmallVec::new(),
+            active_owner: None,
         }
     }
 
-    /// Reset for a new frame.  Clears both the entry list and the clip stack.
+    /// Create a registry pre-configured with an active owner.
+    /// Use for scratch/offscreen registries that will be merged
+    /// into the main registry after rendering.
+    pub fn with_owner(owner: ComponentOwner) -> Self {
+        Self {
+            entries: Vec::new(),
+            clip_stack: smallvec::SmallVec::new(),
+            active_owner: Some(owner),
+        }
+    }
+
+    /// Set the active component owner. All subsequent `register()` calls
+    /// will inherit this owner. Panics if `register()` is called without a
+    /// prior `set_active_owner` call.
+    pub fn set_active_owner(&mut self, owner: ComponentOwner) {
+        self.active_owner = Some(owner);
+    }
+
+    /// Clear the active owner. Primarily for test isolation.
+    /// The production render pipeline does NOT call this between
+    /// render units — it overwrites via sequential `set_active_owner()`.
+    pub fn clear_active_owner(&mut self) {
+        self.active_owner = None;
+    }
+
+    /// Reset for a new frame.  Clears entries, clip stack, and active owner.
     pub fn clear(&mut self) {
         self.entries.clear();
         self.clip_stack.clear();
+        self.active_owner = None;
     }
 
     /// Register a clickable area.
@@ -82,7 +138,14 @@ impl HitboxRegistry {
     /// If the intersection yields an empty rect, the entry is skipped entirely.
     /// This means scrolled-off components simply don't appear in the registry
     /// — no `rect_contains` needed at event time.
+    ///
+    /// # Panics
+    /// Panics if `set_active_owner()` has not been called first.
+    /// Every entry must have a concrete `ComponentOwner`.
     pub fn register(&mut self, id: HitboxId, area: LayoutRect) {
+        let owner = self
+            .active_owner
+            .expect("HitboxRegistry::register invoked without an active ComponentOwner. Call set_active_owner() first.");
         let mut clipped = area;
         for clip in &self.clip_stack {
             clipped = clipped.clamp(*clip);
@@ -90,7 +153,7 @@ impl HitboxRegistry {
         if clipped.width == 0 || clipped.height == 0 {
             return;
         }
-        self.entries.push(HitboxEntry { id, area: clipped });
+        self.entries.push(HitboxEntry { id, owner, area: clipped });
     }
 
     /// Push a clip rect (called by `ScrollViewComponent` before rendering
@@ -112,17 +175,17 @@ impl HitboxRegistry {
     }
 
     /// Query: reverse scan (front-to-back = top-most first) for the top-most
-    /// entry whose area contains `position`. Returns the `HitboxId` and its
-    /// exact screen-space `Rect` if found.
+    /// entry whose area contains `position`. Returns the `HitboxId`, its
+    /// `ComponentOwner`, and its exact screen-space `Rect` if found.
     ///
     /// Entries are registered in render order (back-to-front), so iterating
     /// in reverse yields the top-most (last-rendered, highest z-order) match.
-    pub fn hit_test(&self, position: MousePosition) -> Option<(HitboxId, LayoutRect)> {
+    pub fn hit_test(&self, position: MousePosition) -> Option<(HitboxId, ComponentOwner, LayoutRect)> {
         self.entries
             .iter()
             .rev()
             .find(|entry| position.is_inside(entry.area))
-            .map(|entry| (entry.id, entry.area))
+            .map(|entry| (entry.id, entry.owner, entry.area))
     }
 
     /// Returns the number of registered entries (for diagnostics / metrics).
@@ -143,6 +206,7 @@ impl HitboxRegistry {
     pub fn swap_entries(&mut self, other: &mut Self) {
         std::mem::swap(&mut self.entries, &mut other.entries);
         std::mem::swap(&mut self.clip_stack, &mut other.clip_stack);
+        std::mem::swap(&mut self.active_owner, &mut other.active_owner);
     }
 
     /// Merge all entries from another registry into this one.
@@ -174,8 +238,27 @@ mod tests {
     }
 
     #[test]
+    fn register_without_active_owner_panics() {
+        let mut reg = HitboxRegistry::new();
+        let id = HitboxId::new();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            reg.register(
+                id,
+                LayoutRect {
+                    x: 0,
+                    y: 0,
+                    width: 10,
+                    height: 10,
+                },
+            );
+        }));
+        assert!(result.is_err(), "register() without active_owner should panic");
+    }
+
+    #[test]
     fn register_and_hit() {
         let mut reg = HitboxRegistry::new();
+        reg.set_active_owner(ComponentOwner::Test);
         let id = HitboxId::new();
         reg.register(
             id,
@@ -186,12 +269,17 @@ mod tests {
                 height: 10,
             },
         );
-        assert!(reg.hit_test(screen_pos(5, 5)).is_some());
+        let result = reg.hit_test(screen_pos(5, 5));
+        assert!(result.is_some());
+        let (hit_id, owner, _rect) = result.unwrap();
+        assert_eq!(hit_id, id);
+        assert_eq!(owner, ComponentOwner::Test);
     }
 
     #[test]
     fn miss_outside_area() {
         let mut reg = HitboxRegistry::new();
+        reg.set_active_owner(ComponentOwner::Test);
         let id = HitboxId::new();
         reg.register(
             id,
@@ -208,6 +296,7 @@ mod tests {
     #[test]
     fn front_to_back_priority() {
         let mut reg = HitboxRegistry::new();
+        reg.set_active_owner(ComponentOwner::Test);
         let id1 = HitboxId::new();
         let id2 = HitboxId::new();
         // Register back rect first
@@ -232,13 +321,14 @@ mod tests {
         );
 
         // Point inside both rects should hit the front (last-registered)
-        let (hit, _rect) = reg.hit_test(screen_pos(7, 7)).unwrap();
+        let (hit, _owner, _rect) = reg.hit_test(screen_pos(7, 7)).unwrap();
         assert_eq!(hit, id2);
     }
 
     #[test]
     fn clip_rect_culls_entries() {
         let mut reg = HitboxRegistry::new();
+        reg.set_active_owner(ComponentOwner::Test);
         reg.push_clip(LayoutRect {
             x: 0,
             y: 0,
@@ -263,6 +353,7 @@ mod tests {
     #[test]
     fn clip_rect_intersects_partial_overlap() {
         let mut reg = HitboxRegistry::new();
+        reg.set_active_owner(ComponentOwner::Test);
         reg.push_clip(LayoutRect {
             x: 0,
             y: 0,
@@ -282,7 +373,7 @@ mod tests {
         );
         assert_eq!(reg.len(), 1);
         // The registered area should be clipped to (5,5,5,5) — the overlap
-        let (hit, _rect) = reg.hit_test(screen_pos(7, 7)).unwrap();
+        let (hit, _owner, _rect) = reg.hit_test(screen_pos(7, 7)).unwrap();
         assert_eq!(hit, id);
         // Point in the original rect but outside the clip should miss
         assert!(reg.hit_test(screen_pos(15, 15)).is_none());
@@ -292,6 +383,7 @@ mod tests {
     #[test]
     fn nested_clip_stack_culls_fully_occluded() {
         let mut reg = HitboxRegistry::new();
+        reg.set_active_owner(ComponentOwner::Test);
         reg.push_clip(LayoutRect {
             x: 0,
             y: 0,
@@ -323,6 +415,7 @@ mod tests {
     #[test]
     fn nested_clip_stack_partial_intersection() {
         let mut reg = HitboxRegistry::new();
+        reg.set_active_owner(ComponentOwner::Test);
         reg.push_clip(LayoutRect {
             x: 0,
             y: 0,
@@ -360,6 +453,7 @@ mod tests {
     #[test]
     fn clear_resets_state() {
         let mut reg = HitboxRegistry::new();
+        reg.set_active_owner(ComponentOwner::Test);
         reg.push_clip(LayoutRect {
             x: 0,
             y: 0,
@@ -380,6 +474,19 @@ mod tests {
         reg.clear();
         assert!(reg.is_empty());
         assert!(reg.clip_stack.is_empty());
+        // clear_resets_active_owner: register after clear should panic
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            reg.register(
+                id,
+                LayoutRect {
+                    x: 0,
+                    y: 0,
+                    width: 5,
+                    height: 5,
+                },
+            );
+        }));
+        assert!(result.is_err(), "register() after clear() without set_active_owner should panic");
     }
 
     #[test]
