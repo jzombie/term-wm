@@ -3,10 +3,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use portable_pty::{CommandBuilder, PtySize};
-use ratatui::{
-    layout::Rect,
-    style::{Color as TColor, Modifier, Style},
-};
+use ratatui::style::{Color as TColor, Modifier, Style};
 use term_wm_core::events::{Event, KeyCode, KeyKind, MouseButton, MouseEvent, MouseEventKind};
 use vt100::MouseProtocolEncoding;
 
@@ -169,7 +166,7 @@ impl Component<TermWmAction> for TerminalComponent {
                     if handle_selection_mouse(self, selection_ready, mouse, area) {
                         return EventResult::Consumed;
                     }
-                    if self.try_handle_link_click(layout_rect_to_rect(area), mouse) {
+                    if self.try_handle_link_click(area, mouse) {
                         return EventResult::Consumed;
                     }
                 }
@@ -194,8 +191,8 @@ impl Component<TermWmAction> for TerminalComponent {
                     return EventResult::Ignored;
                 }
                 let local = MouseEvent {
-                    column: mouse.column.saturating_sub(area.x as u16),
-                    row: mouse.row.saturating_sub(area.y as u16),
+                    column: i32::from(mouse.column).saturating_sub(area.x).max(0) as u16,
+                    row: i32::from(mouse.row).saturating_sub(area.y).max(0) as u16,
                     kind: mouse.kind,
                     modifiers: mouse.modifiers,
                 };
@@ -271,7 +268,6 @@ impl Component<TermWmAction> for TerminalComponent {
             width: area.width,
             height: area.height,
         });
-        let _screen_area = layout_rect_to_rect(screen_area_lr);
         let _exited = self.pane.borrow_mut().has_exited();
         // Register this terminal's clickable area in the hitbox registry.
         // Use screen coordinates so hit_test matches screen-space mouse positions.
@@ -486,7 +482,6 @@ impl TerminalComponent {
                 width: area.width,
                 height: area.height,
             });
-            let _screen_area = layout_rect_to_rect(screen_area_lr);
             let mut sel_guard = self.selection.borrow_mut();
             let mut dh = RenderDragHost {
                 selection: &mut sel_guard,
@@ -728,7 +723,6 @@ impl SelectionViewport for TerminalComponent {
         column: u16,
         row: u16,
     ) -> Option<LogicalPosition> {
-        let area = layout_rect_to_rect(area);
         TerminalComponent::logical_position_from_point(self, area, column, row)
     }
 
@@ -779,17 +773,17 @@ impl TerminalComponent {
 
     fn logical_position_from_point(
         &mut self,
-        area: Rect,
+        area: LayoutRect,
         column: u16,
         row: u16,
     ) -> Option<LogicalPosition> {
         if area.width == 0 || area.height == 0 {
             return None;
         }
-        let max_x = area.x.saturating_add(area.width).saturating_sub(1);
-        let max_y = area.y.saturating_add(area.height).saturating_sub(1);
-        let clamped_col = column.clamp(area.x, max_x);
-        let clamped_row = row.clamp(area.y, max_y);
+        let max_x = area.x.saturating_add(i32::from(area.width)).saturating_sub(1);
+        let max_y = area.y.saturating_add(i32::from(area.height)).saturating_sub(1);
+        let clamped_col = i32::from(column).clamp(area.x, max_x);
+        let clamped_row = i32::from(row).clamp(area.y, max_y);
         let local_col = clamped_col.saturating_sub(area.x) as usize;
         let local_row = clamped_row.saturating_sub(area.y) as usize;
         let pane = self.pane.get_mut();
@@ -902,23 +896,25 @@ impl TerminalComponent {
         self.pane.get_mut().set_status_callback(cb);
     }
 
-    fn link_at_position(&self, area: Rect, mouse: &MouseEvent) -> Option<String> {
+    fn link_at_position(&self, area: LayoutRect, mouse: &MouseEvent) -> Option<String> {
         if area.width == 0 || area.height == 0 {
             return None;
         }
-        if mouse.column < area.x
-            || mouse.column >= area.x.saturating_add(area.width)
-            || mouse.row < area.y
-            || mouse.row >= area.y.saturating_add(area.height)
+        let mouse_col = i32::from(mouse.column);
+        let mouse_row = i32::from(mouse.row);
+        if mouse_col < area.x
+            || mouse_col >= area.x.saturating_add(i32::from(area.width))
+            || mouse_row < area.y
+            || mouse_row >= area.y.saturating_add(i32::from(area.height))
         {
             return None;
         }
-        let local_x = mouse.column.saturating_sub(area.x) as usize;
-        let local_y = mouse.row.saturating_sub(area.y) as usize;
+        let local_x = mouse_col.saturating_sub(area.x) as usize;
+        let local_y = mouse_row.saturating_sub(area.y) as usize;
         self.link_overlay.borrow().link_at(local_y, local_x)
     }
 
-    fn try_handle_link_click(&mut self, area: Rect, mouse: &MouseEvent) -> bool {
+    fn try_handle_link_click(&mut self, area: LayoutRect, mouse: &MouseEvent) -> bool {
         if !matches!(mouse.kind, MouseEventKind::Press(MouseButton::Left)) {
             return false;
         }
@@ -960,14 +956,13 @@ impl SelectionViewport for RenderDragHost<'_> {
         column: u16,
         row: u16,
     ) -> Option<LogicalPosition> {
-        let area = layout_rect_to_rect(area);
         if area.width == 0 || area.height == 0 {
             return None;
         }
-        let max_x = area.x.saturating_add(area.width).saturating_sub(1);
-        let max_y = area.y.saturating_add(area.height).saturating_sub(1);
-        let clamped_col = column.clamp(area.x, max_x);
-        let clamped_row = row.clamp(area.y, max_y);
+        let max_x = area.x.saturating_add(i32::from(area.width)).saturating_sub(1);
+        let max_y = area.y.saturating_add(i32::from(area.height)).saturating_sub(1);
+        let clamped_col = i32::from(column).clamp(area.x, max_x);
+        let clamped_row = i32::from(row).clamp(area.y, max_y);
         let local_col = clamped_col.saturating_sub(area.x) as usize;
         let local_row = clamped_row.saturating_sub(area.y) as usize;
         let mut pane = self.pane.borrow_mut();
@@ -1181,6 +1176,7 @@ impl Pane for TestPane {
 mod tests {
     use super::*;
     use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
     use std::cell::RefCell;
     use std::rc::Rc;
     use term_wm_core::component_context::ScrollHandle;
