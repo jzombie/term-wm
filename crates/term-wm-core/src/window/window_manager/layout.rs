@@ -123,18 +123,24 @@ impl WindowManager {
             }
             // TODO: Stop hardcoding these things
             let x = if borders { area.x + 1 } else { area.x };
-            let y = if header { area.y + 2 } else { area.y };
+            let y = if borders && header {
+                area.y + 2
+            } else if header || borders {
+                area.y + 1
+            } else {
+                area.y
+            };
             let width = if borders {
                 area.width.saturating_sub(2)
             } else {
                 area.width
             };
-            let height = if header && borders {
+            let height = if borders && header {
                 area.height.saturating_sub(3)
             } else if header {
-                area.height.saturating_sub(2)
-            } else if borders {
                 area.height.saturating_sub(1)
+            } else if borders {
+                area.height.saturating_sub(2)
             } else {
                 area.height
             };

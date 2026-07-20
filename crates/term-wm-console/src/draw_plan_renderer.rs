@@ -164,7 +164,7 @@ fn register_window_chrome_hitboxes(
     let (cx, cy, cw, ch) = if *borders_enabled && *header_enabled {
         (1u16, 2u16, width.saturating_sub(2), height.saturating_sub(3))
     } else if *header_enabled {
-        (0u16, 2u16, width, height.saturating_sub(2))
+        (0u16, 1u16, width, height.saturating_sub(1))
     } else if *borders_enabled {
         (1u16, 1u16, width.saturating_sub(2), height.saturating_sub(2))
     } else {
@@ -234,8 +234,10 @@ pub fn render_window_chrome(
     } else {
         0
     };
-    let content_y = if ctx.header_enabled {
+    let content_y = if ctx.header_enabled && ctx.borders_enabled {
         TOP_BORDER_HEIGHT.saturating_add(HEADER_HEIGHT)
+    } else if ctx.header_enabled {
+        HEADER_HEIGHT
     } else if ctx.borders_enabled {
         TOP_BORDER_HEIGHT
     } else {
@@ -246,17 +248,14 @@ pub fn render_window_chrome(
     } else {
         width
     };
-    let content_height = if ctx.header_enabled && ctx.borders_enabled {
-        height.saturating_sub(
-            TOP_BORDER_HEIGHT.saturating_add(HEADER_HEIGHT.saturating_add(BOTTOM_BORDER_HEIGHT)),
-        )
-    } else if ctx.header_enabled {
-        height.saturating_sub(TOP_BORDER_HEIGHT.saturating_add(HEADER_HEIGHT))
-    } else if ctx.borders_enabled {
-        height.saturating_sub(TOP_BORDER_HEIGHT.saturating_add(BOTTOM_BORDER_HEIGHT))
+    let bottom_inset = if ctx.borders_enabled {
+        BOTTOM_BORDER_HEIGHT
     } else {
-        height
+        0
     };
+    let content_height = height
+        .saturating_sub(content_y)
+        .saturating_sub(bottom_inset);
     LayoutRect {
         x: i32::from(content_x),
         y: i32::from(content_y),
