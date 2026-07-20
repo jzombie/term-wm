@@ -6,7 +6,6 @@ use crate::components::WmComponent;
 use crate::keybindings::KeyBindings;
 use crate::theme::Theme;
 use crate::window::WindowManager;
-use crate::window::decorator::WindowDecorator;
 use crate::wm_config::{HintVisibility, WmConfig};
 
 /// Error type for [`AppBuilder::build`].
@@ -71,11 +70,6 @@ impl AppBuilder {
 
     pub fn keybindings(mut self, kb: KeyBindings) -> Self {
         self.config.keybindings = kb;
-        self
-    }
-
-    pub fn decorator(mut self, decorator: Arc<dyn WindowDecorator>) -> Self {
-        self.config.decorator = Some(decorator);
         self
     }
 

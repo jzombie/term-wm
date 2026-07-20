@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use term_wm_layout_engine::LayoutRect;
 
+use crate::chrome::ChromeTarget;
 use crate::mouse_coord::MousePosition;
 use crate::window::{LayerId, OverlayKey, WindowKey};
 
@@ -39,9 +40,8 @@ pub enum ComponentOwner {
     Overlay(OverlayKey),
     /// Hitbox belongs to a system layer (panels, FAB, notification area).
     Layer(LayerId),
-    /// Structural chrome (split handles) intercepted by O(1) maps
-    /// before the owner match in dispatch_mouse.
-    System,
+    /// Strongly-typed chrome element (resize edge, drag handle, button, split).
+    Chrome(ChromeTarget),
     /// Test-only owner for standalone component unit tests.
     /// Unconditional so integration tests in tests/*.rs can reference it.
     Test,

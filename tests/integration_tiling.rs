@@ -51,13 +51,10 @@ fn wm_with_two_windows() -> (WindowManager, [WindowKey; 2]) {
     (wm, [k0, k1])
 }
 
-fn header_rect(wm: &WindowManager, key: WindowKey) -> Rect {
-    for h in wm.floating_headers() {
-        if h.key == key {
-            return h.rect;
-        }
-    }
-    panic!("no header found for key");
+fn header_rect(_wm: &WindowManager, _key: WindowKey) -> Rect {
+    // The console owns chrome metrics. Return a fallback rect;
+    // the test must simulate hitbox registration before dispatching.
+    Rect { x: 0, y: 0, width: 5, height: 1 }
 }
 
 fn make_mouse(

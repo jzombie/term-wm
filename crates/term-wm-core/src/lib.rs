@@ -1,5 +1,6 @@
 pub mod actions;
 pub mod app_context;
+pub mod chrome;
 pub use app_context::AppContext;
 pub mod command_menu;
 pub mod component_context;

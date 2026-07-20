@@ -1,18 +1,8 @@
-use std::sync::Arc;
-
 use super::WindowManager;
 use crate::window::WindowKey;
 use crate::window::entry::WindowState;
 
 impl WindowManager {
-    pub fn decorator(&self) -> Arc<dyn super::WindowDecorator> {
-        self.config.decorator()
-    }
-
-    pub fn set_decorator(&mut self, decorator: Arc<dyn super::WindowDecorator>) {
-        self.config.decorator = Some(decorator);
-    }
-
     pub fn minimize_window(&mut self, key: WindowKey) {
         self.transition_window(key, WindowState::Iconic);
     }

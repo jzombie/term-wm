@@ -9,15 +9,121 @@ use term_wm_core::component_context::ComponentContext;
 use term_wm_core::components::{Component, ComponentAction, TopPanelState};
 use term_wm_core::constants::{SHADOW_OFFSET_X, SHADOW_OFFSET_Y};
 use term_wm_core::draw_plan::{DrawPlan, RegionType, RenderRegion, ZLayer};
-use term_wm_core::hitbox_registry::HitboxRegistry;
+use term_wm_core::hitbox_registry::{HitboxId, HitboxRegistry};
 use term_wm_core::layout::floating::{ResizeEdge, ResizeHandle};
 use term_wm_core::layout::rect_contains;
 use term_wm_core::layout::tiling::SplitHandle;
 use term_wm_core::layout::{Direction, FloatingPane, RectSpec, RegionMap};
 use term_wm_core::term_color::lerp_color;
 use term_wm_core::theme::{Color, Theme};
-use term_wm_core::window::decorator::WindowRenderCtx;
 use term_wm_core::window::{ComponentTag, WindowKey, WindowManager, WindowSurface};
+
+/// Render context for window chrome (owned by console, not core).
+pub struct ChromeCtx<'a> {
+    pub title: &'a str,
+    pub focused: bool,
+    pub floating: bool,
+    pub direct_mode: bool,
+    pub hover_pos: Option<(u16, u16)>,
+    pub theme: term_wm_core::theme::Theme,
+}
+
+// ── Chrome metric constants (owned by console) ─────────────
+const LEFT_BORDER_WIDTH: u16 = 1;
+const RIGHT_BORDER_WIDTH: u16 = 1;
+const TOP_BORDER_HEIGHT: u16 = 1;
+const BOTTOM_BORDER_HEIGHT: u16 = 1;
+const HEADER_HEIGHT: u16 = 1;
+const HEADER_BUTTON_GAP: u16 = 2;
+const EDGE_INDEX_ADJUST: u16 = 1;
+
+/// Register chrome hitboxes for a window (resize, drag, close, maximize buttons).
+fn register_window_chrome_hitboxes(
+    registry: &mut HitboxRegistry,
+    key: WindowKey,
+    bounds: LayoutRect,
+) {
+    use term_wm_core::chrome::ChromeTarget;
+    use term_wm_core::hitbox_registry::ComponentOwner;
+    use term_wm_core::layout::floating::ResizeEdge;
+
+    let outer_right = (bounds.x as u16)
+        .saturating_add(bounds.width)
+        .saturating_sub(EDGE_INDEX_ADJUST);
+    let header_y = (bounds.y as u16).saturating_add(TOP_BORDER_HEIGHT);
+
+    // Resize handles at each edge
+    let right_x = outer_right;
+    let bottom_y = (bounds.y as u16)
+        .saturating_add(bounds.height)
+        .saturating_sub(EDGE_INDEX_ADJUST);
+    for (edge, rect) in [
+        (ResizeEdge::Left, LayoutRect { x: bounds.x, y: bounds.y.saturating_add(1), width: 1, height: bounds.height.saturating_sub(2) }),
+        (ResizeEdge::Right, LayoutRect { x: i32::from(right_x), y: bounds.y.saturating_add(1), width: 1, height: bounds.height.saturating_sub(2) }),
+        (ResizeEdge::Top, LayoutRect { x: bounds.x.saturating_add(1), y: bounds.y, width: bounds.width.saturating_sub(2), height: 1 }),
+        (ResizeEdge::Bottom, LayoutRect { x: bounds.x.saturating_add(1), y: i32::from(bottom_y), width: bounds.width.saturating_sub(2), height: 1 }),
+    ] {
+        let id = HitboxId::new();
+        registry.set_active_owner(ComponentOwner::Chrome(ChromeTarget::Resize(key, edge)));
+        registry.register(id, rect);
+    }
+
+    // Drag handle at the header area
+    let drag_rect = LayoutRect {
+        x: bounds.x.saturating_add(i32::from(LEFT_BORDER_WIDTH)),
+        y: i32::from(header_y),
+        width: bounds.width.saturating_sub(LEFT_BORDER_WIDTH.saturating_add(RIGHT_BORDER_WIDTH)),
+        height: 1,
+    };
+    let id = HitboxId::new();
+    registry.set_active_owner(ComponentOwner::Chrome(ChromeTarget::Drag(key)));
+    registry.register(id, drag_rect);
+
+    // Close and maximize buttons
+    let close_x = outer_right.saturating_sub(HEADER_BUTTON_GAP);
+    let max_x = close_x.saturating_sub(HEADER_BUTTON_GAP);
+    for (target, x) in [
+        (ChromeTarget::CloseButton(key), close_x),
+        (ChromeTarget::MaximizeButton(key), max_x),
+    ] {
+        let id = HitboxId::new();
+        registry.set_active_owner(ComponentOwner::Chrome(target));
+        registry.register(
+            id,
+            LayoutRect { x: i32::from(x), y: i32::from(header_y), width: 1, height: 1 },
+        );
+    }
+}
+
+/// Single-pass window chrome rendering: draw chrome, register hitboxes, return inner content bounds.
+/// This is the atomic entry point the console provides for the dumb core architecture.
+pub fn render_window_chrome(
+    buffer: &mut Buffer,
+    registry: &mut HitboxRegistry,
+    key: WindowKey,
+    full_bounds: LayoutRect,
+    ctx: &ChromeCtx<'_>,
+) -> LayoutRect {
+    // Draw chrome using existing renderer
+    render_window(buffer, full_bounds, ChromeCtx { ..*ctx });
+
+    // Register chrome hitboxes (before component hitboxes are added)
+    register_window_chrome_hitboxes(registry, key, full_bounds);
+
+    // Return inner content bounds
+    let border_w = i32::from(LEFT_BORDER_WIDTH);
+    let header_h = i32::from(TOP_BORDER_HEIGHT.saturating_add(HEADER_HEIGHT));
+    LayoutRect {
+        x: full_bounds.x.saturating_add(border_w),
+        y: full_bounds.y.saturating_add(header_h),
+        width: full_bounds
+            .width
+            .saturating_sub(LEFT_BORDER_WIDTH.saturating_add(RIGHT_BORDER_WIDTH)),
+        height: full_bounds
+            .height
+            .saturating_sub(TOP_BORDER_HEIGHT.saturating_add(HEADER_HEIGHT.saturating_add(BOTTOM_BORDER_HEIGHT))),
+    }
+}
 
 /// Convert LayoutRect to Ratatui Rect
 fn layout_rect_to_rect(layout: LayoutRect) -> Rect {
@@ -569,18 +675,20 @@ pub fn render_drop_shadow(buf: &mut Buffer, dest: LayoutRect, z_depth: f32, them
 /// Uses the provided `scratch` buffer for offscreen compositing — callers
 /// should hold a persistent buffer (e.g. from `DrawPlanRenderer::take_scratch`)
 /// to avoid per-frame allocation.
+/// Returns the inner content bounds (after chrome inset) and the chrome hitbox registry.
 pub fn composite_window<F>(
     backend: &mut dyn term_wm_render::RenderBackend,
     surface: &WindowSurface,
-    _decorator: &dyn term_wm_core::window::decorator::WindowDecorator,
-    mut ctx: WindowRenderCtx<'_>,
+    key: WindowKey,
+    mut ctx: ChromeCtx<'_>,
     mut render_content: F,
     scratch: &mut Buffer,
-) where
-    F: FnMut(&mut dyn term_wm_render::RenderBackend, &mut HitboxRegistry),
+) -> (LayoutRect, HitboxRegistry)
+where
+    F: FnMut(&mut dyn term_wm_render::RenderBackend, LayoutRect),
 {
     if surface.dest.width == 0 || surface.dest.height == 0 {
-        return;
+        return (LayoutRect::default(), HitboxRegistry::new());
     }
     let local_area = Rect {
         x: 0,
@@ -608,19 +716,25 @@ pub fn composite_window<F>(
     scratch.resize(local_area);
     scratch.reset();
     let mut buffer = std::mem::replace(scratch, Buffer::empty(Rect::ZERO));
+    let inner_bounds: LayoutRect;
+    let mut chrome_registry = HitboxRegistry::new();
     {
         let mut offscreen = RatatuiBackend::new(buffer, local_area);
-        render_window(
+        let full_local = LayoutRect {
+            x: 0,
+            y: 0,
+            width: surface.dest.width,
+            height: surface.dest.height,
+        };
+        // Atomic single-pass: draw chrome + register hitboxes + get inner bounds
+        inner_bounds = render_window_chrome(
             &mut offscreen.buffer,
-            LayoutRect {
-                x: 0,
-                y: 0,
-                width: surface.dest.width,
-                height: surface.dest.height,
-            },
-            ctx,
+            &mut chrome_registry,
+            key,
+            full_local,
+            &ctx,
         );
-        render_content(&mut offscreen, &mut HitboxRegistry::new());
+        render_content(&mut offscreen, inner_bounds);
         buffer = offscreen.buffer;
     }
     if !focused {
@@ -631,7 +745,7 @@ pub fn composite_window<F>(
     let Some(ratatui_backend) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() else {
         // Return buffer to caller before early return
         *scratch = buffer;
-        return;
+        return (inner_bounds, chrome_registry);
     };
     let main_buf = &mut ratatui_backend.buffer;
     if surface.draw_shadow {
@@ -658,17 +772,14 @@ pub fn composite_window<F>(
     }
     // Return the resized buffer to the caller's scratch for reuse next frame
     *scratch = buffer;
+    (inner_bounds, chrome_registry)
 }
 
 /// Render window chrome (borders, title bar, hover-aware buttons, direct mode indicator).
-fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: WindowRenderCtx<'_>) {
+fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
     use ratatui::style::{Color, Modifier, Style};
-    use term_wm_core::window::decorator::{
-        EDGE_INDEX_ADJUST, HeaderAction as HA, LEFT_BORDER_WIDTH, RIGHT_BORDER_WIDTH,
-        TOP_BORDER_HEIGHT, header_buttons,
-    };
 
-    let WindowRenderCtx {
+    let ChromeCtx {
         title,
         focused,
         floating,
@@ -737,28 +848,42 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: WindowRenderCtx<'_>
     }
     {
         let contrast_fg = theme.menu_selected_fg.to_ratatui();
-        for (bx, action, sym) in header_buttons(outer_right) {
+        #[derive(Clone, Copy)]
+        enum Btn { Close, Max, Min, DirectMode }
+        let buttons: [(u16, Btn, &str); 4] = {
+            let close_x = outer_right.saturating_sub(HEADER_BUTTON_GAP);
+            let max_x = close_x.saturating_sub(HEADER_BUTTON_GAP);
+            let min_x = max_x.saturating_sub(HEADER_BUTTON_GAP);
+            let dm_x = min_x.saturating_sub(HEADER_BUTTON_GAP);
+            [
+                (close_x, Btn::Close, "X"),
+                (max_x, Btn::Max, "▢"),
+                (min_x, Btn::Min, "_"),
+                (dm_x, Btn::DirectMode, "D"),
+            ]
+        };
+        for (bx, action, sym) in buttons {
             if let Some(cell) = buffer.cell_mut((bx, header_y)) {
                 cell.set_symbol(sym);
                 let stoplight_fg = match action {
-                    HA::Close => theme.error.to_ratatui(),
-                    HA::Minimize => theme.warning.to_ratatui(),
-                    HA::Maximize => theme.accent.to_ratatui(),
-                    _ => theme.decorator_header_fg.to_ratatui(),
+                    Btn::Close => theme.error.to_ratatui(),
+                    Btn::Min => theme.warning.to_ratatui(),
+                    Btn::Max => theme.accent.to_ratatui(),
+                    Btn::DirectMode => theme.decorator_header_fg.to_ratatui(),
                 };
                 let is_hovered = hover_pos == Some((bx, header_y));
                 let style = if is_hovered {
                     let (hover_bg, hover_fg) = match action {
-                        HA::Close => (theme.error.to_ratatui(), contrast_fg),
-                        HA::Minimize => (theme.warning.to_ratatui(), contrast_fg),
-                        HA::Maximize => (theme.accent.to_ratatui(), contrast_fg),
-                        _ => (theme.accent_alt.to_ratatui(), contrast_fg),
+                        Btn::Close => (theme.error.to_ratatui(), contrast_fg),
+                        Btn::Min => (theme.warning.to_ratatui(), contrast_fg),
+                        Btn::Max => (theme.accent.to_ratatui(), contrast_fg),
+                        Btn::DirectMode => (theme.accent_alt.to_ratatui(), contrast_fg),
                     };
                     Style::default()
                         .bg(hover_bg)
                         .fg(hover_fg)
                         .add_modifier(Modifier::BOLD)
-                } else if action == HA::ToggleDirectMode && direct_mode && focused {
+                } else if matches!(action, Btn::DirectMode) && direct_mode && focused {
                     Style::default()
                         .bg(theme.decorator_header_fg.to_ratatui())
                         .fg(theme.decorator_header_bg.to_ratatui())
@@ -1348,7 +1473,6 @@ mod tests {
     use term_wm_core::app_context::AppContext;
     use term_wm_core::theme::NOIR;
     use term_wm_core::window::FloatRect;
-    use term_wm_core::window::decorator::{DefaultDecorator, WindowRenderCtx};
     use term_wm_core::wm_config::WmConfig;
 
     #[test]
@@ -1388,8 +1512,7 @@ mod tests {
             z_depth: 0.5,
         };
 
-        let decorator = DefaultDecorator::without_buttons();
-        let ctx = WindowRenderCtx {
+        let ctx = ChromeCtx {
             title: "test",
             focused: false,
             floating: false,
@@ -1404,12 +1527,12 @@ mod tests {
             width: 30,
             height: 8,
         });
-        composite_window(
+        let (_inner, _chrome_hb) = composite_window(
             &mut backend,
             &surface,
-            &decorator,
+            term_wm_core::window::WindowKey::default(),
             ctx,
-            |b, _registry| {
+            |b, _inner| {
                 let rb = b.as_any_mut().downcast_mut::<RatatuiBackend>().unwrap();
                 if let Some(cell) = rb.buffer.cell_mut((5, 2)) {
                     cell.set_symbol("X");

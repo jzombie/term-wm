@@ -1,10 +1,8 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::actions::TermWmAction;
 use crate::keybindings::KeyBindings;
 use crate::theme::NOIR;
-use crate::window::decorator::{DefaultDecorator, WindowDecorator};
 
 fn super_passthrough_window_default() -> Duration {
     const ESC_PASSTHROUGH_DEFAULT: u64 = 600;
@@ -103,8 +101,6 @@ pub struct WmConfig {
     /// Shadow color fades from `theme.shadow_tint` (bottom stack) to
     /// `theme.shadow_bg` (top stack) to reinforce the depth illusion.
     pub shadow_enabled: bool,
-    /// Custom window decorator (title bar + border renderer).
-    pub decorator: Option<Arc<dyn WindowDecorator>>,
     /// Configurable keybindings (defaults to `KeyBindings::default()`).
     pub keybindings: KeyBindings,
     /// Visibility mode for keybinding hints.
@@ -137,7 +133,6 @@ impl WmConfig {
             mouse_capture_enabled: true,
             keyboard_focus_enabled: true,
             mouse_focus_click_enabled: true,
-            decorator: Some(Arc::new(DefaultDecorator::new())),
             keybindings: validate_keybindings(&KeyBindings::standalone()),
             hint_visibility: HintVisibility::Always,
             menu_outline_timeout: Duration::from_millis(500),
@@ -162,19 +157,12 @@ impl WmConfig {
             mouse_capture_enabled: true,
             keyboard_focus_enabled: true,
             mouse_focus_click_enabled: true,
-            decorator: Some(Arc::new(DefaultDecorator::without_buttons())),
             keybindings: validate_keybindings(&KeyBindings::minimal()),
             hint_visibility: HintVisibility::Always,
             menu_outline_timeout: Duration::ZERO,
             drag_snap_timeout: None,
             theme: NOIR,
         }
-    }
-
-    pub fn decorator(&self) -> Arc<dyn WindowDecorator> {
-        self.decorator
-            .clone()
-            .unwrap_or_else(|| Arc::new(DefaultDecorator::without_buttons()))
     }
 
     pub fn panel_active(&self) -> bool {

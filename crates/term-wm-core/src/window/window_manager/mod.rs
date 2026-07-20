@@ -16,7 +16,6 @@ use slotmap::SlotMap;
 
 use super::OverlayKey;
 use super::WindowKey;
-use super::decorator::WindowDecorator;
 use super::entry::{Window, WindowState};
 use crate::actions::{EventResult, SystemTask, TermWmAction};
 use crate::app_context::AppContext;
@@ -184,8 +183,6 @@ pub struct WindowManager {
     pub(crate) regions: RegionMap<WindowKey>,
     scroll: BTreeMap<WindowKey, ScrollState>,
     pub(crate) handles: Vec<SplitHandle>,
-    pub(crate) resize_handles: Vec<ResizeHandle<WindowKey>>,
-    pub(crate) floating_headers: Vec<DragHandle<WindowKey>>,
     pub(crate) managed_draw_order: Vec<WindowKey>,
     pub(crate) managed_layout: Option<TilingLayout<WindowKey>>,
     closed_windows: Vec<WindowKey>,
@@ -258,14 +255,9 @@ pub struct WindowManager {
     pub semantic_registry: HashMap<layer_manager::ComponentTag, layer_manager::LayerId>,
     /// Tap-swap targeting state
     pub(crate) tap_swap_state: Option<TapSwapState>,
-    /// O(1) chrome handle lookups — rebuilt every frame.
-    resize_map:
-        HashMap<crate::hitbox_registry::HitboxId, crate::layout::floating::ResizeHandle<WindowKey>>,
-    drag_map:
-        HashMap<crate::hitbox_registry::HitboxId, crate::layout::floating::DragHandle<WindowKey>>,
-    /// Split handles only need existence check — the event is forwarded to
-    /// TilingLayout::handle_event which stores its own handle data.
-    split_ids: std::collections::HashSet<crate::hitbox_registry::HitboxId>,
+    // Chrome metrics managers (pure synchronous pipelines, zero allocation).
+    // resize_map/drag_map/split_ids removed — chrome routing now uses
+    // ComponentOwner::Chrome(target) directly from HitboxRegistry.
 }
 
 /// State for tap-to-swap targeting mode.
@@ -601,8 +593,6 @@ impl WindowManager {
             regions: RegionMap::default(),
             scroll: BTreeMap::new(),
             handles: Vec::new(),
-            resize_handles: Vec::new(),
-            floating_headers: Vec::new(),
             managed_draw_order: Vec::new(),
             managed_layout: None,
             closed_windows: Vec::new(),
@@ -657,9 +647,6 @@ impl WindowManager {
             input_mode: crate::actions::WmInputMode::Passthrough,
             fab_enabled: true,
             tap_swap_state: None,
-            resize_map: HashMap::new(),
-            drag_map: HashMap::new(),
-            split_ids: std::collections::HashSet::new(),
         }
     }
 
@@ -912,13 +899,8 @@ impl WindowManager {
     pub fn prepare_draw(&mut self) {
         self.regions = RegionMap::default();
         self.handles.clear();
-        self.resize_handles.clear();
-        self.floating_headers.clear();
         self.managed_draw_order.clear();
         self.hitbox_registry.clear();
-        self.resize_map.clear();
-        self.drag_map.clear();
-        self.split_ids.clear();
     }
 
     /// Dispatch a mouse event using the hitbox registry.
@@ -949,14 +931,11 @@ impl WindowManager {
     }
 
     /// Return the currently hovered floating resize handle, if any.
+    /// Handled by the console during render. Returns None.
     pub fn hovered_resize_handle(
         &self,
     ) -> Option<&crate::layout::floating::ResizeHandle<WindowKey>> {
-        let (column, row) = self.hover?;
-        let topmost = self.hit_test_region_topmost(column, row, &self.managed_draw_order);
-        self.resize_handles.iter().find(|handle| {
-            crate::layout::rect_contains(handle.rect, column, row) && topmost == Some(handle.key)
-        })
+        None
     }
 
     /// Return the window region map (for resize outline rendering).
@@ -1072,7 +1051,6 @@ impl WindowManager {
         event: &crate::events::WmEvent,
     ) -> EventResult<(Option<WindowKey>, TermWmAction)> {
         use crate::events::WmEvent;
-        use crate::window::decorator::HeaderAction;
         let WmEvent::Mouse {
             kind,
             modifiers,
@@ -1370,7 +1348,7 @@ impl WindowManager {
                                     false
                                 }
                             }
-                            ComponentOwner::System | ComponentOwner::Test => false,
+                            ComponentOwner::Chrome(_) | ComponentOwner::Test => false,
                         };
 
                         (consumed, !matches!(kind, MouseEventKind::Release(_)))
@@ -1435,179 +1413,75 @@ impl WindowManager {
             modifiers: *modifiers,
         });
 
-        // --- Chrome interception (O(1) maps) ---
-        // Only on Press events — chrome handles initiate capture state.
-        // For Moved events, the tiling layout handles hover feedback directly.
+        // --- Chrome interception ---
+        // Match directly on ComponentOwner::Chrome(target) for O(1) routing.
+        // Only Press events initiate capture state. Moved events forward to layout.
         if matches!(kind, MouseEventKind::Press(_)) {
-            if let Some(handle) = self.resize_map.get(&hitbox_id) {
-                let h_key = handle.key;
-                let h_edge = handle.edge;
-                if !self.config.floating_windows_enabled || !self.is_window_floating(h_key) {
-                    return EventResult::Ignored;
-                }
-                self.bring_floating_to_front_key(h_key);
-                let rect = self.full_region_for_key(h_key);
-                let (start_x, start_y, start_width, start_height) =
-                    if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
-                        self.floating_rect(h_key)
-                    {
-                        (fr.x, fr.y, fr.width, fr.height)
-                    } else {
-                        (rect.x, rect.y, rect.width, rect.height)
-                    };
-                self.mouse_capture = Some(MouseCaptureState::ResizingWindow {
-                    key: h_key,
-                    edge: h_edge,
-                    start_rect: rect,
-                    start_col: col,
-                    start_row: row,
-                    start_x,
-                    start_y,
-                    start_width,
-                    start_height,
-                });
-                return EventResult::Consumed;
-            }
-
-            if let Some(handle) = self.drag_map.get(&hitbox_id) {
-                let key = handle.key;
-                let outer_right =
-                    (handle.rect.x.saturating_add(i32::from(handle.rect.width))).max(0) as u16;
-                let buttons = crate::window::decorator::header_buttons(outer_right);
-                let row_i32 = i32::from(row);
-                let clicked_action = buttons
-                    .iter()
-                    .find(|(bx, _, _)| {
-                        col >= *bx
-                            && col < bx.saturating_add(1)
-                            && row_i32 >= handle.rect.y
-                            && row_i32 < handle.rect.y + 1
-                    })
-                    .map(|(_, action, _)| *action);
-
-                if let Some(action) = clicked_action {
-                    return match action {
-                        HeaderAction::Close => {
-                            self.close_window(key);
-                            self.last_header_click = None;
-                            EventResult::Consumed
+            if let ComponentOwner::Chrome(target) = &owner {
+                return match target {
+                    crate::chrome::ChromeTarget::Resize(_, _) => {
+                        let crate::chrome::ChromeTarget::Resize(h_key, h_edge) = target else {
+                            unreachable!()
+                        };
+                        if !self.config.floating_windows_enabled
+                            || !self.is_window_floating(*h_key)
+                        {
+                            return EventResult::Ignored;
                         }
-                        HeaderAction::Maximize => {
-                            self.toggle_maximize(key);
-                            self.last_header_click = None;
-                            EventResult::Consumed
-                        }
-                        HeaderAction::Minimize => {
-                            self.minimize_window(key);
-                            self.last_header_click = None;
-                            EventResult::Consumed
-                        }
-                        HeaderAction::ToggleDirectMode => {
-                            self.toggle_direct_mode(key);
-                            self.last_header_click = None;
-                            EventResult::Consumed
-                        }
-                        HeaderAction::Drag => {
-                            let now = Instant::now();
-                            if let Some((prev_key, prev)) = self.last_header_click
-                                && prev_key == key
-                                && now.duration_since(prev) <= Duration::from_millis(500)
+                        self.bring_floating_to_front_key(*h_key);
+                        let rect = self.full_region_for_key(*h_key);
+                        let (start_x, start_y, start_width, start_height) =
+                            if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
+                                self.floating_rect(*h_key)
                             {
-                                self.toggle_maximize(key);
-                                self.last_header_click = None;
-                                return EventResult::Consumed;
-                            }
-                            self.last_header_click = Some((key, now));
-                            if self.is_window_floating(key) {
-                                self.bring_floating_to_front_key(key);
-                            }
-                            let rect = self.visible_region_for_key(key);
-                            let (initial_x, initial_y) =
-                                if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
-                                    self.floating_rect(key)
-                                {
-                                    (fr.x, fr.y)
-                                } else {
-                                    (rect.x, rect.y)
-                                };
-                            self.mouse_capture = Some(MouseCaptureState::DraggingWindow {
-                                key,
-                                resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
-                                anchor_x: col,
-                                anchor_y: row,
-                                initial_x,
-                                initial_y,
-                                start_x: col,
-                                start_y: row,
-                                prev_col: col,
-                                prev_row: row,
-                                prev_time_ns: std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .map(|d| d.as_nanos() as u64)
-                                    .unwrap_or(0),
-                                detach_coordinate: None,
-                                snap_applied: false,
-                            });
-                            self.drag_last_event = Some(Instant::now());
-                            self.arm_drag_snap_timer();
-                            EventResult::Consumed
-                        }
-                    };
-                }
-                // Drag area (not a button) — initiate window drag
-                let now = Instant::now();
-                if let Some((prev_key, prev)) = self.last_header_click
-                    && prev_key == key
-                    && now.duration_since(prev) <= Duration::from_millis(500)
-                {
-                    self.toggle_maximize(key);
-                    self.last_header_click = None;
-                    return EventResult::Consumed;
-                }
-                self.last_header_click = Some((key, now));
-                if self.is_window_floating(key) {
-                    self.bring_floating_to_front_key(key);
-                }
-                let rect = self.visible_region_for_key(key);
-                let (initial_x, initial_y) =
-                    if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
-                        self.floating_rect(key)
-                    {
-                        (fr.x, fr.y)
-                    } else {
-                        (rect.x, rect.y)
-                    };
-                self.mouse_capture = Some(MouseCaptureState::DraggingWindow {
-                    key,
-                    resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
-                    anchor_x: col,
-                    anchor_y: row,
-                    initial_x,
-                    initial_y,
-                    start_x: col,
-                    start_y: row,
-                    prev_col: col,
-                    prev_row: row,
-                    prev_time_ns: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_nanos() as u64)
-                        .unwrap_or(0),
-                    detach_coordinate: None,
-                    snap_applied: false,
-                });
-                self.drag_last_event = Some(Instant::now());
-                self.arm_drag_snap_timer();
-                return EventResult::Consumed;
-            }
-
-            if self.split_ids.contains(&hitbox_id) {
-                self.mouse_capture = Some(MouseCaptureState::LayoutHandle);
-                if let Some(layout) = self.managed_layout.as_mut() {
-                    if layout.handle_event(&core_event, self.managed_area) {
-                        return EventResult::Consumed;
+                                (fr.x, fr.y, fr.width, fr.height)
+                            } else {
+                                (rect.x, rect.y, rect.width, rect.height)
+                            };
+                        self.mouse_capture = Some(MouseCaptureState::ResizingWindow {
+                            key: *h_key,
+                            edge: *h_edge,
+                            start_rect: rect,
+                            start_col: col,
+                            start_row: row,
+                            start_x,
+                            start_y,
+                            start_width,
+                            start_height,
+                        });
+                        EventResult::Consumed
                     }
-                }
-                return EventResult::Ignored;
+                    crate::chrome::ChromeTarget::Drag(key) => {
+                        Self::init_window_drag(
+                            self, *key, col, row,
+                        )
+                    }
+                    crate::chrome::ChromeTarget::CloseButton(key) => {
+                        if matches!(kind, MouseEventKind::Press(_)) {
+                            self.close_window(*key);
+                            self.last_header_click = None;
+                            EventResult::Consumed
+                        } else {
+                            EventResult::Ignored
+                        }
+                    }
+                    crate::chrome::ChromeTarget::MaximizeButton(key) => {
+                        if matches!(kind, MouseEventKind::Press(_)) {
+                            self.toggle_maximize(*key);
+                            self.last_header_click = None;
+                            EventResult::Consumed
+                        } else {
+                            EventResult::Ignored
+                        }
+                    }
+                    crate::chrome::ChromeTarget::SplitHandle(_id) => {
+                        self.mouse_capture = Some(MouseCaptureState::LayoutHandle);
+                        if let Some(layout) = self.managed_layout.as_mut() {
+                            let _ = layout.handle_event(&core_event, self.managed_area);
+                        }
+                        EventResult::Consumed
+                    }
+                };
             }
         }
 
@@ -1679,8 +1553,60 @@ impl WindowManager {
                     EventResult::Ignored
                 }
             }
-            ComponentOwner::System | ComponentOwner::Test => EventResult::Ignored,
+            ComponentOwner::Chrome(_) | ComponentOwner::Test => EventResult::Ignored,
         }
+    }
+
+    /// Initialize window drag capture state.
+    /// Extracted as a helper so both `ChromeTarget::Drag` and `ChromeTarget::Button(Drag)`
+    /// can share the same logic.
+    fn init_window_drag(
+        &mut self,
+        key: WindowKey,
+        col: u16,
+        row: u16,
+    ) -> EventResult<(Option<WindowKey>, TermWmAction)> {
+        let now = Instant::now();
+        if let Some((prev_key, prev)) = self.last_header_click
+            && prev_key == key
+            && now.duration_since(prev) <= Duration::from_millis(500)
+        {
+            self.toggle_maximize(key);
+            self.last_header_click = None;
+            return EventResult::Consumed;
+        }
+        self.last_header_click = Some((key, now));
+        if self.is_window_floating(key) {
+            self.bring_floating_to_front_key(key);
+        }
+        let rect = self.visible_region_for_key(key);
+        let (initial_x, initial_y) =
+            if let Some(crate::window::FloatRectSpec::Absolute(fr)) = self.floating_rect(key) {
+                (fr.x, fr.y)
+            } else {
+                (rect.x, rect.y)
+            };
+        self.mouse_capture = Some(MouseCaptureState::DraggingWindow {
+            key,
+            resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
+            anchor_x: col,
+            anchor_y: row,
+            initial_x,
+            initial_y,
+            start_x: col,
+            start_y: row,
+            prev_col: col,
+            prev_row: row,
+            prev_time_ns: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0),
+            detach_coordinate: None,
+            snap_applied: false,
+        });
+        self.drag_last_event = Some(Instant::now());
+        self.arm_drag_snap_timer();
+        EventResult::Consumed
     }
 
     fn reset_drag_snap_timer(&mut self) {
@@ -2079,42 +2005,17 @@ impl WindowManager {
         }
     }
 
-    /// Register tiling layout split handle hitboxes.
-    /// Called after panel registration, before the window loop, so handles sit
-    /// below windows in Z-order (floating windows correctly occlude them).
+    /// No-op: chrome hitbox registration is now handled by the console
+    /// during the rendering pass. See `render_window_chrome` in
+    /// `term-wm-console/src/draw_plan_renderer.rs`.
     pub fn register_layout_handle_hitboxes(&mut self) {
-        for handle in &self.handles {
-            let id = handle.hitbox_id;
-            let rect = handle.rect;
-            self.split_ids.insert(id);
-            self.hitbox_registry.register(id, rect);
-        }
+        // Handled by console during render
     }
 
-    /// Register chrome hitboxes (resize handles + header) for a specific window.
-    /// Called after `composite_window` so chrome is on top of content.
-    pub fn register_window_chrome_hitboxes(&mut self, key: WindowKey) {
-        // Collect handle data first to avoid borrow conflicts
-        let resize_data: Vec<_> = self
-            .resize_handles
-            .iter()
-            .filter(|h| h.key == key)
-            .map(|h| (h.hitbox_id, h.rect, *h))
-            .collect();
-        let header_data: Vec<_> = self
-            .floating_headers
-            .iter()
-            .filter(|h| h.key == key)
-            .map(|h| (h.hitbox_id, h.rect, *h))
-            .collect();
-        for (id, rect, handle) in resize_data {
-            self.resize_map.insert(id, handle);
-            self.hitbox_registry.register(id, rect);
-        }
-        for (id, rect, handle) in header_data {
-            self.drag_map.insert(id, handle);
-            self.hitbox_registry.register(id, rect);
-        }
+    /// No-op: chrome hitbox registration is now handled by the console
+    /// during the rendering pass.
+    pub fn register_window_chrome_hitboxes(&mut self, _key: WindowKey) {
+        // Handled by console during render
     }
 
     /// Process a `TermWmAction` produced by a component's `handle_events`.
@@ -2209,14 +2110,6 @@ impl WindowManager {
 
     pub fn supported_menu_actions(&self) -> &[TermWmAction] {
         &self.supported_menu_actions
-    }
-
-    pub fn resize_handles(&self) -> &[ResizeHandle<WindowKey>] {
-        &self.resize_handles
-    }
-
-    pub fn floating_headers(&self) -> &[DragHandle<WindowKey>] {
-        &self.floating_headers
     }
 
     /// Push a notification and schedule its auto-dismiss via the system task scheduler.
@@ -2943,7 +2836,6 @@ mod tests {
 
     #[test]
     fn hover_targets_respects_occlusion() {
-        use crate::layout::floating::{ResizeEdge, ResizeHandle};
         use crate::layout::tiling::SplitHandle;
         let mut wm = WindowManager::with_config(
             WmConfig::standalone(),
@@ -2972,35 +2864,6 @@ mod tests {
             },
         );
         wm.managed_draw_order = vec![keys[1], keys[2]];
-        let overlapping = Rect {
-            x: 2,
-            y: 1,
-            width: 1,
-            height: 1,
-        };
-        wm.resize_handles.push(ResizeHandle {
-            key: keys[1],
-            rect: overlapping,
-            edge: ResizeEdge::Left,
-            hitbox_id: crate::hitbox_registry::HitboxId::new(),
-        });
-        wm.resize_handles.push(ResizeHandle {
-            key: keys[2],
-            rect: overlapping,
-            edge: ResizeEdge::Left,
-            hitbox_id: crate::hitbox_registry::HitboxId::new(),
-        });
-        wm.resize_handles.push(ResizeHandle {
-            key: keys[1],
-            rect: Rect {
-                x: 8,
-                y: 1,
-                width: 1,
-                height: 1,
-            },
-            edge: ResizeEdge::Right,
-            hitbox_id: crate::hitbox_registry::HitboxId::new(),
-        });
         wm.handles.push(SplitHandle {
             rect: Rect {
                 x: 15,
@@ -3015,28 +2878,14 @@ mod tests {
         });
 
         wm.hover = Some((2, 1));
-        let (handle_hover, resize_hover) = wm.hover_targets();
+        let handle_hover = wm.hover_targets();
         assert!(
             handle_hover.is_none(),
             "floating window should mask layout handles"
         );
-        assert_eq!(
-            resize_hover.map(|handle| handle.key),
-            Some(keys[2]),
-            "topmost window should own the hover"
-        );
-
-        wm.hover = Some((8, 1));
-        let (_, resize_hover) = wm.hover_targets();
-        assert_eq!(
-            resize_hover.map(|handle| handle.key),
-            Some(keys[1]),
-            "background window should hover once it is exposed"
-        );
 
         wm.hover = Some((15, 1));
-        let (handle_hover, resize_hover) = wm.hover_targets();
-        assert!(resize_hover.is_none());
+        let handle_hover = wm.hover_targets();
         assert!(
             handle_hover.is_some(),
             "layout handles should respond off-window"
@@ -3044,7 +2893,7 @@ mod tests {
     }
 
     #[test]
-    fn system_window_header_drag_detaches_to_floating() {
+    fn drag_hitbox_detaches_to_floating() {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::layout::LayoutNode;
 
@@ -3091,33 +2940,39 @@ mod tests {
             width: 80,
             height: 24,
         });
-
-        let header_rect = wm
-            .floating_headers
-            .iter()
-            .find(|handle| handle.key == debug_key)
-            .expect("debug header present")
-            .rect;
         assert!(!wm.is_window_floating(debug_key));
 
-        wm.hitbox_registry_mut()
-            .set_active_owner(ComponentOwner::Window(debug_key));
-        wm.register_window_chrome_hitboxes(debug_key);
+        let start_rect = wm.full_region(debug_key);
+        let header_pos = start_rect.x.saturating_add(5) as u16;
+
+        // Simulate console registering a Drag hitbox in the header area
+        let hitbox_id = crate::hitbox_registry::HitboxId::new();
+        wm.hitbox_registry_mut().set_active_owner(
+            ComponentOwner::Chrome(crate::chrome::ChromeTarget::Drag(debug_key)),
+        );
+        wm.hitbox_registry_mut().register(
+            hitbox_id,
+            Rect {
+                x: i32::from(header_pos),
+                y: start_rect.y,
+                width: 5,
+                height: 1,
+            },
+        );
 
         let down = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
-            column: header_rect.x as u16,
-            row: header_rect.y as u16,
+            column: header_pos,
+            row: start_rect.y as u16,
             modifiers: KeyModifiers::NONE,
         });
         let wm_down = crate::events::core_event_to_wm(&down).unwrap();
         assert!(wm.dispatch_mouse(&wm_down).is_consumed());
         // Floating rect is deferred — Press alone must not decouple.
         assert!(!wm.is_window_floating(debug_key));
-        let start_rect = wm.full_region(debug_key);
 
-        let drag_col = header_rect.x.saturating_add(5) as u16;
-        let drag_row = header_rect.y.saturating_add(1) as u16;
+        let drag_col = header_pos.saturating_add(5);
+        let drag_row = (start_rect.y as u16).saturating_add(1);
         let drag = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
             column: drag_col,
@@ -3756,18 +3611,17 @@ mod tests {
         wm.focus_app_window(keys[1]);
 
         let win_key = keys[1];
-        let header = wm
-            .floating_headers
-            .iter()
-            .find(|h| h.key == win_key)
-            .expect("floating header for window 1");
+        let drag_x = 10u16;
+        let drag_y = 5u16;
 
-        let drag_x = (header.rect.x.saturating_add(i32::from(header.rect.width)) / 2) as u16;
-        let drag_y = header.rect.y as u16;
-
-        wm.hitbox_registry_mut()
-            .set_active_owner(ComponentOwner::Window(win_key));
-        wm.register_window_chrome_hitboxes(win_key);
+        let hitbox_id = crate::hitbox_registry::HitboxId::new();
+        wm.hitbox_registry_mut().set_active_owner(
+            ComponentOwner::Chrome(crate::chrome::ChromeTarget::Drag(win_key)),
+        );
+        wm.hitbox_registry_mut().register(
+            hitbox_id,
+            Rect { x: 10, y: 5, width: 5, height: 1 },
+        );
 
         assert!(!wm.direct_mode(win_key));
 
@@ -4160,17 +4014,12 @@ mod tests {
             })),
         );
 
-        // The window is now floating; floating_headers should contain its header.
-        let header_rect = wm
-            .floating_headers
-            .iter()
-            .find(|h| h.key == win_key)
-            .expect("floating header should exist")
-            .rect;
-
-        wm.hitbox_registry_mut()
-            .set_active_owner(ComponentOwner::Window(win_key));
-        wm.register_window_chrome_hitboxes(win_key);
+        let header_rect = Rect { x: 0, y: 0, width: 5, height: 1 };
+        let hitbox_id = crate::hitbox_registry::HitboxId::new();
+        wm.hitbox_registry_mut().set_active_owner(
+            ComponentOwner::Chrome(crate::chrome::ChromeTarget::Drag(win_key)),
+        );
+        wm.hitbox_registry_mut().register(hitbox_id, header_rect);
 
         // Press on the header — should start a drag via chrome.
         let click_col = header_rect.x;
@@ -4326,16 +4175,12 @@ mod tests {
             height: 24,
         });
 
-        let header_rect = wm
-            .floating_headers
-            .iter()
-            .find(|h| h.key == debug_key)
-            .expect("header should exist")
-            .rect;
-
-        wm.hitbox_registry_mut()
-            .set_active_owner(ComponentOwner::Window(debug_key));
-        wm.register_window_chrome_hitboxes(debug_key);
+        let header_rect = Rect { x: 0, y: 0, width: 5, height: 1 };
+        let hitbox_id = crate::hitbox_registry::HitboxId::new();
+        wm.hitbox_registry_mut().set_active_owner(
+            ComponentOwner::Chrome(crate::chrome::ChromeTarget::Drag(debug_key)),
+        );
+        wm.hitbox_registry_mut().register(hitbox_id, header_rect);
 
         let down = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
@@ -5104,8 +4949,6 @@ mod tests {
             width: 80,
             height: 24,
         });
-        wm.hitbox_registry_mut()
-            .set_active_owner(ComponentOwner::System);
         wm.register_layout_handle_hitboxes();
         let handles = wm.handles.clone();
         assert!(!handles.is_empty(), "tiling must produce split handles");
@@ -5308,17 +5151,10 @@ mod tests {
             height: 24,
         });
 
-        wm.hitbox_registry_mut()
-            .set_active_owner(ComponentOwner::System);
         wm.register_layout_handle_hitboxes();
 
         // Verify at least one entry exists at the gap position.
         let gap = &wm.handles[0].rect;
-        // After register_layout_handle_hitboxes, split_ids should be populated
-        assert!(
-            wm.split_ids.contains(&wm.handles[0].hitbox_id),
-            "split_ids must contain the handle's hitbox_id"
-        );
         let pos = crate::mouse_coord::MousePosition {
             column: (gap.x + i32::from(gap.width) / 2) as i16,
             row: (gap.y + i32::from(gap.height) / 2) as i16,
@@ -5329,7 +5165,7 @@ mod tests {
     }
 
     #[test]
-    fn header_close_action_closes_window() {
+    fn close_button_hitbox_dispatches_close() {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::layout::{LayoutNode, TilingLayout};
 
@@ -5355,24 +5191,21 @@ mod tests {
         wm.transition_window(keys[1], crate::window::entry::WindowState::Mapped);
 
         let win_key = keys[1];
-        let full_rect = wm.full_region_for_key(win_key);
-        let outer_right = full_rect
-            .x
-            .saturating_add(i32::from(full_rect.width))
-            .saturating_sub(1);
-        let close_x = outer_right
-            .saturating_sub(i32::from(crate::window::decorator::HEADER_BUTTON_GAP))
-            as u16;
-        let close_y = full_rect.y.saturating_add(1) as u16;
+        let hitbox_id = crate::hitbox_registry::HitboxId::new();
 
-        wm.hitbox_registry_mut()
-            .set_active_owner(ComponentOwner::Window(win_key));
-        wm.register_window_chrome_hitboxes(win_key);
+        // Simulate console registering a close button hitbox
+        wm.hitbox_registry_mut().set_active_owner(
+            ComponentOwner::Chrome(crate::chrome::ChromeTarget::CloseButton(win_key)),
+        );
+        wm.hitbox_registry_mut().register(
+            hitbox_id,
+            Rect { x: 0, y: 0, width: 1, height: 1 },
+        );
 
         let click = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
-            column: close_x,
-            row: close_y,
+            column: 0,
+            row: 0,
             modifiers: KeyModifiers::NONE,
         });
         let wm_click = crate::events::core_event_to_wm(&click).unwrap();
@@ -5380,7 +5213,7 @@ mod tests {
     }
 
     #[test]
-    fn header_maximize_action_toggles_maximize() {
+    fn maximize_button_hitbox_dispatches_maximize() {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::layout::{LayoutNode, TilingLayout};
 
@@ -5406,78 +5239,27 @@ mod tests {
         wm.transition_window(keys[1], crate::window::entry::WindowState::Mapped);
 
         let win_key = keys[1];
-        let full_rect = wm.full_region_for_key(win_key);
-        let outer_right = full_rect
-            .x
-            .saturating_add(i32::from(full_rect.width))
-            .saturating_sub(1);
-        let close_x = outer_right.saturating_sub(2);
-        let max_x = close_x as u16;
-        let max_y = full_rect.y.saturating_add(1) as u16;
+        let hitbox_id = crate::hitbox_registry::HitboxId::new();
 
-        wm.hitbox_registry_mut()
-            .set_active_owner(ComponentOwner::Window(win_key));
-        wm.register_window_chrome_hitboxes(win_key);
-
-        let click = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Press(MouseButton::Left),
-            column: max_x,
-            row: max_y,
-            modifiers: KeyModifiers::NONE,
-        });
-        let wm_click = crate::events::core_event_to_wm(&click).unwrap();
-        assert!(wm.dispatch_mouse(&wm_click).is_consumed());
-    }
-
-    #[test]
-    fn header_minimize_action_minimizes_window() {
-        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        use crate::layout::{LayoutNode, TilingLayout};
-
-        let mut wm = WindowManager::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
+        // Simulate console registering a maximize button hitbox
+        wm.hitbox_registry_mut().set_active_owner(
+            ComponentOwner::Chrome(crate::chrome::ChromeTarget::MaximizeButton(win_key)),
         );
-        let keys = make_keys(&mut wm, 100);
-        wm.set_panel_visible(false);
-        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(keys[1])));
-        wm.managed_draw_order = vec![keys[1]];
-        wm.z_order = vec![keys[1]];
-        wm.register_managed_layout(Rect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 24,
-        });
-        wm.focus_app_window(keys[1]);
-        wm.transition_window(keys[1], crate::window::entry::WindowState::Mapped);
-
-        let win_key = keys[1];
-        let full_rect = wm.full_region_for_key(win_key);
-        let outer_right = full_rect
-            .x
-            .saturating_add(i32::from(full_rect.width))
-            .saturating_sub(1);
-        let close_x = outer_right.saturating_sub(2);
-        let max_x = close_x.saturating_sub(2);
-        let min_x = max_x as u16;
-        let min_y = full_rect.y.saturating_add(1) as u16;
-
-        wm.hitbox_registry_mut()
-            .set_active_owner(ComponentOwner::Window(win_key));
-        wm.register_window_chrome_hitboxes(win_key);
+        wm.hitbox_registry_mut().register(
+            hitbox_id,
+            Rect { x: 0, y: 0, width: 1, height: 1 },
+        );
 
         let click = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
-            column: min_x,
-            row: min_y,
+            column: 0,
+            row: 0,
             modifiers: KeyModifiers::NONE,
         });
         let wm_click = crate::events::core_event_to_wm(&click).unwrap();
         assert!(wm.dispatch_mouse(&wm_click).is_consumed());
+        assert!(wm.is_window_floating(win_key));
+        assert!(wm.windows.get(win_key).unwrap().is_maximized);
     }
 
     #[test]
