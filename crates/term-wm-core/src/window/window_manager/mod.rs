@@ -2569,6 +2569,60 @@ mod tests {
     }
 
     #[test]
+    fn handle_mouse_focus_click_skipped_in_monocle() {
+        let mut wm = WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+        let key_a = keys[0];
+        let key_b = keys[1];
+
+        // Set up managed_layout so is_monocle() works
+        wm.managed_layout = Some(crate::layout::TilingLayout::new(
+            crate::layout::LayoutNode::leaf(key_a),
+        ));
+        wm.update_monocle_mode(50);
+        assert!(wm.is_monocle(), "monocle must be active (width 50 < 80)");
+
+        wm.managed_draw_order = vec![key_a, key_b];
+        wm.z_order = vec![key_a, key_b];
+        wm.regions.set(
+            key_a,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 25,
+                height: 24,
+            },
+        );
+        wm.regions.set(
+            key_b,
+            LayoutRect {
+                x: 25,
+                y: 0,
+                width: 25,
+                height: 24,
+            },
+        );
+
+        wm.focus_app_window(key_a);
+        assert_eq!(*wm.focus.current(), key_a);
+
+        // Click at coordinate that would match key_b's region
+        wm.handle_mouse_focus_click(30, 12);
+
+        assert_eq!(
+            *wm.focus.current(),
+            key_a,
+            "monocle mode must prevent mouse focus switching"
+        );
+    }
+
+    #[test]
     fn enforce_min_visible_margin_horizontal() {
         use crate::window::{FloatRect, FloatRectSpec};
         let mut wm = WindowManager::with_config(

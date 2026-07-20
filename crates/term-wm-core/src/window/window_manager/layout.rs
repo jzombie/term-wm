@@ -186,10 +186,7 @@ impl WindowManager {
         let targets = self.managed_draw_order_all().to_vec();
         for &key in targets.iter().rev() {
             let rect = self.full_region_for_key(key);
-            if rect.width > 0
-                && rect.height > 0
-                && crate::layout::rect_contains(rect, col, row)
-            {
+            if rect.width > 0 && rect.height > 0 && crate::layout::rect_contains(rect, col, row) {
                 self.focus_app_window(key);
                 break;
             }
