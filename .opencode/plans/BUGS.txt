@@ -8,6 +8,7 @@
 - [X] the keybindings in the bottom panel are no longer gated by mode.  Ctrl+Q and Tab are always showing. This is a regression from a previous version.
 - [X] selecting text in help overlay no longer copies it
 - [ ] help overlay truncates the sentence "The second press is forwarded to the active..."
+- [ ] [TODO] README & help.md need to reflect current state of new changes, including new keybindings
 - [ ] not all overlay components are named "_overlay"
 - [ ] "close window" is not showing in monocle mode command palette
 - [ ] [TODO] Don't show minimize/maximize window chrome buttons in monocle mode. Centralize the gating so that this change directly reflects in the command palette without repeated if/then checks that can get out of sync.
