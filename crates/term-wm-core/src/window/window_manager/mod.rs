@@ -1130,11 +1130,13 @@ impl WindowManager {
                                     if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
                                         self.floating_rect(*key)
                                     {
-                                        // Reposition window so the cursor is at the
-                                        // top-center of the header.
+                                        // Reposition window so the cursor lands on
+                                        // the header (row 1 of the frame), not the
+                                        // top border.
                                         let new_x =
                                             col as i32 - fr.width as i32 / 2;
-                                        let new_y = row as i32;
+                                        let new_y = row as i32
+                                            - i32::from(crate::chrome::TOP_BORDER_HEIGHT);
                                         self.set_floating_rect(
                                             *key,
                                             Some(crate::window::FloatRectSpec::Absolute(
