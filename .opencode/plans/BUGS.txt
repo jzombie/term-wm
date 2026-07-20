@@ -1,11 +1,12 @@
-- [ ] if a window is dragged off the left side of the screen, it's not possible to activate the window behind it unless moving the cursor the full-width of the window from the left axis.
-- [ ] if a window is dragged off the left side of the screen, and performing a text selection, the text selection is offset by the same amount.
+- [X] if a window is dragged off the left side of the screen, it's not possible to activate the window behind it unless moving the cursor the full-width of the window from the left axis.
+- [X] if a window is dragged off the left side of the screen, and performing a text selection, the text selection is offset by the same amount.
 - [ ] stop duplicating multiple intersects across the codebase.  put them in the layout crate.
 - [ ] floating window handles bleed through help overlay
-- [ ] command palette overlay doesn't close when clicking "Exit"
-- [ ] shift-tab no longer cycles windows in reverse
-- [ ] the keybindings in the bottom panel are no longer gated by mode.  Ctrl+Q and Tab are always showing. This is a regression from a previous version.
-- [ ] selecting text in help overlay no longer copies it
+- [X] command palette overlay doesn't close when clicking "Exit"
+- [X] shift-tab no longer cycles windows in reverse
+- [X] the keybindings in the bottom panel are no longer gated by mode.  Ctrl+Q and Tab are always showing. This is a regression from a previous version.
+- [X] selecting text in help overlay no longer copies it
+- [ ] help overlay truncates the sentence "The second press is forwarded to the active..."
 - [ ] not all overlay components are named "_overlay"
 - [ ] [TODO] Command palette should show "Switch to: {window_title}" options and it should always show the *current* window titles. These definitely should be searchable as well.
 - [ ] [TODO] Command palette should show groupings for each command (for instance, app-specific, wm-specific, etc.) and should show optional descriptions for each command (those descriptions could be used as part of the search indexing as well).
