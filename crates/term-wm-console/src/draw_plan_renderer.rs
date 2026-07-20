@@ -117,10 +117,21 @@ fn register_window_chrome_hitboxes(
 
     // Drag handle at the header area (only if header is enabled)
     if *header_enabled {
+        let drag_y = if *borders_enabled {
+            TOP_BORDER_HEIGHT
+        } else {
+            0
+        };
+        let drag_x = if *borders_enabled { LEFT_BORDER_WIDTH } else { 0 };
+        let drag_w = if *borders_enabled {
+            width.saturating_sub(LEFT_BORDER_WIDTH + RIGHT_BORDER_WIDTH)
+        } else {
+            width
+        };
         registry.register(
             HitboxId::new(),
             ComponentOwner::Chrome(ChromeTarget::Drag(*key)),
-            to_screen(1, 1, width.saturating_sub(2), 1),
+            to_screen(drag_x, drag_y, drag_w, 1),
         );
 
         // Window management buttons from centralized list
@@ -138,7 +149,7 @@ fn register_window_chrome_hitboxes(
             registry.register(
                 HitboxId::new(),
                 ComponentOwner::Chrome(target),
-                to_screen(bx, 1u16, 1, 1),
+                to_screen(bx, drag_y, 1, 1),
             );
         }
     }
@@ -159,20 +170,18 @@ fn register_window_chrome_hitboxes(
         }
     }
 
-    // Content area hitbox (inner bounds, screen-space)
-    let (cx, cy, cw, ch) = if *borders_enabled && *header_enabled {
-        (1u16, 2u16, width.saturating_sub(2), height.saturating_sub(3))
-    } else if *header_enabled {
-        (0u16, 1u16, width, height.saturating_sub(1))
-    } else if *borders_enabled {
-        (1u16, 1u16, width.saturating_sub(2), height.saturating_sub(2))
-    } else {
-        (0u16, 0u16, width, height)
+    // Content area hitbox — use shared content_rect function
+    let content_full = term_wm_core::Rect {
+        x: 0,
+        y: 0,
+        width,
+        height,
     };
+    let inner = content_rect(content_full, *borders_enabled, *header_enabled);
     registry.register(
         *content_hitbox_id,
         ComponentOwner::Window(*key),
-        to_screen(cx, cy, cw, ch),
+        to_screen(inner.x as u16, inner.y as u16, inner.width, inner.height),
     );
 }
 
