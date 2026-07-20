@@ -116,14 +116,36 @@ impl WindowManager {
             } else {
                 super::clamp_rect(rect, self.managed_area)
             };
-            if area.width < 3 || area.height < 4 {
+            let borders = self.window_borders_enabled(key);
+            let header = self.window_header_enabled(key);
+            if !borders && !header {
+                return area;
+            }
+            // TODO: Stop hardcoding these things
+            let x = if borders { area.x + 1 } else { area.x };
+            let y = if header { area.y + 2 } else { area.y };
+            let width = if borders {
+                area.width.saturating_sub(2)
+            } else {
+                area.width
+            };
+            let height = if header && borders {
+                area.height.saturating_sub(3)
+            } else if header {
+                area.height.saturating_sub(2)
+            } else if borders {
+                area.height.saturating_sub(1)
+            } else {
+                area.height
+            };
+            if width < 1 || height < 1 {
                 return Rect::default();
             }
             Rect {
-                x: area.x + 1,
-                y: area.y + 2,
-                width: area.width.saturating_sub(2),
-                height: area.height.saturating_sub(3),
+                x,
+                y,
+                width,
+                height,
             }
         } else {
             rect
@@ -171,6 +193,16 @@ impl WindowManager {
             .as_ref()
             .map(|l| l.is_monocle())
             .unwrap_or(false)
+    }
+
+    /// Whether the given window should render borders.
+    pub fn window_borders_enabled(&self, key: WindowKey) -> bool {
+        self.window(key).map(|w| w.borders_enabled).unwrap_or(false)
+    }
+
+    /// Whether the given window should render its header.
+    pub fn window_header_enabled(&self, key: WindowKey) -> bool {
+        self.window(key).map(|w| w.header_enabled).unwrap_or(false)
     }
 
     /// Handle mouse-click focus switching.

@@ -127,6 +127,8 @@ pub fn render_app(
                 };
 
                 let title = all_titles.get(key).map(String::as_str).unwrap_or("");
+                let borders_enabled = wm.window_borders_enabled(*key);
+                let header_enabled = wm.window_header_enabled(*key);
                 let win_ctx = term_wm_console::draw_plan_renderer::ChromeCtx {
                     title,
                     focused,
@@ -135,6 +137,8 @@ pub fn render_app(
                     hover_pos: wm.hover_pos(),
                     theme: wm.config().theme,
                     wm_buttons: wm.window_management_buttons(),
+                    borders_enabled,
+                    header_enabled,
                 };
                 let content_hitbox_id = HitboxId::new();
                 let (_chrome_return, chrome_hb) = composite_window(
