@@ -2,11 +2,10 @@ use super::WindowManager;
 
 impl WindowManager {
     pub fn command_menu_visible(&self) -> bool {
-        self.overlays
-            .contains_key(&super::OverlayId::CommandPalette)
+        self.command_palette_visible()
     }
 
     pub fn close_command_menu(&mut self) {
-        self.overlays.remove(&super::OverlayId::CommandPalette);
+        self.close_command_palette();
     }
 }

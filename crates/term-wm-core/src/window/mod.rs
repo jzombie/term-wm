@@ -10,12 +10,16 @@ use term_wm_layout_engine::{LayoutRect, RectSpec};
 /// keys mathematically impossible to resolve.
 pub type WindowKey = slotmap::DefaultKey;
 
+slotmap::new_key_type! {
+    /// Slotmap-backed generational key used for overlay identification.
+    pub struct OverlayKey;
+}
+
 pub use entry::WindowState;
 
 pub use window_manager::layer_manager::{ComponentTag, LayerId, LayerManager, MacroFocus, ZPlane};
 pub use window_manager::{
-    DrawTask, OverlayId, ScrollState, WindowDrawContext, WindowManager, WindowSurface,
-    wm_menu_items,
+    DrawTask, ScrollState, WindowDrawContext, WindowManager, WindowSurface, wm_menu_items,
 };
 
 /// Signed floating rectangle (alias for engine `LayoutRect`).

@@ -17,7 +17,7 @@ use term_wm_core::layout::{Direction, FloatingPane, RectSpec, RegionMap};
 use term_wm_core::term_color::lerp_color;
 use term_wm_core::theme::{Color, Theme};
 use term_wm_core::window::decorator::WindowRenderCtx;
-use term_wm_core::window::{ComponentTag, OverlayId, WindowKey, WindowManager, WindowSurface};
+use term_wm_core::window::{ComponentTag, WindowKey, WindowManager, WindowSurface};
 
 /// Convert LayoutRect to Ratatui Rect
 fn layout_rect_to_rect(layout: LayoutRect) -> Rect {
@@ -533,9 +533,9 @@ pub fn render_overlays(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut
     let hover_pos = wm.hover_pos();
 
     // Overlays (help, exit confirm, command palette)
-    let overlay_ids: Vec<OverlayId> = wm.overlays().keys().copied().collect();
-    for id in overlay_ids {
-        if let Some(overlay) = wm.overlays_mut().get_mut(&id) {
+    let overlay_keys = wm.overlay_keys();
+    for key in overlay_keys {
+        if let Some(overlay) = wm.overlay_for_key_mut(key) {
             let mut hitbox = HitboxRegistry::new();
             let ctx = ComponentContext::new(false)
                 .with_overlay(true)

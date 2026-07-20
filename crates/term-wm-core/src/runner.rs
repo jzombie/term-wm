@@ -29,7 +29,7 @@ pub trait WindowManagerHost {
     fn set_clipboard_enabled(&mut self, _enabled: bool) {}
     fn set_window_selection_enabled(&mut self, _enabled: bool) {}
     fn open_help_overlay(&mut self) {
-        self.wm().open_overlay(crate::window::OverlayId::Help, None);
+        // Default implementation is a no-op; concrete apps override this.
     }
     fn open_exit_confirm(&mut self) {
         self.wm().request_quit();
