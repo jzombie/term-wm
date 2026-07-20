@@ -3699,7 +3699,12 @@ mod tests {
         wm.hitbox_registry_mut().register(
             crate::hitbox_registry::HitboxId::new(),
             ComponentOwner::Chrome(crate::chrome::ChromeTarget::ToggleDirectMode(win_key)),
-            Rect { x: i32::from(kb_x), y: i32::from(kb_y), width: 1, height: 1 },
+            Rect {
+                x: i32::from(kb_x),
+                y: i32::from(kb_y),
+                width: 1,
+                height: 1,
+            },
         );
 
         let click = Event::Mouse(MouseEvent {
@@ -4100,7 +4105,12 @@ mod tests {
         wm.hitbox_registry_mut().register(
             crate::hitbox_registry::HitboxId::new(),
             ComponentOwner::Chrome(crate::chrome::ChromeTarget::ToggleDirectMode(win_key)),
-            Rect { x: i32::from(kb_x), y: i32::from(kb_y), width: 1, height: 1 },
+            Rect {
+                x: i32::from(kb_x),
+                y: i32::from(kb_y),
+                width: 1,
+                height: 1,
+            },
         );
 
         assert!(wm.direct_mode(win_key), "direct mode enabled before click");
@@ -4176,8 +4186,11 @@ mod tests {
             height: 1,
         };
         let hitbox_id = crate::hitbox_registry::HitboxId::new();
-        wm.hitbox_registry_mut()
-            .register(hitbox_id, ComponentOwner::Chrome(crate::chrome::ChromeTarget::Drag(win_key)), header_rect);
+        wm.hitbox_registry_mut().register(
+            hitbox_id,
+            ComponentOwner::Chrome(crate::chrome::ChromeTarget::Drag(win_key)),
+            header_rect,
+        );
 
         // Press on the header — should start a drag via chrome.
         let click_col = header_rect.x;
@@ -4340,8 +4353,11 @@ mod tests {
             height: 1,
         };
         let hitbox_id = crate::hitbox_registry::HitboxId::new();
-        wm.hitbox_registry_mut()
-            .register(hitbox_id, ComponentOwner::Chrome(crate::chrome::ChromeTarget::Drag(debug_key)), header_rect);
+        wm.hitbox_registry_mut().register(
+            hitbox_id,
+            ComponentOwner::Chrome(crate::chrome::ChromeTarget::Drag(debug_key)),
+            header_rect,
+        );
 
         let down = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
@@ -5524,8 +5540,11 @@ mod tests {
             .insert(Box::new(overlay_obj), layer_manager::ZPlane::Foreground);
         // The foreground dispatch calls handle_events on all layers.
         // Register the hitbox with the correct overlay area.
-        wm.hitbox_registry
-            .register(HitboxId::new(), ComponentOwner::Layer(_overlay_id), overlay_rect);
+        wm.hitbox_registry.register(
+            HitboxId::new(),
+            ComponentOwner::Layer(_overlay_id),
+            overlay_rect,
+        );
 
         let click = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
