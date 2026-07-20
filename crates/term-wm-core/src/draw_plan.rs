@@ -31,14 +31,36 @@ pub enum PanelPosition {
     Bottom,
 }
 
+/// Strictly ordered topological layers for deterministic Z-ordering.
+/// Replaces magic-number `z_index: usize` values to prevent depth collisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ZLayer {
+    /// Unused / background fill
+    Background = 0,
+    /// Standard tiled terminal windows
+    TiledWindow = 10,
+    /// Floating (draggable) windows
+    FloatingWindow = 20,
+    /// Split handles, resize borders
+    SystemChrome = 30,
+    /// Top/bottom system panels
+    Panel = 40,
+    /// Toast notifications
+    Notification = 50,
+    /// Foreground layers
+    ForegroundLayer = 60,
+    /// Overlay components (help, exit confirm, command palette)
+    Overlay = 70,
+}
+
 /// A single render region in the draw plan.
 /// The `region_type` carries the semantic payload; spatial bounds are separate.
 #[derive(Debug, Clone)]
 pub struct RenderRegion {
     /// Bounding box in screen coordinates
     pub bounds: LayoutRect,
-    /// Z-ordering for layering (higher = rendered on top)
-    pub z_index: usize,
+    /// Strictly ordered topological layer for rendering
+    pub layer: ZLayer,
     /// Whether this region should be dimmed (unfocused windows)
     pub dimmed: bool,
     /// Semantic discriminator — carries the key for windows, the message for notifications.
@@ -84,9 +106,14 @@ impl DrawPlan {
         &mut self.regions
     }
 
-    /// Sort regions by z-index (stable sort).
+    /// Sort regions by topological layer (stable sort).
+    pub fn sort_by_layer(&mut self) {
+        self.regions.sort_by_key(|r| r.layer);
+    }
+
+    /// Backward-compatibility alias for `sort_by_layer`.
     pub fn sort_by_z_index(&mut self) {
-        self.regions.sort_by_key(|r| r.z_index);
+        self.sort_by_layer();
     }
 
     /// Current number of regions.
@@ -189,7 +216,7 @@ pub mod tests {
         y: i32,
         width: u16,
         height: u16,
-        z_index: usize,
+        layer: ZLayer,
     ) -> RenderRegion {
         RenderRegion {
             region_type: RegionType::Window(key),
@@ -199,7 +226,7 @@ pub mod tests {
                 width,
                 height,
             },
-            z_index,
+            layer,
             dimmed: false,
             hidden: false,
         }
@@ -212,7 +239,7 @@ pub mod tests {
         y: i32,
         width: u16,
         height: u16,
-        z_index: usize,
+        layer: ZLayer,
     ) -> RenderRegion {
         RenderRegion {
             region_type: RegionType::Window(key),
@@ -222,7 +249,7 @@ pub mod tests {
                 width,
                 height,
             },
-            z_index,
+            layer,
             dimmed: true,
             hidden: false,
         }
@@ -271,13 +298,13 @@ pub mod tests {
         );
     }
 
-    /// Test helper: assert that a region has the expected z-index
-    pub fn assert_region_z_index(plan: &DrawPlan, index: usize, expected: usize) {
+    /// Test helper: assert that a region has the expected layer
+    pub fn assert_region_layer(plan: &DrawPlan, index: usize, expected: ZLayer) {
         let region = &plan.regions()[index];
         assert_eq!(
-            region.z_index, expected,
-            "Region {} z_index: expected {}, got {}",
-            index, expected, region.z_index
+            region.layer, expected,
+            "Region {} layer: expected {:?}, got {:?}",
+            index, expected, region.layer
         );
     }
 
@@ -291,14 +318,14 @@ pub mod tests {
         );
     }
 
-    /// Test helper: assert that regions are sorted by z-index
-    pub fn assert_sorted_by_z_index(plan: &DrawPlan) {
+    /// Test helper: assert that regions are sorted by layer
+    pub fn assert_sorted_by_layer(plan: &DrawPlan) {
         for window in plan.regions().windows(2) {
             assert!(
-                window[0].z_index <= window[1].z_index,
-                "Regions not sorted by z_index: {} > {}",
-                window[0].z_index,
-                window[1].z_index
+                window[0].layer <= window[1].layer,
+                "Regions not sorted by layer: {:?} > {:?}",
+                window[0].layer,
+                window[1].layer
             );
         }
     }
@@ -354,7 +381,7 @@ pub mod tests {
         y: i32,
         width: u16,
         height: u16,
-        z_index: usize,
+        layer: ZLayer,
     ) -> RenderRegion {
         RenderRegion {
             region_type: RegionType::Panel(position),
@@ -364,7 +391,7 @@ pub mod tests {
                 width,
                 height,
             },
-            z_index,
+            layer,
             dimmed: false,
             hidden: false,
         }
@@ -382,8 +409,8 @@ pub mod tests {
             let key2 = WindowKey::default();
 
             let mut plan = DrawPlan::with_capacity(4);
-            plan.push(make_region(key1, 0, 0, 40, 24, 0));
-            plan.push(make_region(key2, 40, 0, 40, 24, 0));
+            plan.push(make_region(key1, 0, 0, 40, 24, ZLayer::TiledWindow));
+            plan.push(make_region(key2, 40, 0, 40, 24, ZLayer::TiledWindow));
 
             assert_region_count(&plan, 2);
             assert_region_bounds(&plan, 0, 0, 0, 40, 24);
@@ -391,22 +418,22 @@ pub mod tests {
         }
 
         #[test]
-        fn test_draw_plan_z_index_sorting() {
+        fn test_draw_plan_layer_sorting() {
             let key1 = WindowKey::default();
             let key2 = WindowKey::default();
             let key3 = WindowKey::default();
 
             let mut plan = DrawPlan::with_capacity(4);
-            plan.push(make_region(key1, 0, 0, 40, 24, 20));
-            plan.push(make_region(key2, 0, 0, 80, 24, 0));
-            plan.push(make_region(key3, 0, 0, 80, 24, 10));
+            plan.push(make_region(key1, 0, 0, 40, 24, ZLayer::Notification));
+            plan.push(make_region(key2, 0, 0, 80, 24, ZLayer::Background));
+            plan.push(make_region(key3, 0, 0, 80, 24, ZLayer::TiledWindow));
 
-            plan.sort_by_z_index();
+            plan.sort_by_layer();
 
-            assert_sorted_by_z_index(&plan);
-            assert_region_z_index(&plan, 0, 0);
-            assert_region_z_index(&plan, 1, 10);
-            assert_region_z_index(&plan, 2, 20);
+            assert_sorted_by_layer(&plan);
+            assert_region_layer(&plan, 0, ZLayer::Background);
+            assert_region_layer(&plan, 1, ZLayer::TiledWindow);
+            assert_region_layer(&plan, 2, ZLayer::Notification);
         }
 
         #[test]
@@ -415,8 +442,8 @@ pub mod tests {
             let key2 = WindowKey::default();
 
             let mut plan = DrawPlan::with_capacity(4);
-            plan.push(make_region(key1, 0, 0, 40, 24, 0));
-            plan.push(make_region(key2, 40, 0, 40, 24, 0));
+            plan.push(make_region(key1, 0, 0, 40, 24, ZLayer::TiledWindow));
+            plan.push(make_region(key2, 40, 0, 40, 24, ZLayer::TiledWindow));
 
             assert_no_overlap(&plan);
         }
@@ -427,8 +454,8 @@ pub mod tests {
             let key2 = WindowKey::default();
 
             let mut plan = DrawPlan::with_capacity(4);
-            plan.push(make_region(key1, 0, 0, 40, 24, 0));
-            plan.push(make_region(key2, 40, 0, 40, 24, 0));
+            plan.push(make_region(key1, 0, 0, 40, 24, ZLayer::TiledWindow));
+            plan.push(make_region(key2, 40, 0, 40, 24, ZLayer::TiledWindow));
 
             assert_within_screen(&plan, 80, 24);
         }
@@ -439,12 +466,12 @@ pub mod tests {
             let key = WindowKey::default();
 
             // Fill the plan
-            plan.push(make_region(key, 0, 0, 80, 24, 0));
+            plan.push(make_region(key, 0, 0, 80, 24, ZLayer::TiledWindow));
             let capacity = plan.regions.capacity();
 
             // Clear and refill
             plan.clear();
-            plan.push(make_region(key, 0, 0, 80, 24, 0));
+            plan.push(make_region(key, 0, 0, 80, 24, ZLayer::TiledWindow));
 
             // Capacity should be reused
             assert_eq!(plan.regions.capacity(), capacity);
@@ -458,8 +485,8 @@ pub mod tests {
             let key2 = WindowKey::from(slotmap::KeyData::from_ffi(1));
 
             let mut plan = DrawPlan::with_capacity(4);
-            plan.push(make_region(key1, 0, 0, 40, 24, 0));
-            plan.push(make_region(key2, 40, 0, 40, 24, 0));
+            plan.push(make_region(key1, 0, 0, 40, 24, ZLayer::TiledWindow));
+            plan.push(make_region(key2, 40, 0, 40, 24, ZLayer::TiledWindow));
 
             let screen = LayoutRect {
                 x: 0,
@@ -480,9 +507,9 @@ pub mod tests {
             let key1 = WindowKey::default();
 
             let mut plan = DrawPlan::with_capacity(4);
-            plan.push(make_region(key1, 0, 0, 80, 20, 0));
-            plan.push(make_panel_region(PanelPosition::Top, 0, 0, 80, 2, 10));
-            plan.push(make_panel_region(PanelPosition::Bottom, 0, 22, 80, 2, 10));
+            plan.push(make_region(key1, 0, 0, 80, 20, ZLayer::TiledWindow));
+            plan.push(make_panel_region(PanelPosition::Top, 0, 0, 80, 2, ZLayer::Panel));
+            plan.push(make_panel_region(PanelPosition::Bottom, 0, 22, 80, 2, ZLayer::Panel));
 
             let screen = LayoutRect {
                 x: 0,
