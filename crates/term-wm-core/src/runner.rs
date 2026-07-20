@@ -376,13 +376,9 @@ where
                             }
                             TermWmAction::FocusWindow(k) => {
                                 let state = app.wm().window_state(k);
-                                if state
-                                    == Some(crate::window::WindowState::Iconic)
-                                {
-                                    app.wm().transition_window(
-                                        k,
-                                        crate::window::WindowState::Mapped,
-                                    );
+                                if state == Some(crate::window::WindowState::Iconic) {
+                                    app.wm()
+                                        .transition_window(k, crate::window::WindowState::Mapped);
                                 }
                                 app.wm().focus_window_key(k);
                             }
