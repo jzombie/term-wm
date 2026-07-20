@@ -1,3 +1,5 @@
+- [X] monocle-mode window drags and resizes still capture their new coordinates; the chrome should disable this
+- [ ] [TODO] window borders should not be drawn in monocle mode
 - [X] clicking a window in monocle mode can sometimes activate another window (happens often)
 - [X] if a window is dragged off the left side of the screen, it's not possible to activate the window behind it unless moving the cursor the full-width of the window from the left axis.
 - [X] if a window is dragged off the left side of the screen, and performing a text selection, the text selection is offset by the same amount.
