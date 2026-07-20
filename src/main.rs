@@ -275,9 +275,7 @@ impl WindowManagerHost for App {
             "Exit App",
             "Exit the application?\nUnsaved changes will be lost.",
         );
-        self.inner
-            .wm()
-            .open_exit_confirm_overlay(Box::new(confirm));
+        self.inner.wm().open_exit_confirm_overlay(Box::new(confirm));
     }
 
     fn open_command_palette(&mut self) {

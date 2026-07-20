@@ -2088,7 +2088,10 @@ impl WindowManager {
             .and_then(|c| c.take_pending_title())
     }
 
-    pub fn overlay_for_key_mut(&mut self, key: OverlayKey) -> Option<&mut Box<dyn Overlay<TermWmAction>>> {
+    pub fn overlay_for_key_mut(
+        &mut self,
+        key: OverlayKey,
+    ) -> Option<&mut Box<dyn Overlay<TermWmAction>>> {
         self.overlays.get_mut(key)
     }
 
