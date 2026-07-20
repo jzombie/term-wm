@@ -1130,8 +1130,24 @@ impl WindowManager {
                                     if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
                                         self.floating_rect(*key)
                                     {
-                                        *initial_x = fr.x;
-                                        *initial_y = fr.y;
+                                        // Reposition window so the cursor is at the
+                                        // top-center of the header.
+                                        let new_x =
+                                            col as i32 - fr.width as i32 / 2;
+                                        let new_y = row as i32;
+                                        self.set_floating_rect(
+                                            *key,
+                                            Some(crate::window::FloatRectSpec::Absolute(
+                                                crate::window::FloatRect {
+                                                    x: new_x,
+                                                    y: new_y,
+                                                    width: fr.width,
+                                                    height: fr.height,
+                                                },
+                                            )),
+                                        );
+                                        *initial_x = new_x;
+                                        *initial_y = new_y;
                                         *start_x = col;
                                         *start_y = row;
                                         *prev_col = col;
