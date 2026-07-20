@@ -26,6 +26,7 @@ pub struct ChromeCtx<'a> {
     pub direct_mode: bool,
     pub hover_pos: Option<(u16, u16)>,
     pub theme: term_wm_core::theme::Theme,
+    pub wm_buttons: Vec<term_wm_core::window::window_manager::WmButton>,
 }
 
 // ── Chrome metric constants (owned by console) ─────────────
@@ -46,6 +47,7 @@ fn register_window_chrome_hitboxes(
     frame_size: (u16, u16),
     screen_origin: (i16, i16),
     content_hitbox_id: HitboxId,
+    wm_buttons: &[term_wm_core::window::window_manager::WmButton],
 ) {
     use term_wm_core::chrome::ChromeTarget;
     use term_wm_core::hitbox_registry::ComponentOwner;
@@ -100,17 +102,18 @@ fn register_window_chrome_hitboxes(
         to_screen(1, 1, width.saturating_sub(2), 1),
     );
 
-    // Close, maximize, minimize, and direct-mode buttons
-    let close_x = outer_right.saturating_sub(HEADER_BUTTON_GAP);
-    let max_x = close_x.saturating_sub(HEADER_BUTTON_GAP);
-    let min_x = max_x.saturating_sub(HEADER_BUTTON_GAP);
-    let dm_x = min_x.saturating_sub(HEADER_BUTTON_GAP);
-    for (target, bx) in [
-        (ChromeTarget::CloseButton(key), close_x),
-        (ChromeTarget::MaximizeButton(key), max_x),
-        (ChromeTarget::MinimizeButton(key), min_x),
-        (ChromeTarget::ToggleDirectMode(key), dm_x),
-    ] {
+    // Window management buttons from centralized list
+    for (i, btn) in wm_buttons.iter().enumerate() {
+        let bx = outer_right
+            .saturating_sub(HEADER_BUTTON_GAP)
+            .saturating_sub(HEADER_BUTTON_GAP * i as u16);
+        let target = match btn.action {
+            TermWmAction::CloseWindow => ChromeTarget::CloseButton(key),
+            TermWmAction::MaximizeWindow => ChromeTarget::MaximizeButton(key),
+            TermWmAction::MinimizeWindow => ChromeTarget::MinimizeButton(key),
+            TermWmAction::ToggleDirectMode => ChromeTarget::ToggleDirectMode(key),
+            _ => continue,
+        };
         registry.register(
             HitboxId::new(),
             ComponentOwner::Chrome(target),
@@ -164,7 +167,14 @@ pub fn render_window_chrome(
     render_window(buffer, local_bounds, ChromeCtx { ..*ctx });
 
     // Register chrome hitboxes + content hitbox (atomic)
-    register_window_chrome_hitboxes(registry, key, frame_size, screen_origin, content_hitbox_id);
+    register_window_chrome_hitboxes(
+        registry,
+        key,
+        frame_size,
+        screen_origin,
+        content_hitbox_id,
+        &ctx.wm_buttons,
+    );
 
     // Return inner content bounds
     LayoutRect {
@@ -835,6 +845,7 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
         direct_mode,
         hover_pos,
         theme,
+        wm_buttons,
     } = ctx;
 
     let focused_header_style = Style::default()
@@ -897,47 +908,42 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
     }
     {
         let contrast_fg = theme.menu_selected_fg.to_ratatui();
-        #[derive(Clone, Copy)]
-        enum Btn {
-            Close,
-            Max,
-            Min,
-            DirectMode,
-        }
-        let buttons: [(u16, Btn, &str); 4] = {
-            let close_x = outer_right.saturating_sub(HEADER_BUTTON_GAP);
-            let max_x = close_x.saturating_sub(HEADER_BUTTON_GAP);
-            let min_x = max_x.saturating_sub(HEADER_BUTTON_GAP);
-            let dm_x = min_x.saturating_sub(HEADER_BUTTON_GAP);
-            [
-                (close_x, Btn::Close, "X"),
-                (max_x, Btn::Max, "▢"),
-                (min_x, Btn::Min, "_"),
-                (dm_x, Btn::DirectMode, "D"),
-            ]
-        };
-        for (bx, action, sym) in buttons {
+        // Buttons are laid out right-to-left from outer_right
+        let num_buttons = wm_buttons.len();
+        for (i, btn) in wm_buttons.iter().enumerate() {
+            let bx = outer_right
+                .saturating_sub(HEADER_BUTTON_GAP)
+                .saturating_sub(HEADER_BUTTON_GAP * i as u16);
             if let Some(cell) = buffer.cell_mut((bx, header_y)) {
-                cell.set_symbol(sym);
-                let stoplight_fg = match action {
-                    Btn::Close => theme.error.to_ratatui(),
-                    Btn::Min => theme.warning.to_ratatui(),
-                    Btn::Max => theme.accent.to_ratatui(),
-                    Btn::DirectMode => theme.decorator_header_fg.to_ratatui(),
+                cell.set_symbol(btn.symbol);
+                let stoplight_fg = match btn.action {
+                    TermWmAction::CloseWindow => theme.error.to_ratatui(),
+                    TermWmAction::MinimizeWindow => theme.warning.to_ratatui(),
+                    TermWmAction::MaximizeWindow => theme.accent.to_ratatui(),
+                    _ => theme.decorator_header_fg.to_ratatui(),
                 };
                 let is_hovered = hover_pos == Some((bx, header_y));
                 let style = if is_hovered {
-                    let (hover_bg, hover_fg) = match action {
-                        Btn::Close => (theme.error.to_ratatui(), contrast_fg),
-                        Btn::Min => (theme.warning.to_ratatui(), contrast_fg),
-                        Btn::Max => (theme.accent.to_ratatui(), contrast_fg),
-                        Btn::DirectMode => (theme.accent_alt.to_ratatui(), contrast_fg),
+                    let (hover_bg, hover_fg) = match btn.action {
+                        TermWmAction::CloseWindow => {
+                            (theme.error.to_ratatui(), contrast_fg)
+                        }
+                        TermWmAction::MinimizeWindow => {
+                            (theme.warning.to_ratatui(), contrast_fg)
+                        }
+                        TermWmAction::MaximizeWindow => {
+                            (theme.accent.to_ratatui(), contrast_fg)
+                        }
+                        _ => (theme.accent_alt.to_ratatui(), contrast_fg),
                     };
                     Style::default()
                         .bg(hover_bg)
                         .fg(hover_fg)
                         .add_modifier(Modifier::BOLD)
-                } else if matches!(action, Btn::DirectMode) && direct_mode && focused {
+                } else if matches!(btn.action, TermWmAction::ToggleDirectMode)
+                    && direct_mode
+                    && focused
+                {
                     Style::default()
                         .bg(theme.decorator_header_fg.to_ratatui())
                         .fg(theme.decorator_header_bg.to_ratatui())
@@ -1527,7 +1533,17 @@ mod tests {
     use term_wm_core::app_context::AppContext;
     use term_wm_core::theme::NOIR;
     use term_wm_core::window::FloatRect;
+    use term_wm_core::window::window_manager::WmButton;
     use term_wm_core::wm_config::WmConfig;
+
+    fn test_wm_buttons() -> Vec<WmButton> {
+        vec![
+            WmButton { action: TermWmAction::CloseWindow, label: "Close Window", symbol: "X" },
+            WmButton { action: TermWmAction::MaximizeWindow, label: "Maximize Window", symbol: "▢" },
+            WmButton { action: TermWmAction::MinimizeWindow, label: "Minimize Window", symbol: "_" },
+            WmButton { action: TermWmAction::ToggleDirectMode, label: "Toggle Direct Mode", symbol: "D" },
+        ]
+    }
 
     #[test]
     fn composite_window_skips_negative_dest_x() {
@@ -1573,6 +1589,7 @@ mod tests {
             direct_mode: false,
             hover_pos: None,
             theme: NOIR,
+            wm_buttons: test_wm_buttons(),
         };
 
         let mut scratch = Buffer::empty(RatatuiRect {
@@ -1663,6 +1680,7 @@ mod tests {
             direct_mode: false,
             hover_pos: None,
             theme: NOIR,
+            wm_buttons: test_wm_buttons(),
         };
 
         let mut scratch = Buffer::empty(RatatuiRect {

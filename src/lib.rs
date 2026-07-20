@@ -134,6 +134,7 @@ pub fn render_app(
                     direct_mode: wm.direct_mode(*key),
                     hover_pos: wm.hover_pos(),
                     theme: wm.config().theme,
+                    wm_buttons: wm.window_management_buttons(),
                 };
                 let content_hitbox_id = HitboxId::new();
                 let (_chrome_return, chrome_hb) = composite_window(

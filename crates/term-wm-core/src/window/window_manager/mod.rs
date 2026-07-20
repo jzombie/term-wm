@@ -2215,130 +2215,141 @@ impl WindowManager {
             window.active_keyboard_focus = Some(hitbox_id);
         }
     }
-}
 
-pub fn wm_menu_items(
-    mouse_capture_enabled: bool,
-    clipboard_enabled: bool,
-    window_selection_enabled: bool,
-    has_focused_window: bool,
-    is_monocle: bool,
-    window_titles: &[(crate::window::WindowKey, String)],
-    focused_window: crate::window::WindowKey,
-) -> Vec<MenuItem<crate::actions::TermWmAction>> {
-    let mouse_label = if mouse_capture_enabled {
-        "Mouse Capture: On"
-    } else {
-        "Mouse Capture: Off"
-    };
-    let clipboard_label = if clipboard_enabled {
-        "Clipboard Mode: On"
-    } else {
-        "Clipboard Mode: Off"
-    };
-    let selection_label = if window_selection_enabled {
-        "Window Selection: On"
-    } else {
-        "Window Selection: Off"
-    };
-    let mut items = vec![
-        MenuItem {
-            label: "Resume".into(),
-            icon: Some("▶"),
-            action: crate::actions::TermWmAction::CloseMenu,
-            disabled: false,
-        },
-        MenuItem {
-            label: mouse_label.into(),
-            icon: Some("◆"),
-            action: crate::actions::TermWmAction::ToggleMouseCapture,
-            disabled: false,
-        },
-        MenuItem {
-            label: clipboard_label.into(),
-            icon: Some("■"),
-            action: crate::actions::TermWmAction::ToggleClipboardMode,
-            disabled: false,
-        },
-        MenuItem {
-            label: selection_label.into(),
-            icon: Some("●"),
-            action: crate::actions::TermWmAction::ToggleWindowSelection,
-            disabled: false,
-        },
-        MenuItem {
-            label: "New Window".into(),
-            icon: Some("+"),
-            action: crate::actions::TermWmAction::NewWindow,
-            disabled: false,
-        },
-        MenuItem {
-            label: "Debug Log".into(),
-            icon: Some("≣"),
-            action: crate::actions::TermWmAction::ToggleDebugWindow,
-            disabled: false,
-        },
-        MenuItem {
-            label: "System Panel".into(),
-            icon: Some("⚙"),
-            action: crate::actions::TermWmAction::ToggleSystemPanel,
-            disabled: false,
-        },
-        MenuItem {
-            label: "Help".into(),
-            icon: Some("?"),
-            action: crate::actions::TermWmAction::Help,
-            disabled: false,
-        },
-        MenuItem {
-            label: "Exit UI".into(),
-            icon: Some("⏻"),
-            action: crate::actions::TermWmAction::ExitUi,
-            disabled: false,
-        },
-    ];
-
-    if has_focused_window {
-        if is_monocle {
-            for (key, title) in window_titles {
-                items.push(MenuItem {
-                    label: format!("Switch to: {}", title).into(),
-                    icon: Some("\u{2192}"),
-                    action: crate::actions::TermWmAction::FocusWindow(*key),
-                    disabled: *key == focused_window,
-                });
-            }
-        } else {
-            items.extend_from_slice(&[
-                MenuItem {
-                    label: "Maximize Window".into(),
-                    icon: Some("⊞"),
-                    action: crate::actions::TermWmAction::MaximizeWindow,
-                    disabled: false,
-                },
-                MenuItem {
-                    label: "Minimize Window".into(),
-                    icon: Some("⊟"),
-                    action: crate::actions::TermWmAction::MinimizeWindow,
-                    disabled: false,
-                },
-                MenuItem {
-                    label: "Close Window".into(),
-                    icon: Some("✕"),
-                    action: crate::actions::TermWmAction::CloseWindow,
-                    disabled: false,
-                },
-                MenuItem {
-                    label: "Toggle Direct Mode".into(),
-                    icon: Some("🎯"),
-                    action: crate::actions::TermWmAction::ToggleDirectMode,
-                    disabled: false,
-                },
-            ]);
+    /// Returns the window management buttons appropriate for the current mode.
+    /// In monocle mode, minimize/maximize are excluded (meaningless when
+    /// the focused window fills the screen). Close and DirectMode always appear.
+    pub fn window_management_buttons(&self) -> Vec<WmButton> {
+        let mut btns = vec![WmButton {
+            action: TermWmAction::CloseWindow,
+            label: "Close Window",
+            symbol: "X",
+        }];
+        if !self.is_monocle() {
+            btns.push(WmButton {
+                action: TermWmAction::MaximizeWindow,
+                label: "Maximize Window",
+                symbol: "▢",
+            });
+            btns.push(WmButton {
+                action: TermWmAction::MinimizeWindow,
+                label: "Minimize Window",
+                symbol: "_",
+            });
         }
+        btns.push(WmButton {
+            action: TermWmAction::ToggleDirectMode,
+            label: "Toggle Direct Mode",
+            symbol: "D",
+        });
+        btns
     }
 
-    items
+    pub fn wm_menu_items(&self) -> Vec<MenuItem<crate::actions::TermWmAction>> {
+        let mouse_label = if self.mouse_capture_enabled {
+            "Mouse Capture: On"
+        } else {
+            "Mouse Capture: Off"
+        };
+        let clipboard_label = if self.clipboard_enabled {
+            "Clipboard Mode: On"
+        } else {
+            "Clipboard Mode: Off"
+        };
+        let selection_label = if self.window_selection_enabled {
+            "Window Selection: On"
+        } else {
+            "Window Selection: Off"
+        };
+        let mut items = vec![
+            MenuItem {
+                label: "Resume".into(),
+                icon: Some("▶"),
+                action: crate::actions::TermWmAction::CloseMenu,
+                disabled: false,
+            },
+            MenuItem {
+                label: mouse_label.into(),
+                icon: Some("◆"),
+                action: crate::actions::TermWmAction::ToggleMouseCapture,
+                disabled: false,
+            },
+            MenuItem {
+                label: clipboard_label.into(),
+                icon: Some("■"),
+                action: crate::actions::TermWmAction::ToggleClipboardMode,
+                disabled: false,
+            },
+            MenuItem {
+                label: selection_label.into(),
+                icon: Some("●"),
+                action: crate::actions::TermWmAction::ToggleWindowSelection,
+                disabled: false,
+            },
+            MenuItem {
+                label: "New Window".into(),
+                icon: Some("+"),
+                action: crate::actions::TermWmAction::NewWindow,
+                disabled: false,
+            },
+            MenuItem {
+                label: "Debug Log".into(),
+                icon: Some("≣"),
+                action: crate::actions::TermWmAction::ToggleDebugWindow,
+                disabled: false,
+            },
+            MenuItem {
+                label: "System Panel".into(),
+                icon: Some("⚙"),
+                action: crate::actions::TermWmAction::ToggleSystemPanel,
+                disabled: false,
+            },
+            MenuItem {
+                label: "Help".into(),
+                icon: Some("?"),
+                action: crate::actions::TermWmAction::Help,
+                disabled: false,
+            },
+            MenuItem {
+                label: "Exit UI".into(),
+                icon: Some("⏻"),
+                action: crate::actions::TermWmAction::ExitUi,
+                disabled: false,
+            },
+        ];
+
+        let has_focused_window = self.window_count() > 0;
+        if has_focused_window {
+            // Window management buttons from centralized list
+            for btn in self.window_management_buttons() {
+                items.push(MenuItem {
+                    label: btn.label.into(),
+                    icon: Some(btn.symbol),
+                    action: btn.action,
+                    disabled: false,
+                });
+            }
+            // Monocle: also add "Switch to" navigation
+            if self.is_monocle() {
+                let focused = *self.focus.current();
+                for (key, title) in self.window_titles() {
+                    items.push(MenuItem {
+                        label: format!("Switch to: {}", title).into(),
+                        icon: Some("→"),
+                        action: crate::actions::TermWmAction::FocusWindow(key),
+                        disabled: key == focused,
+                    });
+                }
+            }
+        }
+        items
+    }
+}
+
+pub struct WmButton {
+    pub action: TermWmAction,
+    pub label: &'static str,
+    pub symbol: &'static str,
 }
 
 fn clamp_rect(area: Rect, bounds: Rect) -> Rect {
