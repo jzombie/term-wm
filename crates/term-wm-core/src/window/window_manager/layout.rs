@@ -116,43 +116,11 @@ impl WindowManager {
             } else {
                 super::clamp_rect(rect, self.managed_area)
             };
-            let borders = self.window_borders_enabled(key);
-            let header = self.window_header_enabled(key);
-            if !borders && !header {
-                return area;
-            }
-            // TODO: Stop hardcoding these things
-            let x = if borders { area.x + 1 } else { area.x };
-            let y = if borders && header {
-                area.y + 2
-            } else if header || borders {
-                area.y + 1
-            } else {
-                area.y
-            };
-            let width = if borders {
-                area.width.saturating_sub(2)
-            } else {
-                area.width
-            };
-            let height = if borders && header {
-                area.height.saturating_sub(3)
-            } else if header {
-                area.height.saturating_sub(1)
-            } else if borders {
-                area.height.saturating_sub(2)
-            } else {
-                area.height
-            };
-            if width < 1 || height < 1 {
-                return Rect::default();
-            }
-            Rect {
-                x,
-                y,
-                width,
-                height,
-            }
+            crate::chrome::content_rect(
+                area,
+                self.window_borders_enabled(key),
+                self.window_header_enabled(key),
+            )
         } else {
             rect
         }

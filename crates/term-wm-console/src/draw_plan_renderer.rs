@@ -31,12 +31,11 @@ pub struct ChromeCtx<'a> {
     pub header_enabled: bool,
 }
 
-// ── Chrome metric constants (owned by console) ─────────────
-const LEFT_BORDER_WIDTH: u16 = 1;
-const RIGHT_BORDER_WIDTH: u16 = 1;
-const TOP_BORDER_HEIGHT: u16 = 1;
-const BOTTOM_BORDER_HEIGHT: u16 = 1;
-const HEADER_HEIGHT: u16 = 1;
+use term_wm_core::chrome::{
+    LEFT_BORDER_WIDTH, RIGHT_BORDER_WIDTH, TOP_BORDER_HEIGHT, content_rect,
+};
+
+// ── Chrome layout constants (console-specific) ──────────────
 const HEADER_BUTTON_GAP: u16 = 2;
 const EDGE_INDEX_ADJUST: u16 = 1;
 
@@ -228,39 +227,19 @@ pub fn render_window_chrome(
         },
     );
 
-    // Return inner content bounds
-    let content_x = if ctx.borders_enabled {
-        LEFT_BORDER_WIDTH
-    } else {
-        0
+    // Return inner content bounds (single source of truth: content_rect)
+    let full_area = term_wm_core::Rect {
+        x: 0,
+        y: 0,
+        width,
+        height,
     };
-    let content_y = if ctx.header_enabled && ctx.borders_enabled {
-        TOP_BORDER_HEIGHT.saturating_add(HEADER_HEIGHT)
-    } else if ctx.header_enabled {
-        HEADER_HEIGHT
-    } else if ctx.borders_enabled {
-        TOP_BORDER_HEIGHT
-    } else {
-        0
-    };
-    let content_width = if ctx.borders_enabled {
-        width.saturating_sub(LEFT_BORDER_WIDTH.saturating_add(RIGHT_BORDER_WIDTH))
-    } else {
-        width
-    };
-    let bottom_inset = if ctx.borders_enabled {
-        BOTTOM_BORDER_HEIGHT
-    } else {
-        0
-    };
-    let content_height = height
-        .saturating_sub(content_y)
-        .saturating_sub(bottom_inset);
+    let inner = content_rect(full_area, ctx.borders_enabled, ctx.header_enabled);
     LayoutRect {
-        x: i32::from(content_x),
-        y: i32::from(content_y),
-        width: content_width,
-        height: content_height,
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: inner.height,
     }
 }
 
