@@ -14,6 +14,10 @@ pub enum ChromeTarget {
     CloseButton(WindowKey),
     /// Maximize button in the window header.
     MaximizeButton(WindowKey),
+    /// Minimize button in the window header.
+    MinimizeButton(WindowKey),
+    /// Toggle direct mode button in the window header.
+    ToggleDirectMode(WindowKey),
     /// Tiling layout split handle seam.
     SplitHandle(HitboxId),
 }

@@ -931,11 +931,32 @@ impl WindowManager {
     }
 
     /// Return the currently hovered floating resize handle, if any.
-    /// Handled by the console during render. Returns None.
+    /// Queries the hitbox registry directly (console registers ChromeTarget::Resize
+    /// hitboxes during the render pass).
     pub fn hovered_resize_handle(
         &self,
-    ) -> Option<&crate::layout::floating::ResizeHandle<WindowKey>> {
-        None
+    ) -> Option<crate::layout::floating::ResizeHandle<WindowKey>> {
+        let (column, row) = self.hover?;
+        use crate::chrome::ChromeTarget;
+        use crate::hitbox_registry::ComponentOwner;
+        use crate::mouse_coord::{CoordSpace, MousePosition};
+        let pos = MousePosition {
+            column: column as i16,
+            row: row as i16,
+            space: CoordSpace::Screen,
+        };
+        if let Some((_, ComponentOwner::Chrome(ChromeTarget::Resize(key, edge)), area)) =
+            self.hitbox_registry.hit_test(pos)
+        {
+            Some(crate::layout::floating::ResizeHandle {
+                key,
+                rect: area,
+                edge,
+                hitbox_id: crate::hitbox_registry::HitboxId::new(),
+            })
+        } else {
+            None
+        }
     }
 
     /// Return the window region map (for resize outline rendering).
@@ -1474,6 +1495,24 @@ impl WindowManager {
                             EventResult::Ignored
                         }
                     }
+                    crate::chrome::ChromeTarget::MinimizeButton(key) => {
+                        if matches!(kind, MouseEventKind::Press(_)) {
+                            self.minimize_window(*key);
+                            self.last_header_click = None;
+                            EventResult::Consumed
+                        } else {
+                            EventResult::Ignored
+                        }
+                    }
+                    crate::chrome::ChromeTarget::ToggleDirectMode(key) => {
+                        if matches!(kind, MouseEventKind::Press(_)) {
+                            self.toggle_direct_mode(*key);
+                            self.last_header_click = None;
+                            EventResult::Consumed
+                        } else {
+                            EventResult::Ignored
+                        }
+                    }
                     crate::chrome::ChromeTarget::SplitHandle(_id) => {
                         self.mouse_capture = Some(MouseCaptureState::LayoutHandle);
                         if let Some(layout) = self.managed_layout.as_mut() {
@@ -1496,6 +1535,10 @@ impl WindowManager {
         // Every hitbox has exactly one owner. No iteration, no fallback.
         match owner {
             ComponentOwner::Window(key) => {
+                // Z-stack elevation: clicking a floating window brings it to front
+                if matches!(kind, MouseEventKind::Press(_)) && self.is_window_floating(key) {
+                    self.bring_floating_to_front_key(key);
+                }
                 let focused = *self.focus.current() == key;
                 let ctx = self
                     .component_context_for(focused, key)

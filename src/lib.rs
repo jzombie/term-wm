@@ -14,7 +14,7 @@ use term_wm_console::draw_plan_renderer::{
     render_drop_shadow, render_ghost_preview, render_handles_masked, render_overlays,
     render_panels, render_resize_outline,
 };
-use term_wm_core::hitbox_registry::{ComponentOwner, HitboxRegistry};
+use term_wm_core::hitbox_registry::{ComponentOwner, HitboxId, HitboxRegistry};
 use term_wm_core::window::{WindowManager, WindowSurface};
 
 /// Default rendering implementation for the window manager.
@@ -123,16 +123,6 @@ pub fn render_app(
                     z_depth,
                 };
 
-                // Chrome hitbox registration is handled by the console
-                // during the rendering pass (render_window_chrome).
-                // Register the window content hitbox for mouse dispatch.
-                wm.hitbox_registry_mut()
-                    .set_active_owner(ComponentOwner::Window(*key));
-                let screen_inner = surface.inner;
-                let content_hitbox_id = wm.window_content_hitbox_id(*key).unwrap_or_default();
-                wm.hitbox_registry_mut()
-                    .register(content_hitbox_id, screen_inner);
-
                 let title = all_titles.get(key).map(String::as_str).unwrap_or("");
                 let win_ctx = term_wm_console::draw_plan_renderer::ChromeCtx {
                     title,
@@ -142,10 +132,12 @@ pub fn render_app(
                     hover_pos: wm.hover_pos(),
                     theme: wm.config().theme,
                 };
+                let content_hitbox_id = HitboxId::new();
                 let (_chrome_return, chrome_hb) = composite_window(
                     backend,
                     &surface,
                     *key,
+                    content_hitbox_id,
                     win_ctx,
                     |backend, content_bounds| {
                         let ctx = wm
@@ -160,7 +152,7 @@ pub fn render_app(
                     },
                     &mut scratch_buf,
                 );
-                // Merge chrome hitboxes into the main registry for mouse dispatch
+                // Merge chrome hitboxes (including content hitbox) into main registry
                 wm.hitbox_registry_mut().merge(chrome_hb);
             }
             // Notification rendering deferred to after tiling handles
@@ -209,7 +201,7 @@ pub fn render_app(
         use term_wm_console::RatatuiBackend;
         if let Some(rb) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() {
             let buf = &mut rb.buffer;
-            let handles = wm.tiling_handles();
+            let handles = wm.tiling_handles().to_vec();
             let hovered = wm.hovered_tiling_handle();
             let managed = wm.managed_draw_order_all().to_vec();
             let regions = wm.regions();
@@ -223,11 +215,18 @@ pub fn render_app(
             if !wm.is_monocle() {
                 render_handles_masked(
                     buf,
-                    handles,
+                    &handles,
                     hovered.as_ref(),
                     &is_obscured,
                     &wm.config().theme,
                 );
+                // Register split handle hitboxes for mouse dispatch
+                for handle in &handles {
+                    wm.hitbox_registry_mut().set_active_owner(
+                        ComponentOwner::Chrome(term_wm_core::chrome::ChromeTarget::SplitHandle(handle.hitbox_id)),
+                    );
+                    wm.hitbox_registry_mut().register(handle.hitbox_id, handle.rect);
+                }
             }
 
             // Floating resize outlines
@@ -273,7 +272,7 @@ pub fn render_app(
             };
             render_resize_outline(
                 buf,
-                hovered_resize.copied(),
+                hovered_resize,
                 None,
                 wm.regions(),
                 area,

@@ -80,7 +80,11 @@ pub struct HitboxEntry {
 /// no coordinate mutation.
 #[derive(Debug, Clone)]
 pub struct HitboxRegistry {
+    /// Standard hitboxes: windows, chrome, layers.
     entries: Vec<HitboxEntry>,
+    /// Overlay hitboxes: checked FIRST by hit_test, highest Z-layer.
+    /// Modal overlays register a full-screen blocker here.
+    overlay_entries: Vec<HitboxEntry>,
     /// Active clip rects from scroll containers.  Inline storage avoids
     /// heap allocation for the common case (depth ≤ 5). Falls back to heap
     /// only in pathological nesting > CLIP_STACK_INLINE_CAPACITY levels deep.
@@ -95,6 +99,7 @@ impl HitboxRegistry {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
+            overlay_entries: Vec::new(),
             clip_stack: smallvec::SmallVec::new(),
             active_owner: None,
         }
@@ -106,6 +111,7 @@ impl HitboxRegistry {
     pub fn with_owner(owner: ComponentOwner) -> Self {
         Self {
             entries: Vec::new(),
+            overlay_entries: Vec::new(),
             clip_stack: smallvec::SmallVec::new(),
             active_owner: Some(owner),
         }
@@ -128,6 +134,7 @@ impl HitboxRegistry {
     /// Reset for a new frame.  Clears entries, clip stack, and active owner.
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.overlay_entries.clear();
         self.clip_stack.clear();
         self.active_owner = None;
     }
@@ -153,11 +160,16 @@ impl HitboxRegistry {
         if clipped.width == 0 || clipped.height == 0 {
             return;
         }
-        self.entries.push(HitboxEntry {
+        let entry = HitboxEntry {
             id,
             owner,
             area: clipped,
-        });
+        };
+        if matches!(owner, ComponentOwner::Overlay(_)) {
+            self.overlay_entries.push(entry);
+        } else {
+            self.entries.push(entry);
+        }
     }
 
     /// Push a clip rect (called by `ScrollViewComponent` before rendering
@@ -188,6 +200,16 @@ impl HitboxRegistry {
         &self,
         position: MousePosition,
     ) -> Option<(HitboxId, ComponentOwner, LayoutRect)> {
+        // 1. Overlay entries first (LIFO — last-registered overlay wins)
+        if let Some(entry) = self
+            .overlay_entries
+            .iter()
+            .rev()
+            .find(|entry| position.is_inside(entry.area))
+        {
+            return Some((entry.id, entry.owner, entry.area));
+        }
+        // 2. Standard entries second (LIFO — last-registered child wins over parent)
         self.entries
             .iter()
             .rev()
@@ -197,12 +219,12 @@ impl HitboxRegistry {
 
     /// Returns the number of registered entries (for diagnostics / metrics).
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.entries.len() + self.overlay_entries.len()
     }
 
     /// Returns `true` if no entries are registered.
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.is_empty() && self.overlay_entries.is_empty()
     }
 
     /// Atomically swap all entries with another registry.
@@ -212,6 +234,7 @@ impl HitboxRegistry {
     /// registry without copying or re-scanning.
     pub fn swap_entries(&mut self, other: &mut Self) {
         std::mem::swap(&mut self.entries, &mut other.entries);
+        std::mem::swap(&mut self.overlay_entries, &mut other.overlay_entries);
         std::mem::swap(&mut self.clip_stack, &mut other.clip_stack);
         std::mem::swap(&mut self.active_owner, &mut other.active_owner);
     }
@@ -222,6 +245,7 @@ impl HitboxRegistry {
     /// The source registry is consumed (entries moved, not copied).
     pub fn merge(&mut self, other: Self) {
         self.entries.extend(other.entries);
+        self.overlay_entries.extend(other.overlay_entries);
     }
 }
 
