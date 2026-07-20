@@ -2243,46 +2243,55 @@ pub fn wm_menu_items(
             label: "Resume".into(),
             icon: Some("▶"),
             action: crate::actions::TermWmAction::CloseMenu,
+            disabled: false,
         },
         MenuItem {
             label: mouse_label.into(),
             icon: Some("◆"),
             action: crate::actions::TermWmAction::ToggleMouseCapture,
+            disabled: false,
         },
         MenuItem {
             label: clipboard_label.into(),
             icon: Some("■"),
             action: crate::actions::TermWmAction::ToggleClipboardMode,
+            disabled: false,
         },
         MenuItem {
             label: selection_label.into(),
             icon: Some("●"),
             action: crate::actions::TermWmAction::ToggleWindowSelection,
+            disabled: false,
         },
         MenuItem {
             label: "New Window".into(),
             icon: Some("+"),
             action: crate::actions::TermWmAction::NewWindow,
+            disabled: false,
         },
         MenuItem {
             label: "Debug Log".into(),
             icon: Some("≣"),
             action: crate::actions::TermWmAction::ToggleDebugWindow,
+            disabled: false,
         },
         MenuItem {
             label: "System Panel".into(),
             icon: Some("⚙"),
             action: crate::actions::TermWmAction::ToggleSystemPanel,
+            disabled: false,
         },
         MenuItem {
             label: "Help".into(),
             icon: Some("?"),
             action: crate::actions::TermWmAction::Help,
+            disabled: false,
         },
         MenuItem {
             label: "Exit UI".into(),
             icon: Some("⏻"),
             action: crate::actions::TermWmAction::ExitUi,
+            disabled: false,
         },
     ];
 
@@ -2292,21 +2301,25 @@ pub fn wm_menu_items(
                 label: "Maximize Window".into(),
                 icon: Some("⊞"),
                 action: crate::actions::TermWmAction::MaximizeWindow,
+                disabled: false,
             },
             MenuItem {
                 label: "Minimize Window".into(),
                 icon: Some("⊟"),
                 action: crate::actions::TermWmAction::MinimizeWindow,
+                disabled: false,
             },
             MenuItem {
                 label: "Close Window".into(),
                 icon: Some("✕"),
                 action: crate::actions::TermWmAction::CloseWindow,
+                disabled: false,
             },
             MenuItem {
                 label: "Toggle Direct Mode".into(),
                 icon: Some("🎯"),
                 action: crate::actions::TermWmAction::ToggleDirectMode,
+                disabled: false,
             },
         ]);
     }

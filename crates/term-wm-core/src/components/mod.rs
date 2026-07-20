@@ -281,6 +281,7 @@ pub struct MenuItem<R> {
     pub icon: Option<&'static str>,
     pub label: Cow<'static, str>,
     pub action: R,
+    pub disabled: bool,
 }
 
 /// Actions the engine broadcasts to components.

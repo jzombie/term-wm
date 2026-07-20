@@ -298,6 +298,7 @@ impl WindowManagerHost for App {
             .filter(|item| supported.contains(&item.action))
             .collect();
         if wm.is_monocle() {
+            let focused = wm.focused_window();
             items.retain(|item| {
                 !matches!(
                     item.action,
@@ -305,10 +306,12 @@ impl WindowManagerHost for App {
                 )
             });
             for (key, title) in wm.window_titles() {
+                let is_current = key == focused;
                 items.push(MenuItem {
                     label: format!("Switch to: {}", title).into(),
                     icon: Some("\u{2192}"),
                     action: TermWmAction::FocusWindow(key),
+                    disabled: is_current,
                 });
             }
         }

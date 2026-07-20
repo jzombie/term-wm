@@ -302,6 +302,7 @@ impl Component<TermWmAction> for CommandPaletteComponent {
                 icon: p.icon,
                 label: Cow::Owned(p.display_name.clone()),
                 action: p.action.clone(),
+                disabled: false,
             })
             .collect();
         self.list_scroll.content.borrow_mut().set_items(menu_items);
