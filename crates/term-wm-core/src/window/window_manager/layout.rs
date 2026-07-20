@@ -192,7 +192,8 @@ impl WindowManager {
         // Global-only hints when closed.
         match self.hint_visibility {
             crate::wm_config::HintVisibility::Always => {
-                let layer = if self.config.wm_command_menu_enabled && self.command_palette_visible() {
+                let layer = if self.config.wm_command_menu_enabled && self.command_palette_visible()
+                {
                     ActionLayer::WmMode
                 } else {
                     ActionLayer::Global

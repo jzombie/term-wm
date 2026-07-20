@@ -195,7 +195,9 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
                     TermWmAction::MenuSelect => {
                         self.palette.update(action, ctx, &mut VecDeque::new());
                         self.last_action = self.palette.selected_action().cloned();
-                        EventResult::Action(self.last_action.clone().unwrap_or(TermWmAction::CloseMenu))
+                        EventResult::Action(
+                            self.last_action.clone().unwrap_or(TermWmAction::CloseMenu),
+                        )
                     }
                     _ => {
                         self.palette.update(action, ctx, &mut VecDeque::new());
@@ -214,7 +216,9 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
                     TermWmAction::MenuSelect => {
                         self.palette.update(action, ctx, &mut VecDeque::new());
                         self.last_action = self.palette.selected_action().cloned();
-                        EventResult::Action(self.last_action.clone().unwrap_or(TermWmAction::CloseMenu))
+                        EventResult::Action(
+                            self.last_action.clone().unwrap_or(TermWmAction::CloseMenu),
+                        )
                     }
                     _ => {
                         self.palette.update(action, ctx, &mut VecDeque::new());

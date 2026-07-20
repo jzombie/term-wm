@@ -293,7 +293,10 @@ impl WindowManagerHost for App {
             wm.window_count() > 0,
         );
         let supported = wm.supported_menu_actions();
-        let items: Vec<_> = items.into_iter().filter(|item| supported.contains(&item.action)).collect();
+        let items: Vec<_> = items
+            .into_iter()
+            .filter(|item| supported.contains(&item.action))
+            .collect();
         palette.set_items(items);
         wm.open_overlay(OverlayId::CommandPalette, Some(Box::new(palette)));
     }

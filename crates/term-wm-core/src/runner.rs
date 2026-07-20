@@ -317,7 +317,10 @@ where
                 if wm_mode
                     && let Event::Key(key) = &evt
                     && key.kind == KeyKind::Press
-                    && app.wm().keybindings().matches(TermWmAction::OpenCommandPalette, key)
+                    && app
+                        .wm()
+                        .keybindings()
+                        .matches(TermWmAction::OpenCommandPalette, key)
                 {
                     if app.wm().command_palette_visible() {
                         app.wm().close_command_palette();
@@ -333,19 +336,48 @@ where
                     if let Some(action) = app.wm().handle_command_palette_event(&evt) {
                         match action {
                             TermWmAction::CloseMenu => {}
-                            TermWmAction::ToggleDebugWindow => { app.toggle_debug_window(); }
-                            TermWmAction::ToggleSystemPanel => { app.toggle_system_panel(); }
-                            TermWmAction::Help | TermWmAction::OpenHelp => { app.open_help_overlay(); }
-                            TermWmAction::Quit | TermWmAction::ExitUi => { app.open_exit_confirm(); }
-                            TermWmAction::CloseWindow => { let id = app.wm().focused_window(); app.wm().close_window(id); }
-                            TermWmAction::NewWindow => { app.wm_new_window()?; }
-                            TermWmAction::MinimizeWindow => { let id = app.wm().focused_window(); app.wm().minimize_window(id); }
-                            TermWmAction::MaximizeWindow => { let id = app.wm().focused_window(); app.wm().toggle_maximize(id); }
-                            TermWmAction::ToggleDirectMode => { let id = app.wm().focused_window(); app.wm().toggle_direct_mode(id); }
+                            TermWmAction::ToggleDebugWindow => {
+                                app.toggle_debug_window();
+                            }
+                            TermWmAction::ToggleSystemPanel => {
+                                app.toggle_system_panel();
+                            }
+                            TermWmAction::Help | TermWmAction::OpenHelp => {
+                                app.open_help_overlay();
+                            }
+                            TermWmAction::Quit | TermWmAction::ExitUi => {
+                                app.open_exit_confirm();
+                            }
+                            TermWmAction::CloseWindow => {
+                                let id = app.wm().focused_window();
+                                app.wm().close_window(id);
+                            }
+                            TermWmAction::NewWindow => {
+                                app.wm_new_window()?;
+                            }
+                            TermWmAction::MinimizeWindow => {
+                                let id = app.wm().focused_window();
+                                app.wm().minimize_window(id);
+                            }
+                            TermWmAction::MaximizeWindow => {
+                                let id = app.wm().focused_window();
+                                app.wm().toggle_maximize(id);
+                            }
+                            TermWmAction::ToggleDirectMode => {
+                                let id = app.wm().focused_window();
+                                app.wm().toggle_direct_mode(id);
+                            }
                             TermWmAction::ToggleMouseCapture => app.wm().toggle_mouse_capture(),
-                            TermWmAction::ToggleClipboardMode => app.wm().toggle_clipboard_enabled(),
-                            TermWmAction::ToggleWindowSelection => app.wm().toggle_window_selection(),
-                            TermWmAction::SendNotification(msg) => { app.wm().push_notification(msg, std::time::Duration::from_secs(3)); }
+                            TermWmAction::ToggleClipboardMode => {
+                                app.wm().toggle_clipboard_enabled()
+                            }
+                            TermWmAction::ToggleWindowSelection => {
+                                app.wm().toggle_window_selection()
+                            }
+                            TermWmAction::SendNotification(msg) => {
+                                app.wm()
+                                    .push_notification(msg, std::time::Duration::from_secs(3));
+                            }
                             _ => {}
                         }
                     }
