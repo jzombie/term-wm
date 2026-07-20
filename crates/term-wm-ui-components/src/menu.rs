@@ -47,9 +47,13 @@ impl MenuComponent {
     }
 
     pub fn selected_action(&self) -> Option<&TermWmAction> {
-        self.items
-            .get(self.selected)
-            .and_then(|item| if item.disabled { None } else { Some(&item.action) })
+        self.items.get(self.selected).and_then(|item| {
+            if item.disabled {
+                None
+            } else {
+                Some(&item.action)
+            }
+        })
     }
 
     pub fn handle_key_event(&mut self, event: &Event) -> EventResult<TermWmAction> {
@@ -313,7 +317,9 @@ impl Default for MenuComponent {
 mod tests {
     use super::*;
     use ratatui::buffer::Buffer;
-    use term_wm_core::events::{Event, KeyCode, KeyEvent, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use term_wm_core::events::{
+        Event, KeyCode, KeyEvent, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
 
     fn key_event(code: KeyCode) -> Event {
         Event::Key(KeyEvent::new(code, KeyModifiers::NONE, KeyKind::Press))
@@ -527,7 +533,10 @@ mod tests {
             },
         ]);
         let result = menu.handle_key_event(&key_event(KeyCode::Enter));
-        assert!(matches!(result, EventResult::Action(TermWmAction::MenuSelect)));
+        assert!(matches!(
+            result,
+            EventResult::Action(TermWmAction::MenuSelect)
+        ));
     }
 
     #[test]
@@ -594,7 +603,10 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         let result = menu.handle_events(&event, &ctx);
-        assert!(matches!(result, EventResult::Action(TermWmAction::MenuSelect)));
+        assert!(matches!(
+            result,
+            EventResult::Action(TermWmAction::MenuSelect)
+        ));
         assert_eq!(menu.selected(), 0);
     }
 }

@@ -179,9 +179,13 @@ impl CommandPaletteComponent {
     }
 
     pub fn selected_action(&self) -> Option<&TermWmAction> {
-        self.filtered_items
-            .get(self.selected)
-            .map(|item| &item.action)
+        self.filtered_items.get(self.selected).and_then(|item| {
+            if item.disabled {
+                None
+            } else {
+                Some(&item.action)
+            }
+        })
     }
 
     pub fn selected_stable_id(&self) -> Option<&str> {
@@ -377,6 +381,13 @@ impl Component<TermWmAction> for CommandPaletteComponent {
             return EventResult::Action(TermWmAction::MenuDown);
         }
         if self.nav_keys.matches(TermWmAction::MenuSelect, key) && !self.filtered_items.is_empty() {
+            let is_disabled = self
+                .filtered_items
+                .get(self.selected)
+                .is_none_or(|item| item.disabled);
+            if is_disabled {
+                return EventResult::Ignored;
+            }
             return EventResult::Action(TermWmAction::MenuSelect);
         }
 
@@ -682,5 +693,90 @@ mod tests {
         });
         let result = palette.handle_events(&event, &ctx);
         assert!(result.is_ignored());
+    }
+
+    fn make_palette_with_disabled_item() -> CommandPaletteComponent {
+        let mut palette = CommandPaletteComponent::new();
+        palette.data_dirty = false;
+        palette.query_dirty = false;
+        palette.filtered_items = vec![
+            PaletteItem {
+                stable_id: "core:new_window".to_string(),
+                display_name: "New Window".to_string(),
+                description: String::new(),
+                action: TermWmAction::NewWindow,
+                icon: Some("+"),
+                disabled: false,
+            },
+            PaletteItem {
+                stable_id: "core:paste".to_string(),
+                display_name: "Paste".to_string(),
+                description: String::new(),
+                action: TermWmAction::CloseHelp,
+                icon: None,
+                disabled: true,
+            },
+            PaletteItem {
+                stable_id: "core:help".to_string(),
+                display_name: "Help".to_string(),
+                description: String::new(),
+                action: TermWmAction::Help,
+                icon: Some("?"),
+                disabled: false,
+            },
+        ];
+        palette
+    }
+
+    #[test]
+    fn selected_action_returns_none_for_disabled_item() {
+        let mut palette = make_palette_with_disabled_item();
+        palette.selected = 1;
+        assert_eq!(palette.selected_action(), None);
+    }
+
+    #[test]
+    fn selected_action_returns_action_for_enabled_item() {
+        let palette = make_palette_with_disabled_item();
+        assert_eq!(palette.selected_action(), Some(&TermWmAction::NewWindow));
+    }
+
+    #[test]
+    fn enter_on_disabled_item_returns_ignored() {
+        let mut palette = make_palette_with_disabled_item();
+        palette.selected = 1;
+        let ctx = ComponentContext::new(true);
+        let event = Event::Key(KeyEvent {
+            code: KeyCode::Enter,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyKind::Press,
+        });
+        let result = palette.handle_events(&event, &ctx);
+        assert!(result.is_ignored());
+    }
+
+    #[test]
+    fn enter_on_enabled_item_returns_menu_select() {
+        let mut palette = make_palette_with_disabled_item();
+        let ctx = ComponentContext::new(true);
+        let event = Event::Key(KeyEvent {
+            code: KeyCode::Enter,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyKind::Press,
+        });
+        let result = palette.handle_events(&event, &ctx);
+        assert!(matches!(
+            result,
+            EventResult::Action(TermWmAction::MenuSelect)
+        ));
+    }
+
+    #[test]
+    fn disabled_items_visible_in_filtered_list() {
+        let palette = make_palette_with_disabled_item();
+        assert_eq!(palette.filtered_items.len(), 3);
+        assert!(!palette.filtered_items[0].disabled);
+        assert!(palette.filtered_items[1].disabled);
+        assert!(!palette.filtered_items[2].disabled);
     }
 }

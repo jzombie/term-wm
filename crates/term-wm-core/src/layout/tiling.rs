@@ -1609,4 +1609,102 @@ mod tests {
             right_width
         );
     }
+
+    #[test]
+    fn monocle_mode_toggles_on_narrow_terminal() {
+        let root = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(1), LayoutNode::Leaf(2)],
+            weights: vec![1.0, 1.0],
+            constraints: vec![],
+            resizable: true,
+        };
+        let mut layout = TilingLayout::new(root);
+        assert!(!layout.is_monocle());
+        layout.update_monocle_state(60);
+        assert!(layout.is_monocle());
+    }
+
+    #[test]
+    fn monocle_mode_deactivates_on_wide_terminal() {
+        let root = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(1), LayoutNode::Leaf(2)],
+            weights: vec![1.0, 1.0],
+            constraints: vec![],
+            resizable: true,
+        };
+        let mut layout = TilingLayout::new(root);
+        layout.update_monocle_state(60);
+        assert!(layout.is_monocle());
+        layout.update_monocle_state(120);
+        assert!(!layout.is_monocle());
+    }
+
+    #[test]
+    fn normalize_weights_resets_to_equal() {
+        let mut node: LayoutNode<usize> = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2)],
+            weights: vec![3.0, 0.5],
+            constraints: vec![],
+            resizable: true,
+        };
+        node.normalize_weights();
+        if let LayoutNode::Split { weights, .. } = &node {
+            assert!(weights.iter().all(|w| (*w - 1.0).abs() < f32::EPSILON));
+        } else {
+            panic!("expected split");
+        }
+    }
+
+    #[test]
+    fn build_flat_empty_returns_void() {
+        let node: LayoutNode<usize> = LayoutNode::build_flat(Direction::Horizontal, vec![]);
+        assert!(node.unwrap_leaf().is_none());
+    }
+
+    #[test]
+    fn build_flat_single_returns_leaf() {
+        let node = LayoutNode::build_flat(Direction::Horizontal, vec![42]);
+        assert_eq!(node.unwrap_leaf(), Some(42));
+    }
+
+    #[test]
+    fn build_flat_multiple_returns_split() {
+        let node = LayoutNode::build_flat(Direction::Vertical, vec![1, 2, 3]);
+        if let LayoutNode::Split {
+            children,
+            weights,
+            direction,
+            ..
+        } = &node
+        {
+            assert_eq!(children.len(), 3);
+            assert_eq!(*direction, Direction::Vertical);
+            assert!(weights.iter().all(|w| (*w - 1.0).abs() < f32::EPSILON));
+        } else {
+            panic!("expected split");
+        }
+    }
+
+    #[test]
+    fn void_regions_returns_voids() {
+        let node: LayoutNode<usize> = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::Void(99)],
+            weights: vec![1.0, 1.0],
+            constraints: vec![],
+            resizable: true,
+        };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let voids = node.void_regions(area);
+        assert_eq!(voids.len(), 1);
+        assert_eq!(voids[0].0, 99);
+    }
 }

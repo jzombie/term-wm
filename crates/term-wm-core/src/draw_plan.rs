@@ -532,5 +532,121 @@ pub mod tests {
             assert!(plan.regions()[1].hidden);
             assert!(plan.regions()[2].hidden);
         }
+
+        #[test]
+        fn test_monocle_z_order_depth_ordering() {
+            let focused = WindowKey::default();
+            let other = WindowKey::from(slotmap::KeyData::from_ffi(1));
+
+            let mut plan = DrawPlan::with_capacity(8);
+            // Add in random order
+            plan.push(make_region(other, 0, 0, 40, 24, ZLayer::TiledWindow));
+            plan.push(RenderRegion {
+                region_type: RegionType::FloatingWindow(other),
+                bounds: LayoutRect {
+                    x: 10,
+                    y: 5,
+                    width: 20,
+                    height: 10,
+                },
+                layer: ZLayer::FloatingWindow,
+                dimmed: false,
+                hidden: false,
+            });
+            plan.push(make_region(focused, 0, 0, 80, 24, ZLayer::TiledWindow));
+            plan.push(RenderRegion {
+                region_type: RegionType::Overlay,
+                bounds: LayoutRect {
+                    x: 0,
+                    y: 0,
+                    width: 80,
+                    height: 24,
+                },
+                layer: ZLayer::Overlay,
+                dimmed: false,
+                hidden: false,
+            });
+
+            plan.apply_monocle_z_order(focused);
+
+            // Expected order: hidden tiled → other tiled → focused → floating → overlays
+            let types: Vec<_> = plan.regions().iter().map(|r| &r.region_type).collect();
+            // Other tiled comes before focused
+            let other_idx = types.iter().position(|t| matches!(t, RegionType::Window(k) if *k == other && !plan.regions()[types.iter().position(|tt| tt == t).unwrap()].hidden)).unwrap();
+            let focused_idx = types
+                .iter()
+                .position(|t| matches!(t, RegionType::Window(k) if *k == focused))
+                .unwrap();
+            let floating_idx = types
+                .iter()
+                .position(|t| matches!(t, RegionType::FloatingWindow(_)))
+                .unwrap();
+            let overlay_idx = types
+                .iter()
+                .position(|t| matches!(t, RegionType::Overlay))
+                .unwrap();
+            assert!(
+                other_idx < focused_idx,
+                "other tiled should come before focused"
+            );
+            assert!(
+                focused_idx < floating_idx,
+                "focused should come before floating"
+            );
+            assert!(
+                floating_idx < overlay_idx,
+                "floating should come before overlay"
+            );
+        }
+
+        #[test]
+        fn test_zlayer_ordering() {
+            assert!(ZLayer::Background < ZLayer::TiledWindow);
+            assert!(ZLayer::TiledWindow < ZLayer::FloatingWindow);
+            assert!(ZLayer::FloatingWindow < ZLayer::SystemChrome);
+            assert!(ZLayer::SystemChrome < ZLayer::Panel);
+            assert!(ZLayer::Panel < ZLayer::Notification);
+            assert!(ZLayer::Notification < ZLayer::ForegroundLayer);
+            assert!(ZLayer::ForegroundLayer < ZLayer::Overlay);
+        }
+
+        #[test]
+        fn test_panel_position_distinct() {
+            assert_ne!(PanelPosition::Top, PanelPosition::Bottom);
+        }
+
+        #[test]
+        fn test_region_type_variants_constructible() {
+            let key = WindowKey::default();
+            let _ = RegionType::Window(key);
+            let _ = RegionType::Notification(std::sync::Arc::from("test"));
+            let _ = RegionType::FloatingWindow(key);
+            let _ = RegionType::Panel(PanelPosition::Top);
+            let _ = RegionType::Overlay;
+            let _ = RegionType::TargetHighlight(key);
+        }
+
+        #[test]
+        fn test_hidden_flag_preserved_through_sort() {
+            let key1 = WindowKey::default();
+            let key2 = WindowKey::from(slotmap::KeyData::from_ffi(1));
+            let mut plan = DrawPlan::with_capacity(4);
+            plan.push(make_region(key1, 0, 0, 40, 24, ZLayer::TiledWindow));
+            plan.push(make_region(key2, 40, 0, 40, 24, ZLayer::TiledWindow));
+            plan.apply_monocle_culling(
+                key1,
+                LayoutRect {
+                    x: 0,
+                    y: 0,
+                    width: 80,
+                    height: 24,
+                },
+            );
+            // key2 should be hidden
+            let hidden_idx = plan.regions().iter().position(|r| r.hidden).unwrap();
+            plan.sort_by_layer();
+            // Hidden region should still be hidden after sort
+            assert!(plan.regions()[hidden_idx].hidden);
+        }
     }
 }
