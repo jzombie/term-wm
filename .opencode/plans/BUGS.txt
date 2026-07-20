@@ -12,7 +12,7 @@
 - [ ] help overlay truncates the sentence "The second press is forwarded to the active..."
 - [ ] [TODO] README & help.md need to reflect current state of new changes, including new keybindings
 - [ ] not all overlay components are named "_overlay"
-- [ ] "close window" is not showing in monocle mode command palette
+- [X] "close window" is not showing in monocle mode command palette
 - [ ] [TODO] Don't show minimize/maximize window chrome buttons in monocle mode. Centralize the gating so that this change directly reflects in the command palette without repeated if/then checks that can get out of sync.
 - [X] [TODO] Command palette should show "Switch to: {window_title}" options and it should always show the *current* window titles. These definitely should be searchable as well.
 - [ ] [TODO] Command palette should show groupings for each command (for instance, app-specific, wm-specific, etc.) and should show optional descriptions for each command (those descriptions could be used as part of the search indexing as well).
