@@ -237,8 +237,34 @@ impl HitboxRegistry {
     /// Appends entries from `other` to `self`, preserving Z-ordering.
     /// The source registry is consumed (entries moved, not copied).
     pub fn merge(&mut self, other: Self) {
-        self.entries.extend(other.entries);
-        self.overlay_entries.extend(other.overlay_entries);
+        for entry in other.entries {
+            let mut clipped = entry.area;
+            for clip in &self.clip_stack {
+                clipped = clipped.clamp(*clip);
+            }
+            if clipped.width == 0 || clipped.height == 0 {
+                continue;
+            }
+            self.entries.push(HitboxEntry {
+                id: entry.id,
+                owner: entry.owner,
+                area: clipped,
+            });
+        }
+        for entry in other.overlay_entries {
+            let mut clipped = entry.area;
+            for clip in &self.clip_stack {
+                clipped = clipped.clamp(*clip);
+            }
+            if clipped.width == 0 || clipped.height == 0 {
+                continue;
+            }
+            self.overlay_entries.push(HitboxEntry {
+                id: entry.id,
+                owner: entry.owner,
+                area: clipped,
+            });
+        }
     }
 }
 
