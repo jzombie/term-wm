@@ -1895,7 +1895,7 @@ mod tests {
             .expect("test build");
         wm.set_panel_visible(false);
 
-        let key = wm.create_window(Box::new(sv));
+        let key = wm.create_window(sv);
         let raw = wm.component_for_key_mut(key).unwrap();
         // The component inside the Window IS our ScrollViewComponent.
         // Verify set_selection_enabled works through the trait.
@@ -1988,7 +1988,7 @@ mod tests {
             .expect("test build");
         wm.set_panel_visible(false);
 
-        let key = wm.create_window(Box::new(sv));
+        let key = wm.create_window(sv);
         let raw = wm.component_for_key_mut(key).unwrap();
         raw.set_selection_enabled(true);
 
