@@ -764,8 +764,8 @@ pub fn render_overlays(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut
 
         // Bottom panel overlay in monocle mode — keybinding hints
         let bottom_area = LayoutRect {
-            x: 0,
-            y: i32::from(full_area.height.saturating_sub(1)),
+            x: full_area.x,
+            y: full_area.y + i32::from(full_area.height).saturating_sub(1),
             width: full_area.width,
             height: 1,
         };
