@@ -125,7 +125,6 @@ muxio-tokio-mpsc-adapter = { workspace = true }
 muxio-tokio-rpc-ipc-client = { workspace = true }
 proptest = { workspace = true }
 tempfile = { workspace = true }
-term-bench = { path = "crates/term-bench" }
 term-session-client = { path = "crates/term-session-client" }
 term-session-muxio-service-definitions = { path = "crates/term-session-muxio-service-definitions" }
 term-session-server = { path = "crates/term-session-server" }

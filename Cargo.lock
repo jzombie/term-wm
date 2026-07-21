@@ -2909,7 +2909,6 @@ dependencies = [
  "proptest",
  "ratatui",
  "tempfile",
- "term-bench",
  "term-session-client",
  "term-session-muxio-service-definitions",
  "term-session-server",
