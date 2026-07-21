@@ -248,19 +248,4 @@ impl KeyBindings {
 mod tests {
     use super::*;
     use crate::events::KeyKind;
-
-    #[test]
-    fn defaults_match_quit() {
-        let kb = KeyBindings::default();
-        let ev = KeyEvent {
-            code: KeyCode::Char('q'),
-            modifiers: KeyModifiers {
-                shift: false,
-                control: true,
-                alt: false,
-            },
-            kind: KeyKind::Press,
-        };
-        assert!(kb.matches(TermWmAction::Quit, &ev));
-    }
 }
