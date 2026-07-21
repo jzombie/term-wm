@@ -19,6 +19,8 @@ pub enum WmInputMode {
     CommandPalette,
     /// Targeting mode for tap-to-swap
     TapToSwapTargeting,
+    /// Help overlay is visible
+    Help,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -28,6 +30,8 @@ pub enum ActionLayer {
     Global,
     /// Only active when the WM overlay (menu) is visible.
     WmMode,
+    /// Only active when the help overlay is visible.
+    Help,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -166,10 +170,11 @@ impl<Msg> EventResult<Msg> {
 
 impl TermWmAction {
     pub fn layer(&self) -> ActionLayer {
-        // All actions are WmMode — the command palette is triggered
-        // via FAB tap or explicit keyboard shortcut, not a global layer.
         match self {
             TermWmAction::OpenCommandPalette => ActionLayer::Global,
+            TermWmAction::CloseHelp | TermWmAction::OpenHelp | TermWmAction::Help => {
+                ActionLayer::Help
+            }
             _ => ActionLayer::WmMode,
         }
     }
@@ -250,6 +255,7 @@ impl TermWmAction {
             TermWmAction::OpenCommandPalette => Some(100),
             TermWmAction::Quit => Some(90),
             TermWmAction::OpenHelp => Some(80),
+            TermWmAction::CloseHelp => Some(75),
             TermWmAction::FocusNext => Some(70),
             TermWmAction::FocusPrev => Some(65),
             TermWmAction::CycleNextWindow => Some(60),

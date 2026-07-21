@@ -82,7 +82,6 @@ macro_rules! default_keybindings {
 impl Default for KeyBindings {
     fn default() -> Self {
         default_keybindings! {
-            Quit: [ (KeyCode::Char('q'), KeyModifiers { shift: false, control: true, alt: false }) ],
             CloseHelp: [ (KeyCode::Esc, KeyModifiers::NONE), (KeyCode::Enter, KeyModifiers::NONE), (KeyCode::Char('q'), KeyModifiers::NONE) ],
             FocusNext: [ (KeyCode::Tab, KeyModifiers::NONE) ],
             FocusPrev: [ (KeyCode::Tab, KeyModifiers { shift: true, control: false, alt: false }) ],
@@ -248,20 +247,13 @@ impl KeyBindings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::KeyKind;
 
     #[test]
-    fn defaults_match_quit() {
+    fn default_keybindings_is_not_empty() {
         let kb = KeyBindings::default();
-        let ev = KeyEvent {
-            code: KeyCode::Char('q'),
-            modifiers: KeyModifiers {
-                shift: false,
-                control: true,
-                alt: false,
-            },
-            kind: KeyKind::Press,
-        };
-        assert!(kb.matches(TermWmAction::Quit, &ev));
+        assert!(
+            !kb.combos_for(TermWmAction::CloseHelp).is_empty(),
+            "CloseHelp should have at least one keybinding"
+        );
     }
 }

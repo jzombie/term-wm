@@ -23,6 +23,7 @@ impl WindowManager {
         if let Some(key) = self.help_key.take() {
             self.overlays.remove(key);
         }
+        self.input_mode = crate::actions::WmInputMode::Passthrough;
     }
 
     // TODO: Drag handling/clipboard selection, etc. should be moved into the component
@@ -87,6 +88,7 @@ impl WindowManager {
         if let Some(key) = self.command_palette_key.take() {
             self.overlays.remove(key);
         }
+        self.input_mode = crate::actions::WmInputMode::Passthrough;
     }
 
     pub fn handle_command_palette_event(&mut self, event: &Event) -> Option<TermWmAction> {
