@@ -247,5 +247,13 @@ impl KeyBindings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::KeyKind;
+
+    #[test]
+    fn default_keybindings_is_not_empty() {
+        let kb = KeyBindings::default();
+        assert!(
+            !kb.combos_for(TermWmAction::CloseHelp).is_empty(),
+            "CloseHelp should have at least one keybinding"
+        );
+    }
 }

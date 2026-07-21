@@ -2026,6 +2026,7 @@ impl WindowManager {
 
     pub fn open_help_overlay(&mut self, overlay: Box<dyn Overlay<TermWmAction>>) {
         self.help_key = Some(self.overlays.insert(overlay));
+        self.input_mode = crate::actions::WmInputMode::Help;
     }
 
     pub fn open_exit_confirm_overlay(&mut self, overlay: Box<dyn Overlay<TermWmAction>>) {
@@ -2034,6 +2035,7 @@ impl WindowManager {
 
     pub fn open_command_palette_overlay(&mut self, overlay: Box<dyn Overlay<TermWmAction>>) {
         self.command_palette_key = Some(self.overlays.insert(overlay));
+        self.input_mode = crate::actions::WmInputMode::CommandPalette;
     }
 
     pub fn set_scroll_keyboard_enabled(&mut self, enabled: bool) {
