@@ -164,7 +164,12 @@ pub fn render_app<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmA
                         if let Some(component) = wm.component_for_key_mut(*key) {
                             let mut local_hb =
                                 HitboxRegistry::with_owner(ComponentOwner::Window(*key));
-                            component.render(backend, content_bounds, &ctx, &mut local_hb);
+                            // Isolate per-window render panics so a crashing
+                            // terminal does not prevent the debug-log overlay
+                            // (or any other window) from rendering.
+                            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                component.render(backend, content_bounds, &ctx, &mut local_hb);
+                            }));
                             wm.hitbox_registry_mut().merge(local_hb);
                         }
                     },
