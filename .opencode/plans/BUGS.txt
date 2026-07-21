@@ -22,5 +22,14 @@
 - [ ] [TODO] Hide mouse cursor after x amount of seconds of no activity.
 - [ ] [TODO] Update crates with idiomatic rust categories and keywords
 - [X] [TODO] In Monocle-mode when tabbing through windows, make the menu go into outline mode for 1 or 2 seconds, and hide the panels, so the user can see the full window titles, etc. If *not* in Monocle mode, just go into outline mode without hiding the panels.
-- [ ] Terminal titles can sometimes switch numbers if the process title for one changes then changes back again
 - [ ] Terminal message can duplicate on smaller terminal views
+
+- [ ] Terminal titles can sometimes switch numbers if the process title for one changes then changes back again.  See notes below:
+
+The window_titles() dedup logic is entirely pure Rust — no platform-specific code. The numbers switch because:
+Window A = "htop" (title_set_order=0) → "htop (1)"
+Window B = "htop" (title_set_order=1) → "htop (2)"
+Then A gets updated by its process (foreground title polling or OSC sequence) to "vim" at order=2. When A later reverts to "htop" at order=3, it sorts last, so:
+Window B = "htop" (order=1) → "htop (1)"  ← was (2)
+Window A = "htop" (order=3) → "htop (2)"  ← was (1)
+The (N) suffixes shuffled because the title_set_order reset when A left and rejoined the group. This happens identically on macOS, Linux, and Windows — it's a property of the grouping/sorting design, not a platform bug.
