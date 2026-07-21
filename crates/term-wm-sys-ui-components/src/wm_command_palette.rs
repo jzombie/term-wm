@@ -9,8 +9,8 @@ use term_wm_core::{
     actions::{EventResult, TermWmAction},
     command_menu::{CommandRegistry, ContextMask, FuzzyMatch, MruRanker},
     components::{
-        Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse, Overlay,
-        WmComponent,
+        Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse, MenuItem,
+        Overlay, WmComponent,
     },
     hitbox_registry::HitboxId,
     window::WindowKey,
@@ -72,6 +72,7 @@ impl WmCommandPaletteComponent {
     }
 
     pub fn set_items(&mut self, items: Vec<term_wm_core::components::MenuItem<TermWmAction>>) {
+        self.registry = CommandRegistry::new();
         use term_wm_core::command_menu::{CommandAction, CommandName, CommandNode, ContextMask};
         for item in items {
             let stable_id = format!("core:{}", item.label.replace(' ', "_").to_lowercase());
@@ -256,6 +257,14 @@ impl Overlay<TermWmAction> for WmCommandPaletteComponent {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
+
+    fn mark_dirty(&mut self) {
+        self.palette.mark_data_dirty();
+    }
+
+    fn set_menu_items(&mut self, items: Vec<MenuItem<TermWmAction>>) {
+        self.set_items(items);
+    }
 }
 
 impl WmComponent for WmCommandPaletteComponent {
@@ -274,7 +283,6 @@ impl WmComponent for WmCommandPaletteComponent {
                 self.palette.query_dirty = true;
             }
             ComponentAction::SetMenuItems(items) => {
-                self.registry = CommandRegistry::new();
                 self.set_items(items.clone());
             }
             ComponentAction::SetManagedArea(area) => self.set_managed_area(*area),

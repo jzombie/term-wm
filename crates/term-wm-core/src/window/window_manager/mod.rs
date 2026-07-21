@@ -2356,17 +2356,15 @@ impl WindowManager {
                     disabled: false,
                 });
             }
-            // Monocle: also add "Switch to" navigation
-            if self.is_monocle() {
-                let focused = *self.focus.current();
-                for (key, title) in self.window_titles() {
-                    items.push(MenuItem {
-                        label: format!("Switch to: {}", title).into(),
-                        icon: Some("→"),
-                        action: crate::actions::TermWmAction::FocusWindow(key),
-                        disabled: key == focused,
-                    });
-                }
+            // Switch-to navigation for all windows
+            let focused = *self.focus.current();
+            for (key, title) in self.window_titles() {
+                items.push(MenuItem {
+                    label: format!("Switch to: {}", title).into(),
+                    icon: Some("→"),
+                    action: crate::actions::TermWmAction::FocusWindow(key),
+                    disabled: key == focused,
+                });
             }
         }
         items

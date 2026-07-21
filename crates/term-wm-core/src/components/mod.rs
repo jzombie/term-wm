@@ -274,6 +274,10 @@ pub trait Overlay<Msg>: Component<Msg> + std::any::Any {
     fn handle_confirm_event(&mut self, _event: &Event) -> Option<crate::actions::ConfirmAction> {
         None
     }
+    /// Mark internal state as needing a rebuild (e.g. after a focus change).
+    fn mark_dirty(&mut self) {}
+    /// Replace the overlay's menu items (e.g. on focus change).
+    fn set_menu_items(&mut self, _items: Vec<MenuItem<Msg>>) {}
 }
 
 #[derive(Debug, Clone)]
