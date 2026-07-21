@@ -56,7 +56,11 @@ impl Component<TermWmAction> for CoreWmComponent {
         }
     }
 
-    fn handle_events(&mut self, event: &Event, ctx: &ComponentContext) -> EventResult<TermWmAction> {
+    fn handle_events(
+        &mut self,
+        event: &Event,
+        ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
         match self {
             Self::Terminal(c) => c.handle_events(event, ctx),
             Self::DebugLog(c) => c.handle_events(event, ctx),
@@ -150,11 +154,7 @@ impl Component<TermWmAction> for CoreWmComponent {
         }
     }
 
-    fn on_key(
-        &mut self,
-        event: &Event,
-        ctx: &ComponentContext,
-    ) -> EventResult<TermWmAction> {
+    fn on_key(&mut self, event: &Event, ctx: &ComponentContext) -> EventResult<TermWmAction> {
         match self {
             Self::Terminal(c) => c.on_key(event, ctx),
             Self::DebugLog(c) => c.on_key(event, ctx),

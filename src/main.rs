@@ -5,6 +5,7 @@ use clap::Parser;
 use crossbeam_channel::Sender;
 
 use term_wm::app_context::AppContext;
+use term_wm::components::AppRootComponent;
 use term_wm::config::AppBuilder;
 use term_wm::io::RenderTarget;
 use term_wm::runner::WindowManagerHost;
@@ -16,13 +17,12 @@ use term_wm::{
     PtyStatus, ScrollKeyMode, ScrollViewComponent, TerminalComponent, default_shell_command,
 };
 use term_wm_console::console_render_target::ConsoleRenderTarget;
-use term_wm::components::AppRootComponent;
 use term_wm_core::components::Component;
+use term_wm_sys_ui_components::WmSystemPanelComponent;
 use term_wm_sys_ui_components::core_component::CoreWmComponent;
 use term_wm_sys_ui_components::wm_debug_log::{
     WmDebugLogComponent, install_panic_hook, set_global_debug_log,
 };
-use term_wm_sys_ui_components::WmSystemPanelComponent;
 
 /// Simple CLI for launching `term-wm` with optional commands / window count.
 #[derive(Parser, Debug)]
@@ -139,7 +139,10 @@ impl App {
             let (mut component, handle) = WmDebugLogComponent::new_default();
             component.set_selection_enabled(app.inner.wm().clipboard_enabled());
             set_global_debug_log(handle);
-            let debug_key = app.inner.wm().set_system_window(AppRootComponent::Core(CoreWmComponent::DebugLog(component)));
+            let debug_key = app
+                .inner
+                .wm()
+                .set_system_window(AppRootComponent::Core(CoreWmComponent::DebugLog(component)));
             app.inner
                 .wm()
                 .transition_window(debug_key, term_wm::window::WindowState::Unmapped);
@@ -152,7 +155,9 @@ impl App {
         // Initialize system panel system window
         {
             let component = WmSystemPanelComponent::new();
-            let key = app.inner.wm().set_system_window(AppRootComponent::Core(CoreWmComponent::SystemPanel(component)));
+            let key = app.inner.wm().set_system_window(AppRootComponent::Core(
+                CoreWmComponent::SystemPanel(component),
+            ));
             app.inner
                 .wm()
                 .transition_window(key, term_wm::window::WindowState::Unmapped);

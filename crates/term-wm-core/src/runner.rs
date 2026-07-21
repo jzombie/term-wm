@@ -731,9 +731,7 @@ mod tests {
         };
         // Store the KeyRecorder directly in the WindowManager — no sidecar.
         let key = app.wm.create_window(TestComponent::KeyRecorder(
-            crate::window::test_component::KeyRecorder {
-                received_key: None,
-            },
+            crate::window::test_component::KeyRecorder { received_key: None },
         ));
         app.wm
             .transition_window(key, crate::window::WindowState::Mapped);
@@ -759,7 +757,8 @@ mod tests {
             consumed,
             "handle_focused_app_event must route key to component"
         );
-        match app.wm
+        match app
+            .wm
             .component_for_key_mut(key)
             .expect("component must exist")
         {
@@ -828,9 +827,7 @@ mod tests {
             ),
         };
         let key = app.wm.create_window(TestComponent::KeyRecorder(
-            crate::window::test_component::KeyRecorder {
-                received_key: None,
-            },
+            crate::window::test_component::KeyRecorder { received_key: None },
         ));
         app.wm
             .transition_window(key, crate::window::WindowState::Mapped);
@@ -858,12 +855,16 @@ mod tests {
         let consumed = handle_focused_app_event(&evt, &mut app);
         assert!(consumed, "event must route even when direct_mode is true");
         // Verify through the WindowManager that the component received the key
-        match app.wm
+        match app
+            .wm
             .component_for_key_mut(key)
             .expect("component must exist")
         {
             TestComponent::KeyRecorder(recorder) => {
-                assert!(recorder.received_key.is_some(), "component must receive the key");
+                assert!(
+                    recorder.received_key.is_some(),
+                    "component must receive the key"
+                );
             }
             _ => panic!("component must be KeyRecorder"),
         }

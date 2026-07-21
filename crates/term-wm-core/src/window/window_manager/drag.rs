@@ -1,6 +1,6 @@
+use crate::Rect;
 use crate::actions::TermWmAction;
 use crate::components::Component;
-use crate::Rect;
 use term_wm_layout_engine::{EdgeResistance, LayoutRect, detect_corner_snap, detect_edge_snap};
 
 use super::{SnapPreviewState, WindowManager};

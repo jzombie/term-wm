@@ -70,7 +70,12 @@ impl CoreEngine {
     }
 
     /// Generate render regions from current layout state.
-    fn generate_regions<C: Component<TermWmAction>>(&mut self, _width: u32, _height: u32, wm: &mut WindowManager<C>) {
+    fn generate_regions<C: Component<TermWmAction>>(
+        &mut self,
+        _width: u32,
+        _height: u32,
+        wm: &mut WindowManager<C>,
+    ) {
         // 1. Generate terminal window regions
         for &window_key in &wm.managed_draw_order {
             let region = wm.full_region_for_key(window_key);
@@ -131,7 +136,10 @@ impl CoreEngine {
 ///
 /// Extracted as a standalone function so that the geometric circuit-breaker
 /// early return only skips notification layers — not the entire pipeline.
-fn generate_notification_regions<C: Component<TermWmAction>>(plan: &mut DrawPlan, wm: &WindowManager<C>) {
+fn generate_notification_regions<C: Component<TermWmAction>>(
+    plan: &mut DrawPlan,
+    wm: &WindowManager<C>,
+) {
     use std::sync::Arc;
     use textwrap::Options;
 

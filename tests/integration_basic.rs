@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use term_wm::config::AppBuilder;
+use term_wm_core::components::NoopComponent;
 use term_wm_layout_engine::LayoutRect;
 
 #[test]
@@ -22,11 +23,11 @@ fn mouse_capture_flow_through_window_manager() {
             &ctx.app_version,
             None,
         ));
-    let mut wm: term_wm::window::WindowManager = AppBuilder::bare()
+    let mut wm = AppBuilder::bare()
         .app_ctx(ctx)
         .top_panel(top)
         .bottom_panel(bottom)
-        .build()
+        .build::<NoopComponent>()
         .expect("test build");
     // default starts enabled (from config)
     assert!(wm.mouse_capture_enabled());

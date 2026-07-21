@@ -632,7 +632,10 @@ impl Default for DrawPlanRenderer {
 
 // ── Rendering functions (called by render_app in lib.rs) ──────────────
 
-pub fn render_panels<C: Component<TermWmAction>>(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut WindowManager<C>) {
+pub fn render_panels<C: Component<TermWmAction>>(
+    backend: &mut dyn term_wm_render::RenderBackend,
+    wm: &mut WindowManager<C>,
+) {
     let status_line = if wm.command_menu_visible() {
         Some("Tab/Shift-Tab: cycle windows".to_string())
     } else {
@@ -710,7 +713,10 @@ pub fn overlay_shadow_data<C: Component<TermWmAction>>(
 }
 
 /// Render all active overlays (command menu, help, exit confirm).
-pub fn render_overlays<C: Component<TermWmAction>>(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut WindowManager<C>) {
+pub fn render_overlays<C: Component<TermWmAction>>(
+    backend: &mut dyn term_wm_render::RenderBackend,
+    wm: &mut WindowManager<C>,
+) {
     let full_area = wm.managed_area();
 
     // Panel overlay in monocle mode — render BEFORE command menu so the panel
@@ -1589,7 +1595,11 @@ impl ColorConvert for Color {
 /// Uses style-modifier overrides only — no character replacement — so the
 /// underlying text is fully preserved.  The active state (drag/resize) also
 /// inverts an adjacent cell as a visual "badge", clamped to buffer boundaries.
-pub fn render_cursor_overlay<C: Component<TermWmAction>>(buf: &mut Buffer, wm: &WindowManager<C>, _theme: &Theme) {
+pub fn render_cursor_overlay<C: Component<TermWmAction>>(
+    buf: &mut Buffer,
+    wm: &WindowManager<C>,
+    _theme: &Theme,
+) {
     use ratatui::style::Modifier;
 
     // Don't render when mouse capture is disabled — the last hover position
@@ -1621,6 +1631,7 @@ mod tests {
     use ratatui::style::Style;
     use std::sync::Arc;
     use term_wm_core::app_context::AppContext;
+    use term_wm_core::components::NoopComponent;
     use term_wm_core::theme::NOIR;
     use term_wm_core::window::FloatRect;
     use term_wm_core::window::WmButton;
@@ -1843,10 +1854,10 @@ mod tests {
 
     // ── render_cursor_overlay tests ──────────────────────────────────────
 
-    fn make_wm() -> WindowManager {
+    fn make_wm() -> WindowManager<NoopComponent> {
         let config = WmConfig::default();
         let app_ctx = Arc::new(AppContext::new("test", "0.1.0"));
-        WindowManager::with_config(
+        WindowManager::<NoopComponent>::with_config(
             config,
             app_ctx,
             None,

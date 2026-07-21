@@ -19,8 +19,6 @@ use super::OverlayKey;
 use super::WindowKey;
 use super::entry::{Window, WindowState};
 use crate::actions::{EventResult, SystemTask, TermWmAction};
-#[cfg(test)]
-use crate::window::test_component::TestComponent;
 use crate::app_context::AppContext;
 use crate::components::{
     Component, ComponentAction, ComponentContext, MenuItem, Overlay, WmComponent,
@@ -33,6 +31,8 @@ use crate::notification::NotificationQueue;
 use crate::power_profile::PowerProfile;
 use crate::reaper::Reaper;
 use crate::task_scheduler::{TaskHandle, TaskId};
+#[cfg(test)]
+use crate::window::test_component::TestComponent;
 use crate::wm_config::{HintVisibility, WmConfig};
 use term_wm_layout_engine::FocusRing;
 use term_wm_layout_engine::{LayoutRect, apply_resize_drag_signed};
@@ -275,10 +275,7 @@ pub(crate) struct TapSwapState {
 impl<C: Component<TermWmAction>> WindowManager<C> {
     /// Allocate a new window entry in the SlotMap and return its key.
     /// The window starts with default state (no title, not floating, etc.).
-    pub fn create_window(
-        &mut self,
-        component: C,
-    ) -> WindowKey {
+    pub fn create_window(&mut self, component: C) -> WindowKey {
         let order = self.next_window_seq;
         self.next_window_seq = self.next_window_seq.saturating_add(1);
         let component_key = self.components.insert(component);
@@ -1945,10 +1942,7 @@ impl<C: Component<TermWmAction>> WindowManager<C> {
     }
 
     /// Register a component directly on a window in the SlotMap.
-    pub fn set_system_window(
-        &mut self,
-        component: C,
-    ) -> WindowKey {
+    pub fn set_system_window(&mut self, component: C) -> WindowKey {
         let key = self.create_window(component);
         if let Some(w) = self.windows.get_mut(key) {
             w.is_system_window = true;
@@ -1958,20 +1952,14 @@ impl<C: Component<TermWmAction>> WindowManager<C> {
 
     /// Render-phase access: borrow component immutably.
     /// Returns &C — no vtable cast. Callers in generic context get static dispatch.
-    pub fn component_for_key(
-        &self,
-        key: WindowKey,
-    ) -> Option<&C> {
+    pub fn component_for_key(&self, key: WindowKey) -> Option<&C> {
         let w = self.windows.get(key)?;
         self.components.get(w.component_key)
     }
 
     /// Event/update-phase access: borrow component mutably.
     /// Returns &mut C — no vtable cast. Callers in generic context get static dispatch.
-    pub fn component_for_key_mut(
-        &mut self,
-        key: WindowKey,
-    ) -> Option<&mut C> {
+    pub fn component_for_key_mut(&mut self, key: WindowKey) -> Option<&mut C> {
         let w = self.windows.get_mut(key)?;
         self.components.get_mut(w.component_key)
     }
@@ -2463,9 +2451,7 @@ mod tests {
     use crate::events::{KeyModifiers, MouseButton};
     use crate::hitbox_registry::HitboxId;
     use crate::layout::{Constraint, Direction};
-    use crate::window::test_component::{
-        ActionRecorder, KeyRecorder, SelComponent, TestComponent,
-    };
+    use crate::window::test_component::{ActionRecorder, KeyRecorder, SelComponent, TestComponent};
     use std::collections::VecDeque;
     use term_wm_layout_engine::LayoutRect;
 
@@ -3198,8 +3184,7 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let debug_key =
-            wm.set_system_window(TestComponent::Noop(crate::components::NoopComponent));
+        let debug_key = wm.set_system_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.set_panel_visible(false);
         wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(debug_key)));
         wm.register_managed_layout(Rect {
@@ -4452,8 +4437,7 @@ mod tests {
             std::collections::HashMap::new(),
         );
 
-        let debug_key =
-            wm.set_system_window(TestComponent::Noop(crate::components::NoopComponent));
+        let debug_key = wm.set_system_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.set_panel_visible(false);
         wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(debug_key)));
         wm.register_managed_layout(Rect {
@@ -4861,9 +4845,7 @@ mod tests {
         assert!(!wm.direct_mode(key));
 
         // Enable selection on the component
-        let sel = wm
-            .component_for_key_mut(key)
-            .expect("component must exist");
+        let sel = wm.component_for_key_mut(key).expect("component must exist");
         if let TestComponent::SelComponent(sel) = sel {
             sel.enabled = true;
         }
@@ -4880,10 +4862,7 @@ mod tests {
         assert!(result.is_some(), "event must route to window component");
 
         // Verify the component received the event
-        match wm
-            .component_for_key_mut(key)
-            .expect("component must exist")
-        {
+        match wm.component_for_key_mut(key).expect("component must exist") {
             TestComponent::SelComponent(sel) => {
                 assert!(sel.received_down, "component must receive mouse Down");
                 assert!(sel.enabled, "selection_enabled must persist");
@@ -4944,10 +4923,7 @@ mod tests {
         }
 
         // Verify the action reached update()
-        match wm
-            .component_for_key_mut(key)
-            .expect("component must exist")
-        {
+        match wm.component_for_key_mut(key).expect("component must exist") {
             TestComponent::ActionRecorder(recorder) => {
                 assert!(
                     recorder.received_mouse_bytes,
@@ -5008,10 +4984,7 @@ mod tests {
             wm.process_action(k, action);
         }
 
-        match wm
-            .component_for_key_mut(key)
-            .expect("component must exist")
-        {
+        match wm.component_for_key_mut(key).expect("component must exist") {
             TestComponent::ActionRecorder(recorder) => {
                 assert!(
                     recorder.received_mouse_bytes,
