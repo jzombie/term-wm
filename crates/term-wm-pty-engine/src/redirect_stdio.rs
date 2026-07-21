@@ -242,96 +242,96 @@ pub fn redirect_fd_to_tracing(_target_fd: i32, _is_stderr: bool) -> std::io::Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::fd::FromRawFd;
+    #[cfg(windows)]
+    use std::os::windows::io::FromRawHandle;
 
     // ── StderrSuppressGuard ───────────────────────────────────────
 
     #[test]
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn stderr_suppress_guard_suppresses_and_restores() {
-        use std::os::fd::FromRawFd;
+        // ---- platform-specific setup: save + redirect stderr to a pipe ----
+        #[cfg(unix)]
+        let (capture_fd, restore) = {
+            let saved_fd = unsafe { libc::dup(libc::STDERR_FILENO) };
+            assert!(saved_fd >= 0, "dup stderr");
 
-        let saved_fd = unsafe { libc::dup(libc::STDERR_FILENO) };
-        assert!(saved_fd >= 0, "dup stderr");
+            let mut fds: [libc::c_int; 2] = [0; 2];
+            unsafe { assert_eq!(libc::pipe(fds.as_mut_ptr()), 0); }
 
-        let mut fds: [libc::c_int; 2] = [0; 2];
-        unsafe { assert_eq!(libc::pipe(fds.as_mut_ptr()), 0); }
+            unsafe { libc::dup2(fds[1], libc::STDERR_FILENO); }
+            unsafe { libc::close(fds[1]); }
 
-        unsafe { libc::dup2(fds[1], libc::STDERR_FILENO); }
-        unsafe { libc::close(fds[1]); }
+            let restore = move || {
+                unsafe { libc::dup2(saved_fd, libc::STDERR_FILENO); }
+                unsafe { libc::close(saved_fd); }
+            };
 
-        {
-            let _guard = StderrSuppressGuard::new();
-            assert!(_guard.is_some(), "guard creation");
-            unsafe {
-                libc::write(libc::STDERR_FILENO, c"suppressed\n".as_ptr().cast(), 11);
+            (fds[0] as isize, restore)
+        };
+
+        #[cfg(windows)]
+        let (capture_fd, restore) = {
+            extern "system" {
+                fn GetStdHandle(nStdHandle: u32) -> isize;
+                fn SetStdHandle(nStdHandle: u32, hHandle: isize) -> i32;
+                fn CreatePipe(
+                    hReadPipe: *mut isize,
+                    hWritePipe: *mut isize,
+                    lpPipeAttributes: *const std::ffi::c_void,
+                    nSize: u32,
+                ) -> i32;
             }
-        }
+            use std::os::windows::io::AsRawHandle;
+            const STD_ERROR_HANDLE: u32 = 0xFFFFFFF4u32;
 
-        unsafe {
-            libc::write(libc::STDERR_FILENO, c"restored\n".as_ptr().cast(), 9);
-        }
+            let saved_handle = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
 
-        unsafe { libc::dup2(saved_fd, libc::STDERR_FILENO); }
-        unsafe { libc::close(saved_fd); }
+            let mut read_handle: isize = 0;
+            let mut write_handle: isize = 0;
+            unsafe { assert_ne!(CreatePipe(&mut read_handle, &mut write_handle, std::ptr::null(), 0), 0); }
 
-        use std::io::Read;
-        let mut file = unsafe { std::fs::File::from_raw_fd(fds[0]) };
-        let mut output = String::new();
-        file.read_to_string(&mut output).unwrap_or(0);
+            unsafe { SetStdHandle(STD_ERROR_HANDLE, write_handle); }
+            let write_fd = unsafe { libc::open_osfhandle(write_handle, 0) };
+            if write_fd != -1 {
+                unsafe { libc::dup2(write_fd, 2); }
+            }
 
-        assert!(
-            !output.contains("suppressed"),
-            "suppressed output leaked to stderr: {output:?}"
-        );
-        assert!(
-            output.contains("restored"),
-            "restored output missing from stderr: {output:?}"
-        );
-    }
+            let restore = move || {
+                unsafe { SetStdHandle(STD_ERROR_HANDLE, saved_handle); }
+                if write_fd != -1 {
+                    unsafe { libc::close(write_fd); }
+                }
+            };
 
-    #[test]
-    #[cfg(windows)]
-    fn stderr_suppress_guard_suppresses_and_restores() {
-        extern "system" {
-            fn GetStdHandle(nStdHandle: u32) -> isize;
-            fn SetStdHandle(nStdHandle: u32, hHandle: isize) -> i32;
-            fn CreatePipe(
-                hReadPipe: *mut isize,
-                hWritePipe: *mut isize,
-                lpPipeAttributes: *const std::ffi::c_void,
-                nSize: u32,
-            ) -> i32;
-        }
-        use std::os::windows::io::{FromRawHandle, AsRawHandle};
-        const STD_ERROR_HANDLE: u32 = 0xFFFFFFF4u32;
+            (read_handle, restore)
+        };
 
-        let saved_handle = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
-
-        let mut read_handle: isize = 0;
-        let mut write_handle: isize = 0;
-        unsafe { assert_ne!(CreatePipe(&mut read_handle, &mut write_handle, std::ptr::null(), 0), 0); }
-
-        unsafe { SetStdHandle(STD_ERROR_HANDLE, write_handle); }
-        let write_fd = unsafe { libc::open_osfhandle(write_handle, 0) };
-        if write_fd != -1 {
-            unsafe { libc::dup2(write_fd, 2); }
-        }
-
+        // ---- shared assertions ----
         {
             let _guard = StderrSuppressGuard::new();
             assert!(_guard.is_some(), "guard creation");
+
+            #[cfg(unix)]
+            unsafe { libc::write(libc::STDERR_FILENO, c"suppressed\n".as_ptr().cast(), 11); }
+            #[cfg(windows)]
             unsafe { libc::write(2, c"suppressed\n".as_ptr().cast(), 11); }
         }
 
+        #[cfg(unix)]
+        unsafe { libc::write(libc::STDERR_FILENO, c"restored\n".as_ptr().cast(), 9); }
+        #[cfg(windows)]
         unsafe { libc::write(2, c"restored\n".as_ptr().cast(), 9); }
 
-        unsafe { SetStdHandle(STD_ERROR_HANDLE, saved_handle); }
-        if write_fd != -1 {
-            unsafe { libc::close(write_fd); }
-        }
+        restore();
 
         use std::io::Read;
-        let mut file = unsafe { std::fs::File::from_raw_handle(read_handle as _) };
+        #[cfg(unix)]
+        let mut file = unsafe { std::fs::File::from_raw_fd(capture_fd as _) };
+        #[cfg(windows)]
+        let mut file = unsafe { std::fs::File::from_raw_handle(capture_fd as _) };
         let mut output = String::new();
         file.read_to_string(&mut output).unwrap_or(0);
 
@@ -343,46 +343,39 @@ mod tests {
             output.contains("restored"),
             "restored output missing from stderr: {output:?}"
         );
-
-        unsafe { SetStdHandle(STD_ERROR_HANDLE, saved_handle); }
     }
 
     // ── redirect_fd_to_tracing ────────────────────────────────────
 
     #[test]
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn redirect_fd_to_tracing_is_ok_on_pipe() {
-        let mut fds: [libc::c_int; 2] = [0; 2];
-        unsafe { assert_eq!(libc::pipe(fds.as_mut_ptr()), 0); }
+        #[cfg(unix)]
+        let write_fd = {
+            let mut fds: [libc::c_int; 2] = [0; 2];
+            unsafe { assert_eq!(libc::pipe(fds.as_mut_ptr()), 0); }
+            fds[1]
+        };
 
-        let result = redirect_fd_to_tracing(fds[1], true);
-        assert!(result.is_ok(), "redirect_fd_to_tracing returned error: {result:?}");
-
-        unsafe { libc::close(fds[0]); }
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn redirect_fd_to_tracing_is_ok_on_pipe() {
-        extern "system" {
-            fn CreatePipe(
-                hReadPipe: *mut isize,
-                hWritePipe: *mut isize,
-                lpPipeAttributes: *const std::ffi::c_void,
-                nSize: u32,
-            ) -> i32;
-        }
-        let mut read_handle: isize = 0;
-        let mut write_handle: isize = 0;
-        unsafe { assert_ne!(CreatePipe(&mut read_handle, &mut write_handle, std::ptr::null(), 0), 0); }
-
-        let write_fd = unsafe { libc::open_osfhandle(write_handle, 0) };
-        assert!(write_fd != -1, "open_osfhandle");
+        #[cfg(windows)]
+        let write_fd = {
+            extern "system" {
+                fn CreatePipe(
+                    hReadPipe: *mut isize,
+                    hWritePipe: *mut isize,
+                    lpPipeAttributes: *const std::ffi::c_void,
+                    nSize: u32,
+                ) -> i32;
+            }
+            let mut read_handle: isize = 0;
+            let mut write_handle: isize = 0;
+            unsafe { assert_ne!(CreatePipe(&mut read_handle, &mut write_handle, std::ptr::null(), 0), 0); }
+            let fd = unsafe { libc::open_osfhandle(write_handle, 0) };
+            assert!(fd != -1, "open_osfhandle");
+            fd
+        };
 
         let result = redirect_fd_to_tracing(write_fd, true);
         assert!(result.is_ok(), "redirect_fd_to_tracing returned error: {result:?}");
-
-        // write_fd was dup2'd inside redirect_fd_to_tracing — the pipe stays
-        // alive through target_fd; read_handle is owned by the tracing thread.
     }
 }
