@@ -230,15 +230,6 @@ pub trait Component<Msg>: std::any::Any {
     }
 }
 
-/// Helper to downcast a `&mut dyn Component<TermWmAction>` to a concrete type.
-/// This works because `Component<TermWmAction>: Any`.
-pub fn component_downcast_mut<T: 'static>(
-    comp: &mut dyn Component<TermWmAction>,
-) -> Option<&mut T> {
-    let any: &mut dyn std::any::Any = comp;
-    any.downcast_mut::<T>()
-}
-
 /// A component that does nothing — used for chrome-only windows.
 #[derive(Debug)]
 pub struct NoopComponent;

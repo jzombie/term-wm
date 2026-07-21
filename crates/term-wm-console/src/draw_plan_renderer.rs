@@ -377,11 +377,11 @@ impl DrawPlanRenderer {
     }
 
     /// Render a window with offscreen compositing into a target buffer.
-    fn render_window_composite_to_buffer(
+    fn render_window_composite_to_buffer<C: Component<TermWmAction>>(
         &mut self,
         target_buf: &mut Buffer,
         area: Rect,
-        component: &mut dyn Component<TermWmAction>,
+        component: &mut C,
         region: &RenderRegion,
         hitbox_registry: &mut HitboxRegistry,
     ) {
@@ -402,11 +402,11 @@ impl DrawPlanRenderer {
     }
 
     /// Render directly into target buffer (panels, overlays).
-    fn render_direct_to_buffer(
+    fn render_direct_to_buffer<C: Component<TermWmAction>>(
         &mut self,
         target_buf: &mut Buffer,
         area: Rect,
-        component: &mut dyn Component<TermWmAction>,
+        component: &mut C,
         region: &RenderRegion,
     ) {
         let mut buffer = std::mem::replace(&mut self.direct_buffer, Buffer::empty(Rect::ZERO));
@@ -524,11 +524,11 @@ impl DrawPlanRenderer {
     }
 
     /// Render a window with offscreen compositing (swap-based, zero-allocation).
-    fn render_window_composite(
+    fn render_window_composite<C: Component<TermWmAction>>(
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        component: &mut dyn Component<TermWmAction>,
+        component: &mut C,
         region: &RenderRegion,
         hitbox_registry: &mut HitboxRegistry,
     ) {
@@ -561,11 +561,11 @@ impl DrawPlanRenderer {
     }
 
     /// Render directly to frame (panels, overlays).
-    fn render_direct(
+    fn render_direct<C: Component<TermWmAction>>(
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        component: &mut dyn Component<TermWmAction>,
+        component: &mut C,
         region: &RenderRegion,
     ) {
         // Swap direct buffer out
