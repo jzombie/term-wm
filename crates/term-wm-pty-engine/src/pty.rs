@@ -42,7 +42,7 @@ type StatusCallback = Arc<Mutex<Option<Box<dyn Fn(PtyStatus) + Send + Sync>>>>;
 
 // ── Event listener for terminal title / OSC events ───────────────────
 
-pub(crate) struct PtyListener {
+pub struct PtyListener {
     pub pending_title: Arc<Mutex<Option<String>>>,
 }
 

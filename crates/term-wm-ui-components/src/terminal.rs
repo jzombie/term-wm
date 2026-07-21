@@ -5,7 +5,7 @@ use std::sync::Arc;
 use portable_pty::{CommandBuilder, PtySize};
 use ratatui::style::{Color as TColor, Modifier, Style};
 use term_wm_core::events::{Event, KeyCode, KeyKind, MouseButton, MouseEvent, MouseEventKind};
-use vt100::MouseProtocolEncoding;
+use term_wm_pty_engine::pane::{CursorInfo, MouseProtocolEncoding, RgbColor, TerminalCell, TerminalSnapshot};
 
 use crate::helpers::{
     color_to_ratatui, decorate_link_style, layout_rect_to_clipped_rect, localize_coordinate,
@@ -174,17 +174,15 @@ impl Component<TermWmAction> for TerminalComponent {
                 }
                 let area = ctx.screen_area().unwrap_or_default();
                 let mut pane = self.pane.borrow_mut();
-                let parser_arc = pane.shared_parser();
-                let parser = parser_arc.lock().unwrap();
-                let screen = parser.screen();
-                let encoding = screen.mouse_protocol_encoding();
+                let snap = pane.snapshot(area.width, area.height);
+                let encoding = snap.mouse.encoding;
 
                 match encoding {
                     MouseProtocolEncoding::Default | MouseProtocolEncoding::Sgr => {}
                     _ => return EventResult::Ignored,
                 }
 
-                let mode = screen.mouse_protocol_mode();
+                let mode = snap.mouse.mode;
                 let pty_kind = convert_mouse_event_kind(mouse.kind);
                 if !mouse_event_allowed(mode, pty_kind) {
                     return EventResult::Ignored;
@@ -568,10 +566,7 @@ impl TerminalComponent {
         // Call sync_screen() to handle DSR, foreground polling.
         pane.sync_screen();
 
-        // Lock the shared parser once for both link overlay and cell rendering.
-        let parser_arc = pane.shared_parser();
-        let parser = parser_arc.lock().unwrap();
-        let screen = parser.screen();
+        let snap = pane.snapshot(area.width, area.height);
 
         let bytes_seen = pane.bytes_received();
         let signature = OverlaySignature::new(
@@ -596,10 +591,9 @@ impl TerminalComponent {
                 let mut offsets = Vec::with_capacity(visible.width as usize + 1);
                 offsets.push(0);
                 for col in start_col..start_col + visible.width {
-                    let ch = screen
-                        .cell(row, col)
-                        .and_then(|cell| cell.contents().chars().next())
-                        .unwrap_or(' ');
+                    let r = row as usize;
+                    let c = col as usize;
+                    let ch = snap.cells.get(r).and_then(|r| r.get(c)).map(|cell| cell.character).unwrap_or(' ');
                     line.push(ch);
                     offsets.push(line.len());
                 }
@@ -614,9 +608,8 @@ impl TerminalComponent {
             );
         }
 
-        // Hoist loop-invariant color defaults
-        let default_fg = screen.fgcolor();
-        let default_bg = screen.bgcolor();
+        let default_fg = snap.default_fg;
+        let default_bg = snap.default_bg;
 
         let focused = ctx.focused();
         for row in start_row..start_row + visible.height {
@@ -626,9 +619,12 @@ impl TerminalComponent {
                 let viewport_row = row.saturating_sub(start_row) as usize;
                 let viewport_col = col.saturating_sub(start_col) as usize;
 
-                if let Some(cell) = screen.cell(row, col) {
-                    let mut symbol = cell.contents().chars().next().unwrap_or(' ');
-                    let (fg, bg) = resolve_colors_with_defaults(cell, default_fg, default_bg);
+                let r = row as usize;
+                let c = col as usize;
+                if let Some(cell) = snap.cells.get(r).and_then(|r| r.get(c)) {
+                    let mut symbol = cell.character;
+                    let fg = cell.fg.map(|rgb| TColor::Rgb(rgb.r, rgb.g, rgb.b));
+                    let bg = cell.bg.map(|rgb| TColor::Rgb(rgb.r, rgb.g, rgb.b));
                     let mut style = Style::default();
                     if let Some(fg) = fg {
                         style = style.fg(fg);
@@ -636,22 +632,22 @@ impl TerminalComponent {
                     if let Some(bg) = bg {
                         style = style.bg(bg);
                     }
-                    if cell.bold() {
+                    if cell.bold {
                         style = style.add_modifier(Modifier::BOLD);
                     }
-                    if cell.dim() {
+                    if cell.dim {
                         style = style.add_modifier(Modifier::DIM);
                     }
-                    if cell.italic() {
+                    if cell.italic {
                         style = style.add_modifier(Modifier::ITALIC);
                     }
-                    if cell.underline() {
+                    if cell.underline {
                         style = style.add_modifier(Modifier::UNDERLINED);
                     }
-                    if cell.inverse() {
+                    if cell.inverse {
                         style = style.add_modifier(Modifier::REVERSED);
                     }
-                    if cell.is_wide_continuation() {
+                    if cell.wide_continuation {
                         symbol = ' ';
                     }
 
@@ -689,42 +685,18 @@ impl TerminalComponent {
             }
         }
 
-        // Clear dirty and notify reader thread via Condvar.
-        // This is the primary mechanism for I/O burst budget backpressure.
         pane.clear_dirty_and_notify();
 
-        if focused && !screen.hide_cursor() && show_cursor {
-            let (row, col) = screen.cursor_position();
-            if row < area.height
-                && col < area.width
-                && let Some(cell) = buffer.cell_mut((area.x + col, area.y + row))
-            {
-                cell.set_style(cell.style().add_modifier(Modifier::REVERSED));
-            }
+        if focused
+            && let Some(ref cursor) = snap.cursor
+            && !cursor.hidden
+            && show_cursor
+            && cursor.row < area.height
+            && cursor.column < area.width
+            && let Some(cell) = buffer.cell_mut((area.x + cursor.column, area.y + cursor.row))
+        {
+            cell.set_style(cell.style().add_modifier(Modifier::REVERSED));
         }
-    }
-}
-
-/// RAII guard that saves and restores the vt100 scrollback position.
-/// Guarantees restoration even on panic or early return.
-struct ScrollbackGuard<'a> {
-    screen: &'a mut vt100::Screen,
-    original_offset: usize,
-}
-
-impl<'a> ScrollbackGuard<'a> {
-    fn new(screen: &'a mut vt100::Screen) -> Self {
-        let original_offset = screen.scrollback();
-        Self {
-            screen,
-            original_offset,
-        }
-    }
-}
-
-impl<'a> Drop for ScrollbackGuard<'a> {
-    fn drop(&mut self) {
-        self.screen.set_scrollback(self.original_offset);
     }
 }
 
@@ -806,84 +778,52 @@ impl TerminalComponent {
 
     fn selection_text_for_range(&self, range: SelectionRange) -> Option<String> {
         let mut pane = self.pane.borrow_mut();
+        let max_sb = pane.max_scrollback();
 
-        // 1. SAFE EXTRACTION: Get max_scrollback BEFORE locking the parser
-        // This prevents Mutex deadlocks if the pane internally accesses the parser.
-        let max_scrollback = pane.max_scrollback();
-
-        let parser_arc = pane.shared_parser();
-        let mut parser = parser_arc.lock().unwrap();
-        let screen = parser.screen_mut();
-
-        let (viewport_rows, cols) = screen.size();
-        if viewport_rows == 0 || cols == 0 {
-            return None;
-        }
-
-        let guard = ScrollbackGuard::new(screen);
-
-        // 2. BOUNDED PROBE: Use the known max_scrollback instead of usize::MAX.
-        // This prevents O(N) CPU hangs and integer overflow panics.
-        guard.screen.set_scrollback(max_scrollback);
-        let vt100_max_scrollback = guard.screen.scrollback();
-        let vt100_total_lines = vt100_max_scrollback + viewport_rows as usize;
-
-        // Map Pane coordinates to vt100 coordinates
-        let offset_from_pane_to_vt100 = max_scrollback.saturating_sub(vt100_max_scrollback);
+        // Capture the current scrollback state and restore on drop.
+        let saved_sb = pane.scrollback();
 
         let mut end_row = range.end.row;
         let mut end_col = range.end.column;
         if end_col == 0 && end_row > range.start.row {
             end_row = end_row.saturating_sub(1);
-            end_col = cols as usize;
-        }
-
-        let vt100_start_row = range.start.row.saturating_sub(offset_from_pane_to_vt100);
-        let vt100_end_row = end_row.saturating_sub(offset_from_pane_to_vt100);
-
-        // Clamp to actual vt100 bounds
-        let vt100_start_row = vt100_start_row.min(vt100_total_lines.saturating_sub(1));
-        let vt100_end_row = vt100_end_row.min(vt100_total_lines.saturating_sub(1));
-        let start_col = range.start.column.min(cols as usize);
-        let end_col = end_col.min(cols as usize);
-
-        if vt100_end_row < vt100_start_row {
-            return None;
+            end_col = pane.snapshot(1, 1).columns as usize;
         }
 
         let mut result = String::new();
+        for absolute_row in range.start.row..=end_row {
+            // Scroll to the appropriate position.  The offset from the
+            // bottom of the scrollback is (max_sb - absolute_row).
+            let offset = max_sb.saturating_sub(absolute_row);
+            pane.set_scrollback(offset);
 
-        // Paginate using the translated vt100 coordinates
-        for absolute_row in vt100_start_row..=vt100_end_row {
-            let viewport_start = absolute_row.min(vt100_max_scrollback);
-            let offset = vt100_max_scrollback - viewport_start;
-            guard.screen.set_scrollback(offset);
+            let snap = pane.snapshot(u16::MAX, u16::MAX);
+            let cols = snap.columns as usize;
 
-            let viewport_row = (absolute_row - viewport_start) as u16;
-
-            let col_start = if absolute_row == vt100_start_row {
-                start_col as u16
+            let col_start = if absolute_row == range.start.row {
+                range.start.column
             } else {
                 0
             };
-
-            let col_end = if absolute_row == vt100_end_row {
-                end_col as u16
+            let col_end = if absolute_row == end_row {
+                end_col
             } else {
                 cols
             };
 
-            let line =
-                guard
-                    .screen
-                    .contents_between(viewport_row, col_start, viewport_row, col_end);
-            result.push_str(&line);
-
-            if absolute_row < vt100_end_row {
+            for c in col_start..col_end {
+                if let Some(row_cells) = snap.cells.get(0) {
+                    if let Some(cell) = row_cells.get(c) {
+                        result.push(cell.character);
+                    }
+                }
+            }
+            if absolute_row < end_row {
                 result.push('\n');
             }
         }
 
+        pane.set_scrollback(saved_sb);
         Some(result)
     }
 
@@ -1002,53 +942,6 @@ impl SelectionHost for RenderDragHost<'_> {
 }
 
 #[allow(dead_code)]
-fn resolve_colors(cell: &vt100::Cell, screen: &vt100::Screen) -> (Option<TColor>, Option<TColor>) {
-    let mut fg = resolve_color(cell.fgcolor(), screen.fgcolor());
-    let bg = resolve_color(cell.bgcolor(), screen.bgcolor());
-    if cell.bold() {
-        fg = brighten_indexed(fg);
-    }
-    (fg, bg)
-}
-
-/// Like `resolve_colors` but takes pre-computed default fg/bg colors
-/// to avoid redundant `screen.fgcolor()`/`bgcolor()` calls per cell.
-fn resolve_colors_with_defaults(
-    cell: &vt100::Cell,
-    default_fg: vt100::Color,
-    default_bg: vt100::Color,
-) -> (Option<TColor>, Option<TColor>) {
-    let mut fg = resolve_color(cell.fgcolor(), default_fg);
-    let bg = resolve_color(cell.bgcolor(), default_bg);
-    if cell.bold() {
-        fg = brighten_indexed(fg);
-    }
-    (fg, bg)
-}
-
-fn vt_color_to_ratatui(color: vt100::Color) -> Option<TColor> {
-    #[allow(unused_imports)]
-    use term_wm_core::term_color::map_rgb_to_color;
-    match color {
-        vt100::Color::Default => None,
-        vt100::Color::Idx(idx) => Some(TColor::Indexed(idx)),
-        vt100::Color::Rgb(r, g, b) => Some(crate::helpers::map_rgb_to_ratatui(r, g, b)),
-    }
-}
-
-fn resolve_color(color: vt100::Color, screen_default: vt100::Color) -> Option<TColor> {
-    match color {
-        vt100::Color::Default => match screen_default {
-            // Default to Reset (No Color) which ratatui treats as "Inherit" or "Transparent" usually.
-            // But since this is a Terminal component, we treat Default as Black/Opaque if undefined,
-            // otherwise we risk bleeding through windows underneath.
-            vt100::Color::Default => None,
-            other => vt_color_to_ratatui(other),
-        },
-        other => vt_color_to_ratatui(other),
-    }
-}
-
 fn brighten_indexed(color: Option<TColor>) -> Option<TColor> {
     match color {
         Some(TColor::Indexed(idx)) if idx < 8 => Some(TColor::Indexed(idx + 8)),
@@ -1060,7 +953,7 @@ fn brighten_indexed(color: Option<TColor>) -> Option<TColor> {
 /// real PTY process.
 #[cfg(test)]
 struct TestPane {
-    parser: std::sync::Arc<std::sync::Mutex<vt100::Parser>>,
+    pane: Box<dyn Pane>,
     current_scrollback: usize,
     max_sb: usize,
     alt_screen: bool,
@@ -1072,7 +965,7 @@ struct TestPane {
 impl TestPane {
     fn new(max_sb: usize) -> Self {
         Self {
-            parser: std::sync::Arc::new(std::sync::Mutex::new(vt100::Parser::new(24, 80, max_sb))),
+            pane: Box::new(crate::test_helpers::new_terminal(24, 80, max_sb)),
             current_scrollback: 0,
             max_sb,
             alt_screen: false,
@@ -1084,7 +977,7 @@ impl TestPane {
     fn with_kill_tracker(max_sb: usize) -> (Self, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         let kill_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let pane = Self {
-            parser: std::sync::Arc::new(std::sync::Mutex::new(vt100::Parser::new(24, 80, max_sb))),
+            pane: Box::new(crate::test_helpers::new_terminal(24, 80, max_sb)),
             current_scrollback: 0,
             max_sb,
             alt_screen: false,
@@ -1140,8 +1033,8 @@ impl Pane for TestPane {
         Ok(())
     }
 
-    fn shared_parser(&mut self) -> std::sync::Arc<std::sync::Mutex<vt100::Parser>> {
-        self.parser.clone()
+    fn snapshot(&mut self, columns: u16, rows: u16) -> term_wm_pty_engine::pane::TerminalSnapshot {
+        self.pane.snapshot(columns, rows)
     }
 
     fn max_scrollback(&mut self) -> usize {
@@ -1564,28 +1457,7 @@ mod tests {
     }
 
     #[test]
-    fn vt_color_and_resolve_color() {
-        assert_eq!(vt_color_to_ratatui(vt100::Color::Default), None);
-        assert_eq!(
-            vt_color_to_ratatui(vt100::Color::Idx(5)),
-            Some(TColor::Indexed(5))
-        );
-        // RGB passthrough depends on COLORTERM truecolor support;
-        // on terminals without it, vt100::Color::Rgb maps to a nearest
-        // indexed color. Assert the function produces *some* color.
-        assert!(vt_color_to_ratatui(vt100::Color::Rgb(1, 2, 3)).is_some());
-
-        // resolve_color: when both default -> None
-        assert_eq!(
-            resolve_color(vt100::Color::Default, vt100::Color::Default),
-            None
-        );
-        // when screen default is idx, default maps to that
-        assert_eq!(
-            resolve_color(vt100::Color::Default, vt100::Color::Idx(7)),
-            Some(TColor::Indexed(7))
-        );
-    }
+    
 
     #[test]
     fn brighten_indexed_moves_0_7_to_8_15() {

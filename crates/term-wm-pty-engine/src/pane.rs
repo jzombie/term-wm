@@ -8,7 +8,7 @@ use crate::{PtyResult, PtyStatus};
 
 // ── terminal-agnostic types ──────────────────────────────────────────
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RgbColor {
     pub r: u8,
     pub g: u8,
