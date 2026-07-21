@@ -1,6 +1,5 @@
+use super::ComponentKey;
 use super::FloatRectSpec;
-use crate::actions::TermWmAction;
-use crate::components::Component;
 use crate::hitbox_registry::HitboxId;
 
 /// Canonical window lifecycle states.
@@ -40,9 +39,8 @@ pub struct Window {
     pub borders_enabled: bool,
     /// Render window header (title bar, buttons).
     pub header_enabled: bool,
-    /// The renderable component. Every window has one.
-    /// For chrome-only windows, use `NoopComponent`.
-    pub component: Box<dyn Component<TermWmAction>>,
+    /// Key into the WindowManager's component arena.
+    pub component_key: ComponentKey,
     /// Persistent HitboxId for the window's content area.
     pub content_hitbox_id: HitboxId,
     /// Which leaf component within this window currently holds keyboard focus.
@@ -52,7 +50,7 @@ pub struct Window {
 }
 
 impl Window {
-    pub fn new(creation_order: usize, component: Box<dyn Component<TermWmAction>>) -> Self {
+    pub fn new(creation_order: usize, component_key: ComponentKey) -> Self {
         Self {
             title: None,
             title_set_order: None,
@@ -65,7 +63,7 @@ impl Window {
             is_maximized: false,
             borders_enabled: true,
             header_enabled: true,
-            component,
+            component_key,
             content_hitbox_id: HitboxId::new(),
             active_keyboard_focus: None,
         }

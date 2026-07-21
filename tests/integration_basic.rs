@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use term_wm::config::AppBuilder;
+use term_wm_core::components::{NoopComponent, NoopOverlay};
 use term_wm_layout_engine::LayoutRect;
+use term_wm_ui_facade::layer_component::LayerComponent;
 
 #[test]
 fn default_shell_nonempty() {
@@ -13,20 +15,15 @@ fn default_shell_nonempty() {
 #[test]
 fn mouse_capture_flow_through_window_manager() {
     let ctx = Arc::new(term_wm::AppContext::new("test", "0.0.0"));
-    let top: Box<dyn term_wm_core::components::WmComponent> = Box::new(
-        term_wm_sys_ui_components::WmTopPanelComponent::new(&ctx.app_name),
-    );
-    let bottom: Box<dyn term_wm_core::components::WmComponent> =
-        Box::new(term_wm_sys_ui_components::WmBottomPanelComponent::new(
-            &ctx.app_name,
-            &ctx.app_version,
-            None,
-        ));
-    let mut wm: term_wm::window::WindowManager = AppBuilder::bare()
+    let mut wm = AppBuilder::<LayerComponent>::bare()
         .app_ctx(ctx)
-        .top_panel(top)
-        .bottom_panel(bottom)
-        .build()
+        .top_panel(LayerComponent::TopPanel(
+            term_wm_sys_ui_components::WmTopPanelComponent::new("test"),
+        ))
+        .bottom_panel(LayerComponent::BottomPanel(
+            term_wm_sys_ui_components::WmBottomPanelComponent::new("test", "0.0.0", None),
+        ))
+        .build::<NoopComponent, NoopOverlay>()
         .expect("test build");
     // default starts enabled (from config)
     assert!(wm.mouse_capture_enabled());

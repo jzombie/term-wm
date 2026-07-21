@@ -1,5 +1,6 @@
 pub mod decorator;
 mod entry;
+pub mod test_component;
 mod window_manager;
 
 use crate::Rect;
@@ -13,6 +14,11 @@ pub type WindowKey = slotmap::DefaultKey;
 slotmap::new_key_type! {
     /// Slotmap-backed generational key used for overlay identification.
     pub struct OverlayKey;
+}
+
+slotmap::new_key_type! {
+    /// Slotmap-backed generational key used for component arena lookup.
+    pub struct ComponentKey;
 }
 
 pub use entry::WindowState;

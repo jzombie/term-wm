@@ -6,7 +6,7 @@ use term_wm_layout_engine::LayoutRect;
 use crate::RatatuiBackend;
 use term_wm_core::actions::TermWmAction;
 use term_wm_core::component_context::ComponentContext;
-use term_wm_core::components::{Component, ComponentAction, TopPanelState};
+use term_wm_core::components::{Component, ComponentAction, Overlay, TopPanelState, WmComponent};
 use term_wm_core::constants::{SHADOW_OFFSET_X, SHADOW_OFFSET_Y};
 use term_wm_core::draw_plan::{DrawPlan, RegionType, RenderRegion, ZLayer};
 use term_wm_core::hitbox_registry::{HitboxId, HitboxRegistry};
@@ -306,11 +306,11 @@ impl DrawPlanRenderer {
     }
 
     /// Render the draw plan directly to a buffer (no Frame needed).
-    pub fn render_to_buffer(
+    pub fn render_to_buffer<C: Component<TermWmAction>>(
         &mut self,
         target_buf: &mut Buffer,
         draw_plan: &DrawPlan,
-        wm: &mut WindowManager,
+        wm: &mut WindowManager<C>,
         hitbox_registry: &mut HitboxRegistry,
     ) {
         for region in draw_plan.regions() {
@@ -377,11 +377,11 @@ impl DrawPlanRenderer {
     }
 
     /// Render a window with offscreen compositing into a target buffer.
-    fn render_window_composite_to_buffer(
+    fn render_window_composite_to_buffer<C: Component<TermWmAction>>(
         &mut self,
         target_buf: &mut Buffer,
         area: Rect,
-        component: &mut dyn Component<TermWmAction>,
+        component: &mut C,
         region: &RenderRegion,
         hitbox_registry: &mut HitboxRegistry,
     ) {
@@ -402,11 +402,11 @@ impl DrawPlanRenderer {
     }
 
     /// Render directly into target buffer (panels, overlays).
-    fn render_direct_to_buffer(
+    fn render_direct_to_buffer<C: Component<TermWmAction>>(
         &mut self,
         target_buf: &mut Buffer,
         area: Rect,
-        component: &mut dyn Component<TermWmAction>,
+        component: &mut C,
         region: &RenderRegion,
     ) {
         let mut buffer = std::mem::replace(&mut self.direct_buffer, Buffer::empty(Rect::ZERO));
@@ -455,11 +455,11 @@ impl DrawPlanRenderer {
 
     /// Render the draw plan to the terminal frame.
     /// This is the ONLY place where Ratatui types are used for rendering.
-    pub fn render(
+    pub fn render<C: Component<TermWmAction>>(
         &mut self,
         frame: &mut Frame,
         draw_plan: &DrawPlan,
-        wm: &mut WindowManager,
+        wm: &mut WindowManager<C>,
         hitbox_registry: &mut HitboxRegistry,
     ) {
         for region in draw_plan.regions() {
@@ -524,11 +524,11 @@ impl DrawPlanRenderer {
     }
 
     /// Render a window with offscreen compositing (swap-based, zero-allocation).
-    fn render_window_composite(
+    fn render_window_composite<C: Component<TermWmAction>>(
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        component: &mut dyn Component<TermWmAction>,
+        component: &mut C,
         region: &RenderRegion,
         hitbox_registry: &mut HitboxRegistry,
     ) {
@@ -561,11 +561,11 @@ impl DrawPlanRenderer {
     }
 
     /// Render directly to frame (panels, overlays).
-    fn render_direct(
+    fn render_direct<C: Component<TermWmAction>>(
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        component: &mut dyn Component<TermWmAction>,
+        component: &mut C,
         region: &RenderRegion,
     ) {
         // Swap direct buffer out
@@ -632,7 +632,10 @@ impl Default for DrawPlanRenderer {
 
 // ── Rendering functions (called by render_app in lib.rs) ──────────────
 
-pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut WindowManager) {
+pub fn render_panels<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>>(
+    backend: &mut dyn term_wm_render::RenderBackend,
+    wm: &mut WindowManager<C, L, O>,
+) {
     let status_line = if wm.command_menu_visible() {
         Some("Tab/Shift-Tab: cycle windows".to_string())
     } else {
@@ -693,8 +696,8 @@ pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut W
 
 /// Returns (shadow_rect, z_depth) pairs for all visible overlays
 /// that request a drop shadow.
-pub fn overlay_shadow_data(
-    wm: &WindowManager,
+pub fn overlay_shadow_data<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>>(
+    wm: &WindowManager<C, L, O>,
     area: LayoutRect,
     z_base: usize,
     z_total: usize,
@@ -702,7 +705,7 @@ pub fn overlay_shadow_data(
     let mut data = Vec::new();
     for (idx, (_, overlay)) in wm.overlays().iter().enumerate() {
         if let Some(rect) = overlay.shadow_rect(area) {
-            let z = WindowManager::compute_z_depth(z_base + idx, z_total);
+            let z = WindowManager::<C, L, O>::compute_z_depth(z_base + idx, z_total);
             data.push((rect, z));
         }
     }
@@ -710,7 +713,10 @@ pub fn overlay_shadow_data(
 }
 
 /// Render all active overlays (command menu, help, exit confirm).
-pub fn render_overlays(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut WindowManager) {
+pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>>(
+    backend: &mut dyn term_wm_render::RenderBackend,
+    wm: &mut WindowManager<C, L, O>,
+) {
     let full_area = wm.managed_area();
 
     // Panel overlay in monocle mode — render BEFORE command menu so the panel
@@ -1589,7 +1595,15 @@ impl ColorConvert for Color {
 /// Uses style-modifier overrides only — no character replacement — so the
 /// underlying text is fully preserved.  The active state (drag/resize) also
 /// inverts an adjacent cell as a visual "badge", clamped to buffer boundaries.
-pub fn render_cursor_overlay(buf: &mut Buffer, wm: &WindowManager, _theme: &Theme) {
+pub fn render_cursor_overlay<
+    C: Component<TermWmAction>,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+>(
+    buf: &mut Buffer,
+    wm: &WindowManager<C, L, O>,
+    _theme: &Theme,
+) {
     use ratatui::style::Modifier;
 
     // Don't render when mouse capture is disabled — the last hover position
@@ -1621,6 +1635,7 @@ mod tests {
     use ratatui::style::Style;
     use std::sync::Arc;
     use term_wm_core::app_context::AppContext;
+    use term_wm_core::components::NoopComponent;
     use term_wm_core::theme::NOIR;
     use term_wm_core::window::FloatRect;
     use term_wm_core::window::WmButton;
@@ -1843,10 +1858,10 @@ mod tests {
 
     // ── render_cursor_overlay tests ──────────────────────────────────────
 
-    fn make_wm() -> WindowManager {
+    fn make_wm() -> WindowManager<NoopComponent> {
         let config = WmConfig::default();
         let app_ctx = Arc::new(AppContext::new("test", "0.1.0"));
-        WindowManager::with_config(
+        WindowManager::<NoopComponent>::with_config(
             config,
             app_ctx,
             None,

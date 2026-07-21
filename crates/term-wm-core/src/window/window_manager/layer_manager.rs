@@ -73,8 +73,8 @@ pub enum ComponentTag {
 /// ```text
 /// Foreground Layers → Windows → Background Layers
 /// ```
-pub struct LayerManager {
-    layers: HashMap<LayerId, Box<dyn WmComponent>>,
+pub struct LayerManager<L: WmComponent = crate::components::NoopWmComponent> {
+    layers: HashMap<LayerId, L>,
     background_order: Vec<LayerId>,
     foreground_order: Vec<LayerId>,
     /// Isolated keyboard focus for foreground layers.
@@ -82,7 +82,7 @@ pub struct LayerManager {
     pub active_keyboard_focus: Option<HitboxId>,
 }
 
-impl LayerManager {
+impl<L: WmComponent> LayerManager<L> {
     pub fn new() -> Self {
         Self {
             layers: HashMap::new(),
@@ -94,7 +94,7 @@ impl LayerManager {
 
     /// Insert a component into the specified Z-plane.
     #[allow(dead_code)]
-    pub fn insert(&mut self, comp: Box<dyn WmComponent>, plane: ZPlane) -> LayerId {
+    pub fn insert(&mut self, comp: L, plane: ZPlane) -> LayerId {
         let id = LayerId::new();
         self.layers.insert(id, comp);
         match plane {
@@ -112,13 +112,13 @@ impl LayerManager {
     }
 
     /// Get an immutable reference to a layer component.
-    pub fn get(&self, id: LayerId) -> Option<&dyn WmComponent> {
-        self.layers.get(&id).map(|c| c.as_ref())
+    pub fn get(&self, id: LayerId) -> Option<&L> {
+        self.layers.get(&id)
     }
 
     /// Get a mutable reference to a layer component.
-    pub fn get_mut(&mut self, id: LayerId) -> Option<&mut dyn WmComponent> {
-        self.layers.get_mut(&id).map(|c| c.as_mut())
+    pub fn get_mut(&mut self, id: LayerId) -> Option<&mut L> {
+        self.layers.get_mut(&id)
     }
 
     /// Dispatch foreground layers (front-to-back = reverse render order).
@@ -195,7 +195,7 @@ impl LayerManager {
     }
 }
 
-impl Default for LayerManager {
+impl<L: WmComponent> Default for LayerManager<L> {
     fn default() -> Self {
         Self::new()
     }

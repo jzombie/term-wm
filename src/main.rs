@@ -4,7 +4,9 @@ use std::sync::{Arc, OnceLock};
 use clap::Parser;
 use crossbeam_channel::Sender;
 
+use term_wm::actions::TermWmAction;
 use term_wm::app_context::AppContext;
+use term_wm::components::AppRootComponent;
 use term_wm::config::AppBuilder;
 use term_wm::io::RenderTarget;
 use term_wm::runner::WindowManagerHost;
@@ -16,10 +18,13 @@ use term_wm::{
     PtyStatus, ScrollKeyMode, ScrollViewComponent, TerminalComponent, default_shell_command,
 };
 use term_wm_console::console_render_target::ConsoleRenderTarget;
+use term_wm_core::components::Component;
 use term_wm_sys_ui_components::WmSystemPanelComponent;
 use term_wm_sys_ui_components::wm_debug_log::{
     WmDebugLogComponent, install_panic_hook, set_global_debug_log,
 };
+use term_wm_ui_facade::core_component::CoreWmComponent;
+use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 
 /// Simple CLI for launching `term-wm` with optional commands / window count.
 #[derive(Parser, Debug)]
@@ -98,25 +103,27 @@ impl App {
         let app_version = app_ctx.app_version.clone();
 
         let wm = if embedded {
-            AppBuilder::bare()
+            AppBuilder::<LayerComponent>::bare()
                 .config(WmConfig::minimal())
                 .app_ctx(Arc::clone(&app_ctx))
                 .build()
                 .expect("embedded build")
         } else {
-            AppBuilder::bare()
+            AppBuilder::<LayerComponent>::bare()
                 .app_ctx(Arc::clone(&app_ctx))
-                .top_panel(Box::new(
+                .top_panel(LayerComponent::TopPanel(
                     term_wm_sys_ui_components::WmTopPanelComponent::new(&app_name),
                 ))
-                .bottom_panel(Box::new(
+                .bottom_panel(LayerComponent::BottomPanel(
                     term_wm_sys_ui_components::WmBottomPanelComponent::new(
                         &app_name,
                         &app_version,
                         hostname,
                     ),
                 ))
-                .fab(Box::new(term_wm_sys_ui_components::WmFabComponent::new()))
+                .fab(LayerComponent::Fab(
+                    term_wm_sys_ui_components::WmFabComponent::new(),
+                ))
                 .build()
                 .expect("standalone build")
         };
@@ -136,7 +143,10 @@ impl App {
             let (mut component, handle) = WmDebugLogComponent::new_default();
             component.set_selection_enabled(app.inner.wm().clipboard_enabled());
             set_global_debug_log(handle);
-            let debug_key = app.inner.wm().set_system_window(Box::new(component));
+            let debug_key = app
+                .inner
+                .wm()
+                .set_system_window(AppRootComponent::Core(CoreWmComponent::DebugLog(component)));
             app.inner
                 .wm()
                 .transition_window(debug_key, term_wm::window::WindowState::Unmapped);
@@ -149,7 +159,9 @@ impl App {
         // Initialize system panel system window
         {
             let component = WmSystemPanelComponent::new();
-            let key = app.inner.wm().set_system_window(Box::new(component));
+            let key = app.inner.wm().set_system_window(AppRootComponent::Core(
+                CoreWmComponent::SystemPanel(component),
+            ));
             app.inner
                 .wm()
                 .transition_window(key, term_wm::window::WindowState::Unmapped);
@@ -225,7 +237,7 @@ impl App {
         let mut sv = ScrollViewComponent::new(pane);
         sv.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
         let wm = self.inner.wm();
-        let key = wm.create_window(Box::new(sv));
+        let key = wm.create_window(AppRootComponent::Core(CoreWmComponent::Terminal(sv)));
         wm.transition_window(key, term_wm::window::WindowState::Mapped);
 
         // The key is now known — store it so the callback can use it.
@@ -253,8 +265,11 @@ impl App {
     }
 }
 
-impl WindowManagerHost for App {
-    fn wm(&mut self) -> &mut term_wm::window::WindowManager {
+impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for App {
+    fn wm(
+        &mut self,
+    ) -> &mut term_wm::window::WindowManager<AppRootComponent, LayerComponent, OverlayComponent>
+    {
         self.inner.wm()
     }
 
@@ -265,7 +280,7 @@ impl WindowManagerHost for App {
         let mut h = WmHelpOverlayComponent::new(wm.app_ctx(), kb);
         h.show();
         h.set_selection_enabled(wm.clipboard_enabled());
-        wm.open_help_overlay(Box::new(h));
+        wm.open_help_overlay(OverlayComponent::Help(h));
     }
 
     fn open_exit_confirm(&mut self) {
@@ -275,11 +290,12 @@ impl WindowManagerHost for App {
             "Exit App",
             "Exit the application?\nUnsaved changes will be lost.",
         );
-        self.inner.wm().open_exit_confirm_overlay(Box::new(confirm));
+        self.inner
+            .wm()
+            .open_exit_confirm_overlay(OverlayComponent::ExitConfirm(confirm));
     }
 
     fn open_command_palette(&mut self) {
-        use term_wm::actions::TermWmAction;
         use term_wm_sys_ui_components::wm_command_palette::WmCommandPaletteComponent;
         let wm = self.inner.wm();
         let mut palette = WmCommandPaletteComponent::new();
@@ -294,7 +310,7 @@ impl WindowManagerHost for App {
             })
             .collect();
         palette.set_items(items);
-        wm.open_command_palette_overlay(Box::new(palette));
+        wm.open_command_palette_overlay(OverlayComponent::CommandPalette(palette));
     }
 
     fn on_panic(&mut self) {
@@ -355,7 +371,7 @@ impl WindowManagerHost for App {
         let mut sv = ScrollViewComponent::new(pane);
         sv.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
         let wm = self.inner.wm();
-        let key = wm.create_window(Box::new(sv));
+        let key = wm.create_window(AppRootComponent::Core(CoreWmComponent::Terminal(sv)));
         wm.transition_window(key, term_wm::window::WindowState::Mapped);
 
         // The key is now known — store it so the callback can use it.
