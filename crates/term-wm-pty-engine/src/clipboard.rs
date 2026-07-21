@@ -69,10 +69,7 @@ struct StderrSuppressGuard {
 impl StderrSuppressGuard {
     fn new() -> Option<Self> {
         unsafe {
-            let null_fd = open(
-                "/dev/null\0".as_ptr() as *const libc::c_char,
-                libc::O_WRONLY,
-            );
+            let null_fd = open(c"/dev/null".as_ptr(), libc::O_WRONLY);
             if null_fd < 0 {
                 return None;
             }
@@ -173,7 +170,10 @@ impl Clipboard {
         }
 
         // Also write via arboard for the local case.
+        // macOS AppKit/NSPasteboard writes debug spam to stderr when
+        // setting the clipboard — suppress it to prevent terminal junk.
         if let Some(cb) = &mut self.arboard {
+            let _guard = StderrSuppressGuard::new();
             let _ = cb.set_text(text.to_owned());
         }
 
