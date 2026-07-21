@@ -433,22 +433,14 @@ impl DrawPlanRenderer {
         area: Rect,
         msg: &str,
     ) {
-        use ratatui::style::{Color, Modifier, Style};
-        use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Widget, Wrap};
+        use ratatui::style::{Color, Style};
+        use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget, Wrap};
 
         let Some(rb) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() else {
             return;
         };
         let buf = &mut rb.buffer;
-
-        // Dim the underlying content instead of clearing it
-        for y in area.y..area.y.saturating_add(area.height) {
-            for x in area.x..area.x.saturating_add(area.width) {
-                if let Some(cell) = buf.cell_mut((x, y)) {
-                    cell.modifier.insert(Modifier::DIM);
-                }
-            }
-        }
+        Clear.render(area, buf);
 
         let block = Block::default()
             .borders(Borders::ALL)
