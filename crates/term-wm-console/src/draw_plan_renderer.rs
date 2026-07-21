@@ -1595,7 +1595,11 @@ impl ColorConvert for Color {
 /// Uses style-modifier overrides only — no character replacement — so the
 /// underlying text is fully preserved.  The active state (drag/resize) also
 /// inverts an adjacent cell as a visual "badge", clamped to buffer boundaries.
-pub fn render_cursor_overlay<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>>(
+pub fn render_cursor_overlay<
+    C: Component<TermWmAction>,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+>(
     buf: &mut Buffer,
     wm: &WindowManager<C, L, O>,
     _theme: &Theme,

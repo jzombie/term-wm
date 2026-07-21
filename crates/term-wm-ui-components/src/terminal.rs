@@ -1889,7 +1889,11 @@ mod tests {
         sv.set_selection_enabled(true);
         sv.set_keyboard_mode(crate::scroll_view::ScrollKeyMode::PaginationOnly);
 
-        let mut wm: term_wm_core::window::WindowManager<crate::scroll_view::ScrollViewComponent<TerminalComponent>, NoopWmComponent, NoopOverlay> = AppBuilder::<NoopWmComponent>::bare()
+        let mut wm: term_wm_core::window::WindowManager<
+            crate::scroll_view::ScrollViewComponent<TerminalComponent>,
+            NoopWmComponent,
+            NoopOverlay,
+        > = AppBuilder::<NoopWmComponent>::bare()
             .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
             .build()
             .expect("test build");
@@ -1981,7 +1985,11 @@ mod tests {
         sv.set_selection_enabled(true);
         sv.set_keyboard_mode(crate::scroll_view::ScrollKeyMode::PaginationOnly);
 
-        let mut wm: term_wm_core::window::WindowManager<crate::scroll_view::ScrollViewComponent<TerminalComponent>, NoopWmComponent, NoopOverlay> = AppBuilder::<NoopWmComponent>::bare()
+        let mut wm: term_wm_core::window::WindowManager<
+            crate::scroll_view::ScrollViewComponent<TerminalComponent>,
+            NoopWmComponent,
+            NoopOverlay,
+        > = AppBuilder::<NoopWmComponent>::bare()
             .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
             .build()
             .expect("test build");

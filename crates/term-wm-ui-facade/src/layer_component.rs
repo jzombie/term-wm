@@ -12,8 +12,8 @@ use term_wm_core::hitbox_registry::HitboxId;
 use term_wm_core::window::WindowKey;
 use term_wm_render::RenderBackend;
 use term_wm_sys_ui_components::{
-    WmBottomPanelComponent, WmCommandPaletteComponent, WmFabComponent,
-    WmNotificationAreaComponent, WmTopPanelComponent,
+    WmBottomPanelComponent, WmCommandPaletteComponent, WmFabComponent, WmNotificationAreaComponent,
+    WmTopPanelComponent,
 };
 
 #[allow(clippy::large_enum_variant)]
@@ -68,7 +68,11 @@ impl Component<TermWmAction> for LayerComponent {
         }
     }
 
-    fn handle_events(&mut self, event: &Event, ctx: &ComponentContext) -> EventResult<TermWmAction> {
+    fn handle_events(
+        &mut self,
+        event: &Event,
+        ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
         match self {
             Self::TopPanel(c) => c.handle_events(event, ctx),
             Self::BottomPanel(c) => c.handle_events(event, ctx),
@@ -80,8 +84,11 @@ impl Component<TermWmAction> for LayerComponent {
 
     fn on_mouse_press(
         &mut self,
-        col: u16, row: u16, button: term_wm_core::events::MouseButton,
-        modifiers: term_wm_core::events::KeyModifiers, ctx: &ComponentContext,
+        col: u16,
+        row: u16,
+        button: term_wm_core::events::MouseButton,
+        modifiers: term_wm_core::events::KeyModifiers,
+        ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
         match self {
             Self::TopPanel(c) => c.on_mouse_press(col, row, button, modifiers, ctx),
@@ -94,8 +101,11 @@ impl Component<TermWmAction> for LayerComponent {
 
     fn on_mouse_release(
         &mut self,
-        col: u16, row: u16, button: term_wm_core::events::MouseButton,
-        modifiers: term_wm_core::events::KeyModifiers, ctx: &ComponentContext,
+        col: u16,
+        row: u16,
+        button: term_wm_core::events::MouseButton,
+        modifiers: term_wm_core::events::KeyModifiers,
+        ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
         match self {
             Self::TopPanel(c) => c.on_mouse_release(col, row, button, modifiers, ctx),
@@ -108,8 +118,11 @@ impl Component<TermWmAction> for LayerComponent {
 
     fn on_mouse_drag(
         &mut self,
-        col: u16, row: u16, button: term_wm_core::events::MouseButton,
-        modifiers: term_wm_core::events::KeyModifiers, ctx: &ComponentContext,
+        col: u16,
+        row: u16,
+        button: term_wm_core::events::MouseButton,
+        modifiers: term_wm_core::events::KeyModifiers,
+        ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
         match self {
             Self::TopPanel(c) => c.on_mouse_drag(col, row, button, modifiers, ctx),
@@ -122,8 +135,11 @@ impl Component<TermWmAction> for LayerComponent {
 
     fn on_mouse_scroll(
         &mut self,
-        col: u16, row: u16, kind: term_wm_core::events::MouseEventKind,
-        modifiers: term_wm_core::events::KeyModifiers, ctx: &ComponentContext,
+        col: u16,
+        row: u16,
+        kind: term_wm_core::events::MouseEventKind,
+        modifiers: term_wm_core::events::KeyModifiers,
+        ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
         match self {
             Self::TopPanel(c) => c.on_mouse_scroll(col, row, kind, modifiers, ctx),
@@ -136,8 +152,10 @@ impl Component<TermWmAction> for LayerComponent {
 
     fn on_mouse_move(
         &mut self,
-        col: u16, row: u16,
-        modifiers: term_wm_core::events::KeyModifiers, ctx: &ComponentContext,
+        col: u16,
+        row: u16,
+        modifiers: term_wm_core::events::KeyModifiers,
+        ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
         match self {
             Self::TopPanel(c) => c.on_mouse_move(col, row, modifiers, ctx),
@@ -251,7 +269,10 @@ impl Component<TermWmAction> for LayerComponent {
 
     fn take_teardown_parts(
         &mut self,
-    ) -> Option<(Box<dyn std::any::Any + Send + Sync>, std::thread::JoinHandle<()>)> {
+    ) -> Option<(
+        Box<dyn std::any::Any + Send + Sync>,
+        std::thread::JoinHandle<()>,
+    )> {
         match self {
             Self::TopPanel(c) => c.take_teardown_parts(),
             Self::BottomPanel(c) => c.take_teardown_parts(),

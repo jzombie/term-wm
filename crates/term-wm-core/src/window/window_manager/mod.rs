@@ -5277,8 +5277,7 @@ mod tests {
     #[test]
     fn overlay_dispatch_passes_screen_area_to_context() {
         use crate::components::{
-            Component as Cmp, ComponentContext as Ctx, EventResult as EvtRes,
-            WmComponent as WmCmp,
+            Component as Cmp, ComponentContext as Ctx, EventResult as EvtRes, WmComponent as WmCmp,
         };
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::layout::{LayoutNode, TilingLayout};

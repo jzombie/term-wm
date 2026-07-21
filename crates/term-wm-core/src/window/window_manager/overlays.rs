@@ -75,7 +75,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         if let Event::Mouse(mouse) = event {
             self.hover = Some((mouse.column, mouse.row));
         }
-        self.overlays.get_mut(self.exit_confirm_key?)?.handle_confirm_event(event)
+        self.overlays
+            .get_mut(self.exit_confirm_key?)?
+            .handle_confirm_event(event)
     }
 
     pub fn command_palette_visible(&self) -> bool {

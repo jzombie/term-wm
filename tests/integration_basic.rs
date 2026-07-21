@@ -21,11 +21,7 @@ fn mouse_capture_flow_through_window_manager() {
             term_wm_sys_ui_components::WmTopPanelComponent::new("test"),
         ))
         .bottom_panel(LayerComponent::BottomPanel(
-            term_wm_sys_ui_components::WmBottomPanelComponent::new(
-                "test",
-                "0.0.0",
-                None,
-            ),
+            term_wm_sys_ui_components::WmBottomPanelComponent::new("test", "0.0.0", None),
         ))
         .build::<NoopComponent, NoopOverlay>()
         .expect("test build");

@@ -23,7 +23,8 @@ pub trait WindowManagerHost<
     C: Component<TermWmAction>,
     L: WmComponent = crate::components::NoopWmComponent,
     O: Overlay<TermWmAction> = crate::components::NoopOverlay,
-> {
+>
+{
     fn wm(&mut self) -> &mut WindowManager<C, L, O>;
     fn wm_new_window(&mut self) -> std::io::Result<()> {
         Ok(())
@@ -65,7 +66,12 @@ pub trait WindowManagerHost<
     }
 }
 
-fn drain_action_queue<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>, A: WindowManagerHost<C, L, O>>(
+fn drain_action_queue<
+    C: Component<TermWmAction>,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+    A: WindowManagerHost<C, L, O>,
+>(
     app: &mut A,
     queue: &mut VecDeque<(WindowKey, TermWmAction)>,
 ) {
@@ -530,7 +536,11 @@ where
 ///       └─ run_with_defaults(...)   // ← you are here
 ///           └─ run_event_loop(...)  // low-level: the actual loop
 /// ```
-pub fn run_with_defaults<C, L, Ov, Rt, D, A>(output: &mut Rt, driver: &mut D, app: &mut A) -> io::Result<()>
+pub fn run_with_defaults<C, L, Ov, Rt, D, A>(
+    output: &mut Rt,
+    driver: &mut D,
+    app: &mut A,
+) -> io::Result<()>
 where
     C: Component<TermWmAction>,
     L: WmComponent,

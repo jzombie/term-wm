@@ -13,11 +13,7 @@ fn new_window_is_focused() {
             term_wm_sys_ui_components::WmTopPanelComponent::new("test"),
         ))
         .bottom_panel(LayerComponent::BottomPanel(
-            term_wm_sys_ui_components::WmBottomPanelComponent::new(
-                "test",
-                "0.0.0",
-                None,
-            ),
+            term_wm_sys_ui_components::WmBottomPanelComponent::new("test", "0.0.0", None),
         ))
         .build::<NoopComponent, NoopOverlay>()
         .expect("test build");

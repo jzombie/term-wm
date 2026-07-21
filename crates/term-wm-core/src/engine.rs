@@ -26,7 +26,11 @@ impl CoreEngine {
 
     /// Project the current draw plan without causing heap allocation.
     /// Returns a reference to the draw plan struct.
-    pub fn project_draw_plan<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>>(
+    pub fn project_draw_plan<
+        C: Component<TermWmAction>,
+        L: WmComponent,
+        O: Overlay<TermWmAction>,
+    >(
         &mut self,
         width: u32,
         height: u32,
@@ -136,7 +140,11 @@ impl CoreEngine {
 ///
 /// Extracted as a standalone function so that the geometric circuit-breaker
 /// early return only skips notification layers — not the entire pipeline.
-fn generate_notification_regions<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>>(
+fn generate_notification_regions<
+    C: Component<TermWmAction>,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+>(
     plan: &mut DrawPlan,
     wm: &WindowManager<C, L, O>,
 ) {

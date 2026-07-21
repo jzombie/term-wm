@@ -58,7 +58,9 @@ impl TermWmApp {
 
         let wm = AppBuilder::<LayerComponent>::bare()
             .app_ctx(Arc::new(app_ctx))
-            .top_panel(LayerComponent::TopPanel(WmTopPanelComponent::new(&app_name)))
+            .top_panel(LayerComponent::TopPanel(WmTopPanelComponent::new(
+                &app_name,
+            )))
             .bottom_panel(LayerComponent::BottomPanel(WmBottomPanelComponent::new(
                 &app_name,
                 &app_version,
@@ -75,7 +77,9 @@ impl TermWmApp {
             .build()
             .expect("standalone build");
         let mut wm = wm;
-        wm.set_notification_component(LayerComponent::NotificationArea(WmNotificationAreaComponent::new()));
+        wm.set_notification_component(LayerComponent::NotificationArea(
+            WmNotificationAreaComponent::new(),
+        ));
         Self::from_wm(wm)
     }
 

@@ -4,6 +4,7 @@ use std::sync::{Arc, OnceLock};
 use clap::Parser;
 use crossbeam_channel::Sender;
 
+use term_wm::actions::TermWmAction;
 use term_wm::app_context::AppContext;
 use term_wm::components::AppRootComponent;
 use term_wm::config::AppBuilder;
@@ -16,15 +17,14 @@ use term_wm::wm_config::WmConfig;
 use term_wm::{
     PtyStatus, ScrollKeyMode, ScrollViewComponent, TerminalComponent, default_shell_command,
 };
-use term_wm::actions::TermWmAction;
 use term_wm_console::console_render_target::ConsoleRenderTarget;
 use term_wm_core::components::Component;
 use term_wm_sys_ui_components::WmSystemPanelComponent;
 use term_wm_sys_ui_components::wm_debug_log::{
     WmDebugLogComponent, install_panic_hook, set_global_debug_log,
 };
-use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 use term_wm_ui_facade::core_component::CoreWmComponent;
+use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 
 /// Simple CLI for launching `term-wm` with optional commands / window count.
 #[derive(Parser, Debug)]
@@ -121,7 +121,9 @@ impl App {
                         hostname,
                     ),
                 ))
-                .fab(LayerComponent::Fab(term_wm_sys_ui_components::WmFabComponent::new()))
+                .fab(LayerComponent::Fab(
+                    term_wm_sys_ui_components::WmFabComponent::new(),
+                ))
                 .build()
                 .expect("standalone build")
         };
@@ -264,7 +266,10 @@ impl App {
 }
 
 impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for App {
-    fn wm(&mut self) -> &mut term_wm::window::WindowManager<AppRootComponent, LayerComponent, OverlayComponent> {
+    fn wm(
+        &mut self,
+    ) -> &mut term_wm::window::WindowManager<AppRootComponent, LayerComponent, OverlayComponent>
+    {
         self.inner.wm()
     }
 
@@ -285,7 +290,9 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
             "Exit App",
             "Exit the application?\nUnsaved changes will be lost.",
         );
-        self.inner.wm().open_exit_confirm_overlay(OverlayComponent::ExitConfirm(confirm));
+        self.inner
+            .wm()
+            .open_exit_confirm_overlay(OverlayComponent::ExitConfirm(confirm));
     }
 
     fn open_command_palette(&mut self) {
