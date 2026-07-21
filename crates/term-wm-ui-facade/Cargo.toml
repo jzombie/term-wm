@@ -1,6 +1,6 @@
 [package]
-name = "term-wm-registry"
-description = "Built-in component registry for term-wm (CoreWmComponent enum)."
+name = "term-wm-ui-facade"
+description = "Built-in component registry for term-wm."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

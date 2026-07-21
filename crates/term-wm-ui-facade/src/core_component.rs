@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::collections::VecDeque;
 
+use term_wm_core::Rect;
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::app_context::AppContext;
 use term_wm_core::component_context::ComponentContext;
@@ -8,7 +9,6 @@ use term_wm_core::components::{Component, NoopComponent, SelectionStatus};
 use term_wm_core::events::Event;
 use term_wm_core::hitbox_registry::HitboxId;
 use term_wm_core::window::WindowKey;
-use term_wm_core::Rect;
 use term_wm_render::RenderBackend;
 use term_wm_ui_components::scroll_view::ScrollViewComponent;
 use term_wm_ui_components::terminal::TerminalComponent;

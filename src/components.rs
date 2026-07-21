@@ -12,8 +12,8 @@ use term_wm_core::hitbox_registry::HitboxId;
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
 use term_wm_render::RenderBackend;
-use term_wm_registry::core_component::CoreWmComponent;
 use term_wm_ui_components::svg_image::SvgImageComponent;
+use term_wm_ui_facade::core_component::CoreWmComponent;
 
 pub enum AppRootComponent {
     Core(CoreWmComponent),

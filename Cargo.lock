@@ -2915,10 +2915,10 @@ dependencies = [
  "term-wm-console",
  "term-wm-core",
  "term-wm-layout-engine",
- "term-wm-registry",
  "term-wm-render",
  "term-wm-sys-ui-components",
  "term-wm-ui-components",
+ "term-wm-ui-facade",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2978,16 +2978,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "term-wm-registry"
-version = "0.8.20-alpha"
-dependencies = [
- "term-wm-core",
- "term-wm-render",
- "term-wm-sys-ui-components",
- "term-wm-ui-components",
-]
-
-[[package]]
 name = "term-wm-render"
 version = "0.8.20-alpha"
 
@@ -3029,6 +3019,16 @@ dependencies = [
  "tracing",
  "vt100",
  "webbrowser",
+]
+
+[[package]]
+name = "term-wm-ui-facade"
+version = "0.8.20-alpha"
+dependencies = [
+ "term-wm-core",
+ "term-wm-render",
+ "term-wm-sys-ui-components",
+ "term-wm-ui-components",
 ]
 
 [[package]]

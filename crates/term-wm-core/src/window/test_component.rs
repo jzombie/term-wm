@@ -380,7 +380,11 @@ impl Component<TermWmAction> for RenderTracker {
     fn hitbox_id(&self) -> Option<HitboxId> {
         None
     }
-    fn handle_events(&mut self, _event: &Event, _ctx: &ComponentContext) -> EventResult<TermWmAction> {
+    fn handle_events(
+        &mut self,
+        _event: &Event,
+        _ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
         EventResult::Ignored
     }
     fn on_key(&mut self, _event: &Event, _ctx: &ComponentContext) -> EventResult<TermWmAction> {
@@ -396,7 +400,10 @@ impl Component<TermWmAction> for RenderTracker {
     fn destroy(&mut self) {}
     fn clear_selection(&mut self) {}
     fn selection_status(&self) -> SelectionStatus {
-        SelectionStatus { active: false, dragging: false }
+        SelectionStatus {
+            active: false,
+            dragging: false,
+        }
     }
     fn selection_text(&self) -> Option<String> {
         None

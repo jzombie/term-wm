@@ -1794,9 +1794,9 @@ mod floating_tiled_separation {
 #[cfg(test)]
 mod render_verification {
     use super::*;
+    use term_wm_core::hitbox_registry::ComponentOwner;
     use term_wm_core::window::test_component::RenderTracker;
     use term_wm_core::window::test_component::TestComponent;
-    use term_wm_core::hitbox_registry::ComponentOwner;
 
     /// Verify that the monomorphized C::render() receives the correct content
     /// area during a full render pass through the compositor.
@@ -1821,23 +1821,35 @@ mod render_verification {
 
         // Register a hitbox so the component can be found during render
         let hit_id = wm.window_content_hitbox_id(key).unwrap_or_default();
-        wm.hitbox_registry_mut().register(
-            hit_id,
-            ComponentOwner::Window(key),
-            AREA,
-        );
+        wm.hitbox_registry_mut()
+            .register(hit_id, ComponentOwner::Window(key), AREA);
 
         // Run the render pipeline
-        let area = ratatui::layout::Rect { x: 0, y: 0, width: AREA.width, height: AREA.height };
+        let area = ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: AREA.width,
+            height: AREA.height,
+        };
         let buf = ratatui::buffer::Buffer::empty(area);
         let mut backend = term_wm_console::RatatuiBackend::new(buf, area);
-        term_wm::render_app(&mut backend, &mut wm, &mut term_wm_core::engine::CoreEngine::new(), &mut term_wm_console::draw_plan_renderer::DrawPlanRenderer::new());
+        term_wm::render_app(
+            &mut backend,
+            &mut wm,
+            &mut term_wm_core::engine::CoreEngine::new(),
+            &mut term_wm_console::draw_plan_renderer::DrawPlanRenderer::new(),
+        );
 
         // Verify the component was rendered and received the correct area
         match wm.component_for_key_mut(key).expect("component must exist") {
             TestComponent::RenderTracker(tracker) => {
-                assert!(tracker.render_count > 0, "component must be rendered at least once");
-                let area = tracker.last_area.expect("component must receive render area");
+                assert!(
+                    tracker.render_count > 0,
+                    "component must be rendered at least once"
+                );
+                let area = tracker
+                    .last_area
+                    .expect("component must receive render area");
                 assert!(area.width > 0, "render area width must be positive");
                 assert!(area.height > 0, "render area height must be positive");
             }
