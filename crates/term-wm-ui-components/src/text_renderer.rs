@@ -94,15 +94,11 @@ impl Component<TermWmAction> for TextRendererComponent {
         use crate::helpers::safe_set_string;
 
         const RULE_PLACEHOLDER: &str = "\0RULE\0";
-        let usable = usable_width;
 
         let mut visual_heights: Vec<usize> = Vec::with_capacity(self.text.lines.len());
         for line in &self.text.lines {
-            let w = line.width();
-            let vh = if w == 0 {
-                1
-            } else if self.wrap {
-                (w + usable - 1).div_euclid(usable)
+            let vh = if self.wrap {
+                actual_wrapped_height(line, area.width)
             } else {
                 1
             };
@@ -722,18 +718,43 @@ impl SelectionHost for TextRendererComponent {
     }
 }
 
-fn compute_display_lines(text: &Text<'_>, width: u16) -> usize {
+fn actual_wrapped_height(line: &Line<'_>, width: u16) -> usize {
+    let w = line.width();
+    if w == 0 {
+        return 1;
+    }
     let usable = width.max(1) as usize;
+    // Upper-bound estimate: worst case, word wrapping adds at most 1 extra line
+    // per visual line compared to character-level breaking.
+    let est = (w + usable - 1).div_euclid(usable) + 1;
+    let area = ratatui::layout::Rect {
+        x: 0,
+        y: 0,
+        width: width.max(1),
+        height: est.min(65535) as u16,
+    };
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let text = ratatui::text::Text::from(vec![line.clone()]);
+    ratatui::widgets::Paragraph::new(text)
+        .wrap(ratatui::widgets::Wrap { trim: false })
+        .render(area, &mut buf);
+    let mut last = 0usize;
+    for y in 0..buf.area.height as usize {
+        let has_content = (0..buf.area.width).any(|x| {
+            buf.cell((x, y as u16))
+                .is_some_and(|c| c.symbol() != " ")
+        });
+        if has_content {
+            last = y + 1;
+        }
+    }
+    last.max(1)
+}
+
+fn compute_display_lines(text: &Text<'_>, width: u16) -> usize {
     text.lines
         .iter()
-        .map(|line| {
-            let w = line.width();
-            if w == 0 {
-                1
-            } else {
-                (w + usable - 1).div_euclid(usable)
-            }
-        })
+        .map(|line| actual_wrapped_height(line, width))
         .sum::<usize>()
         .max(1)
 }
