@@ -48,13 +48,6 @@ impl Component<TermWmAction> for ActionRecorder {
         self.actions.push(action);
     }
     fn on_mount(&mut self, _key: WindowKey, _app: &AppContext) {}
-    fn handle_events(
-        &mut self,
-        _event: &Event,
-        _ctx: &ComponentContext,
-    ) -> EventResult<TermWmAction> {
-        EventResult::Ignored
-    }
     fn render(
         &mut self,
         _backend: &mut dyn RenderBackend,
@@ -287,13 +280,6 @@ impl Component<TermWmAction> for SelComponent {
         }
     }
     fn on_mount(&mut self, _key: WindowKey, _app: &AppContext) {}
-    fn handle_events(
-        &mut self,
-        _event: &Event,
-        _ctx: &ComponentContext,
-    ) -> EventResult<TermWmAction> {
-        EventResult::Ignored
-    }
     fn render(
         &mut self,
         _backend: &mut dyn RenderBackend,
