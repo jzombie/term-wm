@@ -2046,7 +2046,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     /// Whether tab outline mode is currently active.
     pub fn is_tab_outline_active(&self) -> bool {
-        self.tab_outline_until.is_some_and(|until| Instant::now() < until)
+        self.tab_outline_until
+            .is_some_and(|until| Instant::now() < until)
     }
 
     pub fn panel_active(&self) -> bool {
