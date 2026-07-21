@@ -280,6 +280,65 @@ pub trait Overlay<Msg>: Component<Msg> + std::any::Any {
     fn set_menu_items(&mut self, _items: Vec<MenuItem<Msg>>) {}
 }
 
+/// Zero-overhead default for `WindowManager`'s `<L: WmComponent>` generic.
+/// Used by tests and headless configurations that don't need panels/FAB.
+#[derive(Debug, Clone)]
+pub struct NoopWmComponent;
+impl Component<TermWmAction> for NoopWmComponent {
+    fn on_mount(&mut self, _key: WindowKey, _app: &AppContext) {}
+    fn handle_events(&mut self, _event: &Event, _ctx: &ComponentContext) -> EventResult<TermWmAction> { EventResult::Ignored }
+    fn render(&mut self, _backend: &mut dyn term_wm_render::RenderBackend, _area: LayoutRect, _ctx: &ComponentContext, _registry: &mut crate::hitbox_registry::HitboxRegistry) {}
+    fn take_teardown_parts(&mut self) -> Option<(Box<dyn std::any::Any + Send + Sync>, std::thread::JoinHandle<()>)> { None }
+    fn init(&mut self) {}
+    fn hitbox_id(&self) -> Option<HitboxId> { None }
+    fn on_key(&mut self, _event: &Event, _ctx: &ComponentContext) -> EventResult<TermWmAction> { EventResult::Ignored }
+    fn update(&mut self, _action: TermWmAction, _ctx: &ComponentContext, _actions: &mut VecDeque<(WindowKey, TermWmAction)>) {}
+    fn destroy(&mut self) {}
+    fn clear_selection(&mut self) {}
+    fn selection_status(&self) -> SelectionStatus { SelectionStatus { active: false, dragging: false } }
+    fn selection_text(&self) -> Option<String> { None }
+    fn desired_height(&self, _width: u16) -> u16 { 0 }
+    fn take_pending_title(&mut self) -> Option<String> { None }
+    fn set_selection_enabled(&mut self, _enabled: bool) {}
+    fn paste(&mut self, _text: &str) -> bool { false }
+    fn on_mouse_press(&mut self, _col: u16, _row: u16, _button: crate::events::MouseButton, _modifiers: crate::events::KeyModifiers, _ctx: &ComponentContext) -> EventResult<TermWmAction> { EventResult::Ignored }
+    fn on_mouse_release(&mut self, _col: u16, _row: u16, _button: crate::events::MouseButton, _modifiers: crate::events::KeyModifiers, _ctx: &ComponentContext) -> EventResult<TermWmAction> { EventResult::Ignored }
+    fn on_mouse_drag(&mut self, _col: u16, _row: u16, _button: crate::events::MouseButton, _modifiers: crate::events::KeyModifiers, _ctx: &ComponentContext) -> EventResult<TermWmAction> { EventResult::Ignored }
+    fn on_mouse_scroll(&mut self, _col: u16, _row: u16, _kind: crate::events::MouseEventKind, _modifiers: crate::events::KeyModifiers, _ctx: &ComponentContext) -> EventResult<TermWmAction> { EventResult::Ignored }
+    fn on_mouse_move(&mut self, _col: u16, _row: u16, _modifiers: crate::events::KeyModifiers, _ctx: &ComponentContext) -> EventResult<TermWmAction> { EventResult::Ignored }
+}
+impl WmComponent for NoopWmComponent {}
+
+/// Zero-overhead default for `WindowManager`'s `<O: Overlay>` generic.
+/// Used by tests and headless configurations that don't need overlays.
+pub struct NoopOverlay;
+impl Overlay<TermWmAction> for NoopOverlay {
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+}
+impl Component<TermWmAction> for NoopOverlay {
+    fn on_mount(&mut self, _key: WindowKey, _app: &AppContext) {}
+    fn handle_events(&mut self, _event: &Event, _ctx: &ComponentContext) -> EventResult<TermWmAction> { EventResult::Ignored }
+    fn render(&mut self, _backend: &mut dyn term_wm_render::RenderBackend, _area: LayoutRect, _ctx: &ComponentContext, _registry: &mut crate::hitbox_registry::HitboxRegistry) {}
+    fn take_teardown_parts(&mut self) -> Option<(Box<dyn std::any::Any + Send + Sync>, std::thread::JoinHandle<()>)> { None }
+    fn init(&mut self) {}
+    fn hitbox_id(&self) -> Option<HitboxId> { None }
+    fn on_key(&mut self, _event: &Event, _ctx: &ComponentContext) -> EventResult<TermWmAction> { EventResult::Ignored }
+    fn update(&mut self, _action: TermWmAction, _ctx: &ComponentContext, _actions: &mut VecDeque<(WindowKey, TermWmAction)>) {}
+    fn destroy(&mut self) {}
+    fn clear_selection(&mut self) {}
+    fn selection_status(&self) -> SelectionStatus { SelectionStatus { active: false, dragging: false } }
+    fn selection_text(&self) -> Option<String> { None }
+    fn desired_height(&self, _width: u16) -> u16 { 0 }
+    fn take_pending_title(&mut self) -> Option<String> { None }
+    fn set_selection_enabled(&mut self, _enabled: bool) {}
+    fn paste(&mut self, _text: &str) -> bool { false }
+    fn on_mouse_press(&mut self, _col: u16, _row: u16, _button: crate::events::MouseButton, _modifiers: crate::events::KeyModifiers, _ctx: &ComponentContext) -> EventResult<TermWmAction> { EventResult::Ignored }
+    fn on_mouse_release(&mut self, _col: u16, _row: u16, _button: crate::events::MouseButton, _modifiers: crate::events::KeyModifiers, _ctx: &ComponentContext) -> EventResult<TermWmAction> { EventResult::Ignored }
+    fn on_mouse_drag(&mut self, _col: u16, _row: u16, _button: crate::events::MouseButton, _modifiers: crate::events::KeyModifiers, _ctx: &ComponentContext) -> EventResult<TermWmAction> { EventResult::Ignored }
+    fn on_mouse_scroll(&mut self, _col: u16, _row: u16, _kind: crate::events::MouseEventKind, _modifiers: crate::events::KeyModifiers, _ctx: &ComponentContext) -> EventResult<TermWmAction> { EventResult::Ignored }
+    fn on_mouse_move(&mut self, _col: u16, _row: u16, _modifiers: crate::events::KeyModifiers, _ctx: &ComponentContext) -> EventResult<TermWmAction> { EventResult::Ignored }
+}
+
 #[derive(Debug, Clone)]
 pub struct MenuItem<R> {
     pub icon: Option<&'static str>,
