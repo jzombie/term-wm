@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use ratatui::widgets::{Clear, Widget};
+use ratatui::widgets::{Block, Borders, Clear, Widget};
 use term_wm_core::events::Event;
 use term_wm_layout_engine::LayoutRect;
 
@@ -142,7 +142,23 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
         self.area.set(area);
 
         if self.is_tab_outline_active() {
-            self.dialog.render_backdrop(backend, area, None);
+            self.refresh_if_dirty();
+            let (content_width, content_height) = self.compute_content_dimensions();
+            self.dialog.set_size(content_width, content_height);
+            let ratatui_area = layout_rect_to_clipped_rect(area);
+            let rect = self.dialog.rect_for(ratatui_area);
+            let content_rect = LayoutRect {
+                x: i32::from(rect.x),
+                y: i32::from(rect.y),
+                width: rect.width,
+                height: rect.height,
+            };
+            if content_rect.width > 0 && content_rect.height > 0 {
+                let ratatui = downcast_ratatui(backend);
+                Block::default()
+                    .borders(Borders::ALL)
+                    .render(rect, &mut ratatui.buffer);
+            }
             return;
         }
 
