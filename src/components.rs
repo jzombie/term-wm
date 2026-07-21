@@ -12,7 +12,7 @@ use term_wm_core::hitbox_registry::HitboxId;
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
 use term_wm_render::RenderBackend;
-use term_wm_sys_ui_components::core_component::CoreWmComponent;
+use term_wm_registry::core_component::CoreWmComponent;
 use term_wm_ui_components::svg_image::SvgImageComponent;
 
 pub enum AppRootComponent {

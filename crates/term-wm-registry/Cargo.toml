@@ -1,0 +1,14 @@
+[package]
+name = "term-wm-registry"
+description = "Built-in component registry for term-wm (CoreWmComponent enum)."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+term-wm-core = { workspace = true }
+term-wm-render = { workspace = true }
+term-wm-sys-ui-components = { workspace = true }
+term-wm-ui-components = { workspace = true }

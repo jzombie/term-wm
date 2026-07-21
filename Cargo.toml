@@ -22,6 +22,7 @@ members = [
     "crates/term-wm-core",
     "crates/term-wm-layout-engine",
     "crates/term-wm-pty-engine",
+    "crates/term-wm-registry",
     "crates/term-wm-render",
     "crates/term-wm-sys-ui-components",
     "crates/term-wm-ui-components",
@@ -76,6 +77,7 @@ term-wm-console = { path = "crates/term-wm-console", version = "0.8.20-alpha" }
 term-wm-core = { path = "crates/term-wm-core", version = "0.8.20-alpha" }
 term-wm-layout-engine = { path = "crates/term-wm-layout-engine", version = "0.8.20-alpha" }
 term-wm-pty-engine = { path = "crates/term-wm-pty-engine", version = "0.8.20-alpha" }
+term-wm-registry = { path = "crates/term-wm-registry", version = "0.8.20-alpha" }
 term-wm-render = { path = "crates/term-wm-render", version = "0.8.20-alpha" }
 term-wm-sys-ui-components = { path = "crates/term-wm-sys-ui-components", version = "0.8.20-alpha" }
 term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.8.20-alpha" }
@@ -106,6 +108,7 @@ ratatui = { workspace = true }
 term-wm-console = { workspace = true }
 term-wm-core = { workspace = true }
 term-wm-layout-engine = { workspace = true }
+term-wm-registry = { workspace = true }
 term-wm-render = { workspace = true }
 term-wm-sys-ui-components = { workspace = true, optional = true }
 term-wm-ui-components = { workspace = true }

@@ -19,7 +19,7 @@ use term_wm::{
 use term_wm_console::console_render_target::ConsoleRenderTarget;
 use term_wm_core::components::Component;
 use term_wm_sys_ui_components::WmSystemPanelComponent;
-use term_wm_sys_ui_components::core_component::CoreWmComponent;
+use term_wm_registry::core_component::CoreWmComponent;
 use term_wm_sys_ui_components::wm_debug_log::{
     WmDebugLogComponent, install_panic_hook, set_global_debug_log,
 };
