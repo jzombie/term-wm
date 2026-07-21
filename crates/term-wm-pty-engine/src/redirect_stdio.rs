@@ -372,18 +372,17 @@ mod tests {
                 nSize: u32,
             ) -> i32;
         }
-
         let mut read_handle: isize = 0;
         let mut write_handle: isize = 0;
         unsafe { assert_ne!(CreatePipe(&mut read_handle, &mut write_handle, std::ptr::null(), 0), 0); }
 
         let write_fd = unsafe { libc::open_osfhandle(write_handle, 0) };
-        assert!(write_fd != -1, "open_osfhandle failed");
+        assert!(write_fd != -1, "open_osfhandle");
 
         let result = redirect_fd_to_tracing(write_fd, true);
         assert!(result.is_ok(), "redirect_fd_to_tracing returned error: {result:?}");
 
-        unsafe { libc::close(write_fd); }
-        // read_handle is now owned by the tracing thread, don't close it
+        // write_fd was dup2'd inside redirect_fd_to_tracing — the pipe stays
+        // alive through target_fd; read_handle is owned by the tracing thread.
     }
 }
