@@ -2320,13 +2320,13 @@ impl WindowManager {
                 disabled: false,
             },
             MenuItem {
-                label: "Debug Log".into(),
+                label: "Toggle Debug Log".into(),
                 icon: Some("≣"),
                 action: crate::actions::TermWmAction::ToggleDebugWindow,
                 disabled: false,
             },
             MenuItem {
-                label: "System Panel".into(),
+                label: "Toggle System Panel".into(),
                 icon: Some("⚙"),
                 action: crate::actions::TermWmAction::ToggleSystemPanel,
                 disabled: false,
