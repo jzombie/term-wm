@@ -618,6 +618,59 @@ mod tests {
         assert!(!ex.is_active());
     }
 
+    // ── StderrSuppressGuard ───────────────────────────────────────
+
+    #[test]
+    #[cfg(unix)]
+    fn stderr_suppress_guard_suppresses_and_restores() {
+        use std::os::fd::FromRawFd;
+
+        // Save original stderr.
+        let saved_fd = unsafe { libc::dup(libc::STDERR_FILENO) };
+        assert!(saved_fd >= 0, "dup stderr");
+
+        // Create a pipe to intercept stderr output.
+        let mut fds: [libc::c_int; 2] = [0; 2];
+        unsafe { assert_eq!(libc::pipe(fds.as_mut_ptr()), 0); }
+
+        // Redirect stderr to the pipe's write end.
+        unsafe { libc::dup2(fds[1], libc::STDERR_FILENO); }
+        unsafe { libc::close(fds[1]); }
+
+        // Write while suppressed — must not reach the pipe.
+        {
+            let _guard = StderrSuppressGuard::new();
+            assert!(_guard.is_some(), "guard creation");
+            unsafe {
+                libc::write(libc::STDERR_FILENO, c"suppressed\n".as_ptr().cast(), 11);
+            }
+        }
+
+        // Write after guard drop — should reach the pipe.
+        unsafe {
+            libc::write(libc::STDERR_FILENO, c"restored\n".as_ptr().cast(), 9);
+        }
+
+        // Restore original stderr.
+        unsafe { libc::dup2(saved_fd, libc::STDERR_FILENO); }
+        unsafe { libc::close(saved_fd); }
+
+        // Read pipe contents.
+        use std::io::Read;
+        let mut file = unsafe { std::fs::File::from_raw_fd(fds[0]) };
+        let mut output = String::new();
+        file.read_to_string(&mut output).unwrap_or(0);
+
+        assert!(
+            !output.contains("suppressed"),
+            "suppressed output leaked to stderr: {output:?}"
+        );
+        assert!(
+            output.contains("restored"),
+            "restored output missing from stderr: {output:?}"
+        );
+    }
+
     #[test]
     fn extractor_clears_on_4mb_limit() {
         let mut ex = Osc52Extractor::new();
