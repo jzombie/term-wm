@@ -247,6 +247,13 @@ where
                     SystemTask::DismissNotification(id) => {
                         app.wm().dismiss_notification(id);
                     }
+                    SystemTask::ClearTabOutline => {
+                        if let Some(expires_at) = app.wm().tab_outline_until
+                            && std::time::Instant::now() >= expires_at
+                        {
+                            app.wm().clear_tab_outline();
+                        }
+                    }
                 }
             }
 

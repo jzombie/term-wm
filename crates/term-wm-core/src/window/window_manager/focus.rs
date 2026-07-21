@@ -135,6 +135,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.focus.advance(forward);
         let focused = *self.focus.current();
         self.focus_window_key(focused);
+        self.set_tab_outline_mode(crate::constants::TAB_OUTLINE_DURATION);
     }
 
     pub(super) fn select_fallback_focus(&mut self) {

@@ -151,6 +151,9 @@ macro_rules! impl_overlay_delegate {
             fn set_menu_items(&mut self, items: Vec<$crate::components::MenuItem<$crate::actions::TermWmAction>>) {
                 match self { $(Self::$variant(c) => c.set_menu_items(items),)* }
             }
+            fn set_tab_outline(&mut self, expires_at: Option<std::time::Instant>) {
+                match self { $(Self::$variant(c) => c.set_tab_outline(expires_at),)* }
+            }
         }
     };
 }

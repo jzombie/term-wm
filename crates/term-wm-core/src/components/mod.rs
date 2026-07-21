@@ -270,6 +270,8 @@ pub trait Overlay<Msg>: Component<Msg> + std::any::Any {
     fn mark_dirty(&mut self) {}
     /// Replace the overlay's menu items (e.g. on focus change).
     fn set_menu_items(&mut self, _items: Vec<MenuItem<Msg>>) {}
+    /// Enter/exit tab outline mode (palette becomes dim overlay, panels hide).
+    fn set_tab_outline(&mut self, _expires_at: Option<std::time::Instant>) {}
 }
 
 /// Zero-overhead default for `WindowManager`'s `<L: WmComponent>` generic.

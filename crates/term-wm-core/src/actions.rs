@@ -353,4 +353,6 @@ pub enum SystemTask {
     TemporalDwellTick,
     /// A notification's TTL has expired — dismiss it from the queue.
     DismissNotification(u64),
+    /// Tab outline has elapsed — restore palette/panels to normal.
+    ClearTabOutline,
 }

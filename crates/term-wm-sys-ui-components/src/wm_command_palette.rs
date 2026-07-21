@@ -1,7 +1,8 @@
 use std::cell::Cell;
 use std::collections::VecDeque;
+use std::time::Instant;
 
-use ratatui::widgets::{Clear, Widget};
+use ratatui::widgets::{Block, Borders, Clear, Widget};
 use term_wm_core::events::Event;
 use term_wm_layout_engine::LayoutRect;
 
@@ -29,6 +30,7 @@ pub struct WmCommandPaletteComponent {
     pub registry: CommandRegistry,
     pub matcher: FuzzyMatch,
     pub mru: MruRanker,
+    tab_outline_until: Option<Instant>,
 }
 
 impl std::fmt::Debug for WmCommandPaletteComponent {
@@ -60,6 +62,7 @@ impl WmCommandPaletteComponent {
             registry: CommandRegistry::new(),
             matcher: FuzzyMatch::new(),
             mru: MruRanker::new(),
+            tab_outline_until: None,
         }
     }
 
@@ -137,6 +140,28 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
         registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
         self.area.set(area);
+
+        if self.is_tab_outline_active() {
+            self.refresh_if_dirty();
+            let (content_width, content_height) = self.compute_content_dimensions();
+            self.dialog.set_size(content_width, content_height);
+            let ratatui_area = layout_rect_to_clipped_rect(area);
+            let rect = self.dialog.rect_for(ratatui_area);
+            let content_rect = LayoutRect {
+                x: i32::from(rect.x),
+                y: i32::from(rect.y),
+                width: rect.width,
+                height: rect.height,
+            };
+            if content_rect.width > 0 && content_rect.height > 0 {
+                let ratatui = downcast_ratatui(backend);
+                Block::default()
+                    .borders(Borders::ALL)
+                    .render(rect, &mut ratatui.buffer);
+            }
+            return;
+        }
+
         self.refresh_if_dirty();
 
         let (content_width, content_height) = self.compute_content_dimensions();
@@ -171,6 +196,10 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
         ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
         self.last_action = None;
+
+        if self.is_tab_outline_active() {
+            return EventResult::Ignored;
+        }
 
         if let Event::Mouse(_) = event {
             let area = self.area.get();
@@ -249,6 +278,13 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
     fn destroy(&mut self) {}
 }
 
+impl WmCommandPaletteComponent {
+    fn is_tab_outline_active(&self) -> bool {
+        self.tab_outline_until
+            .is_some_and(|expires| Instant::now() < expires)
+    }
+}
+
 impl Overlay<TermWmAction> for WmCommandPaletteComponent {
     fn visible(&self) -> bool {
         self.dialog.visible()
@@ -264,6 +300,10 @@ impl Overlay<TermWmAction> for WmCommandPaletteComponent {
 
     fn set_menu_items(&mut self, items: Vec<MenuItem<TermWmAction>>) {
         self.set_items(items);
+    }
+
+    fn set_tab_outline(&mut self, expires_at: Option<Instant>) {
+        self.tab_outline_until = expires_at;
     }
 }
 

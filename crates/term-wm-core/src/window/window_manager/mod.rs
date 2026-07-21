@@ -232,6 +232,8 @@ pub struct WindowManager<
     help_key: Option<OverlayKey>,
     exit_confirm_key: Option<OverlayKey>,
     command_palette_key: Option<OverlayKey>,
+    /// When `Some(instant)`, tab outline mode is active until that instant.
+    pub(crate) tab_outline_until: Option<Instant>,
     scroll_keyboard_enabled_default: bool,
     floating_resize_offscreen: bool,
     pub(crate) z_order: Vec<WindowKey>,
@@ -636,6 +638,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             help_key: None,
             exit_confirm_key: None,
             command_palette_key: None,
+            tab_outline_until: None,
             input_mode: crate::actions::WmInputMode::Passthrough,
             fab_enabled: true,
             tap_swap_state: None,
@@ -2015,6 +2018,36 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     pub fn set_scroll_keyboard_enabled(&mut self, enabled: bool) {
         self.scroll_keyboard_enabled_default = enabled;
+    }
+
+    /// Enter tab outline mode — palette becomes dim overlay, panels hide in monocle.
+    pub fn set_tab_outline_mode(&mut self, duration: Duration) {
+        let expires = Instant::now() + duration;
+        self.tab_outline_until = Some(expires);
+        if let Some(key) = self.command_palette_key
+            && let Some(overlay) = self.overlays.get_mut(key)
+        {
+            overlay.set_tab_outline(Some(expires));
+        }
+        if let Some(handle) = &self.system_task_handle {
+            let _ = handle.schedule_once(duration, crate::actions::SystemTask::ClearTabOutline);
+        }
+    }
+
+    /// Clear tab outline mode — restore palette/panels to normal.
+    pub fn clear_tab_outline(&mut self) {
+        self.tab_outline_until = None;
+        if let Some(key) = self.command_palette_key
+            && let Some(overlay) = self.overlays.get_mut(key)
+        {
+            overlay.set_tab_outline(None);
+        }
+    }
+
+    /// Whether tab outline mode is currently active.
+    pub fn is_tab_outline_active(&self) -> bool {
+        self.tab_outline_until
+            .is_some_and(|until| Instant::now() < until)
     }
 
     pub fn panel_active(&self) -> bool {
