@@ -12,7 +12,7 @@ use muxio_tokio_rpc_ipc_client::RpcIpcClient;
 use portable_pty::{ExitStatus, PtySize};
 use term_session_muxio_service_definitions::{CloseSession, ResizePty};
 use term_wm_pty_engine::pane::{
-    CursorInfo, MouseProtocol, MouseProtocolEncoding, MouseProtocolMode, RgbColor,
+    CellColor, CursorInfo, MouseProtocol, MouseProtocolEncoding, MouseProtocolMode, RgbColor,
     TerminalCell, TerminalSnapshot,
 };
 use term_wm_pty_engine::{Pane, PtyListener, PtyResult};
@@ -164,11 +164,13 @@ impl Pane for RemotePane {
         let default_fg = t.colors()
             [alacritty_terminal::vte::ansi::NamedColor::Foreground]
             .as_ref()
-            .map(|r| RgbColor { r: r.r, g: r.g, b: r.b });
+            .map(|r| CellColor::Rgb(RgbColor { r: r.r, g: r.g, b: r.b }))
+            .unwrap_or(CellColor::Default);
         let default_bg = t.colors()
             [alacritty_terminal::vte::ansi::NamedColor::Background]
             .as_ref()
-            .map(|r| RgbColor { r: r.r, g: r.g, b: r.b });
+            .map(|r| CellColor::Rgb(RgbColor { r: r.r, g: r.g, b: r.b }))
+            .unwrap_or(CellColor::Default);
 
         let mouse = MouseProtocol {
             encoding: if mode.contains(TermMode::SGR_MOUSE) {
@@ -272,15 +274,17 @@ impl Pane for RemotePane {
 fn resolve_color(
     color: &alacritty_terminal::vte::ansi::Color,
     palette: &alacritty_terminal::term::color::Colors,
-) -> Option<RgbColor> {
+) -> CellColor {
     use alacritty_terminal::vte::ansi::Color;
     match color {
-        Color::Spec(rgb) => Some(RgbColor { r: rgb.r, g: rgb.g, b: rgb.b }),
-        Color::Indexed(idx) => {
-            palette[*idx as usize].as_ref().map(|r| RgbColor { r: r.r, g: r.g, b: r.b })
-        }
+        Color::Spec(rgb) => CellColor::Rgb(RgbColor { r: rgb.r, g: rgb.g, b: rgb.b }),
+        Color::Indexed(idx) => CellColor::Indexed(*idx),
         Color::Named(named) => {
-            palette[*named].as_ref().map(|r| RgbColor { r: r.r, g: r.g, b: r.b })
+            if let Some(p) = palette[*named].as_ref() {
+                CellColor::Rgb(RgbColor { r: p.r, g: p.g, b: p.b })
+            } else {
+                CellColor::Default
+            }
         }
     }
 }

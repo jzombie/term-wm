@@ -17,7 +17,7 @@ use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system}
 
 use crate::clipboard::{Clipboard, Osc52Extractor};
 use crate::pane::{
-    CursorInfo, MouseProtocol, MouseProtocolEncoding, MouseProtocolMode, RgbColor,
+    CellColor, CursorInfo, MouseProtocol, MouseProtocolEncoding, MouseProtocolMode, RgbColor,
     TerminalCell, TerminalSnapshot,
 };
 
@@ -486,16 +486,14 @@ impl Pty {
         let columns = columns.min(t.columns() as u16);
         let rows = rows.min(t.screen_lines() as u16);
 
-        let default_fg = t.colors()[NamedColor::Foreground].as_ref().map(|r| RgbColor {
-            r: r.r,
-            g: r.g,
-            b: r.b,
-        });
-        let default_bg = t.colors()[NamedColor::Background].as_ref().map(|r| RgbColor {
-            r: r.r,
-            g: r.g,
-            b: r.b,
-        });
+        let default_fg = t.colors()[NamedColor::Foreground]
+            .as_ref()
+            .map(|r| CellColor::Rgb(RgbColor { r: r.r, g: r.g, b: r.b }))
+            .unwrap_or(CellColor::Default);
+        let default_bg = t.colors()[NamedColor::Background]
+            .as_ref()
+            .map(|r| CellColor::Rgb(RgbColor { r: r.r, g: r.g, b: r.b }))
+            .unwrap_or(CellColor::Default);
 
         let mouse = MouseProtocol {
             encoding: if mode.contains(TermMode::SGR_MOUSE) {
@@ -649,67 +647,28 @@ impl Pty {
     }
 }
 
-/// Resolve an alacritty_terminal Color to our agnostic RgbColor using
-/// the terminal's active color palette.
-fn resolve_cell_color(color: &Color, palette: &Colors) -> Option<RgbColor> {
+/// Resolve an alacritty_terminal Color to our agnostic CellColor.
+/// Indexed colors pass through as CellColor::Indexed so ratatui can use
+/// the host terminal's actual color palette.  Only truecolor (Spec/Rgb)
+/// resolves to CellColor::Rgb.
+fn resolve_cell_color(color: &Color, palette: &Colors) -> CellColor {
     match color {
-        Color::Spec(rgb) => Some(RgbColor {
+        Color::Spec(rgb) => CellColor::Rgb(RgbColor {
             r: rgb.r,
             g: rgb.g,
             b: rgb.b,
         }),
-        Color::Indexed(idx) => {
-            let i = *idx as usize;
-            palette[i].as_ref().map(|r| RgbColor {
-                r: r.r,
-                g: r.g,
-                b: r.b,
-            }).or_else(|| {
-                // 216-color cube (16..232)
-                if i >= 16 && i < 232 {
-                    fn cube6(v: u8) -> u8 { [0, 95, 135, 175, 215, 255][v as usize] }
-                    let n = i - 16;
-                    Some(RgbColor {
-                        r: cube6(((n / 36) % 6) as u8),
-                        g: cube6(((n / 6) % 6) as u8),
-                        b: cube6((n % 6) as u8),
-                    })
-                // Grayscale ramp (232..256)
-                } else if i >= 232 && i < 256 {
-                    let v = (i - 232) * 10 + 8;
-                    Some(RgbColor { r: v as u8, g: v as u8, b: v as u8 })
-                } else {
-                    None
-                }
-            })
-        }
+        Color::Indexed(idx) => CellColor::Indexed(*idx),
         Color::Named(named) => {
-            palette[*named].as_ref().map(|r| RgbColor {
-                r: r.r,
-                g: r.g,
-                b: r.b,
-            }).or_else(|| {
-                const ANSI: &[RgbColor] = &[
-                    RgbColor { r: 0x00, g: 0x00, b: 0x00 },
-                    RgbColor { r: 0x80, g: 0x00, b: 0x00 },
-                    RgbColor { r: 0x00, g: 0x80, b: 0x00 },
-                    RgbColor { r: 0x80, g: 0x80, b: 0x00 },
-                    RgbColor { r: 0x00, g: 0x00, b: 0x80 },
-                    RgbColor { r: 0x80, g: 0x00, b: 0x80 },
-                    RgbColor { r: 0x00, g: 0x80, b: 0x80 },
-                    RgbColor { r: 0xc0, g: 0xc0, b: 0xc0 },
-                    RgbColor { r: 0x80, g: 0x80, b: 0x80 },
-                    RgbColor { r: 0xff, g: 0x00, b: 0x00 },
-                    RgbColor { r: 0x00, g: 0xff, b: 0x00 },
-                    RgbColor { r: 0xff, g: 0xff, b: 0x00 },
-                    RgbColor { r: 0x00, g: 0x00, b: 0xff },
-                    RgbColor { r: 0xff, g: 0x00, b: 0xff },
-                    RgbColor { r: 0x00, g: 0xff, b: 0xff },
-                    RgbColor { r: 0xff, g: 0xff, b: 0xff },
-                ];
-                let idx = *named as usize;
-                if idx < 16 { Some(ANSI[idx]) } else { None }
-            })
+            // NamedColor indices below 16 are the standard ANSI colors.
+            let idx = *named as usize;
+            if let Some(pal_rgb) = palette[idx].as_ref() {
+                CellColor::Rgb(RgbColor { r: pal_rgb.r, g: pal_rgb.g, b: pal_rgb.b })
+            } else if idx < 16 {
+                CellColor::Indexed(idx as u8)
+            } else {
+                CellColor::Default
+            }
         }
     }
 }

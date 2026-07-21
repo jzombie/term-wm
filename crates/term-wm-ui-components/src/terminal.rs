@@ -5,7 +5,7 @@ use std::sync::Arc;
 use portable_pty::{CommandBuilder, PtySize};
 use ratatui::style::{Color as TColor, Modifier, Style};
 use term_wm_core::events::{Event, KeyCode, KeyKind, MouseButton, MouseEvent, MouseEventKind};
-use term_wm_pty_engine::pane::{CursorInfo, MouseProtocolEncoding, RgbColor, TerminalCell, TerminalSnapshot};
+use term_wm_pty_engine::pane::{CellColor, CursorInfo, MouseProtocolEncoding, RgbColor, TerminalCell, TerminalSnapshot};
 
 use crate::helpers::{
     color_to_ratatui, decorate_link_style, layout_rect_to_clipped_rect, localize_coordinate,
@@ -623,8 +623,16 @@ impl TerminalComponent {
                 let c = col as usize;
                 if let Some(cell) = snap.cells.get(r).and_then(|r| r.get(c)) {
                     let mut symbol = cell.character;
-                    let fg = cell.fg.map(|rgb| TColor::Rgb(rgb.r, rgb.g, rgb.b));
-                    let bg = cell.bg.map(|rgb| TColor::Rgb(rgb.r, rgb.g, rgb.b));
+                    let fg = match cell.fg {
+                        CellColor::Rgb(rgb) => Some(TColor::Rgb(rgb.r, rgb.g, rgb.b)),
+                        CellColor::Indexed(idx) => Some(TColor::Indexed(idx)),
+                        CellColor::Default => None,
+                    };
+                    let bg = match cell.bg {
+                        CellColor::Rgb(rgb) => Some(TColor::Rgb(rgb.r, rgb.g, rgb.b)),
+                        CellColor::Indexed(idx) => Some(TColor::Indexed(idx)),
+                        CellColor::Default => None,
+                    };
                     let mut style = Style::default();
                     if let Some(fg) = fg {
                         style = style.fg(fg);
@@ -1099,17 +1107,23 @@ impl Pane for TestPane {
                 let fg = {
                     use alacritty_terminal::vte::ansi::Color;
                     match &acell.fg {
-                        Color::Spec(rgb) => Some(term_wm_pty_engine::pane::RgbColor { r: rgb.r, g: rgb.g, b: rgb.b }),
-                        Color::Indexed(idx) => t.colors()[*idx as usize].as_ref().map(|r| term_wm_pty_engine::pane::RgbColor { r: r.r, g: r.g, b: r.b }),
-                        Color::Named(named) => t.colors()[*named].as_ref().map(|r| term_wm_pty_engine::pane::RgbColor { r: r.r, g: r.g, b: r.b }),
+                        Color::Spec(rgb) => term_wm_pty_engine::pane::CellColor::Rgb(term_wm_pty_engine::pane::RgbColor { r: rgb.r, g: rgb.g, b: rgb.b }),
+                        Color::Indexed(idx) => term_wm_pty_engine::pane::CellColor::Indexed(*idx),
+                        Color::Named(named) => {
+                            let p = t.colors()[*named];
+                            match p { Some(r) => term_wm_pty_engine::pane::CellColor::Rgb(term_wm_pty_engine::pane::RgbColor { r: r.r, g: r.g, b: r.b }), None => term_wm_pty_engine::pane::CellColor::Default }
+                        }
                     }
                 };
                 let bg = {
                     use alacritty_terminal::vte::ansi::Color;
                     match &acell.bg {
-                        Color::Spec(rgb) => Some(term_wm_pty_engine::pane::RgbColor { r: rgb.r, g: rgb.g, b: rgb.b }),
-                        Color::Indexed(idx) => t.colors()[*idx as usize].as_ref().map(|r| term_wm_pty_engine::pane::RgbColor { r: r.r, g: r.g, b: r.b }),
-                        Color::Named(named) => t.colors()[*named].as_ref().map(|r| term_wm_pty_engine::pane::RgbColor { r: r.r, g: r.g, b: r.b }),
+                        Color::Spec(rgb) => term_wm_pty_engine::pane::CellColor::Rgb(term_wm_pty_engine::pane::RgbColor { r: rgb.r, g: rgb.g, b: rgb.b }),
+                        Color::Indexed(idx) => term_wm_pty_engine::pane::CellColor::Indexed(*idx),
+                        Color::Named(named) => {
+                            let p = t.colors()[*named];
+                            match p { Some(r) => term_wm_pty_engine::pane::CellColor::Rgb(term_wm_pty_engine::pane::RgbColor { r: r.r, g: r.g, b: r.b }), None => term_wm_pty_engine::pane::CellColor::Default }
+                        }
                     }
                 };
                 row_cells.push(TerminalCell {

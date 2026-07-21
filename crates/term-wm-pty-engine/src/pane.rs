@@ -15,11 +15,18 @@ pub struct RgbColor {
     pub b: u8,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CellColor {
+    Indexed(u8),
+    Rgb(RgbColor),
+    Default,
+}
+
 #[derive(Clone, Debug)]
 pub struct TerminalCell {
     pub character: char,
-    pub fg: Option<RgbColor>,
-    pub bg: Option<RgbColor>,
+    pub fg: CellColor,
+    pub bg: CellColor,
     pub bold: bool,
     pub dim: bool,
     pub italic: bool,
@@ -63,8 +70,8 @@ pub struct TerminalSnapshot {
     pub columns: u16,
     pub rows: u16,
     pub cursor: Option<CursorInfo>,
-    pub default_fg: Option<RgbColor>,
-    pub default_bg: Option<RgbColor>,
+    pub default_fg: CellColor,
+    pub default_bg: CellColor,
     pub alternate_screen: bool,
     pub mouse: MouseProtocol,
     pub display_offset: usize,
@@ -101,8 +108,8 @@ pub trait Pane {
             columns,
             rows,
             cursor: None,
-            default_fg: None,
-            default_bg: None,
+            default_fg: CellColor::Default,
+            default_bg: CellColor::Default,
             alternate_screen: false,
             mouse: MouseProtocol {
                 encoding: MouseProtocolEncoding::Default,
