@@ -136,7 +136,7 @@ fn generate_notification_regions(plan: &mut DrawPlan, wm: &WindowManager) {
     const TOAST_W: u16 = 40;
     const H_MARGIN: u16 = 2;
     const Y_OFFSET: u16 = 0;
-    const GAP: u16 = 1;
+    const GAP: u16 = 0;
 
     let managed = wm.managed_area();
     let notif_count = wm.notifications().len();
