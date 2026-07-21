@@ -740,10 +740,8 @@ fn actual_wrapped_height(line: &Line<'_>, width: u16) -> usize {
         .render(area, &mut buf);
     let mut last = 0usize;
     for y in 0..buf.area.height as usize {
-        let has_content = (0..buf.area.width).any(|x| {
-            buf.cell((x, y as u16))
-                .is_some_and(|c| c.symbol() != " ")
-        });
+        let has_content =
+            (0..buf.area.width).any(|x| buf.cell((x, y as u16)).is_some_and(|c| c.symbol() != " "));
         if has_content {
             last = y + 1;
         }
@@ -1050,18 +1048,28 @@ mod tests {
         // word boundaries prevent breaking at column 67.  The old formula
         // (w + usable - 1) / usable gave 2, truncating the third line.
         let line = Line::from(vec![
-            ratatui::text::Span::raw("To send Ctrl+G to the currently focused application, press Ctrl+G"),
-            ratatui::text::Span::raw(" twice quickly. (The second press is forwarded to the active window.)"),
+            ratatui::text::Span::raw(
+                "To send Ctrl+G to the currently focused application, press Ctrl+G",
+            ),
+            ratatui::text::Span::raw(
+                " twice quickly. (The second press is forwarded to the active window.)",
+            ),
         ]);
         let w = line.width();
+        let char_based = w.div_ceil(67);
         // Sanity: the character-width formula undercounts for this paragraph
-        assert!((w + 67 - 1) / 67 < actual_wrapped_height(&line, 67),
+        assert!(
+            char_based < actual_wrapped_height(&line, 67),
             "character-width formula should undercount, but actual={} char-based={}",
-            actual_wrapped_height(&line, 67), (w + 67 - 1) / 67);
+            actual_wrapped_height(&line, 67),
+            char_based
+        );
         // actual_wrapped_height counts word-wrapped lines correctly
-        assert!(actual_wrapped_height(&line, 67) >= 3,
+        assert!(
+            actual_wrapped_height(&line, 67) >= 3,
             "wrapping 132+ chars at width 67 needs at least 3 lines, got {}",
-            actual_wrapped_height(&line, 67));
+            actual_wrapped_height(&line, 67)
+        );
     }
 
     #[test]
