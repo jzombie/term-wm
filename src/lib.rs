@@ -212,7 +212,7 @@ pub fn render_app(
                 .style(
                     Style::default()
                         .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                        .add_modifier(Modifier::UNDERLINED),
                 )
                 .render(text_area, buf);
 
