@@ -4,7 +4,7 @@ use term_wm::layout::Direction;
 use term_wm::layout::tiling::{InsertPosition, LayoutNode, TilingLayout};
 use term_wm::window::{FloatRectSpec, WindowKey, WindowManager};
 use term_wm::wm_config::WmConfig;
-use term_wm_core::components::{NoopComponent, NoopOverlay, NoopWmComponent};
+use term_wm_core::components::NoopComponent;
 use term_wm_layout_engine::{LayoutRect, detect_corner_snap, detect_edge_snap, edge_preview_rect};
 
 type Rect = term_wm_core::Rect;

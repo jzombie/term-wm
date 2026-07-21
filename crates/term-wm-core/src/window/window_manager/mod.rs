@@ -701,10 +701,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     /// Immutable component locator via semantic tag.
-    pub fn get_semantic_component(
-        &self,
-        tag: layer_manager::ComponentTag,
-    ) -> Option<&L> {
+    pub fn get_semantic_component(&self, tag: layer_manager::ComponentTag) -> Option<&L> {
         self.semantic_registry
             .get(&tag)
             .copied()
@@ -1990,10 +1987,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             .and_then(|c| c.take_pending_title())
     }
 
-    pub fn overlay_for_key_mut(
-        &mut self,
-        key: OverlayKey,
-    ) -> Option<&mut O> {
+    pub fn overlay_for_key_mut(&mut self, key: OverlayKey) -> Option<&mut O> {
         self.overlays.get_mut(key)
     }
 
@@ -2440,7 +2434,10 @@ fn rects_intersect(a: Rect, b: Rect) -> bool {
 }
 
 #[cfg(test)]
-fn make_keys(wm: &mut WindowManager<TestComponent>, n: usize) -> Vec<WindowKey> {
+fn make_keys<L: WmComponent, O: Overlay<TermWmAction>>(
+    wm: &mut WindowManager<TestComponent, L, O>,
+    n: usize,
+) -> Vec<WindowKey> {
     (0..n)
         .map(|_| wm.create_window(TestComponent::Noop(crate::components::NoopComponent)))
         .collect()
@@ -2449,12 +2446,12 @@ fn make_keys(wm: &mut WindowManager<TestComponent>, n: usize) -> Vec<WindowKey> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::{NoopOverlay, NoopWmComponent};
     use crate::events::{KeyModifiers, MouseButton};
     use crate::hitbox_registry::HitboxId;
     use crate::layout::{Constraint, Direction};
     use crate::window::test_component::{ActionRecorder, SelComponent, TestComponent};
     use std::collections::VecDeque;
-    use crate::components::{NoopOverlay, NoopWmComponent};
     use term_wm_layout_engine::LayoutRect;
 
     /// Test fixture: how far back to set `drag_last_event` to simulate
@@ -5279,14 +5276,42 @@ mod tests {
 
     #[test]
     fn overlay_dispatch_passes_screen_area_to_context() {
+        use crate::components::{
+            Component as Cmp, ComponentContext as Ctx, EventResult as EvtRes, Overlay as Ovly,
+            WmComponent as WmCmp,
+        };
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::layout::{LayoutNode, TilingLayout};
 
-        let mut wm = WindowManager::<TestComponent>::with_config(
+        #[derive(Debug)]
+        struct ConsumeLayer;
+        impl Cmp<TermWmAction> for ConsumeLayer {
+            fn handle_events(&mut self, _: &Event, _: &Ctx) -> EvtRes<TermWmAction> {
+                EvtRes::Consumed
+            }
+            fn update(
+                &mut self,
+                _: TermWmAction,
+                _: &Ctx,
+                _: &mut VecDeque<(WindowKey, TermWmAction)>,
+            ) {
+            }
+            fn render(
+                &mut self,
+                _: &mut dyn term_wm_render::RenderBackend,
+                _: LayoutRect,
+                _: &Ctx,
+                _: &mut crate::hitbox_registry::HitboxRegistry,
+            ) {
+            }
+        }
+        impl WmCmp for ConsumeLayer {}
+
+        let mut wm = WindowManager::<TestComponent, ConsumeLayer>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            crate::window::LayerManager::new(),
+            layer_manager::LayerManager::<ConsumeLayer>::new(),
             std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
@@ -5309,9 +5334,8 @@ mod tests {
             height: 15,
         };
 
-        let overlay_obj = NoopWmComponent;
-        let _overlay_hitbox_id = layer_manager::LayerId::new();
         // Register overlay's hitbox and store it
+        let overlay_obj = ConsumeLayer;
         let _overlay_id = wm
             .layer_manager
             .insert(overlay_obj, layer_manager::ZPlane::Foreground);
