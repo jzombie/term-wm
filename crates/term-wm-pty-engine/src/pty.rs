@@ -491,9 +491,15 @@ impl Pty {
             },
         };
 
+        // The Grid ringbuffer: Line(0) = bottom of visible screen,
+        // Line(-N) = N rows up (into scrollback).  When the user has
+        // scrolled up by `display_offset`, the first visible line is
+        // Line(-display_offset - 1).
+        let start_line = -(display_offset as i32) - 1;
         let mut cells = Vec::with_capacity(rows as usize);
         for i in 0..rows {
-            let row = &grid[Line(i as i32)];
+            let line = Line(start_line + i as i32);
+            let row = &grid[line];
             let mut row_cells = Vec::with_capacity(columns as usize);
             for col in 0..columns {
                 let acell = &row[Column(col as usize)];
@@ -566,7 +572,7 @@ impl Pty {
         let current = self.scrollback();
         let delta = rows as i32 - current as i32;
         let mut t = self.term.lock().unwrap_or_else(|e| e.into_inner());
-        t.scroll_display(Scroll::Delta(-delta));
+        t.scroll_display(Scroll::Delta(delta));
     }
 
     pub fn scrollback_len(&self) -> usize {

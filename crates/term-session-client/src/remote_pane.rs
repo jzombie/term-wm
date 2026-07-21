@@ -144,7 +144,7 @@ impl Pane for RemotePane {
         let current = self.scrollback();
         let delta = rows as i32 - current as i32;
         let mut term = self.term.lock().unwrap();
-        term.scroll_display(alacritty_terminal::grid::Scroll::Delta(-delta));
+        term.scroll_display(alacritty_terminal::grid::Scroll::Delta(delta));
     }
 
     fn scrollback_len(&self) -> usize {
@@ -187,9 +187,11 @@ impl Pane for RemotePane {
             },
         };
 
+        let display_offset = grid.display_offset();
+        let start_line = -(display_offset as i32) - 1;
         let mut cells = Vec::with_capacity(rows as usize);
         for i in 0..rows {
-            let row = &grid[Line(i as i32)];
+            let row = &grid[Line(start_line + i as i32)];
             let mut row_cells = Vec::with_capacity(columns as usize);
             for col in 0..columns {
                 let acell = &row[Column(col as usize)];

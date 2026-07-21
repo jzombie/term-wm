@@ -778,27 +778,28 @@ impl TerminalComponent {
 
     fn selection_text_for_range(&self, range: SelectionRange) -> Option<String> {
         let mut pane = self.pane.borrow_mut();
-        let max_sb = pane.max_scrollback();
-
-        // Capture the current scrollback state and restore on drop.
         let saved_sb = pane.scrollback();
+
+        let snap = pane.snapshot(u16::MAX, u16::MAX);
+        let cols = snap.columns as usize;
 
         let mut end_row = range.end.row;
         let mut end_col = range.end.column;
         if end_col == 0 && end_row > range.start.row {
             end_row = end_row.saturating_sub(1);
-            end_col = pane.snapshot(1, 1).columns as usize;
+            end_col = cols;
+        }
+
+        if end_row < range.start.row {
+            return None;
         }
 
         let mut result = String::new();
         for absolute_row in range.start.row..=end_row {
-            // Scroll to the appropriate position.  The offset from the
-            // bottom of the scrollback is (max_sb - absolute_row).
-            let offset = max_sb.saturating_sub(absolute_row);
-            pane.set_scrollback(offset);
-
+            // Scroll so the desired row is the first visible line.
+            pane.set_scrollback(absolute_row);
             let snap = pane.snapshot(u16::MAX, u16::MAX);
-            let cols = snap.columns as usize;
+            let snap_cols = snap.columns as usize;
 
             let col_start = if absolute_row == range.start.row {
                 range.start.column
@@ -808,7 +809,7 @@ impl TerminalComponent {
             let col_end = if absolute_row == end_row {
                 end_col
             } else {
-                cols
+                snap_cols
             };
 
             for c in col_start..col_end {
@@ -1087,9 +1088,11 @@ impl Pane for TestPane {
                 else { MouseProtocolMode::None },
         };
 
+        let display_offset = grid.display_offset();
+        let start_line = -(display_offset as i32) - 1;
         let mut cells = Vec::with_capacity(rows as usize);
         for i in 0..rows {
-            let row = &grid[Line(i as i32)];
+            let row = &grid[Line(start_line + i as i32)];
             let mut row_cells = Vec::with_capacity(columns as usize);
             for col in 0..columns {
                 let acell = &row[Column(col as usize)];
