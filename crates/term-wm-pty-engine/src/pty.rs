@@ -17,14 +17,12 @@ const PTY_READ_BUF_SIZE: usize = 65536;
 
 /// Number of bytes from the end of the previous chunk to carry forward
 /// for cross-boundary pattern detection (DSR, OSC 52 header).
-const HISTORY_TAIL_LEN: usize = 3;
+/// Must cover the 5-byte OSC 52 header `\x1b]52;` across chunk boundaries
+/// (needs at least 4 bytes of tail; 8 provides margin).
+const HISTORY_TAIL_LEN: usize = 8;
 
 /// Length of the DSR request sequence `\x1b[6n`.
 const DSR_PATTERN_LEN: usize = 4;
-
-/// Extra bytes to search past the prune target when looking for a newline
-/// boundary during history cap.
-const PRUNE_SEARCH_WINDOW: usize = 1024;
 
 /// Buffer size for `proc_name()` on macOS.
 #[cfg(target_os = "macos")]
@@ -68,8 +66,6 @@ pub struct Pty {
     exited: bool,
     exit_status: Option<portable_pty::ExitStatus>,
     reader: Option<JoinHandle<()>>,
-    /// Resize request sent from main thread to reader thread.
-    pending_resize: Arc<Mutex<Option<PtySize>>>,
     /// Status callback invoked by the reader thread on wakeup and exit.
     status_cb: StatusCallback,
     /// Shutdown flag: when true, the reader thread exits its loop ASAP.
@@ -131,12 +127,10 @@ impl Pty {
         let shared_parser = Arc::new(Mutex::new(initial_parser));
         let dirty = Arc::new(AtomicBool::new(false));
         let dirty_cond = Arc::new((Mutex::new(()), Condvar::new()));
-        let pending_resize = Arc::new(Mutex::new(None::<PtySize>));
         let shutdown = Arc::new(AtomicBool::new(false));
         let reader_parser = Arc::clone(&shared_parser);
         let reader_dirty = Arc::clone(&dirty);
         let reader_dirty_cond = Arc::clone(&dirty_cond);
-        let reader_pending_resize = Arc::clone(&pending_resize);
         let reader_pending_title = Arc::clone(&pending_title);
         let reader_handle = thread::spawn(move || {
             parser_read_loop(ParserReadLoopArgs {
@@ -148,7 +142,6 @@ impl Pty {
                 shared_parser: reader_parser,
                 dirty: reader_dirty,
                 dirty_cond: reader_dirty_cond,
-                pending_resize: reader_pending_resize,
                 pending_title: reader_pending_title,
                 status_cb: reader_status_cb,
                 scrollback_len,
@@ -176,7 +169,6 @@ impl Pty {
             exited: false,
             exit_status: None,
             reader: Some(reader_handle),
-            pending_resize,
             status_cb,
             shutdown,
         })
@@ -221,17 +213,20 @@ impl Pty {
         if size.rows < 2 || size.cols < 2 {
             return Ok(());
         }
-        if size == self.pty_size
-            && let Ok(guard) = self.pending_resize.lock()
-            && guard.is_none()
-        {
+        if size == self.pty_size {
             return Ok(());
         }
+        // Lock the shared parser before resizing the OS PTY so the reader
+        // thread cannot process post-SIGWINCH bytes against stale dimensions.
+        let sp = self.shared_parser.clone();
+        let mut guard = sp.lock().unwrap();
         self.master
             .resize(size)
             .map_err(|err| wrap_err("resize", err))?;
+        guard.screen_mut().set_size(size.rows, size.cols);
+        drop(guard);
         self.pty_size = size;
-        self.apply_resize(size);
+        self.size = size;
         Ok(())
     }
 
@@ -448,12 +443,6 @@ impl Pty {
         parser.screen().alternate_screen()
     }
 
-    fn apply_resize(&mut self, size: PtySize) {
-        self.size = size;
-        if let Ok(mut guard) = self.pending_resize.lock() {
-            *guard = Some(size);
-        }
-    }
 }
 
 impl Drop for Pty {
@@ -475,7 +464,6 @@ struct ParserReadLoopArgs {
     shared_parser: Arc<Mutex<vt100::Parser>>,
     dirty: Arc<AtomicBool>,
     dirty_cond: Arc<(std::sync::Mutex<()>, Condvar)>,
-    pending_resize: Arc<Mutex<Option<PtySize>>>,
     pending_title: Arc<Mutex<Option<String>>>,
     status_cb: StatusCallback,
     scrollback_len: usize,
@@ -494,28 +482,17 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
         shared_parser,
         dirty,
         dirty_cond,
-        pending_resize,
         pending_title,
         status_cb,
-        scrollback_len,
+        scrollback_len: _scrollback_len,
         osc52_text,
     } = args;
-    let mut history: Vec<u8> = Vec::new();
+    let mut prev_tail: [u8; HISTORY_TAIL_LEN] = [0; HISTORY_TAIL_LEN];
     let mut buf = [0u8; PTY_READ_BUF_SIZE];
     let mut osc52 = Osc52Extractor::new();
     let mut bytes_since_render = 0usize;
     const IO_BURST_BUDGET: usize = 256 * 1024; // 256 KB
     loop {
-        // Check for pending resize from main thread
-        if let Ok(mut resize_opt) = pending_resize.lock()
-            && let Some(size) = resize_opt.take()
-        {
-            let mut new_parser = vt100::Parser::new(size.rows, size.cols, scrollback_len);
-            new_parser.process(&history);
-            let mut shared = shared_parser.lock().unwrap();
-            *shared = new_parser;
-        }
-
         match reader.read(&mut buf) {
             Ok(0) => {
                 // EOF — child exited. Send wakeup for final screen, then exited.
@@ -530,15 +507,9 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
             Ok(n) => {
                 bytes_received.fetch_add(n, Ordering::Relaxed);
                 bytes_since_render += n;
-                let combined = if history.is_empty() {
-                    buf[..n].to_vec()
-                } else {
-                    let end = history.len().saturating_sub(HISTORY_TAIL_LEN);
-                    let mut tmp = history[end..].to_vec();
-                    tmp.extend_from_slice(&buf[..n]);
-                    tmp
-                };
-                if combined.windows(DSR_PATTERN_LEN).any(|w| w == b"\x1b[6n") {
+                // DSR detection: 65536-byte reads make cross-chunk splitting
+                // of the 4-byte \x1b[6n pattern vanishingly unlikely.
+                if buf[..n].windows(DSR_PATTERN_LEN).any(|w| w == b"\x1b[6n") {
                     dsr_requested.store(true, Ordering::Relaxed);
                 }
                 if let Ok(mut last) = last_bytes.lock() {
@@ -555,21 +526,6 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     }
                 }
 
-                history.extend_from_slice(&buf[..n]);
-                // Cap history to avoid unbounded memory usage.
-                const MAX_HISTORY_CAP: usize = 2 * 1024 * 1024;
-                const PRUNE_TARGET: usize = 1024 * 1024;
-                if history.len() > MAX_HISTORY_CAP {
-                    let prune_amount = history.len() - PRUNE_TARGET;
-                    let search_end = (prune_amount + PRUNE_SEARCH_WINDOW).min(history.len());
-                    let cut_index = history[prune_amount..search_end]
-                        .iter()
-                        .position(|&b| b == b'\n')
-                        .map(|i| prune_amount + i + 1)
-                        .unwrap_or(prune_amount);
-                    history.drain(0..cut_index);
-                }
-
                 // Process bytes directly into the shared parser.
                 {
                     let mut shared = shared_parser.lock().unwrap();
@@ -582,13 +538,20 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     *guard = Some(title);
                 }
                 // Intercept OSC 52 clipboard sequences (cross-chunk buffering).
-                let tail = &history[history.len().saturating_sub(HISTORY_TAIL_LEN)..];
-                if let Some(text) = osc52.push(&buf[..n], tail) {
+                if let Some(text) = osc52.push(&buf[..n], &prev_tail) {
                     let mut cb = Clipboard::new();
                     let _ = cb.set(&text);
                     if let Some(ref capture) = osc52_text {
                         *capture.lock().unwrap() = Some(text);
                     }
+                }
+
+                // Update prev_tail for next iteration's cross-chunk detection.
+                if n >= HISTORY_TAIL_LEN {
+                    prev_tail.copy_from_slice(&buf[n - HISTORY_TAIL_LEN..n]);
+                } else if n > 0 {
+                    prev_tail.rotate_left(n);
+                    prev_tail[HISTORY_TAIL_LEN - n..].copy_from_slice(&buf[..n]);
                 }
 
                 // Edge-triggered wakeup: only notify on false→true transition.
@@ -883,7 +846,6 @@ mod tests {
             shared_parser: Arc::new(Mutex::new(vt100::Parser::new(24, 80, 0))),
             dirty: Arc::new(AtomicBool::new(false)),
             dirty_cond: Arc::new((Mutex::new(()), Condvar::new())),
-            pending_resize: Arc::new(Mutex::new(None)),
             pending_title: Arc::new(Mutex::new(None)),
             status_cb: Arc::new(Mutex::new(None)),
             scrollback_len: 0,
