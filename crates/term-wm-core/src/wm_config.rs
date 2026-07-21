@@ -70,9 +70,8 @@ pub struct WmConfig {
     pub chrome_enabled: bool,
     /// Support floating (draggable) windows alongside tiled windows.
     pub floating_windows_enabled: bool,
-    // TODO: Rename to `panels_enabled`
     /// Show the top/bottom status panel (window list, menu, indicators).
-    pub panel_enabled: bool,
+    pub panels_enabled: bool,
     /// Enable the WM command menu toggled by Escape.
     pub wm_command_menu_enabled: bool,
     /// Duration of the escape passthrough window.
@@ -124,7 +123,7 @@ impl WmConfig {
         Self {
             chrome_enabled: true,
             floating_windows_enabled: true,
-            panel_enabled: true,
+            panels_enabled: true,
             wm_command_menu_enabled: true,
             super_passthrough_window: super_passthrough_window_default(),
             floating_resize_offscreen: true,
@@ -148,7 +147,7 @@ impl WmConfig {
         Self {
             chrome_enabled: false,
             floating_windows_enabled: false,
-            panel_enabled: false,
+            panels_enabled: false,
             wm_command_menu_enabled: false,
             super_passthrough_window: super_passthrough_window_default(),
             floating_resize_offscreen: false,
@@ -167,6 +166,6 @@ impl WmConfig {
     }
 
     pub fn panel_active(&self) -> bool {
-        self.panel_enabled
+        self.panels_enabled
     }
 }

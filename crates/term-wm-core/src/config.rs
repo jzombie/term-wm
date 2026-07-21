@@ -114,7 +114,7 @@ impl AppBuilder {
     }
 
     pub fn panel(mut self, enabled: bool) -> Self {
-        self.config.panel_enabled = enabled;
+        self.config.panels_enabled = enabled;
         self
     }
 
