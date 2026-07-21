@@ -666,7 +666,7 @@ mod drag_snap_pipeline {
         };
         let buf = Buffer::empty(area);
         let mut backend = RatatuiBackend::new(buf, area);
-        render_app(&mut backend, wm, engine, renderer, "");
+        render_app(&mut backend, wm, engine, renderer);
     }
 
     #[test]
@@ -1448,7 +1448,7 @@ mod floating_tiled_separation {
         };
         let buf = Buffer::empty(area);
         let mut backend = RatatuiBackend::new(buf, area);
-        render_app(&mut backend, wm, engine, renderer, "");
+        render_app(&mut backend, wm, engine, renderer);
     }
 
     #[test]

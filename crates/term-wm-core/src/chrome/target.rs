@@ -20,4 +20,6 @@ pub enum ChromeTarget {
     ToggleDirectMode(WindowKey),
     /// Tiling layout split handle seam.
     SplitHandle(HitboxId),
+    /// Empty-state placeholder ("No opened windows.") — opens command palette on click.
+    EmptyStatePlaceholder,
 }

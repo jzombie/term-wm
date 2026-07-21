@@ -30,7 +30,6 @@ pub struct TermWmApp {
     wm: WindowManager,
     window_keys: Vec<WindowKey>,
     should_quit: bool,
-    empty_message: String,
     /// Core engine for draw plan generation.
     engine: CoreEngine,
     /// Draw plan renderer for rendering components.
@@ -109,22 +108,10 @@ impl TermWmApp {
             wm,
             window_keys: Vec::new(),
             should_quit: false,
-            empty_message: "No opened windows.".to_string(),
             engine: CoreEngine::new(),
             draw_renderer: DrawPlanRenderer::new(),
             known_windows: Vec::new(),
         }
-    }
-
-    /// Set the message shown when no windows are registered.
-    pub fn empty_message(mut self, msg: impl Into<String>) -> Self {
-        self.empty_message = msg.into();
-        self
-    }
-
-    /// Get the message shown when no windows are registered.
-    pub fn empty_message_str(&self) -> &str {
-        &self.empty_message
     }
 
     /// Whether a quit has been requested.
@@ -214,13 +201,11 @@ impl TermWmApp {
 
     /// Render the window manager using the shared `render_app` implementation.
     pub fn render_app(&mut self, backend: &mut dyn term_wm_render::RenderBackend) {
-        let msg = self.empty_message_str().to_owned();
         crate::render_app(
             backend,
             &mut self.wm,
             &mut self.engine,
             &mut self.draw_renderer,
-            &msg,
         );
     }
 }
@@ -235,13 +220,11 @@ impl WindowManagerHost for TermWmApp {
     }
 
     fn render(&mut self, backend: &mut dyn term_wm_render::RenderBackend) {
-        let msg = self.empty_message_str().to_owned();
         crate::render_app(
             backend,
             &mut self.wm,
             &mut self.engine,
             &mut self.draw_renderer,
-            &msg,
         );
     }
 }

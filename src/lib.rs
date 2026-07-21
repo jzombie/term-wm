@@ -8,6 +8,7 @@ pub mod tracing_sub;
 pub mod unified_event_source;
 pub use term_wm_console::widget_adapter::{StatefulWidgetAdapter, WidgetAdapter};
 
+use ratatui::prelude::Widget;
 use term_wm_console::RatatuiBackend;
 use term_wm_console::draw_plan_renderer::{
     ColorConvert, DrawPlanRenderer, composite_window, overlay_shadow_data, render_cursor_overlay,
@@ -16,7 +17,6 @@ use term_wm_console::draw_plan_renderer::{
 };
 use term_wm_core::hitbox_registry::{ComponentOwner, HitboxId, HitboxRegistry};
 use term_wm_core::window::{WindowManager, WindowSurface};
-use ratatui::prelude::Widget;
 
 /// Default rendering implementation for the window manager.
 /// Shared by all apps so they don't need to reimplement rendering.
@@ -25,7 +25,6 @@ pub fn render_app(
     wm: &mut term_wm_core::window::WindowManager,
     engine: &mut term_wm_core::engine::CoreEngine,
     renderer: &mut DrawPlanRenderer,
-    empty_message: &str,
 ) {
     let Some(ratatui_backend) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() else {
         return;
@@ -193,30 +192,44 @@ pub fn render_app(
     }
     renderer.put_scratch(scratch_buf);
 
-    // Render empty state if no mapped windows
-    if wm.mapped_windows().is_empty() && !empty_message.is_empty() {
-        use ratatui::style::{Color, Modifier, Style};
+    // Render empty state if no mapped windows — clickable link opens command palette
+    const EMPTY_MSG: &str = "Open Command Palette";
+    if wm.mapped_windows().is_empty() {
+        use ratatui::style::{Modifier, Style};
         use ratatui::widgets::Paragraph;
         if let Some(rb) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() {
             let buf = &mut rb.buffer;
-            let msg_width = empty_message.len() as u16;
+            let msg_width = EMPTY_MSG.len() as u16;
             let x = area.width.saturating_sub(msg_width) / 2;
             let y = area.height as i32 / 2;
-            Paragraph::new(empty_message)
+            let text_area = ratatui::layout::Rect {
+                x,
+                y: y.max(0) as u16,
+                width: msg_width,
+                height: 1,
+            };
+            Paragraph::new(EMPTY_MSG)
                 .style(
                     Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::DIM),
+                        .fg(wm.config().theme.link_color.to_ratatui())
+                        .add_modifier(Modifier::UNDERLINED),
                 )
-                .render(
-                    ratatui::layout::Rect {
-                        x,
-                        y: y.max(0) as u16,
-                        width: msg_width,
-                        height: 1,
-                    },
-                    buf,
-                );
+                .render(text_area, buf);
+
+            // Register hitbox so click opens command palette
+            let hitbox_id = term_wm_core::hitbox_registry::HitboxId::new();
+            wm.hitbox_registry_mut().register(
+                hitbox_id,
+                term_wm_core::hitbox_registry::ComponentOwner::Chrome(
+                    term_wm_core::chrome::ChromeTarget::EmptyStatePlaceholder,
+                ),
+                term_wm_layout_engine::LayoutRect {
+                    x: i32::from(x),
+                    y: y.max(0),
+                    width: msg_width,
+                    height: 1,
+                },
+            );
         }
     }
 
@@ -224,11 +237,13 @@ pub fn render_app(
     render_panels(backend, wm);
 
     // Render FAB only in monocle/mobile mode — sole mobile navigation mechanism.
+    // Hidden when command palette is open; the bottom panel overlay fills the row.
     let fab_layer_id = wm
         .semantic_registry
         .get(&term_wm_core::window::ComponentTag::FloatingActionButton)
         .copied();
     if wm.is_monocle()
+        && !wm.command_menu_visible()
         && let Some(fab) =
             wm.get_semantic_component_mut(term_wm_core::window::ComponentTag::FloatingActionButton)
         && let Some(layer_id) = fab_layer_id

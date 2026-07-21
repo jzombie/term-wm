@@ -1536,6 +1536,9 @@ impl WindowManager {
                         }
                         EventResult::Consumed
                     }
+                    crate::chrome::ChromeTarget::EmptyStatePlaceholder => {
+                        EventResult::Action((None, TermWmAction::OpenCommandPalette))
+                    }
                 };
             }
         }
