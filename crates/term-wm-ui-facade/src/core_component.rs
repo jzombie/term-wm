@@ -16,5 +16,9 @@ pub enum CoreWmComponent {
 }
 
 impl_component_delegate!(CoreWmComponent {
-    Terminal, DebugLog, SystemPanel, SessionManager, Noop,
+    Terminal,
+    DebugLog,
+    SystemPanel,
+    SessionManager,
+    Noop,
 });

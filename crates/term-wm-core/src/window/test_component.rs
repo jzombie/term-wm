@@ -477,5 +477,9 @@ impl Component<TermWmAction> for RenderTracker {
 }
 
 impl_component_delegate!(TestComponent {
-    Noop, ActionRecorder, KeyRecorder, SelComponent, RenderTracker,
+    Noop,
+    ActionRecorder,
+    KeyRecorder,
+    SelComponent,
+    RenderTracker,
 });

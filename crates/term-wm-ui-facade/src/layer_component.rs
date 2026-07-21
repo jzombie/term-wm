@@ -15,9 +15,17 @@ pub enum LayerComponent {
 }
 
 impl_component_delegate!(LayerComponent {
-    TopPanel, BottomPanel, Fab, NotificationArea, CommandPalette,
+    TopPanel,
+    BottomPanel,
+    Fab,
+    NotificationArea,
+    CommandPalette,
 });
 
 impl_wm_component_delegate!(LayerComponent {
-    TopPanel, BottomPanel, Fab, NotificationArea, CommandPalette,
+    TopPanel,
+    BottomPanel,
+    Fab,
+    NotificationArea,
+    CommandPalette,
 });
