@@ -109,7 +109,7 @@ impl TermWmApp {
             wm,
             window_keys: Vec::new(),
             should_quit: false,
-            empty_message: "No windows".to_string(),
+            empty_message: "No opened windows.".to_string(),
             engine: CoreEngine::new(),
             draw_renderer: DrawPlanRenderer::new(),
             known_windows: Vec::new(),
@@ -214,7 +214,7 @@ impl TermWmApp {
 
     /// Render the window manager using the shared `render_app` implementation.
     pub fn render_app(&mut self, backend: &mut dyn term_wm_render::RenderBackend) {
-        let msg = self.no_windows_message().to_string();
+        let msg = self.empty_message_str().to_owned();
         crate::render_app(
             backend,
             &mut self.wm,
@@ -234,12 +234,8 @@ impl WindowManagerHost for TermWmApp {
         self.should_quit
     }
 
-    fn no_windows_message(&self) -> &str {
-        &self.empty_message
-    }
-
     fn render(&mut self, backend: &mut dyn term_wm_render::RenderBackend) {
-        let msg = self.no_windows_message().to_string();
+        let msg = self.empty_message_str().to_owned();
         crate::render_app(
             backend,
             &mut self.wm,
