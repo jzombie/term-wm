@@ -2044,7 +2044,7 @@ impl WindowManager {
         if self.is_monocle() {
             return false;
         }
-        self.config.panel_enabled
+        self.config.panels_enabled
             && self
                 .get_semantic_component(layer_manager::ComponentTag::TopPanel)
                 .is_some_and(|p| p.visible())
