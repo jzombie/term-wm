@@ -2909,7 +2909,6 @@ dependencies = [
  "proptest",
  "ratatui",
  "tempfile",
- "term-bench",
  "term-session-client",
  "term-session-muxio-service-definitions",
  "term-session-server",
@@ -2975,6 +2974,7 @@ dependencies = [
  "libc",
  "portable-pty",
  "thiserror 2.0.18",
+ "tracing",
  "vt100",
 ]
 
