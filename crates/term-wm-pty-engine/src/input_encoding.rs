@@ -1,4 +1,4 @@
-use vt100::{MouseProtocolEncoding, MouseProtocolMode};
+use crate::pane::{MouseProtocolEncoding, MouseProtocolMode};
 
 // Event types matching term_wm_core::events
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

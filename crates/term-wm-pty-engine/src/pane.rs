@@ -1,10 +1,77 @@
 use std::io;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use portable_pty::{Child, ExitStatus, PtySize};
 
 use crate::{PtyResult, PtyStatus};
+
+// ── terminal-agnostic types ──────────────────────────────────────────
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RgbColor {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+#[derive(Clone, Debug)]
+pub struct TerminalCell {
+    pub character: char,
+    pub fg: Option<RgbColor>,
+    pub bg: Option<RgbColor>,
+    pub bold: bool,
+    pub dim: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub inverse: bool,
+    pub hidden: bool,
+    pub strikeout: bool,
+    pub wide_continuation: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseProtocolEncoding {
+    Default,
+    Sgr,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseProtocolMode {
+    None,
+    Press,
+    PressRelease,
+    ButtonMotion,
+    AnyMotion,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct MouseProtocol {
+    pub encoding: MouseProtocolEncoding,
+    pub mode: MouseProtocolMode,
+}
+
+#[derive(Clone, Debug)]
+pub struct CursorInfo {
+    pub column: u16,
+    pub row: u16,
+    pub hidden: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct TerminalSnapshot {
+    pub columns: u16,
+    pub rows: u16,
+    pub cursor: Option<CursorInfo>,
+    pub default_fg: Option<RgbColor>,
+    pub default_bg: Option<RgbColor>,
+    pub alternate_screen: bool,
+    pub mouse: MouseProtocol,
+    pub display_offset: usize,
+    pub cells: Vec<Vec<TerminalCell>>,
+}
+
+// ── Pane trait ───────────────────────────────────────────────────────
 
 pub trait Pane {
     fn resize(&mut self, size: PtySize) -> PtyResult<()>;
@@ -20,33 +87,43 @@ pub trait Pane {
     fn bytes_received(&self) -> usize;
     fn last_bytes_text(&self) -> String;
     fn kill_child(&mut self) -> PtyResult<()>;
-    /// Set a status callback invoked on PTY data or exit.
     fn set_status_callback(&mut self, _cb: Option<Box<dyn Fn(PtyStatus) + Send + Sync>>) {}
     fn take_pending_title(&mut self) -> Option<String> {
         None
     }
-    /// Extract the child process and reader thread handle so they can be
-    /// moved into the `Reaper` for async teardown.
-    /// Returns `None` by default (for mock panes). The real `Pty` impl
-    /// returns `(child, reader_handle)`.
     fn take_parts(&mut self) -> Option<(Box<dyn Child + Send + Sync>, JoinHandle<()>)> {
         None
     }
-    /// Access the shared parser for zero-copy rendering.
-    fn shared_parser(&mut self) -> Arc<Mutex<vt100::Parser>> {
-        Arc::new(Mutex::new(vt100::Parser::new(24, 80, 0)))
+
+    /// Capture the current visible viewport as a terminal-agnostic snapshot.
+    fn snapshot(&mut self, columns: u16, rows: u16) -> TerminalSnapshot {
+        TerminalSnapshot {
+            columns,
+            rows,
+            cursor: None,
+            default_fg: None,
+            default_bg: None,
+            alternate_screen: false,
+            mouse: MouseProtocol {
+                encoding: MouseProtocolEncoding::Default,
+                mode: MouseProtocolMode::None,
+            },
+            display_offset: 0,
+            cells: Vec::new(),
+        }
     }
+
     /// Reset the dirty flag. Returns true if dirty was set.
     fn take_dirty(&self) -> bool {
         false
     }
     /// Clear the dirty flag and notify the reader thread via Condvar.
-    /// This is the primary mechanism for I/O burst budget backpressure.
     fn clear_dirty_and_notify(&self) {}
     /// Sync dirty state and handle DSR/foreground polling.
-    /// Call before locking the parser for cell access.
     fn sync_screen(&mut self) {}
 }
+
+// ── imp Pane for Pty ─────────────────────────────────────────────────
 
 impl Pane for crate::Pty {
     fn resize(&mut self, size: PtySize) -> PtyResult<()> {
@@ -121,8 +198,8 @@ impl Pane for crate::Pty {
         crate::Pty::set_status_callback(self, cb)
     }
 
-    fn shared_parser(&mut self) -> Arc<Mutex<vt100::Parser>> {
-        self.shared_parser.clone()
+    fn snapshot(&mut self, columns: u16, rows: u16) -> TerminalSnapshot {
+        crate::Pty::snapshot(self, columns, rows)
     }
 
     fn take_dirty(&self) -> bool {

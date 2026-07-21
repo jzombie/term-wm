@@ -21,4 +21,3 @@ term-wm-pty-engine = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-vt100 = { workspace = true }

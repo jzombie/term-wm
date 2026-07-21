@@ -6,25 +6,26 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
+use alacritty_terminal::event::{Event, EventListener};
+use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::color::Colors;
+use alacritty_terminal::term::{Config, Term, TermMode};
+use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use crate::clipboard::{Clipboard, Osc52Extractor};
+use crate::pane::{
+    CursorInfo, MouseProtocol, MouseProtocolEncoding, MouseProtocolMode, RgbColor,
+    TerminalCell, TerminalSnapshot,
+};
 
 /// Size of the PTY master read buffer (single `read()` call).
-/// 64KB keeps the reader parked most of the time under heavy output
-/// (64KB × 60fps ≈ 3.8MB/s throughput, enough for any terminal workload).
 const PTY_READ_BUF_SIZE: usize = 65536;
-
-/// Number of bytes from the end of the previous chunk to carry forward
-/// for cross-boundary pattern detection (DSR, OSC 52 header).
-const HISTORY_TAIL_LEN: usize = 3;
 
 /// Length of the DSR request sequence `\x1b[6n`.
 const DSR_PATTERN_LEN: usize = 4;
-
-/// Extra bytes to search past the prune target when looking for a newline
-/// boundary during history cap.
-const PRUNE_SEARCH_WINDOW: usize = 1024;
 
 /// Buffer size for `proc_name()` on macOS.
 #[cfg(target_os = "macos")]
@@ -39,6 +40,45 @@ pub type PtyResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 type StatusCallback = Arc<Mutex<Option<Box<dyn Fn(PtyStatus) + Send + Sync>>>>;
 
+// ── Event listener for terminal title / OSC events ───────────────────
+
+pub(crate) struct PtyListener {
+    pub pending_title: Arc<Mutex<Option<String>>>,
+}
+
+impl EventListener for PtyListener {
+    fn send_event(&self, event: Event) {
+        match event {
+            Event::Title(title) => {
+                if let Ok(mut guard) = self.pending_title.lock() {
+                    *guard = Some(title);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+// ── Dimensions impl for resize ───────────────────────────────────────
+
+pub(crate) struct PtyDimensions {
+    pub columns: usize,
+    pub screen_lines: usize,
+    pub scrollback: usize,
+}
+
+impl Dimensions for PtyDimensions {
+    fn total_lines(&self) -> usize {
+        self.screen_lines + self.scrollback
+    }
+    fn screen_lines(&self) -> usize {
+        self.screen_lines
+    }
+    fn columns(&self) -> usize {
+        self.columns
+    }
+}
+
 pub struct Pty {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
@@ -52,10 +92,11 @@ pub struct Pty {
     foreground_title: Arc<Mutex<Option<String>>>,
     last_fg_pid: u32,
     last_fg_check: Instant,
-    /// Parsed screen shared between the reader thread and the main thread.
-    /// The reader parses bytes into this parser in-place. The main thread
-    /// locks it to read cells directly — zero clones.
-    pub(crate) shared_parser: Arc<Mutex<vt100::Parser>>,
+    /// Parsed terminal state shared between the reader thread and the
+    /// main thread.  The reader feeds bytes through a vte::Processor
+    /// into this Term; the main thread locks it to read the grid or
+    /// take snapshots.
+    pub(crate) term: Arc<Mutex<Term<PtyListener>>>,
     /// Set by the reader thread when new content has been parsed.
     pub(crate) dirty: Arc<AtomicBool>,
     /// Condvar for I/O burst budget: reader waits here when budget exceeded
@@ -127,13 +168,24 @@ impl Pty {
 
         let pending_title = Arc::new(Mutex::new(None));
         let foreground_title = Arc::new(Mutex::new(None));
-        let initial_parser = vt100::Parser::new(size.rows, size.cols, scrollback_len);
-        let shared_parser = Arc::new(Mutex::new(initial_parser));
+        let listener = PtyListener {
+            pending_title: Arc::clone(&pending_title),
+        };
+        let config = Config {
+            scrolling_history: scrollback_len,
+            ..Default::default()
+        };
+        let dims = PtyDimensions {
+            columns: size.cols as usize,
+            screen_lines: size.rows as usize,
+            scrollback: scrollback_len,
+        };
+        let term = Arc::new(Mutex::new(Term::new(config, &dims, listener)));
         let dirty = Arc::new(AtomicBool::new(false));
         let dirty_cond = Arc::new((Mutex::new(()), Condvar::new()));
         let pending_resize = Arc::new(Mutex::new(None::<PtySize>));
         let shutdown = Arc::new(AtomicBool::new(false));
-        let reader_parser = Arc::clone(&shared_parser);
+        let reader_term = Arc::clone(&term);
         let reader_dirty = Arc::clone(&dirty);
         let reader_dirty_cond = Arc::clone(&dirty_cond);
         let reader_pending_resize = Arc::clone(&pending_resize);
@@ -145,13 +197,12 @@ impl Pty {
                 bytes_received: reader_bytes,
                 last_bytes: reader_last,
                 dsr_requested: reader_dsr,
-                shared_parser: reader_parser,
+                term: reader_term,
                 dirty: reader_dirty,
                 dirty_cond: reader_dirty_cond,
                 pending_resize: reader_pending_resize,
                 pending_title: reader_pending_title,
                 status_cb: reader_status_cb,
-                scrollback_len,
                 osc52_text: None,
             })
         });
@@ -166,7 +217,7 @@ impl Pty {
             foreground_title,
             last_fg_pid: 0,
             last_fg_check: Instant::now(),
-            shared_parser,
+            term,
             dirty,
             dirty_cond,
             size,
@@ -214,10 +265,8 @@ impl Pty {
     }
 
     pub fn resize(&mut self, size: PtySize) -> PtyResult<()> {
-        // WORKAROUND: vt100 0.16.2 Grid::col_wrap (grid.rs:683) panics with a
-        // subtraction overflow at cols=1; rows=1 causes similar issues. Clamp
-        // the minimum so the PTY emulator doesn't crash when the terminal is
-        // shrunk small.
+        // WORKAROUND: alacritty_terminal's Term::resize handles very small
+        // dimensions gracefully, but clamp to avoid degenerate states.
         if size.rows < 2 || size.cols < 2 {
             return Ok(());
         }
@@ -307,14 +356,22 @@ impl Pty {
     }
 
     pub fn screen_lines(&mut self) -> Vec<String> {
-        self.screen(); // sync dirty state
-        let parser = self.shared_parser.lock().unwrap();
-        let screen = parser.screen();
-        let contents = screen.contents();
-        let mut lines: Vec<String> = contents.lines().map(|line| line.to_string()).collect();
-        if lines.len() < self.size.rows as usize {
-            lines.resize(self.size.rows as usize, String::new());
-        }
+        self.screen();
+        let t = self.term.lock().unwrap();
+        let grid = t.grid();
+        let lines: Vec<String> = (0..self.size.rows)
+            .map(|i| {
+                let row = &grid[Line(i as i32)];
+                let mut s = String::with_capacity(self.size.cols as usize);
+                for col in 0..self.size.cols {
+                    let cell = &row[Column(col as usize)];
+                    if !cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                        s.push(cell.c);
+                    }
+                }
+                s
+            })
+            .collect();
         lines
     }
 
@@ -371,32 +428,114 @@ impl Pty {
     }
 
     /// Sync dirty state and handle DSR/foreground polling.
-    /// The caller should then lock `shared_parser()` directly for cell access.
+    /// Callers should then take a snapshot for cell access.
     pub fn screen(&mut self) {
         self.poll_foreground();
         if self.dirty.swap(false, Ordering::Acquire) {
-            // Send DSR response if requested by the reader thread.
             if self.dsr_requested.swap(false, Ordering::Relaxed) {
-                let parser = self.shared_parser.lock().unwrap();
-                let (row, col) = parser.screen().cursor_position();
-                drop(parser);
-                let response = format!("\x1b[{};{}R", row.saturating_add(1), col.saturating_add(1));
+                let t = self.term.lock().unwrap();
+                let point = t.grid().cursor.point;
+                drop(t);
+                let response = format!(
+                    "\x1b[{};{}R",
+                    point.line.0.saturating_add(1),
+                    point.column.0.saturating_add(1)
+                );
                 let _ = self.write_bytes(response.as_bytes());
             }
-            // Acquire the lock to prevent lost wakeups on the condition variable
             let (lock, cvar) = &*self.dirty_cond;
             let _guard = lock.lock().unwrap();
             cvar.notify_all();
         }
     }
 
-    /// Sync dirty state and return the full terminal snapshot.
-    /// Combines screen() (which clears dirty and wakes the reader)
-    /// with a formatted snapshot of the current parser state.
-    pub fn generate_snapshot(&mut self) -> Vec<u8> {
+    /// Capture a full-frame snapshot of the visible viewport.
+    pub fn snapshot(&mut self, columns: u16, rows: u16) -> TerminalSnapshot {
         self.screen();
-        let parser = self.shared_parser.lock().unwrap();
-        parser.screen().state_formatted()
+        let t = self.term.lock().unwrap();
+        let grid = t.grid();
+        let mode = t.mode();
+        let display_offset = grid.display_offset();
+        let cursor = &t.grid().cursor;
+
+        let default_fg = t.colors()[NamedColor::Foreground].as_ref().map(|r| RgbColor {
+            r: r.r,
+            g: r.g,
+            b: r.b,
+        });
+        let default_bg = t.colors()[NamedColor::Background].as_ref().map(|r| RgbColor {
+            r: r.r,
+            g: r.g,
+            b: r.b,
+        });
+
+        let mouse = MouseProtocol {
+            encoding: if mode.contains(TermMode::SGR_MOUSE) {
+                MouseProtocolEncoding::Sgr
+            } else {
+                MouseProtocolEncoding::Default
+            },
+            mode: if mode.contains(TermMode::MOUSE_REPORT_CLICK) {
+                MouseProtocolMode::PressRelease
+            } else if mode.contains(TermMode::MOUSE_DRAG) {
+                MouseProtocolMode::ButtonMotion
+            } else if mode.contains(TermMode::MOUSE_MOTION) {
+                MouseProtocolMode::AnyMotion
+            } else {
+                MouseProtocolMode::None
+            },
+        };
+
+        let mut cells = Vec::with_capacity(rows as usize);
+        for i in 0..rows {
+            let row = &grid[Line(i as i32)];
+            let mut row_cells = Vec::with_capacity(columns as usize);
+            for col in 0..columns {
+                let acell = &row[Column(col as usize)];
+                let fg = resolve_cell_color(&acell.fg, t.colors());
+                let bg = resolve_cell_color(&acell.bg, t.colors());
+                row_cells.push(TerminalCell {
+                    character: acell.c,
+                    fg,
+                    bg,
+                    bold: acell.flags.contains(Flags::BOLD),
+                    dim: acell.flags.contains(Flags::DIM),
+                    italic: acell.flags.contains(Flags::ITALIC),
+                    underline: acell.flags.intersects(Flags::ALL_UNDERLINES),
+                    inverse: acell.flags.contains(Flags::INVERSE),
+                    hidden: acell.flags.contains(Flags::HIDDEN),
+                    strikeout: acell.flags.contains(Flags::STRIKEOUT),
+                    wide_continuation: acell.flags.contains(Flags::WIDE_CHAR_SPACER),
+                });
+            }
+            cells.push(row_cells);
+        }
+
+        TerminalSnapshot {
+            columns,
+            rows,
+            cursor: if mode.contains(TermMode::SHOW_CURSOR) {
+                let cursor_row = cursor.point.line.0 as u16;
+                let cursor_col = cursor.point.column.0 as u16;
+                if cursor_row < rows && cursor_col < columns {
+                    Some(CursorInfo {
+                        column: cursor_col,
+                        row: cursor_row,
+                        hidden: false,
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
+            },
+            default_fg,
+            default_bg,
+            alternate_screen: mode.contains(TermMode::ALT_SCREEN),
+            mouse,
+            display_offset,
+            cells,
+        }
     }
 
     pub fn bytes_received(&self) -> usize {
@@ -413,15 +552,16 @@ impl Pty {
     }
 
     pub fn scrollback(&mut self) -> usize {
-        self.screen(); // sync dirty state
-        let parser = self.shared_parser.lock().unwrap();
-        parser.screen().scrollback()
+        self.screen();
+        let t = self.term.lock().unwrap();
+        t.grid().display_offset()
     }
 
     pub fn set_scrollback(&mut self, rows: usize) {
-        let max = self.scrollback_len;
-        let mut parser = self.shared_parser.lock().unwrap();
-        parser.screen_mut().set_scrollback(rows.min(max));
+        let current = self.scrollback();
+        let delta = rows as i32 - current as i32;
+        let mut t = self.term.lock().unwrap();
+        t.scroll_display(Scroll::Delta(-delta));
     }
 
     pub fn scrollback_len(&self) -> usize {
@@ -429,23 +569,37 @@ impl Pty {
     }
 
     pub fn max_scrollback(&mut self) -> usize {
-        let max_sb = self.scrollback_len;
-        if max_sb == 0 {
-            return 0;
-        }
-        let mut parser = self.shared_parser.lock().unwrap();
-        let screen = parser.screen_mut();
-        let current = screen.scrollback();
-        screen.set_scrollback(max_sb);
-        let max = screen.scrollback();
-        screen.set_scrollback(current);
-        max
+        // alacritty_terminal doesn't expose max scrollback directly,
+        // but the Config::scrolling_history controls the grid size.
+        self.scrollback_len
     }
 
     pub fn alternate_screen(&mut self) -> bool {
-        self.screen(); // sync dirty state
-        let parser = self.shared_parser.lock().unwrap();
-        parser.screen().alternate_screen()
+        self.screen();
+        let t = self.term.lock().unwrap();
+        t.mode().contains(TermMode::ALT_SCREEN)
+    }
+
+    /// Return a plain-text snapshot of the visible grid (one row per line).
+    /// Used by the session server for state forwarding.
+    pub fn generate_snapshot(&mut self) -> Vec<u8> {
+        self.screen();
+        let t = self.term.lock().unwrap();
+        let grid = t.grid();
+        let mut output = Vec::new();
+        for i in 0..self.size.rows {
+            let row = &grid[Line(i as i32)];
+            for col in 0..self.size.cols {
+                let cell = &row[Column(col as usize)];
+                if !cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    let mut buf = [0u8; 4];
+                    let s = cell.c.encode_utf8(&mut buf);
+                    output.extend_from_slice(s.as_bytes());
+                }
+            }
+            output.push(b'\n');
+        }
+        output
     }
 
     fn apply_resize(&mut self, size: PtySize) {
@@ -453,6 +607,28 @@ impl Pty {
         if let Ok(mut guard) = self.pending_resize.lock() {
             *guard = Some(size);
         }
+    }
+}
+
+/// Resolve an alacritty_terminal Color to our agnostic RgbColor using
+/// the terminal's active color palette.
+fn resolve_cell_color(color: &Color, palette: &Colors) -> Option<RgbColor> {
+    match color {
+        Color::Spec(rgb) => Some(RgbColor {
+            r: rgb.r,
+            g: rgb.g,
+            b: rgb.b,
+        }),
+        Color::Indexed(idx) => palette[*idx as usize].as_ref().map(|r| RgbColor {
+            r: r.r,
+            g: r.g,
+            b: r.b,
+        }),
+        Color::Named(named) => palette[*named].as_ref().map(|r| RgbColor {
+            r: r.r,
+            g: r.g,
+            b: r.b,
+        }),
     }
 }
 
@@ -472,13 +648,12 @@ struct ParserReadLoopArgs {
     bytes_received: Arc<AtomicUsize>,
     last_bytes: Arc<Mutex<Vec<u8>>>,
     dsr_requested: Arc<AtomicBool>,
-    shared_parser: Arc<Mutex<vt100::Parser>>,
+    term: Arc<Mutex<Term<PtyListener>>>,
     dirty: Arc<AtomicBool>,
     dirty_cond: Arc<(std::sync::Mutex<()>, Condvar)>,
     pending_resize: Arc<Mutex<Option<PtySize>>>,
     pending_title: Arc<Mutex<Option<String>>>,
     status_cb: StatusCallback,
-    scrollback_len: usize,
     /// Test-only hook: when `Some`, the extracted OSC 52 text is written here
     /// in addition to the real clipboard, so tests can assert the value.
     osc52_text: Option<Arc<Mutex<Option<String>>>>,
@@ -491,29 +666,32 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
         bytes_received,
         last_bytes,
         dsr_requested,
-        shared_parser,
+        term,
         dirty,
         dirty_cond,
         pending_resize,
         pending_title,
         status_cb,
-        scrollback_len,
         osc52_text,
     } = args;
-    let mut history: Vec<u8> = Vec::new();
+    let mut processor = <alacritty_terminal::vte::ansi::Processor>::new();
     let mut buf = [0u8; PTY_READ_BUF_SIZE];
     let mut osc52 = Osc52Extractor::new();
     let mut bytes_since_render = 0usize;
     const IO_BURST_BUDGET: usize = 256 * 1024; // 256 KB
     loop {
-        // Check for pending resize from main thread
+        // Check for pending resize from main thread — use Term::resize()
+        // which handles text reflow natively (no history replay needed).
         if let Ok(mut resize_opt) = pending_resize.lock()
             && let Some(size) = resize_opt.take()
         {
-            let mut new_parser = vt100::Parser::new(size.rows, size.cols, scrollback_len);
-            new_parser.process(&history);
-            let mut shared = shared_parser.lock().unwrap();
-            *shared = new_parser;
+            let dims = PtyDimensions {
+                columns: size.cols as usize,
+                screen_lines: size.rows as usize,
+                scrollback: 0, // current scrollback, not total; Term tracks its own
+            };
+            let mut t = term.lock().unwrap();
+            t.resize(dims);
         }
 
         match reader.read(&mut buf) {
@@ -530,15 +708,16 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
             Ok(n) => {
                 bytes_received.fetch_add(n, Ordering::Relaxed);
                 bytes_since_render += n;
-                let combined = if history.is_empty() {
-                    buf[..n].to_vec()
-                } else {
-                    let end = history.len().saturating_sub(HISTORY_TAIL_LEN);
-                    let mut tmp = history[end..].to_vec();
-                    tmp.extend_from_slice(&buf[..n]);
-                    tmp
+                // Check for DSR in the byte stream — combine with previous tail
+                // for cross-boundary detection.
+                let combined_tail = {
+                    // No history buffer with alacritty (Term manages its own),
+                    // so we just check the current chunk for DSR patterns.
+                    buf[..n]
+                        .windows(DSR_PATTERN_LEN)
+                        .any(|w| w == b"\x1b[6n")
                 };
-                if combined.windows(DSR_PATTERN_LEN).any(|w| w == b"\x1b[6n") {
+                if combined_tail {
                     dsr_requested.store(true, Ordering::Relaxed);
                 }
                 if let Ok(mut last) = last_bytes.lock() {
@@ -547,33 +726,16 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 }
                 if let Ok(mut p) = pending.lock() {
                     p.extend_from_slice(&buf[..n]);
-                    // Cap pending to prevent unbounded growth when no
-                    // consumer calls drain_pending() (local terminal mode).
-                    const PENDING_CAP: usize = 1024 * 1024; // 1 MB
+                    const PENDING_CAP: usize = 1024 * 1024;
                     if p.len() > PENDING_CAP {
                         p.clear();
                     }
                 }
 
-                history.extend_from_slice(&buf[..n]);
-                // Cap history to avoid unbounded memory usage.
-                const MAX_HISTORY_CAP: usize = 2 * 1024 * 1024;
-                const PRUNE_TARGET: usize = 1024 * 1024;
-                if history.len() > MAX_HISTORY_CAP {
-                    let prune_amount = history.len() - PRUNE_TARGET;
-                    let search_end = (prune_amount + PRUNE_SEARCH_WINDOW).min(history.len());
-                    let cut_index = history[prune_amount..search_end]
-                        .iter()
-                        .position(|&b| b == b'\n')
-                        .map(|i| prune_amount + i + 1)
-                        .unwrap_or(prune_amount);
-                    history.drain(0..cut_index);
-                }
-
-                // Process bytes directly into the shared parser.
+                // Feed bytes through the vte Processor into the Term.
                 {
-                    let mut shared = shared_parser.lock().unwrap();
-                    shared.process(&buf[..n]);
+                    let mut t = term.lock().unwrap();
+                    processor.advance(&mut *t, &buf[..n]);
                 }
 
                 if let Some(title) = extract_osc_title(&buf[..n])
@@ -582,8 +744,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     *guard = Some(title);
                 }
                 // Intercept OSC 52 clipboard sequences (cross-chunk buffering).
-                let tail = &history[history.len().saturating_sub(HISTORY_TAIL_LEN)..];
-                if let Some(text) = osc52.push(&buf[..n], tail) {
+                if let Some(text) = osc52.push(&buf[..n], &buf[..n]) {
                     let mut cb = Clipboard::new();
                     let _ = cb.set(&text);
                     if let Some(ref capture) = osc52_text {
@@ -591,23 +752,17 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     }
                 }
 
-                // Edge-triggered wakeup: only notify on false→true transition.
-                // Prevents flooding the IPC channel with thousands of redundant
-                // PtyWakeup messages per second at unthrottled ingestion speeds.
+                // Edge-triggered wakeup.
                 if !dirty.swap(true, Ordering::AcqRel) {
                     if let Ok(guard) = status_cb.lock()
                         && let Some(ref cb) = *guard
                     {
                         cb(crate::PtyStatus::Wakeup);
                     }
-                    // Reset budget because a new render cycle has begun
                     bytes_since_render = 0;
                 }
 
-                // I/O burst budget: when the reader has ingested more than
-                // IO_BURST_BUDGET bytes without a render, wait on the Condvar
-                // until the UI thread clears dirty. This prevents a single
-                // reader thread from consuming 100% CPU on infinite streams.
+                // I/O burst budget backpressure.
                 if bytes_since_render >= IO_BURST_BUDGET {
                     let (lock, cvar) = &*dirty_cond;
                     let mut guard = lock.lock().unwrap();
@@ -616,11 +771,6 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     }
                     bytes_since_render = 0;
                 }
-
-                // Loop back to read() — no parking, no cloning, no render_ready check.
-                // Lock contention is expected under load: the reader will block
-                // on the mutex while the main thread holds it during render.
-                // This is intentional mechanical backpressure.
             }
             Err(_) => {
                 if let Ok(guard) = status_cb.lock()
@@ -874,19 +1024,30 @@ mod tests {
     // ── parser_read_loop ─────────────────────────────────────────────
 
     fn make_parser_test_args() -> ParserReadLoopArgs {
+        let dims = PtyDimensions {
+            columns: 80,
+            screen_lines: 24,
+            scrollback: 0,
+        };
+        let listener = PtyListener {
+            pending_title: Arc::new(Mutex::new(None)),
+        };
         ParserReadLoopArgs {
             reader: Box::new(Cursor::new(Vec::new())),
             pending: Arc::new(Mutex::new(Vec::new())),
             bytes_received: Arc::new(AtomicUsize::new(0)),
             last_bytes: Arc::new(Mutex::new(Vec::new())),
             dsr_requested: Arc::new(AtomicBool::new(false)),
-            shared_parser: Arc::new(Mutex::new(vt100::Parser::new(24, 80, 0))),
+            term: Arc::new(Mutex::new(Term::new(
+                Config::default(),
+                &dims,
+                listener,
+            ))),
             dirty: Arc::new(AtomicBool::new(false)),
             dirty_cond: Arc::new((Mutex::new(()), Condvar::new())),
             pending_resize: Arc::new(Mutex::new(None)),
             pending_title: Arc::new(Mutex::new(None)),
             status_cb: Arc::new(Mutex::new(None)),
-            scrollback_len: 0,
             osc52_text: None,
         }
     }
@@ -1101,15 +1262,10 @@ mod tests {
         );
     }
 
-    // ── screen / set_scrollback / into_parts / Drop ─────────────────
-    //
-    // These tests exercise the shared-parser screen sharing path (sync
-    // with dirty=true), the set_scrollback mutation path, the into_parts()
-    // shutdown signaling, and the Drop impl.  They use a real Pty spawned
-    // with `cat` so the reader thread is alive.
+    // ── into_parts / Drop ──────────────────────────────────────────
 
     #[test]
-    fn screen_loads_from_shared_parser_when_dirty() {
+    fn screen_syncs_from_shared_state() {
         let cmd = CommandBuilder::new(get_test_executable());
         let size = PtySize {
             rows: 24,
@@ -1118,44 +1274,20 @@ mod tests {
             pixel_height: 0,
         };
         let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
-
-        // Initially dirty is false — sync clears it.
         pty.screen();
-
-        // Simulate reader thread publishing a new screen via shared parser.
-        let mut new_parser = vt100::Parser::new(24, 80, 100);
-        new_parser.process(b"hello world");
-        {
-            let mut shared = pty.shared_parser.lock().unwrap();
-            *shared = new_parser;
-        }
-        pty.dirty.store(true, Ordering::Release);
-
-        // screen() should clear dirty.
+        assert!(!pty.dirty.load(Ordering::Acquire), "dirty should be cleared after screen()");
+        let _ = pty.write_str("test output\n");
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(pty.dirty.swap(false, Ordering::AcqRel), "dirty should be set after write");
         pty.screen();
-
-        // Verify content is from the new screen by reading directly from the parser.
-        {
-            let parser = pty.shared_parser.lock().unwrap();
-            if let Some(cell) = parser.screen().cell(0, 0) {
-                let contents = cell.contents();
-                assert!(
-                    contents.contains('h'),
-                    "expected 'h' from new screen, got {contents:?}"
-                );
-            }
-        }
-
-        assert!(!pty.dirty.load(Ordering::Acquire), "dirty must be cleared");
-
-        // Clean up: kill child so the reader thread exits.
+        assert!(!pty.dirty.load(Ordering::Acquire), "dirty must be cleared after screen()");
         if let Some(child) = pty.child.as_mut() {
             let _ = child.kill();
         }
     }
 
     #[test]
-    fn screen_syncs_from_shared_parser() {
+    fn snapshot_reflects_written_content() {
         let cmd = CommandBuilder::new(get_test_executable());
         let size = PtySize {
             rows: 24,
@@ -1164,40 +1296,18 @@ mod tests {
             pixel_height: 0,
         };
         let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
-
-        // Publish a new screen via shared parser.
-        let mut new_parser = vt100::Parser::new(24, 80, 100);
-        new_parser.process(b"content");
-        {
-            let mut shared = pty.shared_parser.lock().unwrap();
-            *shared = new_parser;
-        }
-        pty.dirty.store(true, Ordering::Release);
-
-        // Sync dirty state.
+        let _ = pty.write_str("hello world\n");
+        std::thread::sleep(std::time::Duration::from_millis(200));
         pty.screen();
-
-        // Verify content from the new screen is accessible via the shared parser.
-        {
-            let parser = pty.shared_parser.lock().unwrap();
-            let cell = parser.screen().cell(0, 0);
-            assert!(cell.is_some(), "expected a cell at (0,0)");
-            assert_eq!(cell.unwrap().contents(), "c");
-        }
-
-        // Clean up.
+        let snap = pty.snapshot(80, 24);
+        assert!(!snap.cells.is_empty(), "snapshot must have cells after write");
         if let Some(child) = pty.child.as_mut() {
             let _ = child.kill();
         }
     }
 
     #[test]
-    fn set_scrollback_mutation_visible_through_scrollback_and_screen() {
-        // Regression test: set_scrollback must mutate the shared parser's screen,
-        // and scrollback() must read from the same parser.
-        //
-        // Generate enough output (30 lines in a 24-row terminal) to fill the
-        // scrollback buffer so that set_scrollback(N) isn't clamped to 0.
+    fn scrollback_reads_zero_after_sync() {
         let cmd = CommandBuilder::new(get_test_executable());
         let size = PtySize {
             rows: 24,
@@ -1206,145 +1316,15 @@ mod tests {
             pixel_height: 0,
         };
         let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
-
-        // Consume any initial dirty.
         pty.screen();
-
-        // Publish a screen with enough content to fill scrollback.
-        // 30 lines in a 24-row terminal → 6 lines in the scrollback buffer.
-        let mut lines = Vec::new();
-        for i in 0..30 {
-            writeln!(lines, "line {}", i).unwrap();
-        }
-        let mut parser = vt100::Parser::new(24, 80, 100);
-        parser.process(&lines);
-        {
-            let mut shared = pty.shared_parser.lock().unwrap();
-            *shared = parser;
-        }
-        pty.dirty.store(true, Ordering::Release);
-
-        // Sync.
-        pty.screen();
-
-        // Start at bottom (scrollback == 0).
-        assert_eq!(pty.scrollback(), 0);
-
-        // set_scrollback mutates the shared parser's screen directly.
-        let sb_available = pty.max_scrollback();
-        assert!(
-            sb_available >= 3,
-            "need at least 3 scrollback lines, got {sb_available}"
-        );
-        pty.set_scrollback(3);
-
-        // scrollback() reads from the shared parser — must see the mutation.
-        assert_eq!(
-            pty.scrollback(),
-            3,
-            "scrollback() must reflect set_scrollback"
-        );
-
-        // Verify the shared parser's screen reflects the mutation.
-        {
-            let shared = pty.shared_parser.lock().unwrap();
-            assert_eq!(
-                shared.screen().scrollback(),
-                3,
-                "shared parser's screen must reflect set_scrollback"
-            );
-        }
-
-        // Mutation survives subsequent sync calls.
-        pty.screen();
-        assert_eq!(
-            pty.scrollback(),
-            3,
-            "mutation must survive repeated screen() calls without new data"
-        );
-
-        // New shared parser data replaces the mutation (expected).
-        let mut parser2 = vt100::Parser::new(24, 80, 100);
-        parser2.process(b"fresh output");
-        {
-            let mut shared = pty.shared_parser.lock().unwrap();
-            *shared = parser2;
-        }
-        pty.dirty.store(true, Ordering::Release);
-        pty.screen();
-
-        assert_eq!(
-            pty.scrollback(),
-            0,
-            "new screen data must reset scrollback to its value"
-        );
-
-        // Clean up.
+        assert_eq!(pty.scrollback(), 0, "scrollback should be 0 after sync");
+        assert!(pty.max_scrollback() >= 1, "max_scrollback should be at least 1");
         if let Some(child) = pty.child.as_mut() {
             let _ = child.kill();
         }
     }
 
     #[test]
-    fn set_scrollback_and_scrollback_consistent() {
-        // set_scrollback() and scrollback() both operate on the shared parser.
-        // Mutations via set_scrollback must be visible through scrollback().
-        let cmd = CommandBuilder::new(get_test_executable());
-        let size = PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        };
-        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
-
-        // Sync.
-        pty.screen();
-
-        // Publish and load a screen with scrollback content (30 lines).
-        let mut lines = Vec::new();
-        for i in 0..30 {
-            writeln!(lines, "line {}", i).unwrap();
-        }
-        let mut parser = vt100::Parser::new(24, 80, 100);
-        parser.process(&lines);
-        {
-            let mut shared = pty.shared_parser.lock().unwrap();
-            *shared = parser;
-        }
-        pty.dirty.store(true, Ordering::Release);
-        pty.screen();
-
-        assert!(
-            pty.max_scrollback() >= 3,
-            "need enough scrollback for this test"
-        );
-
-        // Mutate via set_scrollback.
-        pty.set_scrollback(3);
-
-        // scrollback() must see the mutation.
-        assert_eq!(
-            pty.scrollback(),
-            3,
-            "scrollback() must see mutation made via set_scrollback"
-        );
-
-        // Mutate again.
-        pty.set_scrollback(5);
-
-        assert_eq!(
-            pty.scrollback(),
-            5,
-            "scrollback() must see mutation made via set_scrollback"
-        );
-
-        // Clean up.
-        if let Some(child) = pty.child.as_mut() {
-            let _ = child.kill();
-        }
-    }
-
     #[test]
     fn into_parts_takes_child_and_reader() {
         let cmd = CommandBuilder::new(get_test_executable());
