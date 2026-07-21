@@ -7,7 +7,7 @@ pub mod title;
 
 pub use input_encoding::{ctrl_char, key_to_bytes, mouse_event_allowed, mouse_event_to_bytes};
 pub use pane::Pane;
-pub use pty::{Pty, PtyListener, PtyResult, snapshot_from_term};
+pub use pty::{Pty, PtyListener, PtyResult, process_cells_from_term};
 
 /// Status notifications from the PTY reader thread to the main loop.
 /// The engine crate is agnostic about `WindowKey` and `UnifiedEvent`.

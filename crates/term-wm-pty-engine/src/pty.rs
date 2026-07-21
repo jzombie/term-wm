@@ -12,13 +12,13 @@ use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::{Config, Term, TermMode};
-use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
+use alacritty_terminal::vte::ansi::Color;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use crate::clipboard::{Clipboard, Osc52Extractor};
 use crate::pane::{
     CellColor, CursorInfo, MouseProtocol, MouseProtocolEncoding, MouseProtocolMode, RgbColor,
-    TerminalCell, TerminalSnapshot,
+    SnapshotMetadata, TerminalCell,
 };
 
 /// Size of the PTY master read buffer (single `read()` call).
@@ -48,13 +48,10 @@ pub struct PtyListener {
 
 impl EventListener for PtyListener {
     fn send_event(&self, event: Event) {
-        match event {
-            Event::Title(title) => {
-                if let Ok(mut guard) = self.pending_title.lock() {
-                    *guard = Some(title);
-                }
-            }
-            _ => {}
+        if let Event::Title(title) = event
+            && let Ok(mut guard) = self.pending_title.lock()
+        {
+            *guard = Some(title);
         }
     }
 }
@@ -472,11 +469,23 @@ impl Pty {
         }
     }
 
-    /// Capture a full-frame snapshot of the visible viewport.
-    pub fn snapshot(&mut self, columns: u16, rows: u16) -> TerminalSnapshot {
+    /// Process visible cells via IoC callback — zero-copy.
+    pub fn process_visible_cells(
+        &mut self,
+        columns: u16,
+        rows: u16,
+        cell_cb: &mut dyn FnMut(u16, u16, &TerminalCell),
+        meta_cb: &mut dyn FnMut(&SnapshotMetadata),
+    ) {
         self.screen();
         let t = self.term.lock().unwrap_or_else(|e| e.into_inner());
-        snapshot_from_term(&*t, columns, rows)
+        process_cells_from_term(&t, columns, rows, cell_cb, meta_cb);
+    }
+
+    /// Non-destructive dirty read — does NOT consume the flag.
+    /// Pty::screen() is the sole consumer (controls reader-thread condvar).
+    pub fn is_dirty(&self) -> bool {
+        self.dirty.load(std::sync::atomic::Ordering::Acquire)
     }
 
     pub fn bytes_received(&self) -> usize {
@@ -562,7 +571,7 @@ impl Pty {
 /// Indexed colors pass through as CellColor::Indexed so ratatui can use
 /// the host terminal's actual color palette.  Only truecolor (Spec/Rgb)
 /// resolves to CellColor::Rgb.
-fn resolve_cell_color(color: &Color, palette: &Colors) -> CellColor {
+fn resolve_cell_color(color: &Color, _palette: &Colors) -> CellColor {
     match color {
         Color::Spec(rgb) => CellColor::Rgb(RgbColor {
             r: rgb.r,
@@ -583,18 +592,19 @@ fn resolve_cell_color(color: &Color, palette: &Colors) -> CellColor {
     }
 }
 
-/// Shared implementation: produce a TerminalSnapshot from an alacritty
-/// Term, used by both Pty (local) and RemotePane.
-pub fn snapshot_from_term(
+/// Shared implementation: process visible cells from an alacritty Term
+/// via IoC callback. Used by both Pty (local) and RemotePane.
+pub fn process_cells_from_term(
     t: &Term<PtyListener>,
     columns: u16,
     rows: u16,
-) -> TerminalSnapshot {
+    cell_cb: &mut dyn FnMut(u16, u16, &TerminalCell),
+    meta_cb: &mut dyn FnMut(&SnapshotMetadata),
+) {
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::index::{Column, Line};
     use alacritty_terminal::term::cell::Flags;
-    use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
-    use crate::pane::*;
+    use alacritty_terminal::vte::ansi::NamedColor;
 
     let grid = t.grid();
     let mode = t.mode();
@@ -622,16 +632,13 @@ pub fn snapshot_from_term(
     };
 
     let start_line = -(display_offset as i32);
-    let mut cells = Vec::with_capacity(rows as usize);
     for i in 0..rows {
-        let line = Line(start_line + i as i32);
-        let row = &grid[line];
-        let mut row_cells = Vec::with_capacity(columns as usize);
+        let row = &grid[Line(start_line + i as i32)];
         for col in 0..columns {
             let acell = &row[Column(col as usize)];
             let fg = resolve_cell_color(&acell.fg, t.colors());
             let bg = resolve_cell_color(&acell.bg, t.colors());
-            row_cells.push(TerminalCell {
+            cell_cb(i, col, &TerminalCell {
                 character: acell.c, fg, bg,
                 bold: acell.flags.contains(Flags::BOLD),
                 dim: acell.flags.contains(Flags::DIM),
@@ -643,10 +650,9 @@ pub fn snapshot_from_term(
                 wide_continuation: acell.flags.contains(Flags::WIDE_CHAR_SPACER),
             });
         }
-        cells.push(row_cells);
     }
 
-    TerminalSnapshot {
+    meta_cb(&SnapshotMetadata {
         columns,
         rows,
         cursor: if mode.contains(TermMode::SHOW_CURSOR) {
@@ -661,8 +667,7 @@ pub fn snapshot_from_term(
         alternate_screen: mode.contains(TermMode::ALT_SCREEN),
         mouse,
         display_offset,
-        cells,
-    }
+    });
 }
 
 impl Drop for Pty {
@@ -988,7 +993,6 @@ mod tests {
     use super::*;
     use std::io;
     use std::io::Cursor;
-    use std::io::Write;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
@@ -1341,8 +1345,9 @@ mod tests {
         let _ = pty.write_str("hello world\n");
         std::thread::sleep(std::time::Duration::from_millis(200));
         pty.screen();
-        let snap = pty.snapshot(80, 24);
-        assert!(!snap.cells.is_empty(), "snapshot must have cells after write");
+        let mut cell_count = 0usize;
+        pty.process_visible_cells(80, 24, &mut |_, _, _| cell_count += 1, &mut |_| {});
+        assert!(cell_count > 0, "must have cells after write");
         if let Some(child) = pty.child.as_mut() {
             let _ = child.kill();
         }
@@ -1366,7 +1371,6 @@ mod tests {
         }
     }
 
-    #[test]
     #[test]
     fn into_parts_takes_child_and_reader() {
         let cmd = CommandBuilder::new(get_test_executable());

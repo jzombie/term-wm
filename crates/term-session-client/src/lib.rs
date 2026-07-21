@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crossterm::QueueableCommand;
-use crossterm::cursor::{Hide, Show};
+use crossterm::cursor::{Hide, Show, MoveTo};
 use crossterm::event as crossterm_event;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -20,7 +20,7 @@ use term_session_muxio_service_definitions::{
 };
 use term_wm_core::events::{Event, KeyKind};
 use term_wm_pty_engine::Pane;
-use term_wm_pty_engine::clipboard::{Clipboard, extract_osc52_text};
+use term_wm_pty_engine::clipboard::Clipboard;
 use term_wm_pty_engine::input_encoding::{key_to_bytes, mouse_event_to_bytes};
 use term_wm_pty_engine::pane::{MouseProtocolEncoding, MouseProtocolMode};
 use term_wm_pty_engine::signal::install_sigint_handler;
@@ -123,10 +123,18 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     );
 
     // Wait for initial output
-    let mut raw_bytes = Vec::new();
+    let mut has_content = false;
     for _ in 0..INITIAL_WAIT_ITERS {
-        raw_bytes = pane.drain_pushes();
-        if !raw_bytes.is_empty() {
+        let clipboard_texts = pane.drain_pushes();
+        if !clipboard_texts.is_empty() {
+            // Clipboard texts extracted during init — propagate to OS
+        }
+        pane.process_visible_cells(term_cols, term_rows, &mut |_, _, cell| {
+            if cell.character != ' ' {
+                has_content = true;
+            }
+        }, &mut |_| {});
+        if has_content {
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -144,43 +152,53 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     let sigint = install_sigint_handler()?;
 
     // Initial full screen render
-    if !raw_bytes.is_empty() {
-        out.write_all(&raw_bytes)?;
-        out.flush()?;
-    } else {
-        let snap = pane.snapshot(term_cols, term_rows);
-        let mut lines: Vec<u8> = Vec::new();
-        for row_cells in &snap.cells {
-            for cell in row_cells {
-                let mut buf = [0u8; 4];
-                let s = cell.character.encode_utf8(&mut buf);
-                lines.extend_from_slice(s.as_bytes());
-            }
-            lines.push(b'\r');
-            lines.push(b'\n');
-        }
-        out.write_all(&lines)?;
-        out.flush()?;
+    let mut current_row = u16::MAX;
+    pane.process_visible_cells(term_cols, term_rows, &mut |row, _col, cell| {
+    if row != current_row {
+        let _ = out.queue(MoveTo(0, row));
+        current_row = row;
     }
+    if cell.wide_continuation {
+        return;
+    }
+    let mut buf = [0u8; 4];
+    let s = cell.character.encode_utf8(&mut buf);
+    let _ = out.write_all(s.as_bytes());
+}, &mut |_| {});
+    let _ = out.flush();
 
     loop {
         let frame_start = std::time::Instant::now();
 
-        // Drain pushes and get the raw bytes.
-        let raw = pane.drain_pushes();
-
-        // Write accumulated raw PTY bytes to stdout (full ANSI formatting).
-        let mut had_output = false;
-        if !raw.is_empty() {
-            had_output = true;
-            if let Some(text) = extract_osc52_text(&raw) {
-                let _ = clipboard.set(&text);
-            }
-            out.write_all(&raw)?;
-            out.flush()?;
+        // 1. Drain pushes — advance VTE, collect clipboard texts
+        let clipboard_texts = pane.drain_pushes();
+        for text in clipboard_texts {
+            let _ = clipboard.set(&text);
         }
+
         if !client.is_connected() {
             return Err(io::Error::other("connection to session server lost"));
+        }
+
+        // 2. Capture dirty AFTER all mutations (user input + IPC pushes)
+        let is_dirty = pane.is_dirty();
+
+        // 3. Render if dirty
+        if is_dirty {
+            let mut current_row = u16::MAX;
+            pane.process_visible_cells(term_cols, term_rows, &mut |row, _col, cell| {
+                if row != current_row {
+                    let _ = out.queue(MoveTo(0, row));
+                    current_row = row;
+                }
+                if cell.wide_continuation {
+                    return;
+                }
+                let mut buf = [0u8; 4];
+                let s = cell.character.encode_utf8(&mut buf);
+                let _ = out.write_all(s.as_bytes());
+            }, &mut |_| {});
+            let _ = out.flush();
         }
 
         // Drain SIGINT (Ctrl-C) — send 0x03 through the input stream
@@ -378,8 +396,13 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                 }
                 Event::Mouse(ref mouse) => {
                     let mouse_active = {
-                        let snap = pane.snapshot(1, 1);
-                        snap.mouse.mode != MouseProtocolMode::None
+                        let mut encoding = MouseProtocolEncoding::Default;
+                        let mut mode = MouseProtocolMode::None;
+                        pane.process_visible_cells(0, 0, &mut |_, _, _| {}, &mut |meta| {
+                            encoding = meta.mouse.encoding;
+                            mode = meta.mouse.mode;
+                        });
+                        mode != MouseProtocolMode::None
                     };
                     if mouse_active {
                         // Convert core-owned MouseEvent to pty-engine MouseEvent
@@ -443,7 +466,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         }
 
         // Pace the loop
-        if !had_output && !had_input {
+        if !is_dirty && !had_input {
             let elapsed = frame_start.elapsed();
             if elapsed < Duration::from_millis(8) {
                 std::thread::sleep(Duration::from_millis(8) - elapsed);

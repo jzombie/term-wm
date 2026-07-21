@@ -5,7 +5,7 @@ use std::sync::Arc;
 use portable_pty::{CommandBuilder, PtySize};
 use ratatui::style::{Color as TColor, Modifier, Style};
 use term_wm_core::events::{Event, KeyCode, KeyKind, MouseButton, MouseEvent, MouseEventKind};
-use term_wm_pty_engine::pane::{CellColor, CursorInfo, MouseProtocolEncoding, RgbColor, TerminalCell, TerminalSnapshot};
+use term_wm_pty_engine::pane::{CellColor, MouseProtocolEncoding, MouseProtocolMode, SnapshotMetadata};
 
 use crate::helpers::{
     color_to_ratatui, decorate_link_style, layout_rect_to_clipped_rect, localize_coordinate,
@@ -174,15 +174,16 @@ impl Component<TermWmAction> for TerminalComponent {
                 }
                 let area = ctx.screen_area().unwrap_or_default();
                 let mut pane = self.pane.borrow_mut();
-                let snap = pane.snapshot(area.width, area.height);
-                let encoding = snap.mouse.encoding;
+                let mut encoding = MouseProtocolEncoding::Default;
+                let mut mode = MouseProtocolMode::None;
+                pane.process_visible_cells(0, 0, &mut |_, _, _| {}, &mut |meta| {
+                    encoding = meta.mouse.encoding;
+                    mode = meta.mouse.mode;
+                });
 
                 match encoding {
-                    MouseProtocolEncoding::Default | MouseProtocolEncoding::Sgr => {}
-                    _ => return EventResult::Ignored,
+                    MouseProtocolEncoding::Default | MouseProtocolEncoding::Sgr => (),
                 }
-
-                let mode = snap.mouse.mode;
                 let pty_kind = convert_mouse_event_kind(mouse.kind);
                 if !mouse_event_allowed(mode, pty_kind) {
                     return EventResult::Ignored;
@@ -566,137 +567,117 @@ impl TerminalComponent {
         // Call sync_screen() to handle DSR, foreground polling.
         pane.sync_screen();
 
-        let snap = pane.snapshot(area.width, area.height);
-
         let bytes_seen = pane.bytes_received();
-        let signature = OverlaySignature::new(
-            bytes_seen,
-            scrollback_value,
-            area.width,
-            area.height,
-            start_row,
-            start_col,
-        );
-        if !self.link_overlay.borrow().is_signature_current(&signature) {
-            let viewport_height = area.height as usize;
-            let viewport_width = area.width as usize;
-            let mut row_data: Vec<(usize, usize, String, Vec<usize>)> =
-                Vec::with_capacity(visible.height as usize);
-            for row in start_row..start_row + visible.height {
-                let viewport_row = row.saturating_sub(start_row) as usize;
-                if viewport_row >= viewport_height {
-                    continue;
+        let focused = ctx.focused();
+
+        // Accumulate linkifier row data and render cells via IoC callback
+        let mut meta: Option<SnapshotMetadata> = None;
+        let mut current_row = u16::MAX;
+        let mut line = String::new();
+        let mut offsets = vec![0usize];
+        let mut row_data: Vec<(usize, usize, String, Vec<usize>)> = Vec::new();
+        pane.process_visible_cells(area.width, area.height, &mut |row, col, cell| {
+            // Guard off-screen cells
+            if row < start_row || row >= start_row + visible.height ||
+               col < start_col || col >= start_col + visible.width { return; }
+
+            // --- Linkifier row accumulation ---
+            if row != current_row {
+                if current_row != u16::MAX {
+                    let viewport_row = current_row.saturating_sub(start_row);
+                    row_data.push((viewport_row as usize, start_col as usize, line.clone(), offsets.clone()));
                 }
-                let mut line = String::with_capacity(visible.width as usize);
-                let mut offsets = Vec::with_capacity(visible.width as usize + 1);
-                offsets.push(0);
-                for col in start_col..start_col + visible.width {
-                    let r = row as usize;
-                    let c = col as usize;
-                    let ch = snap.cells.get(r).and_then(|r| r.get(c)).map(|cell| cell.character).unwrap_or(' ');
-                    line.push(ch);
-                    offsets.push(line.len());
-                }
-                row_data.push((viewport_row, start_col as usize, line, offsets));
+                line.clear();
+                offsets = vec![0];
+                current_row = row;
             }
-            self.link_overlay.borrow_mut().update_view(
-                signature,
-                viewport_height,
-                viewport_width,
-                &row_data,
-                &self.linkifier,
-            );
+
+            if !cell.wide_continuation {
+                line.push(cell.character);
+                offsets.push(line.len());
+            }
+
+            // --- Render cell to Ratatui buffer ---
+            let cell_x = area.x.saturating_add(col);
+            let cell_y = area.y.saturating_add(row);
+            let viewport_row = row.saturating_sub(start_row) as usize;
+            let viewport_col = col.saturating_sub(start_col) as usize;
+
+            let mut symbol = cell.character;
+            let fg = match cell.fg {
+                CellColor::Rgb(rgb) => Some(TColor::Rgb(rgb.r, rgb.g, rgb.b)),
+                CellColor::Indexed(idx) => Some(TColor::Indexed(idx)),
+                CellColor::Default => None,
+            };
+            let bg = match cell.bg {
+                CellColor::Rgb(rgb) => Some(TColor::Rgb(rgb.r, rgb.g, rgb.b)),
+                CellColor::Indexed(idx) => Some(TColor::Indexed(idx)),
+                CellColor::Default => None,
+            };
+            let mut style = Style::default();
+            if let Some(fg) = fg { style = style.fg(fg); }
+            if let Some(bg) = bg { style = style.bg(bg); }
+            if cell.bold { style = style.add_modifier(Modifier::BOLD); }
+            if cell.dim { style = style.add_modifier(Modifier::DIM); }
+            if cell.italic { style = style.add_modifier(Modifier::ITALIC); }
+            if cell.underline { style = style.add_modifier(Modifier::UNDERLINED); }
+            if cell.inverse { style = style.add_modifier(Modifier::REVERSED); }
+            if cell.wide_continuation { symbol = ' '; }
+
+            let theme = ctx.config().theme;
+            if self.link_overlay.borrow().is_link_cell(viewport_row, viewport_col)
+            {
+                style = decorate_link_style(style, &theme);
+            }
+
+            if let Some(range) = selection_range {
+                let abs_row = selection_row_base.saturating_add(row as usize);
+                let abs_col = col as usize;
+                if range.contains(LogicalPosition::new(abs_row, abs_col)) {
+                    style = style
+                        .bg(color_to_ratatui(theme.selection_bg))
+                        .fg(color_to_ratatui(theme.selection_fg));
+                }
+            }
+
+            if let Some(buf_cell) = buffer.cell_mut((cell_x, cell_y)) {
+                let mut buf = [0u8; 4];
+                if bg.is_none() { buf_cell.reset(); }
+                let sym = symbol.encode_utf8(&mut buf);
+                buf_cell.set_symbol(sym).set_style(style);
+            } else if let Some(buf_cell) = buffer.cell_mut((cell_x, cell_y)) {
+                buf_cell.reset();
+                buf_cell.set_symbol(" ");
+            }
+        }, &mut |m| {
+            meta = Some(m.clone());
+        });
+
+        // Post-loop flush for linkifier last row
+        if current_row != u16::MAX {
+            let viewport_row = current_row.saturating_sub(start_row);
+            row_data.push((viewport_row as usize, start_col as usize, line, offsets));
         }
 
-        let default_fg = snap.default_fg;
-        let default_bg = snap.default_bg;
-
-        let focused = ctx.focused();
-        for row in start_row..start_row + visible.height {
-            for col in start_col..start_col + visible.width {
-                let cell_x = area.x.saturating_add(col);
-                let cell_y = area.y.saturating_add(row);
-                let viewport_row = row.saturating_sub(start_row) as usize;
-                let viewport_col = col.saturating_sub(start_col) as usize;
-
-                let r = row as usize;
-                let c = col as usize;
-                if let Some(cell) = snap.cells.get(r).and_then(|r| r.get(c)) {
-                    let mut symbol = cell.character;
-                    let fg = match cell.fg {
-                        CellColor::Rgb(rgb) => Some(TColor::Rgb(rgb.r, rgb.g, rgb.b)),
-                        CellColor::Indexed(idx) => Some(TColor::Indexed(idx)),
-                        CellColor::Default => None,
-                    };
-                    let bg = match cell.bg {
-                        CellColor::Rgb(rgb) => Some(TColor::Rgb(rgb.r, rgb.g, rgb.b)),
-                        CellColor::Indexed(idx) => Some(TColor::Indexed(idx)),
-                        CellColor::Default => None,
-                    };
-                    let mut style = Style::default();
-                    if let Some(fg) = fg {
-                        style = style.fg(fg);
-                    }
-                    if let Some(bg) = bg {
-                        style = style.bg(bg);
-                    }
-                    if cell.bold {
-                        style = style.add_modifier(Modifier::BOLD);
-                    }
-                    if cell.dim {
-                        style = style.add_modifier(Modifier::DIM);
-                    }
-                    if cell.italic {
-                        style = style.add_modifier(Modifier::ITALIC);
-                    }
-                    if cell.underline {
-                        style = style.add_modifier(Modifier::UNDERLINED);
-                    }
-                    if cell.inverse {
-                        style = style.add_modifier(Modifier::REVERSED);
-                    }
-                    if cell.wide_continuation {
-                        symbol = ' ';
-                    }
-
-                    let theme = ctx.config().theme;
-                    if self
-                        .link_overlay
-                        .borrow()
-                        .is_link_cell(viewport_row, viewport_col)
-                    {
-                        style = decorate_link_style(style, &theme);
-                    }
-
-                    if let Some(range) = selection_range {
-                        let abs_row = selection_row_base.saturating_add(row as usize);
-                        let abs_col = col as usize;
-                        if range.contains(LogicalPosition::new(abs_row, abs_col)) {
-                            style = style
-                                .bg(color_to_ratatui(theme.selection_bg))
-                                .fg(color_to_ratatui(theme.selection_fg));
-                        }
-                    }
-
-                    if let Some(buf_cell) = buffer.cell_mut((cell_x, cell_y)) {
-                        let mut buf = [0u8; 4];
-                        if bg.is_none() {
-                            buf_cell.reset();
-                        }
-                        let sym = symbol.encode_utf8(&mut buf);
-                        buf_cell.set_symbol(sym).set_style(style);
-                    }
-                } else if let Some(buf_cell) = buffer.cell_mut((cell_x, cell_y)) {
-                    buf_cell.reset();
-                    buf_cell.set_symbol(" ");
-                }
+        // Update link overlay
+        {
+            let signature = OverlaySignature::new(bytes_seen, scrollback_value, area.width, area.height, start_row, start_col);
+            if !self.link_overlay.borrow().is_signature_current(&signature) {
+                self.link_overlay.borrow_mut().update_view(
+                    signature,
+                    area.height as usize,
+                    area.width as usize,
+                    &row_data,
+                    &self.linkifier,
+                );
             }
         }
 
         pane.clear_dirty_and_notify();
 
+        // Cursor overlay
         if focused
-            && let Some(ref cursor) = snap.cursor
+            && let Some(cursor) = meta.as_ref().and_then(|m| m.cursor.as_ref())
             && !cursor.hidden
             && show_cursor
             && cursor.row < area.height
@@ -788,8 +769,10 @@ impl TerminalComponent {
         let mut pane = self.pane.borrow_mut();
         let saved_sb = pane.scrollback();
 
-        let snap = pane.snapshot(u16::MAX, u16::MAX);
-        let cols = snap.columns as usize;
+        let mut cols = 0usize;
+        pane.process_visible_cells(0, 0, &mut |_, _, _| {}, &mut |meta| {
+            cols = meta.columns as usize;
+        });
 
         let mut end_row = range.end.row;
         let mut end_col = range.end.column;
@@ -806,27 +789,21 @@ impl TerminalComponent {
         for absolute_row in range.start.row..=end_row {
             // Scroll so the desired row is the first visible line.
             pane.set_scrollback(absolute_row);
-            let snap = pane.snapshot(u16::MAX, u16::MAX);
-            let snap_cols = snap.columns as usize;
 
             let col_start = if absolute_row == range.start.row {
                 range.start.column
             } else {
                 0
             };
-            let col_end = if absolute_row == end_row {
-                end_col
-            } else {
-                snap_cols
-            };
+            let is_last_row = absolute_row == end_row;
 
-            for c in col_start..col_end {
-                if let Some(row_cells) = snap.cells.get(0) {
-                    if let Some(cell) = row_cells.get(c) {
-                        result.push(cell.character);
-                    }
+            pane.process_visible_cells(u16::MAX, 1, &mut |_, col, cell| {
+                let c = col as usize;
+                if c >= col_start && (!is_last_row || c < end_col) {
+                    result.push(cell.character);
                 }
-            }
+            }, &mut |_meta| {});
+
             if absolute_row < end_row {
                 result.push('\n');
             }
@@ -1073,7 +1050,14 @@ impl Pane for TestPane {
         Ok(())
     }
 
-    fn snapshot(&mut self, columns: u16, rows: u16) -> term_wm_pty_engine::pane::TerminalSnapshot {
+    fn process_visible_cells(
+        &mut self,
+        columns: u16,
+        rows: u16,
+        cell_cb: &mut dyn FnMut(u16, u16, &term_wm_pty_engine::pane::TerminalCell),
+        meta_cb: &mut dyn FnMut(&SnapshotMetadata),
+    ) {
+        use alacritty_terminal::grid::Dimensions;
         use alacritty_terminal::index::{Column, Line};
         use alacritty_terminal::term::cell::Flags;
         use alacritty_terminal::term::TermMode;
@@ -1083,10 +1067,20 @@ impl Pane for TestPane {
         let t = self.term.lock().unwrap();
         let grid = t.grid();
         let mode = t.mode();
+        let display_offset = grid.display_offset();
         let cursor = &grid.cursor;
 
-        let default_fg = t.colors()[NamedColor::Foreground].as_ref().map(|r| RgbColor { r: r.r, g: r.g, b: r.b });
-        let default_bg = t.colors()[NamedColor::Background].as_ref().map(|r| RgbColor { r: r.r, g: r.g, b: r.b });
+        let columns = columns.min(t.columns() as u16);
+        let rows = rows.min(t.screen_lines() as u16);
+
+        let default_fg = t.colors()[NamedColor::Foreground]
+            .as_ref()
+            .map(|r| CellColor::Rgb(RgbColor { r: r.r, g: r.g, b: r.b }))
+            .unwrap_or(CellColor::Default);
+        let default_bg = t.colors()[NamedColor::Background]
+            .as_ref()
+            .map(|r| CellColor::Rgb(RgbColor { r: r.r, g: r.g, b: r.b }))
+            .unwrap_or(CellColor::Default);
 
         let mouse = MouseProtocol {
             encoding: if mode.contains(TermMode::SGR_MOUSE) { MouseProtocolEncoding::Sgr } else { MouseProtocolEncoding::Default },
@@ -1096,37 +1090,32 @@ impl Pane for TestPane {
                 else { MouseProtocolMode::None },
         };
 
-        let display_offset = grid.display_offset();
-        let start_line = -(display_offset as i32) - 1;
-        let mut cells = Vec::with_capacity(rows as usize);
+        let start_line = -(display_offset as i32);
         for i in 0..rows {
             let row = &grid[Line(start_line + i as i32)];
-            let mut row_cells = Vec::with_capacity(columns as usize);
             for col in 0..columns {
                 let acell = &row[Column(col as usize)];
                 let fg = {
-                    use alacritty_terminal::vte::ansi::Color;
                     match &acell.fg {
-                        Color::Spec(rgb) => term_wm_pty_engine::pane::CellColor::Rgb(term_wm_pty_engine::pane::RgbColor { r: rgb.r, g: rgb.g, b: rgb.b }),
-                        Color::Indexed(idx) => term_wm_pty_engine::pane::CellColor::Indexed(*idx),
+                        Color::Spec(rgb) => CellColor::Rgb(RgbColor { r: rgb.r, g: rgb.g, b: rgb.b }),
+                        Color::Indexed(idx) => CellColor::Indexed(*idx),
                         Color::Named(named) => {
                             let p = t.colors()[*named];
-                            match p { Some(r) => term_wm_pty_engine::pane::CellColor::Rgb(term_wm_pty_engine::pane::RgbColor { r: r.r, g: r.g, b: r.b }), None => term_wm_pty_engine::pane::CellColor::Default }
+                            match p { Some(r) => CellColor::Rgb(RgbColor { r: r.r, g: r.g, b: r.b }), None => CellColor::Default }
                         }
                     }
                 };
                 let bg = {
-                    use alacritty_terminal::vte::ansi::Color;
                     match &acell.bg {
-                        Color::Spec(rgb) => term_wm_pty_engine::pane::CellColor::Rgb(term_wm_pty_engine::pane::RgbColor { r: rgb.r, g: rgb.g, b: rgb.b }),
-                        Color::Indexed(idx) => term_wm_pty_engine::pane::CellColor::Indexed(*idx),
+                        Color::Spec(rgb) => CellColor::Rgb(RgbColor { r: rgb.r, g: rgb.g, b: rgb.b }),
+                        Color::Indexed(idx) => CellColor::Indexed(*idx),
                         Color::Named(named) => {
                             let p = t.colors()[*named];
-                            match p { Some(r) => term_wm_pty_engine::pane::CellColor::Rgb(term_wm_pty_engine::pane::RgbColor { r: r.r, g: r.g, b: r.b }), None => term_wm_pty_engine::pane::CellColor::Default }
+                            match p { Some(r) => CellColor::Rgb(RgbColor { r: r.r, g: r.g, b: r.b }), None => CellColor::Default }
                         }
                     }
                 };
-                row_cells.push(TerminalCell {
+                cell_cb(i, col, &TerminalCell {
                     character: acell.c,
                     fg,
                     bg,
@@ -1140,10 +1129,9 @@ impl Pane for TestPane {
                     wide_continuation: acell.flags.contains(Flags::WIDE_CHAR_SPACER),
                 });
             }
-            cells.push(row_cells);
         }
 
-        TerminalSnapshot {
+        meta_cb(&SnapshotMetadata {
             columns,
             rows,
             cursor: if mode.contains(TermMode::SHOW_CURSOR) {
@@ -1157,9 +1145,8 @@ impl Pane for TestPane {
             default_bg,
             alternate_screen: mode.contains(TermMode::ALT_SCREEN),
             mouse,
-            display_offset: grid.display_offset(),
-            cells,
-        }
+            display_offset,
+        });
     }
 
     fn max_scrollback(&mut self) -> usize {
@@ -1580,9 +1567,6 @@ mod tests {
             "viewport should follow to new max"
         );
     }
-
-    #[test]
-    
 
     #[test]
     fn brighten_indexed_moves_0_7_to_8_15() {

@@ -1,5 +1,4 @@
 use std::io;
-use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use portable_pty::{Child, ExitStatus, PtySize};
@@ -66,7 +65,7 @@ pub struct CursorInfo {
 }
 
 #[derive(Clone, Debug)]
-pub struct TerminalSnapshot {
+pub struct SnapshotMetadata {
     pub columns: u16,
     pub rows: u16,
     pub cursor: Option<CursorInfo>,
@@ -75,7 +74,6 @@ pub struct TerminalSnapshot {
     pub alternate_screen: bool,
     pub mouse: MouseProtocol,
     pub display_offset: usize,
-    pub cells: Vec<Vec<TerminalCell>>,
 }
 
 // ── Pane trait ───────────────────────────────────────────────────────
@@ -102,22 +100,24 @@ pub trait Pane {
         None
     }
 
-    /// Capture the current visible viewport as a terminal-agnostic snapshot.
-    fn snapshot(&mut self, columns: u16, rows: u16) -> TerminalSnapshot {
-        TerminalSnapshot {
-            columns,
-            rows,
-            cursor: None,
-            default_fg: CellColor::Default,
-            default_bg: CellColor::Default,
-            alternate_screen: false,
-            mouse: MouseProtocol {
-                encoding: MouseProtocolEncoding::Default,
-                mode: MouseProtocolMode::None,
-            },
-            display_offset: 0,
-            cells: Vec::new(),
-        }
+    /// Process visible cells via IoC callback — zero-copy bridge to the UI.
+    /// Backend locks its Term, iterates the grid, constructs transient
+    /// TerminalCells on the stack, and invokes cell_cb(row, col, &cell).
+    /// After all cells, metadata_cb(&SnapshotMetadata) is called.
+    /// The lock is dropped once both callbacks return.
+    fn process_visible_cells(
+        &mut self,
+        columns: u16,
+        rows: u16,
+        cell_cb: &mut dyn FnMut(u16, u16, &TerminalCell),
+        meta_cb: &mut dyn FnMut(&SnapshotMetadata),
+    );
+
+    /// Non-destructive dirty read. Used by the compositor to decide
+    /// whether to re-render. Does NOT consume the flag — Pty::screen()
+    /// is the sole consumer (it controls the reader-thread condvar).
+    fn is_dirty(&mut self) -> bool {
+        false
     }
 
     /// Reset the dirty flag. Returns true if dirty was set.
@@ -205,8 +205,18 @@ impl Pane for crate::Pty {
         crate::Pty::set_status_callback(self, cb)
     }
 
-    fn snapshot(&mut self, columns: u16, rows: u16) -> TerminalSnapshot {
-        crate::Pty::snapshot(self, columns, rows)
+    fn process_visible_cells(
+        &mut self,
+        columns: u16,
+        rows: u16,
+        cell_cb: &mut dyn FnMut(u16, u16, &TerminalCell),
+        meta_cb: &mut dyn FnMut(&SnapshotMetadata),
+    ) {
+        crate::Pty::process_visible_cells(self, columns, rows, cell_cb, meta_cb);
+    }
+
+    fn is_dirty(&mut self) -> bool {
+        crate::Pty::is_dirty(self)
     }
 
     fn take_dirty(&self) -> bool {

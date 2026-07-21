@@ -1,21 +1,16 @@
-use std::cell::Cell;
 use std::io;
 use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Line};
-use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::Processor;
 use muxio_rpc_service::error::RpcServiceError;
 use muxio_tokio_rpc_ipc_client::RpcIpcClient;
 use portable_pty::{ExitStatus, PtySize};
 use term_session_muxio_service_definitions::{CloseSession, ResizePty};
-use term_wm_pty_engine::pane::{
-    CellColor, CursorInfo, MouseProtocol, MouseProtocolEncoding, MouseProtocolMode, RgbColor,
-    TerminalCell, TerminalSnapshot,
-};
-use term_wm_pty_engine::{Pane, PtyListener, PtyResult, snapshot_from_term};
+use term_wm_pty_engine::clipboard::Osc52Extractor;
+use term_wm_pty_engine::pane::{SnapshotMetadata, TerminalCell};
+use term_wm_pty_engine::{Pane, PtyListener, PtyResult, process_cells_from_term};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -39,14 +34,13 @@ pub struct RemotePane {
     rt: Handle,
     term: Arc<Mutex<Term<PtyListener>>>,
     processor: Mutex<Processor>,
-    exited: Cell<bool>,
+    exited: std::cell::Cell<bool>,
     push_rx: mpsc::UnboundedReceiver<Vec<u8>>,
     input_writer: InputWriter,
-    cols: Cell<u16>,
-    rows: Cell<u16>,
-    /// Raw PTY bytes accumulated between drain_pushes calls, returned to
-    /// the session client for forwarding to stdout.
-    pending_output: Vec<u8>,
+    cols: std::cell::Cell<u16>,
+    rows: std::cell::Cell<u16>,
+    dirty: bool,
+    osc52: Osc52Extractor,
 }
 
 impl RemotePane {
@@ -76,32 +70,41 @@ impl RemotePane {
             rt,
             term,
             processor: Mutex::new(Processor::new()),
-            exited: Cell::new(false),
+            exited: std::cell::Cell::new(false),
             push_rx,
             input_writer,
-            cols: Cell::new(cols),
-            rows: Cell::new(rows),
-            pending_output: Vec::new(),
+            cols: std::cell::Cell::new(cols),
+            rows: std::cell::Cell::new(rows),
+            dirty: false,
+            osc52: Osc52Extractor::new(),
         }
     }
 
-    pub fn drain_pushes(&mut self) -> Vec<u8> {
-        let mut output = Vec::new();
+    /// Drain all available IPC push chunks, advance the VTE, and collect
+    /// any clipboard (OSC52) texts extracted across chunk boundaries.
+    /// Returns extracted clipboard strings (raw bytes are dropped after
+    /// advancing the processor).
+    pub fn drain_pushes(&mut self) -> Vec<String> {
+        let mut clipboard_texts = Vec::new();
         loop {
             match self.push_rx.try_recv() {
                 Ok(data) => {
+                    // Extract OSC52 from raw bytes BEFORE VTE processing
+                    if let Some(text) = self.osc52.push(&data, &data) {
+                        clipboard_texts.push(text);
+                    }
                     {
                         let mut term = self.term.lock().unwrap();
                         let mut processor = self.processor.lock().unwrap();
                         processor.advance(&mut *term, &data);
                     }
-                    output.extend_from_slice(&data);
+                    self.dirty = true;
                 }
                 Err(TryRecvError::Disconnected) => {
                     self.exited.set(true);
-                    return output;
+                    return clipboard_texts;
                 }
-                Err(TryRecvError::Empty) => return output,
+                Err(TryRecvError::Empty) => return clipboard_texts,
             }
         }
     }
@@ -131,6 +134,7 @@ impl Pane for RemotePane {
         }
         self.cols.set(size.cols);
         self.rows.set(size.rows);
+        self.dirty = true;
         result.map_err(Self::rpc_to_pty)
     }
 
@@ -163,11 +167,6 @@ impl Pane for RemotePane {
         (self.input_writer)(input)
     }
 
-    fn snapshot(&mut self, columns: u16, rows: u16) -> TerminalSnapshot {
-        let t = self.term.lock().unwrap();
-        snapshot_from_term(&*t, columns, rows)
-    }
-
     fn max_scrollback(&mut self) -> usize {
         0
     }
@@ -198,23 +197,19 @@ impl Pane for RemotePane {
     fn take_pending_title(&mut self) -> Option<String> {
         None
     }
-}
 
-fn resolve_color(
-    color: &alacritty_terminal::vte::ansi::Color,
-    palette: &alacritty_terminal::term::color::Colors,
-) -> CellColor {
-    use alacritty_terminal::vte::ansi::Color;
-    match color {
-        Color::Spec(rgb) => CellColor::Rgb(RgbColor { r: rgb.r, g: rgb.g, b: rgb.b }),
-        Color::Indexed(idx) => CellColor::Indexed(*idx),
-        Color::Named(named) => {
-            let idx = *named as usize;
-            if idx < 256 {
-                CellColor::Indexed(idx as u8)
-            } else {
-                CellColor::Default
-            }
-        }
+    fn process_visible_cells(
+        &mut self,
+        columns: u16,
+        rows: u16,
+        cell_cb: &mut dyn FnMut(u16, u16, &TerminalCell),
+        meta_cb: &mut dyn FnMut(&SnapshotMetadata),
+    ) {
+        let t = self.term.lock().unwrap();
+        process_cells_from_term(&t, columns, rows, cell_cb, meta_cb);
+    }
+
+    fn is_dirty(&mut self) -> bool {
+        std::mem::replace(&mut self.dirty, false)
     }
 }
