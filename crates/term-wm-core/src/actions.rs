@@ -28,8 +28,8 @@ pub enum ActionLayer {
     /// Global actions available regardless of overlay state
     /// (window management, navigation, system commands).
     Global,
-    /// Only active when the WM overlay (menu) is visible.
-    WmMode,
+    /// Only active when the command palette is visible.
+    CommandPalette,
     /// Only active when the help overlay is visible.
     Help,
 }
@@ -175,7 +175,7 @@ impl TermWmAction {
             TermWmAction::CloseHelp | TermWmAction::OpenHelp | TermWmAction::Help => {
                 ActionLayer::Help
             }
-            _ => ActionLayer::WmMode,
+            _ => ActionLayer::CommandPalette,
         }
     }
 

@@ -292,7 +292,7 @@ where
 
                 // Pre-compute the keybinding action using the configured
                 // KeyBindings from WindowManager (not hardcoded defaults).
-                // WmMode actions are handled when the WM overlay is open.
+                // CommandPalette actions are handled when the WM overlay is open.
 
                 // Layer 1: Active overlays (exit confirm, selection preview, help)
                 if app.wm().exit_confirm_visible() {
