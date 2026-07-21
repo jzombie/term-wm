@@ -458,6 +458,10 @@ impl Pty {
         let display_offset = grid.display_offset();
         let cursor = &t.grid().cursor;
 
+        // Clamp to actual terminal dimensions to prevent grid OOB panics.
+        let columns = columns.min(self.size.cols);
+        let rows = rows.min(self.size.rows);
+
         let default_fg = t.colors()[NamedColor::Foreground].as_ref().map(|r| RgbColor {
             r: r.r,
             g: r.g,
@@ -515,7 +519,7 @@ impl Pty {
             columns,
             rows,
             cursor: if mode.contains(TermMode::SHOW_CURSOR) {
-                let cursor_row = cursor.point.line.0 as u16;
+                let cursor_row = cursor.point.line.0.max(0) as u16;
                 let cursor_col = cursor.point.column.0 as u16;
                 if cursor_row < rows && cursor_col < columns {
                     Some(CursorInfo {
@@ -624,11 +628,47 @@ fn resolve_cell_color(color: &Color, palette: &Colors) -> Option<RgbColor> {
             g: r.g,
             b: r.b,
         }),
-        Color::Named(named) => palette[*named].as_ref().map(|r| RgbColor {
-            r: r.r,
-            g: r.g,
-            b: r.b,
-        }),
+        Color::Named(named) => {
+            // When the palette entry is None (not yet configured by OSC),
+            // fall back to standard ANSI color values so that cells
+            // always render with visible fg/bg.
+            palette[*named].as_ref().map(|r| RgbColor {
+                r: r.r,
+                g: r.g,
+                b: r.b,
+            }).or_else(|| {
+                const ANSI_COLORS: &[RgbColor] = &[
+                    RgbColor { r: 0x00, g: 0x00, b: 0x00 }, // Black
+                    RgbColor { r: 0x80, g: 0x00, b: 0x00 }, // Red
+                    RgbColor { r: 0x00, g: 0x80, b: 0x00 }, // Green
+                    RgbColor { r: 0x80, g: 0x80, b: 0x00 }, // Yellow
+                    RgbColor { r: 0x00, g: 0x00, b: 0x80 }, // Blue
+                    RgbColor { r: 0x80, g: 0x00, b: 0x80 }, // Magenta
+                    RgbColor { r: 0x00, g: 0x80, b: 0x80 }, // Cyan
+                    RgbColor { r: 0xc0, g: 0xc0, b: 0xc0 }, // White
+                    RgbColor { r: 0x80, g: 0x80, b: 0x80 }, // Bright Black
+                    RgbColor { r: 0xff, g: 0x00, b: 0x00 }, // Bright Red
+                    RgbColor { r: 0x00, g: 0xff, b: 0x00 }, // Bright Green
+                    RgbColor { r: 0xff, g: 0xff, b: 0x00 }, // Bright Yellow
+                    RgbColor { r: 0x00, g: 0x00, b: 0xff }, // Bright Blue
+                    RgbColor { r: 0xff, g: 0x00, b: 0xff }, // Bright Magenta
+                    RgbColor { r: 0x00, g: 0xff, b: 0xff }, // Bright Cyan
+                    RgbColor { r: 0xff, g: 0xff, b: 0xff }, // Bright White
+                ];
+                let idx = *named as usize;
+                if idx < 16 {
+                    Some(ANSI_COLORS[idx])
+                } else if idx == 256 {
+                    // NamedColor::Foreground
+                    Some(RgbColor { r: 0xd0, g: 0xd0, b: 0xd0 })
+                } else if idx == 257 {
+                    // NamedColor::Background
+                    Some(RgbColor { r: 0x00, g: 0x00, b: 0x00 })
+                } else {
+                    Some(RgbColor { r: 0xaa, g: 0xaa, b: 0xaa })
+                }
+            })
+        }
     }
 }
 

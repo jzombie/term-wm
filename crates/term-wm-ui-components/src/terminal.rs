@@ -953,7 +953,8 @@ fn brighten_indexed(color: Option<TColor>) -> Option<TColor> {
 /// real PTY process.
 #[cfg(test)]
 struct TestPane {
-    pane: Box<dyn Pane>,
+    term: std::sync::Arc<std::sync::Mutex<alacritty_terminal::term::Term<term_wm_pty_engine::PtyListener>>>,
+    processor: std::sync::Mutex<alacritty_terminal::vte::ansi::Processor>,
     current_scrollback: usize,
     max_sb: usize,
     alt_screen: bool,
@@ -964,8 +965,34 @@ struct TestPane {
 #[cfg(test)]
 impl TestPane {
     fn new(max_sb: usize) -> Self {
+        use alacritty_terminal::grid::Dimensions;
+        use alacritty_terminal::term::{Config, Term};
+        use std::sync::Arc;
+        use std::sync::Mutex;
+        use term_wm_pty_engine::PtyListener;
+
+        struct TestDims {
+            cols: usize,
+            rows: usize,
+            sb: usize,
+        }
+        impl Dimensions for TestDims {
+            fn total_lines(&self) -> usize { self.rows + self.sb }
+            fn screen_lines(&self) -> usize { self.rows }
+            fn columns(&self) -> usize { self.cols }
+        }
+
+        let pending_title = Arc::new(Mutex::new(None));
+        let listener = PtyListener { pending_title };
+        let dims = TestDims { cols: 80, rows: 24, sb: max_sb };
+        let term = Arc::new(Mutex::new(Term::new(
+            Config { scrolling_history: max_sb, ..Default::default() },
+            &dims,
+            listener,
+        )));
         Self {
-            pane: Box::new(crate::test_helpers::new_terminal(24, 80, max_sb)),
+            term,
+            processor: std::sync::Mutex::new(alacritty_terminal::vte::ansi::Processor::default()),
             current_scrollback: 0,
             max_sb,
             alt_screen: false,
@@ -976,14 +1003,8 @@ impl TestPane {
 
     fn with_kill_tracker(max_sb: usize) -> (Self, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         let kill_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let pane = Self {
-            pane: Box::new(crate::test_helpers::new_terminal(24, 80, max_sb)),
-            current_scrollback: 0,
-            max_sb,
-            alt_screen: false,
-            pending_title: None,
-            kill_count: std::sync::Arc::clone(&kill_count),
-        };
+        let mut pane = Self::new(max_sb);
+        pane.kill_count = std::sync::Arc::clone(&kill_count);
         (pane, kill_count)
     }
 
@@ -992,13 +1013,23 @@ impl TestPane {
     }
 
     fn write_to_parser(&mut self, bytes: &[u8]) {
-        let mut parser = self.parser.lock().unwrap();
-        parser.process(bytes);
+        let mut term = self.term.lock().unwrap();
+        let mut processor = self.processor.lock().unwrap();
+        processor.advance(&mut *term, bytes);
     }
 
     fn set_parser_size(&mut self, rows: u16, cols: u16) {
-        let mut parser = self.parser.lock().unwrap();
-        parser.screen_mut().set_size(rows, cols);
+        use alacritty_terminal::grid::Dimensions;
+        struct ResizeDims { cols: usize, rows: usize, sb: usize }
+        impl Dimensions for ResizeDims {
+            fn total_lines(&self) -> usize { self.rows + self.sb }
+            fn screen_lines(&self) -> usize { self.rows }
+            fn columns(&self) -> usize { self.cols }
+        }
+        let sb = self.max_sb;
+        let dims = ResizeDims { cols: cols as usize, rows: rows as usize, sb };
+        let mut term = self.term.lock().unwrap();
+        term.resize(dims);
     }
 
     #[allow(dead_code)]
@@ -1034,7 +1065,84 @@ impl Pane for TestPane {
     }
 
     fn snapshot(&mut self, columns: u16, rows: u16) -> term_wm_pty_engine::pane::TerminalSnapshot {
-        self.pane.snapshot(columns, rows)
+        use alacritty_terminal::index::{Column, Line};
+        use alacritty_terminal::term::cell::Flags;
+        use alacritty_terminal::term::TermMode;
+        use alacritty_terminal::vte::ansi::{Color, NamedColor};
+        use term_wm_pty_engine::pane::*;
+
+        let t = self.term.lock().unwrap();
+        let grid = t.grid();
+        let mode = t.mode();
+        let cursor = &grid.cursor;
+
+        let default_fg = t.colors()[NamedColor::Foreground].as_ref().map(|r| RgbColor { r: r.r, g: r.g, b: r.b });
+        let default_bg = t.colors()[NamedColor::Background].as_ref().map(|r| RgbColor { r: r.r, g: r.g, b: r.b });
+
+        let mouse = MouseProtocol {
+            encoding: if mode.contains(TermMode::SGR_MOUSE) { MouseProtocolEncoding::Sgr } else { MouseProtocolEncoding::Default },
+            mode: if mode.contains(TermMode::MOUSE_REPORT_CLICK) { MouseProtocolMode::PressRelease }
+                else if mode.contains(TermMode::MOUSE_DRAG) { MouseProtocolMode::ButtonMotion }
+                else if mode.contains(TermMode::MOUSE_MOTION) { MouseProtocolMode::AnyMotion }
+                else { MouseProtocolMode::None },
+        };
+
+        let mut cells = Vec::with_capacity(rows as usize);
+        for i in 0..rows {
+            let row = &grid[Line(i as i32)];
+            let mut row_cells = Vec::with_capacity(columns as usize);
+            for col in 0..columns {
+                let acell = &row[Column(col as usize)];
+                let fg = {
+                    use alacritty_terminal::vte::ansi::Color;
+                    match &acell.fg {
+                        Color::Spec(rgb) => Some(term_wm_pty_engine::pane::RgbColor { r: rgb.r, g: rgb.g, b: rgb.b }),
+                        Color::Indexed(idx) => t.colors()[*idx as usize].as_ref().map(|r| term_wm_pty_engine::pane::RgbColor { r: r.r, g: r.g, b: r.b }),
+                        Color::Named(named) => t.colors()[*named].as_ref().map(|r| term_wm_pty_engine::pane::RgbColor { r: r.r, g: r.g, b: r.b }),
+                    }
+                };
+                let bg = {
+                    use alacritty_terminal::vte::ansi::Color;
+                    match &acell.bg {
+                        Color::Spec(rgb) => Some(term_wm_pty_engine::pane::RgbColor { r: rgb.r, g: rgb.g, b: rgb.b }),
+                        Color::Indexed(idx) => t.colors()[*idx as usize].as_ref().map(|r| term_wm_pty_engine::pane::RgbColor { r: r.r, g: r.g, b: r.b }),
+                        Color::Named(named) => t.colors()[*named].as_ref().map(|r| term_wm_pty_engine::pane::RgbColor { r: r.r, g: r.g, b: r.b }),
+                    }
+                };
+                row_cells.push(TerminalCell {
+                    character: acell.c,
+                    fg,
+                    bg,
+                    bold: acell.flags.contains(Flags::BOLD),
+                    dim: acell.flags.contains(Flags::DIM),
+                    italic: acell.flags.contains(Flags::ITALIC),
+                    underline: acell.flags.intersects(Flags::ALL_UNDERLINES),
+                    inverse: acell.flags.contains(Flags::INVERSE),
+                    hidden: acell.flags.contains(Flags::HIDDEN),
+                    strikeout: acell.flags.contains(Flags::STRIKEOUT),
+                    wide_continuation: acell.flags.contains(Flags::WIDE_CHAR_SPACER),
+                });
+            }
+            cells.push(row_cells);
+        }
+
+        TerminalSnapshot {
+            columns,
+            rows,
+            cursor: if mode.contains(TermMode::SHOW_CURSOR) {
+                let cr = cursor.point.line.0 as u16;
+                let cc = cursor.point.column.0 as u16;
+                if cr < rows && cc < columns {
+                    Some(CursorInfo { column: cc, row: cr, hidden: false })
+                } else { None }
+            } else { None },
+            default_fg,
+            default_bg,
+            alternate_screen: mode.contains(TermMode::ALT_SCREEN),
+            mouse,
+            display_offset: grid.display_offset(),
+            cells,
+        }
     }
 
     fn max_scrollback(&mut self) -> usize {

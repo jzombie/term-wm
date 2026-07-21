@@ -27,6 +27,7 @@ tracing = { workspace = true }
 webbrowser = { workspace = true }
 
 [dev-dependencies]
+alacritty_terminal = { workspace = true }
 # proptest was previously used for property-based scroll-sync tests.
 # If re-adding property tests, uncomment and ensure proptest-regressions/
 # is maintained.

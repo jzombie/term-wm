@@ -216,7 +216,7 @@ impl Pane for RemotePane {
             columns,
             rows,
             cursor: if mode.contains(TermMode::SHOW_CURSOR) {
-                let cr = cursor.point.line.0 as u16;
+                let cr = cursor.point.line.0.max(0) as u16;
                 let cc = cursor.point.column.0 as u16;
                 if cr < rows && cc < columns {
                     Some(CursorInfo { column: cc, row: cr, hidden: false })

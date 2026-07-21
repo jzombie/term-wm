@@ -3118,6 +3118,7 @@ dependencies = [
 name = "term-wm-ui-components"
 version = "0.8.20-alpha"
 dependencies = [
+ "alacritty_terminal",
  "crossterm",
  "indoc",
  "linkify",
