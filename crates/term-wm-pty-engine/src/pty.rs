@@ -1499,7 +1499,7 @@ mod tests {
             // Place a 65-char line with `%` at absolute row i+1.
             // When replayed at 30 cols this wraps to 3 rows,
             // pushing subsequent content down.
-            write!(history, "\x1b[{};1Hline {}: {} %\n", i + 1, i, "x".repeat(52)).unwrap();
+            writeln!(history, "\x1b[{};1Hline {}: {} %", i + 1, i, "x".repeat(52)).unwrap();
         }
 
         // ── OLD: create parser at 30 cols, replay all history ──
@@ -1517,11 +1517,13 @@ mod tests {
         // each line wraps to ~3 rows.  Absolute references like \x1b[2;1H
         // land inside wrapped continuations, jamming all 5 lines into 1 row.
         assert_eq!(
-            old_text.lines().count(), 1,
+            old_text.lines().count(),
+            1,
             "history-replay must collapse all lines into one row"
         );
         assert_eq!(
-            new_text.lines().count(), 5,
+            new_text.lines().count(),
+            5,
             "set_size must preserve 5 separate rows"
         );
     }
