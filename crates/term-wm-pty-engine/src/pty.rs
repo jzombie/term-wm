@@ -357,7 +357,7 @@ impl Pty {
 
     pub fn screen_lines(&mut self) -> Vec<String> {
         self.screen();
-        let t = self.term.lock().unwrap();
+        let t = self.term.lock().unwrap_or_else(|e| e.into_inner());
         let grid = t.grid();
         let lines: Vec<String> = (0..self.size.rows)
             .map(|i| {
@@ -433,7 +433,7 @@ impl Pty {
         self.poll_foreground();
         if self.dirty.swap(false, Ordering::Acquire) {
             if self.dsr_requested.swap(false, Ordering::Relaxed) {
-                let t = self.term.lock().unwrap();
+                let t = self.term.lock().unwrap_or_else(|e| e.into_inner());
                 let point = t.grid().cursor.point;
                 drop(t);
                 let response = format!(
@@ -452,7 +452,7 @@ impl Pty {
     /// Capture a full-frame snapshot of the visible viewport.
     pub fn snapshot(&mut self, columns: u16, rows: u16) -> TerminalSnapshot {
         self.screen();
-        let t = self.term.lock().unwrap();
+        let t = self.term.lock().unwrap_or_else(|e| e.into_inner());
         let grid = t.grid();
         let mode = t.mode();
         let display_offset = grid.display_offset();
@@ -557,14 +557,14 @@ impl Pty {
 
     pub fn scrollback(&mut self) -> usize {
         self.screen();
-        let t = self.term.lock().unwrap();
+        let t = self.term.lock().unwrap_or_else(|e| e.into_inner());
         t.grid().display_offset()
     }
 
     pub fn set_scrollback(&mut self, rows: usize) {
         let current = self.scrollback();
         let delta = rows as i32 - current as i32;
-        let mut t = self.term.lock().unwrap();
+        let mut t = self.term.lock().unwrap_or_else(|e| e.into_inner());
         t.scroll_display(Scroll::Delta(-delta));
     }
 
@@ -580,7 +580,7 @@ impl Pty {
 
     pub fn alternate_screen(&mut self) -> bool {
         self.screen();
-        let t = self.term.lock().unwrap();
+        let t = self.term.lock().unwrap_or_else(|e| e.into_inner());
         t.mode().contains(TermMode::ALT_SCREEN)
     }
 
@@ -588,7 +588,7 @@ impl Pty {
     /// Used by the session server for state forwarding.
     pub fn generate_snapshot(&mut self) -> Vec<u8> {
         self.screen();
-        let t = self.term.lock().unwrap();
+        let t = self.term.lock().unwrap_or_else(|e| e.into_inner());
         let grid = t.grid();
         let mut output = Vec::new();
         for i in 0..self.size.rows {
@@ -730,7 +730,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 screen_lines: size.rows as usize,
                 scrollback: 0, // current scrollback, not total; Term tracks its own
             };
-            let mut t = term.lock().unwrap();
+            let mut t = term.lock().unwrap_or_else(|e| e.into_inner());
             t.resize(dims);
         }
 
@@ -773,9 +773,18 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 }
 
                 // Feed bytes through the vte Processor into the Term.
+                // Isolated with catch_unwind: if the parser panics we do not
+                // poison the term Mutex — the reader thread stays alive.
                 {
-                    let mut t = term.lock().unwrap();
-                    processor.advance(&mut *t, &buf[..n]);
+                    let mut t = term.lock().unwrap_or_else(|e| e.into_inner());
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        processor.advance(&mut *t, &buf[..n]);
+                    }));
+                    if result.is_err() {
+                        // Parser panicked — mark dirty so the main thread
+                        // detects the issue and re-syncs.
+                        dirty.store(true, Ordering::Release);
+                    }
                 }
 
                 if let Some(title) = extract_osc_title(&buf[..n])
