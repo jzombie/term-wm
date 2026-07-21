@@ -21,3 +21,4 @@
 - [X] [TODO] If no windows remain, render empty_window_message() in the center of the UI. Possibly consider renaming empty_window_message to something more meaningful.
 - [ ] [TODO] Hide mouse cursor after x amount of seconds of no activity.
 - [ ] [TODO] Update crates with idiomatic rust categories and keywords
+- [ ] [TODO] In Monocle-mode when tabbing through windows, make the menu go into outline mode for 1 or 2 seconds, and hide the panels, so the user can see the full window titles, etc. If *not* in Monocle mode, just go into outline mode without hiding the panels.
