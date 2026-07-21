@@ -437,13 +437,17 @@ mod tests {
 
         {
             let out = Arc::clone(&stdout_lines);
-            redirect_fd(stdout_fd, move |line| out.lock().unwrap().push(line.to_string()))
-                .expect("redirect stdout");
+            redirect_fd(stdout_fd, move |line| {
+                out.lock().unwrap().push(line.to_string())
+            })
+            .expect("redirect stdout");
         }
         {
             let err = Arc::clone(&stderr_lines);
-            redirect_fd(stderr_fd, move |line| err.lock().unwrap().push(line.to_string()))
-                .expect("redirect stderr");
+            redirect_fd(stderr_fd, move |line| {
+                err.lock().unwrap().push(line.to_string())
+            })
+            .expect("redirect stderr");
         }
 
         unsafe {
@@ -452,9 +456,15 @@ mod tests {
         }
 
         #[cfg(unix)]
-        unsafe { libc::close(stdout_fd); libc::close(stderr_fd); }
+        unsafe {
+            libc::close(stdout_fd);
+            libc::close(stderr_fd);
+        }
         #[cfg(windows)]
-        unsafe { libc::close(stdout_fd); libc::close(stderr_fd); }
+        unsafe {
+            libc::close(stdout_fd);
+            libc::close(stderr_fd);
+        }
 
         std::thread::sleep(std::time::Duration::from_millis(100));
 
