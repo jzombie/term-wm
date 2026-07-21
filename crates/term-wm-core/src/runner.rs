@@ -7,7 +7,9 @@ use std::collections::VecDeque;
 
 use crate::actions::{ConfirmAction, EventResult, SystemTask, TermWmAction};
 use crate::components::Component;
+use crate::components::Overlay;
 use crate::components::SelectionStatus;
+use crate::components::WmComponent;
 use crate::debug_event_flags;
 use crate::event_loop::{ControlFlow, EventLoop};
 use crate::events::core_event_to_wm;
@@ -17,8 +19,12 @@ use crate::layout::{LayoutNode, TilingLayout};
 use crate::task_scheduler::TaskScheduler;
 use crate::window::{WindowKey, WindowManager};
 
-pub trait WindowManagerHost<C: Component<TermWmAction>> {
-    fn wm(&mut self) -> &mut WindowManager<C>;
+pub trait WindowManagerHost<
+    C: Component<TermWmAction>,
+    L: WmComponent = crate::components::NoopWmComponent,
+    O: Overlay<TermWmAction> = crate::components::NoopOverlay,
+> {
+    fn wm(&mut self) -> &mut WindowManager<C, L, O>;
     fn wm_new_window(&mut self) -> std::io::Result<()> {
         Ok(())
     }
@@ -59,7 +65,7 @@ pub trait WindowManagerHost<C: Component<TermWmAction>> {
     }
 }
 
-fn drain_action_queue<C: Component<TermWmAction>, A: WindowManagerHost<C>>(
+fn drain_action_queue<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>, A: WindowManagerHost<C, L, O>>(
     app: &mut A,
     queue: &mut VecDeque<(WindowKey, TermWmAction)>,
 ) {
@@ -107,10 +113,12 @@ fn drain_action_queue<C: Component<TermWmAction>, A: WindowManagerHost<C>>(
     }
 }
 
-fn handle_focused_app_event<C, A>(event: &Event, app: &mut A) -> bool
+fn handle_focused_app_event<C, L, O, A>(event: &Event, app: &mut A) -> bool
 where
     C: Component<TermWmAction>,
-    A: WindowManagerHost<C>,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+    A: WindowManagerHost<C, L, O>,
 {
     // Clear hover state when the terminal loses focus so stale
     // hover highlights do not persist on menus or buttons.
@@ -194,8 +202,8 @@ where
 /// Prefer [`run_with_defaults`] for typical usage. Use this directly only when
 /// you need a custom draw closure or region mapping.
 #[allow(clippy::too_many_arguments)]
-pub fn run_event_loop<C, O, D, A, FDraw, FMap>(
-    output: &mut O,
+pub fn run_event_loop<C, L, Ov, Rt, D, A, FDraw, FMap>(
+    output: &mut Rt,
     driver: &mut D,
     app: &mut A,
     system_scheduler: TaskScheduler<SystemTask>,
@@ -204,9 +212,11 @@ pub fn run_event_loop<C, O, D, A, FDraw, FMap>(
 ) -> io::Result<()>
 where
     C: Component<TermWmAction>,
-    O: RenderTarget,
+    L: WmComponent,
+    Ov: Overlay<TermWmAction>,
+    Rt: RenderTarget,
     D: EventSource,
-    A: WindowManagerHost<C>,
+    A: WindowManagerHost<C, L, Ov>,
     FDraw: for<'frame> FnMut(&'frame mut dyn term_wm_render::RenderBackend, &mut A),
     FMap: Fn(WindowKey) -> WindowKey + Copy,
 {
@@ -520,12 +530,14 @@ where
 ///       └─ run_with_defaults(...)   // ← you are here
 ///           └─ run_event_loop(...)  // low-level: the actual loop
 /// ```
-pub fn run_with_defaults<C, O, D, A>(output: &mut O, driver: &mut D, app: &mut A) -> io::Result<()>
+pub fn run_with_defaults<C, L, Ov, Rt, D, A>(output: &mut Rt, driver: &mut D, app: &mut A) -> io::Result<()>
 where
     C: Component<TermWmAction>,
-    O: RenderTarget,
+    L: WmComponent,
+    Ov: Overlay<TermWmAction>,
+    Rt: RenderTarget,
     D: EventSource,
-    A: WindowManagerHost<C>,
+    A: WindowManagerHost<C, L, Ov>,
 {
     let system_scheduler = TaskScheduler::<SystemTask>::new();
     let system_handle = system_scheduler.handle();
@@ -555,10 +567,12 @@ fn selection_snapshot_from(
     }
 }
 
-fn update_selection_snapshot<C, A>(app: &mut A)
+fn update_selection_snapshot<C, L, O, A>(app: &mut A)
 where
     C: Component<TermWmAction>,
-    A: WindowManagerHost<C>,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+    A: WindowManagerHost<C, L, O>,
 {
     let was_dragging = app.wm().selection_dragging();
     let focus = app.wm().focused_window();

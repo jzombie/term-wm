@@ -4,7 +4,7 @@ use term_wm::layout::Direction;
 use term_wm::layout::tiling::{InsertPosition, LayoutNode, TilingLayout};
 use term_wm::window::{FloatRectSpec, WindowKey, WindowManager};
 use term_wm::wm_config::WmConfig;
-use term_wm_core::components::NoopComponent;
+use term_wm_core::components::{NoopComponent, NoopOverlay, NoopWmComponent};
 use term_wm_layout_engine::{LayoutRect, detect_corner_snap, detect_edge_snap, edge_preview_rect};
 
 type Rect = term_wm_core::Rect;
@@ -30,13 +30,13 @@ fn area_lr() -> LayoutRect {
 fn wm_with_two_windows() -> (WindowManager<NoopComponent>, [WindowKey; 2]) {
     let mut config = WmConfig::standalone();
     config.chrome_enabled = false;
-    let mut wm = WindowManager::with_config(
-        config,
-        Arc::new(AppContext::new("test", "0.0.0")),
-        None,
-        term_wm_core::window::LayerManager::new(),
-        std::collections::HashMap::new(),
-    );
+        let mut wm: WindowManager<NoopComponent> = WindowManager::with_config(
+            config,
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            term_wm_core::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
     wm.set_panel_visible(false);
     let k0 = wm.create_window(NoopComponent);
     let k1 = wm.create_window(NoopComponent);

@@ -21,7 +21,7 @@ use super::entry::{Window, WindowState};
 use crate::actions::{EventResult, SystemTask, TermWmAction};
 use crate::app_context::AppContext;
 use crate::components::{
-    Component, ComponentAction, ComponentContext, MenuItem, Overlay, WmComponent,
+    Component, ComponentAction, ComponentContext, MenuItem, NoopOverlay, NoopWmComponent, Overlay, WmComponent,
 };
 use crate::hitbox_registry::{ComponentOwner, HitboxRegistry};
 use crate::keybindings::KeyBindings;
@@ -176,12 +176,16 @@ pub enum DrawTask {
     App(WindowDrawContext),
 }
 
-pub struct WindowManager<C: Component<TermWmAction>> {
+pub struct WindowManager<
+    C: Component<TermWmAction>,
+    L: WmComponent = crate::components::NoopWmComponent,
+    O: Overlay<TermWmAction> = crate::components::NoopOverlay,
+> {
     #[allow(dead_code)]
     focus: FocusRing<WindowKey>,
     #[allow(dead_code)]
     macro_focus: layer_manager::MacroFocus,
-    pub(crate) layer_manager: layer_manager::LayerManager,
+    pub(crate) layer_manager: layer_manager::LayerManager<L>,
     windows: SlotMap<WindowKey, Window>,
     /// Dense arena storing all window-root components inline.
     components: SlotMap<ComponentKey, C>,
@@ -224,7 +228,7 @@ pub struct WindowManager<C: Component<TermWmAction>> {
     /// system-level timers (super-passthrough, drag-snap).
     system_task_handle: Option<TaskHandle<SystemTask>>,
     pub(crate) last_frame_area: LayoutRect,
-    overlays: SlotMap<OverlayKey, Box<dyn Overlay<TermWmAction>>>,
+    overlays: SlotMap<OverlayKey, O>,
     help_key: Option<OverlayKey>,
     exit_confirm_key: Option<OverlayKey>,
     command_palette_key: Option<OverlayKey>,
@@ -272,7 +276,7 @@ pub(crate) struct TapSwapState {
     pub target_key: Option<WindowKey>,
 }
 
-impl<C: Component<TermWmAction>> WindowManager<C> {
+impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> WindowManager<C, L, O> {
     /// Allocate a new window entry in the SlotMap and return its key.
     /// The window starts with default state (no title, not floating, etc.).
     pub fn create_window(&mut self, component: C) -> WindowKey {
@@ -546,7 +550,7 @@ impl<C: Component<TermWmAction>> WindowManager<C> {
         config: WmConfig,
         app_ctx: Arc<AppContext>,
         supported_menu_actions: Option<Vec<TermWmAction>>,
-        layer_manager: layer_manager::LayerManager,
+        layer_manager: layer_manager::LayerManager<L>,
         semantic_registry: HashMap<layer_manager::ComponentTag, layer_manager::LayerId>,
     ) -> Self {
         let supported_menu_actions = supported_menu_actions.unwrap_or_else(|| {
@@ -689,7 +693,7 @@ impl<C: Component<TermWmAction>> WindowManager<C> {
     pub fn get_semantic_component_mut(
         &mut self,
         tag: layer_manager::ComponentTag,
-    ) -> Option<&mut dyn WmComponent> {
+    ) -> Option<&mut L> {
         self.semantic_registry
             .get(&tag)
             .copied()
@@ -700,7 +704,7 @@ impl<C: Component<TermWmAction>> WindowManager<C> {
     pub fn get_semantic_component(
         &self,
         tag: layer_manager::ComponentTag,
-    ) -> Option<&dyn WmComponent> {
+    ) -> Option<&L> {
         self.semantic_registry
             .get(&tag)
             .copied()
@@ -1916,8 +1920,7 @@ impl<C: Component<TermWmAction>> WindowManager<C> {
         self.clipboard_enabled = enabled;
         self.clipboard_dirty = true;
         for overlay in self.overlays.values_mut() {
-            let o: &mut dyn crate::components::Overlay<TermWmAction> = &mut **overlay;
-            o.set_selection_enabled(enabled);
+            overlay.set_selection_enabled(enabled);
         }
     }
 
@@ -1990,7 +1993,7 @@ impl<C: Component<TermWmAction>> WindowManager<C> {
     pub fn overlay_for_key_mut(
         &mut self,
         key: OverlayKey,
-    ) -> Option<&mut Box<dyn Overlay<TermWmAction>>> {
+    ) -> Option<&mut O> {
         self.overlays.get_mut(key)
     }
 
@@ -2002,16 +2005,16 @@ impl<C: Component<TermWmAction>> WindowManager<C> {
         self.overlays.keys().collect()
     }
 
-    pub fn open_help_overlay(&mut self, overlay: Box<dyn Overlay<TermWmAction>>) {
+    pub fn open_help_overlay(&mut self, overlay: O) {
         self.help_key = Some(self.overlays.insert(overlay));
         self.input_mode = crate::actions::WmInputMode::Help;
     }
 
-    pub fn open_exit_confirm_overlay(&mut self, overlay: Box<dyn Overlay<TermWmAction>>) {
+    pub fn open_exit_confirm_overlay(&mut self, overlay: O) {
         self.exit_confirm_key = Some(self.overlays.insert(overlay));
     }
 
-    pub fn open_command_palette_overlay(&mut self, overlay: Box<dyn Overlay<TermWmAction>>) {
+    pub fn open_command_palette_overlay(&mut self, overlay: O) {
         self.command_palette_key = Some(self.overlays.insert(overlay));
         self.input_mode = crate::actions::WmInputMode::CommandPalette;
     }
@@ -2136,7 +2139,7 @@ impl<C: Component<TermWmAction>> WindowManager<C> {
 
     // ── Event Routing & Update Accessors ─────────────────────────────
 
-    pub fn overlays_mut(&mut self) -> &mut SlotMap<OverlayKey, Box<dyn Overlay<TermWmAction>>> {
+    pub fn overlays_mut(&mut self) -> &mut SlotMap<OverlayKey, O> {
         &mut self.overlays
     }
 
@@ -2152,7 +2155,7 @@ impl<C: Component<TermWmAction>> WindowManager<C> {
         self.managed_area
     }
 
-    pub fn overlays(&self) -> &SlotMap<OverlayKey, Box<dyn Overlay<TermWmAction>>> {
+    pub fn overlays(&self) -> &SlotMap<OverlayKey, O> {
         &self.overlays
     }
 
@@ -2190,7 +2193,7 @@ impl<C: Component<TermWmAction>> WindowManager<C> {
 
     /// Set the notification area component (called during app init).
     /// Pushes into LayerManager with ZPlane::Foreground.
-    pub fn set_notification_component(&mut self, comp: Box<dyn WmComponent>) {
+    pub fn set_notification_component(&mut self, comp: L) {
         let id = self
             .layer_manager
             .insert(comp, layer_manager::ZPlane::Foreground);
@@ -2199,7 +2202,7 @@ impl<C: Component<TermWmAction>> WindowManager<C> {
     }
 
     /// Get a mutable reference to the notification component.
-    pub fn notification_component_mut(&mut self) -> Option<&mut dyn WmComponent> {
+    pub fn notification_component_mut(&mut self) -> Option<&mut L> {
         self.semantic_registry
             .get(&layer_manager::ComponentTag::NotificationArea)
             .copied()
@@ -5305,52 +5308,12 @@ mod tests {
             height: 15,
         };
 
-        #[derive(Debug)]
-        struct TestOverlay {
-            got_screen_area: std::cell::Cell<bool>,
-        }
-        impl crate::components::Component<TermWmAction> for TestOverlay {
-            fn handle_events(
-                &mut self,
-                _event: &Event,
-                ctx: &crate::components::ComponentContext,
-            ) -> crate::actions::EventResult<TermWmAction> {
-                if ctx.screen_area().is_some() {
-                    self.got_screen_area.set(true);
-                }
-                crate::actions::EventResult::Consumed
-            }
-            fn update(
-                &mut self,
-                _: TermWmAction,
-                _: &crate::components::ComponentContext,
-                _: &mut VecDeque<(crate::window::WindowKey, TermWmAction)>,
-            ) {
-            }
-            fn render(
-                &mut self,
-                _: &mut dyn term_wm_render::RenderBackend,
-                _: LayoutRect,
-                _: &crate::components::ComponentContext,
-                _: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-        }
-        impl crate::components::Overlay<TermWmAction> for TestOverlay {
-            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-                self
-            }
-        }
-        impl crate::components::WmComponent for TestOverlay {}
-
-        let overlay_obj = TestOverlay {
-            got_screen_area: std::cell::Cell::new(false),
-        };
+        let overlay_obj = NoopWmComponent;
         let _overlay_hitbox_id = layer_manager::LayerId::new();
         // Register overlay's hitbox and store it
         let _overlay_id = wm
             .layer_manager
-            .insert(Box::new(overlay_obj), layer_manager::ZPlane::Foreground);
+            .insert(overlay_obj, layer_manager::ZPlane::Foreground);
         // The foreground dispatch calls handle_events on all layers.
         // Register the hitbox with the correct overlay area.
         wm.hitbox_registry.register(
@@ -5380,31 +5343,7 @@ mod tests {
         );
         assert!(!wm.exit_confirm_visible());
 
-        struct StubOverlay;
-        impl crate::components::Component<TermWmAction> for StubOverlay {
-            fn update(
-                &mut self,
-                _: TermWmAction,
-                _: &crate::components::ComponentContext,
-                _: &mut VecDeque<(crate::window::WindowKey, TermWmAction)>,
-            ) {
-            }
-            fn render(
-                &mut self,
-                _: &mut dyn term_wm_render::RenderBackend,
-                _: LayoutRect,
-                _: &crate::components::ComponentContext,
-                _: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-        }
-        impl crate::components::Overlay<TermWmAction> for StubOverlay {
-            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-                self
-            }
-        }
-
-        wm.open_exit_confirm_overlay(Box::new(StubOverlay));
+        wm.open_exit_confirm_overlay(NoopOverlay);
         assert!(wm.exit_confirm_visible());
         wm.close_exit_confirm();
         assert!(!wm.exit_confirm_visible());
@@ -5421,31 +5360,7 @@ mod tests {
         );
         assert!(!wm.help_overlay_visible());
 
-        struct StubOverlay;
-        impl crate::components::Component<TermWmAction> for StubOverlay {
-            fn update(
-                &mut self,
-                _: TermWmAction,
-                _: &crate::components::ComponentContext,
-                _: &mut VecDeque<(crate::window::WindowKey, TermWmAction)>,
-            ) {
-            }
-            fn render(
-                &mut self,
-                _: &mut dyn term_wm_render::RenderBackend,
-                _: LayoutRect,
-                _: &crate::components::ComponentContext,
-                _: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-        }
-        impl crate::components::Overlay<TermWmAction> for StubOverlay {
-            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-                self
-            }
-        }
-
-        wm.open_help_overlay(Box::new(StubOverlay));
+        wm.open_help_overlay(NoopOverlay);
         assert!(wm.help_overlay_visible());
         wm.close_help_overlay();
         assert!(!wm.help_overlay_visible());

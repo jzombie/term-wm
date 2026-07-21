@@ -16,12 +16,14 @@ use term_wm::wm_config::WmConfig;
 use term_wm::{
     PtyStatus, ScrollKeyMode, ScrollViewComponent, TerminalComponent, default_shell_command,
 };
+use term_wm::actions::TermWmAction;
 use term_wm_console::console_render_target::ConsoleRenderTarget;
 use term_wm_core::components::Component;
 use term_wm_sys_ui_components::WmSystemPanelComponent;
 use term_wm_sys_ui_components::wm_debug_log::{
     WmDebugLogComponent, install_panic_hook, set_global_debug_log,
 };
+use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 use term_wm_ui_facade::core_component::CoreWmComponent;
 
 /// Simple CLI for launching `term-wm` with optional commands / window count.
@@ -101,25 +103,25 @@ impl App {
         let app_version = app_ctx.app_version.clone();
 
         let wm = if embedded {
-            AppBuilder::bare()
+            AppBuilder::<LayerComponent>::bare()
                 .config(WmConfig::minimal())
                 .app_ctx(Arc::clone(&app_ctx))
                 .build()
                 .expect("embedded build")
         } else {
-            AppBuilder::bare()
+            AppBuilder::<LayerComponent>::bare()
                 .app_ctx(Arc::clone(&app_ctx))
-                .top_panel(Box::new(
+                .top_panel(LayerComponent::TopPanel(
                     term_wm_sys_ui_components::WmTopPanelComponent::new(&app_name),
                 ))
-                .bottom_panel(Box::new(
+                .bottom_panel(LayerComponent::BottomPanel(
                     term_wm_sys_ui_components::WmBottomPanelComponent::new(
                         &app_name,
                         &app_version,
                         hostname,
                     ),
                 ))
-                .fab(Box::new(term_wm_sys_ui_components::WmFabComponent::new()))
+                .fab(LayerComponent::Fab(term_wm_sys_ui_components::WmFabComponent::new()))
                 .build()
                 .expect("standalone build")
         };
@@ -261,8 +263,8 @@ impl App {
     }
 }
 
-impl WindowManagerHost<AppRootComponent> for App {
-    fn wm(&mut self) -> &mut term_wm::window::WindowManager<AppRootComponent> {
+impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for App {
+    fn wm(&mut self) -> &mut term_wm::window::WindowManager<AppRootComponent, LayerComponent, OverlayComponent> {
         self.inner.wm()
     }
 
@@ -273,7 +275,7 @@ impl WindowManagerHost<AppRootComponent> for App {
         let mut h = WmHelpOverlayComponent::new(wm.app_ctx(), kb);
         h.show();
         h.set_selection_enabled(wm.clipboard_enabled());
-        wm.open_help_overlay(Box::new(h));
+        wm.open_help_overlay(OverlayComponent::Help(h));
     }
 
     fn open_exit_confirm(&mut self) {
@@ -283,11 +285,10 @@ impl WindowManagerHost<AppRootComponent> for App {
             "Exit App",
             "Exit the application?\nUnsaved changes will be lost.",
         );
-        self.inner.wm().open_exit_confirm_overlay(Box::new(confirm));
+        self.inner.wm().open_exit_confirm_overlay(OverlayComponent::ExitConfirm(confirm));
     }
 
     fn open_command_palette(&mut self) {
-        use term_wm::actions::TermWmAction;
         use term_wm_sys_ui_components::wm_command_palette::WmCommandPaletteComponent;
         let wm = self.inner.wm();
         let mut palette = WmCommandPaletteComponent::new();
@@ -302,7 +303,7 @@ impl WindowManagerHost<AppRootComponent> for App {
             })
             .collect();
         palette.set_items(items);
-        wm.open_command_palette_overlay(Box::new(palette));
+        wm.open_command_palette_overlay(OverlayComponent::CommandPalette(palette));
     }
 
     fn on_panic(&mut self) {

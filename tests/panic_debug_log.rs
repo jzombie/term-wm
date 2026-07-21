@@ -92,14 +92,14 @@ impl EventSource for ImmediateDriver {
 }
 
 struct SparseApp {
-    wm: WindowManager<NoopComponent>,
+    wm: WindowManager<NoopComponent, NoopWmComponent, NoopOverlay>,
     draws: usize,
     window_key: Option<WindowKey>,
     should_quit: bool,
 }
 
-impl WindowManagerHost<NoopComponent> for SparseApp {
-    fn wm(&mut self) -> &mut WindowManager<NoopComponent> {
+impl WindowManagerHost<NoopComponent, NoopWmComponent, NoopOverlay> for SparseApp {
+    fn wm(&mut self) -> &mut WindowManager<NoopComponent, NoopWmComponent, NoopOverlay> {
         &mut self.wm
     }
     fn quit_requested(&self) -> bool {
@@ -116,9 +116,9 @@ fn render_panic_shows_in_debug_log() {
     );
     term_wm_sys_ui_components::install_panic_hook();
 
-    let mut wm = AppBuilder::bare()
+    let mut wm = AppBuilder::<NoopWmComponent>::bare()
         .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
-        .build::<NoopComponent>()
+        .build::<NoopComponent, NoopOverlay>()
         .expect("test build");
     let key = wm.create_window(NoopComponent);
     wm.set_window_title(key, "test");
