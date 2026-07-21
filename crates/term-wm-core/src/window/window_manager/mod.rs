@@ -183,7 +183,6 @@ pub struct WindowManager<C: Component<TermWmAction>> {
     windows: SlotMap<WindowKey, Window>,
     /// Dense arena storing all window-root components inline.
     components: SlotMap<ComponentKey, C>,
-    next_component_seq: usize,
     pub(crate) regions: RegionMap<WindowKey>,
     scroll: BTreeMap<WindowKey, ScrollState>,
     pub(crate) handles: Vec<SplitHandle>,
@@ -582,7 +581,6 @@ impl<C: Component<TermWmAction>> WindowManager<C> {
             layer_manager,
             windows: SlotMap::with_capacity(32),
             components: SlotMap::<ComponentKey, C>::with_capacity_and_key(32),
-            next_component_seq: 0,
             regions: RegionMap::default(),
             scroll: BTreeMap::new(),
             handles: Vec::new(),
@@ -2451,9 +2449,9 @@ fn rects_intersect(a: Rect, b: Rect) -> bool {
 }
 
 #[cfg(test)]
-fn make_keys(wm: &mut WindowManager, n: usize) -> Vec<WindowKey> {
+fn make_keys(wm: &mut WindowManager<TestComponent>, n: usize) -> Vec<WindowKey> {
     (0..n)
-        .map(|_| wm.create_window(Box::new(crate::components::NoopComponent)))
+        .map(|_| wm.create_window(TestComponent::Noop(crate::components::NoopComponent)))
         .collect()
 }
 

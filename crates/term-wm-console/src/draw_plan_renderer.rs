@@ -455,11 +455,11 @@ impl DrawPlanRenderer {
 
     /// Render the draw plan to the terminal frame.
     /// This is the ONLY place where Ratatui types are used for rendering.
-    pub fn render(
+    pub fn render<C: Component<TermWmAction>>(
         &mut self,
         frame: &mut Frame,
         draw_plan: &DrawPlan,
-        wm: &mut WindowManager,
+        wm: &mut WindowManager<C>,
         hitbox_registry: &mut HitboxRegistry,
     ) {
         for region in draw_plan.regions() {
@@ -632,7 +632,7 @@ impl Default for DrawPlanRenderer {
 
 // ── Rendering functions (called by render_app in lib.rs) ──────────────
 
-pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut WindowManager) {
+pub fn render_panels<C: Component<TermWmAction>>(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut WindowManager<C>) {
     let status_line = if wm.command_menu_visible() {
         Some("Tab/Shift-Tab: cycle windows".to_string())
     } else {
@@ -693,8 +693,8 @@ pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut W
 
 /// Returns (shadow_rect, z_depth) pairs for all visible overlays
 /// that request a drop shadow.
-pub fn overlay_shadow_data(
-    wm: &WindowManager,
+pub fn overlay_shadow_data<C: Component<TermWmAction>>(
+    wm: &WindowManager<C>,
     area: LayoutRect,
     z_base: usize,
     z_total: usize,
@@ -702,7 +702,7 @@ pub fn overlay_shadow_data(
     let mut data = Vec::new();
     for (idx, (_, overlay)) in wm.overlays().iter().enumerate() {
         if let Some(rect) = overlay.shadow_rect(area) {
-            let z = WindowManager::compute_z_depth(z_base + idx, z_total);
+            let z = WindowManager::<C>::compute_z_depth(z_base + idx, z_total);
             data.push((rect, z));
         }
     }
@@ -710,7 +710,7 @@ pub fn overlay_shadow_data(
 }
 
 /// Render all active overlays (command menu, help, exit confirm).
-pub fn render_overlays(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut WindowManager) {
+pub fn render_overlays<C: Component<TermWmAction>>(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut WindowManager<C>) {
     let full_area = wm.managed_area();
 
     // Panel overlay in monocle mode — render BEFORE command menu so the panel
@@ -1589,7 +1589,7 @@ impl ColorConvert for Color {
 /// Uses style-modifier overrides only — no character replacement — so the
 /// underlying text is fully preserved.  The active state (drag/resize) also
 /// inverts an adjacent cell as a visual "badge", clamped to buffer boundaries.
-pub fn render_cursor_overlay(buf: &mut Buffer, wm: &WindowManager, _theme: &Theme) {
+pub fn render_cursor_overlay<C: Component<TermWmAction>>(buf: &mut Buffer, wm: &WindowManager<C>, _theme: &Theme) {
     use ratatui::style::Modifier;
 
     // Don't render when mouse capture is disabled — the last hover position

@@ -2,6 +2,7 @@
 
 pub use term_wm_core::*;
 pub use term_wm_ui_components::*;
+pub mod components;
 pub mod prelude;
 pub mod term_wm_app;
 pub mod tracing_sub;
@@ -15,14 +16,16 @@ use term_wm_console::draw_plan_renderer::{
     render_drop_shadow, render_ghost_preview, render_handles_masked, render_overlays,
     render_panels, render_resize_outline,
 };
+use term_wm_core::actions::TermWmAction;
+use term_wm_core::components::Component;
 use term_wm_core::hitbox_registry::{ComponentOwner, HitboxId, HitboxRegistry};
 use term_wm_core::window::{WindowManager, WindowSurface};
 
 /// Default rendering implementation for the window manager.
 /// Shared by all apps so they don't need to reimplement rendering.
-pub fn render_app(
+pub fn render_app<C: Component<TermWmAction>>(
     backend: &mut dyn term_wm_render::RenderBackend,
-    wm: &mut term_wm_core::window::WindowManager,
+    wm: &mut WindowManager<C>,
     engine: &mut term_wm_core::engine::CoreEngine,
     renderer: &mut DrawPlanRenderer,
 ) {
@@ -118,7 +121,7 @@ pub fn render_app(
                 };
                 let focused = wm.focused_window() == *key;
                 let draw_shadow = floating && wm.config().shadow_enabled;
-                let z_depth = WindowManager::compute_z_depth(i, total);
+                let z_depth = WindowManager::<C>::compute_z_depth(i, total);
                 let surface = WindowSurface {
                     full,
                     inner,

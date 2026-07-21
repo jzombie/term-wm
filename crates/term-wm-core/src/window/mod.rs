@@ -1,5 +1,6 @@
 pub mod decorator;
 mod entry;
+pub mod test_component;
 mod window_manager;
 
 use crate::Rect;
