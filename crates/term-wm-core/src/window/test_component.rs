@@ -23,12 +23,14 @@ pub enum TestComponent {
 
 pub struct ActionRecorder {
     pub actions: Vec<TermWmAction>,
+    pub received_mouse_bytes: bool,
 }
 
 impl ActionRecorder {
     pub fn new() -> Self {
         Self {
             actions: Vec::new(),
+            received_mouse_bytes: false,
         }
     }
 }
@@ -40,6 +42,9 @@ impl Component<TermWmAction> for ActionRecorder {
         _ctx: &ComponentContext,
         _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
     ) {
+        if matches!(action, TermWmAction::MouseToBytes(_)) {
+            self.received_mouse_bytes = true;
+        }
         self.actions.push(action);
     }
     fn on_mount(&mut self, _key: WindowKey, _app: &AppContext) {}
@@ -73,7 +78,7 @@ impl Component<TermWmAction> for ActionRecorder {
     fn destroy(&mut self) {}
     fn clear_selection(&mut self) {}
     fn selection_status(&self) -> SelectionStatus {
-        SelectionStatus::Inactive
+        SelectionStatus::default()
     }
     fn selection_text(&self) -> Option<String> {
         None
@@ -90,52 +95,54 @@ impl Component<TermWmAction> for ActionRecorder {
     }
     fn on_mouse_press(
         &mut self,
-        _col: u16,
-        _row: u16,
+        local_x: u16,
+        local_y: u16,
         _button: crate::events::MouseButton,
         _modifiers: crate::events::KeyModifiers,
         _ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
-        EventResult::Ignored
+        EventResult::Action(TermWmAction::MouseToBytes(vec![
+            local_x as u8,
+            local_y as u8,
+        ]))
     }
     fn on_mouse_release(
         &mut self,
-        _col: u16,
-        _row: u16,
+        local_x: u16,
+        local_y: u16,
         _button: crate::events::MouseButton,
         _modifiers: crate::events::KeyModifiers,
         _ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
-        EventResult::Ignored
+        EventResult::Action(TermWmAction::MouseToBytes(vec![
+            local_x as u8,
+            local_y as u8,
+        ]))
     }
     fn on_mouse_drag(
         &mut self,
-        _col: u16,
-        _row: u16,
+        local_x: u16,
+        local_y: u16,
         _button: crate::events::MouseButton,
         _modifiers: crate::events::KeyModifiers,
         _ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
-        EventResult::Ignored
-    }
-    fn on_mouse_scroll(
-        &mut self,
-        _col: u16,
-        _row: u16,
-        _kind: crate::events::MouseEventKind,
-        _modifiers: crate::events::KeyModifiers,
-        _ctx: &ComponentContext,
-    ) -> EventResult<TermWmAction> {
-        EventResult::Ignored
+        EventResult::Action(TermWmAction::MouseToBytes(vec![
+            local_x as u8,
+            local_y as u8,
+        ]))
     }
     fn on_mouse_move(
         &mut self,
-        _col: u16,
-        _row: u16,
+        local_x: u16,
+        local_y: u16,
         _modifiers: crate::events::KeyModifiers,
         _ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
-        EventResult::Ignored
+        EventResult::Action(TermWmAction::MouseToBytes(vec![
+            local_x as u8,
+            local_y as u8,
+        ]))
     }
 }
 
@@ -185,7 +192,7 @@ impl Component<TermWmAction> for KeyRecorder {
     fn destroy(&mut self) {}
     fn clear_selection(&mut self) {}
     fn selection_status(&self) -> SelectionStatus {
-        SelectionStatus::Inactive
+        SelectionStatus::default()
     }
     fn selection_text(&self) -> Option<String> {
         None
@@ -251,14 +258,33 @@ impl Component<TermWmAction> for KeyRecorder {
     }
 }
 
-pub struct SelComponent;
+pub struct SelComponent {
+    pub enabled: bool,
+    pub received_down: bool,
+}
+
+impl SelComponent {
+    pub fn new() -> Self {
+        Self {
+            enabled: false,
+            received_down: false,
+        }
+    }
+}
 
 impl Component<TermWmAction> for SelComponent {
     fn selection_status(&self) -> SelectionStatus {
-        SelectionStatus::Active
+        SelectionStatus {
+            active: self.received_down,
+            dragging: false,
+        }
     }
     fn selection_text(&self) -> Option<String> {
-        Some("selected text".to_string())
+        if self.received_down {
+            Some("selected text".to_string())
+        } else {
+            None
+        }
     }
     fn on_mount(&mut self, _key: WindowKey, _app: &AppContext) {}
     fn handle_events(
@@ -303,7 +329,9 @@ impl Component<TermWmAction> for SelComponent {
     fn take_pending_title(&mut self) -> Option<String> {
         None
     }
-    fn set_selection_enabled(&mut self, _enabled: bool) {}
+    fn set_selection_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
     fn paste(&mut self, _text: &str) -> bool {
         false
     }
@@ -313,8 +341,12 @@ impl Component<TermWmAction> for SelComponent {
         _row: u16,
         _button: crate::events::MouseButton,
         _modifiers: crate::events::KeyModifiers,
-        _ctx: &ComponentContext,
+        ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
+        if !ctx.direct_mode() && self.enabled {
+            self.received_down = true;
+            return EventResult::Consumed;
+        }
         EventResult::Ignored
     }
     fn on_mouse_release(

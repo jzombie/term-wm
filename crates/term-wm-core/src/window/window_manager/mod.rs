@@ -19,6 +19,8 @@ use super::OverlayKey;
 use super::WindowKey;
 use super::entry::{Window, WindowState};
 use crate::actions::{EventResult, SystemTask, TermWmAction};
+#[cfg(test)]
+use crate::window::test_component::TestComponent;
 use crate::app_context::AppContext;
 use crate::components::{
     Component, ComponentAction, ComponentContext, MenuItem, Overlay, WmComponent,
@@ -2458,9 +2460,12 @@ fn make_keys(wm: &mut WindowManager<TestComponent>, n: usize) -> Vec<WindowKey> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::KeyModifiers;
+    use crate::events::{KeyModifiers, MouseButton};
     use crate::hitbox_registry::HitboxId;
     use crate::layout::{Constraint, Direction};
+    use crate::window::test_component::{
+        ActionRecorder, KeyRecorder, SelComponent, TestComponent,
+    };
     use std::collections::VecDeque;
     use term_wm_layout_engine::LayoutRect;
 
@@ -2546,14 +2551,14 @@ mod tests {
 
     #[test]
     fn map_layout_node_maps_leaf_to_windowkey() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let key = wm.create_window(Box::new(crate::components::NoopComponent));
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         let node = LayoutNode::leaf(key);
         let mapped = map_layout_node(&node);
         match mapped {
@@ -2578,7 +2583,7 @@ mod tests {
     #[test]
     fn click_focusing_topmost_window() {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -2626,7 +2631,7 @@ mod tests {
 
     #[test]
     fn handle_mouse_focus_click_skipped_in_monocle() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -2681,7 +2686,7 @@ mod tests {
     #[test]
     fn enforce_min_visible_margin_horizontal() {
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -2720,7 +2725,7 @@ mod tests {
     #[test]
     fn enforce_min_visible_margin_vertical() {
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -2756,7 +2761,7 @@ mod tests {
     #[test]
     fn maximize_persists_across_resize() {
         use crate::window::FloatRectSpec;
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -2790,7 +2795,7 @@ mod tests {
     #[test]
     fn minimize_and_restore_preserves_floating_rect() {
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -2848,7 +2853,7 @@ mod tests {
     #[test]
     fn localize_event_converts_to_local_coords() {
         use crate::events::{MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -2895,7 +2900,7 @@ mod tests {
     fn localize_event_handles_negative_origin() {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -2952,7 +2957,7 @@ mod tests {
     fn floating_window_offscreen_click_past_right_edge_hits_window_behind() {
         use crate::window::{FloatRect, FloatRectSpec};
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -3057,7 +3062,7 @@ mod tests {
     #[test]
     fn hit_test_uses_visible_bounds_for_floating_windows() {
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -3099,7 +3104,7 @@ mod tests {
     #[test]
     fn hover_targets_respects_occlusion() {
         use crate::layout::tiling::SplitHandle;
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -3186,14 +3191,15 @@ mod tests {
             fn destroy(&mut self) {}
         }
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let debug_key = wm.set_system_window(Box::new(DummyComponent));
+        let debug_key =
+            wm.set_system_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.set_panel_visible(false);
         wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(debug_key)));
         wm.register_managed_layout(Rect {
@@ -3267,7 +3273,7 @@ mod tests {
         use crate::layout::InsertPosition;
         use crate::window::{FloatRect, FloatRectSpec};
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -3347,7 +3353,7 @@ mod tests {
         use crate::layout::{Direction, LayoutNode, TilingLayout};
         use crate::window::{FloatRect, FloatRectSpec};
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -3517,7 +3523,7 @@ mod tests {
     #[test]
     fn adjust_event_rebases_app_mouse_coordinates() {
         use crate::events::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -3558,7 +3564,7 @@ mod tests {
     #[test]
     fn hover_scroll_routes_to_non_focused_window() {
         use crate::events::{Event, KeyModifiers, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -3605,7 +3611,7 @@ mod tests {
     #[test]
     fn hover_scroll_over_focused_window_routes_normally() {
         use crate::events::{Event, KeyModifiers, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -3648,7 +3654,7 @@ mod tests {
     #[test]
     fn hover_scroll_outside_all_windows_routes_to_focused() {
         use crate::events::{Event, KeyModifiers, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -3690,7 +3696,7 @@ mod tests {
 
     #[test]
     fn direct_mode_defaults_to_false() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -3705,7 +3711,7 @@ mod tests {
 
     #[test]
     fn direct_mode_toggle_cycles_state() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -3725,7 +3731,7 @@ mod tests {
 
     #[test]
     fn direct_mode_set_get_roundtrip() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -3745,7 +3751,7 @@ mod tests {
 
     #[test]
     fn direct_mode_is_per_window() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -3766,7 +3772,7 @@ mod tests {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::layout::{LayoutNode, TilingLayout};
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -3852,7 +3858,7 @@ mod tests {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::layout::{LayoutNode, TilingLayout};
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -3908,7 +3914,7 @@ mod tests {
     fn drag_snap_timeout_none_disables_remaining() {
         let mut config = WmConfig::standalone();
         config.drag_snap_timeout = None;
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -3921,7 +3927,7 @@ mod tests {
 
     #[test]
     fn drag_snap_remaining_none_when_no_drag() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -3934,7 +3940,7 @@ mod tests {
 
     #[test]
     fn drag_snap_remaining_returns_some_when_dragging() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -3965,7 +3971,7 @@ mod tests {
 
     #[test]
     fn drag_snap_remaining_zero_when_expired() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -3988,7 +3994,7 @@ mod tests {
             detach_coordinate: None,
             snap_applied: false,
         });
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -4017,7 +4023,7 @@ mod tests {
 
     #[test]
     fn apply_drag_snap_if_pending_no_drag_is_noop() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -4035,7 +4041,7 @@ mod tests {
 
         let mut config = WmConfig::standalone();
         config.drag_snap_timeout = Some(SHORT_SNAP_TIMEOUT);
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -4114,7 +4120,7 @@ mod tests {
 
     #[test]
     fn power_profile_change_updates_value() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -4134,7 +4140,7 @@ mod tests {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::layout::{LayoutNode, TilingLayout};
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -4178,7 +4184,7 @@ mod tests {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::layout::{LayoutNode, TilingLayout};
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -4254,7 +4260,7 @@ mod tests {
         use crate::layout::{LayoutNode, TilingLayout};
         use crate::window::FloatRectSpec;
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -4370,7 +4376,7 @@ mod tests {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::layout::{LayoutNode, TilingLayout};
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -4438,7 +4444,7 @@ mod tests {
             fn destroy(&mut self) {}
         }
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -4446,7 +4452,8 @@ mod tests {
             std::collections::HashMap::new(),
         );
 
-        let debug_key = wm.set_system_window(Box::new(DummyComponent));
+        let debug_key =
+            wm.set_system_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.set_panel_visible(false);
         wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(debug_key)));
         wm.register_managed_layout(Rect {
@@ -4515,7 +4522,7 @@ mod tests {
         ];
         for &(old, new) in legal {
             assert!(
-                WindowManager::is_valid_transition(old, new),
+                WindowManager::<TestComponent>::is_valid_transition(old, new),
                 "legal transition {:?} -> {:?} should be valid",
                 old,
                 new,
@@ -4541,7 +4548,7 @@ mod tests {
             for &new in &states {
                 let is_legal = legal.contains(&(old, new));
                 assert_eq!(
-                    WindowManager::is_valid_transition(old, new),
+                    WindowManager::<TestComponent>::is_valid_transition(old, new),
                     is_legal,
                     "transition {:?} -> {:?} validity mismatch",
                     old,
@@ -4555,14 +4562,14 @@ mod tests {
 
     #[test]
     fn transition_window_realized_to_mapped() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let key = wm.create_window(Box::new(crate::components::NoopComponent));
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         assert_eq!(wm.window_state(key), Some(WindowState::Realized));
 
         wm.transition_window(key, WindowState::Mapped);
@@ -4575,7 +4582,7 @@ mod tests {
         assert_eq!(*wm.focus.current(), key, "must become focused");
     }
 
-    fn mapped_keys(wm: &mut WindowManager, n: usize) -> Vec<WindowKey> {
+    fn mapped_keys(wm: &mut WindowManager<TestComponent>, n: usize) -> Vec<WindowKey> {
         let raw = make_keys(wm, n);
         for &k in &raw {
             wm.transition_window(k, WindowState::Mapped);
@@ -4585,7 +4592,7 @@ mod tests {
 
     #[test]
     fn transition_window_mapped_to_iconic_removes_from_z_order() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -4609,7 +4616,7 @@ mod tests {
 
     #[test]
     fn transition_window_iconic_to_mapped_restores_z_order() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -4632,7 +4639,7 @@ mod tests {
 
     #[test]
     fn transition_window_mapped_to_unmapped_cleans_up() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -4673,7 +4680,7 @@ mod tests {
 
     #[test]
     fn close_window_cleans_up_layout_and_state() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -4711,7 +4718,7 @@ mod tests {
 
     #[test]
     fn close_window_system_window_keeps_slotmap_entry() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -4744,7 +4751,7 @@ mod tests {
             }
             fn destroy(&mut self) {}
         }
-        let key = wm.set_system_window(Box::new(Dummy));
+        let key = wm.set_system_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.transition_window(key, WindowState::Mapped);
         wm.register_managed_layout(Rect {
             x: 0,
@@ -4769,7 +4776,7 @@ mod tests {
 
     #[test]
     fn shade_and_unshade_window() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -4808,7 +4815,7 @@ mod tests {
 
     #[test]
     fn shade_is_idempotent() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -4830,49 +4837,7 @@ mod tests {
 
     #[test]
     fn dispatch_focused_event_routes_mouse_to_selection_component() {
-        use crate::actions::EventResult;
-        use crate::components::{Component, ComponentContext, SelectionStatus};
-        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-
-        struct SelComponent {
-            enabled: bool,
-            received_down: bool,
-        }
-        impl Component<TermWmAction> for SelComponent {
-            fn render(
-                &mut self,
-                _f: &mut dyn term_wm_render::RenderBackend,
-                _a: Rect,
-                _c: &ComponentContext,
-                _registry: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-            fn on_mouse_press(
-                &mut self,
-                _local_x: u16,
-                _local_y: u16,
-                _button: MouseButton,
-                _modifiers: KeyModifiers,
-                ctx: &ComponentContext,
-            ) -> EventResult<TermWmAction> {
-                if !ctx.direct_mode() && self.enabled {
-                    self.received_down = true;
-                    return EventResult::Consumed;
-                }
-                EventResult::Ignored
-            }
-            fn selection_status(&self) -> SelectionStatus {
-                SelectionStatus {
-                    active: self.received_down,
-                    dragging: false,
-                }
-            }
-            fn set_selection_enabled(&mut self, enabled: bool) {
-                self.enabled = enabled;
-            }
-        }
-
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -4881,11 +4846,8 @@ mod tests {
         );
         wm.set_panel_visible(false);
 
-        let comp = SelComponent {
-            enabled: true,
-            received_down: false,
-        };
-        let key = wm.create_window(Box::new(comp));
+        let comp = TestComponent::SelComponent(SelComponent::new());
+        let key = wm.create_window(comp);
         wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(key)));
         wm.managed_draw_order = vec![key];
         wm.z_order = vec![key];
@@ -4897,6 +4859,14 @@ mod tests {
         });
         wm.focus_app_window(key);
         assert!(!wm.direct_mode(key));
+
+        // Enable selection on the component
+        let sel = wm
+            .component_for_key_mut(key)
+            .expect("component must exist");
+        if let TestComponent::SelComponent(sel) = sel {
+            sel.enabled = true;
+        }
 
         // Click inside the content area
         let content = wm.region_for_key(key);
@@ -4910,93 +4880,22 @@ mod tests {
         assert!(result.is_some(), "event must route to window component");
 
         // Verify the component received the event
-        let comp = wm
+        match wm
             .component_for_key_mut(key)
-            .and_then(|c| crate::components::component_downcast_mut::<SelComponent>(c))
-            .expect("component must be SelComponent");
-        assert!(comp.received_down, "component must receive mouse Down");
-        assert!(comp.enabled, "selection_enabled must persist");
+            .expect("component must exist")
+        {
+            TestComponent::SelComponent(sel) => {
+                assert!(sel.received_down, "component must receive mouse Down");
+                assert!(sel.enabled, "selection_enabled must persist");
+            }
+            _ => panic!("component must be SelComponent"),
+        }
     }
 
     /// Phase 4 (Press events) must call `process_action` so `MouseToBytes` reaches `update()`.
     #[test]
     fn phase4_down_dispatches_mouse_action_to_update() {
-        use crate::actions::EventResult;
-        use crate::components::{Component, ComponentContext};
-        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        use std::collections::VecDeque;
-
-        struct ActionRecorder {
-            received_mouse_bytes: bool,
-        }
-        impl Component<TermWmAction> for ActionRecorder {
-            fn render(
-                &mut self,
-                _f: &mut dyn term_wm_render::RenderBackend,
-                _a: Rect,
-                _c: &ComponentContext,
-                _registry: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-            fn on_mouse_press(
-                &mut self,
-                local_x: u16,
-                local_y: u16,
-                _button: MouseButton,
-                _modifiers: KeyModifiers,
-                _ctx: &ComponentContext,
-            ) -> EventResult<TermWmAction> {
-                EventResult::Action(TermWmAction::MouseToBytes(vec![
-                    local_x as u8,
-                    local_y as u8,
-                ]))
-            }
-            fn on_mouse_release(
-                &mut self,
-                local_x: u16,
-                local_y: u16,
-                _button: MouseButton,
-                _modifiers: KeyModifiers,
-                _ctx: &ComponentContext,
-            ) -> EventResult<TermWmAction> {
-                EventResult::Action(TermWmAction::MouseToBytes(vec![
-                    local_x as u8,
-                    local_y as u8,
-                ]))
-            }
-            fn on_mouse_drag(
-                &mut self,
-                local_x: u16,
-                local_y: u16,
-                _button: MouseButton,
-                _modifiers: KeyModifiers,
-                _ctx: &ComponentContext,
-            ) -> EventResult<TermWmAction> {
-                EventResult::Action(TermWmAction::MouseToBytes(vec![
-                    local_x as u8,
-                    local_y as u8,
-                ]))
-            }
-            fn on_key(
-                &mut self,
-                _event: &Event,
-                _ctx: &ComponentContext,
-            ) -> EventResult<TermWmAction> {
-                EventResult::Ignored
-            }
-            fn update(
-                &mut self,
-                action: TermWmAction,
-                _ctx: &ComponentContext,
-                _queue: &mut VecDeque<(WindowKey, TermWmAction)>,
-            ) {
-                if matches!(action, TermWmAction::MouseToBytes(_)) {
-                    self.received_mouse_bytes = true;
-                }
-            }
-        }
-
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -5005,9 +4904,7 @@ mod tests {
         );
         wm.set_panel_visible(false);
 
-        let key = wm.create_window(Box::new(ActionRecorder {
-            received_mouse_bytes: false,
-        }));
+        let key = wm.create_window(TestComponent::ActionRecorder(ActionRecorder::new()));
         wm.transition_window(key, WindowState::Mapped);
         wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(key)));
         wm.managed_draw_order = vec![key];
@@ -5047,107 +4944,24 @@ mod tests {
         }
 
         // Verify the action reached update()
-        let comp = wm
+        match wm
             .component_for_key_mut(key)
-            .and_then(|c| crate::components::component_downcast_mut::<ActionRecorder>(c))
-            .expect("component must be ActionRecorder");
-        assert!(
-            comp.received_mouse_bytes,
-            "Phase 4 Down must process MouseToBytes action via process_action"
-        );
+            .expect("component must exist")
+        {
+            TestComponent::ActionRecorder(recorder) => {
+                assert!(
+                    recorder.received_mouse_bytes,
+                    "Phase 4 Down must process MouseToBytes action via process_action"
+                );
+            }
+            _ => panic!("component must be ActionRecorder"),
+        }
     }
 
     /// Phase 3 (Moved events without active capture) must call `process_action`.
     #[test]
     fn phase3_moved_dispatches_mouse_action_to_update() {
-        use crate::actions::EventResult;
-        use crate::components::{Component, ComponentContext};
-        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        use std::collections::VecDeque;
-
-        struct ActionRecorder {
-            received_mouse_bytes: bool,
-        }
-        impl Component<TermWmAction> for ActionRecorder {
-            fn render(
-                &mut self,
-                _f: &mut dyn term_wm_render::RenderBackend,
-                _a: Rect,
-                _c: &ComponentContext,
-                _registry: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-            fn on_mouse_press(
-                &mut self,
-                local_x: u16,
-                local_y: u16,
-                _button: MouseButton,
-                _modifiers: KeyModifiers,
-                _ctx: &ComponentContext,
-            ) -> EventResult<TermWmAction> {
-                EventResult::Action(TermWmAction::MouseToBytes(vec![
-                    local_x as u8,
-                    local_y as u8,
-                ]))
-            }
-            fn on_mouse_release(
-                &mut self,
-                local_x: u16,
-                local_y: u16,
-                _button: MouseButton,
-                _modifiers: KeyModifiers,
-                _ctx: &ComponentContext,
-            ) -> EventResult<TermWmAction> {
-                EventResult::Action(TermWmAction::MouseToBytes(vec![
-                    local_x as u8,
-                    local_y as u8,
-                ]))
-            }
-            fn on_mouse_drag(
-                &mut self,
-                local_x: u16,
-                local_y: u16,
-                _button: MouseButton,
-                _modifiers: KeyModifiers,
-                _ctx: &ComponentContext,
-            ) -> EventResult<TermWmAction> {
-                EventResult::Action(TermWmAction::MouseToBytes(vec![
-                    local_x as u8,
-                    local_y as u8,
-                ]))
-            }
-            fn on_mouse_move(
-                &mut self,
-                local_x: u16,
-                local_y: u16,
-                _modifiers: KeyModifiers,
-                _ctx: &ComponentContext,
-            ) -> EventResult<TermWmAction> {
-                EventResult::Action(TermWmAction::MouseToBytes(vec![
-                    local_x as u8,
-                    local_y as u8,
-                ]))
-            }
-            fn on_key(
-                &mut self,
-                _event: &Event,
-                _ctx: &ComponentContext,
-            ) -> EventResult<TermWmAction> {
-                EventResult::Ignored
-            }
-            fn update(
-                &mut self,
-                action: TermWmAction,
-                _ctx: &ComponentContext,
-                _queue: &mut VecDeque<(WindowKey, TermWmAction)>,
-            ) {
-                if matches!(action, TermWmAction::MouseToBytes(_)) {
-                    self.received_mouse_bytes = true;
-                }
-            }
-        }
-
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -5156,9 +4970,7 @@ mod tests {
         );
         wm.set_panel_visible(false);
 
-        let key = wm.create_window(Box::new(ActionRecorder {
-            received_mouse_bytes: false,
-        }));
+        let key = wm.create_window(TestComponent::ActionRecorder(ActionRecorder::new()));
         wm.transition_window(key, WindowState::Mapped);
         wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(key)));
         wm.managed_draw_order = vec![key];
@@ -5196,22 +5008,26 @@ mod tests {
             wm.process_action(k, action);
         }
 
-        let comp = wm
+        match wm
             .component_for_key_mut(key)
-            .and_then(|c| crate::components::component_downcast_mut::<ActionRecorder>(c))
-            .expect("component must be ActionRecorder");
-        assert!(
-            comp.received_mouse_bytes,
-            "Phase 3 Moved must process MouseToBytes action via process_action"
-        );
+            .expect("component must exist")
+        {
+            TestComponent::ActionRecorder(recorder) => {
+                assert!(
+                    recorder.received_mouse_bytes,
+                    "Phase 3 Moved must process MouseToBytes action via process_action"
+                );
+            }
+            _ => panic!("component must be ActionRecorder"),
+        }
     }
 
     // ── LayoutHandle split-resize tests ────────────────────────────────
 
     /// Helper: create a WindowManager with a 2-window horizontal tiling layout.
     /// Returns (wm, keys, gap_col, gap_row) where gap is the center of the split handle.
-    fn setup_tiling_with_gap() -> (WindowManager, Vec<WindowKey>, u16, u16) {
-        let mut wm = WindowManager::with_config(
+    fn setup_tiling_with_gap() -> (WindowManager<TestComponent>, Vec<WindowKey>, u16, u16) {
+        let mut wm = WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
             None,
@@ -5421,7 +5237,7 @@ mod tests {
     #[test]
     fn register_layout_handle_hitboxes_registers_entries() {
         use crate::layout::Constraint;
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
             None,
@@ -5471,7 +5287,7 @@ mod tests {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::layout::{LayoutNode, TilingLayout};
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -5522,7 +5338,7 @@ mod tests {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::layout::{LayoutNode, TilingLayout};
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -5575,7 +5391,7 @@ mod tests {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::layout::{LayoutNode, TilingLayout};
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -5668,7 +5484,7 @@ mod tests {
 
     #[test]
     fn overlay_close_exit_confirm_removes_overlay() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -5709,7 +5525,7 @@ mod tests {
 
     #[test]
     fn overlay_help_visible_and_close() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -5750,7 +5566,7 @@ mod tests {
 
     #[test]
     fn handle_exit_confirm_event_returns_none_without_overlay() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -5767,7 +5583,7 @@ mod tests {
 
     #[test]
     fn command_palette_empty_map_returns_no_action() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -5785,7 +5601,7 @@ mod tests {
 
     #[test]
     fn command_menu_visible_derived_from_overlay_map() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,

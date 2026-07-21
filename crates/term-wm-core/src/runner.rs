@@ -653,6 +653,7 @@ pub fn auto_layout_for_windows(windows: &[WindowKey]) -> Option<TilingLayout<Win
 mod tests {
     use super::*;
     use crate::events::{KeyCode, KeyEvent, KeyKind, KeyModifiers};
+    use crate::window::test_component::TestComponent;
     use term_wm_layout_engine::LayoutRect;
 
     #[test]
@@ -678,22 +679,22 @@ mod tests {
         use crate::window::WindowManager;
 
         struct FakeApp {
-            wm: WindowManager,
+            wm: WindowManager<TestComponent>,
         }
-        impl WindowManagerHost for FakeApp {
-            fn wm(&mut self) -> &mut WindowManager {
+        impl WindowManagerHost<TestComponent> for FakeApp {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
                 &mut self.wm
             }
         }
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let key = wm.create_window(Box::new(crate::components::NoopComponent));
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.transition_window(key, crate::window::WindowState::Mapped);
 
         let mut app = FakeApp { wm };
@@ -710,49 +711,17 @@ mod tests {
     fn handle_focused_app_event_routes_key_to_window_component() {
         use crate::window::WindowManager;
 
-        struct KeyRecorder {
-            received_key: bool,
-        }
-        impl Component<TermWmAction> for KeyRecorder {
-            fn render(
-                &mut self,
-                _backend: &mut dyn term_wm_render::RenderBackend,
-                _area: LayoutRect,
-                _ctx: &crate::components::ComponentContext,
-                _registry: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-            fn handle_events(
-                &mut self,
-                event: &Event,
-                _ctx: &crate::components::ComponentContext,
-            ) -> crate::actions::EventResult<TermWmAction> {
-                if matches!(event, Event::Key(_)) {
-                    self.received_key = true;
-                }
-                crate::actions::EventResult::Consumed
-            }
-            fn update(
-                &mut self,
-                _action: TermWmAction,
-                _ctx: &crate::components::ComponentContext,
-                _queue: &mut VecDeque<(crate::window::WindowKey, TermWmAction)>,
-            ) {
-            }
-            fn destroy(&mut self) {}
-        }
-
         struct FakeApp {
-            wm: WindowManager,
+            wm: WindowManager<TestComponent>,
         }
-        impl WindowManagerHost for FakeApp {
-            fn wm(&mut self) -> &mut WindowManager {
+        impl WindowManagerHost<TestComponent> for FakeApp {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
                 &mut self.wm
             }
         }
 
         let mut app = FakeApp {
-            wm: WindowManager::with_config(
+            wm: WindowManager::<TestComponent>::with_config(
                 crate::wm_config::WmConfig::standalone(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
@@ -761,9 +730,11 @@ mod tests {
             ),
         };
         // Store the KeyRecorder directly in the WindowManager — no sidecar.
-        let key = app.wm.create_window(Box::new(KeyRecorder {
-            received_key: false,
-        }));
+        let key = app.wm.create_window(TestComponent::KeyRecorder(
+            crate::window::test_component::KeyRecorder {
+                received_key: None,
+            },
+        ));
         app.wm
             .transition_window(key, crate::window::WindowState::Mapped);
         app.wm.regions.set(
@@ -788,16 +759,18 @@ mod tests {
             consumed,
             "handle_focused_app_event must route key to component"
         );
-        assert!(
-            app.wm
-                .component_for_key_mut(key)
-                .and_then(|c| {
-                    use crate::components::component_downcast_mut;
-                    component_downcast_mut::<KeyRecorder>(c).map(|r| r.received_key)
-                })
-                .unwrap_or(false),
-            "component must receive the key event"
-        );
+        match app.wm
+            .component_for_key_mut(key)
+            .expect("component must exist")
+        {
+            TestComponent::KeyRecorder(recorder) => {
+                assert!(
+                    recorder.received_key.is_some(),
+                    "component must receive the key event"
+                );
+            }
+            _ => panic!("component must be KeyRecorder"),
+        }
     }
 
     #[test]
@@ -837,16 +810,16 @@ mod tests {
         }
 
         struct FakeApp {
-            wm: WindowManager,
+            wm: WindowManager<TestComponent>,
         }
-        impl WindowManagerHost for FakeApp {
-            fn wm(&mut self) -> &mut WindowManager {
+        impl WindowManagerHost<TestComponent> for FakeApp {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
                 &mut self.wm
             }
         }
 
         let mut app = FakeApp {
-            wm: WindowManager::with_config(
+            wm: WindowManager::<TestComponent>::with_config(
                 crate::wm_config::WmConfig::standalone(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
@@ -854,9 +827,11 @@ mod tests {
                 std::collections::HashMap::new(),
             ),
         };
-        let key = app.wm.create_window(Box::new(KeyRecorder {
-            received_key: false,
-        }));
+        let key = app.wm.create_window(TestComponent::KeyRecorder(
+            crate::window::test_component::KeyRecorder {
+                received_key: None,
+            },
+        ));
         app.wm
             .transition_window(key, crate::window::WindowState::Mapped);
         app.wm.regions.set(
@@ -883,16 +858,15 @@ mod tests {
         let consumed = handle_focused_app_event(&evt, &mut app);
         assert!(consumed, "event must route even when direct_mode is true");
         // Verify through the WindowManager that the component received the key
-        assert!(
-            app.wm
-                .component_for_key_mut(key)
-                .and_then(|c| {
-                    use crate::components::component_downcast_mut;
-                    component_downcast_mut::<KeyRecorder>(c).map(|r| r.received_key)
-                })
-                .unwrap_or(false),
-            "component must receive the key"
-        );
+        match app.wm
+            .component_for_key_mut(key)
+            .expect("component must exist")
+        {
+            TestComponent::KeyRecorder(recorder) => {
+                assert!(recorder.received_key.is_some(), "component must receive the key");
+            }
+            _ => panic!("component must be KeyRecorder"),
+        }
     }
 
     // ── selection_snapshot_from ──────────────────────────────────────
