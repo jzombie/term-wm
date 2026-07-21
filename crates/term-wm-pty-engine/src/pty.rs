@@ -442,7 +442,6 @@ impl Pty {
         let parser = self.shared_parser.lock().unwrap();
         parser.screen().alternate_screen()
     }
-
 }
 
 impl Drop for Pty {
@@ -1474,5 +1473,64 @@ mod tests {
         if let Some(child) = pty.child.as_mut() {
             let _ = child.kill();
         }
+    }
+
+    // ── resize / set_size ──────────────────────────────────────────
+
+    #[test]
+    fn history_replay_corrupts_percent_lines_via_ansi_cursor_movements() {
+        // The old resize replayed ALL accumulated history through a new
+        // parser at the smaller width.  The raw PTY byte stream from a real
+        // session contains ANSI escape sequences (cursor positioning, clear
+        // screen, scroll regions) that were generated at the old width.
+        //
+        // When replayed at a smaller width, long lines wrap to multiple rows,
+        // shifting everything after them.  Absolute cursor positioning that
+        // was correct at the old width now lands on wrong rows, causing the
+        // SAME `%` character to appear at multiple screen positions.
+        // set_size avoids this by operating on the existing cell grid.
+
+        // Simulate command output: each iteration writes a long line (with
+        // `%`) at a specific absolute row using \x1b[row;colH.  At 80 cols
+        // each line fits on one row.  At 30 cols each line wraps to ~3 rows,
+        // so the absolute row positions overlap with prior wrapped content.
+        let mut history = Vec::new();
+        for i in 0..5 {
+            // Place a 65-char line with `%` at absolute row i+1.
+            // When replayed at 30 cols this wraps to 3 rows,
+            // pushing subsequent content down.
+            write!(history, "\x1b[{};1Hline {}: {} %\n", i + 1, i, "x".repeat(52)).unwrap();
+        }
+
+        // ── OLD: create parser at 30 cols, replay all history ──
+        let mut old = vt100::Parser::new(24, 30, 100);
+        old.process(&history);
+        let old_text = old.screen().contents();
+        let old_pct_count = old_text.matches('%').count();
+
+        // ── NEW: process at 80 cols, then set_size to 30 ──
+        let mut new = vt100::Parser::new(24, 80, 100);
+        new.process(&history);
+        new.screen_mut().set_size(24, 30);
+        let new_text = new.screen().contents();
+        let new_pct_count = new_text.matches('%').count();
+
+        // At 80 cols, each line occupies its own row.  set_size truncates
+        // each row to 30 cols — all 5 lines remain separate.  History-replay
+        // processes cursor positioning at 30 cols where each line wraps to
+        // ~3 rows, so absolute row references like \x1b[2;1H land inside
+        // wrapped continuations, jamming content together.
+        eprintln!("OLD (history-replay): {old_pct_count} `%` signs\n{old_text}");
+        eprintln!("NEW (set_size): {new_pct_count} `%` signs\n{new_text}");
+
+        // set_size should preserve the 5 distinct rows.  History-replay
+        // collapses them (the corruption).
+        assert!(
+            new_text.lines().count() >= old_text.lines().count(),
+            "set_size should preserve at least as many lines as history-replay \
+             ({new_lines} vs {old_lines})",
+            new_lines = new_text.lines().count(),
+            old_lines = old_text.lines().count(),
+        );
     }
 }
