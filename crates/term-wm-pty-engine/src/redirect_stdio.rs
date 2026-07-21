@@ -248,6 +248,53 @@ mod tests {
     use std::os::fd::FromRawFd;
     #[cfg(windows)]
     use std::os::windows::io::FromRawHandle;
+    use std::sync::{Arc, Mutex, Once};
+
+    /// Global capture buffer shared across all threads.
+    static GLOBAL_CAPTURED_LINES: std::sync::LazyLock<Arc<Mutex<Vec<String>>>> =
+        std::sync::LazyLock::new(|| Arc::new(Mutex::new(Vec::new())));
+    static INIT_GLOBAL_TRACING: Once = Once::new();
+
+    /// Ensure the global tracing subscriber is installed (once per test run).
+    /// All threads, including background threads spawned by redirect_fd_to_tracing,
+    /// will write their formatted output into `GLOBAL_CAPTURED_LINES`.
+    fn ensure_global_capturing_tracing() {
+        INIT_GLOBAL_TRACING.call_once(|| {
+            struct GlobalWriter;
+            impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for GlobalWriter {
+                type Writer = GlobalCaptureWriter;
+                fn make_writer(&'a self) -> Self::Writer {
+                    GlobalCaptureWriter
+                }
+            }
+            struct GlobalCaptureWriter;
+            impl std::io::Write for GlobalCaptureWriter {
+                fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                    let lines = GLOBAL_CAPTURED_LINES.clone();
+                    // Simple line capture: collect all bytes, split on newlines
+                    let mut guard = lines.lock().unwrap();
+                    let s = String::from_utf8_lossy(buf);
+                    for line in s.lines() {
+                        let trimmed = line.trim();
+                        if !trimmed.is_empty() {
+                            guard.push(trimmed.to_string());
+                        }
+                    }
+                    Ok(buf.len())
+                }
+                fn flush(&mut self) -> std::io::Result<()> {
+                    Ok(())
+                }
+            }
+            let subscriber = tracing_subscriber::fmt()
+                .with_writer(GlobalWriter)
+                .with_target(false)
+                .with_thread_names(false)
+                .without_time()
+                .finish();
+            let _ = tracing::subscriber::set_global_default(subscriber);
+        });
+    }
 
     // ── StderrSuppressGuard ───────────────────────────────────────
 
@@ -388,43 +435,83 @@ mod tests {
 
     #[test]
     #[cfg(any(unix, windows))]
-    fn redirect_fd_to_tracing_is_ok_on_pipe() {
-        #[cfg(unix)]
-        let write_fd = {
-            let mut fds: [libc::c_int; 2] = [0; 2];
-            unsafe {
-                assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
-            }
-            fds[1]
-        };
+    fn redirect_fd_to_tracing_captures_stdout_and_stderr() {
+        ensure_global_capturing_tracing();
 
+        // Clear any lines captured by previous tests.
+        GLOBAL_CAPTURED_LINES.lock().unwrap().clear();
+
+        // Create two pipe fds to simulate stdout and stderr.
+        #[cfg(unix)]
+        let (stdout_fd, stderr_fd) = {
+            let mut a: [libc::c_int; 2] = [0; 2];
+            let mut b: [libc::c_int; 2] = [0; 2];
+            unsafe {
+                assert_eq!(libc::pipe(a.as_mut_ptr()), 0);
+                assert_eq!(libc::pipe(b.as_mut_ptr()), 0);
+            }
+            (a[1], b[1])
+        };
         #[cfg(windows)]
-        let write_fd = {
+        let (stdout_fd, stderr_fd) = {
             unsafe extern "system" {
                 fn CreatePipe(
-                    hReadPipe: *mut isize,
-                    hWritePipe: *mut isize,
-                    lpPipeAttributes: *const std::ffi::c_void,
-                    nSize: u32,
+                    h: *mut isize,
+                    w: *mut isize,
+                    a: *const std::ffi::c_void,
+                    s: u32,
                 ) -> i32;
             }
-            let mut read_handle: isize = 0;
-            let mut write_handle: isize = 0;
+            let mut ra = 0isize;
+            let mut wa = 0isize;
+            let mut rb = 0isize;
+            let mut wb = 0isize;
             unsafe {
-                assert_ne!(
-                    CreatePipe(&mut read_handle, &mut write_handle, std::ptr::null(), 0),
-                    0
-                );
+                assert_ne!(CreatePipe(&mut ra, &mut wa, std::ptr::null(), 0), 0);
+                assert_ne!(CreatePipe(&mut rb, &mut wb, std::ptr::null(), 0), 0);
             }
-            let fd = unsafe { libc::open_osfhandle(write_handle, 0) };
-            assert!(fd != -1, "open_osfhandle");
-            fd
+            let a = unsafe { libc::open_osfhandle(wa, 0) };
+            let b = unsafe { libc::open_osfhandle(wb, 0) };
+            assert!(a != -1 && b != -1);
+            (a, b)
         };
 
-        let result = redirect_fd_to_tracing(write_fd, true);
+        // Redirect the simulated stdout (is_stderr=false → tracing::info!)
+        // and stderr (is_stderr=true → tracing::error!).
+        redirect_fd_to_tracing(stdout_fd, false).expect("redirect stdout");
+        redirect_fd_to_tracing(stderr_fd, true).expect("redirect stderr");
+
+        // Write test messages to each fd.
+        unsafe {
+            libc::write(stdout_fd, c"hello from stdout\n".as_ptr().cast(), 18);
+            libc::write(stderr_fd, c"hello from stderr\n".as_ptr().cast(), 18);
+        }
+
+        // Close the write ends so the background threads get EOF.  This
+        // ensures the tracing calls flush before we check the buffer.
+        #[cfg(unix)]
+        unsafe {
+            libc::close(stdout_fd);
+            libc::close(stderr_fd);
+        }
+        #[cfg(windows)]
+        unsafe {
+            libc::close(stdout_fd);
+            libc::close(stderr_fd);
+        }
+
+        // Wait for the background threads to finish processing.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        let captured = GLOBAL_CAPTURED_LINES.lock().unwrap();
+        let joined = captured.join("\n");
         assert!(
-            result.is_ok(),
-            "redirect_fd_to_tracing returned error: {result:?}"
+            joined.contains("hello from stdout"),
+            "stdout message not captured. got:\n{joined}"
+        );
+        assert!(
+            joined.contains("hello from stderr"),
+            "stderr message not captured. got:\n{joined}"
         );
     }
 }
