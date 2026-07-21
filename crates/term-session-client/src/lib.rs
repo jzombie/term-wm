@@ -2,7 +2,7 @@ mod remote_pane;
 
 pub use remote_pane::RemotePane;
 
-use std::io::{self, BufRead, Write, stdout};
+use std::io::{self, Write, stdout};
 #[cfg(unix)]
 use std::os::unix::io::FromRawFd;
 use std::sync::Arc;
@@ -58,6 +58,7 @@ pub fn redirect_fd_to_tracing(target_fd: libc::c_int, is_stderr: bool) -> std::i
     std::thread::Builder::new()
         .name(name.into())
         .spawn(move || {
+            use std::io::BufRead;
             let file = unsafe { std::fs::File::from_raw_fd(read_fd) };
             let mut reader = std::io::BufReader::new(file);
             let mut buf = Vec::new();

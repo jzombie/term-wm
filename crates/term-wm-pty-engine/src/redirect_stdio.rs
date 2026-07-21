@@ -162,7 +162,6 @@ where
     use std::os::windows::io::FromRawHandle;
 
     unsafe extern "system" {
-        fn GetStdHandle(nStdHandle: u32) -> isize;
         fn SetStdHandle(nStdHandle: u32, hHandle: isize) -> i32;
         fn CreatePipe(
             hReadPipe: *mut isize,
@@ -305,7 +304,6 @@ mod tests {
                     nSize: u32,
                 ) -> i32;
             }
-            use std::os::windows::io::AsRawHandle;
             const STD_ERROR_HANDLE: u32 = 0xFFFFFFF4u32;
 
             let saved_handle = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
