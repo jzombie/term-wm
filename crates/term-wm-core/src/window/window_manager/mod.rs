@@ -462,10 +462,8 @@ impl<C: Component<TermWmAction>> WindowManager<C> {
     pub fn set_direct_mode(&mut self, key: WindowKey, value: bool) {
         if let Some(w) = self.windows.get_mut(key) {
             w.direct_mode = value;
-            if value {
-                if let Some(c) = self.components.get_mut(w.component_key) {
-                    c.clear_selection();
-                }
+            if value && let Some(c) = self.components.get_mut(w.component_key) {
+                c.clear_selection();
             }
         }
     }
@@ -2451,7 +2449,7 @@ mod tests {
     use crate::events::{KeyModifiers, MouseButton};
     use crate::hitbox_registry::HitboxId;
     use crate::layout::{Constraint, Direction};
-    use crate::window::test_component::{ActionRecorder, KeyRecorder, SelComponent, TestComponent};
+    use crate::window::test_component::{ActionRecorder, SelComponent, TestComponent};
     use std::collections::VecDeque;
     use term_wm_layout_engine::LayoutRect;
 
@@ -3148,35 +3146,6 @@ mod tests {
     #[test]
     fn drag_hitbox_detaches_to_floating() {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        use crate::layout::LayoutNode;
-
-        struct DummyComponent;
-        impl crate::components::Component<TermWmAction> for DummyComponent {
-            fn render(
-                &mut self,
-                _backend: &mut dyn term_wm_render::RenderBackend,
-                _area: LayoutRect,
-                _ctx: &crate::components::ComponentContext,
-                _registry: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-            fn handle_events(
-                &mut self,
-                _event: &Event,
-                _ctx: &crate::components::ComponentContext,
-            ) -> crate::actions::EventResult<TermWmAction> {
-                crate::actions::EventResult::Consumed
-            }
-            fn update(
-                &mut self,
-                _action: TermWmAction,
-                _ctx: &crate::components::ComponentContext,
-                _queue: &mut std::collections::VecDeque<(super::WindowKey, TermWmAction)>,
-            ) {
-            }
-            fn destroy(&mut self) {}
-        }
-
         let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
@@ -4400,35 +4369,6 @@ mod tests {
 
     #[test]
     fn drag_last_event_updated_on_drag_events() {
-        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-
-        struct DummyComponent;
-        impl crate::components::Component<TermWmAction> for DummyComponent {
-            fn render(
-                &mut self,
-                _backend: &mut dyn term_wm_render::RenderBackend,
-                _area: LayoutRect,
-                _ctx: &crate::components::ComponentContext,
-                _registry: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-            fn handle_events(
-                &mut self,
-                _event: &Event,
-                _ctx: &crate::components::ComponentContext,
-            ) -> crate::actions::EventResult<TermWmAction> {
-                crate::actions::EventResult::Consumed
-            }
-            fn update(
-                &mut self,
-                _action: TermWmAction,
-                _ctx: &crate::components::ComponentContext,
-                _queue: &mut std::collections::VecDeque<(super::WindowKey, TermWmAction)>,
-            ) {
-            }
-            fn destroy(&mut self) {}
-        }
-
         let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
@@ -4709,32 +4649,6 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        struct Dummy;
-        impl crate::components::Component<TermWmAction> for Dummy {
-            fn render(
-                &mut self,
-                _backend: &mut dyn term_wm_render::RenderBackend,
-                _area: Rect,
-                _ctx: &crate::components::ComponentContext,
-                _registry: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-            fn handle_events(
-                &mut self,
-                _event: &Event,
-                _ctx: &crate::components::ComponentContext,
-            ) -> crate::actions::EventResult<TermWmAction> {
-                crate::actions::EventResult::Consumed
-            }
-            fn update(
-                &mut self,
-                _action: TermWmAction,
-                _ctx: &crate::components::ComponentContext,
-                _queue: &mut std::collections::VecDeque<(super::WindowKey, TermWmAction)>,
-            ) {
-            }
-            fn destroy(&mut self) {}
-        }
         let key = wm.set_system_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.transition_window(key, WindowState::Mapped);
         wm.register_managed_layout(Rect {
@@ -4830,7 +4744,7 @@ mod tests {
         );
         wm.set_panel_visible(false);
 
-        let comp = TestComponent::SelComponent(SelComponent::new());
+        let comp = TestComponent::SelComponent(SelComponent::default());
         let key = wm.create_window(comp);
         wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(key)));
         wm.managed_draw_order = vec![key];
@@ -4883,7 +4797,7 @@ mod tests {
         );
         wm.set_panel_visible(false);
 
-        let key = wm.create_window(TestComponent::ActionRecorder(ActionRecorder::new()));
+        let key = wm.create_window(TestComponent::ActionRecorder(ActionRecorder::default()));
         wm.transition_window(key, WindowState::Mapped);
         wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(key)));
         wm.managed_draw_order = vec![key];
@@ -4946,7 +4860,7 @@ mod tests {
         );
         wm.set_panel_visible(false);
 
-        let key = wm.create_window(TestComponent::ActionRecorder(ActionRecorder::new()));
+        let key = wm.create_window(TestComponent::ActionRecorder(ActionRecorder::default()));
         wm.transition_window(key, WindowState::Mapped);
         wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(key)));
         wm.managed_draw_order = vec![key];

@@ -774,40 +774,6 @@ mod tests {
 
     #[test]
     fn handle_focused_app_event_with_direct_mode_still_routes() {
-        use crate::window::WindowManager;
-
-        struct KeyRecorder {
-            received_key: bool,
-        }
-        impl Component<TermWmAction> for KeyRecorder {
-            fn render(
-                &mut self,
-                _backend: &mut dyn term_wm_render::RenderBackend,
-                _area: LayoutRect,
-                _ctx: &crate::components::ComponentContext,
-                _registry: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-            fn handle_events(
-                &mut self,
-                event: &Event,
-                _ctx: &crate::components::ComponentContext,
-            ) -> crate::actions::EventResult<TermWmAction> {
-                if matches!(event, Event::Key(_)) {
-                    self.received_key = true;
-                }
-                crate::actions::EventResult::Consumed
-            }
-            fn update(
-                &mut self,
-                _action: TermWmAction,
-                _ctx: &crate::components::ComponentContext,
-                _queue: &mut VecDeque<(crate::window::WindowKey, TermWmAction)>,
-            ) {
-            }
-            fn destroy(&mut self) {}
-        }
-
         struct FakeApp {
             wm: WindowManager<TestComponent>,
         }

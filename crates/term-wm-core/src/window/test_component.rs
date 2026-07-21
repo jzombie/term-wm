@@ -1,8 +1,5 @@
 use std::any::Any;
 use std::collections::VecDeque;
-use std::sync::Arc;
-
-use slotmap::DefaultKey;
 
 use crate::actions::{EventResult, TermWmAction};
 use crate::app_context::AppContext;
@@ -21,18 +18,10 @@ pub enum TestComponent {
     SelComponent(SelComponent),
 }
 
+#[derive(Default)]
 pub struct ActionRecorder {
     pub actions: Vec<TermWmAction>,
     pub received_mouse_bytes: bool,
-}
-
-impl ActionRecorder {
-    pub fn new() -> Self {
-        Self {
-            actions: Vec::new(),
-            received_mouse_bytes: false,
-        }
-    }
 }
 
 impl Component<TermWmAction> for ActionRecorder {
@@ -251,18 +240,10 @@ impl Component<TermWmAction> for KeyRecorder {
     }
 }
 
+#[derive(Default)]
 pub struct SelComponent {
     pub enabled: bool,
     pub received_down: bool,
-}
-
-impl SelComponent {
-    pub fn new() -> Self {
-        Self {
-            enabled: false,
-            received_down: false,
-        }
-    }
 }
 
 impl Component<TermWmAction> for SelComponent {
