@@ -4,6 +4,7 @@ use term_wm::layout::Direction;
 use term_wm::layout::tiling::{InsertPosition, LayoutNode, TilingLayout};
 use term_wm::window::{FloatRectSpec, WindowKey, WindowManager};
 use term_wm::wm_config::WmConfig;
+use term_wm_core::components::NoopComponent;
 use term_wm_layout_engine::{LayoutRect, detect_corner_snap, detect_edge_snap, edge_preview_rect};
 
 type Rect = term_wm_core::Rect;
@@ -26,7 +27,7 @@ fn area_lr() -> LayoutRect {
     }
 }
 
-fn wm_with_two_windows() -> (WindowManager, [WindowKey; 2]) {
+fn wm_with_two_windows() -> (WindowManager<NoopComponent>, [WindowKey; 2]) {
     let mut config = WmConfig::standalone();
     config.chrome_enabled = false;
     let mut wm = WindowManager::with_config(
@@ -37,8 +38,8 @@ fn wm_with_two_windows() -> (WindowManager, [WindowKey; 2]) {
         std::collections::HashMap::new(),
     );
     wm.set_panel_visible(false);
-    let k0 = wm.create_window(Box::new(NoopComponent));
-    let k1 = wm.create_window(Box::new(NoopComponent));
+    let k0 = wm.create_window(NoopComponent);
+    let k1 = wm.create_window(NoopComponent);
     let split = LayoutNode::Split {
         direction: Direction::Horizontal,
         children: vec![LayoutNode::Leaf(k0), LayoutNode::Leaf(k1)],
@@ -51,7 +52,7 @@ fn wm_with_two_windows() -> (WindowManager, [WindowKey; 2]) {
     (wm, [k0, k1])
 }
 
-fn header_rect(wm: &mut WindowManager, key: WindowKey) -> Rect {
+fn header_rect(wm: &mut WindowManager<NoopComponent>, key: WindowKey) -> Rect {
     use term_wm::chrome::ChromeTarget;
     use term_wm::hitbox_registry::{ComponentOwner, HitboxId};
     let bounds = wm.full_region_for_key(key);
@@ -82,33 +83,6 @@ fn make_mouse(
         modifiers: term_wm::events::KeyModifiers::NONE,
     });
     term_wm::events::core_event_to_wm(&event).expect("valid mouse event")
-}
-
-struct NoopComponent;
-impl term_wm::components::Component<term_wm::actions::TermWmAction> for NoopComponent {
-    fn render(
-        &mut self,
-        _backend: &mut dyn term_wm_render::RenderBackend,
-        _area: LayoutRect,
-        _ctx: &term_wm::components::ComponentContext,
-        _registry: &mut term_wm::hitbox_registry::HitboxRegistry,
-    ) {
-    }
-    fn handle_events(
-        &mut self,
-        _event: &term_wm::events::Event,
-        _ctx: &term_wm::components::ComponentContext,
-    ) -> term_wm::actions::EventResult<term_wm::actions::TermWmAction> {
-        term_wm::actions::EventResult::Ignored
-    }
-    fn update(
-        &mut self,
-        _action: term_wm::actions::TermWmAction,
-        _ctx: &term_wm::components::ComponentContext,
-        _queue: &mut std::collections::VecDeque<(WindowKey, term_wm::actions::TermWmAction)>,
-    ) {
-    }
-    fn destroy(&mut self) {}
 }
 
 fn collect_leaf_ids(node: &LayoutNode<usize>) -> Vec<usize> {
@@ -491,8 +465,8 @@ mod spatial_isolation {
             std::collections::HashMap::new(),
         );
         wm.set_panel_visible(false);
-        let k0 = wm.create_window(Box::new(NoopComponent));
-        let k1 = wm.create_window(Box::new(NoopComponent));
+        let k0 = wm.create_window(NoopComponent);
+        let k1 = wm.create_window(NoopComponent);
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(k0), LayoutNode::Leaf(k1)],
@@ -622,16 +596,26 @@ mod drag_snap_pipeline {
     use term_wm_console::draw_plan_renderer::DrawPlanRenderer;
     use term_wm_core::engine::CoreEngine;
 
-    fn setup() -> (WindowManager, CoreEngine, DrawPlanRenderer, [WindowKey; 2]) {
+    fn setup() -> (
+        WindowManager<NoopComponent>,
+        CoreEngine,
+        DrawPlanRenderer,
+        [WindowKey; 2],
+    ) {
         let (wm, keys) = wm_with_two_windows();
         (wm, CoreEngine::new(), DrawPlanRenderer::new(), keys)
     }
 
     /// Like `setup` but with `resizable: true` so split handles are produced.
-    fn setup_with_resizable() -> (WindowManager, CoreEngine, DrawPlanRenderer, [WindowKey; 2]) {
+    fn setup_with_resizable() -> (
+        WindowManager<NoopComponent>,
+        CoreEngine,
+        DrawPlanRenderer,
+        [WindowKey; 2],
+    ) {
         let mut config = WmConfig::standalone();
         config.chrome_enabled = false;
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<NoopComponent>::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -639,8 +623,8 @@ mod drag_snap_pipeline {
             std::collections::HashMap::new(),
         );
         wm.set_panel_visible(false);
-        let k0 = wm.create_window(Box::new(NoopComponent));
-        let k1 = wm.create_window(Box::new(NoopComponent));
+        let k0 = wm.create_window(NoopComponent);
+        let k1 = wm.create_window(NoopComponent);
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(k0), LayoutNode::Leaf(k1)],
@@ -654,7 +638,7 @@ mod drag_snap_pipeline {
     }
 
     fn advance_frame(
-        wm: &mut WindowManager,
+        wm: &mut WindowManager<NoopComponent>,
         engine: &mut CoreEngine,
         renderer: &mut DrawPlanRenderer,
     ) {
@@ -1204,9 +1188,9 @@ mod drag_snap_pipeline {
         wm.close_window(keys[1]);
 
         // Open two new windows via tile_window (production path)
-        let k0 = wm.create_window(Box::new(NoopComponent));
+        let k0 = wm.create_window(NoopComponent);
         assert!(wm.tile_window(k0), "first new window must tile");
-        let k1 = wm.create_window(Box::new(NoopComponent));
+        let k1 = wm.create_window(NoopComponent);
         assert!(wm.tile_window(k1), "second new window must tile");
 
         advance_frame(&mut wm, &mut engine, &mut renderer);
@@ -1245,7 +1229,7 @@ mod drag_snap_pipeline {
         );
         wm.set_panel_visible(false);
 
-        let k0 = wm.create_window(Box::new(NoopComponent));
+        let k0 = wm.create_window(NoopComponent);
         assert!(wm.tile_window(k0));
         wm.register_managed_layout(AREA);
 
@@ -1415,7 +1399,7 @@ mod floating_tiled_separation {
     use term_wm_console::draw_plan_renderer::DrawPlanRenderer;
     use term_wm_core::engine::CoreEngine;
 
-    fn assert_bifurcation_invariant(wm: &WindowManager) {
+    fn assert_bifurcation_invariant(wm: &WindowManager<NoopComponent>) {
         let order = wm.managed_draw_order_all();
         let mut seen_floating = false;
         for &key in order.iter() {
@@ -1430,13 +1414,18 @@ mod floating_tiled_separation {
         }
     }
 
-    fn setup() -> (WindowManager, CoreEngine, DrawPlanRenderer, [WindowKey; 2]) {
+    fn setup() -> (
+        WindowManager<NoopComponent>,
+        CoreEngine,
+        DrawPlanRenderer,
+        [WindowKey; 2],
+    ) {
         let (wm, keys) = wm_with_two_windows();
         (wm, CoreEngine::new(), DrawPlanRenderer::new(), keys)
     }
 
     fn advance_frame(
-        wm: &mut WindowManager,
+        wm: &mut WindowManager<NoopComponent>,
         engine: &mut CoreEngine,
         renderer: &mut DrawPlanRenderer,
     ) {
@@ -1692,9 +1681,9 @@ mod floating_tiled_separation {
         );
         wm.set_panel_visible(false);
 
-        let k0 = wm.create_window(Box::new(NoopComponent));
-        let k1 = wm.create_window(Box::new(NoopComponent));
-        let k2 = wm.create_window(Box::new(NoopComponent));
+        let k0 = wm.create_window(NoopComponent);
+        let k1 = wm.create_window(NoopComponent);
+        let k2 = wm.create_window(NoopComponent);
 
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,

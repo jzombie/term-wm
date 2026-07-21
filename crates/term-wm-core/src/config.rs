@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::actions::TermWmAction;
 use crate::app_context::AppContext;
+use crate::components::Component;
 use crate::components::WmComponent;
 use crate::keybindings::KeyBindings;
 use crate::theme::Theme;
@@ -119,7 +120,7 @@ impl AppBuilder {
     }
 
     /// Build a [`WindowManager`] from the accumulated configuration.
-    pub fn build(self) -> Result<WindowManager, ConfigError> {
+    pub fn build<C: Component<TermWmAction>>(self) -> Result<WindowManager<C>, ConfigError> {
         use crate::window::{ComponentTag, LayerManager, ZPlane};
         use std::collections::HashMap;
 

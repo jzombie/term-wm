@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use term_wm::config::AppBuilder;
+use term_wm_core::components::NoopComponent;
 
 #[test]
 fn new_window_is_focused() {
@@ -18,10 +19,10 @@ fn new_window_is_focused() {
         .app_ctx(ctx)
         .top_panel(top)
         .bottom_panel(bottom)
-        .build()
+        .build::<NoopComponent>()
         .expect("test build");
 
-    let key = wm.create_window(Box::new(term_wm::components::NoopComponent));
+    let key = wm.create_window(NoopComponent);
     wm.set_focus(key);
 
     assert_eq!(wm.focused_window(), key);

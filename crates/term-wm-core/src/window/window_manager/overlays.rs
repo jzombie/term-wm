@@ -1,10 +1,11 @@
+use crate::components::Component;
 use crate::events::Event;
 
 use super::WindowManager;
 use crate::actions::{ConfirmAction, EventResult, TermWmAction};
 use crate::components::Overlay;
 
-impl WindowManager {
+impl<C: Component<TermWmAction>> WindowManager<C> {
     pub fn close_exit_confirm(&mut self) {
         if let Some(key) = self.exit_confirm_key.take() {
             self.overlays.remove(key);

@@ -1,4 +1,6 @@
 use crate::Rect;
+use crate::actions::TermWmAction;
+use crate::components::Component;
 use term_wm_layout_engine::{EdgeResistance, LayoutRect, detect_corner_snap, detect_edge_snap};
 
 use super::{SnapPreviewState, WindowManager};
@@ -11,7 +13,7 @@ const EDGE_SNAP_THRESHOLD: u16 = 3;
 /// Cells from screen corner that triggers corner-snap preview.
 const CORNER_SNAP_THRESHOLD: u16 = 6;
 
-impl WindowManager {
+impl<C: Component<TermWmAction>> WindowManager<C> {
     pub(super) fn focus_window_at(&mut self, column: u16, row: u16) -> bool {
         if !self.config.wm_command_menu_enabled || self.managed_draw_order.is_empty() {
             return false;

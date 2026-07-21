@@ -15,6 +15,7 @@ use term_wm::io::{EventSource, RenderTarget};
 use term_wm::runner::{WindowManagerHost, run_event_loop};
 use term_wm::task_scheduler::TaskScheduler;
 use term_wm::window::{WindowKey, WindowManager};
+use term_wm_core::components::NoopComponent;
 
 #[derive(Debug)]
 struct TestOutput {
@@ -91,14 +92,14 @@ impl EventSource for ImmediateDriver {
 }
 
 struct SparseApp {
-    wm: WindowManager,
+    wm: WindowManager<NoopComponent>,
     draws: usize,
     window_key: Option<WindowKey>,
     should_quit: bool,
 }
 
-impl WindowManagerHost for SparseApp {
-    fn wm(&mut self) -> &mut WindowManager {
+impl WindowManagerHost<NoopComponent> for SparseApp {
+    fn wm(&mut self) -> &mut WindowManager<NoopComponent> {
         &mut self.wm
     }
     fn quit_requested(&self) -> bool {
@@ -117,9 +118,9 @@ fn render_panic_shows_in_debug_log() {
 
     let mut wm = AppBuilder::bare()
         .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
-        .build()
+        .build::<NoopComponent>()
         .expect("test build");
-    let key = wm.create_window(Box::new(term_wm::components::NoopComponent));
+    let key = wm.create_window(NoopComponent);
     wm.set_window_title(key, "test");
 
     let mut app = SparseApp {

@@ -1,3 +1,5 @@
+use crate::actions::TermWmAction;
+use crate::components::Component;
 use crate::draw_plan::{DrawPlan, RegionType, RenderRegion, ZLayer};
 use crate::window::WindowManager;
 use term_wm_layout_engine::LayoutRect;
@@ -24,11 +26,11 @@ impl CoreEngine {
 
     /// Project the current draw plan without causing heap allocation.
     /// Returns a reference to the draw plan struct.
-    pub fn project_draw_plan(
+    pub fn project_draw_plan<C: Component<TermWmAction>>(
         &mut self,
         width: u32,
         height: u32,
-        wm: &mut WindowManager,
+        wm: &mut WindowManager<C>,
     ) -> &DrawPlan {
         // Check if either the engine or the WindowManager has changed
         if !self.is_dirty && !wm.layout_dirty() {
@@ -68,7 +70,12 @@ impl CoreEngine {
     }
 
     /// Generate render regions from current layout state.
-    fn generate_regions(&mut self, _width: u32, _height: u32, wm: &mut WindowManager) {
+    fn generate_regions<C: Component<TermWmAction>>(
+        &mut self,
+        _width: u32,
+        _height: u32,
+        wm: &mut WindowManager<C>,
+    ) {
         // 1. Generate terminal window regions
         for &window_key in &wm.managed_draw_order {
             let region = wm.full_region_for_key(window_key);
@@ -129,7 +136,10 @@ impl CoreEngine {
 ///
 /// Extracted as a standalone function so that the geometric circuit-breaker
 /// early return only skips notification layers — not the entire pipeline.
-fn generate_notification_regions(plan: &mut DrawPlan, wm: &WindowManager) {
+fn generate_notification_regions<C: Component<TermWmAction>>(
+    plan: &mut DrawPlan,
+    wm: &WindowManager<C>,
+) {
     use std::sync::Arc;
     use textwrap::Options;
 
