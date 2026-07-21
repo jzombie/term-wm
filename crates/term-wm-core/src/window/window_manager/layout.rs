@@ -161,10 +161,12 @@ impl WindowManager {
             layout.update_monocle_state(terminal_width);
         }
         let curr = self.is_monocle();
-        if prev == curr {
+        if prev == curr && !curr {
             return;
         }
-        // Monocle state changed: turn borders off in monocle, on otherwise
+        // Turn borders off in monocle, on otherwise.
+        // Runs on every monocle frame so newly created windows also get
+        // borders disabled without waiting for a mode transition.
         for (_, window) in self.windows.iter_mut() {
             window.borders_enabled = !curr;
         }
