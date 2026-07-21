@@ -313,54 +313,6 @@ impl WmComponent for NoopWmComponent {}
 /// Zero-overhead default for `WindowManager`'s `<O: Overlay>` generic.
 /// Used by tests and headless configurations that don't need overlays.
 pub struct NoopOverlay;
-/// Blanket implementations so `Box<T>` where `T: Component<TermWmAction>`
-/// satisfies the trait bound during the migration from `Box<dyn>` to
-/// concrete generic types. These can be removed once all call sites pass
-/// concrete types (or `Noop*` defaults).
-impl<T: Component<TermWmAction> + ?Sized> Component<TermWmAction> for Box<T> {
-    fn render(
-        &mut self,
-        backend: &mut dyn term_wm_render::RenderBackend,
-        area: LayoutRect,
-        ctx: &ComponentContext,
-        registry: &mut crate::hitbox_registry::HitboxRegistry,
-    ) {
-        let inner: &mut T = &mut *self;
-        Component::render(inner, backend, area, ctx, registry);
-    }
-    fn init(&mut self) { let inner: &mut T = &mut *self; Component::init(inner); }
-    fn on_mount(&mut self, key: WindowKey, app: &AppContext) { let inner: &mut T = &mut *self; Component::on_mount(inner, key, app); }
-    fn hitbox_id(&self) -> Option<HitboxId> { let inner: &T = &*self; Component::hitbox_id(inner) }
-    fn handle_events(&mut self, event: &Event, ctx: &ComponentContext) -> EventResult<TermWmAction> { let inner: &mut T = &mut *self; Component::handle_events(inner, event, ctx) }
-    fn on_mouse_press(&mut self, local_x: u16, local_y: u16, button: MouseButton, modifiers: KeyModifiers, ctx: &ComponentContext) -> EventResult<TermWmAction> { let inner: &mut T = &mut *self; Component::on_mouse_press(inner, local_x, local_y, button, modifiers, ctx) }
-    fn on_mouse_release(&mut self, local_x: u16, local_y: u16, button: MouseButton, modifiers: KeyModifiers, ctx: &ComponentContext) -> EventResult<TermWmAction> { let inner: &mut T = &mut *self; Component::on_mouse_release(inner, local_x, local_y, button, modifiers, ctx) }
-    fn on_mouse_drag(&mut self, local_x: u16, local_y: u16, button: MouseButton, modifiers: KeyModifiers, ctx: &ComponentContext) -> EventResult<TermWmAction> { let inner: &mut T = &mut *self; Component::on_mouse_drag(inner, local_x, local_y, button, modifiers, ctx) }
-    fn on_mouse_scroll(&mut self, local_x: u16, local_y: u16, kind: MouseEventKind, modifiers: KeyModifiers, ctx: &ComponentContext) -> EventResult<TermWmAction> { let inner: &mut T = &mut *self; Component::on_mouse_scroll(inner, local_x, local_y, kind, modifiers, ctx) }
-    fn on_mouse_move(&mut self, local_x: u16, local_y: u16, modifiers: KeyModifiers, ctx: &ComponentContext) -> EventResult<TermWmAction> { let inner: &mut T = &mut *self; Component::on_mouse_move(inner, local_x, local_y, modifiers, ctx) }
-    fn on_key(&mut self, event: &Event, ctx: &ComponentContext) -> EventResult<TermWmAction> { let inner: &mut T = &mut *self; Component::on_key(inner, event, ctx) }
-    fn update(&mut self, action: TermWmAction, ctx: &ComponentContext, actions: &mut VecDeque<(WindowKey, TermWmAction)>) { let inner: &mut T = &mut *self; Component::update(inner, action, ctx, actions) }
-    fn destroy(&mut self) { let inner: &mut T = &mut *self; Component::destroy(inner); }
-    fn clear_selection(&mut self) { let inner: &mut T = &mut *self; Component::clear_selection(inner); }
-    fn selection_status(&self) -> SelectionStatus { let inner: &T = &*self; Component::selection_status(inner) }
-    fn selection_text(&self) -> Option<String> { let inner: &T = &*self; Component::selection_text(inner) }
-    fn desired_height(&self, width: u16) -> u16 { let inner: &T = &*self; Component::desired_height(inner, width) }
-    fn take_pending_title(&mut self) -> Option<String> { let inner: &mut T = &mut *self; Component::take_pending_title(inner) }
-    fn take_teardown_parts(&mut self) -> Option<(Box<dyn std::any::Any + Send + Sync>, std::thread::JoinHandle<()>)> { let inner: &mut T = &mut *self; Component::take_teardown_parts(inner) }
-    fn set_selection_enabled(&mut self, enabled: bool) { let inner: &mut T = &mut *self; Component::set_selection_enabled(inner, enabled); }
-    fn paste(&mut self, text: &str) -> bool { let inner: &mut T = &mut *self; Component::paste(inner, text) }
-}
-
-impl<T: WmComponent + ?Sized> WmComponent for Box<T> {}
-
-impl<T: Overlay<TermWmAction> + ?Sized> Overlay<TermWmAction> for Box<T> {
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { (&mut **self).as_any_mut() }
-    fn shadow_rect(&self, area: LayoutRect) -> Option<LayoutRect> { (&**self).shadow_rect(area) }
-    fn handle_confirm_event(&mut self, event: &Event) -> Option<crate::actions::ConfirmAction> { (&mut **self).handle_confirm_event(event) }
-    fn mark_dirty(&mut self) { (&mut **self).mark_dirty() }
-    fn set_menu_items(&mut self, items: Vec<MenuItem<TermWmAction>>) { (&mut **self).set_menu_items(items) }
-    fn visible(&self) -> bool { (&**self).visible() }
-}
-
 impl Overlay<TermWmAction> for NoopOverlay {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
 }
