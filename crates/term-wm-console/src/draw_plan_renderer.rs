@@ -306,11 +306,11 @@ impl DrawPlanRenderer {
     }
 
     /// Render the draw plan directly to a buffer (no Frame needed).
-    pub fn render_to_buffer(
+    pub fn render_to_buffer<C: Component<TermWmAction>>(
         &mut self,
         target_buf: &mut Buffer,
         draw_plan: &DrawPlan,
-        wm: &mut WindowManager,
+        wm: &mut WindowManager<C>,
         hitbox_registry: &mut HitboxRegistry,
     ) {
         for region in draw_plan.regions() {

@@ -1,6 +1,8 @@
 use super::WindowManager;
+use crate::actions::TermWmAction;
+use crate::components::Component;
 
-impl WindowManager {
+impl<C: Component<TermWmAction>> WindowManager<C> {
     pub fn command_menu_visible(&self) -> bool {
         self.command_palette_visible()
     }

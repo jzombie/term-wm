@@ -15,6 +15,11 @@ slotmap::new_key_type! {
     pub struct OverlayKey;
 }
 
+slotmap::new_key_type! {
+    /// Slotmap-backed generational key used for component arena lookup.
+    pub struct ComponentKey;
+}
+
 pub use entry::WindowState;
 
 pub use window_manager::layer_manager::{ComponentTag, LayerId, LayerManager, MacroFocus, ZPlane};

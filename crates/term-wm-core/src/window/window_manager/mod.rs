@@ -14,6 +14,7 @@ use crate::Rect;
 use crate::events::{Event, MouseEvent, MouseEventKind};
 use slotmap::SlotMap;
 
+use super::ComponentKey;
 use super::OverlayKey;
 use super::WindowKey;
 use super::entry::{Window, WindowState};
@@ -173,13 +174,16 @@ pub enum DrawTask {
     App(WindowDrawContext),
 }
 
-pub struct WindowManager {
+pub struct WindowManager<C: Component<TermWmAction>> {
     #[allow(dead_code)]
     focus: FocusRing<WindowKey>,
     #[allow(dead_code)]
     macro_focus: layer_manager::MacroFocus,
     pub(crate) layer_manager: layer_manager::LayerManager,
     windows: SlotMap<WindowKey, Window>,
+    /// Dense arena storing all window-root components inline.
+    components: SlotMap<ComponentKey, C>,
+    next_component_seq: usize,
     pub(crate) regions: RegionMap<WindowKey>,
     scroll: BTreeMap<WindowKey, ScrollState>,
     pub(crate) handles: Vec<SplitHandle>,
@@ -233,8 +237,6 @@ pub struct WindowManager {
     /// tree on every drag frame. Keyed by (target, position, area).
     snap_projection_cache: Option<(SnapPreviewState, Rect, Option<Rect>)>,
     drag_last_event: Option<Instant>,
-    // No separate component map — components live on the Window struct
-    // in the SlotMap.  See `Window.component`.
     next_window_seq: usize,
     next_title_seq: usize,
     synthetic_event: Option<Event>,
@@ -269,35 +271,22 @@ pub(crate) struct TapSwapState {
     pub target_key: Option<WindowKey>,
 }
 
-impl WindowManager {
+impl<C: Component<TermWmAction>> WindowManager<C> {
     /// Allocate a new window entry in the SlotMap and return its key.
     /// The window starts with default state (no title, not floating, etc.).
     pub fn create_window(
         &mut self,
-        component: Box<dyn crate::components::Component<TermWmAction>>,
+        component: C,
     ) -> WindowKey {
         let order = self.next_window_seq;
         self.next_window_seq = self.next_window_seq.saturating_add(1);
+        let component_key = self.components.insert(component);
         tracing::debug!(seq = order, "opened window");
-        self.windows.insert(Window::new(order, component))
+        self.windows.insert(Window::new(order, component_key))
     }
 
     /// Register a component and invoke its `on_mount` hook with the assigned key.
-    /// Prefer this over `create_window` for components that need their WindowKey.
-    pub fn spawn<C>(&mut self, component: C) -> WindowKey
-    where
-        C: Component<TermWmAction> + 'static,
-    {
-        let app_ctx = self.app_ctx().clone();
-        let key = self.create_window(Box::new(component));
-        if let Some(comp) = self.component_for_key_mut(key) {
-            comp.on_mount(key, &app_ctx);
-        }
-        key
-    }
-
-    /// Register a pre-boxed component and invoke its `on_mount` hook.
-    pub fn spawn_boxed(&mut self, component: Box<dyn Component<TermWmAction>>) -> WindowKey {
+    pub fn spawn(&mut self, component: C) -> WindowKey {
         let app_ctx = self.app_ctx().clone();
         let key = self.create_window(component);
         if let Some(comp) = self.component_for_key_mut(key) {
@@ -476,7 +465,9 @@ impl WindowManager {
         if let Some(w) = self.windows.get_mut(key) {
             w.direct_mode = value;
             if value {
-                w.component.clear_selection();
+                if let Some(c) = self.components.get_mut(w.component_key) {
+                    c.clear_selection();
+                }
             }
         }
     }
@@ -590,6 +581,8 @@ impl WindowManager {
             macro_focus: layer_manager::MacroFocus::FocusRing(slotmap::DefaultKey::default()),
             layer_manager,
             windows: SlotMap::with_capacity(32),
+            components: SlotMap::<ComponentKey, C>::with_capacity_and_key(32),
+            next_component_seq: 0,
             regions: RegionMap::default(),
             scroll: BTreeMap::new(),
             handles: Vec::new(),
@@ -1952,15 +1945,9 @@ impl WindowManager {
     }
 
     /// Register a component directly on a window in the SlotMap.
-    /// Creates the SlotMap entry, stores the component, and returns the
-    /// WindowKey.  The App or runner retrieves the component via
-    /// Helper to create a window with a WM-owned component (debug log, etc.).
-    /// The component is stored directly in the Window struct, NOT in
-    /// an app-sidecar HashMap. Callers that need post-creation access
-    /// should configure the component before boxing it.
     pub fn set_system_window(
         &mut self,
-        component: Box<dyn crate::components::Component<TermWmAction>>,
+        component: C,
     ) -> WindowKey {
         let key = self.create_window(component);
         if let Some(w) = self.windows.get_mut(key) {
@@ -1970,21 +1957,23 @@ impl WindowManager {
     }
 
     /// Render-phase access: borrow component immutably.
+    /// Returns &C — no vtable cast. Callers in generic context get static dispatch.
     pub fn component_for_key(
         &self,
         key: WindowKey,
-    ) -> Option<&dyn crate::components::Component<TermWmAction>> {
+    ) -> Option<&C> {
         let w = self.windows.get(key)?;
-        Some(w.component.as_ref())
+        self.components.get(w.component_key)
     }
 
     /// Event/update-phase access: borrow component mutably.
+    /// Returns &mut C — no vtable cast. Callers in generic context get static dispatch.
     pub fn component_for_key_mut(
         &mut self,
         key: WindowKey,
-    ) -> Option<&mut dyn crate::components::Component<TermWmAction>> {
+    ) -> Option<&mut C> {
         let w = self.windows.get_mut(key)?;
-        Some(w.component.as_mut())
+        self.components.get_mut(w.component_key)
     }
 
     /// Return all window keys currently in the SlotMap.
