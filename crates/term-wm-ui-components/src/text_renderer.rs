@@ -769,7 +769,7 @@ impl Default for TextRendererComponent {
 mod tests {
     use super::*;
     use crate::ScrollViewComponent;
-    use ratatui::{buffer::Buffer, text::Text};
+    use ratatui::{buffer::Buffer, text::Line, text::Text};
     use term_wm_core::events::{
         Event, KeyCode, KeyEvent, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
@@ -1042,6 +1042,38 @@ mod tests {
         let ctx = ComponentContext::new(true).with_screen_area(area);
         let result = renderer.on_mouse_press(0, 0, MouseButton::Left, KeyModifiers::NONE, &ctx);
         assert!(result.is_ignored());
+    }
+
+    #[test]
+    fn actual_wrapped_height_accounts_for_word_boundaries() {
+        // A 132-char paragraph at width 67 wraps to 3 visual lines because
+        // word boundaries prevent breaking at column 67.  The old formula
+        // (w + usable - 1) / usable gave 2, truncating the third line.
+        let line = Line::from(vec![
+            ratatui::text::Span::raw("To send Ctrl+G to the currently focused application, press Ctrl+G"),
+            ratatui::text::Span::raw(" twice quickly. (The second press is forwarded to the active window.)"),
+        ]);
+        let w = line.width();
+        // Sanity: the character-width formula undercounts for this paragraph
+        assert!((w + 67 - 1) / 67 < actual_wrapped_height(&line, 67),
+            "character-width formula should undercount, but actual={} char-based={}",
+            actual_wrapped_height(&line, 67), (w + 67 - 1) / 67);
+        // actual_wrapped_height counts word-wrapped lines correctly
+        assert!(actual_wrapped_height(&line, 67) >= 3,
+            "wrapping 132+ chars at width 67 needs at least 3 lines, got {}",
+            actual_wrapped_height(&line, 67));
+    }
+
+    #[test]
+    fn actual_wrapped_height_empty_line() {
+        let line = Line::from("");
+        assert_eq!(actual_wrapped_height(&line, 67), 1);
+    }
+
+    #[test]
+    fn actual_wrapped_height_single_short_line() {
+        let line = Line::from("hello");
+        assert_eq!(actual_wrapped_height(&line, 67), 1);
     }
 }
 
