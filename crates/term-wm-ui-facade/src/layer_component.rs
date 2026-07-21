@@ -16,6 +16,7 @@ use term_wm_sys_ui_components::{
     WmNotificationAreaComponent, WmTopPanelComponent,
 };
 
+#[allow(clippy::large_enum_variant)]
 pub enum LayerComponent {
     TopPanel(WmTopPanelComponent),
     BottomPanel(WmBottomPanelComponent),

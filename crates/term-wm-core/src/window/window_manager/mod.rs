@@ -2446,7 +2446,7 @@ fn make_keys<L: WmComponent, O: Overlay<TermWmAction>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{NoopOverlay, NoopWmComponent};
+    use crate::components::NoopOverlay;
     use crate::events::{KeyModifiers, MouseButton};
     use crate::hitbox_registry::HitboxId;
     use crate::layout::{Constraint, Direction};
@@ -5277,7 +5277,7 @@ mod tests {
     #[test]
     fn overlay_dispatch_passes_screen_area_to_context() {
         use crate::components::{
-            Component as Cmp, ComponentContext as Ctx, EventResult as EvtRes, Overlay as Ovly,
+            Component as Cmp, ComponentContext as Ctx, EventResult as EvtRes,
             WmComponent as WmCmp,
         };
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};

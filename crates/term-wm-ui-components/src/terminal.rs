@@ -1915,7 +1915,6 @@ mod tests {
 
         // Simulate rendering to set last_area on the terminal
         use term_wm_core::components::ComponentContext;
-        use term_wm_layout_engine::LayoutRect;
         let area = wm.region(key);
         let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
             x: 0,
