@@ -47,10 +47,6 @@ pub trait WindowManagerHost {
         false
     }
 
-    fn empty_window_message(&self) -> &str {
-        "No windows"
-    }
-
     fn layout_for_windows(&mut self, windows: &[WindowKey]) -> Option<TilingLayout<WindowKey>> {
         auto_layout_for_windows(windows)
     }

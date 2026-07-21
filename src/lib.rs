@@ -16,6 +16,7 @@ use term_wm_console::draw_plan_renderer::{
 };
 use term_wm_core::hitbox_registry::{ComponentOwner, HitboxId, HitboxRegistry};
 use term_wm_core::window::{WindowManager, WindowSurface};
+use ratatui::prelude::Widget;
 
 /// Default rendering implementation for the window manager.
 /// Shared by all apps so they don't need to reimplement rendering.
@@ -24,6 +25,7 @@ pub fn render_app(
     wm: &mut term_wm_core::window::WindowManager,
     engine: &mut term_wm_core::engine::CoreEngine,
     renderer: &mut DrawPlanRenderer,
+    empty_message: &str,
 ) {
     let Some(ratatui_backend) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() else {
         return;
@@ -190,6 +192,33 @@ pub fn render_app(
         }
     }
     renderer.put_scratch(scratch_buf);
+
+    // Render empty state if no mapped windows
+    if wm.mapped_windows().is_empty() && !empty_message.is_empty() {
+        use ratatui::style::{Color, Modifier, Style};
+        use ratatui::widgets::Paragraph;
+        if let Some(rb) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() {
+            let buf = &mut rb.buffer;
+            let msg_width = empty_message.len() as u16;
+            let x = area.width.saturating_sub(msg_width) / 2;
+            let y = area.height as i32 / 2;
+            Paragraph::new(empty_message)
+                .style(
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::DIM),
+                )
+                .render(
+                    ratatui::layout::Rect {
+                        x,
+                        y: y.max(0) as u16,
+                        width: msg_width,
+                        height: 1,
+                    },
+                    buf,
+                );
+        }
+    }
 
     // Render panels AFTER windows
     render_panels(backend, wm);
