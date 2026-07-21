@@ -14,9 +14,9 @@
 use std::io::Write;
 
 use base64::Engine;
-#[cfg(unix)]
-use libc::{STDERR_FILENO, close, dup, dup2, open};
 use thiserror::Error;
+
+use crate::redirect_stdio::StderrSuppressGuard;
 
 #[derive(Debug, Error)]
 pub enum ClipboardError {
@@ -56,39 +56,6 @@ pub fn set_via_osc52_with_writer(text: &str, writer: &mut dyn Write) -> Result<(
     writer.write_all(&seq)?;
     writer.flush()?;
     Ok(())
-}
-
-/// Suppress stderr output during a closure (macOS AppKit/NSPasteboard noise).
-/// On non-Unix platforms this is a no-op.
-#[cfg(unix)]
-struct StderrSuppressGuard {
-    saved_fd: libc::c_int,
-}
-
-#[cfg(unix)]
-impl StderrSuppressGuard {
-    fn new() -> Option<Self> {
-        unsafe {
-            let null_fd = open(c"/dev/null".as_ptr(), libc::O_WRONLY);
-            if null_fd < 0 {
-                return None;
-            }
-            let saved_fd = dup(STDERR_FILENO);
-            dup2(null_fd, STDERR_FILENO);
-            close(null_fd);
-            Some(StderrSuppressGuard { saved_fd })
-        }
-    }
-}
-
-#[cfg(unix)]
-impl Drop for StderrSuppressGuard {
-    fn drop(&mut self) {
-        unsafe {
-            dup2(self.saved_fd, STDERR_FILENO);
-            close(self.saved_fd);
-        }
-    }
 }
 
 /// A persistent clipboard handle backed by `arboard` (optional) and OSC 52.
@@ -616,59 +583,6 @@ mod tests {
         let mut ex = Osc52Extractor::new();
         assert!(ex.push(data, &[]).is_none());
         assert!(!ex.is_active());
-    }
-
-    // ── StderrSuppressGuard ───────────────────────────────────────
-
-    #[test]
-    #[cfg(unix)]
-    fn stderr_suppress_guard_suppresses_and_restores() {
-        use std::os::fd::FromRawFd;
-
-        // Save original stderr.
-        let saved_fd = unsafe { libc::dup(libc::STDERR_FILENO) };
-        assert!(saved_fd >= 0, "dup stderr");
-
-        // Create a pipe to intercept stderr output.
-        let mut fds: [libc::c_int; 2] = [0; 2];
-        unsafe { assert_eq!(libc::pipe(fds.as_mut_ptr()), 0); }
-
-        // Redirect stderr to the pipe's write end.
-        unsafe { libc::dup2(fds[1], libc::STDERR_FILENO); }
-        unsafe { libc::close(fds[1]); }
-
-        // Write while suppressed — must not reach the pipe.
-        {
-            let _guard = StderrSuppressGuard::new();
-            assert!(_guard.is_some(), "guard creation");
-            unsafe {
-                libc::write(libc::STDERR_FILENO, c"suppressed\n".as_ptr().cast(), 11);
-            }
-        }
-
-        // Write after guard drop — should reach the pipe.
-        unsafe {
-            libc::write(libc::STDERR_FILENO, c"restored\n".as_ptr().cast(), 9);
-        }
-
-        // Restore original stderr.
-        unsafe { libc::dup2(saved_fd, libc::STDERR_FILENO); }
-        unsafe { libc::close(saved_fd); }
-
-        // Read pipe contents.
-        use std::io::Read;
-        let mut file = unsafe { std::fs::File::from_raw_fd(fds[0]) };
-        let mut output = String::new();
-        file.read_to_string(&mut output).unwrap_or(0);
-
-        assert!(
-            !output.contains("suppressed"),
-            "suppressed output leaked to stderr: {output:?}"
-        );
-        assert!(
-            output.contains("restored"),
-            "restored output missing from stderr: {output:?}"
-        );
     }
 
     #[test]
