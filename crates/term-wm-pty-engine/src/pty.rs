@@ -635,50 +635,57 @@ fn resolve_cell_color(color: &Color, palette: &Colors) -> Option<RgbColor> {
             g: rgb.g,
             b: rgb.b,
         }),
-        Color::Indexed(idx) => palette[*idx as usize].as_ref().map(|r| RgbColor {
-            r: r.r,
-            g: r.g,
-            b: r.b,
-        }),
+        Color::Indexed(idx) => {
+            let i = *idx as usize;
+            palette[i].as_ref().map(|r| RgbColor {
+                r: r.r,
+                g: r.g,
+                b: r.b,
+            }).or_else(|| {
+                // 216-color cube (16..232)
+                if i >= 16 && i < 232 {
+                    fn cube6(v: u8) -> u8 { [0, 95, 135, 175, 215, 255][v as usize] }
+                    let n = i - 16;
+                    Some(RgbColor {
+                        r: cube6(((n / 36) % 6) as u8),
+                        g: cube6(((n / 6) % 6) as u8),
+                        b: cube6((n % 6) as u8),
+                    })
+                // Grayscale ramp (232..256)
+                } else if i >= 232 && i < 256 {
+                    let v = (i - 232) * 10 + 8;
+                    Some(RgbColor { r: v as u8, g: v as u8, b: v as u8 })
+                } else {
+                    None
+                }
+            })
+        }
         Color::Named(named) => {
-            // When the palette entry is None (not yet configured by OSC),
-            // fall back to standard ANSI color values so that cells
-            // always render with visible fg/bg.
             palette[*named].as_ref().map(|r| RgbColor {
                 r: r.r,
                 g: r.g,
                 b: r.b,
             }).or_else(|| {
-                const ANSI_COLORS: &[RgbColor] = &[
-                    RgbColor { r: 0x00, g: 0x00, b: 0x00 }, // Black
-                    RgbColor { r: 0x80, g: 0x00, b: 0x00 }, // Red
-                    RgbColor { r: 0x00, g: 0x80, b: 0x00 }, // Green
-                    RgbColor { r: 0x80, g: 0x80, b: 0x00 }, // Yellow
-                    RgbColor { r: 0x00, g: 0x00, b: 0x80 }, // Blue
-                    RgbColor { r: 0x80, g: 0x00, b: 0x80 }, // Magenta
-                    RgbColor { r: 0x00, g: 0x80, b: 0x80 }, // Cyan
-                    RgbColor { r: 0xc0, g: 0xc0, b: 0xc0 }, // White
-                    RgbColor { r: 0x80, g: 0x80, b: 0x80 }, // Bright Black
-                    RgbColor { r: 0xff, g: 0x00, b: 0x00 }, // Bright Red
-                    RgbColor { r: 0x00, g: 0xff, b: 0x00 }, // Bright Green
-                    RgbColor { r: 0xff, g: 0xff, b: 0x00 }, // Bright Yellow
-                    RgbColor { r: 0x00, g: 0x00, b: 0xff }, // Bright Blue
-                    RgbColor { r: 0xff, g: 0x00, b: 0xff }, // Bright Magenta
-                    RgbColor { r: 0x00, g: 0xff, b: 0xff }, // Bright Cyan
-                    RgbColor { r: 0xff, g: 0xff, b: 0xff }, // Bright White
+                const ANSI: &[RgbColor] = &[
+                    RgbColor { r: 0x00, g: 0x00, b: 0x00 },
+                    RgbColor { r: 0x80, g: 0x00, b: 0x00 },
+                    RgbColor { r: 0x00, g: 0x80, b: 0x00 },
+                    RgbColor { r: 0x80, g: 0x80, b: 0x00 },
+                    RgbColor { r: 0x00, g: 0x00, b: 0x80 },
+                    RgbColor { r: 0x80, g: 0x00, b: 0x80 },
+                    RgbColor { r: 0x00, g: 0x80, b: 0x80 },
+                    RgbColor { r: 0xc0, g: 0xc0, b: 0xc0 },
+                    RgbColor { r: 0x80, g: 0x80, b: 0x80 },
+                    RgbColor { r: 0xff, g: 0x00, b: 0x00 },
+                    RgbColor { r: 0x00, g: 0xff, b: 0x00 },
+                    RgbColor { r: 0xff, g: 0xff, b: 0x00 },
+                    RgbColor { r: 0x00, g: 0x00, b: 0xff },
+                    RgbColor { r: 0xff, g: 0x00, b: 0xff },
+                    RgbColor { r: 0x00, g: 0xff, b: 0xff },
+                    RgbColor { r: 0xff, g: 0xff, b: 0xff },
                 ];
                 let idx = *named as usize;
-                if idx < 16 {
-                    Some(ANSI_COLORS[idx])
-                } else if idx == 256 {
-                    // NamedColor::Foreground
-                    Some(RgbColor { r: 0xd0, g: 0xd0, b: 0xd0 })
-                } else if idx == 257 {
-                    // NamedColor::Background
-                    Some(RgbColor { r: 0x00, g: 0x00, b: 0x00 })
-                } else {
-                    Some(RgbColor { r: 0xaa, g: 0xaa, b: 0xaa })
-                }
+                if idx < 16 { Some(ANSI[idx]) } else { None }
             })
         }
     }
