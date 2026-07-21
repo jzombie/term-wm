@@ -53,6 +53,31 @@ impl WindowManager {
         self.focus.set_current(key);
         self.bring_to_front_key(key);
         self.mark_layout_dirty();
+
+        // If the command palette is open, rebuild its items with the new
+        // focus state so "Switch to" and window management buttons reflect
+        // the currently focused window.
+        if !self.command_menu_visible() {
+            return;
+        }
+        let Some(palette_key) = self.command_palette_key else {
+            return;
+        };
+
+        // Build fresh items BEFORE accessing the overlay (borrow checker).
+        let items = self.wm_menu_items();
+        let supported = &self.supported_menu_actions;
+        let filtered: Vec<_> = items
+            .into_iter()
+            .filter(|item| {
+                supported.contains(&item.action)
+                    || matches!(item.action, crate::actions::TermWmAction::FocusWindow(_))
+            })
+            .collect();
+
+        if let Some(overlay) = self.overlays.get_mut(palette_key) {
+            overlay.process_action(&crate::components::ComponentAction::SetMenuItems(filtered));
+        }
     }
 
     #[expect(dead_code)]

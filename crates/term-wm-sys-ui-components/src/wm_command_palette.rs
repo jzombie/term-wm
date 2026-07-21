@@ -256,6 +256,14 @@ impl Overlay<TermWmAction> for WmCommandPaletteComponent {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
+
+    fn mark_dirty(&mut self) {
+        self.palette.mark_data_dirty();
+    }
+
+    fn process_action(&mut self, action: &ComponentAction) {
+        <Self as WmComponent>::process_action(self, action);
+    }
 }
 
 impl WmComponent for WmCommandPaletteComponent {
