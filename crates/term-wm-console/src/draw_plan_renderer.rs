@@ -26,33 +26,50 @@ pub struct ChromeCtx<'a> {
     pub direct_mode: bool,
     pub hover_pos: Option<(u16, u16)>,
     pub theme: term_wm_core::theme::Theme,
+    pub wm_buttons: Vec<term_wm_core::window::WmButton>,
+    pub borders_enabled: bool,
+    pub header_enabled: bool,
 }
 
-// ── Chrome metric constants (owned by console) ─────────────
-const LEFT_BORDER_WIDTH: u16 = 1;
-const RIGHT_BORDER_WIDTH: u16 = 1;
-const TOP_BORDER_HEIGHT: u16 = 1;
-const BOTTOM_BORDER_HEIGHT: u16 = 1;
-const HEADER_HEIGHT: u16 = 1;
+use term_wm_core::chrome::{
+    LEFT_BORDER_WIDTH, RIGHT_BORDER_WIDTH, TOP_BORDER_HEIGHT, content_rect,
+};
+
+// ── Chrome layout constants (console-specific) ──────────────
 const HEADER_BUTTON_GAP: u16 = 2;
 const EDGE_INDEX_ADJUST: u16 = 1;
 
 /// Register chrome hitboxes for a window (resize, drag, close, maximize buttons).
-/// `frame_size` is (width, height) of the window frame. `screen_origin` is the screen-space
-/// top-left coordinate (x, y). Also registers a content-area hitbox.
-fn register_window_chrome_hitboxes(
-    registry: &mut HitboxRegistry,
+/// Parameters for chrome hitbox registration.
+struct ChromeHitboxParams {
     key: WindowKey,
     frame_size: (u16, u16),
     screen_origin: (i16, i16),
     content_hitbox_id: HitboxId,
-) {
+    wm_buttons: Vec<term_wm_core::window::WmButton>,
+    borders_enabled: bool,
+    header_enabled: bool,
+}
+
+/// Register chrome hitboxes for a window (resize, drag, close, maximize buttons).
+/// `frame_size` is (width, height) of the window frame. `screen_origin` is the screen-space
+/// top-left coordinate (x, y). Also registers a content-area hitbox.
+fn register_window_chrome_hitboxes(registry: &mut HitboxRegistry, params: &ChromeHitboxParams) {
     use term_wm_core::chrome::ChromeTarget;
     use term_wm_core::hitbox_registry::ComponentOwner;
     use term_wm_core::layout::floating::ResizeEdge;
 
-    let (width, height) = frame_size;
-    let (ox, oy) = screen_origin;
+    let ChromeHitboxParams {
+        key,
+        frame_size,
+        screen_origin,
+        content_hitbox_id,
+        wm_buttons,
+        borders_enabled,
+        header_enabled,
+    } = params;
+    let (width, height) = *frame_size;
+    let (ox, oy) = *screen_origin;
 
     // Build screen-space rect from local offsets — no double-translation risk
     let to_screen = |lx: u16, ly: u16, lw: u16, lh: u16| -> LayoutRect {
@@ -67,76 +84,105 @@ fn register_window_chrome_hitboxes(
     let outer_right = width.saturating_sub(EDGE_INDEX_ADJUST);
     let bottom_y = height.saturating_sub(EDGE_INDEX_ADJUST);
 
-    // Resize handles at each edge
-    for (edge, lx, ly, lw, lh) in [
-        (ResizeEdge::Left, 0u16, 1u16, 1u16, height.saturating_sub(2)),
-        (
-            ResizeEdge::Right,
-            outer_right,
-            1u16,
-            1u16,
-            height.saturating_sub(2),
-        ),
-        (ResizeEdge::Top, 1u16, 0u16, width.saturating_sub(2), 1u16),
-        (
-            ResizeEdge::Bottom,
-            1u16,
-            bottom_y,
-            width.saturating_sub(2),
-            1u16,
-        ),
-    ] {
-        registry.register(
-            HitboxId::new(),
-            ComponentOwner::Chrome(ChromeTarget::Resize(key, edge)),
-            to_screen(lx, ly, lw, lh),
-        );
+    // Resize handles at each edge (only if borders are enabled)
+    if *borders_enabled {
+        for (edge, lx, ly, lw, lh) in [
+            (ResizeEdge::Left, 0u16, 1u16, 1u16, height.saturating_sub(2)),
+            (
+                ResizeEdge::Right,
+                outer_right,
+                1u16,
+                1u16,
+                height.saturating_sub(2),
+            ),
+            (ResizeEdge::Top, 1u16, 0u16, width.saturating_sub(2), 1u16),
+            (
+                ResizeEdge::Bottom,
+                1u16,
+                bottom_y,
+                width.saturating_sub(2),
+                1u16,
+            ),
+        ] {
+            registry.register(
+                HitboxId::new(),
+                ComponentOwner::Chrome(ChromeTarget::Resize(*key, edge)),
+                to_screen(lx, ly, lw, lh),
+            );
+        }
     }
 
-    // Drag handle at the header area (row 1 local)
-    registry.register(
-        HitboxId::new(),
-        ComponentOwner::Chrome(ChromeTarget::Drag(key)),
-        to_screen(1, 1, width.saturating_sub(2), 1),
-    );
-
-    // Close, maximize, minimize, and direct-mode buttons
-    let close_x = outer_right.saturating_sub(HEADER_BUTTON_GAP);
-    let max_x = close_x.saturating_sub(HEADER_BUTTON_GAP);
-    let min_x = max_x.saturating_sub(HEADER_BUTTON_GAP);
-    let dm_x = min_x.saturating_sub(HEADER_BUTTON_GAP);
-    for (target, bx) in [
-        (ChromeTarget::CloseButton(key), close_x),
-        (ChromeTarget::MaximizeButton(key), max_x),
-        (ChromeTarget::MinimizeButton(key), min_x),
-        (ChromeTarget::ToggleDirectMode(key), dm_x),
-    ] {
+    // Drag handle at the header area (only if header is enabled)
+    if *header_enabled {
+        let drag_y = if *borders_enabled {
+            TOP_BORDER_HEIGHT
+        } else {
+            0
+        };
+        let drag_x = if *borders_enabled {
+            LEFT_BORDER_WIDTH
+        } else {
+            0
+        };
+        let drag_w = if *borders_enabled {
+            width.saturating_sub(LEFT_BORDER_WIDTH + RIGHT_BORDER_WIDTH)
+        } else {
+            width
+        };
         registry.register(
             HitboxId::new(),
-            ComponentOwner::Chrome(target),
-            to_screen(bx, 1u16, 1, 1),
+            ComponentOwner::Chrome(ChromeTarget::Drag(*key)),
+            to_screen(drag_x, drag_y, drag_w, 1),
         );
+
+        // Window management buttons from centralized list
+        for (i, btn) in wm_buttons.iter().enumerate() {
+            let bx = outer_right
+                .saturating_sub(HEADER_BUTTON_GAP)
+                .saturating_sub(HEADER_BUTTON_GAP * i as u16);
+            let target = match btn.action {
+                TermWmAction::CloseWindow => ChromeTarget::CloseButton(*key),
+                TermWmAction::MaximizeWindow => ChromeTarget::MaximizeButton(*key),
+                TermWmAction::MinimizeWindow => ChromeTarget::MinimizeButton(*key),
+                TermWmAction::ToggleDirectMode => ChromeTarget::ToggleDirectMode(*key),
+                _ => continue,
+            };
+            registry.register(
+                HitboxId::new(),
+                ComponentOwner::Chrome(target),
+                to_screen(bx, drag_y, 1, 1),
+            );
+        }
     }
 
     // Corner resize hitboxes (registered after edges for LIFO priority)
-    for (edge, lx, ly) in [
-        (ResizeEdge::TopLeft, 0u16, 0u16),
-        (ResizeEdge::TopRight, outer_right, 0u16),
-        (ResizeEdge::BottomLeft, 0u16, bottom_y),
-        (ResizeEdge::BottomRight, outer_right, bottom_y),
-    ] {
-        registry.register(
-            HitboxId::new(),
-            ComponentOwner::Chrome(ChromeTarget::Resize(key, edge)),
-            to_screen(lx, ly, 1, 1),
-        );
+    if *borders_enabled {
+        for (edge, lx, ly) in [
+            (ResizeEdge::TopLeft, 0u16, 0u16),
+            (ResizeEdge::TopRight, outer_right, 0u16),
+            (ResizeEdge::BottomLeft, 0u16, bottom_y),
+            (ResizeEdge::BottomRight, outer_right, bottom_y),
+        ] {
+            registry.register(
+                HitboxId::new(),
+                ComponentOwner::Chrome(ChromeTarget::Resize(*key, edge)),
+                to_screen(lx, ly, 1, 1),
+            );
+        }
     }
 
-    // Content area hitbox (inner bounds, screen-space)
+    // Content area hitbox — use shared content_rect function
+    let content_full = term_wm_core::Rect {
+        x: 0,
+        y: 0,
+        width,
+        height,
+    };
+    let inner = content_rect(content_full, *borders_enabled, *header_enabled);
     registry.register(
-        content_hitbox_id,
-        ComponentOwner::Window(key),
-        to_screen(1, 2, width.saturating_sub(2), height.saturating_sub(3)),
+        *content_hitbox_id,
+        ComponentOwner::Window(*key),
+        to_screen(inner.x as u16, inner.y as u16, inner.width, inner.height),
     );
 }
 
@@ -161,19 +207,49 @@ pub fn render_window_chrome(
     };
 
     // Draw chrome using existing renderer
-    render_window(buffer, local_bounds, ChromeCtx { ..*ctx });
+    render_window(
+        buffer,
+        local_bounds,
+        ChromeCtx {
+            title: ctx.title,
+            focused: ctx.focused,
+            floating: ctx.floating,
+            direct_mode: ctx.direct_mode,
+            hover_pos: ctx.hover_pos,
+            theme: ctx.theme,
+            wm_buttons: ctx.wm_buttons.clone(),
+            borders_enabled: ctx.borders_enabled,
+            header_enabled: ctx.header_enabled,
+        },
+    );
 
     // Register chrome hitboxes + content hitbox (atomic)
-    register_window_chrome_hitboxes(registry, key, frame_size, screen_origin, content_hitbox_id);
+    register_window_chrome_hitboxes(
+        registry,
+        &ChromeHitboxParams {
+            key,
+            frame_size,
+            screen_origin,
+            content_hitbox_id,
+            wm_buttons: ctx.wm_buttons.clone(),
+            borders_enabled: ctx.borders_enabled,
+            header_enabled: ctx.header_enabled,
+        },
+    );
 
-    // Return inner content bounds
+    // Return inner content bounds (single source of truth: content_rect)
+    let full_area = term_wm_core::Rect {
+        x: 0,
+        y: 0,
+        width,
+        height,
+    };
+    let inner = content_rect(full_area, ctx.borders_enabled, ctx.header_enabled);
     LayoutRect {
-        x: i32::from(LEFT_BORDER_WIDTH),
-        y: i32::from(TOP_BORDER_HEIGHT.saturating_add(HEADER_HEIGHT)),
-        width: width.saturating_sub(LEFT_BORDER_WIDTH.saturating_add(RIGHT_BORDER_WIDTH)),
-        height: height.saturating_sub(
-            TOP_BORDER_HEIGHT.saturating_add(HEADER_HEIGHT.saturating_add(BOTTOM_BORDER_HEIGHT)),
-        ),
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: inner.height,
     }
 }
 
@@ -683,6 +759,20 @@ pub fn render_overlays(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut
             p.process_action(&ComponentAction::SetPanelActive(false));
         }
         wm.hitbox_registry_mut().merge(top_hb);
+
+        // Bottom panel overlay in monocle mode — keybinding hints
+        let bottom_area = LayoutRect {
+            x: 0,
+            y: i32::from(full_area.height.saturating_sub(1)),
+            width: full_area.width,
+            height: 1,
+        };
+        let mut bottom_hb = HitboxRegistry::new();
+        if let Some(p) = wm.get_semantic_component_mut(ComponentTag::BottomPanel) {
+            let ctx = ComponentContext::new(false).with_screen_area(bottom_area);
+            p.render(backend, bottom_area, &ctx, &mut bottom_hb);
+        }
+        wm.hitbox_registry_mut().merge(bottom_hb);
     }
 
     let hover_pos = wm.hover_pos();
@@ -835,6 +925,9 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
         direct_mode,
         hover_pos,
         theme,
+        wm_buttons,
+        borders_enabled,
+        header_enabled,
     } = ctx;
 
     let focused_header_style = Style::default()
@@ -873,122 +966,123 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
     let outer_bottom = outer_top
         .saturating_add(rect.height)
         .saturating_sub(EDGE_INDEX_ADJUST);
-    let header_y = outer_top.saturating_add(TOP_BORDER_HEIGHT);
+    let header_y = if borders_enabled {
+        outer_top.saturating_add(TOP_BORDER_HEIGHT)
+    } else {
+        outer_top
+    };
 
-    for x in outer_left.saturating_add(LEFT_BORDER_WIDTH)..outer_right {
-        if let Some(cell) = buffer.cell_mut((x, header_y)) {
-            cell.set_symbol(" ");
-            cell.set_style(header_style);
-        }
-    }
-    let title_len = title.len() as u16;
-    let header_width = outer_right
-        .saturating_sub(outer_left)
-        .saturating_sub(RIGHT_BORDER_WIDTH);
-    if title_len <= header_width {
-        let start_x = outer_left.saturating_add(LEFT_BORDER_WIDTH) + (header_width - title_len) / 2;
-        for (idx, ch) in title.chars().enumerate() {
-            let x = start_x + idx as u16;
+    if header_enabled {
+        for x in outer_left.saturating_add(LEFT_BORDER_WIDTH)..outer_right {
             if let Some(cell) = buffer.cell_mut((x, header_y)) {
-                cell.set_symbol(&ch.to_string());
+                cell.set_symbol(" ");
                 cell.set_style(header_style);
             }
         }
-    }
-    {
-        let contrast_fg = theme.menu_selected_fg.to_ratatui();
-        #[derive(Clone, Copy)]
-        enum Btn {
-            Close,
-            Max,
-            Min,
-            DirectMode,
+        let title_len = title.len() as u16;
+        let header_width = outer_right
+            .saturating_sub(outer_left)
+            .saturating_sub(RIGHT_BORDER_WIDTH);
+        if title_len <= header_width {
+            let start_x =
+                outer_left.saturating_add(LEFT_BORDER_WIDTH) + (header_width - title_len) / 2;
+            for (idx, ch) in title.chars().enumerate() {
+                let x = start_x + idx as u16;
+                if let Some(cell) = buffer.cell_mut((x, header_y)) {
+                    cell.set_symbol(&ch.to_string());
+                    cell.set_style(header_style);
+                }
+            }
         }
-        let buttons: [(u16, Btn, &str); 4] = {
-            let close_x = outer_right.saturating_sub(HEADER_BUTTON_GAP);
-            let max_x = close_x.saturating_sub(HEADER_BUTTON_GAP);
-            let min_x = max_x.saturating_sub(HEADER_BUTTON_GAP);
-            let dm_x = min_x.saturating_sub(HEADER_BUTTON_GAP);
-            [
-                (close_x, Btn::Close, "X"),
-                (max_x, Btn::Max, "▢"),
-                (min_x, Btn::Min, "_"),
-                (dm_x, Btn::DirectMode, "D"),
-            ]
-        };
-        for (bx, action, sym) in buttons {
-            if let Some(cell) = buffer.cell_mut((bx, header_y)) {
-                cell.set_symbol(sym);
-                let stoplight_fg = match action {
-                    Btn::Close => theme.error.to_ratatui(),
-                    Btn::Min => theme.warning.to_ratatui(),
-                    Btn::Max => theme.accent.to_ratatui(),
-                    Btn::DirectMode => theme.decorator_header_fg.to_ratatui(),
-                };
-                let is_hovered = hover_pos == Some((bx, header_y));
-                let style = if is_hovered {
-                    let (hover_bg, hover_fg) = match action {
-                        Btn::Close => (theme.error.to_ratatui(), contrast_fg),
-                        Btn::Min => (theme.warning.to_ratatui(), contrast_fg),
-                        Btn::Max => (theme.accent.to_ratatui(), contrast_fg),
-                        Btn::DirectMode => (theme.accent_alt.to_ratatui(), contrast_fg),
+        {
+            let contrast_fg = theme.menu_selected_fg.to_ratatui();
+            // Buttons are laid out right-to-left from outer_right
+            for (i, btn) in wm_buttons.iter().enumerate() {
+                let bx = outer_right
+                    .saturating_sub(HEADER_BUTTON_GAP)
+                    .saturating_sub(HEADER_BUTTON_GAP * i as u16);
+                if let Some(cell) = buffer.cell_mut((bx, header_y)) {
+                    cell.set_symbol(btn.symbol);
+                    let stoplight_fg = match btn.action {
+                        TermWmAction::CloseWindow => theme.error.to_ratatui(),
+                        TermWmAction::MinimizeWindow => theme.warning.to_ratatui(),
+                        TermWmAction::MaximizeWindow => theme.accent.to_ratatui(),
+                        _ => theme.decorator_header_fg.to_ratatui(),
                     };
-                    Style::default()
-                        .bg(hover_bg)
-                        .fg(hover_fg)
-                        .add_modifier(Modifier::BOLD)
-                } else if matches!(action, Btn::DirectMode) && direct_mode && focused {
-                    Style::default()
-                        .bg(theme.decorator_header_fg.to_ratatui())
-                        .fg(theme.decorator_header_bg.to_ratatui())
-                } else {
-                    Style::default().bg(header_bg.to_ratatui()).fg(stoplight_fg)
-                };
-                cell.set_style(style);
+                    let is_hovered = hover_pos == Some((bx, header_y));
+                    let style = if is_hovered {
+                        let (hover_bg, hover_fg) = match btn.action {
+                            TermWmAction::CloseWindow => (theme.error.to_ratatui(), contrast_fg),
+                            TermWmAction::MinimizeWindow => {
+                                (theme.warning.to_ratatui(), contrast_fg)
+                            }
+                            TermWmAction::MaximizeWindow => {
+                                (theme.accent.to_ratatui(), contrast_fg)
+                            }
+                            _ => (theme.accent_alt.to_ratatui(), contrast_fg),
+                        };
+                        Style::default()
+                            .bg(hover_bg)
+                            .fg(hover_fg)
+                            .add_modifier(Modifier::BOLD)
+                    } else if matches!(btn.action, TermWmAction::ToggleDirectMode)
+                        && direct_mode
+                        && focused
+                    {
+                        Style::default()
+                            .bg(theme.decorator_header_fg.to_ratatui())
+                            .fg(theme.decorator_header_bg.to_ratatui())
+                    } else {
+                        Style::default().bg(header_bg.to_ratatui()).fg(stoplight_fg)
+                    };
+                    cell.set_style(style);
+                }
             }
         }
     }
 
     // Borders — rounded corners for floating windows
-    let (tl, tr, bl, br) = if floating {
-        ("╭", "╮", "╰", "╯")
-    } else {
-        ("┌", "┐", "└", "┘")
-    };
-    for x in outer_left..=outer_right {
-        if let Some(cell) = buffer.cell_mut((x, outer_top)) {
-            let sym = if x == outer_left {
-                tl
-            } else if x == outer_right {
-                tr
-            } else {
-                "─"
-            };
-            cell.set_symbol(sym);
-            cell.set_style(border_style);
+    if borders_enabled {
+        let (tl, tr, bl, br) = if floating {
+            ("╭", "╮", "╰", "╯")
+        } else {
+            ("┌", "┐", "└", "┘")
+        };
+        for x in outer_left..=outer_right {
+            if let Some(cell) = buffer.cell_mut((x, outer_top)) {
+                let sym = if x == outer_left {
+                    tl
+                } else if x == outer_right {
+                    tr
+                } else {
+                    "─"
+                };
+                cell.set_symbol(sym);
+                cell.set_style(border_style);
+            }
         }
-    }
-    for x in outer_left..=outer_right {
-        if let Some(cell) = buffer.cell_mut((x, outer_bottom)) {
-            let sym = if x == outer_left {
-                bl
-            } else if x == outer_right {
-                br
-            } else {
-                "─"
-            };
-            cell.set_symbol(sym);
-            cell.set_style(border_style);
+        for x in outer_left..=outer_right {
+            if let Some(cell) = buffer.cell_mut((x, outer_bottom)) {
+                let sym = if x == outer_left {
+                    bl
+                } else if x == outer_right {
+                    br
+                } else {
+                    "─"
+                };
+                cell.set_symbol(sym);
+                cell.set_style(border_style);
+            }
         }
-    }
-    for y in outer_top.saturating_add(TOP_BORDER_HEIGHT)..outer_bottom {
-        if let Some(cell) = buffer.cell_mut((outer_left, y)) {
-            cell.set_symbol("│");
-            cell.set_style(border_style);
-        }
-        if let Some(cell) = buffer.cell_mut((outer_right, y)) {
-            cell.set_symbol("│");
-            cell.set_style(border_style);
+        for y in outer_top.saturating_add(TOP_BORDER_HEIGHT)..outer_bottom {
+            if let Some(cell) = buffer.cell_mut((outer_left, y)) {
+                cell.set_symbol("│");
+                cell.set_style(border_style);
+            }
+            if let Some(cell) = buffer.cell_mut((outer_right, y)) {
+                cell.set_symbol("│");
+                cell.set_style(border_style);
+            }
         }
     }
 }
@@ -1527,7 +1621,33 @@ mod tests {
     use term_wm_core::app_context::AppContext;
     use term_wm_core::theme::NOIR;
     use term_wm_core::window::FloatRect;
+    use term_wm_core::window::WmButton;
     use term_wm_core::wm_config::WmConfig;
+
+    fn test_wm_buttons() -> Vec<WmButton> {
+        vec![
+            WmButton {
+                action: TermWmAction::CloseWindow,
+                label: "Close Window",
+                symbol: "X",
+            },
+            WmButton {
+                action: TermWmAction::MaximizeWindow,
+                label: "Maximize Window",
+                symbol: "▢",
+            },
+            WmButton {
+                action: TermWmAction::MinimizeWindow,
+                label: "Minimize Window",
+                symbol: "_",
+            },
+            WmButton {
+                action: TermWmAction::ToggleDirectMode,
+                label: "Toggle Direct Mode",
+                symbol: "D",
+            },
+        ]
+    }
 
     #[test]
     fn composite_window_skips_negative_dest_x() {
@@ -1573,6 +1693,9 @@ mod tests {
             direct_mode: false,
             hover_pos: None,
             theme: NOIR,
+            wm_buttons: test_wm_buttons(),
+            borders_enabled: true,
+            header_enabled: true,
         };
 
         let mut scratch = Buffer::empty(RatatuiRect {
@@ -1663,6 +1786,9 @@ mod tests {
             direct_mode: false,
             hover_pos: None,
             theme: NOIR,
+            wm_buttons: test_wm_buttons(),
+            borders_enabled: true,
+            header_enabled: true,
         };
 
         let mut scratch = Buffer::empty(RatatuiRect {

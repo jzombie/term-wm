@@ -70,6 +70,7 @@ pub struct WmConfig {
     pub chrome_enabled: bool,
     /// Support floating (draggable) windows alongside tiled windows.
     pub floating_windows_enabled: bool,
+    // TODO: Rename to `panels_enabled`
     /// Show the top/bottom status panel (window list, menu, indicators).
     pub panel_enabled: bool,
     /// Enable the WM command menu toggled by Escape.

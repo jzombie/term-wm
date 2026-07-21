@@ -116,15 +116,11 @@ impl WindowManager {
             } else {
                 super::clamp_rect(rect, self.managed_area)
             };
-            if area.width < 3 || area.height < 4 {
-                return Rect::default();
-            }
-            Rect {
-                x: area.x + 1,
-                y: area.y + 2,
-                width: area.width.saturating_sub(2),
-                height: area.height.saturating_sub(3),
-            }
+            crate::chrome::content_rect(
+                area,
+                self.window_borders_enabled(key),
+                self.window_header_enabled(key),
+            )
         } else {
             rect
         }
@@ -160,8 +156,17 @@ impl WindowManager {
     /// Update monocle mode state based on terminal width.
     /// Called during resize events to auto-activate/deactivate monocle mode.
     pub fn update_monocle_mode(&mut self, terminal_width: u16) {
+        let prev = self.is_monocle();
         if let Some(ref mut layout) = self.managed_layout {
             layout.update_monocle_state(terminal_width);
+        }
+        let curr = self.is_monocle();
+        if prev == curr {
+            return;
+        }
+        // Monocle state changed: turn borders off in monocle, on otherwise
+        for (_, window) in self.windows.iter_mut() {
+            window.borders_enabled = !curr;
         }
     }
 
@@ -171,6 +176,16 @@ impl WindowManager {
             .as_ref()
             .map(|l| l.is_monocle())
             .unwrap_or(false)
+    }
+
+    /// Whether the given window should render borders.
+    pub fn window_borders_enabled(&self, key: WindowKey) -> bool {
+        self.window(key).map(|w| w.borders_enabled).unwrap_or(false)
+    }
+
+    /// Whether the given window should render its header.
+    pub fn window_header_enabled(&self, key: WindowKey) -> bool {
+        self.window(key).map(|w| w.header_enabled).unwrap_or(false)
     }
 
     /// Handle mouse-click focus switching.
@@ -278,7 +293,15 @@ impl WindowManager {
         } else {
             false
         };
-        let bottom_h = if has_hints || panel_active { 1u16 } else { 0 };
+        let bottom_h = if self.is_monocle() {
+            // In monocle mode, panels only show when the command palette is
+            // open — rendered as overlays, never claiming permanent space.
+            0
+        } else if has_hints || panel_active {
+            1u16
+        } else {
+            0
+        };
         let (top_rect, after_top) = if let Some(p) =
             self.get_semantic_component_mut(super::layer_manager::ComponentTag::TopPanel)
         {

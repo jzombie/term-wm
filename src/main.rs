@@ -10,7 +10,7 @@ use term_wm::io::RenderTarget;
 use term_wm::runner::WindowManagerHost;
 use term_wm::term_wm_app::TermWmApp;
 use term_wm::unified_event_source::{UnifiedEvent, UnifiedEventSource};
-use term_wm::window::{WindowKey, wm_menu_items};
+use term_wm::window::WindowKey;
 use term_wm::wm_config::WmConfig;
 use term_wm::{
     PtyStatus, ScrollKeyMode, ScrollViewComponent, TerminalComponent, default_shell_command,
@@ -282,18 +282,9 @@ impl WindowManagerHost for App {
         use term_wm::actions::TermWmAction;
         use term_wm_sys_ui_components::wm_command_palette::WmCommandPaletteComponent;
         let wm = self.inner.wm();
-        let titles = wm.window_titles();
         let mut palette = WmCommandPaletteComponent::new();
         palette.show();
-        let items = wm_menu_items(
-            wm.mouse_capture_enabled(),
-            wm.clipboard_enabled(),
-            wm.window_selection_enabled(),
-            wm.window_count() > 0,
-            wm.is_monocle(),
-            &titles,
-            wm.focused_window(),
-        );
+        let items = wm.wm_menu_items();
         let supported = wm.supported_menu_actions();
         let items: Vec<_> = items
             .into_iter()

@@ -36,6 +36,10 @@ pub struct Window {
     /// Decoupled maximization state flag.  Set when the window is maximized,
     /// cleared when restored.  Must NOT be derived from geometry comparison.
     pub is_maximized: bool,
+    /// Render window borders (left, right, bottom, corners).
+    pub borders_enabled: bool,
+    /// Render window header (title bar, buttons).
+    pub header_enabled: bool,
     /// The renderable component. Every window has one.
     /// For chrome-only windows, use `NoopComponent`.
     pub component: Box<dyn Component<TermWmAction>>,
@@ -59,6 +63,8 @@ impl Window {
             direct_mode: false,
             is_system_window: false,
             is_maximized: false,
+            borders_enabled: true,
+            header_enabled: true,
             component,
             content_hitbox_id: HitboxId::new(),
             active_keyboard_focus: None,
