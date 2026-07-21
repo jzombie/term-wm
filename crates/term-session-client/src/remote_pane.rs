@@ -44,9 +44,9 @@ pub struct RemotePane {
     input_writer: InputWriter,
     cols: Cell<u16>,
     rows: Cell<u16>,
-    /// Raw PTY bytes forwarded from drain_pushes, to be written to stdout
-    /// by the session client.  The caller drains this each frame.
-    pub pending_output: Mutex<Vec<u8>>,
+    /// Raw PTY bytes accumulated between drain_pushes calls, returned to
+    /// the session client for forwarding to stdout.
+    pending_output: Vec<u8>,
 }
 
 impl RemotePane {
@@ -81,11 +81,12 @@ impl RemotePane {
             input_writer,
             cols: Cell::new(cols),
             rows: Cell::new(rows),
-            pending_output: Mutex::new(Vec::new()),
+            pending_output: Vec::new(),
         }
     }
 
-    pub fn drain_pushes(&mut self) {
+    pub fn drain_pushes(&mut self) -> Vec<u8> {
+        let mut output = Vec::new();
         loop {
             match self.push_rx.try_recv() {
                 Ok(data) => {
@@ -94,16 +95,13 @@ impl RemotePane {
                         let mut processor = self.processor.lock().unwrap();
                         processor.advance(&mut *term, &data);
                     }
-                    // Accumulate raw bytes for the forwarding output.
-                    if let Ok(mut buf) = self.pending_output.lock() {
-                        buf.extend_from_slice(&data);
-                    }
+                    output.extend_from_slice(&data);
                 }
                 Err(TryRecvError::Disconnected) => {
                     self.exited.set(true);
-                    break;
+                    return output;
                 }
-                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Empty) => return output,
             }
         }
     }

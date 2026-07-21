@@ -123,9 +123,10 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     );
 
     // Wait for initial output
+    let mut raw_bytes = Vec::new();
     for _ in 0..INITIAL_WAIT_ITERS {
-        pane.drain_pushes();
-        if !pane.pending_output.lock().unwrap_or_else(|e| e.into_inner()).is_empty() {
+        raw_bytes = pane.drain_pushes();
+        if !raw_bytes.is_empty() {
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -142,85 +143,41 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     let mut clipboard = Clipboard::new();
     let sigint = install_sigint_handler()?;
 
-    // Initial full screen render — write what we have, even if pending_output is empty
-    {
-        let raw_bytes = {
-            let mut buf = pane.pending_output.lock().unwrap_or_else(|e| e.into_inner());
-            let data = buf.clone();
-            buf.clear();
-            data
-        };
-        if !raw_bytes.is_empty() {
-            out.write_all(&raw_bytes)?;
-            out.flush()?;
-        } else {
-            // No raw bytes yet — render a snapshot so the display isn't blank.
-            let snap = pane.snapshot(term_cols, term_rows);
-            let mut lines: Vec<u8> = Vec::new();
-            for row_cells in &snap.cells {
-                for cell in row_cells {
-                    let mut buf = [0u8; 4];
-                    let s = cell.character.encode_utf8(&mut buf);
-                    lines.extend_from_slice(s.as_bytes());
-                }
-                lines.push(b'\r');
-                lines.push(b'\n');
+    // Initial full screen render
+    if !raw_bytes.is_empty() {
+        out.write_all(&raw_bytes)?;
+        out.flush()?;
+    } else {
+        let snap = pane.snapshot(term_cols, term_rows);
+        let mut lines: Vec<u8> = Vec::new();
+        for row_cells in &snap.cells {
+            for cell in row_cells {
+                let mut buf = [0u8; 4];
+                let s = cell.character.encode_utf8(&mut buf);
+                lines.extend_from_slice(s.as_bytes());
             }
-            out.write_all(&lines)?;
-            out.flush()?;
+            lines.push(b'\r');
+            lines.push(b'\n');
         }
+        out.write_all(&lines)?;
+        out.flush()?;
     }
-
-    let mut prev_content: Option<Vec<u8>> = None;
 
     loop {
         let frame_start = std::time::Instant::now();
 
-        // Drain pushes from the server into the Term AND accumulate raw
-        // bytes in pending_output.
-        pane.drain_pushes();
+        // Drain pushes and get the raw bytes.
+        let raw = pane.drain_pushes();
 
-        // Write all accumulated raw PTY bytes to stdout — they already
-        // contain full ANSI formatting.
+        // Write accumulated raw PTY bytes to stdout (full ANSI formatting).
         let mut had_output = false;
-        let raw = {
-            let mut buf = pane.pending_output.lock().unwrap_or_else(|e| e.into_inner());
-            let data = buf.clone();
-            buf.clear();
-            data
-        };
         if !raw.is_empty() {
             had_output = true;
-            // Check for OSC 52 clipboard data in the raw stream.
             if let Some(text) = extract_osc52_text(&raw) {
                 let _ = clipboard.set(&text);
             }
             out.write_all(&raw)?;
             out.flush()?;
-        } else {
-            // No raw bytes this frame — re-render a plain-text snapshot
-            // so the display doesn't go blank between server bursts.
-            let snap = pane.snapshot(term_cols, term_rows);
-            let mut lines: Vec<u8> = Vec::new();
-            for row_cells in &snap.cells {
-                for cell in row_cells {
-                    let mut buf = [0u8; 4];
-                    let s = cell.character.encode_utf8(&mut buf);
-                    lines.extend_from_slice(s.as_bytes());
-                }
-                lines.push(b'\r');
-                lines.push(b'\n');
-            }
-            // Only write if the snapshot content differs from previous,
-            // or it's the first frame (prev_content is None).
-            if prev_content.as_deref() != Some(&lines) {
-                had_output = true;
-                let prefix: &[u8] = if prev_content.is_none() { b"\x1b[2J\x1b[H" } else { b"\x1b[H" };
-                out.write_all(prefix)?;
-                out.write_all(&lines)?;
-                out.flush()?;
-                prev_content = Some(lines);
-            }
         }
         if !client.is_connected() {
             return Err(io::Error::other("connection to session server lost"));
@@ -471,7 +428,6 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                         pixel_width: 0,
                         pixel_height: 0,
                     };
-                    prev_content = None;
                     let _ = pane.resize(size);
                     true
                 }
