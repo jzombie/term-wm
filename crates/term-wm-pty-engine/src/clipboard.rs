@@ -14,6 +14,8 @@
 use std::io::Write;
 
 use base64::Engine;
+#[cfg(unix)]
+use libc::{STDERR_FILENO, dup, dup2, open, close};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -54,6 +56,42 @@ pub fn set_via_osc52_with_writer(text: &str, writer: &mut dyn Write) -> Result<(
     writer.write_all(&seq)?;
     writer.flush()?;
     Ok(())
+}
+
+/// Suppress stderr output during a closure (macOS AppKit/NSPasteboard noise).
+/// On non-Unix platforms this is a no-op.
+#[cfg(unix)]
+struct StderrSuppressGuard {
+    saved_fd: libc::c_int,
+}
+
+#[cfg(unix)]
+impl StderrSuppressGuard {
+    fn new() -> Option<Self> {
+        unsafe {
+            let null_fd = open(
+                "/dev/null\0".as_ptr() as *const libc::c_char,
+                libc::O_WRONLY,
+            );
+            if null_fd < 0 {
+                return None;
+            }
+            let saved_fd = dup(STDERR_FILENO);
+            dup2(null_fd, STDERR_FILENO);
+            close(null_fd);
+            Some(StderrSuppressGuard { saved_fd })
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for StderrSuppressGuard {
+    fn drop(&mut self) {
+        unsafe {
+            dup2(self.saved_fd, STDERR_FILENO);
+            close(self.saved_fd);
+        }
+    }
 }
 
 /// A persistent clipboard handle backed by `arboard` (optional) and OSC 52.

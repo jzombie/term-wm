@@ -2845,6 +2845,7 @@ version = "0.8.20-alpha"
 dependencies = [
  "clap",
  "crossterm",
+ "libc",
  "muxio-core",
  "muxio-rpc-service",
  "muxio-rpc-service-caller",
