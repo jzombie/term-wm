@@ -13,7 +13,10 @@ use term_wm_core::runner::{WindowManagerHost, run_with_defaults};
 use term_wm_core::window::{WindowKey, WindowManager};
 use term_wm_core::wm_config::WmConfig;
 
+use term_wm_ui_components::confirm_overlay::ConfirmOverlayComponent;
 use term_wm_ui_facade::{LayerComponent, OverlayComponent};
+use term_wm_sys_ui_components::wm_command_palette::WmCommandPaletteComponent;
+use term_wm_sys_ui_components::wm_help_overlay::WmHelpOverlayComponent;
 
 use crate::components::AppRootComponent;
 
@@ -212,5 +215,40 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for T
             &mut self.engine,
             &mut self.draw_renderer,
         );
+    }
+
+    fn open_command_palette(&mut self) {
+        let mut palette = WmCommandPaletteComponent::new();
+        palette.show();
+        let items = self.wm.wm_menu_items();
+        let supported = self.wm.supported_menu_actions();
+        let items: Vec<_> = items
+            .into_iter()
+            .filter(|item| {
+                supported.contains(&item.action)
+                    || matches!(item.action, TermWmAction::FocusWindow(_))
+            })
+            .collect();
+        palette.set_items(items);
+        self.wm
+            .open_command_palette_overlay(OverlayComponent::CommandPalette(palette));
+    }
+
+    fn open_help_overlay(&mut self) {
+        let kb = self.wm.keybindings().clone();
+        let mut h = WmHelpOverlayComponent::new(self.wm.app_ctx(), kb);
+        h.show();
+        h.set_selection_enabled(self.wm.clipboard_enabled());
+        self.wm.open_help_overlay(OverlayComponent::Help(h));
+    }
+
+    fn open_exit_confirm(&mut self) {
+        let mut confirm = ConfirmOverlayComponent::new();
+        confirm.open(
+            "Exit App",
+            "Exit the application?\nUnsaved changes will be lost.",
+        );
+        self.wm
+            .open_exit_confirm_overlay(OverlayComponent::ExitConfirm(confirm));
     }
 }
