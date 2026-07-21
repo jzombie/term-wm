@@ -168,6 +168,12 @@ impl WindowManager {
         for (_, window) in self.windows.iter_mut() {
             window.borders_enabled = !curr;
         }
+        let msg = if curr {
+            "Monocle mode activated"
+        } else {
+            "Monocle mode deactivated"
+        };
+        self.push_notification(msg, std::time::Duration::from_secs(3));
     }
 
     /// Check if monocle mode is active.
