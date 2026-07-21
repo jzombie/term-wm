@@ -13,10 +13,10 @@ use term_wm_core::runner::{WindowManagerHost, run_with_defaults};
 use term_wm_core::window::{WindowKey, WindowManager};
 use term_wm_core::wm_config::WmConfig;
 
-use term_wm_ui_components::confirm_overlay::ConfirmOverlayComponent;
-use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 use term_wm_sys_ui_components::wm_command_palette::WmCommandPaletteComponent;
 use term_wm_sys_ui_components::wm_help_overlay::WmHelpOverlayComponent;
+use term_wm_ui_components::confirm_overlay::ConfirmOverlayComponent;
+use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 
 use crate::components::AppRootComponent;
 
