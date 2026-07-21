@@ -661,14 +661,14 @@ mod tests {
         let empty: Vec<WindowKey> = vec![];
         assert!(auto_layout_for_windows(&empty).is_none());
 
-        let mut wm = crate::window::WindowManager::with_config(
+        let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let key = wm.create_window(Box::new(crate::components::NoopComponent));
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         let one = vec![key];
         let layout = auto_layout_for_windows(&one).unwrap();
         assert!(matches!(layout.root(), crate::layout::LayoutNode::Leaf(_)));
@@ -908,7 +908,7 @@ mod tests {
     // ── WindowDrawState ──────────────────────────────────────────────
 
     fn make_keys(n: usize) -> Vec<WindowKey> {
-        let mut wm = crate::window::WindowManager::with_config(
+        let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
@@ -916,7 +916,7 @@ mod tests {
             std::collections::HashMap::new(),
         );
         (0..n)
-            .map(|_| wm.create_window(Box::new(crate::components::NoopComponent)))
+            .map(|_| wm.create_window(TestComponent::Noop(crate::components::NoopComponent)))
             .collect()
     }
 
@@ -965,15 +965,15 @@ mod tests {
 
     #[test]
     fn auto_layout_two_windows_creates_split() {
-        let mut wm = crate::window::WindowManager::with_config(
+        let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let k1 = wm.create_window(Box::new(crate::components::NoopComponent));
-        let k2 = wm.create_window(Box::new(crate::components::NoopComponent));
+        let k1 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k2 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         let layout = auto_layout_for_windows(&[k1, k2]).unwrap();
         let node = layout.root();
         match node {
@@ -987,16 +987,16 @@ mod tests {
 
     #[test]
     fn auto_layout_three_windows_all_present() {
-        let mut wm = crate::window::WindowManager::with_config(
+        let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let k1 = wm.create_window(Box::new(crate::components::NoopComponent));
-        let k2 = wm.create_window(Box::new(crate::components::NoopComponent));
-        let k3 = wm.create_window(Box::new(crate::components::NoopComponent));
+        let k1 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k2 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k3 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         let layout = auto_layout_for_windows(&[k1, k2, k3]).unwrap();
         let node = layout.root();
         assert!(node.subtree_any(|id| id == k1));
@@ -1006,7 +1006,7 @@ mod tests {
 
     #[test]
     fn auto_layout_multiple_windows_uses_all() {
-        let mut wm = crate::window::WindowManager::with_config(
+        let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
@@ -1015,7 +1015,7 @@ mod tests {
         );
         // Use 4 windows — this reliably works within 80x24 default area
         let keys: Vec<WindowKey> = (0..4)
-            .map(|_| wm.create_window(Box::new(crate::components::NoopComponent)))
+            .map(|_| wm.create_window(TestComponent::Noop(crate::components::NoopComponent)))
             .collect();
         let layout = auto_layout_for_windows(&keys).unwrap();
         let node = layout.root();
