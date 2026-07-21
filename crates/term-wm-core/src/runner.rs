@@ -351,6 +351,18 @@ where
                     return flush_state_changes(app, ControlFlow::Continue, false);
                 }
 
+                // In tab outline mode, any non-focus key closes the palette immediately.
+                if app.wm().is_tab_outline_active()
+                    && app.wm().command_palette_visible()
+                    && let Event::Key(key) = &evt
+                    && !app.wm().keybindings().matches(TermWmAction::FocusNext, key)
+                    && !app.wm().keybindings().matches(TermWmAction::FocusPrev, key)
+                {
+                    app.wm().close_command_palette();
+                    update_selection_snapshot(app);
+                    return flush_state_changes(app, ControlFlow::Continue, false);
+                }
+
                 // Command palette absolute event barrier (same pattern as help overlay)
                 if app.wm().command_palette_visible() {
                     if let Some(action) = app.wm().handle_command_palette_event(&evt) {
