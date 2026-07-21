@@ -1506,31 +1506,23 @@ mod tests {
         let mut old = vt100::Parser::new(24, 30, 100);
         old.process(&history);
         let old_text = old.screen().contents();
-        let old_pct_count = old_text.matches('%').count();
 
         // ── NEW: process at 80 cols, then set_size to 30 ──
         let mut new = vt100::Parser::new(24, 80, 100);
         new.process(&history);
         new.screen_mut().set_size(24, 30);
         let new_text = new.screen().contents();
-        let new_pct_count = new_text.matches('%').count();
 
-        // At 80 cols, each line occupies its own row.  set_size truncates
-        // each row to 30 cols — all 5 lines remain separate.  History-replay
-        // processes cursor positioning at 30 cols where each line wraps to
-        // ~3 rows, so absolute row references like \x1b[2;1H land inside
-        // wrapped continuations, jamming content together.
-        eprintln!("OLD (history-replay): {old_pct_count} `%` signs\n{old_text}");
-        eprintln!("NEW (set_size): {new_pct_count} `%` signs\n{new_text}");
-
-        // set_size should preserve the 5 distinct rows.  History-replay
-        // collapses them (the corruption).
-        assert!(
-            new_text.lines().count() >= old_text.lines().count(),
-            "set_size should preserve at least as many lines as history-replay \
-             ({new_lines} vs {old_lines})",
-            new_lines = new_text.lines().count(),
-            old_lines = old_text.lines().count(),
+        // History-replay re-interprets cursor positioning at 30 cols where
+        // each line wraps to ~3 rows.  Absolute references like \x1b[2;1H
+        // land inside wrapped continuations, jamming all 5 lines into 1 row.
+        assert_eq!(
+            old_text.lines().count(), 1,
+            "history-replay must collapse all lines into one row"
+        );
+        assert_eq!(
+            new_text.lines().count(), 5,
+            "set_size must preserve 5 separate rows"
         );
     }
 }
