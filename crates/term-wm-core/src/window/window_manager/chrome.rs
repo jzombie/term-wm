@@ -1,10 +1,10 @@
 use super::WindowManager;
 use crate::actions::TermWmAction;
-use crate::components::Component;
+use crate::components::{Component, Overlay, WmComponent};
 use crate::window::WindowKey;
 use crate::window::entry::WindowState;
 
-impl<C: Component<TermWmAction>> WindowManager<C> {
+impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> WindowManager<C, L, O> {
     pub fn minimize_window(&mut self, key: WindowKey) {
         self.transition_window(key, WindowState::Iconic);
     }

@@ -1,6 +1,6 @@
 use crate::Rect;
 use crate::actions::TermWmAction;
-use crate::components::Component;
+use crate::components::{Component, Overlay, WmComponent};
 use crate::events::{Event, MouseEvent};
 
 use super::WindowManager;
@@ -8,7 +8,7 @@ use crate::keybindings::ActionLayer;
 use crate::layout::{LayoutNode, LayoutPlan, RegionMap, SplitHandle, TilingLayout};
 use crate::window::{FloatRectSpec, WindowKey, WindowState};
 
-impl<C: Component<TermWmAction>> WindowManager<C> {
+impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> WindowManager<C, L, O> {
     pub fn scroll(&self, key: WindowKey) -> super::ScrollState {
         self.scroll.get(&key).copied().unwrap_or_default()
     }

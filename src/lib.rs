@@ -17,15 +17,15 @@ use term_wm_console::draw_plan_renderer::{
     render_panels, render_resize_outline,
 };
 use term_wm_core::actions::TermWmAction;
-use term_wm_core::components::Component;
+use term_wm_core::components::{Component, Overlay, WmComponent};
 use term_wm_core::hitbox_registry::{ComponentOwner, HitboxId, HitboxRegistry};
 use term_wm_core::window::{WindowManager, WindowSurface};
 
 /// Default rendering implementation for the window manager.
 /// Shared by all apps so they don't need to reimplement rendering.
-pub fn render_app<C: Component<TermWmAction>>(
+pub fn render_app<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>>(
     backend: &mut dyn term_wm_render::RenderBackend,
-    wm: &mut WindowManager<C>,
+    wm: &mut WindowManager<C, L, O>,
     engine: &mut term_wm_core::engine::CoreEngine,
     renderer: &mut DrawPlanRenderer,
 ) {

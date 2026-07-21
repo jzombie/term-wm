@@ -1,11 +1,10 @@
-use crate::components::Component;
+use crate::components::{Component, Overlay, WmComponent};
 use crate::events::Event;
 
 use super::WindowManager;
 use crate::actions::{ConfirmAction, EventResult, TermWmAction};
-use crate::components::Overlay;
 
-impl<C: Component<TermWmAction>> WindowManager<C> {
+impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> WindowManager<C, L, O> {
     pub fn close_exit_confirm(&mut self) {
         if let Some(key) = self.exit_confirm_key.take() {
             self.overlays.remove(key);
@@ -76,9 +75,9 @@ impl<C: Component<TermWmAction>> WindowManager<C> {
         if let Event::Mouse(mouse) = event {
             self.hover = Some((mouse.column, mouse.row));
         }
-        let comp = self.overlays.get_mut(self.exit_confirm_key?)?;
-        let overlay: &mut dyn Overlay<TermWmAction> = &mut **comp;
-        overlay.handle_confirm_event(event)
+        self.overlays
+            .get_mut(self.exit_confirm_key?)?
+            .handle_confirm_event(event)
     }
 
     pub fn command_palette_visible(&self) -> bool {

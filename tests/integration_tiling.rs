@@ -30,7 +30,7 @@ fn area_lr() -> LayoutRect {
 fn wm_with_two_windows() -> (WindowManager<NoopComponent>, [WindowKey; 2]) {
     let mut config = WmConfig::standalone();
     config.chrome_enabled = false;
-    let mut wm = WindowManager::with_config(
+    let mut wm: WindowManager<NoopComponent> = WindowManager::with_config(
         config,
         Arc::new(AppContext::new("test", "0.0.0")),
         None,
@@ -457,7 +457,7 @@ mod spatial_isolation {
     fn snap_right_preserves_left_sibling() {
         let mut config = WmConfig::standalone();
         config.chrome_enabled = false;
-        let mut wm = WindowManager::with_config(
+        let mut wm: WindowManager<NoopComponent> = WindowManager::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -1220,7 +1220,7 @@ mod drag_snap_pipeline {
     fn tile_single_window_on_empty_workspace_occupies_full_screen() {
         let mut config = WmConfig::standalone();
         config.chrome_enabled = false;
-        let mut wm = WindowManager::with_config(
+        let mut wm: WindowManager<NoopComponent> = WindowManager::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
@@ -1672,7 +1672,7 @@ mod floating_tiled_separation {
     fn multiple_floating_stacked_correctly() {
         let mut config = WmConfig::standalone();
         config.chrome_enabled = false;
-        let mut wm = WindowManager::with_config(
+        let mut wm: WindowManager<NoopComponent> = WindowManager::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,

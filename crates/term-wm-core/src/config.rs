@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::actions::TermWmAction;
 use crate::app_context::AppContext;
 use crate::components::Component;
+use crate::components::Overlay;
 use crate::components::WmComponent;
 use crate::keybindings::KeyBindings;
 use crate::theme::Theme;
@@ -31,16 +32,16 @@ impl std::error::Error for ConfigError {}
 /// is whether it boots with default system UI (inject components via
 /// `.top_panel()` / `.bottom_panel()` / `.command_menu()`) or as a
 /// blank canvas (`.bare()` with no chrome).
-pub struct AppBuilder {
+pub struct AppBuilder<L: WmComponent> {
     config: WmConfig,
     app_ctx: Option<Arc<AppContext>>,
-    top_panel: Option<Box<dyn WmComponent>>,
-    bottom_panel: Option<Box<dyn WmComponent>>,
-    fab_component: Option<Box<dyn WmComponent>>,
+    top_panel: Option<L>,
+    bottom_panel: Option<L>,
+    fab_component: Option<L>,
     supported_menu_actions: Option<Vec<TermWmAction>>,
 }
 
-impl AppBuilder {
+impl<L: WmComponent> AppBuilder<L> {
     /// Blank canvas — full standalone config, no chrome injected.
     /// Use `.config(WmConfig::minimal())` for a minimal preset.
     pub fn bare() -> Self {
@@ -79,17 +80,17 @@ impl AppBuilder {
         self
     }
 
-    pub fn top_panel(mut self, panel: Box<dyn WmComponent>) -> Self {
+    pub fn top_panel(mut self, panel: L) -> Self {
         self.top_panel = Some(panel);
         self
     }
 
-    pub fn bottom_panel(mut self, panel: Box<dyn WmComponent>) -> Self {
+    pub fn bottom_panel(mut self, panel: L) -> Self {
         self.bottom_panel = Some(panel);
         self
     }
 
-    pub fn fab(mut self, fab: Box<dyn WmComponent>) -> Self {
+    pub fn fab(mut self, fab: L) -> Self {
         self.fab_component = Some(fab);
         self
     }
@@ -120,12 +121,14 @@ impl AppBuilder {
     }
 
     /// Build a [`WindowManager`] from the accumulated configuration.
-    pub fn build<C: Component<TermWmAction>>(self) -> Result<WindowManager<C>, ConfigError> {
+    pub fn build<C: Component<TermWmAction>, O: Overlay<TermWmAction>>(
+        self,
+    ) -> Result<WindowManager<C, L, O>, ConfigError> {
         use crate::window::{ComponentTag, LayerManager, ZPlane};
         use std::collections::HashMap;
 
         let app_ctx = self.app_ctx.ok_or(ConfigError::MissingAppContext)?;
-        let mut layer_manager = LayerManager::new();
+        let mut layer_manager = LayerManager::<L>::new();
         let mut semantic_registry = HashMap::new();
 
         if let Some(comp) = self.top_panel {
