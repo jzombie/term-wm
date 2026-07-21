@@ -660,13 +660,12 @@ fn resolve_cell_color(color: &Color, palette: &Colors) -> CellColor {
         }),
         Color::Indexed(idx) => CellColor::Indexed(*idx),
         Color::Named(named) => {
-            // NamedColor indices below 16 are the standard ANSI colors.
             let idx = *named as usize;
-            if let Some(pal_rgb) = palette[idx].as_ref() {
-                CellColor::Rgb(RgbColor { r: pal_rgb.r, g: pal_rgb.g, b: pal_rgb.b })
-            } else if idx < 16 {
+            if idx < 256 {
+                // Pass through to the host terminal's palette.
                 CellColor::Indexed(idx as u8)
             } else {
+                // Foreground (256), Background (257), Cursor (258), etc.
                 CellColor::Default
             }
         }

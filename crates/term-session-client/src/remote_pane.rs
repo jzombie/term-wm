@@ -280,8 +280,9 @@ fn resolve_color(
         Color::Spec(rgb) => CellColor::Rgb(RgbColor { r: rgb.r, g: rgb.g, b: rgb.b }),
         Color::Indexed(idx) => CellColor::Indexed(*idx),
         Color::Named(named) => {
-            if let Some(p) = palette[*named].as_ref() {
-                CellColor::Rgb(RgbColor { r: p.r, g: p.g, b: p.b })
+            let idx = *named as usize;
+            if idx < 256 {
+                CellColor::Indexed(idx as u8)
             } else {
                 CellColor::Default
             }
