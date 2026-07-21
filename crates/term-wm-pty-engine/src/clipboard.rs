@@ -15,7 +15,7 @@ use std::io::Write;
 
 use base64::Engine;
 #[cfg(unix)]
-use libc::{STDERR_FILENO, dup, dup2, open, close};
+use libc::{STDERR_FILENO, close, dup, dup2, open};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
