@@ -188,7 +188,7 @@ impl Pane for RemotePane {
         };
 
         let display_offset = grid.display_offset();
-        let start_line = -(display_offset as i32) - 1;
+        let start_line = -(display_offset as i32);
         let mut cells = Vec::with_capacity(rows as usize);
         for i in 0..rows {
             let row = &grid[Line(start_line + i as i32)];
