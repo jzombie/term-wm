@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::collections::VecDeque;
 
+use term_wm_core::Rect;
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::app_context::AppContext;
 use term_wm_core::component_context::ComponentContext;
@@ -8,14 +9,13 @@ use term_wm_core::components::{Component, NoopComponent, SelectionStatus};
 use term_wm_core::events::Event;
 use term_wm_core::hitbox_registry::HitboxId;
 use term_wm_core::window::WindowKey;
-use term_wm_layout_engine::LayoutRect;
 use term_wm_render::RenderBackend;
 use term_wm_ui_components::scroll_view::ScrollViewComponent;
 use term_wm_ui_components::terminal::TerminalComponent;
 
-use crate::wm_debug_log::WmDebugLogComponent;
-use crate::wm_session_manager::WmSessionManagerComponent;
-use crate::wm_system_panel::WmSystemPanelComponent;
+use term_wm_sys_ui_components::wm_debug_log::WmDebugLogComponent;
+use term_wm_sys_ui_components::wm_session_manager::WmSessionManagerComponent;
+use term_wm_sys_ui_components::wm_system_panel::WmSystemPanelComponent;
 
 pub enum CoreWmComponent {
     Terminal(ScrollViewComponent<TerminalComponent>),
@@ -182,7 +182,7 @@ impl Component<TermWmAction> for CoreWmComponent {
     fn render(
         &mut self,
         backend: &mut dyn RenderBackend,
-        area: LayoutRect,
+        area: Rect,
         ctx: &ComponentContext,
         registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {

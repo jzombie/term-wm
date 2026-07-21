@@ -25,6 +25,7 @@ members = [
     "crates/term-wm-render",
     "crates/term-wm-sys-ui-components",
     "crates/term-wm-ui-components",
+    "crates/term-wm-ui-facade",
 ]
 resolver = "2"
 
@@ -79,6 +80,7 @@ term-wm-pty-engine = { path = "crates/term-wm-pty-engine", version = "0.8.20-alp
 term-wm-render = { path = "crates/term-wm-render", version = "0.8.20-alpha" }
 term-wm-sys-ui-components = { path = "crates/term-wm-sys-ui-components", version = "0.8.20-alpha" }
 term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.8.20-alpha" }
+term-wm-ui-facade = { path = "crates/term-wm-ui-facade", version = "0.8.20-alpha" }
 textwrap = "0.16.2"
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["full"] }
@@ -109,6 +111,7 @@ term-wm-layout-engine = { workspace = true }
 term-wm-render = { workspace = true }
 term-wm-sys-ui-components = { workspace = true, optional = true }
 term-wm-ui-components = { workspace = true }
+term-wm-ui-facade = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 webbrowser = { workspace = true }
