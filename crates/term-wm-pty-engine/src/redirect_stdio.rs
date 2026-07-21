@@ -6,6 +6,8 @@
 //! through background threads and `tracing`.
 
 use std::io::BufRead;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
 
 /// RAII guard that temporarily redirects stderr to the null device.
 ///
@@ -55,7 +57,7 @@ pub struct StderrSuppressGuard {
 #[cfg(windows)]
 impl StderrSuppressGuard {
     pub fn new() -> Option<Self> {
-        extern "system" {
+        unsafe extern "system" {
             fn GetStdHandle(nStdHandle: u32) -> isize;
             fn SetStdHandle(nStdHandle: u32, hHandle: isize) -> i32;
         }
@@ -83,7 +85,7 @@ impl StderrSuppressGuard {
 #[cfg(windows)]
 impl Drop for StderrSuppressGuard {
     fn drop(&mut self) {
-        extern "system" {
+        unsafe extern "system" {
             fn SetStdHandle(nStdHandle: u32, hHandle: isize) -> i32;
         }
         const STD_ERROR_HANDLE: u32 = 0xFFFFFFF4u32;
@@ -163,9 +165,9 @@ pub fn redirect_fd_to_tracing(target_fd: libc::c_int, is_stderr: bool) -> std::i
 /// Windows implementation — same semantics as the Unix version.
 #[cfg(windows)]
 pub fn redirect_fd_to_tracing(target_fd: i32, is_stderr: bool) -> std::io::Result<()> {
-    use std::os::windows::io::{FromRawHandle, AsRawHandle};
+    use std::os::windows::io::FromRawHandle;
 
-    extern "system" {
+    unsafe extern "system" {
         fn GetStdHandle(nStdHandle: u32) -> isize;
         fn SetStdHandle(nStdHandle: u32, hHandle: isize) -> i32;
         fn CreatePipe(
