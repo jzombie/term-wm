@@ -4,7 +4,6 @@ use std::sync::{Arc, OnceLock};
 use clap::Parser;
 use crossbeam_channel::Sender;
 
-use term_wm::actions::TermWmAction;
 use term_wm::app_context::AppContext;
 use term_wm::components::AppRootComponent;
 use term_wm::config::AppBuilder;
@@ -274,43 +273,15 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
     }
 
     fn open_help_overlay(&mut self) {
-        use term_wm_sys_ui_components::wm_help_overlay::WmHelpOverlayComponent;
-        let wm = self.inner.wm();
-        let kb = wm.keybindings().clone();
-        let mut h = WmHelpOverlayComponent::new(wm.app_ctx(), kb);
-        h.show();
-        h.set_selection_enabled(wm.clipboard_enabled());
-        wm.open_help_overlay(OverlayComponent::Help(h));
+        self.inner.open_help_overlay();
     }
 
     fn open_exit_confirm(&mut self) {
-        use term_wm_ui_components::confirm_overlay::ConfirmOverlayComponent;
-        let mut confirm = ConfirmOverlayComponent::new();
-        confirm.open(
-            "Exit App",
-            "Exit the application?\nUnsaved changes will be lost.",
-        );
-        self.inner
-            .wm()
-            .open_exit_confirm_overlay(OverlayComponent::ExitConfirm(confirm));
+        self.inner.open_exit_confirm();
     }
 
     fn open_command_palette(&mut self) {
-        use term_wm_sys_ui_components::wm_command_palette::WmCommandPaletteComponent;
-        let wm = self.inner.wm();
-        let mut palette = WmCommandPaletteComponent::new();
-        palette.show();
-        let items = wm.wm_menu_items();
-        let supported = wm.supported_menu_actions();
-        let items: Vec<_> = items
-            .into_iter()
-            .filter(|item| {
-                supported.contains(&item.action)
-                    || matches!(item.action, TermWmAction::FocusWindow(_))
-            })
-            .collect();
-        palette.set_items(items);
-        wm.open_command_palette_overlay(OverlayComponent::CommandPalette(palette));
+        self.inner.open_command_palette();
     }
 
     fn on_panic(&mut self) {
