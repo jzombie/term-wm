@@ -82,7 +82,6 @@ macro_rules! default_keybindings {
 impl Default for KeyBindings {
     fn default() -> Self {
         default_keybindings! {
-            Quit: [ (KeyCode::Char('q'), KeyModifiers { shift: false, control: true, alt: false }) ],
             CloseHelp: [ (KeyCode::Esc, KeyModifiers::NONE), (KeyCode::Enter, KeyModifiers::NONE), (KeyCode::Char('q'), KeyModifiers::NONE) ],
             FocusNext: [ (KeyCode::Tab, KeyModifiers::NONE) ],
             FocusPrev: [ (KeyCode::Tab, KeyModifiers { shift: true, control: false, alt: false }) ],
