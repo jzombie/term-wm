@@ -434,7 +434,7 @@ impl DrawPlanRenderer {
         msg: &str,
     ) {
         use ratatui::style::{Color, Modifier, Style};
-        use ratatui::widgets::{Block, Borders, Paragraph, Widget, Wrap};
+        use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Widget, Wrap};
 
         let Some(rb) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() else {
             return;
@@ -452,6 +452,7 @@ impl DrawPlanRenderer {
 
         let block = Block::default()
             .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(Color::White))
             .style(Style::default().bg(Color::Reset).fg(Color::White));
         Paragraph::new(msg)
