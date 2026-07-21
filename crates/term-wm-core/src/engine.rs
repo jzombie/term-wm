@@ -134,7 +134,8 @@ fn generate_notification_regions(plan: &mut DrawPlan, wm: &WindowManager) {
     use textwrap::Options;
 
     const TOAST_W: u16 = 40;
-    const MARGIN: u16 = 2;
+    const H_MARGIN: u16 = 2;
+    const Y_OFFSET: u16 = 0;
     const GAP: u16 = 1;
 
     let managed = wm.managed_area();
@@ -144,15 +145,15 @@ fn generate_notification_regions(plan: &mut DrawPlan, wm: &WindowManager) {
     }
 
     // Circuit breaker — terminal too narrow; skip notification layers only.
-    if managed.width <= MARGIN.saturating_mul(2).saturating_add(2) {
+    if managed.width <= H_MARGIN.saturating_mul(2).saturating_add(2) {
         return;
     }
 
-    let actual_w = TOAST_W.min(managed.width.saturating_sub(MARGIN.saturating_mul(2)));
+    let actual_w = TOAST_W.min(managed.width.saturating_sub(H_MARGIN.saturating_mul(2)));
     let inner_w = actual_w.saturating_sub(2) as usize;
     let wrap_opts = Options::new(inner_w);
 
-    let mut y_offset: u16 = MARGIN;
+    let mut y_offset: u16 = Y_OFFSET;
 
     for notification in wm.notifications().renderable().rev() {
         let lines = textwrap::wrap(&notification.message, &wrap_opts);
@@ -160,7 +161,7 @@ fn generate_notification_regions(plan: &mut DrawPlan, wm: &WindowManager) {
         let h = h.min(
             managed
                 .height
-                .saturating_sub(y_offset.saturating_add(MARGIN)),
+                .saturating_sub(y_offset.saturating_add(H_MARGIN)),
         );
         if h < 3 {
             break;
@@ -170,7 +171,7 @@ fn generate_notification_regions(plan: &mut DrawPlan, wm: &WindowManager) {
             .x
             .saturating_add(managed.width as i32)
             .saturating_sub(actual_w as i32)
-            .saturating_sub(MARGIN as i32);
+            .saturating_sub(H_MARGIN as i32);
 
         plan.push(RenderRegion {
             bounds: LayoutRect {
