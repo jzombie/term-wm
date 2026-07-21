@@ -15,7 +15,7 @@ use term_wm::io::{EventSource, RenderTarget};
 use term_wm::runner::{WindowManagerHost, run_event_loop};
 use term_wm::task_scheduler::TaskScheduler;
 use term_wm::window::{WindowKey, WindowManager};
-use term_wm_core::components::NoopComponent;
+use term_wm_core::components::{NoopComponent, NoopOverlay, NoopWmComponent};
 
 #[derive(Debug)]
 struct TestOutput {

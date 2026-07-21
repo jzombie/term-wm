@@ -1880,7 +1880,7 @@ mod tests {
     fn mouse_selection_via_dispatch_focused_event() {
         use std::sync::Arc;
         use term_wm_core::app_context::AppContext;
-        use term_wm_core::components::Component;
+        use term_wm_core::components::{Component, NoopOverlay, NoopWmComponent};
         use term_wm_core::config::AppBuilder;
         use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
@@ -1889,7 +1889,7 @@ mod tests {
         sv.set_selection_enabled(true);
         sv.set_keyboard_mode(crate::scroll_view::ScrollKeyMode::PaginationOnly);
 
-        let mut wm = AppBuilder::bare()
+        let mut wm: term_wm_core::window::WindowManager<crate::scroll_view::ScrollViewComponent<TerminalComponent>, NoopWmComponent, NoopOverlay> = AppBuilder::<NoopWmComponent>::bare()
             .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
             .build()
             .expect("test build");
@@ -1905,7 +1905,7 @@ mod tests {
         let layout =
             term_wm_core::layout::TilingLayout::new(term_wm_core::layout::LayoutNode::leaf(key));
         wm.set_managed_layout(layout);
-        wm.register_managed_layout(LayoutRect {
+        wm.register_managed_layout(term_wm_layout_engine::LayoutRect {
             x: 0,
             y: 0,
             width: 80,
@@ -1973,7 +1973,7 @@ mod tests {
     fn mouse_selection_skipped_in_direct_mode_via_dispatch() {
         use std::sync::Arc;
         use term_wm_core::app_context::AppContext;
-        use term_wm_core::components::Component;
+        use term_wm_core::components::{Component, NoopOverlay, NoopWmComponent};
         use term_wm_core::config::AppBuilder;
         use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
@@ -1982,7 +1982,7 @@ mod tests {
         sv.set_selection_enabled(true);
         sv.set_keyboard_mode(crate::scroll_view::ScrollKeyMode::PaginationOnly);
 
-        let mut wm = AppBuilder::bare()
+        let mut wm: term_wm_core::window::WindowManager<crate::scroll_view::ScrollViewComponent<TerminalComponent>, NoopWmComponent, NoopOverlay> = AppBuilder::<NoopWmComponent>::bare()
             .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
             .build()
             .expect("test build");

@@ -21,7 +21,7 @@ use super::entry::{Window, WindowState};
 use crate::actions::{EventResult, SystemTask, TermWmAction};
 use crate::app_context::AppContext;
 use crate::components::{
-    Component, ComponentAction, ComponentContext, MenuItem, NoopOverlay, NoopWmComponent, Overlay, WmComponent,
+    Component, ComponentAction, ComponentContext, MenuItem, Overlay, WmComponent,
 };
 use crate::hitbox_registry::{ComponentOwner, HitboxRegistry};
 use crate::keybindings::KeyBindings;
@@ -2454,6 +2454,7 @@ mod tests {
     use crate::layout::{Constraint, Direction};
     use crate::window::test_component::{ActionRecorder, SelComponent, TestComponent};
     use std::collections::VecDeque;
+    use crate::components::{NoopOverlay, NoopWmComponent};
     use term_wm_layout_engine::LayoutRect;
 
     /// Test fixture: how far back to set `drag_last_event` to simulate
