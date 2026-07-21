@@ -276,8 +276,8 @@ pub trait Overlay<Msg>: Component<Msg> + std::any::Any {
     }
     /// Mark internal state as needing a rebuild (e.g. after a focus change).
     fn mark_dirty(&mut self) {}
-    /// Process a component-level action.
-    fn process_action(&mut self, _action: &ComponentAction) {}
+    /// Replace the overlay's menu items (e.g. on focus change).
+    fn set_menu_items(&mut self, _items: Vec<MenuItem<Msg>>) {}
 }
 
 #[derive(Debug, Clone)]

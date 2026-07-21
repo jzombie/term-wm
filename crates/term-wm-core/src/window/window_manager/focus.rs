@@ -76,7 +76,7 @@ impl WindowManager {
             .collect();
 
         if let Some(overlay) = self.overlays.get_mut(palette_key) {
-            overlay.process_action(&crate::components::ComponentAction::SetMenuItems(filtered));
+            overlay.set_menu_items(filtered);
         }
     }
 
