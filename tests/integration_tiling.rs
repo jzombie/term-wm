@@ -85,8 +85,6 @@ fn make_mouse(
     term_wm::events::core_event_to_wm(&event).expect("valid mouse event")
 }
 
-
-
 fn collect_leaf_ids(node: &LayoutNode<usize>) -> Vec<usize> {
     node.collect_leaves()
 }
@@ -598,13 +596,23 @@ mod drag_snap_pipeline {
     use term_wm_console::draw_plan_renderer::DrawPlanRenderer;
     use term_wm_core::engine::CoreEngine;
 
-    fn setup() -> (WindowManager<NoopComponent>, CoreEngine, DrawPlanRenderer, [WindowKey; 2]) {
+    fn setup() -> (
+        WindowManager<NoopComponent>,
+        CoreEngine,
+        DrawPlanRenderer,
+        [WindowKey; 2],
+    ) {
         let (wm, keys) = wm_with_two_windows();
         (wm, CoreEngine::new(), DrawPlanRenderer::new(), keys)
     }
 
     /// Like `setup` but with `resizable: true` so split handles are produced.
-    fn setup_with_resizable() -> (WindowManager<NoopComponent>, CoreEngine, DrawPlanRenderer, [WindowKey; 2]) {
+    fn setup_with_resizable() -> (
+        WindowManager<NoopComponent>,
+        CoreEngine,
+        DrawPlanRenderer,
+        [WindowKey; 2],
+    ) {
         let mut config = WmConfig::standalone();
         config.chrome_enabled = false;
         let mut wm = WindowManager::<NoopComponent>::with_config(
@@ -1406,7 +1414,12 @@ mod floating_tiled_separation {
         }
     }
 
-    fn setup() -> (WindowManager<NoopComponent>, CoreEngine, DrawPlanRenderer, [WindowKey; 2]) {
+    fn setup() -> (
+        WindowManager<NoopComponent>,
+        CoreEngine,
+        DrawPlanRenderer,
+        [WindowKey; 2],
+    ) {
         let (wm, keys) = wm_with_two_windows();
         (wm, CoreEngine::new(), DrawPlanRenderer::new(), keys)
     }
