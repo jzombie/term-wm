@@ -193,13 +193,21 @@ pub fn render_app(
     renderer.put_scratch(scratch_buf);
 
     // Render empty state if no mapped windows — clickable link opens command palette
-    const EMPTY_MSG: &str = "Open Command Palette";
     if wm.mapped_windows().is_empty() {
         use ratatui::style::{Modifier, Style};
         use ratatui::widgets::Paragraph;
+        let empty_msg = wm
+            .keybindings()
+            .combos_for(term_wm_core::actions::TermWmAction::OpenCommandPalette)
+            .first()
+            .cloned()
+            .map_or_else(
+                || "No opened windows.".to_string(),
+                |hint| format!("Press {hint} to open Command Palette."),
+            );
         if let Some(rb) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() {
             let buf = &mut rb.buffer;
-            let msg_width = EMPTY_MSG.len() as u16;
+            let msg_width = empty_msg.len() as u16;
             let x = area.width.saturating_sub(msg_width) / 2;
             let y = area.height as i32 / 2;
             let text_area = ratatui::layout::Rect {
@@ -208,7 +216,7 @@ pub fn render_app(
                 width: msg_width,
                 height: 1,
             };
-            Paragraph::new(EMPTY_MSG)
+            Paragraph::new(empty_msg.as_str())
                 .style(
                     Style::default()
                         .fg(wm.config().theme.link_color.to_ratatui())
