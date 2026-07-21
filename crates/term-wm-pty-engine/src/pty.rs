@@ -580,9 +580,14 @@ impl Pty {
     }
 
     pub fn max_scrollback(&mut self) -> usize {
-        // alacritty_terminal doesn't expose max scrollback directly,
-        // but the Config::scrolling_history controls the grid size.
-        self.scrollback_len
+        self.screen();
+        let mut t = self.term.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = t.grid().display_offset();
+        t.scroll_display(Scroll::Top);
+        let max = t.grid().display_offset();
+        // Restore — delta is (saved - max), positive Scroll::Delta scrolls UP.
+        t.scroll_display(Scroll::Delta(saved as i32 - max as i32));
+        max
     }
 
     pub fn alternate_screen(&mut self) -> bool {
