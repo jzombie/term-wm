@@ -47,7 +47,7 @@ pub trait WindowManagerHost {
         false
     }
 
-    fn empty_window_message(&self) -> &str {
+    fn no_windows_message(&self) -> &str {
         "No windows"
     }
 

@@ -407,8 +407,8 @@ impl WindowManagerHost for App {
         }
     }
 
-    fn empty_window_message(&self) -> &str {
-        "all shells exited"
+    fn no_windows_message(&self) -> &str {
+        "All shells exited"
     }
 
     fn render(&mut self, backend: &mut dyn term_wm_render::RenderBackend) {

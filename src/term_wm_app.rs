@@ -214,11 +214,13 @@ impl TermWmApp {
 
     /// Render the window manager using the shared `render_app` implementation.
     pub fn render_app(&mut self, backend: &mut dyn term_wm_render::RenderBackend) {
+        let msg = self.no_windows_message().to_string();
         crate::render_app(
             backend,
             &mut self.wm,
             &mut self.engine,
             &mut self.draw_renderer,
+            &msg,
         );
     }
 }
@@ -232,16 +234,18 @@ impl WindowManagerHost for TermWmApp {
         self.should_quit
     }
 
-    fn empty_window_message(&self) -> &str {
+    fn no_windows_message(&self) -> &str {
         &self.empty_message
     }
 
     fn render(&mut self, backend: &mut dyn term_wm_render::RenderBackend) {
+        let msg = self.no_windows_message().to_string();
         crate::render_app(
             backend,
             &mut self.wm,
             &mut self.engine,
             &mut self.draw_renderer,
+            &msg,
         );
     }
 }
