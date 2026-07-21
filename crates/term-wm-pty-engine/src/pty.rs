@@ -458,9 +458,10 @@ impl Pty {
         let display_offset = grid.display_offset();
         let cursor = &t.grid().cursor;
 
-        // Clamp to actual terminal dimensions to prevent grid OOB panics.
-        let columns = columns.min(self.size.cols);
-        let rows = rows.min(self.size.rows);
+        // Clamp to actual Term grid dimensions (the reader thread may not
+        // have processed the latest resize yet, so self.size can be stale).
+        let columns = columns.min(t.columns() as u16);
+        let rows = rows.min(t.screen_lines() as u16);
 
         let default_fg = t.colors()[NamedColor::Foreground].as_ref().map(|r| RgbColor {
             r: r.r,
