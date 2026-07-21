@@ -1,10 +1,11 @@
+use crate::components::{Component, Overlay, WmComponent};
 use crate::events::{Event, MouseEventKind};
 
 use super::WindowManager;
 use crate::actions::{EventResult, TermWmAction};
 use crate::window::WindowKey;
 
-impl WindowManager {
+impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> WindowManager<C, L, O> {
     pub fn set_focus_order(&mut self, order: Vec<WindowKey>) {
         self.focus.set_order(order);
     }

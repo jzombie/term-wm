@@ -6,9 +6,10 @@ use term_wm_render::RenderTarget;
 use std::collections::VecDeque;
 
 use crate::actions::{ConfirmAction, EventResult, SystemTask, TermWmAction};
-#[cfg(test)]
 use crate::components::Component;
+use crate::components::Overlay;
 use crate::components::SelectionStatus;
+use crate::components::WmComponent;
 use crate::debug_event_flags;
 use crate::event_loop::{ControlFlow, EventLoop};
 use crate::events::core_event_to_wm;
@@ -18,8 +19,13 @@ use crate::layout::{LayoutNode, TilingLayout};
 use crate::task_scheduler::TaskScheduler;
 use crate::window::{WindowKey, WindowManager};
 
-pub trait WindowManagerHost {
-    fn wm(&mut self) -> &mut WindowManager;
+pub trait WindowManagerHost<
+    C: Component<TermWmAction>,
+    L: WmComponent = crate::components::NoopWmComponent,
+    O: Overlay<TermWmAction> = crate::components::NoopOverlay,
+>
+{
+    fn wm(&mut self) -> &mut WindowManager<C, L, O>;
     fn wm_new_window(&mut self) -> std::io::Result<()> {
         Ok(())
     }
@@ -60,7 +66,12 @@ pub trait WindowManagerHost {
     }
 }
 
-fn drain_action_queue<A: WindowManagerHost>(
+fn drain_action_queue<
+    C: Component<TermWmAction>,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+    A: WindowManagerHost<C, L, O>,
+>(
     app: &mut A,
     queue: &mut VecDeque<(WindowKey, TermWmAction)>,
 ) {
@@ -108,9 +119,12 @@ fn drain_action_queue<A: WindowManagerHost>(
     }
 }
 
-fn handle_focused_app_event<A>(event: &Event, app: &mut A) -> bool
+fn handle_focused_app_event<C, L, O, A>(event: &Event, app: &mut A) -> bool
 where
-    A: WindowManagerHost,
+    C: Component<TermWmAction>,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+    A: WindowManagerHost<C, L, O>,
 {
     // Clear hover state when the terminal loses focus so stale
     // hover highlights do not persist on menus or buttons.
@@ -194,8 +208,8 @@ where
 /// Prefer [`run_with_defaults`] for typical usage. Use this directly only when
 /// you need a custom draw closure or region mapping.
 #[allow(clippy::too_many_arguments)]
-pub fn run_event_loop<O, D, A, FDraw, FMap>(
-    output: &mut O,
+pub fn run_event_loop<C, L, Ov, Rt, D, A, FDraw, FMap>(
+    output: &mut Rt,
     driver: &mut D,
     app: &mut A,
     system_scheduler: TaskScheduler<SystemTask>,
@@ -203,9 +217,12 @@ pub fn run_event_loop<O, D, A, FDraw, FMap>(
     mut draw: FDraw,
 ) -> io::Result<()>
 where
-    O: RenderTarget,
+    C: Component<TermWmAction>,
+    L: WmComponent,
+    Ov: Overlay<TermWmAction>,
+    Rt: RenderTarget,
     D: EventSource,
-    A: WindowManagerHost,
+    A: WindowManagerHost<C, L, Ov>,
     FDraw: for<'frame> FnMut(&'frame mut dyn term_wm_render::RenderBackend, &mut A),
     FMap: Fn(WindowKey) -> WindowKey + Copy,
 {
@@ -519,11 +536,18 @@ where
 ///       └─ run_with_defaults(...)   // ← you are here
 ///           └─ run_event_loop(...)  // low-level: the actual loop
 /// ```
-pub fn run_with_defaults<O, D, A>(output: &mut O, driver: &mut D, app: &mut A) -> io::Result<()>
+pub fn run_with_defaults<C, L, Ov, Rt, D, A>(
+    output: &mut Rt,
+    driver: &mut D,
+    app: &mut A,
+) -> io::Result<()>
 where
-    O: RenderTarget,
+    C: Component<TermWmAction>,
+    L: WmComponent,
+    Ov: Overlay<TermWmAction>,
+    Rt: RenderTarget,
     D: EventSource,
-    A: WindowManagerHost,
+    A: WindowManagerHost<C, L, Ov>,
 {
     let system_scheduler = TaskScheduler::<SystemTask>::new();
     let system_handle = system_scheduler.handle();
@@ -553,9 +577,12 @@ fn selection_snapshot_from(
     }
 }
 
-fn update_selection_snapshot<A>(app: &mut A)
+fn update_selection_snapshot<C, L, O, A>(app: &mut A)
 where
-    A: WindowManagerHost,
+    C: Component<TermWmAction>,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+    A: WindowManagerHost<C, L, O>,
 {
     let was_dragging = app.wm().selection_dragging();
     let focus = app.wm().focused_window();
@@ -650,6 +677,7 @@ pub fn auto_layout_for_windows(windows: &[WindowKey]) -> Option<TilingLayout<Win
 mod tests {
     use super::*;
     use crate::events::{KeyCode, KeyEvent, KeyKind, KeyModifiers};
+    use crate::window::test_component::TestComponent;
     use term_wm_layout_engine::LayoutRect;
 
     #[test]
@@ -657,14 +685,14 @@ mod tests {
         let empty: Vec<WindowKey> = vec![];
         assert!(auto_layout_for_windows(&empty).is_none());
 
-        let mut wm = crate::window::WindowManager::with_config(
+        let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let key = wm.create_window(Box::new(crate::components::NoopComponent));
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         let one = vec![key];
         let layout = auto_layout_for_windows(&one).unwrap();
         assert!(matches!(layout.root(), crate::layout::LayoutNode::Leaf(_)));
@@ -675,22 +703,22 @@ mod tests {
         use crate::window::WindowManager;
 
         struct FakeApp {
-            wm: WindowManager,
+            wm: WindowManager<TestComponent>,
         }
-        impl WindowManagerHost for FakeApp {
-            fn wm(&mut self) -> &mut WindowManager {
+        impl WindowManagerHost<TestComponent> for FakeApp {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
                 &mut self.wm
             }
         }
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let key = wm.create_window(Box::new(crate::components::NoopComponent));
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.transition_window(key, crate::window::WindowState::Mapped);
 
         let mut app = FakeApp { wm };
@@ -707,49 +735,17 @@ mod tests {
     fn handle_focused_app_event_routes_key_to_window_component() {
         use crate::window::WindowManager;
 
-        struct KeyRecorder {
-            received_key: bool,
-        }
-        impl Component<TermWmAction> for KeyRecorder {
-            fn render(
-                &mut self,
-                _backend: &mut dyn term_wm_render::RenderBackend,
-                _area: LayoutRect,
-                _ctx: &crate::components::ComponentContext,
-                _registry: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-            fn handle_events(
-                &mut self,
-                event: &Event,
-                _ctx: &crate::components::ComponentContext,
-            ) -> crate::actions::EventResult<TermWmAction> {
-                if matches!(event, Event::Key(_)) {
-                    self.received_key = true;
-                }
-                crate::actions::EventResult::Consumed
-            }
-            fn update(
-                &mut self,
-                _action: TermWmAction,
-                _ctx: &crate::components::ComponentContext,
-                _queue: &mut VecDeque<(crate::window::WindowKey, TermWmAction)>,
-            ) {
-            }
-            fn destroy(&mut self) {}
-        }
-
         struct FakeApp {
-            wm: WindowManager,
+            wm: WindowManager<TestComponent>,
         }
-        impl WindowManagerHost for FakeApp {
-            fn wm(&mut self) -> &mut WindowManager {
+        impl WindowManagerHost<TestComponent> for FakeApp {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
                 &mut self.wm
             }
         }
 
         let mut app = FakeApp {
-            wm: WindowManager::with_config(
+            wm: WindowManager::<TestComponent>::with_config(
                 crate::wm_config::WmConfig::standalone(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
@@ -758,9 +754,9 @@ mod tests {
             ),
         };
         // Store the KeyRecorder directly in the WindowManager — no sidecar.
-        let key = app.wm.create_window(Box::new(KeyRecorder {
-            received_key: false,
-        }));
+        let key = app.wm.create_window(TestComponent::KeyRecorder(
+            crate::window::test_component::KeyRecorder { received_key: None },
+        ));
         app.wm
             .transition_window(key, crate::window::WindowState::Mapped);
         app.wm.regions.set(
@@ -785,65 +781,34 @@ mod tests {
             consumed,
             "handle_focused_app_event must route key to component"
         );
-        assert!(
-            app.wm
-                .component_for_key_mut(key)
-                .and_then(|c| {
-                    use crate::components::component_downcast_mut;
-                    component_downcast_mut::<KeyRecorder>(c).map(|r| r.received_key)
-                })
-                .unwrap_or(false),
-            "component must receive the key event"
-        );
+        match app
+            .wm
+            .component_for_key_mut(key)
+            .expect("component must exist")
+        {
+            TestComponent::KeyRecorder(recorder) => {
+                assert!(
+                    recorder.received_key.is_some(),
+                    "component must receive the key event"
+                );
+            }
+            _ => panic!("component must be KeyRecorder"),
+        }
     }
 
     #[test]
     fn handle_focused_app_event_with_direct_mode_still_routes() {
-        use crate::window::WindowManager;
-
-        struct KeyRecorder {
-            received_key: bool,
-        }
-        impl Component<TermWmAction> for KeyRecorder {
-            fn render(
-                &mut self,
-                _backend: &mut dyn term_wm_render::RenderBackend,
-                _area: LayoutRect,
-                _ctx: &crate::components::ComponentContext,
-                _registry: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-            fn handle_events(
-                &mut self,
-                event: &Event,
-                _ctx: &crate::components::ComponentContext,
-            ) -> crate::actions::EventResult<TermWmAction> {
-                if matches!(event, Event::Key(_)) {
-                    self.received_key = true;
-                }
-                crate::actions::EventResult::Consumed
-            }
-            fn update(
-                &mut self,
-                _action: TermWmAction,
-                _ctx: &crate::components::ComponentContext,
-                _queue: &mut VecDeque<(crate::window::WindowKey, TermWmAction)>,
-            ) {
-            }
-            fn destroy(&mut self) {}
-        }
-
         struct FakeApp {
-            wm: WindowManager,
+            wm: WindowManager<TestComponent>,
         }
-        impl WindowManagerHost for FakeApp {
-            fn wm(&mut self) -> &mut WindowManager {
+        impl WindowManagerHost<TestComponent> for FakeApp {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
                 &mut self.wm
             }
         }
 
         let mut app = FakeApp {
-            wm: WindowManager::with_config(
+            wm: WindowManager::<TestComponent>::with_config(
                 crate::wm_config::WmConfig::standalone(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
@@ -851,9 +816,9 @@ mod tests {
                 std::collections::HashMap::new(),
             ),
         };
-        let key = app.wm.create_window(Box::new(KeyRecorder {
-            received_key: false,
-        }));
+        let key = app.wm.create_window(TestComponent::KeyRecorder(
+            crate::window::test_component::KeyRecorder { received_key: None },
+        ));
         app.wm
             .transition_window(key, crate::window::WindowState::Mapped);
         app.wm.regions.set(
@@ -880,16 +845,19 @@ mod tests {
         let consumed = handle_focused_app_event(&evt, &mut app);
         assert!(consumed, "event must route even when direct_mode is true");
         // Verify through the WindowManager that the component received the key
-        assert!(
-            app.wm
-                .component_for_key_mut(key)
-                .and_then(|c| {
-                    use crate::components::component_downcast_mut;
-                    component_downcast_mut::<KeyRecorder>(c).map(|r| r.received_key)
-                })
-                .unwrap_or(false),
-            "component must receive the key"
-        );
+        match app
+            .wm
+            .component_for_key_mut(key)
+            .expect("component must exist")
+        {
+            TestComponent::KeyRecorder(recorder) => {
+                assert!(
+                    recorder.received_key.is_some(),
+                    "component must receive the key"
+                );
+            }
+            _ => panic!("component must be KeyRecorder"),
+        }
     }
 
     // ── selection_snapshot_from ──────────────────────────────────────
@@ -964,7 +932,7 @@ mod tests {
     // ── WindowDrawState ──────────────────────────────────────────────
 
     fn make_keys(n: usize) -> Vec<WindowKey> {
-        let mut wm = crate::window::WindowManager::with_config(
+        let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
@@ -972,7 +940,7 @@ mod tests {
             std::collections::HashMap::new(),
         );
         (0..n)
-            .map(|_| wm.create_window(Box::new(crate::components::NoopComponent)))
+            .map(|_| wm.create_window(TestComponent::Noop(crate::components::NoopComponent)))
             .collect()
     }
 
@@ -1021,15 +989,15 @@ mod tests {
 
     #[test]
     fn auto_layout_two_windows_creates_split() {
-        let mut wm = crate::window::WindowManager::with_config(
+        let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let k1 = wm.create_window(Box::new(crate::components::NoopComponent));
-        let k2 = wm.create_window(Box::new(crate::components::NoopComponent));
+        let k1 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k2 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         let layout = auto_layout_for_windows(&[k1, k2]).unwrap();
         let node = layout.root();
         match node {
@@ -1043,16 +1011,16 @@ mod tests {
 
     #[test]
     fn auto_layout_three_windows_all_present() {
-        let mut wm = crate::window::WindowManager::with_config(
+        let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let k1 = wm.create_window(Box::new(crate::components::NoopComponent));
-        let k2 = wm.create_window(Box::new(crate::components::NoopComponent));
-        let k3 = wm.create_window(Box::new(crate::components::NoopComponent));
+        let k1 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k2 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k3 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         let layout = auto_layout_for_windows(&[k1, k2, k3]).unwrap();
         let node = layout.root();
         assert!(node.subtree_any(|id| id == k1));
@@ -1062,7 +1030,7 @@ mod tests {
 
     #[test]
     fn auto_layout_multiple_windows_uses_all() {
-        let mut wm = crate::window::WindowManager::with_config(
+        let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
@@ -1071,7 +1039,7 @@ mod tests {
         );
         // Use 4 windows — this reliably works within 80x24 default area
         let keys: Vec<WindowKey> = (0..4)
-            .map(|_| wm.create_window(Box::new(crate::components::NoopComponent)))
+            .map(|_| wm.create_window(TestComponent::Noop(crate::components::NoopComponent)))
             .collect();
         let layout = auto_layout_for_windows(&keys).unwrap();
         let node = layout.root();

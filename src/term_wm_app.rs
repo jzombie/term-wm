@@ -6,13 +6,16 @@ use term_wm_console::console_render_target::ConsoleRenderTarget;
 use term_wm_console::draw_plan_renderer::DrawPlanRenderer;
 use term_wm_core::actions::TermWmAction;
 use term_wm_core::app_context::AppContext;
-use term_wm_core::components::{Component, component_downcast_mut};
 use term_wm_core::config::AppBuilder;
 use term_wm_core::engine::CoreEngine;
 use term_wm_core::io::{EventSource, RenderTarget};
 use term_wm_core::runner::{WindowManagerHost, run_with_defaults};
 use term_wm_core::window::{WindowKey, WindowManager};
 use term_wm_core::wm_config::WmConfig;
+
+use term_wm_ui_facade::{LayerComponent, OverlayComponent};
+
+use crate::components::AppRootComponent;
 
 /// A self-contained window manager app that eliminates dual-trait boilerplate.
 ///
@@ -27,7 +30,7 @@ use term_wm_core::wm_config::WmConfig;
 /// }
 /// ```
 pub struct TermWmApp {
-    wm: WindowManager,
+    wm: WindowManager<AppRootComponent, LayerComponent, OverlayComponent>,
     window_keys: Vec<WindowKey>,
     should_quit: bool,
     /// Core engine for draw plan generation.
@@ -53,15 +56,17 @@ impl TermWmApp {
             WmTopPanelComponent,
         };
 
-        let wm = AppBuilder::bare()
+        let wm = AppBuilder::<LayerComponent>::bare()
             .app_ctx(Arc::new(app_ctx))
-            .top_panel(Box::new(WmTopPanelComponent::new(&app_name)))
-            .bottom_panel(Box::new(WmBottomPanelComponent::new(
+            .top_panel(LayerComponent::TopPanel(WmTopPanelComponent::new(
+                &app_name,
+            )))
+            .bottom_panel(LayerComponent::BottomPanel(WmBottomPanelComponent::new(
                 &app_name,
                 &app_version,
                 hostname.as_deref(),
             )))
-            .fab(Box::new(WmFabComponent::new()))
+            .fab(LayerComponent::Fab(WmFabComponent::new()))
             .supported_menu_actions(vec![
                 TermWmAction::CloseMenu,
                 TermWmAction::ToggleMouseCapture,
@@ -72,7 +77,9 @@ impl TermWmApp {
             .build()
             .expect("standalone build");
         let mut wm = wm;
-        wm.set_notification_component(Box::new(WmNotificationAreaComponent::new()));
+        wm.set_notification_component(LayerComponent::NotificationArea(
+            WmNotificationAreaComponent::new(),
+        ));
         Self::from_wm(wm)
     }
 
@@ -84,7 +91,7 @@ impl TermWmApp {
 
     /// Create a bare standalone app without system chrome.
     pub fn bare(app_ctx: AppContext) -> Self {
-        let wm = AppBuilder::bare()
+        let wm = AppBuilder::<LayerComponent>::bare()
             .app_ctx(Arc::new(app_ctx))
             .build()
             .expect("bare standalone build");
@@ -94,7 +101,7 @@ impl TermWmApp {
     /// Create an embedded app without command menu, suitable for
     /// embedding in an existing Ratatui application.
     pub fn embedded(app_ctx: AppContext) -> Self {
-        let wm = AppBuilder::bare()
+        let wm = AppBuilder::<LayerComponent>::bare()
             .config(WmConfig::minimal())
             .app_ctx(Arc::new(app_ctx))
             .build()
@@ -103,7 +110,7 @@ impl TermWmApp {
     }
 
     /// Create from an already-constructed WindowManager.
-    pub fn from_wm(wm: WindowManager) -> Self {
+    pub fn from_wm(wm: WindowManager<AppRootComponent, LayerComponent, OverlayComponent>) -> Self {
         Self {
             wm,
             window_keys: Vec::new(),
@@ -121,10 +128,7 @@ impl TermWmApp {
 
     /// Register a component as a window. Returns the WindowKey for later access.
     /// Calls `on_mount` on the component after registration.
-    pub fn register<C>(&mut self, component: C) -> WindowKey
-    where
-        C: Component<TermWmAction> + 'static,
-    {
+    pub fn register(&mut self, component: AppRootComponent) -> WindowKey {
         let key = self.wm.spawn(component);
         self.wm
             .transition_window(key, term_wm_core::window::WindowState::Mapped);
@@ -133,19 +137,8 @@ impl TermWmApp {
         key
     }
 
-    /// Register a pre-boxed component (for dynamic dispatch scenarios).
-    /// Calls `on_mount` on the component after registration, matching `register`.
-    pub fn register_boxed(&mut self, component: Box<dyn Component<TermWmAction>>) -> WindowKey {
-        let key = self.wm.spawn_boxed(component);
-        self.wm
-            .transition_window(key, term_wm_core::window::WindowState::Mapped);
-        self.wm.tile_window(key);
-        self.window_keys.push(key);
-        key
-    }
-
     /// Borrow the WindowManager for configuration or direct access.
-    pub fn wm(&mut self) -> &mut WindowManager {
+    pub fn wm(&mut self) -> &mut WindowManager<AppRootComponent, LayerComponent, OverlayComponent> {
         &mut self.wm
     }
 
@@ -162,13 +155,6 @@ impl TermWmApp {
     /// Set the display title for a registered window.
     pub fn set_window_title(&mut self, key: WindowKey, title: impl Into<String>) {
         self.wm.set_window_title(key, title);
-    }
-
-    /// Get a mutable reference to a registered component by key.
-    pub fn component_mut<T: 'static>(&mut self, key: WindowKey) -> Option<&mut T> {
-        self.wm
-            .component_for_key_mut(key)
-            .and_then(|c| component_downcast_mut::<T>(c))
     }
 
     /// Request the app to quit after the current event cycle.
@@ -210,8 +196,8 @@ impl TermWmApp {
     }
 }
 
-impl WindowManagerHost for TermWmApp {
-    fn wm(&mut self) -> &mut WindowManager {
+impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for TermWmApp {
+    fn wm(&mut self) -> &mut WindowManager<AppRootComponent, LayerComponent, OverlayComponent> {
         &mut self.wm
     }
 

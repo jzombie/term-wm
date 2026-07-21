@@ -15,6 +15,7 @@ pub mod hitbox_registry;
 pub mod io;
 pub mod keybindings;
 pub mod layout;
+pub mod macros;
 pub mod mouse_coord;
 pub mod notification;
 pub mod power_profile;

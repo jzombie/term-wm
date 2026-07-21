@@ -1880,7 +1880,7 @@ mod tests {
     fn mouse_selection_via_dispatch_focused_event() {
         use std::sync::Arc;
         use term_wm_core::app_context::AppContext;
-        use term_wm_core::components::Component;
+        use term_wm_core::components::{Component, NoopOverlay, NoopWmComponent};
         use term_wm_core::config::AppBuilder;
         use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
@@ -1889,13 +1889,17 @@ mod tests {
         sv.set_selection_enabled(true);
         sv.set_keyboard_mode(crate::scroll_view::ScrollKeyMode::PaginationOnly);
 
-        let mut wm = AppBuilder::bare()
+        let mut wm: term_wm_core::window::WindowManager<
+            crate::scroll_view::ScrollViewComponent<TerminalComponent>,
+            NoopWmComponent,
+            NoopOverlay,
+        > = AppBuilder::<NoopWmComponent>::bare()
             .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
             .build()
             .expect("test build");
         wm.set_panel_visible(false);
 
-        let key = wm.create_window(Box::new(sv));
+        let key = wm.create_window(sv);
         let raw = wm.component_for_key_mut(key).unwrap();
         // The component inside the Window IS our ScrollViewComponent.
         // Verify set_selection_enabled works through the trait.
@@ -1905,7 +1909,7 @@ mod tests {
         let layout =
             term_wm_core::layout::TilingLayout::new(term_wm_core::layout::LayoutNode::leaf(key));
         wm.set_managed_layout(layout);
-        wm.register_managed_layout(LayoutRect {
+        wm.register_managed_layout(term_wm_layout_engine::LayoutRect {
             x: 0,
             y: 0,
             width: 80,
@@ -1915,7 +1919,6 @@ mod tests {
 
         // Simulate rendering to set last_area on the terminal
         use term_wm_core::components::ComponentContext;
-        use term_wm_layout_engine::LayoutRect;
         let area = wm.region(key);
         let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
             x: 0,
@@ -1973,7 +1976,7 @@ mod tests {
     fn mouse_selection_skipped_in_direct_mode_via_dispatch() {
         use std::sync::Arc;
         use term_wm_core::app_context::AppContext;
-        use term_wm_core::components::Component;
+        use term_wm_core::components::{Component, NoopOverlay, NoopWmComponent};
         use term_wm_core::config::AppBuilder;
         use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
@@ -1982,13 +1985,17 @@ mod tests {
         sv.set_selection_enabled(true);
         sv.set_keyboard_mode(crate::scroll_view::ScrollKeyMode::PaginationOnly);
 
-        let mut wm = AppBuilder::bare()
+        let mut wm: term_wm_core::window::WindowManager<
+            crate::scroll_view::ScrollViewComponent<TerminalComponent>,
+            NoopWmComponent,
+            NoopOverlay,
+        > = AppBuilder::<NoopWmComponent>::bare()
             .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
             .build()
             .expect("test build");
         wm.set_panel_visible(false);
 
-        let key = wm.create_window(Box::new(sv));
+        let key = wm.create_window(sv);
         let raw = wm.component_for_key_mut(key).unwrap();
         raw.set_selection_enabled(true);
 
