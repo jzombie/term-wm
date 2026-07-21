@@ -2,7 +2,9 @@ mod remote_pane;
 
 pub use remote_pane::RemotePane;
 
-use std::io::{self, Write, stdout};
+use std::io::{self, BufRead, Write, stdout};
+#[cfg(unix)]
+use std::os::unix::io::FromRawFd;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,6 +27,55 @@ use term_wm_pty_engine::input_encoding::{key_to_bytes, mouse_event_to_bytes};
 use term_wm_pty_engine::signal::install_sigint_handler;
 use tokio::sync::mpsc;
 use vt100::{MouseProtocolEncoding, MouseProtocolMode};
+
+/// Redirect an OS-level file descriptor (stdout or stderr) into `tracing`.
+///
+/// macOS system frameworks (AppKit, NSPasteboard, etc.) often write debug
+/// output directly to FD 1 or 2.  When the terminal is in raw/alt-screen mode
+/// this junk leaks to the display.  This function creates a pipe, redirects
+/// the given FD into it, and spawns a background thread that feeds incoming
+/// lines into `tracing::info!` (stdout) or `tracing::error!` (stderr).
+#[cfg(unix)]
+pub fn redirect_fd_to_tracing(target_fd: libc::c_int, is_stderr: bool) -> std::io::Result<()> {
+    let mut fds: [libc::c_int; 2] = [0; 2];
+    unsafe {
+        if libc::pipe(fds.as_mut_ptr()) == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if libc::dup2(fds[1], target_fd) == -1 {
+            libc::close(fds[0]);
+            libc::close(fds[1]);
+            return Err(std::io::Error::last_os_error());
+        }
+        libc::close(fds[1]);
+    }
+    let read_fd = fds[0];
+    let name = if is_stderr {
+        "stderr-tracing"
+    } else {
+        "stdout-tracing"
+    };
+    std::thread::Builder::new()
+        .name(name.into())
+        .spawn(move || {
+            let file = unsafe { std::fs::File::from_raw_fd(read_fd) };
+            let mut reader = std::io::BufReader::new(file);
+            let mut buf = Vec::new();
+            while reader.read_until(b'\n', &mut buf).unwrap_or(0) > 0 {
+                let text = String::from_utf8_lossy(&buf);
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    if is_stderr {
+                        tracing::error!(target: "c_stderr", "{}", trimmed);
+                    } else {
+                        tracing::info!(target: "c_stdout", "{}", trimmed);
+                    }
+                }
+                buf.clear();
+            }
+        })?;
+    Ok(())
+}
 
 /// Number of iterations to wait for initial PTY output.
 /// Windows ConPTY needs more time to initialize and flush its internal buffers.
@@ -51,6 +102,12 @@ impl Drop for TerminalGuard {
 /// for muxio IPC, then runs the synchronous crossterm event loop on the
 /// calling thread.
 pub fn run_session(socket_path: &str) -> io::Result<()> {
+    // Redirect stderr to tracing so macOS AppKit/NSPasteboard noise doesn't
+    // leak to the terminal display.  Best-effort: if it fails (non-Unix, etc.)
+    // the session still works, just without the noise suppression.
+    #[cfg(unix)]
+    let _ = redirect_fd_to_tracing(libc::STDERR_FILENO, true);
+
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| io::Error::other(format!("runtime: {e}")))?;
 
