@@ -476,98 +476,7 @@ impl Pty {
     pub fn snapshot(&mut self, columns: u16, rows: u16) -> TerminalSnapshot {
         self.screen();
         let t = self.term.lock().unwrap_or_else(|e| e.into_inner());
-        let grid = t.grid();
-        let mode = t.mode();
-        let display_offset = grid.display_offset();
-        let cursor = &t.grid().cursor;
-
-        // Clamp to actual Term grid dimensions (the reader thread may not
-        // have processed the latest resize yet, so self.size can be stale).
-        let columns = columns.min(t.columns() as u16);
-        let rows = rows.min(t.screen_lines() as u16);
-
-        let default_fg = t.colors()[NamedColor::Foreground]
-            .as_ref()
-            .map(|r| CellColor::Rgb(RgbColor { r: r.r, g: r.g, b: r.b }))
-            .unwrap_or(CellColor::Default);
-        let default_bg = t.colors()[NamedColor::Background]
-            .as_ref()
-            .map(|r| CellColor::Rgb(RgbColor { r: r.r, g: r.g, b: r.b }))
-            .unwrap_or(CellColor::Default);
-
-        let mouse = MouseProtocol {
-            encoding: if mode.contains(TermMode::SGR_MOUSE) {
-                MouseProtocolEncoding::Sgr
-            } else {
-                MouseProtocolEncoding::Default
-            },
-            mode: if mode.contains(TermMode::MOUSE_REPORT_CLICK) {
-                MouseProtocolMode::PressRelease
-            } else if mode.contains(TermMode::MOUSE_DRAG) {
-                MouseProtocolMode::ButtonMotion
-            } else if mode.contains(TermMode::MOUSE_MOTION) {
-                MouseProtocolMode::AnyMotion
-            } else {
-                MouseProtocolMode::None
-            },
-        };
-
-        // The Grid ringbuffer: Line(0) = bottom of visible screen,
-        // Line(-N) = N rows up (into scrollback).  When the user has
-        // scrolled up by `display_offset`, the first visible line is
-        // Line(-display_offset - 1).
-        let start_line = -(display_offset as i32);
-        let mut cells = Vec::with_capacity(rows as usize);
-        for i in 0..rows {
-            let line = Line(start_line + i as i32);
-            let row = &grid[line];
-            let mut row_cells = Vec::with_capacity(columns as usize);
-            for col in 0..columns {
-                let acell = &row[Column(col as usize)];
-                let fg = resolve_cell_color(&acell.fg, t.colors());
-                let bg = resolve_cell_color(&acell.bg, t.colors());
-                row_cells.push(TerminalCell {
-                    character: acell.c,
-                    fg,
-                    bg,
-                    bold: acell.flags.contains(Flags::BOLD),
-                    dim: acell.flags.contains(Flags::DIM),
-                    italic: acell.flags.contains(Flags::ITALIC),
-                    underline: acell.flags.intersects(Flags::ALL_UNDERLINES),
-                    inverse: acell.flags.contains(Flags::INVERSE),
-                    hidden: acell.flags.contains(Flags::HIDDEN),
-                    strikeout: acell.flags.contains(Flags::STRIKEOUT),
-                    wide_continuation: acell.flags.contains(Flags::WIDE_CHAR_SPACER),
-                });
-            }
-            cells.push(row_cells);
-        }
-
-        TerminalSnapshot {
-            columns,
-            rows,
-            cursor: if mode.contains(TermMode::SHOW_CURSOR) {
-                let cursor_row = cursor.point.line.0.max(0) as u16;
-                let cursor_col = cursor.point.column.0 as u16;
-                if cursor_row < rows && cursor_col < columns {
-                    Some(CursorInfo {
-                        column: cursor_col,
-                        row: cursor_row,
-                        hidden: false,
-                    })
-                } else {
-                    None
-                }
-            } else {
-                None
-            },
-            default_fg,
-            default_bg,
-            alternate_screen: mode.contains(TermMode::ALT_SCREEN),
-            mouse,
-            display_offset,
-            cells,
-        }
+        snapshot_from_term(&*t, columns, rows)
     }
 
     pub fn bytes_received(&self) -> usize {
@@ -623,10 +532,12 @@ impl Pty {
         self.screen();
         let t = self.term.lock().unwrap_or_else(|e| e.into_inner());
         let grid = t.grid();
+        let rows = self.size.rows.min(t.screen_lines() as u16);
+        let cols = self.size.cols.min(t.columns() as u16);
         let mut output = Vec::new();
-        for i in 0..self.size.rows {
+        for i in 0..rows {
             let row = &grid[Line(i as i32)];
-            for col in 0..self.size.cols {
+            for col in 0..cols {
                 let cell = &row[Column(col as usize)];
                 if !cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
                     let mut buf = [0u8; 4];
@@ -669,6 +580,88 @@ fn resolve_cell_color(color: &Color, palette: &Colors) -> CellColor {
                 CellColor::Default
             }
         }
+    }
+}
+
+/// Shared implementation: produce a TerminalSnapshot from an alacritty
+/// Term, used by both Pty (local) and RemotePane.
+pub fn snapshot_from_term(
+    t: &Term<PtyListener>,
+    columns: u16,
+    rows: u16,
+) -> TerminalSnapshot {
+    use alacritty_terminal::grid::Dimensions;
+    use alacritty_terminal::index::{Column, Line};
+    use alacritty_terminal::term::cell::Flags;
+    use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
+    use crate::pane::*;
+
+    let grid = t.grid();
+    let mode = t.mode();
+    let display_offset = grid.display_offset();
+    let cursor = &t.grid().cursor;
+
+    let columns = columns.min(t.columns() as u16);
+    let rows = rows.min(t.screen_lines() as u16);
+
+    let default_fg = t.colors()[NamedColor::Foreground]
+        .as_ref()
+        .map(|r| CellColor::Rgb(RgbColor { r: r.r, g: r.g, b: r.b }))
+        .unwrap_or(CellColor::Default);
+    let default_bg = t.colors()[NamedColor::Background]
+        .as_ref()
+        .map(|r| CellColor::Rgb(RgbColor { r: r.r, g: r.g, b: r.b }))
+        .unwrap_or(CellColor::Default);
+
+    let mouse = MouseProtocol {
+        encoding: if mode.contains(TermMode::SGR_MOUSE) { MouseProtocolEncoding::Sgr } else { MouseProtocolEncoding::Default },
+        mode: if mode.contains(TermMode::MOUSE_REPORT_CLICK) { MouseProtocolMode::PressRelease }
+            else if mode.contains(TermMode::MOUSE_DRAG) { MouseProtocolMode::ButtonMotion }
+            else if mode.contains(TermMode::MOUSE_MOTION) { MouseProtocolMode::AnyMotion }
+            else { MouseProtocolMode::None },
+    };
+
+    let start_line = -(display_offset as i32);
+    let mut cells = Vec::with_capacity(rows as usize);
+    for i in 0..rows {
+        let line = Line(start_line + i as i32);
+        let row = &grid[line];
+        let mut row_cells = Vec::with_capacity(columns as usize);
+        for col in 0..columns {
+            let acell = &row[Column(col as usize)];
+            let fg = resolve_cell_color(&acell.fg, t.colors());
+            let bg = resolve_cell_color(&acell.bg, t.colors());
+            row_cells.push(TerminalCell {
+                character: acell.c, fg, bg,
+                bold: acell.flags.contains(Flags::BOLD),
+                dim: acell.flags.contains(Flags::DIM),
+                italic: acell.flags.contains(Flags::ITALIC),
+                underline: acell.flags.intersects(Flags::ALL_UNDERLINES),
+                inverse: acell.flags.contains(Flags::INVERSE),
+                hidden: acell.flags.contains(Flags::HIDDEN),
+                strikeout: acell.flags.contains(Flags::STRIKEOUT),
+                wide_continuation: acell.flags.contains(Flags::WIDE_CHAR_SPACER),
+            });
+        }
+        cells.push(row_cells);
+    }
+
+    TerminalSnapshot {
+        columns,
+        rows,
+        cursor: if mode.contains(TermMode::SHOW_CURSOR) {
+            let cr = cursor.point.line.0.max(0) as u16;
+            let cc = cursor.point.column.0 as u16;
+            if cr < rows && cc < columns {
+                Some(CursorInfo { column: cc, row: cr, hidden: false })
+            } else { None }
+        } else { None },
+        default_fg,
+        default_bg,
+        alternate_screen: mode.contains(TermMode::ALT_SCREEN),
+        mouse,
+        display_offset,
+        cells,
     }
 }
 

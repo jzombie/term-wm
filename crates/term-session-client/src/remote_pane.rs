@@ -15,7 +15,7 @@ use term_wm_pty_engine::pane::{
     CellColor, CursorInfo, MouseProtocol, MouseProtocolEncoding, MouseProtocolMode, RgbColor,
     TerminalCell, TerminalSnapshot,
 };
-use term_wm_pty_engine::{Pane, PtyListener, PtyResult};
+use term_wm_pty_engine::{Pane, PtyListener, PtyResult, snapshot_from_term};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -44,6 +44,9 @@ pub struct RemotePane {
     input_writer: InputWriter,
     cols: Cell<u16>,
     rows: Cell<u16>,
+    /// Raw PTY bytes forwarded from drain_pushes, to be written to stdout
+    /// by the session client.  The caller drains this each frame.
+    pub pending_output: Mutex<Vec<u8>>,
 }
 
 impl RemotePane {
@@ -78,6 +81,7 @@ impl RemotePane {
             input_writer,
             cols: Cell::new(cols),
             rows: Cell::new(rows),
+            pending_output: Mutex::new(Vec::new()),
         }
     }
 
@@ -85,9 +89,15 @@ impl RemotePane {
         loop {
             match self.push_rx.try_recv() {
                 Ok(data) => {
-                    let mut term = self.term.lock().unwrap();
-                    let mut processor = self.processor.lock().unwrap();
-                    processor.advance(&mut *term, &data);
+                    {
+                        let mut term = self.term.lock().unwrap();
+                        let mut processor = self.processor.lock().unwrap();
+                        processor.advance(&mut *term, &data);
+                    }
+                    // Accumulate raw bytes for the forwarding output.
+                    if let Ok(mut buf) = self.pending_output.lock() {
+                        buf.extend_from_slice(&data);
+                    }
                 }
                 Err(TryRecvError::Disconnected) => {
                     self.exited.set(true);
@@ -157,86 +167,7 @@ impl Pane for RemotePane {
 
     fn snapshot(&mut self, columns: u16, rows: u16) -> TerminalSnapshot {
         let t = self.term.lock().unwrap();
-        let grid = t.grid();
-        let mode = t.mode();
-        let cursor = &grid.cursor;
-
-        let default_fg = t.colors()
-            [alacritty_terminal::vte::ansi::NamedColor::Foreground]
-            .as_ref()
-            .map(|r| CellColor::Rgb(RgbColor { r: r.r, g: r.g, b: r.b }))
-            .unwrap_or(CellColor::Default);
-        let default_bg = t.colors()
-            [alacritty_terminal::vte::ansi::NamedColor::Background]
-            .as_ref()
-            .map(|r| CellColor::Rgb(RgbColor { r: r.r, g: r.g, b: r.b }))
-            .unwrap_or(CellColor::Default);
-
-        let mouse = MouseProtocol {
-            encoding: if mode.contains(TermMode::SGR_MOUSE) {
-                MouseProtocolEncoding::Sgr
-            } else {
-                MouseProtocolEncoding::Default
-            },
-            mode: if mode.contains(TermMode::MOUSE_REPORT_CLICK) {
-                MouseProtocolMode::PressRelease
-            } else if mode.contains(TermMode::MOUSE_DRAG) {
-                MouseProtocolMode::ButtonMotion
-            } else if mode.contains(TermMode::MOUSE_MOTION) {
-                MouseProtocolMode::AnyMotion
-            } else {
-                MouseProtocolMode::None
-            },
-        };
-
-        let display_offset = grid.display_offset();
-        let start_line = -(display_offset as i32);
-        let mut cells = Vec::with_capacity(rows as usize);
-        for i in 0..rows {
-            let row = &grid[Line(start_line + i as i32)];
-            let mut row_cells = Vec::with_capacity(columns as usize);
-            for col in 0..columns {
-                let acell = &row[Column(col as usize)];
-                let fg = resolve_color(&acell.fg, t.colors());
-                let bg = resolve_color(&acell.bg, t.colors());
-                row_cells.push(TerminalCell {
-                    character: acell.c,
-                    fg,
-                    bg,
-                    bold: acell.flags.contains(Flags::BOLD),
-                    dim: acell.flags.contains(Flags::DIM),
-                    italic: acell.flags.contains(Flags::ITALIC),
-                    underline: acell.flags.intersects(Flags::ALL_UNDERLINES),
-                    inverse: acell.flags.contains(Flags::INVERSE),
-                    hidden: acell.flags.contains(Flags::HIDDEN),
-                    strikeout: acell.flags.contains(Flags::STRIKEOUT),
-                    wide_continuation: acell.flags.contains(Flags::WIDE_CHAR_SPACER),
-                });
-            }
-            cells.push(row_cells);
-        }
-
-        TerminalSnapshot {
-            columns,
-            rows,
-            cursor: if mode.contains(TermMode::SHOW_CURSOR) {
-                let cr = cursor.point.line.0.max(0) as u16;
-                let cc = cursor.point.column.0 as u16;
-                if cr < rows && cc < columns {
-                    Some(CursorInfo { column: cc, row: cr, hidden: false })
-                } else {
-                    None
-                }
-            } else {
-                None
-            },
-            default_fg,
-            default_bg,
-            alternate_screen: mode.contains(TermMode::ALT_SCREEN),
-            mouse,
-            display_offset: grid.display_offset(),
-            cells,
-        }
+        snapshot_from_term(&*t, columns, rows)
     }
 
     fn max_scrollback(&mut self) -> usize {
