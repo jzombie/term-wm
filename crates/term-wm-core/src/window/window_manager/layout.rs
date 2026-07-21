@@ -222,12 +222,12 @@ impl WindowManager {
 
     pub fn register_managed_layout(&mut self, area: Rect) {
         self.last_frame_area = area;
-        // Show WmMode-filtered hints when the command palette is open,
+        // Show CommandPalette-filtered hints when the command palette is open,
         // Global-only hints when closed.
         match self.hint_visibility {
             crate::wm_config::HintVisibility::Always => {
                 let layer = match self.input_mode {
-                    crate::actions::WmInputMode::CommandPalette => ActionLayer::WmMode,
+                    crate::actions::WmInputMode::CommandPalette => ActionLayer::CommandPalette,
                     crate::actions::WmInputMode::Help => ActionLayer::Help,
                     _ => ActionLayer::Global,
                 };
