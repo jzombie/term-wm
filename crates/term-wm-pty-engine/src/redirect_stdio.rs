@@ -301,6 +301,10 @@ mod tests {
 
             let saved_handle = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
 
+            // Save the original CRT fd 2 before redirecting.
+            let saved_fd2 = unsafe { libc::dup(2) };
+            assert!(saved_fd2 >= 0);
+
             let mut read_handle: isize = 0;
             let mut write_handle: isize = 0;
             unsafe {
@@ -323,6 +327,8 @@ mod tests {
             let restore = move || {
                 unsafe {
                     SetStdHandle(STD_ERROR_HANDLE, saved_handle);
+                    libc::dup2(saved_fd2, 2);
+                    libc::close(saved_fd2);
                 }
                 if write_fd != -1 {
                     unsafe {
