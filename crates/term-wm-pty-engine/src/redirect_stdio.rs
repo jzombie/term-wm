@@ -107,20 +107,20 @@ impl StderrSuppressGuard {
     }
 }
 
-/// Redirect an OS-level file descriptor into `tracing`.
+/// Redirect an OS-level file descriptor into a callback.
 ///
-/// Spawns a background thread that reads from the FD and forwards each line
-/// to `tracing::error!` (stderr) or `tracing::info!` (stdout).
+/// Spawns a background thread that reads from the FD and calls `on_line`
+/// for each non-empty line.  Non-UTF-8 bytes are handled via
+/// `String::from_utf8_lossy`.
 ///
-/// - **Unix**: creates a pipe, uses `dup2` to redirect the FD, reads from
-///   the pipe in the background thread.
+/// - **Unix**: creates a pipe, uses `dup2` to redirect the FD.
 /// - **Windows**: creates a Win32 anonymous pipe, redirects both the CRT
-///   descriptor and the Win32 handle, reads from the pipe in the background
-///   thread.
-///
-/// Non-UTF-8 bytes are handled via `String::from_utf8_lossy`.
+///   descriptor and the Win32 handle.
 #[cfg(unix)]
-pub fn redirect_fd_to_tracing(target_fd: libc::c_int, is_stderr: bool) -> std::io::Result<()> {
+pub fn redirect_fd<F>(target_fd: libc::c_int, on_line: F) -> std::io::Result<()>
+where
+    F: Fn(&str) + Send + 'static,
+{
     let mut fds: [libc::c_int; 2] = [0; 2];
     unsafe {
         if libc::pipe(fds.as_mut_ptr()) == -1 {
@@ -134,13 +134,8 @@ pub fn redirect_fd_to_tracing(target_fd: libc::c_int, is_stderr: bool) -> std::i
         libc::close(fds[1]);
     }
     let read_fd = fds[0];
-    let name = if is_stderr {
-        "stderr-tracing"
-    } else {
-        "stdout-tracing"
-    };
     std::thread::Builder::new()
-        .name(name.into())
+        .name("fd-redirect".into())
         .spawn(move || {
             use std::os::unix::io::FromRawFd;
             let file = unsafe { std::fs::File::from_raw_fd(read_fd) };
@@ -150,11 +145,7 @@ pub fn redirect_fd_to_tracing(target_fd: libc::c_int, is_stderr: bool) -> std::i
                 let text = String::from_utf8_lossy(&buf);
                 let trimmed = text.trim();
                 if !trimmed.is_empty() {
-                    if is_stderr {
-                        tracing::error!(target: "c_stderr", "{}", trimmed);
-                    } else {
-                        tracing::info!(target: "c_stdout", "{}", trimmed);
-                    }
+                    on_line(trimmed);
                 }
                 buf.clear();
             }
@@ -164,7 +155,10 @@ pub fn redirect_fd_to_tracing(target_fd: libc::c_int, is_stderr: bool) -> std::i
 
 /// Windows implementation — same semantics as the Unix version.
 #[cfg(windows)]
-pub fn redirect_fd_to_tracing(target_fd: i32, is_stderr: bool) -> std::io::Result<()> {
+pub fn redirect_fd<F>(target_fd: i32, on_line: F) -> std::io::Result<()>
+where
+    F: Fn(&str) + Send + 'static,
+{
     use std::os::windows::io::FromRawHandle;
 
     unsafe extern "system" {
@@ -178,9 +172,8 @@ pub fn redirect_fd_to_tracing(target_fd: i32, is_stderr: bool) -> std::io::Resul
         ) -> i32;
     }
 
-    const STD_ERROR_HANDLE: u32 = 0xFFFFFFF4u32; // -12
-    const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5u32; // -11
-    const STD_INPUT_HANDLE: u32 = 0xFFFFFFF6u32; // -10
+    const STD_ERROR_HANDLE: u32 = 0xFFFFFFF4u32;
+    const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5u32;
 
     let win_std_handle = if target_fd == 1 {
         STD_OUTPUT_HANDLE
@@ -205,15 +198,10 @@ pub fn redirect_fd_to_tracing(target_fd: i32, is_stderr: bool) -> std::io::Resul
             libc::dup2(write_fd, target_fd);
         }
 
-        let name = if is_stderr {
-            "stderr-tracing"
-        } else {
-            "stdout-tracing"
-        };
         let file = std::fs::File::from_raw_handle(read_handle as _);
 
         std::thread::Builder::new()
-            .name(name.into())
+            .name("fd-redirect".into())
             .spawn(move || {
                 let mut reader = std::io::BufReader::new(file);
                 let mut buf = Vec::new();
@@ -221,11 +209,7 @@ pub fn redirect_fd_to_tracing(target_fd: i32, is_stderr: bool) -> std::io::Resul
                     let text = String::from_utf8_lossy(&buf);
                     let trimmed = text.trim();
                     if !trimmed.is_empty() {
-                        if is_stderr {
-                            tracing::error!(target: "c_stderr", "{}", trimmed);
-                        } else {
-                            tracing::info!(target: "c_stdout", "{}", trimmed);
-                        }
+                        on_line(trimmed);
                     }
                     buf.clear();
                 }
@@ -235,9 +219,33 @@ pub fn redirect_fd_to_tracing(target_fd: i32, is_stderr: bool) -> std::io::Resul
     Ok(())
 }
 
+/// Convenience wrapper: redirects an FD and feeds lines into `tracing`.
+#[cfg(any(unix, windows))]
+pub fn redirect_fd_to_tracing(target_fd: impl Into<i32>, is_stderr: bool) -> std::io::Result<()> {
+    let target_fd = target_fd.into();
+    if is_stderr {
+        redirect_fd(target_fd, |line| {
+            tracing::error!(target: "c_stderr", "{}", line);
+        })
+    } else {
+        redirect_fd(target_fd, |line| {
+            tracing::info!(target: "c_stdout", "{}", line);
+        })
+    }
+}
+
 /// No-op fallback for unsupported platforms (e.g. wasm).
 #[cfg(not(any(unix, windows)))]
 pub fn redirect_fd_to_tracing(_target_fd: i32, _is_stderr: bool) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// No-op fallback.
+#[cfg(not(any(unix, windows)))]
+pub fn redirect_fd<F>(_target_fd: i32, _on_line: F) -> std::io::Result<()>
+where
+    F: Fn(&str) + Send + 'static,
+{
     Ok(())
 }
 
@@ -248,53 +256,7 @@ mod tests {
     use std::os::fd::FromRawFd;
     #[cfg(windows)]
     use std::os::windows::io::FromRawHandle;
-    use std::sync::{Arc, Mutex, Once};
-
-    /// Global capture buffer shared across all threads.
-    static GLOBAL_CAPTURED_LINES: std::sync::LazyLock<Arc<Mutex<Vec<String>>>> =
-        std::sync::LazyLock::new(|| Arc::new(Mutex::new(Vec::new())));
-    static INIT_GLOBAL_TRACING: Once = Once::new();
-
-    /// Ensure the global tracing subscriber is installed (once per test run).
-    /// All threads, including background threads spawned by redirect_fd_to_tracing,
-    /// will write their formatted output into `GLOBAL_CAPTURED_LINES`.
-    fn ensure_global_capturing_tracing() {
-        INIT_GLOBAL_TRACING.call_once(|| {
-            struct GlobalWriter;
-            impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for GlobalWriter {
-                type Writer = GlobalCaptureWriter;
-                fn make_writer(&'a self) -> Self::Writer {
-                    GlobalCaptureWriter
-                }
-            }
-            struct GlobalCaptureWriter;
-            impl std::io::Write for GlobalCaptureWriter {
-                fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                    let lines = GLOBAL_CAPTURED_LINES.clone();
-                    // Simple line capture: collect all bytes, split on newlines
-                    let mut guard = lines.lock().unwrap();
-                    let s = String::from_utf8_lossy(buf);
-                    for line in s.lines() {
-                        let trimmed = line.trim();
-                        if !trimmed.is_empty() {
-                            guard.push(trimmed.to_string());
-                        }
-                    }
-                    Ok(buf.len())
-                }
-                fn flush(&mut self) -> std::io::Result<()> {
-                    Ok(())
-                }
-            }
-            let subscriber = tracing_subscriber::fmt()
-                .with_writer(GlobalWriter)
-                .with_target(false)
-                .with_thread_names(false)
-                .without_time()
-                .finish();
-            let _ = tracing::subscriber::set_global_default(subscriber);
-        });
-    }
+    use std::sync::{Arc, Mutex};
 
     // ── StderrSuppressGuard ───────────────────────────────────────
 
@@ -435,13 +397,7 @@ mod tests {
 
     #[test]
     #[cfg(any(unix, windows))]
-    fn redirect_fd_to_tracing_captures_stdout_and_stderr() {
-        ensure_global_capturing_tracing();
-
-        // Clear any lines captured by previous tests.
-        GLOBAL_CAPTURED_LINES.lock().unwrap().clear();
-
-        // Create two pipe fds to simulate stdout and stderr.
+    fn redirect_fd_captures_stdout_and_stderr() {
         #[cfg(unix)]
         let (stdout_fd, stderr_fd) = {
             let mut a: [libc::c_int; 2] = [0; 2];
@@ -476,42 +432,41 @@ mod tests {
             (a, b)
         };
 
-        // Redirect the simulated stdout (is_stderr=false → tracing::info!)
-        // and stderr (is_stderr=true → tracing::error!).
-        redirect_fd_to_tracing(stdout_fd, false).expect("redirect stdout");
-        redirect_fd_to_tracing(stderr_fd, true).expect("redirect stderr");
+        let stdout_lines = Arc::new(Mutex::new(Vec::new()));
+        let stderr_lines = Arc::new(Mutex::new(Vec::new()));
 
-        // Write test messages to each fd.
+        {
+            let out = Arc::clone(&stdout_lines);
+            redirect_fd(stdout_fd, move |line| out.lock().unwrap().push(line.to_string()))
+                .expect("redirect stdout");
+        }
+        {
+            let err = Arc::clone(&stderr_lines);
+            redirect_fd(stderr_fd, move |line| err.lock().unwrap().push(line.to_string()))
+                .expect("redirect stderr");
+        }
+
         unsafe {
             libc::write(stdout_fd, c"hello from stdout\n".as_ptr().cast(), 18);
             libc::write(stderr_fd, c"hello from stderr\n".as_ptr().cast(), 18);
         }
 
-        // Close the write ends so the background threads get EOF.  This
-        // ensures the tracing calls flush before we check the buffer.
         #[cfg(unix)]
-        unsafe {
-            libc::close(stdout_fd);
-            libc::close(stderr_fd);
-        }
+        unsafe { libc::close(stdout_fd); libc::close(stderr_fd); }
         #[cfg(windows)]
-        unsafe {
-            libc::close(stdout_fd);
-            libc::close(stderr_fd);
-        }
+        unsafe { libc::close(stdout_fd); libc::close(stderr_fd); }
 
-        // Wait for the background threads to finish processing.
         std::thread::sleep(std::time::Duration::from_millis(100));
 
-        let captured = GLOBAL_CAPTURED_LINES.lock().unwrap();
-        let joined = captured.join("\n");
+        let stdout: Vec<_> = stdout_lines.lock().unwrap().clone();
+        let stderr: Vec<_> = stderr_lines.lock().unwrap().clone();
         assert!(
-            joined.contains("hello from stdout"),
-            "stdout message not captured. got:\n{joined}"
+            stdout.iter().any(|l| l.contains("hello from stdout")),
+            "stdout: got {stdout:?}"
         );
         assert!(
-            joined.contains("hello from stderr"),
-            "stderr message not captured. got:\n{joined}"
+            stderr.iter().any(|l| l.contains("hello from stderr")),
+            "stderr: got {stderr:?}"
         );
     }
 }
