@@ -181,6 +181,29 @@ impl Pty {
             scrollback: scrollback_len,
         };
         let term = Arc::new(Mutex::new(Term::new(config, &dims, listener)));
+        // Seed the palette with standard ANSI colors (indices 0-15) so
+        // programs that use them don't depend on the shell having sent
+        // OSC 4 sequences first.  Default fg/bg (indices 256/257) are
+        // deliberately left unset — they use the terminal's default.
+        {
+            let mut t = term.lock().unwrap_or_else(|e| e.into_inner());
+            let mut seed = alacritty_terminal::vte::ansi::Processor::<
+                alacritty_terminal::vte::ansi::StdSyncHandler,
+            >::new();
+            let seed_osc4: Vec<u8> = [
+                (0, 0x00,0x00,0x00), (1, 0xaa,0x00,0x00),
+                (2, 0x00,0xaa,0x00), (3, 0xaa,0x55,0x00),
+                (4, 0x00,0x00,0xaa), (5, 0xaa,0x00,0xaa),
+                (6, 0x00,0xaa,0xaa), (7, 0xaa,0xaa,0xaa),
+                (8, 0x55,0x55,0x55), (9, 0xff,0x55,0x55),
+                (10,0x55,0xff,0x55), (11,0xff,0xff,0x55),
+                (12,0x55,0x55,0xff), (13,0xff,0x55,0xff),
+                (14,0x55,0xff,0xff), (15,0xff,0xff,0xff),
+            ].iter().flat_map(|(i,r,g,b)| {
+                format!("\x1b]4;{};rgb:{:02x}/{:02x}/{:02x}\x07", i, r, g, b).into_bytes()
+            }).collect();
+            seed.advance(&mut *t, &seed_osc4);
+        }
         let dirty = Arc::new(AtomicBool::new(false));
         let dirty_cond = Arc::new((Mutex::new(()), Condvar::new()));
         let pending_resize = Arc::new(Mutex::new(None::<PtySize>));
