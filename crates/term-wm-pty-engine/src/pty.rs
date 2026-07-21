@@ -495,7 +495,7 @@ impl Pty {
         // Line(-N) = N rows up (into scrollback).  When the user has
         // scrolled up by `display_offset`, the first visible line is
         // Line(-display_offset - 1).
-        let start_line = -(display_offset as i32) - 1;
+        let start_line = -(display_offset as i32);
         let mut cells = Vec::with_capacity(rows as usize);
         for i in 0..rows {
             let line = Line(start_line + i as i32);
