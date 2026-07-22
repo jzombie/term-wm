@@ -102,15 +102,12 @@ pub fn init_default() {
     // to the debug log view instead of the terminal display.
     #[cfg(unix)]
     {
-        // let _ = redirect_fd_to_tracing(libc::STDOUT_FILENO, false);
         let _ = redirect_fd_to_tracing(libc::STDERR_FILENO, true);
     }
     #[cfg(windows)]
     {
-        // let _ = redirect_fd_to_tracing(1i32, false);
         let _ = redirect_fd_to_tracing(2i32, true);
     }
 
-    // println!("stdout redirected");
     eprintln!("stderr redirected");
 }
