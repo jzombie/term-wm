@@ -208,10 +208,21 @@ impl Component<TermWmAction> for TerminalComponent {
                 EventResult::Action(TermWmAction::MouseToBytes(bytes))
             }
             Event::Paste(text) => {
-                let mut wrapped = b"\x1b[200~".to_vec();
-                wrapped.extend_from_slice(text.as_bytes());
-                wrapped.extend_from_slice(b"\x1b[201~");
-                EventResult::Action(TermWmAction::KeyToBytes(wrapped))
+                let bracketed_paste = {
+                    let mut pane = self.pane.borrow_mut();
+                    let parser = pane.shared_parser();
+                    let parser_lock = parser.lock().unwrap();
+                    parser_lock.screen().bracketed_paste()
+                };
+                let bytes = if bracketed_paste {
+                    let mut wrapped = b"\x1b[200~".to_vec();
+                    wrapped.extend_from_slice(text.as_bytes());
+                    wrapped.extend_from_slice(b"\x1b[201~");
+                    wrapped
+                } else {
+                    text.as_bytes().to_vec()
+                };
+                EventResult::Action(TermWmAction::KeyToBytes(bytes))
             }
             _ => EventResult::Ignored,
         }
