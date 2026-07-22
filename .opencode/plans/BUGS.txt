@@ -1,3 +1,4 @@
+- [ ] [TODO] Make test_pty share same FD redirection utils as rest of crate, so it can be made cross-platform.
 - [ ] Fix bracketed paste issue. Pasting long text into opencode can make it crash.
 - [X] monocle-mode window drags and resizes still capture their new coordinates; the chrome should disable this
 - [X] [TODO] window borders should not be drawn in monocle mode
