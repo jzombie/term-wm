@@ -2228,6 +2228,136 @@ mod tests {
         );
     }
 
+    // ── Right-Click Paste Tests ────────────────────────────────────────
+    //
+    // These tests verify that right-click mouse events are intercepted by
+    // TerminalComponent::handle_events and produce PasteClipboard (in
+    // normal mode) or pass through to PTY encoding (in direct mode).
+
+    /// Right-click Release in normal mode must produce
+    /// PasteClipboard; Press and Drag must be consumed (not forwarded
+    /// to the PTY).
+    #[test]
+    fn right_click_paste_in_normal_mode() {
+        use term_wm_core::actions::TermWmAction;
+        use term_wm_core::components::{ComponentContext, EventResult};
+        use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let (mut term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
+        let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        // Right-click Press — must be consumed (intercepted before PTY)
+        let press = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Right),
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let press_result = term.handle_events(&press, &ctx);
+        assert!(
+            matches!(press_result, EventResult::Consumed),
+            "right-click Press must be Consumed, got {:?}",
+            press_result
+        );
+
+        // Right-click Drag — must be consumed
+        let drag = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Right),
+            column: 15,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let drag_result = term.handle_events(&drag, &ctx);
+        assert!(
+            matches!(drag_result, EventResult::Consumed),
+            "right-click Drag must be Consumed, got {:?}",
+            drag_result
+        );
+
+        // Right-click Release — must produce PasteClipboard
+        let release = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Release(MouseButton::Right),
+            column: 15,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let release_result = term.handle_events(&release, &ctx);
+        assert!(
+            matches!(
+                release_result,
+                EventResult::Action(TermWmAction::PasteClipboard)
+            ),
+            "right-click Release must produce PasteClipboard, got {:?}",
+            release_result
+        );
+    }
+
+    /// Right-click in direct mode must NOT produce PasteClipboard — it
+    /// must pass through to PTY encoding (MouseToBytes when the PTY has
+    /// enabled mouse tracking).
+    #[test]
+    fn right_click_in_direct_mode_passes_through() {
+        use term_wm_core::actions::TermWmAction;
+        use term_wm_core::components::{ComponentContext, EventResult};
+        use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let mut pane = TestPane::new(2000);
+        pane.set_parser_size(24, 80);
+        pane.write_to_parser(b"Hello World");
+        // Enable mouse tracking so the event would produce MouseToBytes
+        pane.write_to_parser(b"\x1b[?1000h");
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        term.set_selection_enabled(true);
+
+        let ctx = ComponentContext::new(true)
+            .with_direct_mode(true)
+            .with_screen_area(LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            });
+
+        // Right-click Release in direct mode — must NOT be PasteClipboard
+        let release = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Release(MouseButton::Right),
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result = term.handle_events(&release, &ctx);
+        assert!(
+            !matches!(result, EventResult::Action(TermWmAction::PasteClipboard)),
+            "right-click Release in direct mode must NOT produce PasteClipboard, got {:?}",
+            result
+        );
+        // With mouse tracking enabled, Release should produce MouseToBytes
+        assert!(
+            matches!(result, EventResult::Action(TermWmAction::MouseToBytes(_))),
+            "right-click Release in direct mode should produce MouseToBytes, got {:?}",
+            result
+        );
+
+        // Right-click Press in direct mode — also not consumed/paste-intercepted
+        let press = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Right),
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let press_result = term.handle_events(&press, &ctx);
+        assert!(
+            !matches!(press_result, EventResult::Consumed),
+            "right-click Press in direct mode must NOT be Consumed, got {:?}",
+            press_result
+        );
+    }
+
     // ── Bracketed Paste Tests ──────────────────────────────────────────
     //
     // These tests verify that TerminalComponent::handle_events correctly
