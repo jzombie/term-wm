@@ -102,12 +102,14 @@ clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
 crossterm = { workspace = true }
 hostname = { workspace = true }
+libc = { workspace = true }
 line-ending = { workspace = true }
 portable-pty = { workspace = true }
 ratatui = { workspace = true }
 term-wm-console = { workspace = true }
 term-wm-core = { workspace = true }
 term-wm-layout-engine = { workspace = true }
+term-wm-pty-engine = { workspace = true }
 term-wm-render = { workspace = true }
 term-wm-sys-ui-components = { workspace = true, optional = true }
 term-wm-ui-components = { workspace = true }

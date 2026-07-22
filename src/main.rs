@@ -152,7 +152,7 @@ impl App {
             app.debug_key = Some(debug_key);
             app.inner.wm().set_window_title(debug_key, "Debug Log");
             install_panic_hook();
-            term_wm::tracing_sub::init_default();
+            term_wm::logging::init_default();
         }
 
         // Initialize system panel system window
