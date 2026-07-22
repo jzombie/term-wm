@@ -596,7 +596,7 @@ mod tests {
 
     /// Calls the real `init_terminal()` with a test writer and verifies
     /// the bracketed paste enable sequence `\x1b[?2004h` is written.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn init_terminal_writes_bracketed_paste_enable() {
         let _pty = StdinPtyGuard::new().expect("PTY guard");
@@ -638,7 +638,7 @@ mod tests {
 
     /// Full lifecycle: init_terminal followed by TerminalGuard teardown
     /// writes both the enable and disable sequences.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn init_and_teardown_roundtrip_contains_both_sequences() {
         let _pty = StdinPtyGuard::new().expect("PTY guard");

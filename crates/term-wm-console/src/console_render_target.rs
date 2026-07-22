@@ -160,7 +160,7 @@ mod tests {
     use super::*;
     use term_wm_pty_engine::test_pty::StdinPtyGuard;
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn enter_writes_bracketed_paste_enable() {
         let _pty = StdinPtyGuard::new().expect("PTY guard");
@@ -179,7 +179,7 @@ mod tests {
 
     /// Verifies that the real `exit()` method writes the bracketed paste
     /// disable sequence `\x1b[?2004l` to the backend.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn exit_writes_bracketed_paste_disable() {
         let _pty = StdinPtyGuard::new().expect("PTY guard");
@@ -198,7 +198,7 @@ mod tests {
 
     /// Full lifecycle: enter() then exit() writes both the enable and
     /// disable sequences.  Catches regressions where one drops out.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn enter_and_exit_roundtrip_contains_both_sequences() {
         let _pty = StdinPtyGuard::new().expect("PTY guard");
@@ -218,7 +218,7 @@ mod tests {
 
     /// Calling enter() twice must not write additional bytes — the
     /// `entered` guard on the second call should skip the body.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn double_enter_is_idempotent() {
         let _pty = StdinPtyGuard::new().expect("PTY guard");

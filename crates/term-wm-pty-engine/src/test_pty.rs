@@ -137,7 +137,7 @@ mod tests {
     /// Verify that creating and dropping a `StdinPtyGuard` does not panic
     /// and that after the guard is dropped, the original stdin is restored
     /// (the guard should not leak a redirected fd).
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn guard_restores_stdin_on_drop() {
         let orig_fd = unsafe { libc::dup(0) };
