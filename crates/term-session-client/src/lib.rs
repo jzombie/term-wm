@@ -2,7 +2,7 @@ mod remote_pane;
 
 pub use remote_pane::RemotePane;
 
-use std::io::{self, Write, stdout};
+use std::io::{self, IsTerminal, Write, stdout};
 #[cfg(unix)]
 use std::os::unix::io::FromRawFd;
 use std::sync::Arc;
@@ -11,6 +11,7 @@ use std::time::Duration;
 use crossterm::QueueableCommand;
 use crossterm::cursor::{Hide, Show};
 use crossterm::event as crossterm_event;
+use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
@@ -85,15 +86,46 @@ const INITIAL_WAIT_ITERS: usize = 60;
 #[cfg(not(target_os = "windows"))]
 const INITIAL_WAIT_ITERS: usize = 20;
 
-struct TerminalGuard;
+/// Initialize terminal for TUI mode: write startup escape sequences
+/// (alternate screen, hide cursor, bracketed paste, mouse capture) to
+/// the given writer, enable raw mode on stdin, and return a guard that
+/// restores the terminal on drop.
+///
+/// The writer parameter allows tests to capture the ANSI sequences
+/// without writing to a real terminal.
+pub fn init_terminal<W: Write>(mut writer: W) -> io::Result<TerminalGuard<W>> {
+    if std::io::stdin().is_terminal() {
+        enable_raw_mode()?;
+    }
+    writer.queue(EnterAlternateScreen)?;
+    writer.queue(Hide)?;
+    writer.queue(EnableBracketedPaste)?;
+    writer.queue(crossterm::event::EnableMouseCapture)?;
+    writer.flush()?;
+    Ok(TerminalGuard {
+        writer: Some(writer),
+    })
+}
 
-impl Drop for TerminalGuard {
+/// Guard that restores the terminal (leave alternate screen, show cursor,
+/// disable bracketed paste) when dropped.  Generic over `W` so tests can
+/// inject a `Vec<u8>` writer and verify the teardown sequences.
+pub struct TerminalGuard<W: Write = std::io::Stdout> {
+    writer: Option<W>,
+}
+
+impl<W: Write> Drop for TerminalGuard<W> {
     fn drop(&mut self) {
-        let _ = stdout().queue(crossterm::event::DisableMouseCapture);
-        let _ = stdout().queue(Show);
-        let _ = stdout().queue(LeaveAlternateScreen);
-        let _ = disable_raw_mode();
-        let _ = stdout().flush();
+        if let Some(ref mut writer) = self.writer {
+            let _ = writer.queue(crossterm::event::DisableMouseCapture);
+            let _ = writer.queue(DisableBracketedPaste);
+            let _ = writer.queue(Show);
+            let _ = writer.queue(LeaveAlternateScreen);
+            if std::io::stdin().is_terminal() {
+                let _ = disable_raw_mode();
+            }
+            let _ = writer.flush();
+        }
     }
 }
 
@@ -192,13 +224,10 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    enable_raw_mode()?;
+    // Pass one stdout handle to init_terminal for the startup sequences
+    // and TerminalGuard teardown; keep a second handle for rendering.
+    let _guard = init_terminal(stdout())?;
     let mut out = stdout();
-    out.queue(EnterAlternateScreen)?;
-    out.queue(Hide)?;
-    out.queue(crossterm::event::EnableMouseCapture)?;
-    out.flush()?;
-    let _guard = TerminalGuard;
 
     let mut clipboard = Clipboard::new();
     let sigint = install_sigint_handler()?;
@@ -489,6 +518,13 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                     let _ = pane.resize(size);
                     true
                 }
+                Event::Paste(text) => {
+                    let mut wrapped = b"\x1b[200~".to_vec();
+                    wrapped.extend_from_slice(text.as_bytes());
+                    wrapped.extend_from_slice(b"\x1b[201~");
+                    let _ = pane.write_bytes(&wrapped);
+                    true
+                }
                 _ => false,
             }
         } else {
@@ -531,5 +567,97 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                 std::thread::sleep(Duration::from_millis(8) - elapsed);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    /// Helper writer that captures bytes into a shared `Vec<u8>`.
+    struct TestWriter {
+        buf: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl TestWriter {
+        fn new() -> (Self, Arc<Mutex<Vec<u8>>>) {
+            let buf = Arc::new(Mutex::new(Vec::new()));
+            (Self { buf: buf.clone() }, buf)
+        }
+    }
+
+    impl Write for TestWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.buf.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Calls the real `init_terminal()` with a test writer and verifies
+    /// the bracketed paste enable sequence `\x1b[?2004h` is written.
+    /// Under `cargo test` stdin is a pipe, so `is_terminal()` returns false
+    /// and the raw-mode OS call is skipped — only the ANSI output matters.
+    #[test]
+    fn init_terminal_writes_bracketed_paste_enable() {
+        let (writer, buf) = TestWriter::new();
+        let _guard = init_terminal(writer).expect("init_terminal");
+        let bytes = buf.lock().unwrap();
+        assert!(
+            bytes
+                .windows(b"\x1b[?2004h".len())
+                .any(|w| w == b"\x1b[?2004h"),
+            "init_terminal must write bracketed paste enable \\x1b[?2004h. \
+             If this fails, EnableBracketedPaste may have been removed \
+             from the startup sequence. Captured bytes: {:?}",
+            String::from_utf8_lossy(&bytes)
+        );
+    }
+
+    /// Constructs a TerminalGuard with a test writer and verifies that
+    /// dropping it writes the bracketed paste disable sequence `\x1b[?2004l`.
+    #[test]
+    fn terminal_guard_teardown_writes_bracketed_paste_disable() {
+        let (writer, buf) = TestWriter::new();
+        {
+            let _guard = TerminalGuard {
+                writer: Some(writer),
+            };
+        }
+        let bytes = buf.lock().unwrap();
+        assert!(
+            bytes
+                .windows(b"\x1b[?2004l".len())
+                .any(|w| w == b"\x1b[?2004l"),
+            "TerminalGuard drop must write bracketed paste disable \\x1b[?2004l. \
+             If this fails, DisableBracketedPaste may have been removed \
+             from TerminalGuard::drop. Captured bytes: {:?}",
+            String::from_utf8_lossy(&bytes)
+        );
+    }
+
+    /// Full lifecycle: init_terminal followed by TerminalGuard teardown
+    /// writes both the enable and disable sequences.
+    #[test]
+    fn init_and_teardown_roundtrip_contains_both_sequences() {
+        let (writer, buf) = TestWriter::new();
+        let guard = init_terminal(writer).expect("init_terminal");
+        drop(guard);
+        let bytes = buf.lock().unwrap();
+        assert!(
+            bytes
+                .windows(b"\x1b[?2004h".len())
+                .any(|w| w == b"\x1b[?2004h"),
+            "init/teardown roundtrip must contain enable \\x1b[?2004h"
+        );
+        assert!(
+            bytes
+                .windows(b"\x1b[?2004l".len())
+                .any(|w| w == b"\x1b[?2004l"),
+            "init/teardown roundtrip must contain disable \\x1b[?2004l"
+        );
     }
 }
