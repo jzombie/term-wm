@@ -536,6 +536,14 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
         match event {
             Event::Mouse(_) => self.on_mouse(event, ctx),
             Event::Key(_) => self.on_key(event, ctx),
+            Event::Paste(_) => {
+                let handle = self.scroll_handle();
+                let info = handle.info();
+                let child_ctx = ctx.with_viewport(info, Some(handle));
+                self.content
+                    .borrow_mut()
+                    .handle_events(event, &child_ctx)
+            }
             _ => EventResult::Ignored,
         }
     }

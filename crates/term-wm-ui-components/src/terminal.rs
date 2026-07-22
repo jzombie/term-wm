@@ -208,10 +208,7 @@ impl Component<TermWmAction> for TerminalComponent {
                 EventResult::Action(TermWmAction::MouseToBytes(bytes))
             }
             Event::Paste(text) => {
-                let mut wrapped = b"\x1b[200~".to_vec();
-                wrapped.extend_from_slice(text.as_bytes());
-                wrapped.extend_from_slice(b"\x1b[201~");
-                EventResult::Action(TermWmAction::KeyToBytes(wrapped))
+                EventResult::Action(TermWmAction::KeyToBytes(text.as_bytes().to_vec()))
             }
             _ => EventResult::Ignored,
         }
