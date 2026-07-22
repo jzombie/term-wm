@@ -34,13 +34,11 @@ use std::io;
 #[doc(hidden)]
 pub struct StdinPtyGuard {
     #[cfg(unix)]
-    saved_stdin: libc::c_int,
-    #[cfg(unix)]
-    _master: Box<dyn portable_pty::MasterPty + Send>,
+    _guard: crate::redirect_stdio::FdSwapGuard,
+    #[cfg(windows)]
+    _guard: crate::redirect_stdio::HandleSwapGuard,
     #[cfg(windows)]
     _pair: portable_pty::PtyPair,
-    #[cfg(windows)]
-    _saved_handle: std::os::windows::io::RawHandle,
 }
 
 /// Shared PTY creation logic used by both Unix and Windows impls.
@@ -70,29 +68,19 @@ impl StdinPtyGuard {
         let master_fd = pair.master.as_raw_fd().ok_or_else(|| {
             io::Error::other("PTY master has no raw fd")
         })?;
-        let saved_stdin = unsafe { libc::dup(0) };
-        if saved_stdin < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let ret = unsafe { libc::dup2(master_fd, 0) };
-        if ret < 0 {
-            unsafe { libc::close(saved_stdin) };
-            return Err(io::Error::last_os_error());
-        }
-        Ok(Self {
-            saved_stdin,
-            _master: pair.master,
-        })
+        // Use the shared FdSwapGuard to swap fd 0 with the PTY master fd.
+        // This saves the original stdin and restores it on drop.
+        let _guard = crate::redirect_stdio::FdSwapGuard::new(0, master_fd)?;
+        // FdSwapGuard's Drop restores original stdin — keeping it alive
+        // inside Self ensures the redirect lasts for the guard's lifetime.
+        Ok(Self { _guard })
     }
 }
 
 #[cfg(unix)]
 impl Drop for StdinPtyGuard {
     fn drop(&mut self) {
-        unsafe {
-            libc::dup2(self.saved_stdin, 0);
-            libc::close(self.saved_stdin);
-        }
+        // _guard's Drop handles the restore via dup2(saved, 0)
     }
 }
 
@@ -100,14 +88,14 @@ impl Drop for StdinPtyGuard {
 impl StdinPtyGuard {
     /// Create a ConPTY pair and redirect stdin to the PTY slave.
     ///
-    /// Uses `SetStdHandle` to redirect the Win32 stdin handle.
+    /// Uses `SetStdHandle` via the shared `HandleSwapGuard` to redirect
+    /// the Win32 stdin handle, avoiding raw Win32 API calls in this file.
     pub fn new() -> io::Result<Self> {
         use std::os::windows::io::AsRawHandle;
         let pair = open_test_pty()?;
         let slave_handle = pair.slave.as_raw_handle();
-        let saved_handle = unsafe { libc::GetStdHandle(libc::STD_INPUT_HANDLE) };
-        // Duplicate the slave handle and set it as stdin
-        unsafe {
+        // Duplicate the slave handle so we can set it as stdin
+        let duped = unsafe {
             let proc = libc::GetCurrentProcess();
             let mut duped: isize = 0;
             if libc::DuplicateHandle(
@@ -122,21 +110,13 @@ impl StdinPtyGuard {
             {
                 return Err(io::Error::last_os_error());
             }
-            libc::SetStdHandle(libc::STD_INPUT_HANDLE, duped as *mut std::ffi::c_void);
-        }
-        Ok(Self {
-            _pair: pair,
-            _saved_handle: saved_handle,
-        })
-    }
-}
-
-#[cfg(windows)]
-impl Drop for StdinPtyGuard {
-    fn drop(&mut self) {
-        unsafe {
-            libc::SetStdHandle(libc::STD_INPUT_HANDLE, self._saved_handle as *mut std::ffi::c_void);
-        }
+            duped
+        };
+        let _guard = crate::redirect_stdio::HandleSwapGuard::new(
+            libc::STD_INPUT_HANDLE,
+            duped,
+        )?;
+        Ok(Self { _guard, _pair: pair })
     }
 }
 

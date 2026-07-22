@@ -9,6 +9,98 @@ use std::io::BufRead;
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
 
+/// RAII guard that swaps a file descriptor, restoring the original on drop.
+///
+/// Saves fd `target` via `dup`, redirects it to `new_fd` via `dup2`, and
+/// restores via `dup2` + `close` when the guard drops.  Used internally by
+/// [`redirect_fd`] and externally by [`StdinPtyGuard`](crate::test_pty::StdinPtyGuard).
+///
+/// # Errors
+///
+/// Returns the OS error if `dup` or `dup2` fails.
+#[cfg(unix)]
+pub(crate) struct FdSwapGuard {
+    pub(crate) saved: libc::c_int,
+    pub(crate) target: libc::c_int,
+}
+
+#[cfg(unix)]
+impl FdSwapGuard {
+    /// Save `target_fd` and swap it with `new_fd`.
+    pub(crate) fn new(target_fd: libc::c_int, new_fd: libc::c_int) -> std::io::Result<Self> {
+        let saved = unsafe { libc::dup(target_fd) };
+        if saved < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let ret = unsafe { libc::dup2(new_fd, target_fd) };
+        if ret < 0 {
+            unsafe { libc::close(saved) };
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Self {
+            saved,
+            target: target_fd,
+        })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for FdSwapGuard {
+    fn drop(&mut self) {
+        unsafe {
+            libc::dup2(self.saved, self.target);
+            libc::close(self.saved);
+        }
+    }
+}
+
+/// RAII guard that swaps a Win32 standard handle, restoring the original
+/// on drop.  Saves via `GetStdHandle`, redirects via `SetStdHandle`, and
+/// restores via `SetStdHandle` when the guard drops.
+///
+/// Used by [`StdinPtyGuard`](crate::test_pty::StdinPtyGuard) on Windows.
+#[cfg(windows)]
+pub(crate) struct HandleSwapGuard {
+    std_handle_id: u32,
+    saved: isize,
+}
+
+#[cfg(windows)]
+impl HandleSwapGuard {
+    /// Save the handle identified by `std_handle_id` (e.g. `STD_INPUT_HANDLE`)
+    /// and replace it with `new_handle`.
+    pub(crate) fn new(std_handle_id: u32, new_handle: isize) -> std::io::Result<Self> {
+        unsafe extern "system" {
+            fn GetStdHandle(nStdHandle: u32) -> isize;
+            fn SetStdHandle(nStdHandle: u32, hHandle: isize) -> i32;
+        }
+        let saved = unsafe { GetStdHandle(std_handle_id) };
+        if saved == 0 || saved == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let ret = unsafe { SetStdHandle(std_handle_id, new_handle) };
+        if ret == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Self {
+            std_handle_id,
+            saved,
+        })
+    }
+}
+
+#[cfg(windows)]
+impl Drop for HandleSwapGuard {
+    fn drop(&mut self) {
+        unsafe extern "system" {
+            fn SetStdHandle(nStdHandle: u32, hHandle: isize) -> i32;
+        }
+        unsafe {
+            SetStdHandle(self.std_handle_id, self.saved);
+        }
+    }
+}
+
 /// RAII guard that temporarily redirects stderr to the null device.
 ///
 /// Drops restore the original stderr.  Used to suppress transient noise
