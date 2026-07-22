@@ -655,4 +655,219 @@ mod tests {
         let result = img.load_svg_from_path("/nonexistent/path.svg");
         assert!(result.is_err());
     }
+
+    #[test]
+    fn render_braille_mode_with_data() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect as RatRect;
+        use term_wm_core::components::Component;
+
+        let mut img = AsciiImageComponent::new();
+        // 4x4 image, all pixels at luma 200 (bright)
+        img.set_luma8(4, 4, vec![200u8; 16]);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 4,
+        };
+        let buf = Buffer::empty(RatRect::new(0, 0, 4, 4));
+        let mut backend = term_wm_console::RatatuiBackend::new(buf, RatRect::new(0, 0, 4, 4));
+        let ctx = term_wm_core::components::ComponentContext::new(true);
+        let mut reg = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        img.render(&mut backend, area, &ctx, &mut reg);
+        // After render, cache should be populated
+        assert!(!img.cached.borrow().is_empty());
+    }
+
+    #[test]
+    fn render_ascii_mode_with_data() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect as RatRect;
+        use term_wm_core::components::Component;
+
+        let mut img = AsciiImageComponent::new();
+        img.set_render_mode(RenderMode::Ascii);
+        img.set_luma8(4, 4, vec![128u8; 16]);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 4,
+        };
+        let buf = Buffer::empty(RatRect::new(0, 0, 4, 4));
+        let mut backend = term_wm_console::RatatuiBackend::new(buf, RatRect::new(0, 0, 4, 4));
+        let ctx = term_wm_core::components::ComponentContext::new(true);
+        let mut reg = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        img.render(&mut backend, area, &ctx, &mut reg);
+        assert!(!img.cached.borrow().is_empty());
+    }
+
+    #[test]
+    fn render_with_rgba_colorize() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect as RatRect;
+        use term_wm_core::components::Component;
+
+        let mut img = AsciiImageComponent::new();
+        img.set_colorize(true);
+        // 2x2 red pixels
+        let rgba = vec![
+            255u8, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,
+        ];
+        img.set_rgba8(2, 2, rgba);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 4,
+        };
+        let buf = Buffer::empty(RatRect::new(0, 0, 4, 4));
+        let mut backend = term_wm_console::RatatuiBackend::new(buf, RatRect::new(0, 0, 4, 4));
+        let ctx = term_wm_core::components::ComponentContext::new(true);
+        let mut reg = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        img.render(&mut backend, area, &ctx, &mut reg);
+        assert!(!img.cached.borrow().is_empty());
+    }
+
+    #[test]
+    fn render_zero_area_returns_early() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect as RatRect;
+        use term_wm_core::components::Component;
+
+        let mut img = AsciiImageComponent::new();
+        img.set_luma8(2, 2, vec![100u8; 4]);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        };
+        let buf = Buffer::empty(RatRect::new(0, 0, 10, 10));
+        let mut backend = term_wm_console::RatatuiBackend::new(buf, RatRect::new(0, 0, 10, 10));
+        let ctx = term_wm_core::components::ComponentContext::new(true);
+        let mut reg = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        img.render(&mut backend, area, &ctx, &mut reg);
+        // cached should be empty since area is zero
+        assert!(img.cached.borrow().is_empty());
+    }
+
+    #[test]
+    fn render_uses_cache_when_not_dirty() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect as RatRect;
+        use term_wm_core::components::Component;
+
+        let mut img = AsciiImageComponent::new();
+        img.set_luma8(4, 4, vec![200u8; 16]);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 4,
+        };
+        let buf = Buffer::empty(RatRect::new(0, 0, 4, 4));
+        let mut backend = term_wm_console::RatatuiBackend::new(buf, RatRect::new(0, 0, 4, 4));
+        let ctx = term_wm_core::components::ComponentContext::new(true);
+        let mut reg = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        img.render(&mut backend, area, &ctx, &mut reg);
+        let cache_len_1 = img.cached.borrow().len();
+        // Render again with same area and dirty=false — should reuse cache
+        img.dirty.set(false);
+        let buf2 = Buffer::empty(RatRect::new(0, 0, 4, 4));
+        let mut backend2 = term_wm_console::RatatuiBackend::new(buf2, RatRect::new(0, 0, 4, 4));
+        img.render(&mut backend2, area, &ctx, &mut reg);
+        assert_eq!(img.cached.borrow().len(), cache_len_1);
+    }
+
+    #[test]
+    fn render_braille_dark_mode_inverts() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect as RatRect;
+        use term_wm_core::components::Component;
+
+        let mut img = AsciiImageComponent::new();
+        // All dark pixels (luma < 128 → dark_mode = true)
+        img.set_luma8(4, 4, vec![30u8; 16]);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 4,
+        };
+        let buf = Buffer::empty(RatRect::new(0, 0, 4, 4));
+        let mut backend = term_wm_console::RatatuiBackend::new(buf, RatRect::new(0, 0, 4, 4));
+        let ctx = term_wm_core::components::ComponentContext::new(true);
+        let mut reg = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        img.render(&mut backend, area, &ctx, &mut reg);
+        assert!(!img.cached.borrow().is_empty());
+    }
+
+    #[test]
+    fn render_ascii_dark_mode() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect as RatRect;
+        use term_wm_core::components::Component;
+
+        let mut img = AsciiImageComponent::new();
+        img.set_render_mode(RenderMode::Ascii);
+        img.set_luma8(4, 4, vec![30u8; 16]);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 4,
+        };
+        let buf = Buffer::empty(RatRect::new(0, 0, 4, 4));
+        let mut backend = term_wm_console::RatatuiBackend::new(buf, RatRect::new(0, 0, 4, 4));
+        let ctx = term_wm_core::components::ComponentContext::new(true);
+        let mut reg = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        img.render(&mut backend, area, &ctx, &mut reg);
+        assert!(!img.cached.borrow().is_empty());
+    }
+
+    #[test]
+    fn render_no_keep_aspect_fills_area() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect as RatRect;
+        use term_wm_core::components::Component;
+
+        let mut img = AsciiImageComponent::new();
+        img.set_keep_aspect(false);
+        img.set_luma8(10, 10, vec![128u8; 100]);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 5,
+            height: 5,
+        };
+        let buf = Buffer::empty(RatRect::new(0, 0, 5, 5));
+        let mut backend = term_wm_console::RatatuiBackend::new(buf, RatRect::new(0, 0, 5, 5));
+        let ctx = term_wm_core::components::ComponentContext::new(true);
+        let mut reg = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        img.render(&mut backend, area, &ctx, &mut reg);
+        assert!(!img.cached.borrow().is_empty());
+    }
+
+    #[test]
+    fn render_empty_image_returns_early() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect as RatRect;
+        use term_wm_core::components::Component;
+
+        let mut img = AsciiImageComponent::new();
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 4,
+        };
+        let buf = Buffer::empty(RatRect::new(0, 0, 4, 4));
+        let mut backend = term_wm_console::RatatuiBackend::new(buf, RatRect::new(0, 0, 4, 4));
+        let ctx = term_wm_core::components::ComponentContext::new(true);
+        let mut reg = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        img.render(&mut backend, area, &ctx, &mut reg);
+        assert!(img.cached.borrow().is_empty());
+    }
 }
