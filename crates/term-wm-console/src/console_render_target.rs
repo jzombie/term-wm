@@ -1,10 +1,10 @@
-use std::io::{self, IsTerminal, Stdout, Write};
+use std::io::{self, Stdout, Write};
 
 use crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
 };
 use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
-use crossterm::{execute, terminal};
+use crossterm::execute;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
@@ -16,33 +16,6 @@ use term_wm_core::io::RenderTarget;
 
 #[cfg(test)]
 use std::sync::{Arc, Mutex};
-
-/// RAII guard that manages OS-level terminal state (raw mode).
-///
-/// Initializes raw mode on construction (iff stdin is a terminal) and
-/// restores it on drop.  Keeps OS side-effects out of the render target
-/// while providing a one-line setup for consumers.
-///
-/// Under `cargo test` stdin is a pipe — `is_terminal()` returns false
-/// and the OS call is skipped.  Tests stay fast and concurrent.
-pub struct TerminalEnvironment;
-
-impl TerminalEnvironment {
-    pub fn init() -> io::Result<Self> {
-        if std::io::stdin().is_terminal() {
-            terminal::enable_raw_mode()?;
-        }
-        Ok(Self)
-    }
-}
-
-impl Drop for TerminalEnvironment {
-    fn drop(&mut self) {
-        if std::io::stdin().is_terminal() {
-            let _ = terminal::disable_raw_mode();
-        }
-    }
-}
 
 /// Terminal render target backed by a crossterm/ratatui terminal.
 ///
