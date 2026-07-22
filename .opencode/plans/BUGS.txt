@@ -3,6 +3,7 @@
 - [ ] Fix bracketed paste issue. Pasting long text into opencode can make it crash.
 - [ ] Fix issue where remote copy is not working.
 - [ ] [TODO] In Direct Mode, route non-scrollbar mouse events to the PTY (click, right-click, etc.)
+- [ ] [TODO] If the viewport is tall and narrow, consider *not* forcing monocle mode and use a smarter layout grid to stack vertically.
 - [ ] [TODO-RESEARCH] Cross-platform consistency for icons so they do not take up more than 1-character width/height in terminal shells
 - [X] monocle-mode window drags and resizes still capture their new coordinates; the chrome should disable this
 - [X] [TODO] window borders should not be drawn in monocle mode
@@ -29,7 +30,6 @@
 - [ ] [TODO] Update crates with idiomatic rust categories and keywords
 - [X] [TODO] In Monocle-mode when tabbing through windows, make the menu go into outline mode for 1 or 2 seconds, and hide the panels, so the user can see the full window titles, etc. If *not* in Monocle mode, just go into outline mode without hiding the panels.
 - [ ] Terminal message can duplicate on smaller terminal views
-
 - [ ] Terminal titles can sometimes switch numbers if the process title for one changes then changes back again.  See notes below:
 
 The window_titles() dedup logic is entirely pure Rust — no platform-specific code. The numbers switch because:
