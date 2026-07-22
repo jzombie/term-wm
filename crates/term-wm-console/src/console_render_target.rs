@@ -5,14 +5,15 @@ use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternate
 use crossterm::{execute, terminal};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::buffer::Buffer;
 
-#[cfg(test)]
-use std::sync::{Arc, Mutex};
+use ratatui::buffer::Buffer;
 
 use crate::RatatuiBackend;
 use crate::RenderBackend;
 use term_wm_core::io::RenderTarget;
+
+#[cfg(test)]
+use std::sync::{Arc, Mutex};
 
 /// Terminal render target backed by a crossterm/ratatui terminal.
 ///
@@ -58,6 +59,10 @@ impl CaptureWriter {
     pub fn bytes(&self) -> Vec<u8> {
         self.buf.lock().unwrap().clone()
     }
+
+    pub fn clear(&self) {
+        self.buf.lock().unwrap().clear();
+    }
 }
 
 #[cfg(test)]
@@ -81,10 +86,7 @@ impl ConsoleRenderTarget<CaptureWriter> {
     pub fn new_capturing() -> (Self, CaptureWriter) {
         let writer = CaptureWriter::new();
         let mut rt = Self::with_writer(writer.clone()).expect("new_capturing");
-
-        // EXPLICITLY DISABLE OS CALLS IN TESTS
         rt.manage_raw_mode = false;
-
         (rt, writer)
     }
 }
@@ -97,7 +99,6 @@ impl<W: Write> ConsoleRenderTarget<W> {
         Ok(Self {
             terminal,
             entered: false,
-            // Defaults to true for normal application usage
             manage_raw_mode: true,
         })
     }
@@ -108,19 +109,14 @@ impl<W: Write> RenderTarget for ConsoleRenderTarget<W> {
         if self.entered {
             return Ok(());
         }
-
-        // This ALWAYS runs (tests your byte stream)
         execute!(
             self.terminal.backend_mut(),
             EnterAlternateScreen,
             EnableBracketedPaste,
         )?;
-
-        // This ONLY runs if we aren't testing
         if self.manage_raw_mode {
             terminal::enable_raw_mode()?;
         }
-
         self.terminal.hide_cursor()?;
         self.entered = true;
         Ok(())
@@ -130,23 +126,15 @@ impl<W: Write> RenderTarget for ConsoleRenderTarget<W> {
         if !self.entered {
             return Ok(());
         }
-
-        // This ALWAYS runs (tests your byte stream)
         execute!(
             self.terminal.backend_mut(),
             DisableMouseCapture,
             DisableBracketedPaste
         )?;
 
-        const MOUSE_DISABLE_DELAY: std::time::Duration = std::time::Duration::from_millis(8);
-        std::thread::sleep(MOUSE_DISABLE_DELAY);
-
-        // This ONLY runs if we aren't testing
         if self.manage_raw_mode {
             terminal::disable_raw_mode()?;
         }
-
-        // This ALWAYS runs
         execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;
         self.terminal.show_cursor()?;
         self.entered = false;
@@ -203,7 +191,6 @@ mod tests {
              Captured bytes: {:?}",
             String::from_utf8_lossy(&bytes)
         );
-        rt.exit().expect("exit must succeed");
     }
 
     /// Tests that `exit()` writes `\x1b[?2004l` (bracketed paste disable).
@@ -212,7 +199,10 @@ mod tests {
     #[test]
     fn exit_writes_bracketed_paste_disable() {
         let (mut rt, writer) = ConsoleRenderTarget::new_capturing();
-        rt.entered = true;
+        // Must call real enter() so crossterm saves initial terminal state
+        rt.enter().expect("enter must succeed");
+        // Clear the capture buffer so we only assert on exit's output
+        writer.clear();
         rt.exit().expect("exit must succeed");
         let bytes = writer.bytes();
         assert!(
@@ -261,6 +251,5 @@ mod tests {
             first_len,
             "second enter() must not write additional bytes"
         );
-        rt.exit().expect("exit");
     }
 }
