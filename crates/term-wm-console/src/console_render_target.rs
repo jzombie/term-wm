@@ -109,14 +109,20 @@ impl<W: Write> RenderTarget for ConsoleRenderTarget<W> {
         if self.entered {
             return Ok(());
         }
+
+        // write_ansi() — goes through the writer, testable via CaptureWriter.
         execute!(
             self.terminal.backend_mut(),
             EnterAlternateScreen,
             EnableBracketedPaste,
         )?;
+
+        // OS console API (enable_raw_mode on Windows) / raw mode switching.
         if self.manage_raw_mode {
             terminal::enable_raw_mode()?;
         }
+
+        // Also testable via CaptureWriter — see Hide::write_ansi.
         self.terminal.hide_cursor()?;
         self.entered = true;
         Ok(())
@@ -126,17 +132,33 @@ impl<W: Write> RenderTarget for ConsoleRenderTarget<W> {
         if !self.entered {
             return Ok(());
         }
+
+        // On Windows, DisableMouseCapture overrides is_ansi_code_supported()
+        // to false, forcing execute_winapi() which touches the real console.
+        // Guard it behind manage_raw_mode so tests (CaptureWriter) don't
+        // interact with the OS console.
+        if self.manage_raw_mode {
+            execute!(self.terminal.backend_mut(), DisableMouseCapture)?;
+
+            const MOUSE_DISABLE_DELAY: std::time::Duration = std::time::Duration::from_millis(8);
+            std::thread::sleep(MOUSE_DISABLE_DELAY);
+        }
+
+        // write_ansi() — always write so tests verify the byte stream.
         execute!(
             self.terminal.backend_mut(),
-            DisableMouseCapture,
-            DisableBracketedPaste
+            DisableBracketedPaste,
+            LeaveAlternateScreen,
         )?;
 
+        // Also testable via CaptureWriter — see Show::write_ansi.
+        self.terminal.show_cursor()?;
+
+        // OS console API / raw mode switching.
         if self.manage_raw_mode {
             terminal::disable_raw_mode()?;
         }
-        execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;
-        self.terminal.show_cursor()?;
+
         self.entered = false;
         Ok(())
     }
