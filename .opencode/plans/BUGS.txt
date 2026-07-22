@@ -1,5 +1,6 @@
-- [ ] [TODO] In Direct Mode, route non-scrollbar mouse events to the PTY (click, right-click, etc.)
 - [ ] [TODO] Implement changes in `FUTURE-SIMD-OPPORTUNITIES`
+- [ ] [TODO] Floating one window should make all of the other windows floating (and retain their current position, regardless if previous tiled or floating); conversely, snapping a window should snap the others, using an algorithm to smartly determine their new tiled positions, preferring a tiling layout which as closely mimics the current floating positions, while at the same time filling up the entire viewport with the floating windows.... AND, the snap preview *should not lie*, so it must already calculate those new positions when that preview is drawn.
+- [ ] [TODO] In Direct Mode, route non-scrollbar mouse events to the PTY (click, right-click, etc.)
 - [ ] [TODO] Investigate a better Command Palette activation key binding.  Ctrl-G conflicts with Google Gemini when a Chrome browser is open.
 - [ ] [TODO] Make test_pty share same FD redirection utils as rest of crate, so it can be made cross-platform.
 - [ ] Fix bracketed paste issue. Pasting long text into opencode can make it crash.
@@ -25,7 +26,6 @@
 - [X] [TODO] Command palette should show "Switch to: {window_title}" options and it should always show the *current* window titles. These definitely should be searchable as well.
 - [ ] [TODO] Command palette should show groupings for each command (for instance, app-specific, wm-specific, etc.) and should show optional descriptions for each command (those descriptions could be used as part of the search indexing as well).
 - [ ] [TODO] How effective could using per-window content as part of the search index be? If so, it should be limited by a max buffer size and not continuously update if the window is rapidly redrawing, etc.
-- [ ] [TODO] Floating one window should make all of the other windows floating (and retain their current position, regardless if previous tiled or floating); conversely, snapping a window should snap the others, using an algorithm to smartly determine their new tiled positions, preferring a tiling layout which as closely mimics the current floating positions, while at the same time filling up the entire viewport with the floating windows.... AND, the snap preview *should not lie*, so it must already calculate those new positions when that preview is drawn.
 - [X] [TODO] If no windows remain, render empty_window_message() in the center of the UI. Possibly consider renaming empty_window_message to something more meaningful.
 - [ ] [TODO] Hide mouse cursor after x amount of seconds of no activity. Keyboard events might should hide it completely until it is moved again.
 - [ ] [TODO] Update crates with idiomatic rust categories and keywords
