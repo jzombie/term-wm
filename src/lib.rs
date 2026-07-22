@@ -3,9 +3,9 @@
 pub use term_wm_core::*;
 pub use term_wm_ui_components::*;
 pub mod components;
+pub mod logging;
 pub mod prelude;
 pub mod term_wm_app;
-pub mod logging;
 pub mod unified_event_source;
 pub use term_wm_console::widget_adapter::{StatefulWidgetAdapter, WidgetAdapter};
 
