@@ -18,5 +18,4 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 libc = { workspace = true }
-serial_test = { workspace = true }
 term-wm-pty-engine = { workspace = true }
