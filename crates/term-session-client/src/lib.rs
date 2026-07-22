@@ -11,6 +11,7 @@ use std::time::Duration;
 use crossterm::QueueableCommand;
 use crossterm::cursor::{Hide, Show};
 use crossterm::event as crossterm_event;
+use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
@@ -90,6 +91,7 @@ struct TerminalGuard;
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = stdout().queue(crossterm::event::DisableMouseCapture);
+        let _ = stdout().queue(DisableBracketedPaste);
         let _ = stdout().queue(Show);
         let _ = stdout().queue(LeaveAlternateScreen);
         let _ = disable_raw_mode();
@@ -196,6 +198,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     let mut out = stdout();
     out.queue(EnterAlternateScreen)?;
     out.queue(Hide)?;
+    out.queue(EnableBracketedPaste)?;
     out.queue(crossterm::event::EnableMouseCapture)?;
     out.flush()?;
     let _guard = TerminalGuard;
@@ -487,6 +490,13 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                     };
                     prev_content = None;
                     let _ = pane.resize(size);
+                    true
+                }
+                Event::Paste(text) => {
+                    let mut wrapped = b"\x1b[200~".to_vec();
+                    wrapped.extend_from_slice(text.as_bytes());
+                    wrapped.extend_from_slice(b"\x1b[201~");
+                    let _ = pane.write_bytes(&wrapped);
                     true
                 }
                 _ => false,

@@ -1,6 +1,8 @@
 use std::io::{self, Stdout};
 
-use crossterm::event::DisableMouseCapture;
+use crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
+};
 use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, terminal};
 use ratatui::Terminal;
@@ -34,7 +36,11 @@ impl RenderTarget for ConsoleRenderTarget {
         if self.entered {
             return Ok(());
         }
-        execute!(self.terminal.backend_mut(), EnterAlternateScreen)?;
+        execute!(
+            self.terminal.backend_mut(),
+            EnterAlternateScreen,
+            EnableBracketedPaste,
+        )?;
         terminal::enable_raw_mode()?;
         self.terminal.hide_cursor()?;
         self.entered = true;
@@ -45,7 +51,7 @@ impl RenderTarget for ConsoleRenderTarget {
         if !self.entered {
             return Ok(());
         }
-        execute!(self.terminal.backend_mut(), DisableMouseCapture)?;
+        execute!(self.terminal.backend_mut(), DisableMouseCapture, DisableBracketedPaste)?;
         // TODO: Refactor this constant
         // Give the terminal emulator time to process DisableMouseCapture
         // before we disable raw mode (which re-enables echo). Without this
