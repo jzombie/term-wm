@@ -540,9 +540,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
                 let handle = self.scroll_handle();
                 let info = handle.info();
                 let child_ctx = ctx.with_viewport(info, Some(handle));
-                self.content
-                    .borrow_mut()
-                    .handle_events(event, &child_ctx)
+                self.content.borrow_mut().handle_events(event, &child_ctx)
             }
             _ => EventResult::Ignored,
         }

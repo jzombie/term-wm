@@ -2264,15 +2264,11 @@ mod tests {
         match result {
             EventResult::Action(TermWmAction::KeyToBytes(bytes)) => {
                 assert_eq!(
-                    bytes,
-                    b"\x1b[200~hello\x1b[201~",
+                    bytes, b"\x1b[200~hello\x1b[201~",
                     "paste must be wrapped in bracketed markers when child has DECSET 2004 enabled"
                 );
             }
-            other => panic!(
-                "expected Action(KeyToBytes), got {:?}",
-                other
-            ),
+            other => panic!("expected Action(KeyToBytes), got {:?}", other),
         }
     }
 
@@ -2294,15 +2290,11 @@ mod tests {
         match result {
             EventResult::Action(TermWmAction::KeyToBytes(bytes)) => {
                 assert_eq!(
-                    bytes,
-                    b"hello",
+                    bytes, b"hello",
                     "paste must be raw bytes when child has not enabled DECSET 2004"
                 );
             }
-            other => panic!(
-                "expected Action(KeyToBytes), got {:?}",
-                other
-            ),
+            other => panic!("expected Action(KeyToBytes), got {:?}", other),
         }
     }
 
@@ -2338,10 +2330,7 @@ mod tests {
                     bytes
                 );
             }
-            other => panic!(
-                "expected Action(KeyToBytes), got {:?}",
-                other
-            ),
+            other => panic!("expected Action(KeyToBytes), got {:?}", other),
         }
     }
 
@@ -2372,8 +2361,7 @@ mod tests {
             // the last_written field through the Pane trait method
             let written = term.pane.borrow_mut().last_bytes_text();
             assert_eq!(
-                written,
-                "\x1b[200~data\x1b[201~",
+                written, "\x1b[200~data\x1b[201~",
                 "wrapped paste bytes must be written to the pane"
             );
         } else {
@@ -2398,8 +2386,7 @@ mod tests {
 
             let written = term.pane.borrow_mut().last_bytes_text();
             assert_eq!(
-                written,
-                "raw",
+                written, "raw",
                 "raw bytes (no bracketed wrapping) must be written to the pane when child has not enabled DECSET 2004"
             );
         } else {
