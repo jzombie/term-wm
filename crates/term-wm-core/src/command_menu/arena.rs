@@ -102,4 +102,20 @@ mod tests {
         };
         assert_eq!(name.format(ContextMask::NONE), "Mouse Capture: Off");
     }
+
+    #[test]
+    fn command_node_into_action_returns_inner() {
+        let node = CommandNode {
+            stable_id: "test:a".to_string(),
+            name: CommandName::Static("A".to_string()),
+            description: None,
+            action: CommandAction::AppAction(TermWmAction::CloseMenu),
+            icon: None,
+            required_context: ContextMask::NONE,
+            owner_id: None,
+            disabled: false,
+        };
+        let action = node.into_action();
+        assert!(matches!(action, TermWmAction::CloseMenu));
+    }
 }

@@ -313,4 +313,166 @@ mod tests {
         assert_eq!(res.y, 10);
         assert_eq!(res.height, 12);
     }
+
+    #[test]
+    fn resize_handles_for_region_zero_size_returns_empty() {
+        let handles = resize_handles_for_region(
+            1,
+            Rect {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            },
+            Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            },
+        );
+        assert!(handles.is_empty());
+    }
+
+    #[test]
+    fn resize_handles_for_region_small_rect_returns_corners_only() {
+        let handles = resize_handles_for_region(
+            1,
+            Rect {
+                x: 10,
+                y: 10,
+                width: 2,
+                height: 2,
+            },
+            Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            },
+        );
+        // 2x2 rect: width>2 and height>2 are false, so only 4 corners
+        assert_eq!(handles.len(), 4);
+    }
+
+    #[test]
+    fn resize_handles_for_region_large_rect_includes_edges() {
+        let handles = resize_handles_for_region(
+            1,
+            Rect {
+                x: 10,
+                y: 10,
+                width: 10,
+                height: 10,
+            },
+            Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            },
+        );
+        // 10x10: 4 corners + 4 edges = 8
+        assert_eq!(handles.len(), 8);
+    }
+
+    #[test]
+    fn floating_header_for_region_too_small_returns_none() {
+        let result = floating_header_for_region(
+            1,
+            Rect {
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 2,
+            },
+            Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            },
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn floating_header_for_region_valid_rect_returns_handle() {
+        let result = floating_header_for_region(
+            1,
+            Rect {
+                x: 10,
+                y: 10,
+                width: 10,
+                height: 10,
+            },
+            Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            },
+        );
+        assert!(result.is_some());
+        let handle = result.unwrap();
+        assert_eq!(handle.key, 1);
+        assert_eq!(handle.rect.y, 11);
+        assert_eq!(handle.rect.height, 1);
+    }
+
+    #[test]
+    fn floating_header_for_region_header_outside_bounds_returns_none() {
+        let result = floating_header_for_region(
+            1,
+            Rect {
+                x: 10,
+                y: 90,
+                width: 10,
+                height: 10,
+            },
+            Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 90,
+            },
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn apply_resize_drag_right_increases_width() {
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+        };
+        let start = Rect {
+            x: 10,
+            y: 10,
+            width: 20,
+            height: 20,
+        };
+        let res = apply_resize_drag(start, ResizeEdge::Right, 25, 15, 20, 15, bounds, false);
+        assert!(res.width > start.width);
+    }
+
+    #[test]
+    fn apply_resize_drag_bottom_increases_height() {
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+        };
+        let start = Rect {
+            x: 10,
+            y: 10,
+            width: 20,
+            height: 20,
+        };
+        let res = apply_resize_drag(start, ResizeEdge::Bottom, 15, 25, 15, 20, bounds, false);
+        assert!(res.height > start.height);
+    }
 }
