@@ -86,12 +86,17 @@ impl Drop for StdinPtyGuard {
 
 #[cfg(windows)]
 impl StdinPtyGuard {
-    /// Create a ConPTY pair and redirect stdin to the PTY master.
+    /// Create a ConPTY pair and redirect stdin to the PTY input handle.
     ///
-    /// Uses `SetStdHandle` via the shared `HandleSwapGuard` to redirect
-    /// the Win32 stdin handle to the ConPTY master handle (which
-    /// supports the terminal operations that `enable_raw_mode` needs).
+    /// On Windows, ConPTY input/output handles are exposed through
+    /// `MasterPty::as_raw_handle()` (input) and `try_clone_reader()`
+    /// (output).  We use `as_raw_handle()` to get the input handle,
+    /// duplicate it, and redirect stdin via `HandleSwapGuard`.
     pub fn new() -> io::Result<Self> {
+        // STD_INPUT_HANDLE = 0xFFFFFFF6u32
+        const STD_INPUT_HANDLE: u32 = 0xFFFFFFF6u32;
+        use std::os::windows::io::{AsRawHandle, RawHandle};
+
         unsafe extern "system" {
             fn GetCurrentProcess() -> isize;
             fn DuplicateHandle(
@@ -105,21 +110,21 @@ impl StdinPtyGuard {
             ) -> i32;
         }
         const DUPLICATE_SAME_ACCESS: u32 = 0x00000002;
-        // STD_INPUT_HANDLE = -10 (0xFFFFFFF6)
-        const STD_INPUT_HANDLE: u32 = 0xFFFFFFF6u32;
 
-        use std::os::windows::io::AsRawHandle;
         let pair = open_test_pty()?;
-        let master_handle = pair.master.as_raw_handle().ok_or_else(|| {
+
+        // MasterPty on Windows provides as_raw_handle() returning the
+        // ConPTY input handle.  We duplicate it for use as stdin.
+        let input_handle: RawHandle = pair.master.as_raw_handle().ok_or_else(|| {
             io::Error::other("PTY master has no raw handle")
         })?;
-        // Duplicate the handle for use as stdin
+
         let duped = unsafe {
             let proc = GetCurrentProcess();
             let mut duped: isize = 0;
             if DuplicateHandle(
                 proc,
-                master_handle as isize,
+                input_handle as isize,
                 proc,
                 &mut duped as *mut isize,
                 0,
@@ -135,6 +140,7 @@ impl StdinPtyGuard {
             STD_INPUT_HANDLE,
             duped,
         )?;
+        // Keep pair alive so the ConPTY handles stay valid.
         Ok(Self { _guard, _pair: pair })
     }
 }
