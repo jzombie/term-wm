@@ -86,16 +86,16 @@ impl Drop for StdinPtyGuard {
 
 #[cfg(windows)]
 impl StdinPtyGuard {
-    /// Create a ConPTY pair and redirect stdin to the PTY input handle.
+    /// Redirect stdin to the physical console input buffer.
     ///
-    /// On Windows, ConPTY input/output handles are exposed through
-    /// `MasterPty::as_raw_handle()` (input) and `try_clone_reader()`
-    /// (output).  We use `as_raw_handle()` to get the input handle,
-    /// duplicate it, and redirect stdin via `HandleSwapGuard`.
+    /// During `cargo test`, standard input is redirected to a pipe. We bypass this
+    /// by explicitly opening `CONIN$`, which gives us a raw handle to the actual
+    /// host console. We duplicate this handle and swap it into `STD_INPUT_HANDLE`
+    /// so `crossterm::terminal::enable_raw_mode` tests the real OS code.
     pub fn new() -> io::Result<Self> {
-        // STD_INPUT_HANDLE = 0xFFFFFFF6u32
         const STD_INPUT_HANDLE: u32 = 0xFFFFFFF6u32;
-        use std::os::windows::io::{AsRawHandle, RawHandle};
+        use std::fs::OpenOptions;
+        use std::os::windows::io::AsRawHandle;
 
         unsafe extern "system" {
             fn GetCurrentProcess() -> isize;
@@ -111,14 +111,15 @@ impl StdinPtyGuard {
         }
         const DUPLICATE_SAME_ACCESS: u32 = 0x00000002;
 
-        let pair = open_test_pty()?;
+        // 1. Grab the real Windows console buffer
+        let conin = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("CONIN$")?;
 
-        // MasterPty on Windows provides as_raw_handle() returning the
-        // ConPTY input handle.  We duplicate it for use as stdin.
-        let input_handle: RawHandle = pair.master.as_raw_handle().ok_or_else(|| {
-            io::Error::other("PTY master has no raw handle")
-        })?;
+        let input_handle = conin.as_raw_handle();
 
+        // 2. Duplicate it for swapping
         let duped = unsafe {
             let proc = GetCurrentProcess();
             let mut duped: isize = 0;
@@ -136,12 +137,21 @@ impl StdinPtyGuard {
             }
             duped
         };
+
+        // 3. Swap it into standard input
         let _guard = crate::redirect_stdio::HandleSwapGuard::new(
             STD_INPUT_HANDLE,
             duped,
         )?;
-        // Keep pair alive so the ConPTY handles stay valid.
-        Ok(Self { _guard, _pair: pair })
+
+        // We open a pair to satisfy the struct definition, but we don't need
+        // its handles since we are using CONIN$ to test the real Win32 APIs.
+        let pair = open_test_pty()?;
+
+        Ok(Self {
+            _guard,
+            _pair: pair,
+        })
     }
 }
 
