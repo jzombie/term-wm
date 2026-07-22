@@ -17,6 +17,9 @@ use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
 
+/// Minimum scrollbar thumb size in cells.
+const MIN_THUMB_SIZE: i32 = 1;
+
 // --- Scroll Logic Helpers (Public API) ---
 
 #[derive(Debug, Default, Clone)]
@@ -59,37 +62,33 @@ impl ScrollbarDrag {
         }
 
         let (mouse_pos, area_start, track_len) = match axis {
-            ScrollbarAxis::Vertical => (
-                i32::from(mouse.row),
-                area.y,
-                i32::from(area.height),
-            ),
-            ScrollbarAxis::Horizontal => (
-                i32::from(mouse.column),
-                area.x,
-                i32::from(area.width),
-            ),
+            ScrollbarAxis::Vertical => (i32::from(mouse.row), area.y, i32::from(area.height)),
+            ScrollbarAxis::Horizontal => (i32::from(mouse.column), area.x, i32::from(area.width)),
         };
 
         let thumb_size = ((view as f64 / total as f64) * track_len as f64).round() as i32;
-        let thumb_size = thumb_size.clamp(1, track_len);
+        let thumb_size = thumb_size.clamp(MIN_THUMB_SIZE, track_len);
         let available_track = track_len - thumb_size;
 
         if available_track <= 0 {
             return None;
         }
 
-        let current_thumb_rel = ((current_offset as f64 / max_offset as f64) * available_track as f64)
-            .round() as i32;
+        let current_thumb_rel =
+            ((current_offset as f64 / max_offset as f64) * available_track as f64).round() as i32;
         let mouse_rel = mouse_pos - area_start;
 
         let on_scrollbar = match axis {
             ScrollbarAxis::Vertical => {
-                let sb_col = area.x.saturating_add(i32::from(area.width.saturating_sub(1)));
+                let sb_col = area
+                    .x
+                    .saturating_add(i32::from(area.width.saturating_sub(1)));
                 i32::from(mouse.column) == sb_col && mouse_rel >= 0 && mouse_rel < track_len
             }
             ScrollbarAxis::Horizontal => {
-                let sb_row = area.y.saturating_add(i32::from(area.height.saturating_sub(1)));
+                let sb_row = area
+                    .y
+                    .saturating_add(i32::from(area.height.saturating_sub(1)));
                 i32::from(mouse.row) == sb_row && mouse_rel >= 0 && mouse_rel < track_len
             }
         };
@@ -612,7 +611,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
 #[cfg(test)]
 mod tests {
     use super::*;
-    use term_wm_core::events::{MouseButton, MouseEvent, MouseEventKind};
+    use term_wm_core::events::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use term_wm_layout_engine::LayoutRect;
 
     #[test]
@@ -667,7 +666,14 @@ mod tests {
             row: (area.y + 2) as u16,
             modifiers: KeyModifiers::NONE,
         };
-        let resp2 = drag.handle_mouse(&drag_evt, area, total, view, current_off, ScrollbarAxis::Vertical);
+        let resp2 = drag.handle_mouse(
+            &drag_evt,
+            area,
+            total,
+            view,
+            current_off,
+            ScrollbarAxis::Vertical,
+        );
         assert!(resp2.is_some());
         assert!(drag.dragging);
 
@@ -714,7 +720,14 @@ mod tests {
             row: scrollbar_y,
             modifiers: KeyModifiers::NONE,
         };
-        let resp2 = drag.handle_mouse(&drag_evt, area, total, view, current_off, ScrollbarAxis::Horizontal);
+        let resp2 = drag.handle_mouse(
+            &drag_evt,
+            area,
+            total,
+            view,
+            current_off,
+            ScrollbarAxis::Horizontal,
+        );
         assert!(resp2.is_some());
         assert!(drag.dragging);
 
@@ -724,8 +737,202 @@ mod tests {
             row: scrollbar_y,
             modifiers: KeyModifiers::NONE,
         };
-        let resp3 = drag.handle_mouse(&up, area, total, view, current_off, ScrollbarAxis::Horizontal);
+        let resp3 = drag.handle_mouse(
+            &up,
+            area,
+            total,
+            view,
+            current_off,
+            ScrollbarAxis::Horizontal,
+        );
         assert!(resp3.is_none());
+        assert!(!drag.dragging);
+    }
+
+    // ── ScrollbarDrag regression tests ────────────────────────────
+
+    const SB_TOTAL: usize = 100;
+    const SB_VIEW: usize = 20;
+    const SB_H: i32 = 30;
+
+    fn sb_area() -> LayoutRect {
+        LayoutRect {
+            x: 79,
+            y: 0,
+            width: 1,
+            height: SB_H as u16,
+        }
+    }
+
+    fn mouse_event(kind: MouseEventKind, col: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn scrollbar_press_on_thumb_does_not_jump() {
+        let mut drag = ScrollbarDrag::new();
+        let area = sb_area();
+        // offset 30 → thumb at row 30/80 * (30-4) ≈ row 9
+        let offset = 30usize;
+        let down = mouse_event(MouseEventKind::Press(MouseButton::Left), 79, 10);
+        let resp = drag.handle_mouse(
+            &down,
+            area,
+            SB_TOTAL,
+            SB_VIEW,
+            offset,
+            ScrollbarAxis::Vertical,
+        );
+        assert_eq!(resp, Some(offset));
+        assert!(drag.dragging);
+    }
+
+    #[test]
+    fn scrollbar_press_in_track_jumps() {
+        let mut drag = ScrollbarDrag::new();
+        let area = sb_area();
+        let offset = 0usize;
+        let down = mouse_event(MouseEventKind::Press(MouseButton::Left), 79, 20);
+        let resp = drag.handle_mouse(
+            &down,
+            area,
+            SB_TOTAL,
+            SB_VIEW,
+            offset,
+            ScrollbarAxis::Vertical,
+        );
+        assert!(resp.is_some_and(|o| o > offset));
+        assert!(drag.dragging);
+    }
+
+    #[test]
+    fn scrollbar_drag_tracks_cursor_1to1() {
+        let mut drag = ScrollbarDrag::new();
+        let area = sb_area();
+        let offset = 0usize;
+        let press = mouse_event(MouseEventKind::Press(MouseButton::Left), 79, 2);
+        let r1 = drag.handle_mouse(
+            &press,
+            area,
+            SB_TOTAL,
+            SB_VIEW,
+            offset,
+            ScrollbarAxis::Vertical,
+        );
+        assert_eq!(r1, Some(offset));
+        let drag_evt = mouse_event(MouseEventKind::Drag(MouseButton::Left), 79, 5);
+        let r2 = drag.handle_mouse(
+            &drag_evt,
+            area,
+            SB_TOTAL,
+            SB_VIEW,
+            offset,
+            ScrollbarAxis::Vertical,
+        );
+        assert!(r2.is_some_and(|o| o > offset));
+        assert!(drag.dragging);
+    }
+
+    #[test]
+    fn scrollbar_release_ends_drag() {
+        let mut drag = ScrollbarDrag::new();
+        let area = sb_area();
+        let offset = 0usize;
+        let press = mouse_event(MouseEventKind::Press(MouseButton::Left), 79, 1);
+        drag.handle_mouse(
+            &press,
+            area,
+            SB_TOTAL,
+            SB_VIEW,
+            offset,
+            ScrollbarAxis::Vertical,
+        );
+        assert!(drag.dragging);
+        let up = mouse_event(MouseEventKind::Release(MouseButton::Left), 79, 5);
+        let r = drag.handle_mouse(
+            &up,
+            area,
+            SB_TOTAL,
+            SB_VIEW,
+            offset,
+            ScrollbarAxis::Vertical,
+        );
+        assert!(r.is_none());
+        assert!(!drag.dragging);
+    }
+
+    #[test]
+    fn scrollbar_press_outside_area_ignored() {
+        let mut drag = ScrollbarDrag::new();
+        let area = sb_area();
+        let down = mouse_event(MouseEventKind::Press(MouseButton::Left), 78, 5);
+        let resp = drag.handle_mouse(&down, area, SB_TOTAL, SB_VIEW, 0, ScrollbarAxis::Vertical);
+        assert!(resp.is_none());
+        assert!(!drag.dragging);
+    }
+
+    #[test]
+    fn scrollbar_drag_without_press_ignored() {
+        let mut drag = ScrollbarDrag::new();
+        let area = sb_area();
+        let evt = mouse_event(MouseEventKind::Drag(MouseButton::Left), 79, 5);
+        let resp = drag.handle_mouse(&evt, area, SB_TOTAL, SB_VIEW, 0, ScrollbarAxis::Vertical);
+        assert!(resp.is_none());
+        assert!(!drag.dragging);
+    }
+
+    #[test]
+    fn scrollbar_no_content_no_scroll() {
+        let mut drag = ScrollbarDrag::new();
+        let area = sb_area();
+        let evt = mouse_event(MouseEventKind::Press(MouseButton::Left), 79, 5);
+        let resp = drag.handle_mouse(&evt, area, SB_VIEW, SB_VIEW, 0, ScrollbarAxis::Vertical);
+        assert!(resp.is_none());
+        assert!(!drag.dragging);
+    }
+
+    #[test]
+    fn scrollbar_horizontal_press_on_thumb_does_not_jump() {
+        let mut drag = ScrollbarDrag::new();
+        let area = LayoutRect {
+            x: 0,
+            y: 29,
+            width: 80,
+            height: 1,
+        };
+        // offset 40 → thumb at col (40/80 * 64) = 32, size 16 → cols 32-47
+        let offset = 40usize;
+        // Click at col 40, well within the thumb
+        let down = mouse_event(MouseEventKind::Press(MouseButton::Left), 40, 29);
+        let resp = drag.handle_mouse(
+            &down,
+            area,
+            SB_TOTAL,
+            SB_VIEW,
+            offset,
+            ScrollbarAxis::Horizontal,
+        );
+        assert_eq!(resp, Some(offset));
+        assert!(drag.dragging);
+    }
+
+    #[test]
+    fn scrollbar_horizontal_press_outside_ignored() {
+        let mut drag = ScrollbarDrag::new();
+        let area = LayoutRect {
+            x: 0,
+            y: 29,
+            width: 80,
+            height: 1,
+        };
+        let down = mouse_event(MouseEventKind::Press(MouseButton::Left), 30, 28);
+        let resp = drag.handle_mouse(&down, area, SB_TOTAL, SB_VIEW, 0, ScrollbarAxis::Horizontal);
+        assert!(resp.is_none());
         assert!(!drag.dragging);
     }
 
