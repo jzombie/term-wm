@@ -1,8 +1,10 @@
-use std::io::{self, IsTerminal, Stdout, Write};
+use std::io::{self, Stdout, Write};
 
-use crossterm::event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste};
+use crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
+};
 use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
-use crossterm::{execute, terminal};
+use crossterm::execute;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
@@ -19,7 +21,13 @@ use std::sync::{Arc, Mutex};
 ///
 /// Generic over the writer `W` (defaults to `Stdout`) so tests can inject
 /// a `CaptureWriter` and verify the ANSI sequences produced by `enter()`
-/// and `exit()` through the actual implementation.
+/// and `exit()`.
+///
+/// # Responsibilities
+///
+/// This is a **pure byte-stream renderer**.  It writes ANSI escape
+/// sequences to the backend.  OS-level terminal state (raw mode, etc.)
+/// is managed by the application root (`main.rs`), not by this component.
 pub struct ConsoleRenderTarget<W: Write = Stdout> {
     terminal: Terminal<CrosstermBackend<W>>,
     pub(crate) entered: bool,
@@ -102,13 +110,6 @@ impl<W: Write> RenderTarget for ConsoleRenderTarget<W> {
             EnterAlternateScreen,
             EnableBracketedPaste,
         )?;
-        // Only touch the real terminal when there IS a real terminal.
-        // Under `cargo test` stdin is a pipe — skip the OS call and
-        // let the test verify the ANSI sequences captured by the fake
-        // backend instead.
-        if std::io::stdin().is_terminal() {
-            terminal::enable_raw_mode()?;
-        }
         self.terminal.hide_cursor()?;
         self.entered = true;
         Ok(())
@@ -118,21 +119,7 @@ impl<W: Write> RenderTarget for ConsoleRenderTarget<W> {
         if !self.entered {
             return Ok(());
         }
-        execute!(
-            self.terminal.backend_mut(),
-            DisableMouseCapture,
-            DisableBracketedPaste
-        )?;
-        // TODO: Refactor this constant
-        // Give the terminal emulator time to process DisableMouseCapture
-        // before we disable raw mode (which re-enables echo). Without this
-        // delay, the terminal emulator might still send mouse events that
-        // get echoed as visible characters after raw mode is restored.
-        const MOUSE_DISABLE_DELAY: std::time::Duration = std::time::Duration::from_millis(8);
-        std::thread::sleep(MOUSE_DISABLE_DELAY);
-        if std::io::stdin().is_terminal() {
-            terminal::disable_raw_mode()?;
-        }
+        execute!(self.terminal.backend_mut(), DisableMouseCapture, DisableBracketedPaste)?;
         execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;
         self.terminal.show_cursor()?;
         self.entered = false;
@@ -156,8 +143,6 @@ impl<W: Write> RenderTarget for ConsoleRenderTarget<W> {
     }
 
     fn repair(&mut self) -> io::Result<()> {
-        // Clear the screen and hide cursor without leaving alternate
-        // screen or toggling raw mode (which would cause flicker).
         execute!(self.terminal.backend_mut(), Clear(ClearType::All),)?;
         self.terminal.hide_cursor()
     }
@@ -173,21 +158,15 @@ impl<W: Write> Drop for ConsoleRenderTarget<W> {
 mod tests {
     use super::*;
 
-    /// Tests that `enter()` writes `\x1b[?2004h` (bracketed paste enable).
-    /// Under `cargo test` stdin is a pipe, so `is_terminal()` returns false
-    /// and the raw-mode OS call is skipped — only the ANSI output matters.
     #[test]
     fn enter_writes_bracketed_paste_enable() {
         let (mut rt, writer) = ConsoleRenderTarget::new_capturing();
         rt.enter().expect("enter must succeed");
         let bytes = writer.bytes();
         assert!(
-            bytes
-                .windows(b"\x1b[?2004h".len())
-                .any(|w| w == b"\x1b[?2004h"),
+            bytes.windows(b"\x1b[?2004h".len()).any(|w| w == b"\x1b[?2004h"),
             "enter() must write bracketed paste enable \\x1b[?2004h. \
-             If this fails, EnableBracketedPaste may have been removed \
-             from enter(). Captured bytes: {:?}",
+             Captured bytes: {:?}",
             String::from_utf8_lossy(&bytes)
         );
     }
@@ -205,12 +184,9 @@ mod tests {
         rt.exit().expect("exit must succeed");
         let bytes = writer.bytes();
         assert!(
-            bytes
-                .windows(b"\x1b[?2004l".len())
-                .any(|w| w == b"\x1b[?2004l"),
+            bytes.windows(b"\x1b[?2004l".len()).any(|w| w == b"\x1b[?2004l"),
             "exit() must write bracketed paste disable \\x1b[?2004l. \
-             If this fails, DisableBracketedPaste may have been removed \
-             from exit(). Captured bytes: {:?}",
+             Captured bytes: {:?}",
             String::from_utf8_lossy(&bytes)
         );
     }
@@ -224,15 +200,11 @@ mod tests {
         rt.exit().expect("exit");
         let bytes = writer.bytes();
         assert!(
-            bytes
-                .windows(b"\x1b[?2004h".len())
-                .any(|w| w == b"\x1b[?2004h"),
+            bytes.windows(b"\x1b[?2004h".len()).any(|w| w == b"\x1b[?2004h"),
             "enter/exit roundtrip must contain enable \\x1b[?2004h"
         );
         assert!(
-            bytes
-                .windows(b"\x1b[?2004l".len())
-                .any(|w| w == b"\x1b[?2004l"),
+            bytes.windows(b"\x1b[?2004l".len()).any(|w| w == b"\x1b[?2004l"),
             "enter/exit roundtrip must contain disable \\x1b[?2004l"
         );
     }

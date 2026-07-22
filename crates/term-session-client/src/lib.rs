@@ -2,7 +2,7 @@ mod remote_pane;
 
 pub use remote_pane::RemotePane;
 
-use std::io::{self, IsTerminal, Write, stdout};
+use std::io::{self, Write, stdout};
 #[cfg(unix)]
 use std::os::unix::io::FromRawFd;
 use std::sync::Arc;
@@ -94,9 +94,6 @@ const INITIAL_WAIT_ITERS: usize = 20;
 /// The writer parameter allows tests to capture the ANSI sequences
 /// without writing to a real terminal.
 pub fn init_terminal<W: Write>(mut writer: W) -> io::Result<TerminalGuard<W>> {
-    if std::io::stdin().is_terminal() {
-        enable_raw_mode()?;
-    }
     writer.queue(EnterAlternateScreen)?;
     writer.queue(Hide)?;
     writer.queue(EnableBracketedPaste)?;
@@ -121,9 +118,6 @@ impl<W: Write> Drop for TerminalGuard<W> {
             let _ = writer.queue(DisableBracketedPaste);
             let _ = writer.queue(Show);
             let _ = writer.queue(LeaveAlternateScreen);
-            if std::io::stdin().is_terminal() {
-                let _ = disable_raw_mode();
-            }
             let _ = writer.flush();
         }
     }
@@ -224,6 +218,9 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         std::thread::sleep(Duration::from_millis(50));
     }
 
+    // Enable raw mode before terminal init; the app root (run_session)
+    // owns OS terminal state, not the render target.
+    enable_raw_mode()?;
     // Pass one stdout handle to init_terminal for the startup sequences
     // and TerminalGuard teardown; keep a second handle for rendering.
     let _guard = init_terminal(stdout())?;
@@ -557,6 +554,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
 
         // Exit on session exit
         if pane.has_exited() {
+            let _ = disable_raw_mode();
             return Ok(());
         }
 
