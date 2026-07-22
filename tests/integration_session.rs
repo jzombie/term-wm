@@ -175,7 +175,11 @@ async fn session_osc52_via_osc52extractor() {
             Err(_) => continue,
         }
     }
-    eprintln!("DEBUG final extracted={:?} is_active={}", extracted, extractor.is_active());
+    eprintln!(
+        "DEBUG final extracted={:?} is_active={}",
+        extracted,
+        extractor.is_active()
+    );
 
     assert_eq!(
         extracted,

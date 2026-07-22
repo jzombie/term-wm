@@ -179,10 +179,16 @@ const OSC52_HDR_WIN: &[u8] = "←]52;".as_bytes();
 /// indicating whether this was the Windows-transformed variant.
 /// Handles both `\x1b]52;` and `←]52;` (Windows ConPTY).
 fn find_osc52_header(data: &[u8]) -> Option<usize> {
-    if let Some(pos) = data.windows(OSC52_HEADER_LEN).position(|w| w == OSC52_HDR_STD) {
+    if let Some(pos) = data
+        .windows(OSC52_HEADER_LEN)
+        .position(|w| w == OSC52_HDR_STD)
+    {
         return Some(pos + OSC52_HEADER_LEN);
     }
-    if let Some(pos) = data.windows(OSC52_HEADER_LEN_WIN).position(|w| w == OSC52_HDR_WIN) {
+    if let Some(pos) = data
+        .windows(OSC52_HEADER_LEN_WIN)
+        .position(|w| w == OSC52_HDR_WIN)
+    {
         return Some(pos + OSC52_HEADER_LEN_WIN);
     }
     None
@@ -323,7 +329,8 @@ impl Osc52Extractor {
                 } else {
                     OSC52_HEADER_LEN_WIN
                 };
-                self.buf.extend_from_slice(&combined[header_end - header_len..]);
+                self.buf
+                    .extend_from_slice(&combined[header_end - header_len..]);
                 return self.try_extract(data, prev_tail);
             }
         }
