@@ -5,8 +5,12 @@ use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternate
 use crossterm::{execute, terminal};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-
 use ratatui::buffer::Buffer;
+
+#[cfg(test)]
+use ratatui::layout::Rect;
+#[cfg(test)]
+use ratatui::{TerminalOptions, Viewport};
 
 use crate::RatatuiBackend;
 use crate::RenderBackend;
@@ -83,9 +87,24 @@ impl ConsoleRenderTarget<CaptureWriter> {
     ///
     /// Disables raw mode management so tests can verify the ANSI byte
     /// stream without mutating the test runner's OS terminal state.
+    ///
+    /// Uses a fixed viewport (80×24) instead of querying the real terminal
+    /// size so the constructor works in CI where no terminal is attached.
     pub fn new_capturing() -> (Self, CaptureWriter) {
         let writer = CaptureWriter::new();
-        let mut rt = Self::with_writer(writer.clone()).expect("new_capturing");
+        let backend = CrosstermBackend::new(writer.clone());
+        let terminal = Terminal::with_options(
+            backend,
+            TerminalOptions {
+                viewport: Viewport::Fixed(Rect::new(0, 0, 80, 24)),
+            },
+        )
+        .expect("new_capturing");
+        let mut rt = Self {
+            terminal,
+            entered: false,
+            manage_raw_mode: true,
+        };
         rt.manage_raw_mode = false;
         (rt, writer)
     }
