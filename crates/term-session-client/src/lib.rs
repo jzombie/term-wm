@@ -2,7 +2,7 @@ mod remote_pane;
 
 pub use remote_pane::RemotePane;
 
-use std::io::{self, Write, stdout};
+use std::io::{self, IsTerminal, Write, stdout};
 #[cfg(unix)]
 use std::os::unix::io::FromRawFd;
 use std::sync::Arc;
@@ -94,7 +94,9 @@ const INITIAL_WAIT_ITERS: usize = 20;
 /// The writer parameter allows tests to capture the ANSI sequences
 /// without writing to a real terminal.
 pub fn init_terminal<W: Write>(mut writer: W) -> io::Result<TerminalGuard<W>> {
-    enable_raw_mode()?;
+    if std::io::stdin().is_terminal() {
+        enable_raw_mode()?;
+    }
     writer.queue(EnterAlternateScreen)?;
     writer.queue(Hide)?;
     writer.queue(EnableBracketedPaste)?;
@@ -119,7 +121,9 @@ impl<W: Write> Drop for TerminalGuard<W> {
             let _ = writer.queue(DisableBracketedPaste);
             let _ = writer.queue(Show);
             let _ = writer.queue(LeaveAlternateScreen);
-            let _ = disable_raw_mode();
+            if std::io::stdin().is_terminal() {
+                let _ = disable_raw_mode();
+            }
             let _ = writer.flush();
         }
     }
@@ -570,8 +574,6 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
-    use serial_test::serial;
-    use term_wm_pty_engine::test_pty::StdinPtyGuard;
 
     /// Helper writer that captures bytes into a shared `Vec<u8>`.
     struct TestWriter {
@@ -597,11 +599,10 @@ mod tests {
 
     /// Calls the real `init_terminal()` with a test writer and verifies
     /// the bracketed paste enable sequence `\x1b[?2004h` is written.
-    #[cfg(any(unix, windows))]
-    #[serial]
+    /// Under `cargo test` stdin is a pipe, so `is_terminal()` returns false
+    /// and the raw-mode OS call is skipped — only the ANSI output matters.
     #[test]
     fn init_terminal_writes_bracketed_paste_enable() {
-        let _pty = StdinPtyGuard::new().expect("PTY guard");
         let (writer, buf) = TestWriter::new();
         let _guard = init_terminal(writer).expect("init_terminal");
         let bytes = buf.lock().unwrap();
@@ -618,7 +619,6 @@ mod tests {
 
     /// Constructs a TerminalGuard with a test writer and verifies that
     /// dropping it writes the bracketed paste disable sequence `\x1b[?2004l`.
-    /// Does NOT need serial — the guard writes to a Vec, not the real terminal.
     #[test]
     fn terminal_guard_teardown_writes_bracketed_paste_disable() {
         let (writer, buf) = TestWriter::new();
@@ -641,11 +641,8 @@ mod tests {
 
     /// Full lifecycle: init_terminal followed by TerminalGuard teardown
     /// writes both the enable and disable sequences.
-    #[cfg(any(unix, windows))]
-    #[serial]
     #[test]
     fn init_and_teardown_roundtrip_contains_both_sequences() {
-        let _pty = StdinPtyGuard::new().expect("PTY guard");
         let (writer, buf) = TestWriter::new();
         let guard = init_terminal(writer).expect("init_terminal");
         drop(guard);

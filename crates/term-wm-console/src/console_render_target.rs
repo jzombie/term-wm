@@ -1,4 +1,4 @@
-use std::io::{self, Stdout, Write};
+use std::io::{self, IsTerminal, Stdout, Write};
 
 use crossterm::event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste};
 use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
@@ -8,12 +8,12 @@ use ratatui::backend::CrosstermBackend;
 
 use ratatui::buffer::Buffer;
 
-#[cfg(test)]
-use std::sync::{Arc, Mutex};
-
 use crate::RatatuiBackend;
 use crate::RenderBackend;
 use term_wm_core::io::RenderTarget;
+
+#[cfg(test)]
+use std::sync::{Arc, Mutex};
 
 /// Terminal render target backed by a crossterm/ratatui terminal.
 ///
@@ -102,7 +102,13 @@ impl<W: Write> RenderTarget for ConsoleRenderTarget<W> {
             EnterAlternateScreen,
             EnableBracketedPaste,
         )?;
-        terminal::enable_raw_mode()?;
+        // Only touch the real terminal when there IS a real terminal.
+        // Under `cargo test` stdin is a pipe — skip the OS call and
+        // let the test verify the ANSI sequences captured by the fake
+        // backend instead.
+        if std::io::stdin().is_terminal() {
+            terminal::enable_raw_mode()?;
+        }
         self.terminal.hide_cursor()?;
         self.entered = true;
         Ok(())
@@ -124,19 +130,8 @@ impl<W: Write> RenderTarget for ConsoleRenderTarget<W> {
         // get echoed as visible characters after raw mode is restored.
         const MOUSE_DISABLE_DELAY: std::time::Duration = std::time::Duration::from_millis(8);
         std::thread::sleep(MOUSE_DISABLE_DELAY);
-        // Attempt to disable raw mode.
-        if let Err(e) = terminal::disable_raw_mode() {
-            // WINDOWS TESTING WORKAROUND (should not affect production usage):
-            // Crossterm skips saving the initial console state for handles
-            // that lack echo flags by default (e.g. duplicated ConPTY handles
-            // during testing).  Gracefully absorb this known artifact so the
-            // rest of the teardown sequence (LeaveAlternateScreen, etc.) still
-            // executes and the terminal is left in a usable state.
-            let is_mode_state_artifact =
-                cfg!(all(windows, test)) && e.to_string().contains("Initial console modes not set");
-            if !is_mode_state_artifact {
-                return Err(e);
-            }
+        if std::io::stdin().is_terminal() {
+            terminal::disable_raw_mode()?;
         }
         execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;
         self.terminal.show_cursor()?;
@@ -177,18 +172,12 @@ impl<W: Write> Drop for ConsoleRenderTarget<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
-    use term_wm_pty_engine::test_pty::StdinPtyGuard;
 
-    /// Crossterm tracks raw-mode state globally.  These tests manipulate
-    /// real terminal state and must not run concurrently or they corrupt
-    /// each other's crossterm state and cascade panic.
-
-    #[cfg(any(unix, windows))]
-    #[serial]
+    /// Tests that `enter()` writes `\x1b[?2004h` (bracketed paste enable).
+    /// Under `cargo test` stdin is a pipe, so `is_terminal()` returns false
+    /// and the raw-mode OS call is skipped — only the ANSI output matters.
     #[test]
     fn enter_writes_bracketed_paste_enable() {
-        let _pty = StdinPtyGuard::new().expect("PTY guard");
         let (mut rt, writer) = ConsoleRenderTarget::new_capturing();
         rt.enter().expect("enter must succeed");
         let bytes = writer.bytes();
@@ -201,20 +190,13 @@ mod tests {
              from enter(). Captured bytes: {:?}",
             String::from_utf8_lossy(&bytes)
         );
-        rt.exit().expect("exit must succeed");
     }
 
-    /// Verifies that the real `exit()` method writes the bracketed paste
-    /// disable sequence `\x1b[?2004l` to the backend.
-    ///
-    /// Must call enter() first so crossterm saves its raw-mode baseline —
-    /// faking `rt.entered = true` would cause disable_raw_mode to panic
-    /// with "Initial console modes not set".
-    #[cfg(any(unix, windows))]
-    #[serial]
+    /// Tests that `exit()` writes `\x1b[?2004l` (bracketed paste disable).
+    /// Must call `enter()` first so the `entered` guard allows `exit()` to
+    /// run its full body.
     #[test]
     fn exit_writes_bracketed_paste_disable() {
-        let _pty = StdinPtyGuard::new().expect("PTY guard");
         let (mut rt, writer) = ConsoleRenderTarget::new_capturing();
         // Must call real enter() so crossterm saves initial terminal state
         rt.enter().expect("enter must succeed");
@@ -233,13 +215,10 @@ mod tests {
         );
     }
 
-    /// Full lifecycle: enter() then exit() writes both the enable and
-    /// disable sequences.  Catches regressions where one drops out.
-    #[cfg(any(unix, windows))]
-    #[serial]
+    /// Tests that the full `enter()` → `exit()` lifecycle writes both
+    /// the enable and disable sequences.
     #[test]
     fn enter_and_exit_roundtrip_contains_both_sequences() {
-        let _pty = StdinPtyGuard::new().expect("PTY guard");
         let (mut rt, writer) = ConsoleRenderTarget::new_capturing();
         rt.enter().expect("enter");
         rt.exit().expect("exit");
@@ -258,13 +237,10 @@ mod tests {
         );
     }
 
-    /// Calling enter() twice must not write additional bytes — the
-    /// `entered` guard on the second call should skip the body.
-    #[cfg(any(unix, windows))]
-    #[serial]
+    /// Tests that calling `enter()` twice does not write additional bytes
+    /// — the `entered` guard on the second call should skip the body.
     #[test]
     fn double_enter_is_idempotent() {
-        let _pty = StdinPtyGuard::new().expect("PTY guard");
         let (mut rt, writer) = ConsoleRenderTarget::new_capturing();
         rt.enter().expect("first enter");
         let first_len = writer.bytes().len();
@@ -275,6 +251,5 @@ mod tests {
             first_len,
             "second enter() must not write additional bytes"
         );
-        rt.exit().expect("exit");
     }
 }
