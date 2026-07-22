@@ -493,7 +493,10 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                     true
                 }
                 Event::Paste(text) => {
-                    let _ = pane.write_bytes(text.as_bytes());
+                    let mut wrapped = b"\x1b[200~".to_vec();
+                    wrapped.extend_from_slice(text.as_bytes());
+                    wrapped.extend_from_slice(b"\x1b[201~");
+                    let _ = pane.write_bytes(&wrapped);
                     true
                 }
                 _ => false,
