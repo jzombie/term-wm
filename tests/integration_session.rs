@@ -8,11 +8,11 @@ use term_session_muxio_service_definitions::{
 
 mod common;
 use common::mock::{find_osc52_payload, find_sgr_mouse_token, get_mock_bin};
-use term_wm_pty_engine::clipboard::Osc52Extractor;
 use common::session::{
     TEST_COLS, TEST_ROWS, connect_client_with_retry, generate_socket_path, get_bench_bin,
     spawn_session, wait_for_output,
 };
+use term_wm_pty_engine::clipboard::Osc52Extractor;
 
 #[tokio::test]
 async fn session_spawn_returns_id() {
