@@ -5,6 +5,7 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::{Layer, layer::Context};
 
 use term_wm_core::debug_event_flags::trigger_error_pending;
+use term_wm_pty_engine::redirect_stdio::redirect_fd_to_tracing;
 
 #[cfg(feature = "sys-ui")]
 use term_wm_sys_ui_components::wm_debug_log::{DebugLogWriter, global_debug_log};
@@ -95,4 +96,21 @@ pub fn init_default() {
             Level::DEBUG,
         ))
         .try_init();
+
+    // Redirect OS-level stdout/stderr into tracing so C-library and
+    // system-framework debug output (AppKit, NSPasteboard, etc.) goes
+    // to the debug log view instead of the terminal display.
+    #[cfg(unix)]
+    {
+        // let _ = redirect_fd_to_tracing(libc::STDOUT_FILENO, false);
+        let _ = redirect_fd_to_tracing(libc::STDERR_FILENO, true);
+    }
+    #[cfg(windows)]
+    {
+        // let _ = redirect_fd_to_tracing(1i32, false);
+        let _ = redirect_fd_to_tracing(2i32, true);
+    }
+
+    // println!("stdout redirected");
+    eprintln!("stderr redirected");
 }
