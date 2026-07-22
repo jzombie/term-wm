@@ -1,4 +1,4 @@
-use std::io::{self, IsTerminal, Stdout, Write};
+use std::io::{self, Stdout, Write};
 
 use crossterm::event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste};
 use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
@@ -19,10 +19,19 @@ use std::sync::{Arc, Mutex};
 ///
 /// Generic over the writer `W` (defaults to `Stdout`) so tests can inject
 /// a `CaptureWriter` and verify the ANSI sequences produced by `enter()`
-/// and `exit()` through the actual implementation.
+/// and `exit()`.
+///
+/// # Raw mode
+///
+/// [`manage_raw_mode`](Self::manage_raw_mode) controls whether `enter()` /
+/// `exit()` call `crossterm::terminal::enable_raw_mode` / `disable_raw_mode`.
+/// Defaults to `true` for production.  Set to `false` in `new_capturing()` so
+/// tests can verify the ANSI byte stream without the test runner's OS state
+/// being mutated.
 pub struct ConsoleRenderTarget<W: Write = Stdout> {
     terminal: Terminal<CrosstermBackend<W>>,
     pub(crate) entered: bool,
+    pub manage_raw_mode: bool,
 }
 
 impl ConsoleRenderTarget<Stdout> {
@@ -70,12 +79,14 @@ impl Write for CaptureWriter {
 
 #[cfg(test)]
 impl ConsoleRenderTarget<CaptureWriter> {
-    /// Create a test render target backed by a `CaptureWriter`.  The real
-    /// `enter()` / `exit()` methods are exercised — every code path runs,
-    /// including the `execute!` macro and `EnableBracketedPaste`.
+    /// Create a test render target backed by a `CaptureWriter`.
+    ///
+    /// Disables raw mode management so tests can verify the ANSI byte
+    /// stream without mutating the test runner's OS terminal state.
     pub fn new_capturing() -> (Self, CaptureWriter) {
         let writer = CaptureWriter::new();
-        let rt = Self::with_writer(writer.clone()).expect("new_capturing");
+        let mut rt = Self::with_writer(writer.clone()).expect("new_capturing");
+        rt.manage_raw_mode = false;
         (rt, writer)
     }
 }
@@ -88,6 +99,7 @@ impl<W: Write> ConsoleRenderTarget<W> {
         Ok(Self {
             terminal,
             entered: false,
+            manage_raw_mode: true,
         })
     }
 }
@@ -102,10 +114,8 @@ impl<W: Write> RenderTarget for ConsoleRenderTarget<W> {
             EnterAlternateScreen,
             EnableBracketedPaste,
         )?;
-        // Enable raw mode when attached to a real terminal; silently
-        // skip under `cargo test` where stdin is a pipe.
-        if std::io::stdin().is_terminal() {
-            let _ = terminal::enable_raw_mode();
+        if self.manage_raw_mode {
+            terminal::enable_raw_mode()?;
         }
         self.terminal.hide_cursor()?;
         self.entered = true;
@@ -121,23 +131,9 @@ impl<W: Write> RenderTarget for ConsoleRenderTarget<W> {
             DisableMouseCapture,
             DisableBracketedPaste
         )?;
-        // TODO: Refactor this constant
-        // Give the terminal emulator time to process DisableMouseCapture
-        // before we disable raw mode (which re-enables echo). Without this
-        // delay, the terminal emulator might still send mouse events that
-        // get echoed as visible characters after raw mode is restored.
-        const MOUSE_DISABLE_DELAY: std::time::Duration = std::time::Duration::from_millis(8);
-        std::thread::sleep(MOUSE_DISABLE_DELAY);
-        if std::io::stdin().is_terminal()
-            && let Err(e) = terminal::disable_raw_mode()
-        {
-            // Crossterm tracks raw mode in a global static. During
-            // concurrent `cargo test` runs, one test can clear the
-            // state while another reads it.  Gracefully absorb so
-            // the visual teardown always completes.
-            if !e.to_string().contains("Initial console modes not set") {
-                return Err(e);
-            }
+
+        if self.manage_raw_mode {
+            terminal::disable_raw_mode()?;
         }
         execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;
         self.terminal.show_cursor()?;
@@ -192,8 +188,7 @@ mod tests {
                 .windows(b"\x1b[?2004h".len())
                 .any(|w| w == b"\x1b[?2004h"),
             "enter() must write bracketed paste enable \\x1b[?2004h. \
-             If this fails, EnableBracketedPaste may have been removed \
-             from enter(). Captured bytes: {:?}",
+             Captured bytes: {:?}",
             String::from_utf8_lossy(&bytes)
         );
     }
@@ -215,8 +210,7 @@ mod tests {
                 .windows(b"\x1b[?2004l".len())
                 .any(|w| w == b"\x1b[?2004l"),
             "exit() must write bracketed paste disable \\x1b[?2004l. \
-             If this fails, DisableBracketedPaste may have been removed \
-             from exit(). Captured bytes: {:?}",
+             Captured bytes: {:?}",
             String::from_utf8_lossy(&bytes)
         );
     }
