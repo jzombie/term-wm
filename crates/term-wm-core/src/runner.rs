@@ -885,6 +885,89 @@ mod tests {
         }
     }
 
+    #[test]
+    fn handle_focused_app_event_routes_mouse_to_component_and_drains_actions() {
+        use crate::events::{MouseButton, MouseEvent, MouseEventKind};
+        use crate::hitbox_registry::{ComponentOwner, HitboxId};
+        use crate::window::WindowState;
+
+        struct FakeApp {
+            wm: WindowManager<TestComponent>,
+        }
+        impl WindowManagerHost<TestComponent> for FakeApp {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
+                &mut self.wm
+            }
+        }
+
+        let mut app = FakeApp {
+            wm: WindowManager::<TestComponent>::with_config(
+                crate::wm_config::WmConfig::standalone(),
+                std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+                None,
+                crate::window::LayerManager::new(),
+                std::collections::HashMap::new(),
+            ),
+        };
+
+        let key = app
+            .wm
+            .create_window(TestComponent::ActionRecorder(Default::default()));
+        app.wm.transition_window(key, WindowState::Mapped);
+        app.wm.regions.set(
+            key,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        app.wm.focus_app_window(key);
+
+        // Register a hitbox so dispatch_mouse can route to the component
+        let hitbox_id = HitboxId::new();
+        app.wm.hitbox_registry_mut().register(
+            hitbox_id,
+            ComponentOwner::Window(key),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+
+        let evt = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        let consumed = handle_focused_app_event(&evt, &mut app);
+        assert!(
+            consumed,
+            "mouse Press must be consumed through handle_focused_app_event"
+        );
+
+        // Verify the component received the action via drain_action_queue
+        match app
+            .wm
+            .component_for_key_mut(key)
+            .expect("component must exist")
+        {
+            TestComponent::ActionRecorder(recorder) => {
+                assert!(
+                    recorder.received_mouse_bytes,
+                    "ActionRecorder must receive MouseToBytes via drain_action_queue, actions: {:?}",
+                    recorder.actions
+                );
+            }
+            _ => panic!("component must be ActionRecorder"),
+        }
+    }
+
     // ── selection_snapshot_from ──────────────────────────────────────
 
     #[test]
