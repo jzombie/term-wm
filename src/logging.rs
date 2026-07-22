@@ -78,11 +78,13 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SubscriberMakeWriter {
     }
 }
 
-/// Initialize tracing subscriber to write to the debug log buffer when available,
-/// otherwise fall back to stderr. Safe to call multiple times; subsequent calls
-/// are no-ops for the global subscriber.
+/// Initialize tracing and redirect stderr into it.
+///
+/// Routes tracing output to the in-app Debug Log window when available
+/// (falls back to stderr).  Also redirects the OS-level stderr FD into
+/// tracing so framework noise (NSPasteboard, etc.) goes to the log
+/// instead of the terminal.  Safe to call multiple times.
 pub fn init_default() {
-    // Configure a compact formatter and delegate writes to our make-writer.
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_writer(SubscriberMakeWriter)
         .with_target(false)
@@ -97,9 +99,9 @@ pub fn init_default() {
         ))
         .try_init();
 
-    // Redirect OS-level stdout/stderr into tracing so C-library and
-    // system-framework debug output (AppKit, NSPasteboard, etc.) goes
-    // to the debug log view instead of the terminal display.
+    // Redirect stderr into tracing so system-framework debug output
+    // (NSPasteboard, etc.) goes to the debug log instead of the terminal.
+    // stdout is NOT redirected — ratatui/crossterm render to stdout.
     #[cfg(unix)]
     {
         let _ = redirect_fd_to_tracing(libc::STDERR_FILENO, true);
@@ -109,5 +111,6 @@ pub fn init_default() {
         let _ = redirect_fd_to_tracing(2i32, true);
     }
 
+    // This is safe.  It should show up in the debug console.
     eprintln!("stderr redirected");
 }
