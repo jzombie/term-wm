@@ -124,10 +124,15 @@ fn register_window_chrome_hitboxes(registry: &mut HitboxRegistry, params: &Chrom
         } else {
             0
         };
-        let drag_w = if *borders_enabled {
-            width.saturating_sub(LEFT_BORDER_WIDTH + RIGHT_BORDER_WIDTH)
+        let buttons_width = if wm_buttons.is_empty() {
+            0
         } else {
-            width
+            HEADER_BUTTON_GAP + HEADER_BUTTON_GAP * (wm_buttons.len() - 1) as u16
+        };
+        let drag_w = if *borders_enabled {
+            width.saturating_sub(LEFT_BORDER_WIDTH + RIGHT_BORDER_WIDTH + buttons_width)
+        } else {
+            width.saturating_sub(buttons_width)
         };
         registry.register(
             HitboxId::new(),
