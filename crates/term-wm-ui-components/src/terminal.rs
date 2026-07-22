@@ -163,6 +163,22 @@ impl Component<TermWmAction> for TerminalComponent {
             }
             Event::Mouse(mouse) => {
                 if !ctx.direct_mode() {
+                    // Right-click paste (Windows Cmd/PS convention).
+                    // Only in normal mode — in direct mode (tmux, vim, etc.)
+                    // right-click passes through to the running program.
+                    match mouse.kind {
+                        MouseEventKind::Press(MouseButton::Right)
+                        | MouseEventKind::Drag(MouseButton::Right) => {
+                            return EventResult::Consumed;
+                        }
+                        MouseEventKind::Release(MouseButton::Right) => {
+                            return EventResult::Action(TermWmAction::PasteClipboard);
+                        }
+                        _ => {}
+                    }
+                }
+
+                if !ctx.direct_mode() {
                     let selection_ready = self.selection_enabled;
                     let area = ctx.screen_area().unwrap_or_default();
                     if handle_selection_mouse(self, selection_ready, mouse, area) {
@@ -240,18 +256,39 @@ impl Component<TermWmAction> for TerminalComponent {
                 if self.pane.borrow_mut().scrollback() > 0 {
                     self.pane.borrow_mut().set_scrollback(0);
                 }
-                if let Err(_err) = self.pane.borrow_mut().write_bytes(&bytes) {
-                    #[cfg(windows)]
-                    eprintln!("terminal input write failed: {_err}");
+                if let Err(err) = self.pane.borrow_mut().write_bytes(&bytes) {
+                    tracing::warn!(?err, "terminal input write failed");
                 }
             }
             TermWmAction::Scroll(delta) => {
                 self.scroll_scrollback(delta);
             }
             TermWmAction::MouseToBytes(bytes) => {
-                if let Err(_err) = self.pane.borrow_mut().write_bytes(&bytes) {
-                    #[cfg(windows)]
-                    eprintln!("terminal mouse write failed: {_err}");
+                if let Err(err) = self.pane.borrow_mut().write_bytes(&bytes) {
+                    tracing::warn!(?err, "terminal mouse write failed");
+                }
+            }
+            TermWmAction::ClipboardPaste(text) => {
+                let bracketed_paste = {
+                    let mut pane = self.pane.borrow_mut();
+                    let parser = pane.shared_parser();
+                    let parser_lock = parser.lock().unwrap();
+                    parser_lock.screen().bracketed_paste()
+                };
+                let bytes = if bracketed_paste {
+                    let mut wrapped = b"\x1b[200~".to_vec();
+                    wrapped.extend_from_slice(text.as_bytes());
+                    wrapped.extend_from_slice(b"\x1b[201~");
+                    wrapped
+                } else {
+                    text.as_bytes().to_vec()
+                };
+                self.selection.borrow_mut().clear();
+                if self.pane.borrow_mut().scrollback() > 0 {
+                    self.pane.borrow_mut().set_scrollback(0);
+                }
+                if let Err(err) = self.pane.borrow_mut().write_bytes(&bytes) {
+                    tracing::warn!(?err, "terminal paste write failed");
                 }
             }
             _ => {}
@@ -2355,5 +2392,72 @@ mod tests {
         } else {
             panic!("expected Action(KeyToBytes), got {:?}", result);
         }
+    }
+
+    /// ClipboardPaste with bracketed paste enabled wraps the text in
+    /// \x1b[200~...\x1b[201~ markers before writing to the pane.
+    #[test]
+    fn clipboard_paste_wraps_when_bracketed_enabled() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+
+        // Enable bracketed paste on the child's parser
+        {
+            let parser = term.pane.borrow_mut().shared_parser();
+            parser.lock().unwrap().process(b"\x1b[?2004h");
+        }
+
+        let ctx = ComponentContext::default();
+        let mut queue = std::collections::VecDeque::new();
+        term.update(
+            TermWmAction::ClipboardPaste("clip".to_string()),
+            &ctx,
+            &mut queue,
+        );
+
+        let written = term.pane.borrow_mut().last_bytes_text();
+        assert_eq!(
+            written, "\x1b[200~clip\x1b[201~",
+            "ClipboardPaste must wrap in bracketed markers when DECSET 2004 is enabled"
+        );
+    }
+
+    /// ClipboardPaste without bracketed paste writes raw bytes to the pane.
+    #[test]
+    fn clipboard_paste_raw_when_bracketed_disabled() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+
+        let ctx = ComponentContext::default();
+        let mut queue = std::collections::VecDeque::new();
+        term.update(
+            TermWmAction::ClipboardPaste("raw".to_string()),
+            &ctx,
+            &mut queue,
+        );
+
+        let written = term.pane.borrow_mut().last_bytes_text();
+        assert_eq!(
+            written, "raw",
+            "ClipboardPaste must write raw bytes when DECSET 2004 is not enabled"
+        );
+    }
+
+    /// ClipboardPaste with empty text is a no-op (no bytes written).
+    #[test]
+    fn clipboard_paste_empty_text_is_noop() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+
+        let ctx = ComponentContext::default();
+        let mut queue = std::collections::VecDeque::new();
+        term.update(
+            TermWmAction::ClipboardPaste(String::new()),
+            &ctx,
+            &mut queue,
+        );
+
+        let written = term.pane.borrow_mut().last_bytes_text();
+        assert_eq!(
+            written, "",
+            "ClipboardPaste with empty text must write nothing"
+        );
     }
 }
