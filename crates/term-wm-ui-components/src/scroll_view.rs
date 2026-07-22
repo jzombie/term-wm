@@ -83,8 +83,19 @@ impl ScrollbarDrag {
             .round() as i32;
         let mouse_rel = mouse_pos - area_start;
 
+        let on_scrollbar = match axis {
+            ScrollbarAxis::Vertical => {
+                let sb_col = area.x.saturating_add(i32::from(area.width.saturating_sub(1)));
+                i32::from(mouse.column) == sb_col && mouse_rel >= 0 && mouse_rel < track_len
+            }
+            ScrollbarAxis::Horizontal => {
+                let sb_row = area.y.saturating_add(i32::from(area.height.saturating_sub(1)));
+                i32::from(mouse.row) == sb_row && mouse_rel >= 0 && mouse_rel < track_len
+            }
+        };
+
         match mouse.kind {
-            MouseEventKind::Press(_) if mouse_rel >= 0 && mouse_rel < track_len => {
+            MouseEventKind::Press(_) if on_scrollbar => {
                 if mouse_rel >= current_thumb_rel && mouse_rel < current_thumb_rel + thumb_size {
                     self.dragging = true;
                     self.drag_anchor = mouse_rel - current_thumb_rel;
