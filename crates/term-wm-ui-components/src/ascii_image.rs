@@ -550,4 +550,110 @@ mod tests {
         assert_eq!(img2.sample_alpha(0, 0), 0);
         assert_eq!(img2.sample_rgb(0, 0), None);
     }
+
+    #[test]
+    fn set_rgba8_invalid_size_clears() {
+        let mut img = AsciiImageComponent::new();
+        img.set_rgba8(0, 0, vec![]);
+        assert_eq!(img.width, 0);
+        assert!(img.luma.is_empty());
+        // wrong length
+        img.set_rgba8(2, 2, vec![0u8; 10]);
+        assert_eq!(img.width, 0);
+    }
+
+    #[test]
+    fn set_luma8_invalid_width_height_clears() {
+        let mut img = AsciiImageComponent::new();
+        img.set_luma8(0, 5, vec![]);
+        assert_eq!(img.width, 0);
+        img.set_luma8(5, 0, vec![]);
+        assert_eq!(img.width, 0);
+    }
+
+    #[test]
+    fn clear_resets_all_state() {
+        let mut img = AsciiImageComponent::new();
+        img.set_luma8(2, 2, vec![10, 20, 30, 40]);
+        assert_eq!(img.width, 2);
+        img.clear();
+        assert_eq!(img.width, 0);
+        assert!(img.luma.is_empty());
+        assert!(img.rgba.is_none());
+        assert!(img.alpha.is_none());
+    }
+
+    #[test]
+    fn setters_mark_dirty() {
+        let mut img = AsciiImageComponent::new();
+        img.set_luma8(2, 2, vec![10, 20, 30, 40]);
+        img.dirty.set(false);
+        img.set_keep_aspect(false);
+        assert!(img.dirty.get());
+        img.dirty.set(false);
+        img.set_colorize(false);
+        assert!(img.dirty.get());
+        img.dirty.set(false);
+        img.set_render_mode(RenderMode::Ascii);
+        assert!(img.dirty.get());
+    }
+
+    #[test]
+    fn sample_luma_out_of_bounds_returns_zero() {
+        let img = AsciiImageComponent::new();
+        assert_eq!(img.sample_luma(0, 0), 0);
+        assert_eq!(img.sample_luma(100, 100), 0);
+    }
+
+    #[test]
+    fn sample_alpha_without_rgba_returns_255() {
+        let mut img = AsciiImageComponent::new();
+        img.set_luma8(1, 1, vec![128]);
+        assert_eq!(img.sample_alpha(0, 0), 255);
+    }
+
+    #[test]
+    fn sample_rgb_out_of_bounds_returns_none() {
+        let mut img = AsciiImageComponent::new();
+        img.set_rgba8(1, 1, vec![255, 0, 0, 255]);
+        assert_eq!(img.sample_rgb(5, 5), None);
+    }
+
+    #[test]
+    fn sample_rgb_average_averages_two_rows() {
+        let mut img = AsciiImageComponent::new();
+        // 2 pixels wide, 2 pixels tall: red top, green bottom
+        let rgba = vec![
+            255u8, 0, 0, 255,  0, 255, 0, 255,
+            0, 0, 255, 255,    255, 255, 0, 255,
+        ];
+        img.set_rgba8(2, 2, rgba);
+        let avg = img.sample_rgb_average(0, 0, 1);
+        assert!(avg.is_some());
+        let (r, g, b) = avg.unwrap();
+        // Red at (0,0) averaged with Blue at (0,1): r=127, g=0, b=127
+        assert_eq!(r, 127);
+        assert_eq!(g, 0);
+        assert_eq!(b, 127);
+    }
+
+    #[test]
+    fn default_render_mode_is_braille() {
+        let img = AsciiImageComponent::new();
+        assert!(matches!(img.render_mode, RenderMode::Braille));
+    }
+
+    #[test]
+    fn load_svg_from_bytes_invalid_returns_err() {
+        let mut img = AsciiImageComponent::new();
+        let result = img.load_svg_from_bytes(b"not svg");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_svg_from_path_nonexistent_returns_err() {
+        let mut img = AsciiImageComponent::new();
+        let result = img.load_svg_from_path("/nonexistent/path.svg");
+        assert!(result.is_err());
+    }
 }

@@ -136,6 +136,13 @@ impl WmComponent for WmFabComponent {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::buffer::Buffer;
+    use term_wm_core::events::{Event, MouseEvent, MouseEventKind, MouseButton, KeyModifiers};
+
+    fn make_backend(w: u16, h: u16) -> term_wm_console::RatatuiBackend {
+        let buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, w, h));
+        term_wm_console::RatatuiBackend::new(buf, ratatui::layout::Rect::new(0, 0, w, h))
+    }
 
     #[test]
     fn fab_component_new_is_visible() {
@@ -156,5 +163,95 @@ mod tests {
     fn fab_component_default_is_visible() {
         let fab = WmFabComponent::default();
         assert!(fab.visible());
+    }
+
+    #[test]
+    fn fab_render_when_hidden_does_nothing() {
+        let mut fab = WmFabComponent::new();
+        fab.set_visible(false);
+        let mut backend = make_backend(80, 24);
+        let mut reg = HitboxRegistry::new();
+        let area = LayoutRect { x: 0, y: 0, width: 80, height: 24 };
+        fab.render(&mut backend, area, &ComponentContext::default(), &mut reg);
+        assert!(reg.is_empty());
+    }
+
+    #[test]
+    fn fab_render_registers_hitbox_and_draws() {
+        let mut fab = WmFabComponent::new();
+        let id = fab.hitbox_id().unwrap();
+        let mut backend = make_backend(80, 24);
+        let mut reg = HitboxRegistry::new();
+        let area = LayoutRect { x: 0, y: 0, width: 80, height: 24 };
+        fab.render(&mut backend, area, &ComponentContext::default(), &mut reg);
+        // FAB is at bottom-right: 3 wide, 1 tall
+        assert_eq!(fab.fab_rect().width, 3);
+        assert_eq!(fab.fab_rect().height, 1);
+        assert_eq!(fab.fab_rect().x, 77);
+        assert_eq!(fab.fab_rect().y, 23);
+        // Hitbox should be registered
+        assert!(!reg.is_empty());
+        let result = reg.hit_test(term_wm_core::mouse_coord::MousePosition {
+            column: 78,
+            row: 23,
+            space: term_wm_core::mouse_coord::CoordSpace::Screen,
+        });
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().0, id);
+    }
+
+    #[test]
+    fn fab_render_small_buffer_clips() {
+        let mut fab = WmFabComponent::new();
+        let mut backend = make_backend(5, 3);
+        let mut reg = HitboxRegistry::new();
+        let area = LayoutRect { x: 0, y: 0, width: 5, height: 3 };
+        fab.render(&mut backend, area, &ComponentContext::default(), &mut reg);
+        assert_eq!(fab.fab_rect().x, 2);
+        assert_eq!(fab.fab_rect().y, 2);
+    }
+
+    #[test]
+    fn fab_handle_events_ignores_when_not_active() {
+        let mut fab = WmFabComponent::new();
+        let ctx = ComponentContext::default();
+        let mouse = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            column: 78,
+            row: 23,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result = fab.handle_events(&mouse, &ctx);
+        assert!(matches!(result, EventResult::Ignored));
+    }
+
+    #[test]
+    fn fab_handle_events_opens_command_palette_when_active() {
+        let mut fab = WmFabComponent::new();
+        let id = fab.hitbox_id().unwrap();
+        let ctx = ComponentContext::default().with_active_hitbox(id);
+        let mouse = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            column: 78,
+            row: 23,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result = fab.handle_events(&mouse, &ctx);
+        assert!(matches!(result, EventResult::Action(TermWmAction::OpenCommandPalette)));
+    }
+
+    #[test]
+    fn fab_handle_events_ignores_non_press() {
+        let mut fab = WmFabComponent::new();
+        let id = fab.hitbox_id().unwrap();
+        let ctx = ComponentContext::default().with_active_hitbox(id);
+        let mouse = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 78,
+            row: 23,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result = fab.handle_events(&mouse, &ctx);
+        assert!(matches!(result, EventResult::Ignored));
     }
 }

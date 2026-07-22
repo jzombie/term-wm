@@ -55,3 +55,84 @@ impl Default for WmNotificationAreaComponent {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    fn make_backend(area: LayoutRect) -> term_wm_console::RatatuiBackend {
+        let ratatui_area = term_wm_ui_components::helpers::layout_rect_to_clipped_rect(area);
+        let buf = Buffer::empty(ratatui_area);
+        term_wm_console::RatatuiBackend::new(buf, ratatui_area)
+    }
+
+    #[test]
+    fn new_creates_component() {
+        let c = WmNotificationAreaComponent::new();
+        assert!(c.hitbox_id().is_some());
+    }
+
+    #[test]
+    fn default_is_new() {
+        let c = WmNotificationAreaComponent::default();
+        assert!(c.hitbox_id().is_some());
+    }
+
+    #[test]
+    fn hitbox_id_returns_some() {
+        let c = WmNotificationAreaComponent::new();
+        let id = c.hitbox_id().unwrap();
+        assert!(id.0 > 0);
+    }
+
+    #[test]
+    fn render_registers_hitbox_when_area_nonzero() {
+        let mut c = WmNotificationAreaComponent::new();
+        let id = c.hitbox_id().unwrap();
+        let mut reg = HitboxRegistry::new();
+        let area = LayoutRect { x: 0, y: 0, width: 10, height: 5 };
+        let mut backend = make_backend(area);
+        c.render(&mut backend, area, &ComponentContext::default(), &mut reg);
+        let result = reg.hit_test(term_wm_core::mouse_coord::MousePosition {
+            column: 5,
+            row: 2,
+            space: term_wm_core::mouse_coord::CoordSpace::Screen,
+        });
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().0, id);
+    }
+
+    #[test]
+    fn render_skips_when_area_zero() {
+        let mut c = WmNotificationAreaComponent::new();
+        let mut reg = HitboxRegistry::new();
+        let area = LayoutRect { x: 0, y: 0, width: 0, height: 0 };
+        let mut backend = make_backend(LayoutRect { x: 0, y: 0, width: 10, height: 10 });
+        c.render(&mut backend, area, &ComponentContext::default(), &mut reg);
+        assert!(reg.is_empty());
+    }
+
+    #[test]
+    fn register_hitbox_nonzero_area() {
+        let c = WmNotificationAreaComponent::new();
+        let id = c.hitbox_id().unwrap();
+        let mut reg = HitboxRegistry::new();
+        c.register_hitbox(LayoutRect { x: 5, y: 5, width: 10, height: 3 }, &mut reg);
+        let result = reg.hit_test(term_wm_core::mouse_coord::MousePosition {
+            column: 7,
+            row: 6,
+            space: term_wm_core::mouse_coord::CoordSpace::Screen,
+        });
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().0, id);
+    }
+
+    #[test]
+    fn register_hitbox_zero_area_does_not_register() {
+        let c = WmNotificationAreaComponent::new();
+        let mut reg = HitboxRegistry::new();
+        c.register_hitbox(LayoutRect { x: 0, y: 0, width: 0, height: 0 }, &mut reg);
+        assert!(reg.is_empty());
+    }
+}

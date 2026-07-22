@@ -67,3 +67,80 @@ pub fn content_rect(full: Rect, borders_enabled: bool, header_enabled: bool) -> 
         height,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_borders_no_header_returns_full() {
+        let full = Rect { x: 0, y: 0, width: 80, height: 24 };
+        assert_eq!(content_rect(full, false, false), full);
+    }
+
+    #[test]
+    fn borders_only() {
+        let full = Rect { x: 0, y: 0, width: 80, height: 24 };
+        let inner = content_rect(full, true, false);
+        assert_eq!(inner.x, 1);
+        assert_eq!(inner.y, 1);
+        assert_eq!(inner.width, 78);
+        assert_eq!(inner.height, 22);
+    }
+
+    #[test]
+    fn header_only() {
+        let full = Rect { x: 0, y: 0, width: 80, height: 24 };
+        let inner = content_rect(full, false, true);
+        assert_eq!(inner.x, 0);
+        assert_eq!(inner.y, 1);
+        assert_eq!(inner.width, 80);
+        assert_eq!(inner.height, 23);
+    }
+
+    #[test]
+    fn borders_and_header() {
+        let full = Rect { x: 0, y: 0, width: 80, height: 24 };
+        let inner = content_rect(full, true, true);
+        assert_eq!(inner.x, 1);
+        assert_eq!(inner.y, 2);
+        assert_eq!(inner.width, 78);
+        assert_eq!(inner.height, 21);
+    }
+
+    #[test]
+    fn too_small_returns_default() {
+        let tiny = Rect { x: 0, y: 0, width: 1, height: 1 };
+        assert_eq!(content_rect(tiny, true, true), Rect::default());
+    }
+
+    #[test]
+    fn borders_only_too_narrow() {
+        let narrow = Rect { x: 0, y: 0, width: 2, height: 24 };
+        assert_eq!(content_rect(narrow, true, false), Rect::default());
+    }
+
+    #[test]
+    fn header_only_too_short() {
+        let short = Rect { x: 0, y: 0, width: 80, height: 1 };
+        assert_eq!(content_rect(short, false, true), Rect::default());
+    }
+
+    #[test]
+    fn nonzero_origin() {
+        let full = Rect { x: 10, y: 20, width: 80, height: 24 };
+        let inner = content_rect(full, true, true);
+        assert_eq!(inner.x, 11);
+        assert_eq!(inner.y, 22);
+        assert_eq!(inner.width, 78);
+        assert_eq!(inner.height, 21);
+    }
+
+    #[test]
+    fn min_content_dim_borders_only_exactly_minimal() {
+        let full = Rect { x: 0, y: 0, width: 3, height: 2 };
+        let inner = content_rect(full, true, false);
+        assert_eq!(inner.width, 1);
+        assert_eq!(inner.height, 0);
+    }
+}
