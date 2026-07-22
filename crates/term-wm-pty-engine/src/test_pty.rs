@@ -108,8 +108,13 @@ impl StdinPtyGuard {
                 bInheritHandle: i32,
                 dwOptions: u32,
             ) -> i32;
+            fn GetConsoleMode(hConsoleHandle: isize, lpMode: *mut u32) -> i32;
+            fn SetConsoleMode(hConsoleHandle: isize, dwMode: u32) -> i32;
         }
         const DUPLICATE_SAME_ACCESS: u32 = 0x00000002;
+        const ENABLE_PROCESSED_INPUT: u32 = 0x0001;
+        const ENABLE_LINE_INPUT: u32 = 0x0002;
+        const ENABLE_ECHO_INPUT: u32 = 0x0004;
 
         // 1. Grab the real Windows console buffer
         let conin = OpenOptions::new()
@@ -138,7 +143,19 @@ impl StdinPtyGuard {
             duped
         };
 
-        // 3. Swap it into standard input
+        // 3. Force ECHO/LINE/PROCESSED input on the duplicated handle.
+        // Without this, the new handle starts with mode=0 and crossterm
+        // thinks raw mode is already active — it skips saving state and
+        // then panics on disable_raw_mode with "Initial console modes not set".
+        unsafe {
+            let mut mode: u32 = 0;
+            if GetConsoleMode(duped, &mut mode) != 0 {
+                mode |= ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT;
+                SetConsoleMode(duped, mode);
+            }
+        }
+
+        // 4. Swap it into standard input
         let _guard = crate::redirect_stdio::HandleSwapGuard::new(
             STD_INPUT_HANDLE,
             duped,
