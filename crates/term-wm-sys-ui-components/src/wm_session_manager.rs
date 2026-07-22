@@ -268,6 +268,7 @@ mod tests {
 
     #[test]
     fn render_visible_with_sessions_registers_hitbox() {
+        use term_wm_core::hitbox_registry::ComponentOwner;
         let mut sm = WmSessionManagerComponent::new();
         sm.set_visible(true);
         let key = WindowKey::default();
@@ -275,7 +276,7 @@ mod tests {
             SessionEntry { key, title: "bash".to_string(), working_dir: "/home".to_string(), is_active: true },
         ]);
         let mut backend = make_backend(40, 10);
-        let mut reg = HitboxRegistry::new();
+        let mut reg = HitboxRegistry::with_owner(ComponentOwner::Window(key));
         let area = LayoutRect { x: 0, y: 0, width: 40, height: 10 };
         // Need to mount first so window_key is set
         sm.on_mount(key, &term_wm_core::app_context::AppContext::new("test", "0.1"));

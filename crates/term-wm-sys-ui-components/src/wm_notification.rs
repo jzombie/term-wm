@@ -88,9 +88,10 @@ mod tests {
 
     #[test]
     fn render_registers_hitbox_when_area_nonzero() {
+        use term_wm_core::hitbox_registry::ComponentOwner;
         let mut c = WmNotificationAreaComponent::new();
         let id = c.hitbox_id().unwrap();
-        let mut reg = HitboxRegistry::new();
+        let mut reg = HitboxRegistry::with_owner(ComponentOwner::Test);
         let area = LayoutRect { x: 0, y: 0, width: 10, height: 5 };
         let mut backend = make_backend(area);
         c.render(&mut backend, area, &ComponentContext::default(), &mut reg);
@@ -105,8 +106,9 @@ mod tests {
 
     #[test]
     fn render_skips_when_area_zero() {
+        use term_wm_core::hitbox_registry::ComponentOwner;
         let mut c = WmNotificationAreaComponent::new();
-        let mut reg = HitboxRegistry::new();
+        let mut reg = HitboxRegistry::with_owner(ComponentOwner::Test);
         let area = LayoutRect { x: 0, y: 0, width: 0, height: 0 };
         let mut backend = make_backend(LayoutRect { x: 0, y: 0, width: 10, height: 10 });
         c.render(&mut backend, area, &ComponentContext::default(), &mut reg);
@@ -115,9 +117,10 @@ mod tests {
 
     #[test]
     fn register_hitbox_nonzero_area() {
+        use term_wm_core::hitbox_registry::ComponentOwner;
         let c = WmNotificationAreaComponent::new();
         let id = c.hitbox_id().unwrap();
-        let mut reg = HitboxRegistry::new();
+        let mut reg = HitboxRegistry::with_owner(ComponentOwner::Test);
         c.register_hitbox(LayoutRect { x: 5, y: 5, width: 10, height: 3 }, &mut reg);
         let result = reg.hit_test(term_wm_core::mouse_coord::MousePosition {
             column: 7,

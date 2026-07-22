@@ -178,10 +178,11 @@ mod tests {
 
     #[test]
     fn fab_render_registers_hitbox_and_draws() {
+        use term_wm_core::hitbox_registry::ComponentOwner;
         let mut fab = WmFabComponent::new();
         let id = fab.hitbox_id().unwrap();
         let mut backend = make_backend(80, 24);
-        let mut reg = HitboxRegistry::new();
+        let mut reg = HitboxRegistry::with_owner(ComponentOwner::Test);
         let area = LayoutRect { x: 0, y: 0, width: 80, height: 24 };
         fab.render(&mut backend, area, &ComponentContext::default(), &mut reg);
         // FAB is at bottom-right: 3 wide, 1 tall
@@ -202,9 +203,10 @@ mod tests {
 
     #[test]
     fn fab_render_small_buffer_clips() {
+        use term_wm_core::hitbox_registry::ComponentOwner;
         let mut fab = WmFabComponent::new();
         let mut backend = make_backend(5, 3);
-        let mut reg = HitboxRegistry::new();
+        let mut reg = HitboxRegistry::with_owner(ComponentOwner::Test);
         let area = LayoutRect { x: 0, y: 0, width: 5, height: 3 };
         fab.render(&mut backend, area, &ComponentContext::default(), &mut reg);
         assert_eq!(fab.fab_rect().x, 2);
