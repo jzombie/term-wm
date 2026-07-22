@@ -2228,6 +2228,331 @@ mod tests {
         );
     }
 
+    // ── Right-Click Paste Tests ────────────────────────────────────────
+    //
+    // These tests verify that right-click mouse events are intercepted by
+    // TerminalComponent::handle_events and produce PasteClipboard (in
+    // normal mode) or pass through to PTY encoding (in direct mode).
+
+    /// Right-click Release in normal mode must produce
+    /// PasteClipboard; Press and Drag must be consumed (not forwarded
+    /// to the PTY).
+    #[test]
+    fn right_click_paste_in_normal_mode() {
+        use term_wm_core::actions::TermWmAction;
+        use term_wm_core::components::{ComponentContext, EventResult};
+        use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let (mut term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
+        let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        // Right-click Press — must be consumed (intercepted before PTY)
+        let press = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Right),
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let press_result = term.handle_events(&press, &ctx);
+        assert!(
+            matches!(press_result, EventResult::Consumed),
+            "right-click Press must be Consumed, got {:?}",
+            press_result
+        );
+
+        // Right-click Drag — must be consumed
+        let drag = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Right),
+            column: 15,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let drag_result = term.handle_events(&drag, &ctx);
+        assert!(
+            matches!(drag_result, EventResult::Consumed),
+            "right-click Drag must be Consumed, got {:?}",
+            drag_result
+        );
+
+        // Right-click Release — must produce PasteClipboard
+        let release = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Release(MouseButton::Right),
+            column: 15,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let release_result = term.handle_events(&release, &ctx);
+        assert!(
+            matches!(
+                release_result,
+                EventResult::Action(TermWmAction::PasteClipboard)
+            ),
+            "right-click Release must produce PasteClipboard, got {:?}",
+            release_result
+        );
+    }
+
+    /// Right-click in direct mode must NOT produce PasteClipboard — it
+    /// must pass through to PTY encoding (MouseToBytes when the PTY has
+    /// enabled mouse tracking).
+    #[test]
+    fn right_click_in_direct_mode_passes_through() {
+        use term_wm_core::actions::TermWmAction;
+        use term_wm_core::components::{ComponentContext, EventResult};
+        use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let mut pane = TestPane::new(2000);
+        pane.set_parser_size(24, 80);
+        pane.write_to_parser(b"Hello World");
+        // Enable mouse tracking so the event would produce MouseToBytes
+        pane.write_to_parser(b"\x1b[?1000h");
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        term.set_selection_enabled(true);
+
+        let ctx = ComponentContext::new(true)
+            .with_direct_mode(true)
+            .with_screen_area(LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            });
+
+        // Right-click Release in direct mode — must NOT be PasteClipboard
+        let release = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Release(MouseButton::Right),
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result = term.handle_events(&release, &ctx);
+        assert!(
+            !matches!(result, EventResult::Action(TermWmAction::PasteClipboard)),
+            "right-click Release in direct mode must NOT produce PasteClipboard, got {:?}",
+            result
+        );
+        // With mouse tracking enabled, Release should produce MouseToBytes
+        assert!(
+            matches!(result, EventResult::Action(TermWmAction::MouseToBytes(_))),
+            "right-click Release in direct mode should produce MouseToBytes, got {:?}",
+            result
+        );
+
+        // Right-click Press in direct mode — also not consumed/paste-intercepted
+        let press = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Right),
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let press_result = term.handle_events(&press, &ctx);
+        assert!(
+            !matches!(press_result, EventResult::Consumed),
+            "right-click Press in direct mode must NOT be Consumed, got {:?}",
+            press_result
+        );
+    }
+
+    // ── Right-Click Paste Through Event Dispatch ──────────────────────
+    //
+    // These tests verify that right-click paste works when events are
+    // dispatched through the WindowManager's dispatch_focused_event
+    // (the full pipeline from WM → component tree → handle_events).
+
+    /// Right-click Release through dispatch_focused_event must produce
+    /// PasteClipboard; Press must be Consumed.
+    #[test]
+    fn right_click_paste_via_dispatch_focused_event() {
+        use std::sync::Arc;
+        use term_wm_core::actions::TermWmAction;
+        use term_wm_core::app_context::AppContext;
+        use term_wm_core::components::{Component, NoopOverlay, NoopWmComponent};
+        use term_wm_core::config::AppBuilder;
+        use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let (term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
+        let mut sv = crate::scroll_view::ScrollViewComponent::new(term);
+        sv.set_selection_enabled(true);
+        sv.set_keyboard_mode(crate::scroll_view::ScrollKeyMode::PaginationOnly);
+
+        let mut wm: term_wm_core::window::WindowManager<
+            crate::scroll_view::ScrollViewComponent<TerminalComponent>,
+            NoopWmComponent,
+            NoopOverlay,
+        > = AppBuilder::<NoopWmComponent>::bare()
+            .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
+            .build()
+            .expect("test build");
+        wm.set_panel_visible(false);
+
+        let key = wm.create_window(sv);
+
+        let layout =
+            term_wm_core::layout::TilingLayout::new(term_wm_core::layout::LayoutNode::leaf(key));
+        wm.set_managed_layout(layout);
+        wm.register_managed_layout(term_wm_layout_engine::LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_app_window(key);
+
+        // Render to set last_area on the terminal
+        let area = wm.region(key);
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let mut backend = term_wm_console::RatatuiBackend::new(
+            buffer,
+            ratatui::prelude::Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let ctx = term_wm_core::components::ComponentContext::new(true);
+        if let Some(comp) = wm.component_for_key_mut(key) {
+            comp.render(
+                &mut backend,
+                area,
+                &ctx,
+                &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+            );
+        }
+
+        // Right-click Press — consumed
+        let press = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Right),
+            column: (area.x + 10) as u16,
+            row: (area.y + 5) as u16,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result_press = wm.dispatch_focused_event(&press);
+        assert!(
+            result_press.as_ref().is_some_and(|(_, r)| r.is_consumed()),
+            "right-click Press must be Consumed via dispatch, got {:?}",
+            result_press.map(|(_, r)| r)
+        );
+
+        // Right-click Release — produces PasteClipboard
+        let release = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Release(MouseButton::Right),
+            column: (area.x + 10) as u16,
+            row: (area.y + 5) as u16,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result_release = wm.dispatch_focused_event(&release);
+        assert!(
+            result_release.as_ref().is_some_and(|(_, r)| {
+                matches!(r, EventResult::Action(TermWmAction::PasteClipboard))
+            }),
+            "right-click Release must produce PasteClipboard via dispatch, got {:?}",
+            result_release.map(|(_, r)| r)
+        );
+    }
+
+    /// Right-click in direct mode through dispatch_focused_event must NOT
+    /// produce PasteClipboard — it must pass through to PTY encoding.
+    #[test]
+    fn right_click_paste_via_dispatch_in_direct_mode() {
+        use std::sync::Arc;
+        use term_wm_core::actions::TermWmAction;
+        use term_wm_core::app_context::AppContext;
+        use term_wm_core::components::{Component, NoopOverlay, NoopWmComponent};
+        use term_wm_core::config::AppBuilder;
+        use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let mut pane = TestPane::new(2000);
+        pane.set_parser_size(24, 80);
+        pane.write_to_parser(b"Hello World");
+        pane.write_to_parser(b"\x1b[?1000h");
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        term.set_selection_enabled(true);
+
+        let mut sv = crate::scroll_view::ScrollViewComponent::new(term);
+        sv.set_selection_enabled(true);
+        sv.set_keyboard_mode(crate::scroll_view::ScrollKeyMode::PaginationOnly);
+
+        let mut wm: term_wm_core::window::WindowManager<
+            crate::scroll_view::ScrollViewComponent<TerminalComponent>,
+            NoopWmComponent,
+            NoopOverlay,
+        > = AppBuilder::<NoopWmComponent>::bare()
+            .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
+            .build()
+            .expect("test build");
+        wm.set_panel_visible(false);
+
+        let key = wm.create_window(sv);
+        let raw = wm.component_for_key_mut(key).unwrap();
+        raw.set_selection_enabled(true);
+
+        let layout =
+            term_wm_core::layout::TilingLayout::new(term_wm_core::layout::LayoutNode::leaf(key));
+        wm.set_managed_layout(layout);
+        wm.register_managed_layout(term_wm_layout_engine::LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_app_window(key);
+        wm.set_direct_mode(key, true);
+
+        // Render to set last_area
+        let area = wm.region(key);
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let mut backend = term_wm_console::RatatuiBackend::new(
+            buffer,
+            ratatui::prelude::Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let ctx = term_wm_core::components::ComponentContext::new(true);
+        if let Some(comp) = wm.component_for_key_mut(key) {
+            comp.render(
+                &mut backend,
+                area,
+                &ctx,
+                &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+            );
+        }
+
+        // Right-click Release in direct mode — must NOT produce PasteClipboard
+        let release = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Release(MouseButton::Right),
+            column: (area.x + 10) as u16,
+            row: (area.y + 5) as u16,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result_release = wm.dispatch_focused_event(&release);
+        assert!(
+            result_release.as_ref().map(|(_, r)| r).is_some_and(|r| {
+                !matches!(r, EventResult::Action(TermWmAction::PasteClipboard))
+            }),
+            "right-click Release in direct mode must NOT produce PasteClipboard via dispatch, got {:?}",
+            result_release.map(|(_, r)| r)
+        );
+    }
+
     // ── Bracketed Paste Tests ──────────────────────────────────────────
     //
     // These tests verify that TerminalComponent::handle_events correctly
