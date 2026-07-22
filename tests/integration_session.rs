@@ -102,7 +102,10 @@ async fn session_mouse_bytes_forwarded() {
         .await
         .unwrap();
 
-    writer.send(b"ping".to_vec()).unwrap();
+    // NOTE: must include trailing \n — on headless Windows CI where
+    // GetConsoleMode fails, stdin defaults to line-input mode and
+    // blocks until a newline is received.
+    writer.send(b"ping\n".to_vec()).unwrap();
 
     let output = wait_for_output(&mut reader, b"MOUSE_OK:", Duration::from_secs(3)).await;
     assert!(
