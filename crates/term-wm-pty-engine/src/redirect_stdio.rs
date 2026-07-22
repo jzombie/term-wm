@@ -6,6 +6,8 @@
 //! through background threads and `tracing`.
 
 use std::io::BufRead;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
 
 /// RAII guard that temporarily redirects stderr to the null device.
 ///
