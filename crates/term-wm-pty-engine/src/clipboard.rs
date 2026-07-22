@@ -151,44 +151,74 @@ impl Clipboard {
 /// Length of the OSC 52 header `\x1b]52;` (ESC + ] + "52;").
 const OSC52_HEADER_LEN: usize = 5;
 
-/// Offset past the `ESC ]` introducer to reach the command.
-const OSC52_ESC_OFFSET: usize = 2;
+/// Length of the Windows ConPTY-transformed header `←]52;` where
+/// the 0x1b ESC byte is rendered as the Unicode left-arrow U+2190
+/// (3-byte UTF-8 sequence: 0xE2 0x86 0x90) followed by `]52;`.
+const OSC52_HEADER_LEN_WIN: usize = 7;
+
+// (OSC52_ESC_OFFSET = 2 is no longer needed; find_osc52_header returns
+//  the position past the full header including the command.)
 
 /// Length of the clipboard-parameter `c;` following the header.
 const CLIPBOARD_PARAM_LEN: usize = 2;
 
-/// Length of the ST string terminator `\x1b\\`.
-const ST_TERMINATOR_LEN: usize = 2;
+// (ST_TERMINATOR_LEN = 2 is no longer needed; implicit terminator
+//  detection handles the case via extract_osc52_text.)
 
 /// Maximum bytes to buffer for an in-progress OSC 52 sequence before
 /// giving up (safety valve against malformed / non-terminated sequences).
 const MAX_OSC52_BUFFER_BYTES: usize = 4 * 1024 * 1024;
 
+/// Standard ESC-prefixed header bytes: `\x1b]52;`
+const OSC52_HDR_STD: &[u8] = b"\x1b]52;";
+/// Windows ConPTY header bytes: `←]52;` (ESC rendered as left-arrow)
+const OSC52_HDR_WIN: &[u8] = "←]52;".as_bytes();
+
+/// Find the OSC 52 header in `data`, returning the offset past the
+/// header (ready for optional `c;` clipboard-param skip) and a flag
+/// indicating whether this was the Windows-transformed variant.
+/// Handles both `\x1b]52;` and `←]52;` (Windows ConPTY).
+fn find_osc52_header(data: &[u8]) -> Option<usize> {
+    if let Some(pos) = data
+        .windows(OSC52_HEADER_LEN)
+        .position(|w| w == OSC52_HDR_STD)
+    {
+        return Some(pos + OSC52_HEADER_LEN);
+    }
+    if let Some(pos) = data
+        .windows(OSC52_HEADER_LEN_WIN)
+        .position(|w| w == OSC52_HDR_WIN)
+    {
+        return Some(pos + OSC52_HEADER_LEN_WIN);
+    }
+    None
+}
+
+/// Returns `true` when `b` is a valid base64 character (A-Z, a-z, 0-9,
+/// `+`, `/`, or padding `=`).
+fn is_base64_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='
+}
+
 /// Scan `data` for a complete OSC 52 clipboard sequence
 /// (`OSC 52 ; c ; BASE64 ST`) and return the decoded text.
 ///
-/// Only the **first** complete sequence is extracted.  Terminators:
-/// - `BEL` (`\x07`)
-/// - `ST`  (`\x1b\\`)
+/// Only the **first** complete sequence is extracted.  Accepts:
+/// - Standard ESC prefix `\x1b]52;`
+/// - Windows ConPTY prefix `←]52;` (ESC rendered as left-arrow)
+/// - Terminator: BEL (`\x07`), ST (`\x1b\\`), or implicit termination at
+///   the first byte that is not a valid base64 character.
 pub fn extract_osc52_text(data: &[u8]) -> Option<String> {
     let mut i = 0;
     while i < data.len() {
-        // Find \x1b]52;
-        if i + OSC52_HEADER_LEN > data.len() || data[i] != 0x1b || data[i + 1] != b']' {
-            i += 1;
-            continue;
-        }
-        // Check for "52;" or "52;c;" or "52;c;" after the ESC ] introducer
-        // The format is: ESC ] 5 2 ; c ; <base64> ST
-        let header = b"52;";
-        if i + OSC52_HEADER_LEN + header.len() > data.len() {
-            break;
-        }
-        if &data[i + OSC52_ESC_OFFSET..i + OSC52_ESC_OFFSET + header.len()] != header {
-            i += 1;
-            continue;
-        }
-        let content_start = i + OSC52_ESC_OFFSET + header.len();
+        let header_end = match find_osc52_header(&data[i..]) {
+            Some(off) => i + off,
+            None => {
+                i += 1;
+                continue;
+            }
+        };
+        let content_start = header_end;
         // Skip optional "c;" — some terminals send "52;c;" and
         // some just "52;".  We accept both.
         let payload_start = if data[content_start..].starts_with(b"c;") {
@@ -196,9 +226,13 @@ pub fn extract_osc52_text(data: &[u8]) -> Option<String> {
         } else {
             content_start
         };
-        // Find the terminator: BEL (\x07) or ST (\x1b\\)
+        // Find the terminator: BEL (\x07), ST (\x1b\\), or any
+        // non-base64 character *after at least one base64 payload byte*
+        // (handles Windows ConPTY where ConPTY consumes the BEL
+        // terminator but leaves the payload intact).
         let mut end = None;
         let mut j = payload_start;
+        let mut seen_base64 = false;
         while j < data.len() {
             if data[j] == 0x07 {
                 end = Some(j);
@@ -208,6 +242,13 @@ pub fn extract_osc52_text(data: &[u8]) -> Option<String> {
                 end = Some(j);
                 break;
             }
+            if !is_base64_char(data[j]) {
+                if seen_base64 {
+                    end = Some(j);
+                }
+                break;
+            }
+            seen_base64 = true;
             j += 1;
         }
         if let Some(end_pos) = end {
@@ -264,11 +305,14 @@ impl Osc52Extractor {
         }
 
         // Common case: header lies entirely inside the current chunk.
-        if let Some(pos) = data
-            .windows(OSC52_HEADER_LEN)
-            .position(|w| w == b"\x1b]52;")
-        {
-            self.buf.extend_from_slice(&data[pos..]);
+        // Handles both \x1b]52; and ←]52; (Windows ConPTY).
+        if let Some(header_end) = find_osc52_header(data) {
+            let header_len = if data.windows(OSC52_HEADER_LEN).any(|w| w == OSC52_HDR_STD) {
+                OSC52_HEADER_LEN
+            } else {
+                OSC52_HEADER_LEN_WIN
+            };
+            self.buf.extend_from_slice(&data[header_end - header_len..]);
             return self.try_extract(data, prev_tail);
         }
 
@@ -276,16 +320,17 @@ impl Osc52Extractor {
         if !prev_tail.is_empty() {
             let mut combined = prev_tail.to_vec();
             combined.extend_from_slice(data);
-            if let Some(pos) = combined
-                .windows(OSC52_HEADER_LEN)
-                .position(|w| w == b"\x1b]52;")
-            {
-                let tail_len = prev_tail.len();
-                if pos < tail_len {
-                    self.buf.extend_from_slice(&combined[pos..tail_len]);
-                }
+            if let Some(header_end) = find_osc52_header(&combined) {
+                let header_len = if combined
+                    .windows(OSC52_HEADER_LEN)
+                    .any(|w| w == OSC52_HDR_STD)
+                {
+                    OSC52_HEADER_LEN
+                } else {
+                    OSC52_HEADER_LEN_WIN
+                };
                 self.buf
-                    .extend_from_slice(&data[pos.saturating_sub(tail_len)..]);
+                    .extend_from_slice(&combined[header_end - header_len..]);
                 return self.try_extract(data, prev_tail);
             }
         }
@@ -304,24 +349,19 @@ impl Osc52Extractor {
         self.buf.clear();
     }
 
-    /// Check `data` and `prev_tail` for a terminator and, if found, run
-    /// the full extraction against the accumulated buffer.
-    /// Safety-valve at [`MAX_OSC52_BUFFER_BYTES`].
-    fn try_extract(&mut self, data: &[u8], prev_tail: &[u8]) -> Option<String> {
-        // BEL (\x07) is always within a single chunk.
-        // ST (\x1b\\) can span the chunk boundary.
-        let has_term = data.contains(&0x07)
-            || data.windows(ST_TERMINATOR_LEN).any(|w| w == b"\x1b\\")
-            || (!prev_tail.is_empty()
-                && prev_tail.last() == Some(&0x1b)
-                && data.first() == Some(&b'\\'));
-        if has_term {
-            let result = extract_osc52_text(&self.buf);
-            self.buf.clear();
-            return result;
-        }
+    /// Check the accumulated buffer for a complete OSC 52 sequence and
+    /// extract it if found.  Handles BEL (`\x07`), ST (`\x1b\\`), and
+    /// implicit termination at any non-base64 character (Windows ConPTY
+    /// drops the BEL terminator).  Safety-valve at
+    /// [`MAX_OSC52_BUFFER_BYTES`].
+    fn try_extract(&mut self, _data: &[u8], _prev_tail: &[u8]) -> Option<String> {
         if self.buf.len() >= MAX_OSC52_BUFFER_BYTES {
             self.buf.clear();
+            return None;
+        }
+        if let Some(result) = extract_osc52_text(&self.buf) {
+            self.buf.clear();
+            return Some(result);
         }
         None
     }

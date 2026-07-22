@@ -23,7 +23,7 @@ use term_session_muxio_service_definitions::{
 };
 use term_wm_core::events::{Event, KeyKind};
 use term_wm_pty_engine::Pane;
-use term_wm_pty_engine::clipboard::{Clipboard, extract_osc52_text};
+use term_wm_pty_engine::clipboard::{Clipboard, Osc52Extractor};
 use term_wm_pty_engine::input_encoding::{key_to_bytes, mouse_event_to_bytes};
 use term_wm_pty_engine::signal::install_sigint_handler;
 use tokio::sync::mpsc;
@@ -152,6 +152,9 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     // Channel for raw PTY output bytes from the subscription stream
     let (push_tx, push_rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
+    // Side-channel for intercepted OSC 52 clipboard text
+    let (clip_tx, mut clip_rx) = mpsc::unbounded_channel::<String>();
+
     // Get terminal size
     let (term_cols, term_rows) = crossterm::terminal::size()?;
 
@@ -174,10 +177,27 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         // Forward response chunks to push_tx.  When the stream ends
         // (session exits), push_tx is dropped, and `drain_pushes`
         // detects the disconnect.
+        // Intercept OSC 52 clipboard sequences from the raw byte stream
+        // before the VT100 parser can consume them.
         rt.spawn(async move {
+            let mut osc52 = Osc52Extractor::new();
+            let mut prev_tail: [u8; 8] = [0; 8];
+
             while let Some(chunk) = reader.recv().await {
                 match chunk {
                     Ok(data) => {
+                        if let Some(text) = osc52.push(&data, &prev_tail) {
+                            let _ = clip_tx.send(text);
+                        }
+
+                        let n = data.len();
+                        if n >= 8 {
+                            prev_tail.copy_from_slice(&data[n - 8..n]);
+                        } else if n > 0 {
+                            prev_tail.rotate_left(n);
+                            prev_tail[8 - n..].copy_from_slice(&data[..n]);
+                        }
+
                         let _ = push_tx.send(data);
                     }
                     Err(_) => break,
@@ -258,8 +278,8 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         };
         let has_new_data = prev_content.as_deref() != Some(&current_content);
 
-        // Process OSC 52 clipboard data
-        if has_new_data && let Some(text) = extract_osc52_text(&current_content) {
+        // Drain any clipboard texts intercepted by the reader task
+        while let Ok(text) = clip_rx.try_recv() {
             let _ = clipboard.set(&text);
         }
 
