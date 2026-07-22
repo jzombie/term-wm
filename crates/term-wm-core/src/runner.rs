@@ -92,6 +92,15 @@ fn drain_action_queue<
             TermWmAction::RequestKeyboardFocus(id) => {
                 app.wm().set_keyboard_focus(key, id);
             }
+            TermWmAction::PasteClipboard => {
+                let text = app
+                    .wm()
+                    .clipboard_mut()
+                    .and_then(|cb| cb.get().ok());
+                if let Some(text) = text {
+                    queue.push_back((key, TermWmAction::ClipboardPaste(text)));
+                }
+            }
             TermWmAction::ToggleMouseCapture => {
                 app.wm().toggle_mouse_capture();
             }
