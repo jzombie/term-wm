@@ -2416,8 +2416,7 @@ mod tests {
 
         let written = term.pane.borrow_mut().last_bytes_text();
         assert_eq!(
-            written,
-            "\x1b[200~clip\x1b[201~",
+            written, "\x1b[200~clip\x1b[201~",
             "ClipboardPaste must wrap in bracketed markers when DECSET 2004 is enabled"
         );
     }
@@ -2437,8 +2436,7 @@ mod tests {
 
         let written = term.pane.borrow_mut().last_bytes_text();
         assert_eq!(
-            written,
-            "raw",
+            written, "raw",
             "ClipboardPaste must write raw bytes when DECSET 2004 is not enabled"
         );
     }
@@ -2457,6 +2455,9 @@ mod tests {
         );
 
         let written = term.pane.borrow_mut().last_bytes_text();
-        assert_eq!(written, "", "ClipboardPaste with empty text must write nothing");
+        assert_eq!(
+            written, "",
+            "ClipboardPaste with empty text must write nothing"
+        );
     }
 }
