@@ -64,9 +64,6 @@ fn main() -> io::Result<()> {
     let pty_wakeup_tx = event_source.pty_wakeup_tx();
     let mut app = App::new_with(cli.cmds, total, cli.embedded, pty_wakeup_tx)?;
 
-    // TerminalEnvironment handles raw-mode setup/teardown.
-    // The render target stays pure — it only writes ANSI sequences.
-    let _env = term_wm_console::console_render_target::TerminalEnvironment::init()?;
     let mut output = ConsoleRenderTarget::new()?;
     output.enter()?;
     let result = app.run_with(&mut output, &mut event_source);
