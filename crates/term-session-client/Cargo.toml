@@ -25,3 +25,6 @@ term-wm-pty-engine = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 vt100 = { workspace = true }
+
+[dev-dependencies]
+serial_test = { workspace = true }
