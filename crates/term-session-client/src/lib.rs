@@ -100,7 +100,9 @@ pub fn init_terminal<W: Write>(mut writer: W) -> io::Result<TerminalGuard<W>> {
     writer.queue(EnableBracketedPaste)?;
     writer.queue(crossterm::event::EnableMouseCapture)?;
     writer.flush()?;
-    Ok(TerminalGuard { writer: Some(writer) })
+    Ok(TerminalGuard {
+        writer: Some(writer),
+    })
 }
 
 /// Guard that restores the terminal (leave alternate screen, show cursor,
@@ -559,6 +561,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             let elapsed = frame_start.elapsed();
             if elapsed < Duration::from_millis(8) {
                 std::thread::sleep(Duration::from_millis(8) - elapsed);
+            }
         }
     }
 }
@@ -609,9 +612,10 @@ mod tests {
                     pixel_height: 0,
                 })
                 .map_err(|e| io::Error::other(e.to_string()))?;
-            let master_fd = pair.master.as_raw_fd().ok_or_else(|| {
-                io::Error::other("PTY master has no raw fd")
-            })?;
+            let master_fd = pair
+                .master
+                .as_raw_fd()
+                .ok_or_else(|| io::Error::other("PTY master has no raw fd"))?;
             let saved_stdin = unsafe { libc::dup(0) };
             if saved_stdin < 0 {
                 return Err(io::Error::last_os_error());
@@ -648,7 +652,9 @@ mod tests {
         let _guard = init_terminal(writer).expect("init_terminal");
         let bytes = buf.lock().unwrap();
         assert!(
-            bytes.windows(b"\x1b[?2004h".len()).any(|w| w == b"\x1b[?2004h"),
+            bytes
+                .windows(b"\x1b[?2004h".len())
+                .any(|w| w == b"\x1b[?2004h"),
             "init_terminal must write bracketed paste enable \\x1b[?2004h. \
              If this fails, EnableBracketedPaste may have been removed \
              from the startup sequence. Captured bytes: {:?}",
@@ -668,7 +674,9 @@ mod tests {
         }
         let bytes = buf.lock().unwrap();
         assert!(
-            bytes.windows(b"\x1b[?2004l".len()).any(|w| w == b"\x1b[?2004l"),
+            bytes
+                .windows(b"\x1b[?2004l".len())
+                .any(|w| w == b"\x1b[?2004l"),
             "TerminalGuard drop must write bracketed paste disable \\x1b[?2004l. \
              If this fails, DisableBracketedPaste may have been removed \
              from TerminalGuard::drop. Captured bytes: {:?}",
@@ -687,13 +695,16 @@ mod tests {
         drop(guard);
         let bytes = buf.lock().unwrap();
         assert!(
-            bytes.windows(b"\x1b[?2004h".len()).any(|w| w == b"\x1b[?2004h"),
+            bytes
+                .windows(b"\x1b[?2004h".len())
+                .any(|w| w == b"\x1b[?2004h"),
             "init/teardown roundtrip must contain enable \\x1b[?2004h"
         );
         assert!(
-            bytes.windows(b"\x1b[?2004l".len()).any(|w| w == b"\x1b[?2004l"),
+            bytes
+                .windows(b"\x1b[?2004l".len())
+                .any(|w| w == b"\x1b[?2004l"),
             "init/teardown roundtrip must contain disable \\x1b[?2004l"
         );
     }
-}
 }
