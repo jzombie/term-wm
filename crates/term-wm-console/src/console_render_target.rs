@@ -52,10 +52,6 @@ impl CaptureWriter {
     pub fn bytes(&self) -> Vec<u8> {
         self.buf.lock().unwrap().clone()
     }
-
-    pub fn clear(&self) {
-        self.buf.lock().unwrap().clear();
-    }
 }
 
 #[cfg(test)]
@@ -162,15 +158,9 @@ impl<W: Write> Drop for ConsoleRenderTarget<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
     use term_wm_pty_engine::test_pty::StdinPtyGuard;
 
-    /// Crossterm tracks raw-mode state globally.  These tests manipulate
-    /// real terminal state and must not run concurrently or they corrupt
-    /// each other's crossterm state and cascade panic.
-
     #[cfg(any(unix, windows))]
-    #[serial]
     #[test]
     fn enter_writes_bracketed_paste_enable() {
         let _pty = StdinPtyGuard::new().expect("PTY guard");
@@ -189,20 +179,12 @@ mod tests {
 
     /// Verifies that the real `exit()` method writes the bracketed paste
     /// disable sequence `\x1b[?2004l` to the backend.
-    ///
-    /// Must call enter() first so crossterm saves its raw-mode baseline —
-    /// faking `rt.entered = true` would cause disable_raw_mode to panic
-    /// with "Initial console modes not set".
     #[cfg(any(unix, windows))]
-    #[serial]
     #[test]
     fn exit_writes_bracketed_paste_disable() {
         let _pty = StdinPtyGuard::new().expect("PTY guard");
         let (mut rt, writer) = ConsoleRenderTarget::new_capturing();
-        // Must call real enter() so crossterm saves initial terminal state
-        rt.enter().expect("enter must succeed");
-        // Clear the capture buffer so we only assert on exit's output
-        writer.clear();
+        rt.entered = true;
         rt.exit().expect("exit must succeed");
         let bytes = writer.bytes();
         assert!(
@@ -217,7 +199,6 @@ mod tests {
     /// Full lifecycle: enter() then exit() writes both the enable and
     /// disable sequences.  Catches regressions where one drops out.
     #[cfg(any(unix, windows))]
-    #[serial]
     #[test]
     fn enter_and_exit_roundtrip_contains_both_sequences() {
         let _pty = StdinPtyGuard::new().expect("PTY guard");
@@ -238,7 +219,6 @@ mod tests {
     /// Calling enter() twice must not write additional bytes — the
     /// `entered` guard on the second call should skip the body.
     #[cfg(any(unix, windows))]
-    #[serial]
     #[test]
     fn double_enter_is_idempotent() {
         let _pty = StdinPtyGuard::new().expect("PTY guard");

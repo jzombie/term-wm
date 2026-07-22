@@ -570,7 +570,6 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
-    use serial_test::serial;
     use term_wm_pty_engine::test_pty::StdinPtyGuard;
 
     /// Helper writer that captures bytes into a shared `Vec<u8>`.
@@ -598,7 +597,6 @@ mod tests {
     /// Calls the real `init_terminal()` with a test writer and verifies
     /// the bracketed paste enable sequence `\x1b[?2004h` is written.
     #[cfg(any(unix, windows))]
-    #[serial]
     #[test]
     fn init_terminal_writes_bracketed_paste_enable() {
         let _pty = StdinPtyGuard::new().expect("PTY guard");
@@ -618,7 +616,6 @@ mod tests {
 
     /// Constructs a TerminalGuard with a test writer and verifies that
     /// dropping it writes the bracketed paste disable sequence `\x1b[?2004l`.
-    /// Does NOT need serial — the guard writes to a Vec, not the real terminal.
     #[test]
     fn terminal_guard_teardown_writes_bracketed_paste_disable() {
         let (writer, buf) = TestWriter::new();
@@ -642,7 +639,6 @@ mod tests {
     /// Full lifecycle: init_terminal followed by TerminalGuard teardown
     /// writes both the enable and disable sequences.
     #[cfg(any(unix, windows))]
-    #[serial]
     #[test]
     fn init_and_teardown_roundtrip_contains_both_sequences() {
         let _pty = StdinPtyGuard::new().expect("PTY guard");
