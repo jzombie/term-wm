@@ -1,8 +1,9 @@
+- [ ] [TODO] In Direct Mode, route non-scrollbar mouse events to the PTY (click, right-click, etc.)
+- [ ] [TODO] Implement changes in `FUTURE-SIMD-OPPORTUNITIES`
 - [ ] [TODO] Investigate a better Command Palette activation key binding.  Ctrl-G conflicts with Google Gemini when a Chrome browser is open.
 - [ ] [TODO] Make test_pty share same FD redirection utils as rest of crate, so it can be made cross-platform.
 - [ ] Fix bracketed paste issue. Pasting long text into opencode can make it crash.
 - [ ] Fix issue where remote copy is not working.
-- [ ] [TODO] In Direct Mode, route non-scrollbar mouse events to the PTY (click, right-click, etc.)
 - [ ] [TODO] If the viewport is tall and narrow, consider *not* forcing monocle mode and use a smarter layout grid to stack vertically.
 - [ ] [TODO-RESEARCH] Cross-platform consistency for icons so they do not take up more than 1-character width/height in terminal shells
 - [X] monocle-mode window drags and resizes still capture their new coordinates; the chrome should disable this
