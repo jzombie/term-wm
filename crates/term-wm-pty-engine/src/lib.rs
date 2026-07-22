@@ -4,6 +4,7 @@ pub mod pane;
 pub mod pty;
 pub mod redirect_stdio;
 pub mod signal;
+pub mod test_pty;
 pub mod title;
 
 pub use input_encoding::{ctrl_char, key_to_bytes, mouse_event_allowed, mouse_event_to_bytes};

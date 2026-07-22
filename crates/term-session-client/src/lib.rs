@@ -570,6 +570,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+    use term_wm_pty_engine::test_pty::StdinPtyGuard;
 
     /// Helper writer that captures bytes into a shared `Vec<u8>`.
     struct TestWriter {
@@ -590,55 +591,6 @@ mod tests {
         }
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
-        }
-    }
-
-    /// Create a PTY and redirect stdin to it so `enable_raw_mode()` works.
-    #[cfg(unix)]
-    struct StdinPtyGuard {
-        saved_stdin: std::os::unix::io::RawFd,
-        _master: Box<dyn portable_pty::MasterPty + Send>,
-    }
-
-    #[cfg(unix)]
-    impl StdinPtyGuard {
-        fn new() -> io::Result<Self> {
-            let pty_system = portable_pty::native_pty_system();
-            let pair = pty_system
-                .openpty(portable_pty::PtySize {
-                    rows: 24,
-                    cols: 80,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                })
-                .map_err(|e| io::Error::other(e.to_string()))?;
-            let master_fd = pair
-                .master
-                .as_raw_fd()
-                .ok_or_else(|| io::Error::other("PTY master has no raw fd"))?;
-            let saved_stdin = unsafe { libc::dup(0) };
-            if saved_stdin < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            let ret = unsafe { libc::dup2(master_fd, 0) };
-            if ret < 0 {
-                unsafe { libc::close(saved_stdin) };
-                return Err(io::Error::last_os_error());
-            }
-            Ok(Self {
-                saved_stdin,
-                _master: pair.master,
-            })
-        }
-    }
-
-    #[cfg(unix)]
-    impl Drop for StdinPtyGuard {
-        fn drop(&mut self) {
-            unsafe {
-                libc::dup2(self.saved_stdin, 0);
-                libc::close(self.saved_stdin);
-            }
         }
     }
 

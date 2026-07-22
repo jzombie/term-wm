@@ -10,6 +10,9 @@ use ratatui::backend::CrosstermBackend;
 
 use ratatui::buffer::Buffer;
 
+#[cfg(test)]
+use std::sync::{Arc, Mutex};
+
 use crate::RatatuiBackend;
 use crate::RenderBackend;
 use term_wm_core::io::RenderTarget;
@@ -30,9 +33,6 @@ impl ConsoleRenderTarget<Stdout> {
         Self::with_writer(io::stdout())
     }
 }
-
-#[cfg(test)]
-use std::sync::{Arc, Mutex};
 
 /// A writer that captures all written bytes into a shared `Vec<u8>` via
 /// `Arc<Mutex<...>>` so the buffer can be read after the writer is moved
@@ -158,66 +158,8 @@ impl<W: Write> Drop for ConsoleRenderTarget<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use term_wm_pty_engine::test_pty::StdinPtyGuard;
 
-    /// Helper: create a PTY pair and redirect this process's stdin to the
-    /// slave end so that `crossterm::terminal::enable_raw_mode()` —
-    /// which requires a real TTY — succeeds.  The original stdin is
-    /// restored when the returned guard is dropped.
-    #[cfg(unix)]
-    struct StdinPtyGuard {
-        saved_stdin: std::os::unix::io::RawFd,
-        _pair: portable_pty::PtyPair,
-    }
-
-    #[cfg(unix)]
-    impl StdinPtyGuard {
-        fn new() -> io::Result<Self> {
-            let pty_system = portable_pty::native_pty_system();
-            let pair = pty_system
-                .openpty(portable_pty::PtySize {
-                    rows: 24,
-                    cols: 80,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                })
-                .map_err(|e| io::Error::other(e.to_string()))?;
-            let master_fd = pair.master.as_raw_fd().ok_or_else(|| {
-                io::Error::other("PTY master has no raw fd")
-            })?;
-            // Save current stdin
-            let saved_stdin = unsafe { libc::dup(0) };
-            if saved_stdin < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            // Redirect stdin to the PTY master so enable_raw_mode succeeds
-            let ret = unsafe { libc::dup2(master_fd, 0) };
-            if ret < 0 {
-                unsafe { libc::close(saved_stdin) };
-                return Err(io::Error::last_os_error());
-            }
-            Ok(Self {
-                saved_stdin,
-                _pair: pair,
-            })
-        }
-    }
-
-    #[cfg(unix)]
-    impl Drop for StdinPtyGuard {
-        fn drop(&mut self) {
-            unsafe {
-                libc::dup2(self.saved_stdin, 0);
-                libc::close(self.saved_stdin);
-            }
-        }
-    }
-
-    /// Verifies that the real `enter()` method writes the bracketed paste
-    /// enable sequence `\x1b[?2004h` to the backend.
-    ///
-    /// A real PTY is attached to stdin so `enable_raw_mode()` succeeds.
-    /// If someone removes `EnableBracketedPaste` from `enter()`, the
-    /// captured bytes won't contain the sequence and this test fails.
     #[cfg(unix)]
     #[test]
     fn enter_writes_bracketed_paste_enable() {
