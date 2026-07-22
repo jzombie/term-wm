@@ -151,7 +151,15 @@ async fn session_osc52_via_osc52extractor() {
     while start.elapsed() < Duration::from_secs(3) {
         match tokio::time::timeout(Duration::from_millis(200), reader.recv()).await {
             Ok(Some(Ok(data))) => {
+                eprintln!(
+                    "DEBUG chunk len={} is_active={} hex={:02x?} text={:?}",
+                    data.len(),
+                    extractor.is_active(),
+                    &data[..data.len().min(40)],
+                    String::from_utf8_lossy(&data[..data.len().min(80)])
+                );
                 if let Some(text) = extractor.push(&data, &prev_tail) {
+                    eprintln!("DEBUG EXTRACTED {:?}", text);
                     extracted = Some(text);
                     break;
                 }
@@ -167,6 +175,7 @@ async fn session_osc52_via_osc52extractor() {
             Err(_) => continue,
         }
     }
+    eprintln!("DEBUG final extracted={:?} is_active={}", extracted, extractor.is_active());
 
     assert_eq!(
         extracted,
