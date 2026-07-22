@@ -2932,9 +2932,11 @@ name = "term-wm-console"
 version = "0.8.20-alpha"
 dependencies = [
  "crossterm",
+ "libc",
  "ratatui",
  "term-wm-core",
  "term-wm-layout-engine",
+ "term-wm-pty-engine",
  "term-wm-render",
  "tracing",
 ]

@@ -9,9 +9,13 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-crossterm = { workspace = true }
+crossterm = { workspace = true, features = ["bracketed-paste"] }
 ratatui = { workspace = true }
 term-wm-core = { workspace = true }
 term-wm-layout-engine = { workspace = true }
 term-wm-render = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+libc = { workspace = true }
+term-wm-pty-engine = { workspace = true }

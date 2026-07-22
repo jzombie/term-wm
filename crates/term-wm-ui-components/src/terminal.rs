@@ -163,6 +163,22 @@ impl Component<TermWmAction> for TerminalComponent {
             }
             Event::Mouse(mouse) => {
                 if !ctx.direct_mode() {
+                    // Right-click paste (Windows Cmd/PS convention).
+                    // Only in normal mode — in direct mode (tmux, vim, etc.)
+                    // right-click passes through to the running program.
+                    match mouse.kind {
+                        MouseEventKind::Press(MouseButton::Right)
+                        | MouseEventKind::Drag(MouseButton::Right) => {
+                            return EventResult::Consumed;
+                        }
+                        MouseEventKind::Release(MouseButton::Right) => {
+                            return EventResult::Action(TermWmAction::PasteClipboard);
+                        }
+                        _ => {}
+                    }
+                }
+
+                if !ctx.direct_mode() {
                     let selection_ready = self.selection_enabled;
                     let area = ctx.screen_area().unwrap_or_default();
                     if handle_selection_mouse(self, selection_ready, mouse, area) {
@@ -207,6 +223,23 @@ impl Component<TermWmAction> for TerminalComponent {
                 }
                 EventResult::Action(TermWmAction::MouseToBytes(bytes))
             }
+            Event::Paste(text) => {
+                let bracketed_paste = {
+                    let mut pane = self.pane.borrow_mut();
+                    let parser = pane.shared_parser();
+                    let parser_lock = parser.lock().unwrap();
+                    parser_lock.screen().bracketed_paste()
+                };
+                let bytes = if bracketed_paste {
+                    let mut wrapped = b"\x1b[200~".to_vec();
+                    wrapped.extend_from_slice(text.as_bytes());
+                    wrapped.extend_from_slice(b"\x1b[201~");
+                    wrapped
+                } else {
+                    text.as_bytes().to_vec()
+                };
+                EventResult::Action(TermWmAction::KeyToBytes(bytes))
+            }
             _ => EventResult::Ignored,
         }
     }
@@ -223,18 +256,39 @@ impl Component<TermWmAction> for TerminalComponent {
                 if self.pane.borrow_mut().scrollback() > 0 {
                     self.pane.borrow_mut().set_scrollback(0);
                 }
-                if let Err(_err) = self.pane.borrow_mut().write_bytes(&bytes) {
-                    #[cfg(windows)]
-                    eprintln!("terminal input write failed: {_err}");
+                if let Err(err) = self.pane.borrow_mut().write_bytes(&bytes) {
+                    tracing::warn!(?err, "terminal input write failed");
                 }
             }
             TermWmAction::Scroll(delta) => {
                 self.scroll_scrollback(delta);
             }
             TermWmAction::MouseToBytes(bytes) => {
-                if let Err(_err) = self.pane.borrow_mut().write_bytes(&bytes) {
-                    #[cfg(windows)]
-                    eprintln!("terminal mouse write failed: {_err}");
+                if let Err(err) = self.pane.borrow_mut().write_bytes(&bytes) {
+                    tracing::warn!(?err, "terminal mouse write failed");
+                }
+            }
+            TermWmAction::ClipboardPaste(text) => {
+                let bracketed_paste = {
+                    let mut pane = self.pane.borrow_mut();
+                    let parser = pane.shared_parser();
+                    let parser_lock = parser.lock().unwrap();
+                    parser_lock.screen().bracketed_paste()
+                };
+                let bytes = if bracketed_paste {
+                    let mut wrapped = b"\x1b[200~".to_vec();
+                    wrapped.extend_from_slice(text.as_bytes());
+                    wrapped.extend_from_slice(b"\x1b[201~");
+                    wrapped
+                } else {
+                    text.as_bytes().to_vec()
+                };
+                self.selection.borrow_mut().clear();
+                if self.pane.borrow_mut().scrollback() > 0 {
+                    self.pane.borrow_mut().set_scrollback(0);
+                }
+                if let Err(err) = self.pane.borrow_mut().write_bytes(&bytes) {
+                    tracing::warn!(?err, "terminal paste write failed");
                 }
             }
             _ => {}
@@ -1058,6 +1112,9 @@ fn brighten_indexed(color: Option<TColor>) -> Option<TColor> {
 
 /// Simulated terminal pane for testing scroll synchronization logic without a
 /// real PTY process.
+///
+/// Also tracks written bytes so paste-forwarding tests can verify the exact
+/// byte sequence written to the child PTY (wrapped vs. raw).
 #[cfg(test)]
 struct TestPane {
     parser: std::sync::Arc<std::sync::Mutex<vt100::Parser>>,
@@ -1066,6 +1123,7 @@ struct TestPane {
     alt_screen: bool,
     pending_title: Option<String>,
     kill_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    written_bytes: Vec<u8>,
 }
 
 #[cfg(test)]
@@ -1078,6 +1136,7 @@ impl TestPane {
             alt_screen: false,
             pending_title: None,
             kill_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            written_bytes: Vec::new(),
         }
     }
 
@@ -1090,6 +1149,7 @@ impl TestPane {
             alt_screen: false,
             pending_title: None,
             kill_count: std::sync::Arc::clone(&kill_count),
+            written_bytes: Vec::new(),
         };
         (pane, kill_count)
     }
@@ -1136,7 +1196,8 @@ impl Pane for TestPane {
         self.current_scrollback = rows.min(self.max_sb);
     }
 
-    fn write_bytes(&mut self, _input: &[u8]) -> std::io::Result<()> {
+    fn write_bytes(&mut self, input: &[u8]) -> std::io::Result<()> {
+        self.written_bytes.extend_from_slice(input);
         Ok(())
     }
 
@@ -1165,7 +1226,7 @@ impl Pane for TestPane {
     }
 
     fn last_bytes_text(&self) -> String {
-        String::new()
+        String::from_utf8_lossy(&self.written_bytes).to_string()
     }
 
     fn kill_child(&mut self) -> term_wm_pty_engine::PtyResult<()> {
@@ -2164,6 +2225,369 @@ mod tests {
             matches!(result_drag, EventResult::Consumed),
             "in normal mode, Drag must be consumed by selection, got {:?}",
             result_drag
+        );
+    }
+
+    // ── Right-Click Paste Tests ────────────────────────────────────────
+    //
+    // These tests verify that right-click mouse events are intercepted by
+    // TerminalComponent::handle_events and produce PasteClipboard (in
+    // normal mode) or pass through to PTY encoding (in direct mode).
+
+    /// Right-click Release in normal mode must produce
+    /// PasteClipboard; Press and Drag must be consumed (not forwarded
+    /// to the PTY).
+    #[test]
+    fn right_click_paste_in_normal_mode() {
+        use term_wm_core::actions::TermWmAction;
+        use term_wm_core::components::{ComponentContext, EventResult};
+        use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let (mut term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
+        let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        // Right-click Press — must be consumed (intercepted before PTY)
+        let press = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Right),
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let press_result = term.handle_events(&press, &ctx);
+        assert!(
+            matches!(press_result, EventResult::Consumed),
+            "right-click Press must be Consumed, got {:?}",
+            press_result
+        );
+
+        // Right-click Drag — must be consumed
+        let drag = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Right),
+            column: 15,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let drag_result = term.handle_events(&drag, &ctx);
+        assert!(
+            matches!(drag_result, EventResult::Consumed),
+            "right-click Drag must be Consumed, got {:?}",
+            drag_result
+        );
+
+        // Right-click Release — must produce PasteClipboard
+        let release = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Release(MouseButton::Right),
+            column: 15,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let release_result = term.handle_events(&release, &ctx);
+        assert!(
+            matches!(
+                release_result,
+                EventResult::Action(TermWmAction::PasteClipboard)
+            ),
+            "right-click Release must produce PasteClipboard, got {:?}",
+            release_result
+        );
+    }
+
+    /// Right-click in direct mode must NOT produce PasteClipboard — it
+    /// must pass through to PTY encoding (MouseToBytes when the PTY has
+    /// enabled mouse tracking).
+    #[test]
+    fn right_click_in_direct_mode_passes_through() {
+        use term_wm_core::actions::TermWmAction;
+        use term_wm_core::components::{ComponentContext, EventResult};
+        use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let mut pane = TestPane::new(2000);
+        pane.set_parser_size(24, 80);
+        pane.write_to_parser(b"Hello World");
+        // Enable mouse tracking so the event would produce MouseToBytes
+        pane.write_to_parser(b"\x1b[?1000h");
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        term.set_selection_enabled(true);
+
+        let ctx = ComponentContext::new(true)
+            .with_direct_mode(true)
+            .with_screen_area(LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            });
+
+        // Right-click Release in direct mode — must NOT be PasteClipboard
+        let release = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Release(MouseButton::Right),
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result = term.handle_events(&release, &ctx);
+        assert!(
+            !matches!(result, EventResult::Action(TermWmAction::PasteClipboard)),
+            "right-click Release in direct mode must NOT produce PasteClipboard, got {:?}",
+            result
+        );
+        // With mouse tracking enabled, Release should produce MouseToBytes
+        assert!(
+            matches!(result, EventResult::Action(TermWmAction::MouseToBytes(_))),
+            "right-click Release in direct mode should produce MouseToBytes, got {:?}",
+            result
+        );
+
+        // Right-click Press in direct mode — also not consumed/paste-intercepted
+        let press = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Right),
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let press_result = term.handle_events(&press, &ctx);
+        assert!(
+            !matches!(press_result, EventResult::Consumed),
+            "right-click Press in direct mode must NOT be Consumed, got {:?}",
+            press_result
+        );
+    }
+
+    // ── Bracketed Paste Tests ──────────────────────────────────────────
+    //
+    // These tests verify that TerminalComponent::handle_events correctly
+    // wraps paste text in bracketed escape sequences (\x1b[200~...\x1b[201~)
+    // only when the child PTY has explicitly enabled bracketed paste mode
+    // by sending \x1b[?2004h (DECSET 2004).
+    //
+    // If the child has NOT enabled bracketed paste, the paste text must be
+    // forwarded as raw bytes — wrapping would cause legacy shells to
+    // display rogue "~" characters (the vt100 parser consumes \x1b[200 but
+    // lets the trailing ~ through as a literal).
+
+    /// When the child PTY has bracketed paste enabled (DECSET 2004), the
+    /// paste text must be wrapped in \x1b[200~ ... \x1b[201~ so the child
+    /// (e.g. opencode, vim, nano) can recognize it as a bulk paste rather
+    /// than a keystroke flood.
+    #[test]
+    fn paste_wraps_in_bracketed_when_child_enabled() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+
+        // Simulate the child sending \x1b[?2004h (DECSET 2004) to enable
+        // bracketed paste mode.  The vt100 parser tracks this as
+        // screen().bracketed_paste().
+        {
+            let parser = term.pane.borrow_mut().shared_parser();
+            parser.lock().unwrap().process(b"\x1b[?2004h");
+        }
+
+        let ctx = ComponentContext::default();
+        let event = Event::Paste("hello".to_string());
+        let result = term.handle_events(&event, &ctx);
+
+        // Must produce KeyToBytes with bracketed markers wrapping the text
+        match result {
+            EventResult::Action(TermWmAction::KeyToBytes(bytes)) => {
+                assert_eq!(
+                    bytes, b"\x1b[200~hello\x1b[201~",
+                    "paste must be wrapped in bracketed markers when child has DECSET 2004 enabled"
+                );
+            }
+            other => panic!("expected Action(KeyToBytes), got {:?}", other),
+        }
+    }
+
+    /// When the child PTY has NOT enabled bracketed paste, the paste text
+    /// must be forwarded as raw bytes.  Wrapping would cause legacy shells
+    /// (bash, zsh without bracketed-paste support) to display stray "~"
+    /// characters on screen.
+    #[test]
+    fn paste_sends_raw_when_child_disabled() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+        // Deliberately do NOT send \x1b[?2004h — bracketed_paste defaults
+        // to false in the vt100 parser.
+
+        let ctx = ComponentContext::default();
+        let event = Event::Paste("hello".to_string());
+        let result = term.handle_events(&event, &ctx);
+
+        // Must produce KeyToBytes with raw text (no bracketed wrapping)
+        match result {
+            EventResult::Action(TermWmAction::KeyToBytes(bytes)) => {
+                assert_eq!(
+                    bytes, b"hello",
+                    "paste must be raw bytes when child has not enabled DECSET 2004"
+                );
+            }
+            other => panic!("expected Action(KeyToBytes), got {:?}", other),
+        }
+    }
+
+    /// Even when bracketed paste is enabled, the wrapping must include the
+    /// full bracketed start/end markers (including the trailing ~ in
+    /// \x1b[200~ and \x1b[201~).  A common bug is sending \x1b[200~ but
+    /// forgetting to include the final "~" tilde character.
+    #[test]
+    fn paste_wrapping_includes_trailing_tilde() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+
+        // Enable bracketed paste on the child's parser
+        {
+            let parser = term.pane.borrow_mut().shared_parser();
+            parser.lock().unwrap().process(b"\x1b[?2004h");
+        }
+
+        let ctx = ComponentContext::default();
+        let event = Event::Paste("test".to_string());
+        let result = term.handle_events(&event, &ctx);
+
+        // Verify the wrapped bytes end with \x1b[201~ (including the ~)
+        match result {
+            EventResult::Action(TermWmAction::KeyToBytes(bytes)) => {
+                assert!(
+                    bytes.ends_with(b"\x1b[201~"),
+                    "wrapped bytes must end with \\x1b[201~, got {:?}",
+                    bytes
+                );
+                assert!(
+                    bytes.starts_with(b"\x1b[200~"),
+                    "wrapped bytes must start with \\x1b[200~, got {:?}",
+                    bytes
+                );
+            }
+            other => panic!("expected Action(KeyToBytes), got {:?}", other),
+        }
+    }
+
+    /// Full pipeline test: verify that when handle_events produces a
+    /// KeyToBytes action, calling update() actually writes those bytes
+    /// to the pane (the real PTY or TestPane).
+    #[test]
+    fn paste_full_pipeline_writes_to_pane() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+
+        // Enable bracketed paste on the child's parser
+        {
+            let mut pane = term.pane.borrow_mut();
+            let parser = pane.shared_parser();
+            parser.lock().unwrap().process(b"\x1b[?2004h");
+        }
+
+        let ctx = ComponentContext::default();
+        let event = Event::Paste("data".to_string());
+        let result = term.handle_events(&event, &ctx);
+
+        // Extract the bytes from the action and feed them into update
+        if let EventResult::Action(TermWmAction::KeyToBytes(expected)) = result {
+            let mut queue = std::collections::VecDeque::new();
+            term.update(TermWmAction::KeyToBytes(expected.clone()), &ctx, &mut queue);
+
+            // Verify the pane received exactly the wrapped bytes by checking
+            // the last_written field through the Pane trait method
+            let written = term.pane.borrow_mut().last_bytes_text();
+            assert_eq!(
+                written, "\x1b[200~data\x1b[201~",
+                "wrapped paste bytes must be written to the pane"
+            );
+        } else {
+            panic!("expected Action(KeyToBytes), got {:?}", result);
+        }
+    }
+
+    /// When the child has not enabled bracketed paste, the full pipeline
+    /// must write raw bytes (no wrapping) to the pane.
+    #[test]
+    fn paste_full_pipeline_raw_when_disabled() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+        // No \x1b[?2004h — bracketed_paste defaults to false
+
+        let ctx = ComponentContext::default();
+        let event = Event::Paste("raw".to_string());
+        let result = term.handle_events(&event, &ctx);
+
+        if let EventResult::Action(TermWmAction::KeyToBytes(expected)) = result {
+            let mut queue = std::collections::VecDeque::new();
+            term.update(TermWmAction::KeyToBytes(expected.clone()), &ctx, &mut queue);
+
+            let written = term.pane.borrow_mut().last_bytes_text();
+            assert_eq!(
+                written, "raw",
+                "raw bytes (no bracketed wrapping) must be written to the pane when child has not enabled DECSET 2004"
+            );
+        } else {
+            panic!("expected Action(KeyToBytes), got {:?}", result);
+        }
+    }
+
+    /// ClipboardPaste with bracketed paste enabled wraps the text in
+    /// \x1b[200~...\x1b[201~ markers before writing to the pane.
+    #[test]
+    fn clipboard_paste_wraps_when_bracketed_enabled() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+
+        // Enable bracketed paste on the child's parser
+        {
+            let parser = term.pane.borrow_mut().shared_parser();
+            parser.lock().unwrap().process(b"\x1b[?2004h");
+        }
+
+        let ctx = ComponentContext::default();
+        let mut queue = std::collections::VecDeque::new();
+        term.update(
+            TermWmAction::ClipboardPaste("clip".to_string()),
+            &ctx,
+            &mut queue,
+        );
+
+        let written = term.pane.borrow_mut().last_bytes_text();
+        assert_eq!(
+            written, "\x1b[200~clip\x1b[201~",
+            "ClipboardPaste must wrap in bracketed markers when DECSET 2004 is enabled"
+        );
+    }
+
+    /// ClipboardPaste without bracketed paste writes raw bytes to the pane.
+    #[test]
+    fn clipboard_paste_raw_when_bracketed_disabled() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+
+        let ctx = ComponentContext::default();
+        let mut queue = std::collections::VecDeque::new();
+        term.update(
+            TermWmAction::ClipboardPaste("raw".to_string()),
+            &ctx,
+            &mut queue,
+        );
+
+        let written = term.pane.borrow_mut().last_bytes_text();
+        assert_eq!(
+            written, "raw",
+            "ClipboardPaste must write raw bytes when DECSET 2004 is not enabled"
+        );
+    }
+
+    /// ClipboardPaste with empty text is a no-op (no bytes written).
+    #[test]
+    fn clipboard_paste_empty_text_is_noop() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+
+        let ctx = ComponentContext::default();
+        let mut queue = std::collections::VecDeque::new();
+        term.update(
+            TermWmAction::ClipboardPaste(String::new()),
+            &ctx,
+            &mut queue,
+        );
+
+        let written = term.pane.borrow_mut().last_bytes_text();
+        assert_eq!(
+            written, "",
+            "ClipboardPaste with empty text must write nothing"
         );
     }
 }

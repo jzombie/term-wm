@@ -100,7 +100,7 @@ sys-ui = ["dep:term-wm-sys-ui-components"]
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
-crossterm = { workspace = true }
+crossterm = { workspace = true, features = ["bracketed-paste"] }
 hostname = { workspace = true }
 libc = { workspace = true }
 line-ending = { workspace = true }
