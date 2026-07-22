@@ -8,6 +8,7 @@ use term_session_muxio_service_definitions::{
 
 mod common;
 use common::mock::{find_osc52_payload, find_sgr_mouse_token, get_mock_bin};
+use term_wm_pty_engine::clipboard::Osc52Extractor;
 use common::session::{
     TEST_COLS, TEST_ROWS, connect_client_with_retry, generate_socket_path, get_bench_bin,
     spawn_session, wait_for_output,
@@ -129,6 +130,48 @@ async fn session_osc52_in_output() {
         Some(common::mock::EXPECTED_OSC52_PAYLOAD),
         "OSC 52 payload extraction failed, got stream: {:?}",
         String::from_utf8_lossy(&output)
+    );
+}
+
+#[tokio::test]
+async fn session_osc52_via_osc52extractor() {
+    let mock = get_mock_bin();
+    let (client, _dir) = spawn_session(vec![mock, "osc52".into()], TEST_COLS, TEST_ROWS).await;
+
+    let (_, mut reader) = client
+        .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
+        .await
+        .unwrap();
+
+    let mut extractor = Osc52Extractor::new();
+    let mut prev_tail: [u8; 8] = [0; 8];
+    let mut extracted = None;
+
+    let start = std::time::Instant::now();
+    while start.elapsed() < Duration::from_secs(3) {
+        match tokio::time::timeout(Duration::from_millis(200), reader.recv()).await {
+            Ok(Some(Ok(data))) => {
+                if let Some(text) = extractor.push(&data, &prev_tail) {
+                    extracted = Some(text);
+                    break;
+                }
+                let n = data.len();
+                if n >= 8 {
+                    prev_tail.copy_from_slice(&data[n - 8..n]);
+                } else if n > 0 {
+                    prev_tail.rotate_left(n);
+                    prev_tail[8 - n..].copy_from_slice(&data[..n]);
+                }
+            }
+            Ok(Some(Err(_))) | Ok(None) => break,
+            Err(_) => continue,
+        }
+    }
+
+    assert_eq!(
+        extracted,
+        Some("test".to_string()),
+        "Osc52Extractor should decode 'test' from real server byte stream"
     );
 }
 
