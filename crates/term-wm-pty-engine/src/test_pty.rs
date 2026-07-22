@@ -86,26 +86,45 @@ impl Drop for StdinPtyGuard {
 
 #[cfg(windows)]
 impl StdinPtyGuard {
-    /// Create a ConPTY pair and redirect stdin to the PTY slave.
+    /// Create a ConPTY pair and redirect stdin to the PTY master.
     ///
     /// Uses `SetStdHandle` via the shared `HandleSwapGuard` to redirect
-    /// the Win32 stdin handle, avoiding raw Win32 API calls in this file.
+    /// the Win32 stdin handle to the ConPTY master handle (which
+    /// supports the terminal operations that `enable_raw_mode` needs).
     pub fn new() -> io::Result<Self> {
+        unsafe extern "system" {
+            fn GetCurrentProcess() -> isize;
+            fn DuplicateHandle(
+                hSourceProcess: isize,
+                hSourceHandle: isize,
+                hTargetProcess: isize,
+                lpTargetHandle: *mut isize,
+                dwDesiredAccess: u32,
+                bInheritHandle: i32,
+                dwOptions: u32,
+            ) -> i32;
+        }
+        const DUPLICATE_SAME_ACCESS: u32 = 0x00000002;
+        // STD_INPUT_HANDLE = -10 (0xFFFFFFF6)
+        const STD_INPUT_HANDLE: u32 = 0xFFFFFFF6u32;
+
         use std::os::windows::io::AsRawHandle;
         let pair = open_test_pty()?;
-        let slave_handle = pair.slave.as_raw_handle();
-        // Duplicate the slave handle so we can set it as stdin
+        let master_handle = pair.master.as_raw_handle().ok_or_else(|| {
+            io::Error::other("PTY master has no raw handle")
+        })?;
+        // Duplicate the handle for use as stdin
         let duped = unsafe {
-            let proc = libc::GetCurrentProcess();
+            let proc = GetCurrentProcess();
             let mut duped: isize = 0;
-            if libc::DuplicateHandle(
+            if DuplicateHandle(
                 proc,
-                slave_handle as *mut std::ffi::c_void,
+                master_handle as isize,
                 proc,
                 &mut duped as *mut isize,
                 0,
                 0,
-                libc::DUPLICATE_SAME_ACCESS,
+                DUPLICATE_SAME_ACCESS,
             ) == 0
             {
                 return Err(io::Error::last_os_error());
@@ -113,7 +132,7 @@ impl StdinPtyGuard {
             duped
         };
         let _guard = crate::redirect_stdio::HandleSwapGuard::new(
-            libc::STD_INPUT_HANDLE,
+            STD_INPUT_HANDLE,
             duped,
         )?;
         Ok(Self { _guard, _pair: pair })
