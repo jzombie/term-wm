@@ -190,7 +190,7 @@ mod tests {
     use super::*;
     use ratatui::buffer::Buffer;
     use term_wm_core::components::Component;
-    use term_wm_core::events::{MouseButton, KeyModifiers};
+    use term_wm_core::events::{KeyModifiers, MouseButton};
 
     fn make_backend(w: u16, h: u16) -> term_wm_console::RatatuiBackend {
         let buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, w, h));
@@ -250,7 +250,12 @@ mod tests {
         }]);
         let mut backend = make_backend(40, 10);
         let mut reg = HitboxRegistry::new();
-        let area = LayoutRect { x: 0, y: 0, width: 40, height: 10 };
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 10,
+        };
         sm.render(&mut backend, area, &ComponentContext::default(), &mut reg);
         assert!(reg.is_empty());
     }
@@ -261,7 +266,12 @@ mod tests {
         sm.set_visible(true);
         let mut backend = make_backend(40, 10);
         let mut reg = HitboxRegistry::new();
-        let area = LayoutRect { x: 0, y: 0, width: 40, height: 10 };
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 10,
+        };
         sm.render(&mut backend, area, &ComponentContext::default(), &mut reg);
         assert!(reg.is_empty());
     }
@@ -272,14 +282,25 @@ mod tests {
         let mut sm = WmSessionManagerComponent::new();
         sm.set_visible(true);
         let key = WindowKey::default();
-        sm.set_sessions(vec![
-            SessionEntry { key, title: "bash".to_string(), working_dir: "/home".to_string(), is_active: true },
-        ]);
+        sm.set_sessions(vec![SessionEntry {
+            key,
+            title: "bash".to_string(),
+            working_dir: "/home".to_string(),
+            is_active: true,
+        }]);
         let mut backend = make_backend(40, 10);
         let mut reg = HitboxRegistry::with_owner(ComponentOwner::Window(key));
-        let area = LayoutRect { x: 0, y: 0, width: 40, height: 10 };
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 10,
+        };
         // Need to mount first so window_key is set
-        sm.on_mount(key, &term_wm_core::app_context::AppContext::new("test", "0.1"));
+        sm.on_mount(
+            key,
+            &term_wm_core::app_context::AppContext::new("test", "0.1"),
+        );
         sm.render(&mut backend, area, &ComponentContext::default(), &mut reg);
         assert!(!reg.is_empty());
     }
@@ -288,9 +309,12 @@ mod tests {
     fn on_mouse_press_within_bounds_returns_focus_action() {
         let mut sm = WmSessionManagerComponent::new();
         let key = WindowKey::default();
-        sm.set_sessions(vec![
-            SessionEntry { key, title: "bash".to_string(), working_dir: "/home".to_string(), is_active: true },
-        ]);
+        sm.set_sessions(vec![SessionEntry {
+            key,
+            title: "bash".to_string(),
+            working_dir: "/home".to_string(),
+            is_active: true,
+        }]);
         let ctx = ComponentContext::default();
         let result = sm.on_mouse_press(0, 0, MouseButton::Left, KeyModifiers::NONE, &ctx);
         assert!(matches!(result, EventResult::Action(TermWmAction::FocusWindow(k)) if k == key));
@@ -299,9 +323,12 @@ mod tests {
     #[test]
     fn on_mouse_press_out_of_bounds_ignores() {
         let mut sm = WmSessionManagerComponent::new();
-        sm.set_sessions(vec![
-            SessionEntry { key: WindowKey::default(), title: "bash".to_string(), working_dir: "/home".to_string(), is_active: true },
-        ]);
+        sm.set_sessions(vec![SessionEntry {
+            key: WindowKey::default(),
+            title: "bash".to_string(),
+            working_dir: "/home".to_string(),
+            is_active: true,
+        }]);
         let ctx = ComponentContext::default();
         let result = sm.on_mouse_press(0, 5, MouseButton::Left, KeyModifiers::NONE, &ctx);
         assert!(matches!(result, EventResult::Ignored));

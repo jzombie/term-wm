@@ -624,8 +624,7 @@ mod tests {
         let mut img = AsciiImageComponent::new();
         // 2 pixels wide, 2 pixels tall: red top, green bottom
         let rgba = vec![
-            255u8, 0, 0, 255,  0, 255, 0, 255,
-            0, 0, 255, 255,    255, 255, 0, 255,
+            255u8, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
         ];
         img.set_rgba8(2, 2, rgba);
         let avg = img.sample_rgb_average(0, 0, 1);
