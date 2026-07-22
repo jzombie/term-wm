@@ -586,6 +586,17 @@ impl Default for WmTopPanelComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::buffer::Buffer;
+    use term_wm_core::components::{
+        ComponentAction, ComponentQuery, ComponentResponse, WmComponent,
+    };
+    use term_wm_core::theme::NOIR;
+    use term_wm_core::wm_config::HintVisibility;
+
+    fn make_backend(w: u16, h: u16) -> term_wm_console::RatatuiBackend {
+        let buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, w, h));
+        term_wm_console::RatatuiBackend::new(buf, ratatui::layout::Rect::new(0, 0, w, h))
+    }
 
     #[test]
     fn top_panel_basic_methods_and_split_area() {
@@ -621,5 +632,646 @@ mod tests {
         let (panel, managed) = p.split_area(false, area);
         assert_eq!(panel.height, 0);
         assert_eq!(managed, area);
+    }
+
+    #[test]
+    fn default_is_same_as_new() {
+        let p = WmTopPanelComponent::default();
+        assert!(p.visible());
+        assert_eq!(p.height(), 1);
+    }
+
+    #[test]
+    fn hitbox_id_returns_some() {
+        let p = WmTopPanelComponent::new("test");
+        assert!(p.hitbox_id().is_some());
+    }
+
+    #[test]
+    fn set_height_enforces_minimum() {
+        let mut p = WmTopPanelComponent::new("test");
+        p.set_height(0);
+        assert!(p.height() >= 1);
+        p.set_height(5);
+        assert_eq!(p.height(), 5);
+    }
+
+    #[test]
+    fn area_returns_stored_area() {
+        let mut p = WmTopPanelComponent::new("test");
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let _ = p.split_area(true, area);
+        assert_eq!(p.area(), area);
+    }
+
+    #[test]
+    fn menu_icon_contains_point_returns_false_when_no_rect() {
+        let p = WmTopPanelComponent::new("test");
+        assert!(!p.menu_icon_contains_point(0, 0));
+    }
+
+    #[test]
+    fn menu_icon_rect_none_initially() {
+        let p = WmTopPanelComponent::new("test");
+        assert!(p.menu_icon_rect().is_none());
+    }
+
+    #[test]
+    fn hit_test_window_after_render_with_display_order() {
+        let mut p = WmTopPanelComponent::new("test");
+        p.active = true;
+        let key = WindowKey::default();
+        p.focus_current = Some(key);
+        p.display_order = vec![key];
+        p.window_labels.insert(key, "W".to_string());
+
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let _ = p.split_area(true, area);
+        let mut backend = make_backend(80, 24);
+        p.render_inner(
+            &mut backend,
+            true,
+            key,
+            &[key],
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &NOIR,
+        );
+        assert!(!p.list.window_hits.is_empty());
+        let hit_rect = p.list.window_hits[0].rect;
+        let hit_key = p.hit_test_window(hit_rect.x as u16 + 1, hit_rect.y as u16);
+        assert!(hit_key.is_some());
+    }
+
+    #[test]
+    fn hit_test_mouse_capture_after_render() {
+        let mut p = WmTopPanelComponent::new("test");
+        p.active = true;
+        let key = WindowKey::default();
+        p.focus_current = Some(key);
+        p.display_order = vec![key];
+        p.mouse_capture_enabled = true;
+
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let _ = p.split_area(true, area);
+        let mut backend = make_backend(80, 24);
+        p.render_inner(
+            &mut backend,
+            true,
+            key,
+            &[key],
+            None,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &NOIR,
+        );
+        let mc_rect = p.notifications.mouse_capture_rect;
+        assert!(
+            mc_rect.is_some(),
+            "mouse_capture_rect should be set after render"
+        );
+        let rect = mc_rect.unwrap();
+        assert!(p.hit_test_mouse_capture(rect.x as u16 + 1, rect.y as u16));
+    }
+
+    #[test]
+    fn hit_test_clipboard_after_render() {
+        let mut p = WmTopPanelComponent::new("test");
+        p.active = true;
+        let key = WindowKey::default();
+        p.focus_current = Some(key);
+        p.display_order = vec![key];
+        p.clipboard_enabled = true;
+
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let _ = p.split_area(true, area);
+        let mut backend = make_backend(80, 24);
+        p.render_inner(
+            &mut backend,
+            true,
+            key,
+            &[key],
+            None,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            &NOIR,
+        );
+        let cb_rect = p.notifications.clipboard_rect;
+        assert!(
+            cb_rect.is_some(),
+            "clipboard_rect should be set after render"
+        );
+        let rect = cb_rect.unwrap();
+        assert!(p.hit_test_clipboard(rect.x as u16 + 1, rect.y as u16));
+    }
+
+    #[test]
+    fn hit_test_selection_after_render() {
+        let mut p = WmTopPanelComponent::new("test");
+        p.active = true;
+        let key = WindowKey::default();
+        p.focus_current = Some(key);
+        p.display_order = vec![key];
+        p.window_selection_enabled = true;
+
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let _ = p.split_area(true, area);
+        let mut backend = make_backend(80, 24);
+        p.render_inner(
+            &mut backend,
+            true,
+            key,
+            &[key],
+            None,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            &NOIR,
+        );
+        let sel_rect = p.notifications.selection_rect;
+        assert!(
+            sel_rect.is_some(),
+            "selection_rect should be set after render"
+        );
+        let rect = sel_rect.unwrap();
+        assert!(p.hit_test_selection(rect.x as u16 + 1, rect.y as u16));
+    }
+
+    #[test]
+    fn hit_test_clipboard_no_rect_returns_false() {
+        let p = WmTopPanelComponent::new("test");
+        assert!(!p.hit_test_clipboard(0, 0));
+    }
+
+    #[test]
+    fn hit_test_selection_no_rect_returns_false() {
+        let p = WmTopPanelComponent::new("test");
+        assert!(!p.hit_test_selection(0, 0));
+    }
+
+    #[test]
+    fn hit_test_area_returns_true_inside() {
+        let mut p = WmTopPanelComponent::new("test");
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let _ = p.split_area(true, area);
+        assert!(p.hit_test(5, 0));
+    }
+
+    #[test]
+    fn hit_test_area_returns_false_outside() {
+        let mut p = WmTopPanelComponent::new("test");
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let _ = p.split_area(true, area);
+        assert!(!p.hit_test(5, 5));
+    }
+
+    #[test]
+    fn render_when_not_active_does_nothing() {
+        let mut p = WmTopPanelComponent::new("test");
+        p.active = false;
+        let mut backend = make_backend(80, 24);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let ctx = ComponentContext::new(true);
+        let mut reg = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        p.render(&mut backend, area, &ctx, &mut reg);
+        // No panic, no-op
+    }
+
+    #[test]
+    fn render_with_status_line() {
+        let mut p = WmTopPanelComponent::new("test");
+        p.active = true;
+        let key = WindowKey::default();
+        p.focus_current = Some(key);
+        p.display_order = vec![key];
+        p.status_line = Some("Status: OK".to_string());
+
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let _ = p.split_area(true, area);
+        let theme = NOIR;
+        let mut backend = make_backend(80, 24);
+        p.render_inner(
+            &mut backend,
+            true,
+            key,
+            &[],
+            Some("Status: OK"),
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &theme,
+        );
+        // Should render without panic
+    }
+
+    #[test]
+    fn render_menu_open_style() {
+        let mut p = WmTopPanelComponent::new("test");
+        p.active = true;
+        let key = WindowKey::default();
+        p.focus_current = Some(key);
+        p.display_order = vec![key];
+        p.menu_open = true;
+
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let _ = p.split_area(true, area);
+        let theme = NOIR;
+        let mut backend = make_backend(80, 24);
+        p.render_inner(
+            &mut backend,
+            true,
+            key,
+            &[key],
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+            &theme,
+        );
+        // Menu rect should be set after render
+        assert!(p.menu_icon_rect().is_some());
+    }
+
+    #[test]
+    fn render_narrow_buffer_truncates_labels() {
+        let mut p = WmTopPanelComponent::new("test");
+        p.active = true;
+        let key = WindowKey::default();
+        p.focus_current = Some(key);
+        p.display_order = vec![key];
+        p.window_labels.insert(
+            key,
+            "A very long window label that exceeds buffer width".to_string(),
+        );
+
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 1,
+        };
+        let _ = p.split_area(true, area);
+        let theme = NOIR;
+        let mut backend = make_backend(20, 1);
+        p.render_inner(
+            &mut backend,
+            true,
+            key,
+            &[key],
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &theme,
+        );
+    }
+
+    #[test]
+    fn process_action_toggle_visibility() {
+        let mut p = WmTopPanelComponent::new("test");
+        assert!(p.visible());
+        p.process_action(&ComponentAction::ToggleVisibility);
+        assert!(!p.visible());
+        p.process_action(&ComponentAction::ToggleVisibility);
+        assert!(p.visible());
+    }
+
+    #[test]
+    fn process_action_set_hint_visibility_always() {
+        let mut p = WmTopPanelComponent::new("test");
+        p.set_visible(false);
+        p.process_action(&ComponentAction::SetHintVisibility(HintVisibility::Always));
+        assert!(p.visible());
+    }
+
+    #[test]
+    fn process_action_set_hint_visibility_never() {
+        let mut p = WmTopPanelComponent::new("test");
+        p.process_action(&ComponentAction::SetHintVisibility(HintVisibility::Never));
+        assert!(!p.visible());
+    }
+
+    #[test]
+    fn process_action_set_hint_visibility_on_demand() {
+        let mut p = WmTopPanelComponent::new("test");
+        p.set_visible(false);
+        p.process_action(&ComponentAction::SetHintVisibility(
+            HintVisibility::OnDemand,
+        ));
+        assert!(!p.visible());
+    }
+
+    #[test]
+    fn process_action_set_panel_active() {
+        let mut p = WmTopPanelComponent::new("test");
+        p.process_action(&ComponentAction::SetPanelActive(true));
+        assert!(p.active);
+        p.process_action(&ComponentAction::SetPanelActive(false));
+        assert!(!p.active);
+    }
+
+    #[test]
+    fn process_action_set_window_labels() {
+        use std::collections::BTreeMap;
+        let mut p = WmTopPanelComponent::new("test");
+        let mut labels = BTreeMap::new();
+        let key = WindowKey::default();
+        labels.insert(key, "My Window".to_string());
+        p.process_action(&ComponentAction::SetWindowLabels(labels));
+        assert_eq!(
+            p.window_labels.get(&key).map(|s| s.as_str()),
+            Some("My Window")
+        );
+    }
+
+    #[test]
+    fn process_action_set_top_panel_state() {
+        use term_wm_core::components::TopPanelState;
+        let mut p = WmTopPanelComponent::new("test");
+        let key = WindowKey::default();
+        let state = TopPanelState {
+            focus_current: Some(key),
+            display_order: vec![key],
+            status_line: Some("ready".to_string()),
+            mouse_capture_enabled: true,
+            clipboard_enabled: true,
+            window_selection_enabled: true,
+            selection_active: true,
+            selection_dragging: true,
+            menu_open: true,
+        };
+        p.process_action(&ComponentAction::SetTopPanelState(Box::new(state)));
+        assert_eq!(p.focus_current, Some(key));
+        assert_eq!(p.display_order, vec![key]);
+        assert_eq!(p.status_line.as_deref(), Some("ready"));
+        assert!(p.mouse_capture_enabled);
+        assert!(p.clipboard_enabled);
+        assert!(p.window_selection_enabled);
+        assert!(p.selection_active);
+        assert!(p.selection_dragging);
+        assert!(p.menu_open);
+    }
+
+    #[test]
+    fn query_non_menu_returns_none() {
+        let p = WmTopPanelComponent::new("test");
+        assert!(matches!(
+            p.query(&ComponentQuery::SelectedAction),
+            ComponentResponse::None
+        ));
+        assert!(matches!(
+            p.query(&ComponentQuery::KeybindingHints),
+            ComponentResponse::None
+        ));
+    }
+
+    #[test]
+    fn query_menu_icon_rect_returns_none_initially() {
+        let p = WmTopPanelComponent::new("test");
+        let resp = p.query(&ComponentQuery::MenuIconRect);
+        assert!(matches!(resp, ComponentResponse::Rect(None)));
+    }
+
+    #[test]
+    fn begin_frame_clears_state() {
+        let mut p = WmTopPanelComponent::new("test");
+        p.menu_rect = Some(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 5,
+            height: 1,
+        });
+        p.list.window_hits.push(PanelWindowHit {
+            id: WindowKey::default(),
+            rect: LayoutRect {
+                x: 0,
+                y: 0,
+                width: 5,
+                height: 1,
+            },
+        });
+        p.notifications.mouse_capture_rect = Some(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 5,
+            height: 1,
+        });
+        p.begin_frame();
+        assert!(p.menu_rect.is_none());
+        assert!(p.list.window_hits.is_empty());
+        assert!(p.notifications.mouse_capture_rect.is_none());
+    }
+
+    #[test]
+    fn wmbegin_frame_trait_delegates() {
+        let mut p = WmTopPanelComponent::new("test");
+        p.menu_rect = Some(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 5,
+            height: 1,
+        });
+        WmComponent::begin_frame(&mut p);
+        assert!(p.menu_rect.is_none());
+    }
+
+    #[test]
+    fn wmvisible_trait_delegates() {
+        let p = WmTopPanelComponent::new("test");
+        assert!(WmComponent::visible(&p));
+    }
+
+    #[test]
+    fn wmset_visible_trait_delegates() {
+        let mut p = WmTopPanelComponent::new("test");
+        WmComponent::set_visible(&mut p, false);
+        assert!(!WmComponent::visible(&p));
+    }
+
+    #[test]
+    fn handle_events_non_mouse_returns_ignored() {
+        let mut p = WmTopPanelComponent::new("test");
+        let ctx = ComponentContext::new(true);
+        let event = term_wm_core::events::Event::Key(term_wm_core::events::KeyEvent {
+            code: term_wm_core::events::KeyCode::Char('a'),
+            modifiers: term_wm_core::events::KeyModifiers::NONE,
+            kind: term_wm_core::events::KeyKind::Press,
+        });
+        let result = p.handle_events(&event, &ctx);
+        assert!(result.is_ignored());
+    }
+
+    #[test]
+    fn handle_events_mouse_not_press_returns_ignored() {
+        let mut p = WmTopPanelComponent::new("test");
+        let ctx = ComponentContext::new(true);
+        let event = term_wm_core::events::Event::Mouse(term_wm_core::events::MouseEvent {
+            kind: term_wm_core::events::MouseEventKind::Moved,
+            column: 0,
+            row: 0,
+            modifiers: term_wm_core::events::KeyModifiers::NONE,
+        });
+        let result = p.handle_events(&event, &ctx);
+        assert!(result.is_ignored());
+    }
+
+    #[test]
+    fn on_mouse_press_no_hit_returns_ignored() {
+        let mut p = WmTopPanelComponent::new("test");
+        let ctx = ComponentContext::new(true);
+        let result = p.on_mouse_press(0, 0, MouseButton::Left, KeyModifiers::NONE, &ctx);
+        assert!(result.is_ignored());
+    }
+
+    #[test]
+    fn render_with_zero_area_does_nothing() {
+        let mut p = WmTopPanelComponent::new("test");
+        p.active = true;
+        p.area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        };
+        let theme = NOIR;
+        let mut backend = make_backend(80, 24);
+        let key = WindowKey::default();
+        p.render_inner(
+            &mut backend,
+            true,
+            key,
+            &[],
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &theme,
+        );
+    }
+
+    #[test]
+    fn render_with_empty_display_order_and_no_status() {
+        let mut p = WmTopPanelComponent::new("test");
+        p.active = true;
+        let key = WindowKey::default();
+        p.focus_current = Some(key);
+        p.display_order = vec![];
+
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let _ = p.split_area(true, area);
+        let theme = NOIR;
+        let mut backend = make_backend(80, 24);
+        p.render_inner(
+            &mut backend,
+            true,
+            key,
+            &[],
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &theme,
+        );
+    }
+
+    #[test]
+    fn consume_area_delegates_to_split_area() {
+        let mut p = WmTopPanelComponent::new("test");
+        p.active = true;
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let (panel, managed) = p.consume_area(area);
+        assert_eq!(panel.height, 1);
+        assert_eq!(managed.height, 23);
     }
 }
