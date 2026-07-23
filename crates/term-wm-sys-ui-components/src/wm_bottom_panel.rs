@@ -1,5 +1,5 @@
 use ratatui::style::Style;
-use term_wm_core::events::{Event, MouseEventKind};
+use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEventKind};
 use term_wm_layout_engine::LayoutRect;
 
 use term_wm_core::{
@@ -8,11 +8,14 @@ use term_wm_core::{
         Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse,
         WmComponent,
     },
+    hitbox_registry::HitboxId,
     layout::rect_contains,
     power_profile::PowerProfile,
     utils::truncate_to_width,
 };
-use term_wm_ui_components::helpers::{color_to_ratatui, layout_rect_to_rect, safe_set_string};
+use term_wm_ui_components::helpers::{
+    color_to_ratatui, layout_rect_to_clipped_rect, safe_set_string,
+};
 
 #[derive(Debug)]
 pub struct WmBottomPanelComponent {
@@ -23,6 +26,7 @@ pub struct WmBottomPanelComponent {
     keybinding_hints: Vec<(TermWmAction, Vec<String>)>,
     hint_rects: Vec<(LayoutRect, TermWmAction)>,
     power_profile: PowerProfile,
+    hitbox_id: HitboxId,
 }
 
 impl WmBottomPanelComponent {
@@ -35,6 +39,7 @@ impl WmBottomPanelComponent {
             keybinding_hints: Vec::new(),
             hint_rects: Vec::new(),
             power_profile: PowerProfile::PowerSaver,
+            hitbox_id: HitboxId::new(),
         }
     }
 
@@ -108,7 +113,7 @@ impl WmBottomPanelComponent {
         }
         let ratatui_backend = term_wm_ui_components::helpers::downcast_ratatui(backend);
         let buffer = &mut ratatui_backend.buffer;
-        let ratatui_area = layout_rect_to_rect(area);
+        let ratatui_area = layout_rect_to_clipped_rect(area);
         let bounds = ratatui_area.intersection(buffer.area);
         if bounds.width == 0 || bounds.height == 0 {
             return;
@@ -268,15 +273,9 @@ impl WmBottomPanelComponent {
         }
     }
 
-    pub fn hit_test_hint(&self, event: &Event) -> Option<TermWmAction> {
-        let Event::Mouse(mouse) = event else {
-            return None;
-        };
-        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
-            return None;
-        }
+    pub fn hit_test_hint(&self, column: u16, row: u16) -> Option<TermWmAction> {
         for (rect, action) in &self.hint_rects {
-            if rect_contains(*rect, mouse.column, mouse.row) {
+            if rect_contains(*rect, column, row) {
                 return Some(action.clone());
             }
         }
@@ -285,6 +284,10 @@ impl WmBottomPanelComponent {
 }
 
 impl Component<TermWmAction> for WmBottomPanelComponent {
+    fn hitbox_id(&self) -> Option<HitboxId> {
+        Some(self.hitbox_id)
+    }
+
     fn render(
         &mut self,
         backend: &mut dyn term_wm_render::RenderBackend,
@@ -300,9 +303,32 @@ impl Component<TermWmAction> for WmBottomPanelComponent {
     fn handle_events(
         &mut self,
         event: &Event,
+        ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        let Event::Mouse(mouse) = event else {
+            return EventResult::Ignored;
+        };
+        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
+            return EventResult::Ignored;
+        }
+        self.on_mouse_press(
+            mouse.column,
+            mouse.row,
+            MouseButton::Left,
+            mouse.modifiers,
+            ctx,
+        )
+    }
+
+    fn on_mouse_press(
+        &mut self,
+        column: u16,
+        row: u16,
+        _button: MouseButton,
+        _modifiers: KeyModifiers,
         _ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
-        if let Some(action) = self.hit_test_hint(event) {
+        if let Some(action) = self.hit_test_hint(column, row) {
             return EventResult::Action(action);
         }
         EventResult::Ignored
@@ -367,7 +393,7 @@ mod tests {
             height: 1,
         };
         p.area = area;
-        let ratatui_area = layout_rect_to_rect(area);
+        let ratatui_area = layout_rect_to_clipped_rect(area);
         let buf = Buffer::empty(ratatui_area);
         let mut backend = term_wm_console::RatatuiBackend::new(buf, ratatui_area);
 
@@ -397,7 +423,7 @@ mod tests {
             height: 1,
         };
         p.area = area;
-        let ratatui_area = layout_rect_to_rect(area);
+        let ratatui_area = layout_rect_to_clipped_rect(area);
         let buf = Buffer::empty(ratatui_area);
         let mut backend = term_wm_console::RatatuiBackend::new(buf, ratatui_area);
 
@@ -447,7 +473,7 @@ mod tests {
             height: 1,
         };
         p.area = area;
-        let ratatui_area = layout_rect_to_rect(area);
+        let ratatui_area = layout_rect_to_clipped_rect(area);
         let buf = Buffer::empty(ratatui_area);
         let mut backend = term_wm_console::RatatuiBackend::new(buf, ratatui_area);
 

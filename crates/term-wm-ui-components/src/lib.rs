@@ -1,6 +1,7 @@
 pub mod ascii_image;
 pub mod button;
 pub mod center;
+pub mod command_palette;
 pub mod confirm_overlay;
 pub mod dialog_overlay;
 pub mod helpers;
@@ -19,6 +20,7 @@ pub mod vertical_stack;
 pub use ascii_image::AsciiImageComponent;
 pub use button::ButtonComponent;
 pub use center::CenterComponent;
+pub use command_palette::CommandPaletteComponent;
 pub use confirm_overlay::ConfirmOverlayComponent;
 pub use dialog_overlay::DialogOverlayComponent;
 pub use label::LabelComponent;

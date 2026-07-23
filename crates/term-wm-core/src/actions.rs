@@ -1,6 +1,5 @@
 use std::fmt;
 
-use crate::events::Event;
 use crate::window::WindowKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -9,27 +8,43 @@ pub enum ConfirmAction {
     Cancel,
 }
 
+/// Universal input mode state machine.
+/// Single state machine across all environments — no mobile/desktop fork.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum WmInputMode {
+    /// Default: all events pass through to active app. Esc, keys, mouse
+    /// go directly to PTY without WM interception.
+    Passthrough,
+    /// Command palette is visible, accepting taps/keys
+    CommandPalette,
+    /// Targeting mode for tap-to-swap
+    TapToSwapTargeting,
+    /// Help overlay is visible
+    Help,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ActionLayer {
-    /// Always active. Only `WmToggleOverlay` (Esc) is in this layer.
+    /// Global actions available regardless of overlay state
+    /// (window management, navigation, system commands).
     Global,
-    /// Only active when the WM overlay (menu) is visible.
-    WmMode,
+    /// Only active when the command palette is visible.
+    CommandPalette,
+    /// Only active when the help overlay is visible.
+    Help,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TermWmAction {
-    // --- Existing Action variants (all preserved) ---
+    // --- Existing Action variants (all preserved except WmToggleOverlay) ---
     Quit,
     CloseHelp,
     CycleNextWindow,
     CyclePrevWindow,
     FocusWindow(WindowKey),
     OpenHelp,
-    OpenKeybindings,
     FocusNext,
     FocusPrev,
-    WmToggleOverlay,
     NewWindow,
     HintToggle,
     MenuUp,
@@ -74,6 +89,7 @@ pub enum TermWmAction {
     ToggleWindowSelection,
     MinimizeWindow,
     MaximizeWindow,
+    ToggleDirectMode,
     ToggleDebugWindow,
     ExitUi,
     ToggleSystemPanel,
@@ -86,6 +102,25 @@ pub enum TermWmAction {
     // External events
     ProcessExited,
     ProfileChange(crate::power_profile::PowerProfile),
+
+    // Component-level keyboard focus
+    /// A component requests keyboard focus. The WindowManager stores the
+    /// HitboxId on the focused Window's `active_keyboard_focus` field.
+    RequestKeyboardFocus(crate::hitbox_registry::HitboxId),
+
+    // --- Universal input mode actions (replaces WmToggleOverlay) ---
+    /// Open the command palette. Triggered by FAB tap or Ctrl+Shift+Space.
+    OpenCommandPalette,
+    /// Close the command palette and return to passthrough mode.
+    CloseCommandPalette,
+    /// Begin tap-to-swap targeting for the given window.
+    BeginTapSwap(WindowKey),
+    /// Select a target window for tap-to-swap.
+    TapSwapTarget(WindowKey),
+    /// Confirm the swap operation.
+    ConfirmSwap,
+    /// Cancel the swap operation.
+    CancelSwap,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -136,8 +171,11 @@ impl<Msg> EventResult<Msg> {
 impl TermWmAction {
     pub fn layer(&self) -> ActionLayer {
         match self {
-            TermWmAction::WmToggleOverlay => ActionLayer::Global,
-            _ => ActionLayer::WmMode,
+            TermWmAction::OpenCommandPalette => ActionLayer::Global,
+            TermWmAction::CloseHelp | TermWmAction::OpenHelp | TermWmAction::Help => {
+                ActionLayer::Help
+            }
+            _ => ActionLayer::CommandPalette,
         }
     }
 
@@ -146,10 +184,10 @@ impl TermWmAction {
             TermWmAction::Quit
             | TermWmAction::CloseHelp
             | TermWmAction::OpenHelp
-            | TermWmAction::OpenKeybindings
             | TermWmAction::LinkClicked(_)
             | TermWmAction::ProcessExited
-            | TermWmAction::ProfileChange(_) => Category::System,
+            | TermWmAction::ProfileChange(_)
+            | TermWmAction::RequestKeyboardFocus(_) => Category::System,
 
             TermWmAction::CycleNextWindow
             | TermWmAction::CyclePrevWindow
@@ -157,8 +195,7 @@ impl TermWmAction {
             | TermWmAction::FocusPrev
             | TermWmAction::FocusWindow(_) => Category::Navigation,
 
-            TermWmAction::WmToggleOverlay
-            | TermWmAction::NewWindow
+            TermWmAction::NewWindow
             | TermWmAction::HintToggle
             | TermWmAction::CloseMenu
             | TermWmAction::Help
@@ -168,10 +205,17 @@ impl TermWmAction {
             | TermWmAction::ToggleWindowSelection
             | TermWmAction::MinimizeWindow
             | TermWmAction::MaximizeWindow
+            | TermWmAction::ToggleDirectMode
             | TermWmAction::ToggleDebugWindow
             | TermWmAction::ExitUi
             | TermWmAction::ToggleSystemPanel
-            | TermWmAction::SendNotification(_) => Category::Windows,
+            | TermWmAction::SendNotification(_)
+            | TermWmAction::OpenCommandPalette
+            | TermWmAction::CloseCommandPalette
+            | TermWmAction::BeginTapSwap(_)
+            | TermWmAction::TapSwapTarget(_)
+            | TermWmAction::ConfirmSwap
+            | TermWmAction::CancelSwap => Category::Windows,
 
             TermWmAction::MenuUp
             | TermWmAction::MenuDown
@@ -208,10 +252,10 @@ impl TermWmAction {
 
     pub fn bottom_hint_priority(&self) -> Option<u8> {
         match self {
-            TermWmAction::WmToggleOverlay => Some(100),
+            TermWmAction::OpenCommandPalette => Some(100),
             TermWmAction::Quit => Some(90),
             TermWmAction::OpenHelp => Some(80),
-            TermWmAction::OpenKeybindings => Some(75),
+            TermWmAction::CloseHelp => Some(75),
             TermWmAction::FocusNext => Some(70),
             TermWmAction::FocusPrev => Some(65),
             TermWmAction::CycleNextWindow => Some(60),
@@ -233,10 +277,8 @@ impl fmt::Display for TermWmAction {
             TermWmAction::CyclePrevWindow => "Cycle previous window",
             TermWmAction::FocusWindow(_) => "Focus window",
             TermWmAction::OpenHelp => "Open help",
-            TermWmAction::OpenKeybindings => "Open keybindings",
             TermWmAction::FocusNext => "Focus next",
             TermWmAction::FocusPrev => "Focus previous",
-            TermWmAction::WmToggleOverlay => "Menu",
             TermWmAction::NewWindow => "New window",
             TermWmAction::HintToggle => "Toggle hints",
             TermWmAction::MenuUp => "Menu up",
@@ -273,6 +315,7 @@ impl fmt::Display for TermWmAction {
             TermWmAction::ToggleWindowSelection => "Toggle window selection",
             TermWmAction::MinimizeWindow => "Minimize window",
             TermWmAction::MaximizeWindow => "Maximize window",
+            TermWmAction::ToggleDirectMode => "Toggle direct mode",
             TermWmAction::ToggleDebugWindow => "Toggle debug window",
             TermWmAction::ExitUi => "Exit UI",
             TermWmAction::ToggleSystemPanel => "Toggle system panel",
@@ -281,6 +324,13 @@ impl fmt::Display for TermWmAction {
             TermWmAction::ClipboardPaste(_) => "Clipboard paste",
             TermWmAction::ProcessExited => "Process exited",
             TermWmAction::ProfileChange(_) => "Profile change",
+            TermWmAction::RequestKeyboardFocus(_) => "Request keyboard focus",
+            TermWmAction::OpenCommandPalette => "Open command palette",
+            TermWmAction::CloseCommandPalette => "Close command palette",
+            TermWmAction::BeginTapSwap(_) => "Begin tap-to-swap",
+            TermWmAction::TapSwapTarget(_) => "Tap swap target",
+            TermWmAction::ConfirmSwap => "Confirm swap",
+            TermWmAction::CancelSwap => "Cancel swap",
         };
         write!(f, "{}", s)
     }
@@ -289,14 +339,10 @@ impl fmt::Display for TermWmAction {
 /// System-level tasks managed by the runner's `TaskScheduler<SystemTask>`.
 ///
 /// These are tasks that the runner dispatches directly because they need
-/// access to `app` and `driver` (e.g., forwarding timed-out key events,
-/// applying drag-snap).  Component-level tasks use their own scheduler
-/// with a separate type parameter.
+/// access to `app` and `driver` (e.g., applying drag-snap).
+/// Component-level tasks use their own scheduler with a separate type parameter.
 #[derive(Debug, Clone)]
 pub enum SystemTask {
-    /// A super-key passthrough timeout has expired — forward the deferred
-    /// key event to the focused terminal component.
-    SuperPassthrough { event: Event },
     /// The drag-snap timeout has elapsed — auto-apply the pending layout
     /// snap for the window that was being dragged.
     DragSnap,
@@ -307,4 +353,6 @@ pub enum SystemTask {
     TemporalDwellTick,
     /// A notification's TTL has expired — dismiss it from the queue.
     DismissNotification(u64),
+    /// Tab outline has elapsed — restore palette/panels to normal.
+    ClearTabOutline,
 }

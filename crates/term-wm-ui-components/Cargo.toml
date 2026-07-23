@@ -11,6 +11,7 @@ license.workspace = true
 crossterm = { workspace = true }
 indoc = { workspace = true }
 linkify = { workspace = true }
+nucleo-matcher = { workspace = true }
 portable-pty = { workspace = true }
 pulldown-cmark = { workspace = true }
 ratatui = { workspace = true }

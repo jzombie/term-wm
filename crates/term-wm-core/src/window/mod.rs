@@ -1,5 +1,6 @@
 pub mod decorator;
 mod entry;
+pub mod test_component;
 mod window_manager;
 
 use crate::Rect;
@@ -10,11 +11,21 @@ use term_wm_layout_engine::{LayoutRect, RectSpec};
 /// keys mathematically impossible to resolve.
 pub type WindowKey = slotmap::DefaultKey;
 
+slotmap::new_key_type! {
+    /// Slotmap-backed generational key used for overlay identification.
+    pub struct OverlayKey;
+}
+
+slotmap::new_key_type! {
+    /// Slotmap-backed generational key used for component arena lookup.
+    pub struct ComponentKey;
+}
+
 pub use entry::WindowState;
 
+pub use window_manager::layer_manager::{ComponentTag, LayerId, LayerManager, MacroFocus, ZPlane};
 pub use window_manager::{
-    DrawTask, OverlayId, ScrollState, SuperPressResult, WindowDrawContext, WindowManager,
-    WindowSurface, wm_menu_items,
+    DrawTask, ScrollState, WindowDrawContext, WindowManager, WindowSurface, WmButton,
 };
 
 /// Signed floating rectangle (alias for engine `LayoutRect`).

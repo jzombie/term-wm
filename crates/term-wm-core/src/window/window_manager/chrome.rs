@@ -1,18 +1,10 @@
-use std::sync::Arc;
-
 use super::WindowManager;
+use crate::actions::TermWmAction;
+use crate::components::{Component, Overlay, WmComponent};
 use crate::window::WindowKey;
 use crate::window::entry::WindowState;
 
-impl WindowManager {
-    pub fn decorator(&self) -> Arc<dyn super::WindowDecorator> {
-        self.config.decorator()
-    }
-
-    pub fn set_decorator(&mut self, decorator: Arc<dyn super::WindowDecorator>) {
-        self.config.decorator = Some(decorator);
-    }
-
+impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> WindowManager<C, L, O> {
     pub fn minimize_window(&mut self, key: WindowKey) {
         self.transition_window(key, WindowState::Iconic);
     }
@@ -37,6 +29,7 @@ impl WindowManager {
                 }
                 if let Some(w) = self.windows.get_mut(key) {
                     w.is_maximized = false;
+                    w.borders_enabled = true;
                 }
             } else {
                 // Maximize: save current and expand
@@ -44,6 +37,7 @@ impl WindowManager {
                 self.set_floating_rect(key, Some(full));
                 if let Some(w) = self.windows.get_mut(key) {
                     w.is_maximized = true;
+                    w.borders_enabled = false;
                 }
             }
             self.bring_floating_to_front_key(key);
@@ -73,6 +67,7 @@ impl WindowManager {
         self.set_floating_rect(key, Some(full));
         if let Some(w) = self.windows.get_mut(key) {
             w.is_maximized = true;
+            w.borders_enabled = false;
         }
         self.bring_floating_to_front_key(key);
     }
@@ -102,7 +97,10 @@ impl WindowManager {
             // Destroy the component (kills child PTY processes) then
             // remove from SlotMap — all in one call, no API chaining.
             if let Some(w) = self.windows.get_mut(key) {
-                w.component.destroy();
+                if let Some(c) = self.components.get_mut(w.component_key) {
+                    c.destroy();
+                }
+                self.components.remove(w.component_key);
             }
             self.windows.remove(key);
         }

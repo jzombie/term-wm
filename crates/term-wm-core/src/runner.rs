@@ -6,9 +6,10 @@ use term_wm_render::RenderTarget;
 use std::collections::VecDeque;
 
 use crate::actions::{ConfirmAction, EventResult, SystemTask, TermWmAction};
-#[cfg(test)]
 use crate::components::Component;
+use crate::components::Overlay;
 use crate::components::SelectionStatus;
+use crate::components::WmComponent;
 use crate::debug_event_flags;
 use crate::event_loop::{ControlFlow, EventLoop};
 use crate::events::core_event_to_wm;
@@ -18,8 +19,13 @@ use crate::layout::{LayoutNode, TilingLayout};
 use crate::task_scheduler::TaskScheduler;
 use crate::window::{WindowKey, WindowManager};
 
-pub trait WindowManagerHost {
-    fn wm(&mut self) -> &mut WindowManager;
+pub trait WindowManagerHost<
+    C: Component<TermWmAction>,
+    L: WmComponent = crate::components::NoopWmComponent,
+    O: Overlay<TermWmAction> = crate::components::NoopOverlay,
+>
+{
+    fn wm(&mut self) -> &mut WindowManager<C, L, O>;
     fn wm_new_window(&mut self) -> std::io::Result<()> {
         Ok(())
     }
@@ -29,15 +35,12 @@ pub trait WindowManagerHost {
     fn set_clipboard_enabled(&mut self, _enabled: bool) {}
     fn set_window_selection_enabled(&mut self, _enabled: bool) {}
     fn open_help_overlay(&mut self) {
-        self.wm().open_overlay(crate::window::OverlayId::Help, None);
-    }
-    fn open_keybindings_overlay(&mut self) {
-        self.wm()
-            .open_overlay(crate::window::OverlayId::Keybindings, None);
+        // Default implementation is a no-op; concrete apps override this.
     }
     fn open_exit_confirm(&mut self) {
         self.wm().request_quit();
     }
+    fn open_command_palette(&mut self) {}
     /// Called when a panic is detected.
     fn on_panic(&mut self) {}
     /// Toggle the debug log window visibility.
@@ -48,10 +51,6 @@ pub trait WindowManagerHost {
     /// The app sets this to `true` to exit the event loop.
     fn quit_requested(&self) -> bool {
         false
-    }
-
-    fn empty_window_message(&self) -> &str {
-        "No windows"
     }
 
     fn layout_for_windows(&mut self, windows: &[WindowKey]) -> Option<TilingLayout<WindowKey>> {
@@ -67,7 +66,12 @@ pub trait WindowManagerHost {
     }
 }
 
-fn drain_action_queue<A: WindowManagerHost>(
+fn drain_action_queue<
+    C: Component<TermWmAction>,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+    A: WindowManagerHost<C, L, O>,
+>(
     app: &mut A,
     queue: &mut VecDeque<(WindowKey, TermWmAction)>,
 ) {
@@ -77,6 +81,39 @@ fn drain_action_queue<A: WindowManagerHost>(
                 tracing::info!("drain_action_queue: SendNotification({})", msg);
                 app.wm()
                     .push_notification(msg, std::time::Duration::from_secs(3));
+            }
+            TermWmAction::OpenCommandPalette => {
+                if app.wm().command_menu_visible() {
+                    app.wm().close_command_palette();
+                } else {
+                    app.open_command_palette();
+                }
+            }
+            TermWmAction::RequestKeyboardFocus(id) => {
+                app.wm().set_keyboard_focus(key, id);
+            }
+            TermWmAction::PasteClipboard => {
+                let text = app.wm().clipboard_mut().and_then(|cb| cb.get().ok());
+                if let Some(text) = text {
+                    queue.push_back((key, TermWmAction::ClipboardPaste(text)));
+                }
+            }
+            TermWmAction::ToggleMouseCapture => {
+                app.wm().toggle_mouse_capture();
+            }
+            TermWmAction::ToggleWindowSelection => {
+                app.wm().toggle_window_selection();
+            }
+            TermWmAction::ToggleClipboardMode => {
+                app.wm().toggle_clipboard_enabled();
+            }
+            TermWmAction::FocusWindow(k) => {
+                let state = app.wm().window_state(k);
+                if state == Some(crate::window::WindowState::Iconic) {
+                    app.wm()
+                        .transition_window(k, crate::window::WindowState::Mapped);
+                }
+                app.wm().focus_window_key(k);
             }
             action => {
                 let ctx = app.wm().component_context_for(true, key);
@@ -88,9 +125,12 @@ fn drain_action_queue<A: WindowManagerHost>(
     }
 }
 
-fn handle_focused_app_event<A>(event: &Event, app: &mut A) -> bool
+fn handle_focused_app_event<C, L, O, A>(event: &Event, app: &mut A) -> bool
 where
-    A: WindowManagerHost,
+    C: Component<TermWmAction>,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+    A: WindowManagerHost<C, L, O>,
 {
     // Clear hover state when the terminal loses focus so stale
     // hover highlights do not persist on menus or buttons.
@@ -107,6 +147,15 @@ where
             let result = app.wm().dispatch_mouse(&wm_event);
             match result {
                 EventResult::Action((target_key, action)) => {
+                    // Intercept global actions from system chrome (FAB has no WindowKey)
+                    if matches!(action, TermWmAction::OpenCommandPalette) {
+                        if app.wm().command_menu_visible() {
+                            app.wm().close_command_palette();
+                        } else {
+                            app.open_command_palette();
+                        }
+                        return true;
+                    }
                     let key = target_key.unwrap_or_else(|| app.wm().focused_window());
                     let mut queue = VecDeque::from([(key, action)]);
                     drain_action_queue(app, &mut queue);
@@ -165,8 +214,8 @@ where
 /// Prefer [`run_with_defaults`] for typical usage. Use this directly only when
 /// you need a custom draw closure or region mapping.
 #[allow(clippy::too_many_arguments)]
-pub fn run_event_loop<O, D, A, FDraw, FMap>(
-    output: &mut O,
+pub fn run_event_loop<C, L, Ov, Rt, D, A, FDraw, FMap>(
+    output: &mut Rt,
     driver: &mut D,
     app: &mut A,
     system_scheduler: TaskScheduler<SystemTask>,
@@ -174,9 +223,12 @@ pub fn run_event_loop<O, D, A, FDraw, FMap>(
     mut draw: FDraw,
 ) -> io::Result<()>
 where
-    O: RenderTarget,
+    C: Component<TermWmAction>,
+    L: WmComponent,
+    Ov: Overlay<TermWmAction>,
+    Rt: RenderTarget,
     D: EventSource,
-    A: WindowManagerHost,
+    A: WindowManagerHost<C, L, Ov>,
     FDraw: for<'frame> FnMut(&'frame mut dyn term_wm_render::RenderBackend, &mut A),
     FMap: Fn(WindowKey) -> WindowKey + Copy,
 {
@@ -192,10 +244,6 @@ where
             // Process expired system tasks (super-passthrough, drag-snap)
             for (_id, task) in system_handle.drain_expired() {
                 match task {
-                    SystemTask::SuperPassthrough { event } => {
-                        app.wm().clear_super_pending();
-                        let _ = handle_focused_app_event(&event, app);
-                    }
                     SystemTask::DragSnap => {
                         app.wm().apply_drag_snap_if_pending();
                     }
@@ -204,6 +252,13 @@ where
                     }
                     SystemTask::DismissNotification(id) => {
                         app.wm().dismiss_notification(id);
+                    }
+                    SystemTask::ClearTabOutline => {
+                        if let Some(expires_at) = app.wm().tab_outline_until
+                            && std::time::Instant::now() >= expires_at
+                        {
+                            app.wm().clear_tab_outline();
+                        }
                     }
                 }
             }
@@ -224,6 +279,12 @@ where
             for key in driver.take_exited_windows() {
                 app.wm().close_window(key);
             }
+
+            // Update monocle mode on resize
+            if let Some(Event::Resize(width, _height)) = &event {
+                app.wm().update_monocle_mode(*width);
+            }
+
             let mut flush_state_changes = |app: &mut A, flow: ControlFlow, consume_dirty: bool| {
                 if let Some(enabled) = app.wm().take_mouse_capture_change() {
                     let _ = driver.set_mouse_capture(enabled);
@@ -257,15 +318,7 @@ where
 
                 // Pre-compute the keybinding action using the configured
                 // KeyBindings from WindowManager (not hardcoded defaults).
-                // Only Global-layer actions are proactively dispatched;
-                // WmMode actions are handled when the WM overlay is open.
-                let mapped_action = match &evt {
-                    Event::Key(key) => app
-                        .wm()
-                        .keybindings()
-                        .action_for_key_in_layer(key, crate::keybindings::ActionLayer::Global),
-                    _ => None,
-                };
+                // CommandPalette actions are handled when the WM overlay is open.
 
                 // Layer 1: Active overlays (exit confirm, selection preview, help)
                 if app.wm().exit_confirm_visible() {
@@ -285,66 +338,7 @@ where
                     return flush_state_changes(app, ControlFlow::Continue, false);
                 }
 
-                // If keyboard capture is disabled for the focused window, key events
-                // bypass all WM interception and go directly to the terminal,
-                // except when the WM overlay is visible — overlay takes priority.
-                // Uses the unified double-Super handler: first Super is deferred (panel
-                // shows countdown), second Super within window opens overlay, timeout
-                // (checked in idle path) forwards the first Super to the terminal.
-                if let Event::Key(key) = &evt {
-                    let focus_id = app.wm().focused_window();
-                    if app.wm().direct_mode(focus_id)
-                        && !app.wm().command_menu_visible()
-                        && key.kind == KeyKind::Press
-                    {
-                        let is_wm_key = app
-                            .wm()
-                            .keybindings()
-                            .matches(TermWmAction::WmToggleOverlay, key);
-                        match app.wm().handle_super_press(key, is_wm_key) {
-                            crate::window::SuperPressResult::DoubleSuper => {
-                                app.wm().open_command_menu_no_passthrough();
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
-                            }
-                            crate::window::SuperPressResult::Pending => {
-                                // First Super of a pair — deferred. Panel shows countdown.
-                                // Timeout forwarding happens in the idle path below.
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
-                            }
-                            crate::window::SuperPressResult::Forward => {
-                                // Non-wm-toggle key → forward to terminal immediately.
-                                let _ = handle_focused_app_event(&evt, app);
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
-                            }
-                        }
-                    }
-                }
-
-                // Layer 2a: App-level event handler (before WM actions, after overlays)
-                if app.handle_app_event(&evt) {
-                    update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue, false);
-                }
-
-                // Layer 2b: Global-layer actions (only WmToggleOverlay is Global;
-                // all other actions are WmMode — dispatched when the overlay is open).
-                if let Some(_action) = mapped_action {
-                    // Only WmToggleOverlay reaches here; handled inline below.
-                }
-
-                // Pre-compute WmMode-layer action for use inside the overlay section.
-                let mapped_action_wm_mode = match &evt {
-                    Event::Key(key) => app
-                        .wm()
-                        .keybindings()
-                        .action_for_key_in_layer(key, crate::keybindings::ActionLayer::WmMode),
-                    _ => None,
-                };
-
-                // WM command menu toggle (special case due to passthrough logic)
+                // Command palette toggle (runs BEFORE the barrier so toggle works)
                 let wm_mode = app.wm().config().wm_command_menu_enabled;
                 if wm_mode
                     && let Event::Key(key) = &evt
@@ -352,156 +346,119 @@ where
                     && app
                         .wm()
                         .keybindings()
-                        .matches(TermWmAction::WmToggleOverlay, key)
+                        .matches(TermWmAction::OpenCommandPalette, key)
                 {
-                    if app.wm().command_menu_visible() {
-                        let passthrough = app.wm().super_passthrough_active();
-                        app.wm().close_command_menu();
-                        if passthrough {
-                            let passthrough_event = Event::Key(*key);
-                            let _ = handle_focused_app_event(&passthrough_event, app);
-                        }
+                    if app.wm().command_palette_visible() {
+                        app.wm().close_command_palette();
                     } else {
-                        app.wm().open_command_menu();
+                        app.open_command_palette();
                     }
                     update_selection_snapshot(app);
                     return flush_state_changes(app, ControlFlow::Continue, false);
                 }
-                if wm_mode && app.wm().command_menu_visible() {
-                    if let Some(action) = app.wm().handle_wm_menu_event(&evt) {
+
+                // In tab outline mode, any non-focus key closes the palette immediately.
+                if app.wm().is_tab_outline_active()
+                    && app.wm().command_palette_visible()
+                    && let Event::Key(key) = &evt
+                    && !app.wm().keybindings().matches(TermWmAction::FocusNext, key)
+                    && !app.wm().keybindings().matches(TermWmAction::FocusPrev, key)
+                {
+                    app.wm().close_command_palette();
+                    update_selection_snapshot(app);
+                    return flush_state_changes(app, ControlFlow::Continue, false);
+                }
+
+                // Command palette absolute event barrier (same pattern as help overlay)
+                if app.wm().command_palette_visible() {
+                    if let Some(action) = app.wm().handle_command_palette_event(&evt) {
                         match action {
-                            TermWmAction::CloseMenu => {
-                                app.wm().close_command_menu();
+                            TermWmAction::CloseMenu => {}
+                            TermWmAction::ToggleDebugWindow => {
+                                app.toggle_debug_window();
                             }
-                            TermWmAction::ToggleMouseCapture => {
-                                app.wm().toggle_mouse_capture();
+                            TermWmAction::ToggleSystemPanel => {
+                                app.toggle_system_panel();
                             }
-                            TermWmAction::ToggleClipboardMode => {
-                                app.wm().toggle_clipboard_enabled();
+                            TermWmAction::Help | TermWmAction::OpenHelp => {
+                                app.open_help_overlay();
                             }
-                            TermWmAction::ToggleWindowSelection => {
-                                app.wm().toggle_window_selection();
-                            }
-                            TermWmAction::MinimizeWindow => {
-                                let id = app.wm().focused_window();
-                                app.wm().minimize_window(id);
-                                app.wm().close_command_menu();
-                            }
-                            TermWmAction::MaximizeWindow => {
-                                let id = app.wm().focused_window();
-                                app.wm().toggle_maximize(id);
-                                app.wm().close_command_menu();
+                            TermWmAction::Quit | TermWmAction::ExitUi => {
+                                app.open_exit_confirm();
                             }
                             TermWmAction::CloseWindow => {
                                 let id = app.wm().focused_window();
                                 app.wm().close_window(id);
-                                app.wm().close_command_menu();
-                                // System windows queued by close_window are
-                                // cleaned up by take_closed_windows below.
                             }
                             TermWmAction::NewWindow => {
                                 app.wm_new_window()?;
-                                app.wm().close_command_menu();
                             }
-                            TermWmAction::ToggleDebugWindow => {
-                                app.toggle_debug_window();
-                                app.wm().close_command_menu();
+                            TermWmAction::MinimizeWindow => {
+                                let id = app.wm().focused_window();
+                                app.wm().minimize_window(id);
                             }
-                            TermWmAction::ToggleSystemPanel => {
-                                app.toggle_system_panel();
-                                app.wm().close_command_menu();
+                            TermWmAction::MaximizeWindow => {
+                                let id = app.wm().focused_window();
+                                app.wm().toggle_maximize(id);
+                            }
+                            TermWmAction::ToggleDirectMode => {
+                                let id = app.wm().focused_window();
+                                app.wm().toggle_direct_mode(id);
+                            }
+                            TermWmAction::ToggleMouseCapture => app.wm().toggle_mouse_capture(),
+                            TermWmAction::ToggleClipboardMode => {
+                                app.wm().toggle_clipboard_enabled()
+                            }
+                            TermWmAction::ToggleWindowSelection => {
+                                app.wm().toggle_window_selection()
+                            }
+                            TermWmAction::FocusWindow(k) => {
+                                let state = app.wm().window_state(k);
+                                if state == Some(crate::window::WindowState::Iconic) {
+                                    app.wm()
+                                        .transition_window(k, crate::window::WindowState::Mapped);
+                                }
+                                app.wm().focus_window_key(k);
                             }
                             TermWmAction::SendNotification(msg) => {
                                 app.wm()
                                     .push_notification(msg, std::time::Duration::from_secs(3));
-                                app.wm().close_command_menu();
-                            }
-                            TermWmAction::Help => {
-                                app.open_help_overlay();
-                                app.wm().close_command_menu();
-                            }
-                            TermWmAction::ExitUi => {
-                                app.wm().close_command_menu();
-                                app.open_exit_confirm();
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
-                            }
-                            _ => {}
-                        }
-                        update_selection_snapshot(app);
-                        return flush_state_changes(app, ControlFlow::Continue, false);
-                    }
-                    if app.wm().wm_menu_consumes_event(&evt) {
-                        update_selection_snapshot(app);
-                        return flush_state_changes(app, ControlFlow::Continue, false);
-                    }
-                    // Focus routing in WM mode (Tab/Shift+Tab)
-                    // Fold menu to outline so user can see the window they focused.
-                    if app.wm().handle_focus_event(&evt) {
-                        if matches!(&evt, Event::Key(_)) {
-                            app.wm().fold_menu();
-                        } else {
-                            app.wm().close_command_menu();
-                        }
-                        update_selection_snapshot(app);
-                        return flush_state_changes(app, ControlFlow::Continue, false);
-                    }
-                    // Dispatch remaining WmMode actions (Quit, OpenHelp, etc.)
-                    // while the WM overlay is open.
-                    if let Some(action) = mapped_action_wm_mode {
-                        match action {
-                            TermWmAction::Quit => {
-                                app.open_exit_confirm();
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
-                            }
-                            TermWmAction::OpenHelp => {
-                                app.open_help_overlay();
-                                app.wm().close_command_menu();
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
-                            }
-                            TermWmAction::OpenKeybindings => {
-                                app.open_keybindings_overlay();
-                                app.wm().close_command_menu();
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
-                            }
-                            TermWmAction::CycleNextWindow => {
-                                app.wm().advance_focus(true);
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
-                            }
-                            TermWmAction::CyclePrevWindow => {
-                                app.wm().advance_focus(false);
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
-                            }
-                            TermWmAction::HintToggle => {
-                                let current = app.wm().hint_visibility();
-                                let next = match current {
-                                    crate::wm_config::HintVisibility::Always => {
-                                        crate::wm_config::HintVisibility::Never
-                                    }
-                                    crate::wm_config::HintVisibility::OnDemand => {
-                                        crate::wm_config::HintVisibility::Always
-                                    }
-                                    crate::wm_config::HintVisibility::Never => {
-                                        crate::wm_config::HintVisibility::Always
-                                    }
-                                };
-                                app.wm().set_hint_visibility(next);
-                                update_selection_snapshot(app);
-                                return flush_state_changes(app, ControlFlow::Continue, false);
                             }
                             _ => {}
                         }
                     }
-                    if let Event::Key(_) = &evt {
+                    // Focus routing while menu is open (Tab/Shift+Tab)
+                    if matches!(&evt, Event::Key(_)) && app.wm().handle_focus_event(&evt) {
+                        update_selection_snapshot(app);
+                        return flush_state_changes(app, ControlFlow::Continue, false);
+                    }
+                    update_selection_snapshot(app);
+                    return flush_state_changes(app, ControlFlow::Continue, false);
+                }
+
+                // If keyboard capture is disabled for the focused window, key events
+
+                // Layer 2b: Direct mode check — intercepts ALL other keys
+                if let Event::Key(key) = &evt {
+                    let focus_id = app.wm().focused_window();
+                    if app.wm().direct_mode(focus_id)
+                        && !app.wm().command_menu_visible()
+                        && key.kind == KeyKind::Press
+                    {
+                        // Direct mode — forward to terminal immediately.
+                        let _ = handle_focused_app_event(&evt, app);
                         update_selection_snapshot(app);
                         return flush_state_changes(app, ControlFlow::Continue, false);
                     }
                 }
+
+                // Layer 2c: App-level event handler (before WM actions, after overlays)
+                if app.handle_app_event(&evt) {
+                    update_selection_snapshot(app);
+                    return flush_state_changes(app, ControlFlow::Continue, false);
+                }
+
+                // Mouse capture check
 
                 if matches!(evt, Event::Mouse(_)) && !app.wm().mouse_capture_enabled() {
                     update_selection_snapshot(app);
@@ -510,23 +467,10 @@ where
                 // Direct focus switching for mouse clicks.  Uses the live window
                 // set from managed_draw_order (repopulated every draw) instead of
                 // the static focus_regions snapshot captured at startup.
-                if app.wm().mouse_focus_click_enabled()
-                    && let Event::Mouse(mouse) = &evt
+                if let Event::Mouse(mouse) = &evt
                     && matches!(mouse.kind, MouseEventKind::Press(_))
                 {
-                    let targets = app.wm().managed_draw_order_all().to_vec();
-                    // managed_draw_order is bottom-to-top; iterate in reverse
-                    // to find the topmost window under the cursor.
-                    for &key in targets.iter().rev() {
-                        let rect = app.wm().full_region_for_key(key);
-                        if rect.width > 0
-                            && rect.height > 0
-                            && crate::layout::rect_contains(rect, mouse.column, mouse.row)
-                        {
-                            app.wm().focus_app_window(key);
-                            break;
-                        }
-                    }
+                    app.wm().handle_mouse_focus_click(mouse.column, mouse.row);
                 }
                 // Route Tab/Shift+Tab through focus routing for embedded mode only.
                 // In standalone mode without the open overlay, Tab passes through.
@@ -617,11 +561,18 @@ where
 ///       └─ run_with_defaults(...)   // ← you are here
 ///           └─ run_event_loop(...)  // low-level: the actual loop
 /// ```
-pub fn run_with_defaults<O, D, A>(output: &mut O, driver: &mut D, app: &mut A) -> io::Result<()>
+pub fn run_with_defaults<C, L, Ov, Rt, D, A>(
+    output: &mut Rt,
+    driver: &mut D,
+    app: &mut A,
+) -> io::Result<()>
 where
-    O: RenderTarget,
+    C: Component<TermWmAction>,
+    L: WmComponent,
+    Ov: Overlay<TermWmAction>,
+    Rt: RenderTarget,
     D: EventSource,
-    A: WindowManagerHost,
+    A: WindowManagerHost<C, L, Ov>,
 {
     let system_scheduler = TaskScheduler::<SystemTask>::new();
     let system_handle = system_scheduler.handle();
@@ -651,9 +602,12 @@ fn selection_snapshot_from(
     }
 }
 
-fn update_selection_snapshot<A>(app: &mut A)
+fn update_selection_snapshot<C, L, O, A>(app: &mut A)
 where
-    A: WindowManagerHost,
+    C: Component<TermWmAction>,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+    A: WindowManagerHost<C, L, O>,
 {
     let was_dragging = app.wm().selection_dragging();
     let focus = app.wm().focused_window();
@@ -748,6 +702,7 @@ pub fn auto_layout_for_windows(windows: &[WindowKey]) -> Option<TilingLayout<Win
 mod tests {
     use super::*;
     use crate::events::{KeyCode, KeyEvent, KeyKind, KeyModifiers};
+    use crate::window::test_component::TestComponent;
     use term_wm_layout_engine::LayoutRect;
 
     #[test]
@@ -755,15 +710,14 @@ mod tests {
         let empty: Vec<WindowKey> = vec![];
         assert!(auto_layout_for_windows(&empty).is_none());
 
-        let mut wm = crate::window::WindowManager::with_config(
+        let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
-        let key = wm.create_window(Box::new(crate::components::NoopComponent));
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         let one = vec![key];
         let layout = auto_layout_for_windows(&one).unwrap();
         assert!(matches!(layout.root(), crate::layout::LayoutNode::Leaf(_)));
@@ -774,23 +728,22 @@ mod tests {
         use crate::window::WindowManager;
 
         struct FakeApp {
-            wm: WindowManager,
+            wm: WindowManager<TestComponent>,
         }
-        impl WindowManagerHost for FakeApp {
-            fn wm(&mut self) -> &mut WindowManager {
+        impl WindowManagerHost<TestComponent> for FakeApp {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
                 &mut self.wm
             }
         }
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
-            None,
-            Some(Box::new(TestMenu)),
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
-        let key = wm.create_window(Box::new(crate::components::NoopComponent));
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.transition_window(key, crate::window::WindowState::Mapped);
 
         let mut app = FakeApp { wm };
@@ -807,61 +760,28 @@ mod tests {
     fn handle_focused_app_event_routes_key_to_window_component() {
         use crate::window::WindowManager;
 
-        struct KeyRecorder {
-            received_key: bool,
-        }
-        impl Component<TermWmAction> for KeyRecorder {
-            fn render(
-                &mut self,
-                _backend: &mut dyn term_wm_render::RenderBackend,
-                _area: LayoutRect,
-                _ctx: &crate::components::ComponentContext,
-                _registry: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-            fn handle_events(
-                &mut self,
-                event: &Event,
-                _ctx: &crate::components::ComponentContext,
-            ) -> crate::actions::EventResult<TermWmAction> {
-                if matches!(event, Event::Key(_)) {
-                    self.received_key = true;
-                }
-                crate::actions::EventResult::Consumed
-            }
-            fn update(
-                &mut self,
-                _action: TermWmAction,
-                _ctx: &crate::components::ComponentContext,
-                _queue: &mut VecDeque<(crate::window::WindowKey, TermWmAction)>,
-            ) {
-            }
-            fn destroy(&mut self) {}
-        }
-
         struct FakeApp {
-            wm: WindowManager,
+            wm: WindowManager<TestComponent>,
         }
-        impl WindowManagerHost for FakeApp {
-            fn wm(&mut self) -> &mut WindowManager {
+        impl WindowManagerHost<TestComponent> for FakeApp {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
                 &mut self.wm
             }
         }
 
         let mut app = FakeApp {
-            wm: WindowManager::with_config(
+            wm: WindowManager::<TestComponent>::with_config(
                 crate::wm_config::WmConfig::standalone(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
-                None,
-                Some(Box::new(TestMenu)),
-                None,
+                crate::window::LayerManager::new(),
+                std::collections::HashMap::new(),
             ),
         };
         // Store the KeyRecorder directly in the WindowManager — no sidecar.
-        let key = app.wm.create_window(Box::new(KeyRecorder {
-            received_key: false,
-        }));
+        let key = app.wm.create_window(TestComponent::KeyRecorder(
+            crate::window::test_component::KeyRecorder { received_key: None },
+        ));
         app.wm
             .transition_window(key, crate::window::WindowState::Mapped);
         app.wm.regions.set(
@@ -886,76 +806,44 @@ mod tests {
             consumed,
             "handle_focused_app_event must route key to component"
         );
-        assert!(
-            app.wm
-                .component_for_key_mut(key)
-                .and_then(|c| {
-                    use crate::components::component_downcast_mut;
-                    component_downcast_mut::<KeyRecorder>(c).map(|r| r.received_key)
-                })
-                .unwrap_or(false),
-            "component must receive the key event"
-        );
+        match app
+            .wm
+            .component_for_key_mut(key)
+            .expect("component must exist")
+        {
+            TestComponent::KeyRecorder(recorder) => {
+                assert!(
+                    recorder.received_key.is_some(),
+                    "component must receive the key event"
+                );
+            }
+            _ => panic!("component must be KeyRecorder"),
+        }
     }
 
     #[test]
     fn handle_focused_app_event_with_direct_mode_still_routes() {
-        use crate::window::WindowManager;
-
-        struct KeyRecorder {
-            received_key: bool,
-        }
-        impl Component<TermWmAction> for KeyRecorder {
-            fn render(
-                &mut self,
-                _backend: &mut dyn term_wm_render::RenderBackend,
-                _area: LayoutRect,
-                _ctx: &crate::components::ComponentContext,
-                _registry: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-            fn handle_events(
-                &mut self,
-                event: &Event,
-                _ctx: &crate::components::ComponentContext,
-            ) -> crate::actions::EventResult<TermWmAction> {
-                if matches!(event, Event::Key(_)) {
-                    self.received_key = true;
-                }
-                crate::actions::EventResult::Consumed
-            }
-            fn update(
-                &mut self,
-                _action: TermWmAction,
-                _ctx: &crate::components::ComponentContext,
-                _queue: &mut VecDeque<(crate::window::WindowKey, TermWmAction)>,
-            ) {
-            }
-            fn destroy(&mut self) {}
-        }
-
         struct FakeApp {
-            wm: WindowManager,
+            wm: WindowManager<TestComponent>,
         }
-        impl WindowManagerHost for FakeApp {
-            fn wm(&mut self) -> &mut WindowManager {
+        impl WindowManagerHost<TestComponent> for FakeApp {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
                 &mut self.wm
             }
         }
 
         let mut app = FakeApp {
-            wm: WindowManager::with_config(
+            wm: WindowManager::<TestComponent>::with_config(
                 crate::wm_config::WmConfig::standalone(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
-                None,
-                Some(Box::new(TestMenu)),
-                None,
+                crate::window::LayerManager::new(),
+                std::collections::HashMap::new(),
             ),
         };
-        let key = app.wm.create_window(Box::new(KeyRecorder {
-            received_key: false,
-        }));
+        let key = app.wm.create_window(TestComponent::KeyRecorder(
+            crate::window::test_component::KeyRecorder { received_key: None },
+        ));
         app.wm
             .transition_window(key, crate::window::WindowState::Mapped);
         app.wm.regions.set(
@@ -982,16 +870,102 @@ mod tests {
         let consumed = handle_focused_app_event(&evt, &mut app);
         assert!(consumed, "event must route even when direct_mode is true");
         // Verify through the WindowManager that the component received the key
-        assert!(
-            app.wm
-                .component_for_key_mut(key)
-                .and_then(|c| {
-                    use crate::components::component_downcast_mut;
-                    component_downcast_mut::<KeyRecorder>(c).map(|r| r.received_key)
-                })
-                .unwrap_or(false),
-            "component must receive the key"
+        match app
+            .wm
+            .component_for_key_mut(key)
+            .expect("component must exist")
+        {
+            TestComponent::KeyRecorder(recorder) => {
+                assert!(
+                    recorder.received_key.is_some(),
+                    "component must receive the key"
+                );
+            }
+            _ => panic!("component must be KeyRecorder"),
+        }
+    }
+
+    #[test]
+    fn handle_focused_app_event_routes_mouse_to_component_and_drains_actions() {
+        use crate::events::{MouseButton, MouseEvent, MouseEventKind};
+        use crate::hitbox_registry::{ComponentOwner, HitboxId};
+        use crate::window::WindowState;
+
+        struct FakeApp {
+            wm: WindowManager<TestComponent>,
+        }
+        impl WindowManagerHost<TestComponent> for FakeApp {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
+                &mut self.wm
+            }
+        }
+
+        let mut app = FakeApp {
+            wm: WindowManager::<TestComponent>::with_config(
+                crate::wm_config::WmConfig::standalone(),
+                std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+                None,
+                crate::window::LayerManager::new(),
+                std::collections::HashMap::new(),
+            ),
+        };
+
+        let key = app
+            .wm
+            .create_window(TestComponent::ActionRecorder(Default::default()));
+        app.wm.transition_window(key, WindowState::Mapped);
+        app.wm.regions.set(
+            key,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
         );
+        app.wm.focus_app_window(key);
+
+        // Register a hitbox so dispatch_mouse can route to the component
+        let hitbox_id = HitboxId::new();
+        app.wm.hitbox_registry_mut().register(
+            hitbox_id,
+            ComponentOwner::Window(key),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+
+        let evt = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        let consumed = handle_focused_app_event(&evt, &mut app);
+        assert!(
+            consumed,
+            "mouse Press must be consumed through handle_focused_app_event"
+        );
+
+        // Verify the component received the action via drain_action_queue
+        match app
+            .wm
+            .component_for_key_mut(key)
+            .expect("component must exist")
+        {
+            TestComponent::ActionRecorder(recorder) => {
+                assert!(
+                    recorder.received_mouse_bytes,
+                    "ActionRecorder must receive MouseToBytes via drain_action_queue, actions: {:?}",
+                    recorder.actions
+                );
+            }
+            _ => panic!("component must be ActionRecorder"),
+        }
     }
 
     // ── selection_snapshot_from ──────────────────────────────────────
@@ -1066,16 +1040,15 @@ mod tests {
     // ── WindowDrawState ──────────────────────────────────────────────
 
     fn make_keys(n: usize) -> Vec<WindowKey> {
-        let mut wm = crate::window::WindowManager::with_config(
+        let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         (0..n)
-            .map(|_| wm.create_window(Box::new(crate::components::NoopComponent)))
+            .map(|_| wm.create_window(TestComponent::Noop(crate::components::NoopComponent)))
             .collect()
     }
 
@@ -1124,16 +1097,15 @@ mod tests {
 
     #[test]
     fn auto_layout_two_windows_creates_split() {
-        let mut wm = crate::window::WindowManager::with_config(
+        let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
-        let k1 = wm.create_window(Box::new(crate::components::NoopComponent));
-        let k2 = wm.create_window(Box::new(crate::components::NoopComponent));
+        let k1 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k2 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         let layout = auto_layout_for_windows(&[k1, k2]).unwrap();
         let node = layout.root();
         match node {
@@ -1147,17 +1119,16 @@ mod tests {
 
     #[test]
     fn auto_layout_three_windows_all_present() {
-        let mut wm = crate::window::WindowManager::with_config(
+        let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
-        let k1 = wm.create_window(Box::new(crate::components::NoopComponent));
-        let k2 = wm.create_window(Box::new(crate::components::NoopComponent));
-        let k3 = wm.create_window(Box::new(crate::components::NoopComponent));
+        let k1 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k2 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k3 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         let layout = auto_layout_for_windows(&[k1, k2, k3]).unwrap();
         let node = layout.root();
         assert!(node.subtree_any(|id| id == k1));
@@ -1167,17 +1138,16 @@ mod tests {
 
     #[test]
     fn auto_layout_multiple_windows_uses_all() {
-        let mut wm = crate::window::WindowManager::with_config(
+        let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         // Use 4 windows — this reliably works within 80x24 default area
         let keys: Vec<WindowKey> = (0..4)
-            .map(|_| wm.create_window(Box::new(crate::components::NoopComponent)))
+            .map(|_| wm.create_window(TestComponent::Noop(crate::components::NoopComponent)))
             .collect();
         let layout = auto_layout_for_windows(&keys).unwrap();
         let node = layout.root();
@@ -1192,6 +1162,7 @@ mod tests {
     use crate::components::Overlay;
 
     #[derive(Debug)]
+    #[allow(dead_code)]
     struct TestMenu;
     impl Component<TermWmAction> for TestMenu {
         fn render(
@@ -1227,6 +1198,9 @@ mod tests {
         }
         fn visible(&self) -> bool {
             false
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
         }
     }
     impl crate::components::WmComponent for TestMenu {}

@@ -36,7 +36,6 @@ pub fn install_panic_hook() {
         return;
     }
     let _ = PANIC_HOOK_INSTALLED.set(());
-    let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let mut lines: Vec<String> = Vec::new();
         lines.push("=== PANIC ===".to_string());
@@ -69,7 +68,9 @@ pub fn install_panic_hook() {
         }
 
         debug_event_flags::trigger_panic_pending();
-        prev(info);
+        // IMPORTANT!  Do *not* call take_hook. It blows up the terminal
+        // and prevents the debug log from properly opening
+        tracing::error!("{}", lines.join("\n"));
     }));
 }
 
@@ -312,7 +313,7 @@ mod tests {
             width: 10,
             height: 5,
         };
-        let ratatui_area = term_wm_ui_components::helpers::layout_rect_to_rect(area);
+        let ratatui_area = term_wm_ui_components::helpers::layout_rect_to_clipped_rect(area);
         let buf = ratatui::buffer::Buffer::empty(ratatui_area);
         let mut backend = term_wm_console::RatatuiBackend::new(buf, ratatui_area);
         {

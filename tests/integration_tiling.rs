@@ -4,6 +4,7 @@ use term_wm::layout::Direction;
 use term_wm::layout::tiling::{InsertPosition, LayoutNode, TilingLayout};
 use term_wm::window::{FloatRectSpec, WindowKey, WindowManager};
 use term_wm::wm_config::WmConfig;
+use term_wm_core::components::NoopComponent;
 use term_wm_layout_engine::{LayoutRect, detect_corner_snap, detect_edge_snap, edge_preview_rect};
 
 type Rect = term_wm_core::Rect;
@@ -26,20 +27,19 @@ fn area_lr() -> LayoutRect {
     }
 }
 
-fn wm_with_two_windows() -> (WindowManager, [WindowKey; 2]) {
+fn wm_with_two_windows() -> (WindowManager<NoopComponent>, [WindowKey; 2]) {
     let mut config = WmConfig::standalone();
     config.chrome_enabled = false;
-    let mut wm = WindowManager::with_config(
+    let mut wm: WindowManager<NoopComponent> = WindowManager::with_config(
         config,
         Arc::new(AppContext::new("test", "0.0.0")),
         None,
-        None,
-        None,
-        None,
+        term_wm_core::window::LayerManager::new(),
+        std::collections::HashMap::new(),
     );
     wm.set_panel_visible(false);
-    let k0 = wm.create_window(Box::new(NoopComponent));
-    let k1 = wm.create_window(Box::new(NoopComponent));
+    let k0 = wm.create_window(NoopComponent);
+    let k1 = wm.create_window(NoopComponent);
     let split = LayoutNode::Split {
         direction: Direction::Horizontal,
         children: vec![LayoutNode::Leaf(k0), LayoutNode::Leaf(k1)],
@@ -52,13 +52,23 @@ fn wm_with_two_windows() -> (WindowManager, [WindowKey; 2]) {
     (wm, [k0, k1])
 }
 
-fn header_rect(wm: &WindowManager, key: WindowKey) -> Rect {
-    for h in wm.floating_headers() {
-        if h.key == key {
-            return h.rect;
-        }
-    }
-    panic!("no header found for key");
+fn header_rect(wm: &mut WindowManager<NoopComponent>, key: WindowKey) -> Rect {
+    use term_wm::chrome::ChromeTarget;
+    use term_wm::hitbox_registry::{ComponentOwner, HitboxId};
+    let bounds = wm.full_region_for_key(key);
+    let rect = Rect {
+        x: bounds.x + 1,
+        y: bounds.y + 1,
+        width: bounds.width.saturating_sub(2),
+        height: 1,
+    };
+    // Register a drag hitbox so dispatch_mouse can route header clicks
+    wm.hitbox_registry_mut().register(
+        HitboxId::new(),
+        ComponentOwner::Chrome(ChromeTarget::Drag(key)),
+        rect,
+    );
+    rect
 }
 
 fn make_mouse(
@@ -73,33 +83,6 @@ fn make_mouse(
         modifiers: term_wm::events::KeyModifiers::NONE,
     });
     term_wm::events::core_event_to_wm(&event).expect("valid mouse event")
-}
-
-struct NoopComponent;
-impl term_wm::components::Component<term_wm::actions::TermWmAction> for NoopComponent {
-    fn render(
-        &mut self,
-        _backend: &mut dyn term_wm_render::RenderBackend,
-        _area: LayoutRect,
-        _ctx: &term_wm::components::ComponentContext,
-        _registry: &mut term_wm::hitbox_registry::HitboxRegistry,
-    ) {
-    }
-    fn handle_events(
-        &mut self,
-        _event: &term_wm::events::Event,
-        _ctx: &term_wm::components::ComponentContext,
-    ) -> term_wm::actions::EventResult<term_wm::actions::TermWmAction> {
-        term_wm::actions::EventResult::Ignored
-    }
-    fn update(
-        &mut self,
-        _action: term_wm::actions::TermWmAction,
-        _ctx: &term_wm::components::ComponentContext,
-        _queue: &mut std::collections::VecDeque<(WindowKey, term_wm::actions::TermWmAction)>,
-    ) {
-    }
-    fn destroy(&mut self) {}
 }
 
 fn collect_leaf_ids(node: &LayoutNode<usize>) -> Vec<usize> {
@@ -474,17 +457,16 @@ mod spatial_isolation {
     fn snap_right_preserves_left_sibling() {
         let mut config = WmConfig::standalone();
         config.chrome_enabled = false;
-        let mut wm = WindowManager::with_config(
+        let mut wm: WindowManager<NoopComponent> = WindowManager::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            term_wm_core::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.set_panel_visible(false);
-        let k0 = wm.create_window(Box::new(NoopComponent));
-        let k1 = wm.create_window(Box::new(NoopComponent));
+        let k0 = wm.create_window(NoopComponent);
+        let k1 = wm.create_window(NoopComponent);
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(k0), LayoutNode::Leaf(k1)],
@@ -614,26 +596,35 @@ mod drag_snap_pipeline {
     use term_wm_console::draw_plan_renderer::DrawPlanRenderer;
     use term_wm_core::engine::CoreEngine;
 
-    fn setup() -> (WindowManager, CoreEngine, DrawPlanRenderer, [WindowKey; 2]) {
+    fn setup() -> (
+        WindowManager<NoopComponent>,
+        CoreEngine,
+        DrawPlanRenderer,
+        [WindowKey; 2],
+    ) {
         let (wm, keys) = wm_with_two_windows();
         (wm, CoreEngine::new(), DrawPlanRenderer::new(), keys)
     }
 
     /// Like `setup` but with `resizable: true` so split handles are produced.
-    fn setup_with_resizable() -> (WindowManager, CoreEngine, DrawPlanRenderer, [WindowKey; 2]) {
+    fn setup_with_resizable() -> (
+        WindowManager<NoopComponent>,
+        CoreEngine,
+        DrawPlanRenderer,
+        [WindowKey; 2],
+    ) {
         let mut config = WmConfig::standalone();
         config.chrome_enabled = false;
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<NoopComponent>::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            term_wm_core::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.set_panel_visible(false);
-        let k0 = wm.create_window(Box::new(NoopComponent));
-        let k1 = wm.create_window(Box::new(NoopComponent));
+        let k0 = wm.create_window(NoopComponent);
+        let k1 = wm.create_window(NoopComponent);
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(k0), LayoutNode::Leaf(k1)],
@@ -647,7 +638,7 @@ mod drag_snap_pipeline {
     }
 
     fn advance_frame(
-        wm: &mut WindowManager,
+        wm: &mut WindowManager<NoopComponent>,
         engine: &mut CoreEngine,
         renderer: &mut DrawPlanRenderer,
     ) {
@@ -666,7 +657,7 @@ mod drag_snap_pipeline {
     fn drag_to_right_edge_snaps() {
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
         let down = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header.x as u16,
@@ -716,7 +707,7 @@ mod drag_snap_pipeline {
         advance_frame(&mut wm, &mut engine, &mut renderer);
         assert!(!wm.is_window_floating(keys[0]), "starts tiled");
 
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
         let down = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header.x as u16,
@@ -751,7 +742,7 @@ mod drag_snap_pipeline {
     fn drag_to_top_maximizes() {
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
         let down = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header.x as u16,
@@ -797,7 +788,7 @@ mod drag_snap_pipeline {
         advance_frame(&mut wm, &mut engine, &mut renderer);
         assert!(!wm.is_window_floating(keys[0]), "starts tiled");
 
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
         let col = header.x as u16;
         let row = header.y as u16;
 
@@ -831,7 +822,7 @@ mod drag_snap_pipeline {
     fn drag_to_corner_quadrant() {
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
         let down = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header.x as u16,
@@ -872,7 +863,7 @@ mod drag_snap_pipeline {
     fn drag_away_restores_float_geometry() {
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
 
         let down = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
@@ -910,7 +901,7 @@ mod drag_snap_pipeline {
         let pre_w = snapped.width;
         let pre_h = snapped.height;
 
-        let header2 = header_rect(&wm, keys[0]);
+        let header2 = header_rect(&mut wm, keys[0]);
         let cursor_x = header2.x as u16;
         let cursor_y = header2.y as u16;
         let cursor_offset_x = cursor_x as i32 - snapped.x;
@@ -954,7 +945,7 @@ mod drag_snap_pipeline {
     fn double_snap_converges() {
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
 
         // Phase 1: snap right
         let down = make_mouse(
@@ -995,7 +986,7 @@ mod drag_snap_pipeline {
         assert_eq!(r1.width, AREA.width / 2, "phase 1: right-snapped width");
 
         // Phase 2: drag away from edge
-        let header2 = header_rect(&wm, keys[0]);
+        let header2 = header_rect(&mut wm, keys[0]);
         let cursor_x = header2.x as u16;
         let cursor_y = header2.y as u16;
         let cursor_offset_x = cursor_x as i32 - r1.x;
@@ -1042,7 +1033,7 @@ mod drag_snap_pipeline {
         }
 
         // Phase 3: snap left
-        let header3 = header_rect(&wm, keys[0]);
+        let header3 = header_rect(&mut wm, keys[0]);
         let down3 = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header3.x as u16,
@@ -1094,7 +1085,7 @@ mod drag_snap_pipeline {
         assert_eq!(r_before, AREA, "sole leaf must fill the full area");
 
         // Drag the header to the right edge to trigger a snap preview.
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
         let press = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header.x as u16,
@@ -1197,9 +1188,9 @@ mod drag_snap_pipeline {
         wm.close_window(keys[1]);
 
         // Open two new windows via tile_window (production path)
-        let k0 = wm.create_window(Box::new(NoopComponent));
+        let k0 = wm.create_window(NoopComponent);
         assert!(wm.tile_window(k0), "first new window must tile");
-        let k1 = wm.create_window(Box::new(NoopComponent));
+        let k1 = wm.create_window(NoopComponent);
         assert!(wm.tile_window(k1), "second new window must tile");
 
         advance_frame(&mut wm, &mut engine, &mut renderer);
@@ -1229,17 +1220,16 @@ mod drag_snap_pipeline {
     fn tile_single_window_on_empty_workspace_occupies_full_screen() {
         let mut config = WmConfig::standalone();
         config.chrome_enabled = false;
-        let mut wm = WindowManager::with_config(
+        let mut wm: WindowManager<NoopComponent> = WindowManager::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            term_wm_core::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.set_panel_visible(false);
 
-        let k0 = wm.create_window(Box::new(NoopComponent));
+        let k0 = wm.create_window(NoopComponent);
         assert!(wm.tile_window(k0));
         wm.register_managed_layout(AREA);
 
@@ -1409,7 +1399,7 @@ mod floating_tiled_separation {
     use term_wm_console::draw_plan_renderer::DrawPlanRenderer;
     use term_wm_core::engine::CoreEngine;
 
-    fn assert_bifurcation_invariant(wm: &WindowManager) {
+    fn assert_bifurcation_invariant(wm: &WindowManager<NoopComponent>) {
         let order = wm.managed_draw_order_all();
         let mut seen_floating = false;
         for &key in order.iter() {
@@ -1424,13 +1414,18 @@ mod floating_tiled_separation {
         }
     }
 
-    fn setup() -> (WindowManager, CoreEngine, DrawPlanRenderer, [WindowKey; 2]) {
+    fn setup() -> (
+        WindowManager<NoopComponent>,
+        CoreEngine,
+        DrawPlanRenderer,
+        [WindowKey; 2],
+    ) {
         let (wm, keys) = wm_with_two_windows();
         (wm, CoreEngine::new(), DrawPlanRenderer::new(), keys)
     }
 
     fn advance_frame(
-        wm: &mut WindowManager,
+        wm: &mut WindowManager<NoopComponent>,
         engine: &mut CoreEngine,
         renderer: &mut DrawPlanRenderer,
     ) {
@@ -1451,7 +1446,7 @@ mod floating_tiled_separation {
         advance_frame(&mut wm, &mut engine, &mut renderer);
         assert_bifurcation_invariant(&wm);
 
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
         let down = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header.x as u16,
@@ -1583,7 +1578,7 @@ mod floating_tiled_separation {
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
         let down = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header.x as u16,
@@ -1606,7 +1601,7 @@ mod floating_tiled_separation {
         assert_bifurcation_invariant(&wm);
         assert!(!wm.is_window_floating(keys[0]), "after first snap: tiled");
 
-        let header2 = header_rect(&wm, keys[0]);
+        let header2 = header_rect(&mut wm, keys[0]);
         let down2 = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header2.x as u16,
@@ -1625,7 +1620,7 @@ mod floating_tiled_separation {
         assert_bifurcation_invariant(&wm);
         assert!(wm.is_window_floating(keys[0]), "after float: floating");
 
-        let header3 = header_rect(&wm, keys[0]);
+        let header3 = header_rect(&mut wm, keys[0]);
         let down3 = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header3.x as u16,
@@ -1677,19 +1672,18 @@ mod floating_tiled_separation {
     fn multiple_floating_stacked_correctly() {
         let mut config = WmConfig::standalone();
         config.chrome_enabled = false;
-        let mut wm = WindowManager::with_config(
+        let mut wm: WindowManager<NoopComponent> = WindowManager::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            term_wm_core::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.set_panel_visible(false);
 
-        let k0 = wm.create_window(Box::new(NoopComponent));
-        let k1 = wm.create_window(Box::new(NoopComponent));
-        let k2 = wm.create_window(Box::new(NoopComponent));
+        let k0 = wm.create_window(NoopComponent);
+        let k1 = wm.create_window(NoopComponent);
+        let k2 = wm.create_window(NoopComponent);
 
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
@@ -1747,7 +1741,7 @@ mod floating_tiled_separation {
 
         let corner_x = (AREA.x + i32::from(AREA.width) - 1) as u16;
         let corner_y = (AREA.y + i32::from(AREA.height) - 1) as u16;
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
         let down = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header.x as u16,
@@ -1774,7 +1768,7 @@ mod floating_tiled_separation {
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
-        let header = header_rect(&wm, keys[0]);
+        let header = header_rect(&mut wm, keys[0]);
         let down = make_mouse(
             MouseEventKind::Press(MouseButton::Left),
             header.x as u16,
@@ -1792,5 +1786,74 @@ mod floating_tiled_separation {
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
         assert_bifurcation_invariant(&wm);
+    }
+}
+
+// ─── Module 8: Render Pipeline Verification ──────────────────────────
+
+#[cfg(test)]
+mod render_verification {
+    use super::*;
+    use term_wm_core::hitbox_registry::ComponentOwner;
+    use term_wm_core::window::test_component::RenderTracker;
+    use term_wm_core::window::test_component::TestComponent;
+
+    /// Verify that the monomorphized C::render() receives the correct content
+    /// area during a full render pass through the compositor.
+    #[test]
+    fn render_tracker_records_render_area() {
+        let mut config = WmConfig::standalone();
+        config.chrome_enabled = false;
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            config,
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            term_wm_core::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.set_panel_visible(false);
+
+        let tracker = RenderTracker::default();
+        let key = wm.create_window(TestComponent::RenderTracker(tracker));
+        wm.transition_window(key, term_wm_core::window::WindowState::Mapped);
+        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(key)));
+        wm.register_managed_layout(AREA);
+
+        // Register a hitbox so the component can be found during render
+        let hit_id = wm.window_content_hitbox_id(key).unwrap_or_default();
+        wm.hitbox_registry_mut()
+            .register(hit_id, ComponentOwner::Window(key), AREA);
+
+        // Run the render pipeline
+        let area = ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: AREA.width,
+            height: AREA.height,
+        };
+        let buf = ratatui::buffer::Buffer::empty(area);
+        let mut backend = term_wm_console::RatatuiBackend::new(buf, area);
+        term_wm::render_app(
+            &mut backend,
+            &mut wm,
+            &mut term_wm_core::engine::CoreEngine::new(),
+            &mut term_wm_console::draw_plan_renderer::DrawPlanRenderer::new(),
+        );
+
+        // Verify the component was rendered and received the correct area
+        match wm.component_for_key_mut(key).expect("component must exist") {
+            TestComponent::RenderTracker(tracker) => {
+                assert!(
+                    tracker.render_count > 0,
+                    "component must be rendered at least once"
+                );
+                let area = tracker
+                    .last_area
+                    .expect("component must receive render area");
+                assert!(area.width > 0, "render area width must be positive");
+                assert!(area.height > 0, "render area height must be positive");
+            }
+            _ => panic!("unexpected component variant"),
+        }
     }
 }

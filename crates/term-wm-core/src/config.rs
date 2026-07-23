@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use crate::actions::TermWmAction;
 use crate::app_context::AppContext;
+use crate::components::Component;
+use crate::components::Overlay;
 use crate::components::WmComponent;
 use crate::keybindings::KeyBindings;
 use crate::theme::Theme;
 use crate::window::WindowManager;
-use crate::window::decorator::WindowDecorator;
 use crate::wm_config::{HintVisibility, WmConfig};
 
 /// Error type for [`AppBuilder::build`].
@@ -31,16 +32,16 @@ impl std::error::Error for ConfigError {}
 /// is whether it boots with default system UI (inject components via
 /// `.top_panel()` / `.bottom_panel()` / `.command_menu()`) or as a
 /// blank canvas (`.bare()` with no chrome).
-pub struct AppBuilder {
+pub struct AppBuilder<L: WmComponent> {
     config: WmConfig,
     app_ctx: Option<Arc<AppContext>>,
-    top_panel: Option<Box<dyn WmComponent>>,
-    bottom_panel: Option<Box<dyn WmComponent>>,
-    command_menu: Option<Box<dyn WmComponent>>,
+    top_panel: Option<L>,
+    bottom_panel: Option<L>,
+    fab_component: Option<L>,
     supported_menu_actions: Option<Vec<TermWmAction>>,
 }
 
-impl AppBuilder {
+impl<L: WmComponent> AppBuilder<L> {
     /// Blank canvas — full standalone config, no chrome injected.
     /// Use `.config(WmConfig::minimal())` for a minimal preset.
     pub fn bare() -> Self {
@@ -49,7 +50,7 @@ impl AppBuilder {
             app_ctx: None,
             top_panel: None,
             bottom_panel: None,
-            command_menu: None,
+            fab_component: None,
             supported_menu_actions: None,
         }
     }
@@ -74,28 +75,23 @@ impl AppBuilder {
         self
     }
 
-    pub fn decorator(mut self, decorator: Arc<dyn WindowDecorator>) -> Self {
-        self.config.decorator = Some(decorator);
-        self
-    }
-
     pub fn hint_visibility(mut self, v: HintVisibility) -> Self {
         self.config.hint_visibility = v;
         self
     }
 
-    pub fn top_panel(mut self, panel: Box<dyn WmComponent>) -> Self {
+    pub fn top_panel(mut self, panel: L) -> Self {
         self.top_panel = Some(panel);
         self
     }
 
-    pub fn bottom_panel(mut self, panel: Box<dyn WmComponent>) -> Self {
+    pub fn bottom_panel(mut self, panel: L) -> Self {
         self.bottom_panel = Some(panel);
         self
     }
 
-    pub fn command_menu(mut self, menu: Box<dyn WmComponent>) -> Self {
-        self.command_menu = Some(menu);
+    pub fn fab(mut self, fab: L) -> Self {
+        self.fab_component = Some(fab);
         self
     }
 
@@ -120,21 +116,40 @@ impl AppBuilder {
     }
 
     pub fn panel(mut self, enabled: bool) -> Self {
-        self.config.panel_enabled = enabled;
+        self.config.panels_enabled = enabled;
         self
     }
 
     /// Build a [`WindowManager`] from the accumulated configuration.
-    pub fn build(self) -> Result<WindowManager, ConfigError> {
+    pub fn build<C: Component<TermWmAction>, O: Overlay<TermWmAction>>(
+        self,
+    ) -> Result<WindowManager<C, L, O>, ConfigError> {
+        use crate::window::{ComponentTag, LayerManager, ZPlane};
+        use std::collections::HashMap;
+
         let app_ctx = self.app_ctx.ok_or(ConfigError::MissingAppContext)?;
+        let mut layer_manager = LayerManager::<L>::new();
+        let mut semantic_registry = HashMap::new();
+
+        if let Some(comp) = self.top_panel {
+            let id = layer_manager.insert(comp, ZPlane::Background);
+            semantic_registry.insert(ComponentTag::TopPanel, id);
+        }
+        if let Some(comp) = self.bottom_panel {
+            let id = layer_manager.insert(comp, ZPlane::Background);
+            semantic_registry.insert(ComponentTag::BottomPanel, id);
+        }
+        if let Some(comp) = self.fab_component {
+            let id = layer_manager.insert(comp, ZPlane::Foreground);
+            semantic_registry.insert(ComponentTag::FloatingActionButton, id);
+        }
 
         Ok(WindowManager::with_config(
             self.config,
             app_ctx,
-            self.top_panel,
-            self.bottom_panel,
-            self.command_menu,
             self.supported_menu_actions,
+            layer_manager,
+            semantic_registry,
         ))
     }
 }

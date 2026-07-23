@@ -1,6 +1,6 @@
+use super::ComponentKey;
 use super::FloatRectSpec;
-use crate::actions::TermWmAction;
-use crate::components::Component;
+use crate::hitbox_registry::HitboxId;
 
 /// Canonical window lifecycle states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,13 +35,22 @@ pub struct Window {
     /// Decoupled maximization state flag.  Set when the window is maximized,
     /// cleared when restored.  Must NOT be derived from geometry comparison.
     pub is_maximized: bool,
-    /// The renderable component. Every window has one.
-    /// For chrome-only windows, use `NoopComponent`.
-    pub component: Box<dyn Component<TermWmAction>>,
+    /// Render window borders (left, right, bottom, corners).
+    pub borders_enabled: bool,
+    /// Render window header (title bar, buttons).
+    pub header_enabled: bool,
+    /// Key into the WindowManager's component arena.
+    pub component_key: ComponentKey,
+    /// Persistent HitboxId for the window's content area.
+    pub content_hitbox_id: HitboxId,
+    /// Which leaf component within this window currently holds keyboard focus.
+    /// Set when a component returns `TermWmAction::RequestKeyboardFocus`.
+    /// Cleared automatically when `FocusRing` switches to a different window.
+    pub active_keyboard_focus: Option<HitboxId>,
 }
 
 impl Window {
-    pub fn new(creation_order: usize, component: Box<dyn Component<TermWmAction>>) -> Self {
+    pub fn new(creation_order: usize, component_key: ComponentKey) -> Self {
         Self {
             title: None,
             title_set_order: None,
@@ -52,7 +61,11 @@ impl Window {
             direct_mode: false,
             is_system_window: false,
             is_maximized: false,
-            component,
+            borders_enabled: true,
+            header_enabled: true,
+            component_key,
+            content_hitbox_id: HitboxId::new(),
+            active_keyboard_focus: None,
         }
     }
 

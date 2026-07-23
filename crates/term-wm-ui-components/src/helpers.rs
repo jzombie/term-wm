@@ -3,13 +3,65 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use term_wm_layout_engine::LayoutRect;
 
-pub fn layout_rect_to_rect(area: LayoutRect) -> Rect {
+/// Safely converts a signed LayoutRect into an unsigned Ratatui Rect for rendering.
+/// If the LayoutRect is partially off-screen (negative x/y), it crops the
+/// invisible portion and shrinks width/height to fit the screen.
+pub fn layout_rect_to_clipped_rect(area: LayoutRect) -> Rect {
+    let x = area.x.max(0) as u16;
+    let y = area.y.max(0) as u16;
+    let crop_left = area.x.min(0).unsigned_abs() as u16;
+    let crop_top = area.y.min(0).unsigned_abs() as u16;
     Rect {
-        x: area.x as u16,
-        y: area.y as u16,
-        width: area.width,
-        height: area.height,
+        x,
+        y,
+        width: area.width.saturating_sub(crop_left),
+        height: area.height.saturating_sub(crop_top),
     }
+}
+
+/// Translates a global screen coordinate into a component-local coordinate.
+/// Returns None if the coordinate falls outside the component's bounds.
+/// Use this for click targets, link hits, and other "reject if outside" cases.
+#[inline]
+pub fn localize_coordinate(
+    area: LayoutRect,
+    global_col: u16,
+    global_row: u16,
+) -> Option<(u16, u16)> {
+    let g_col = i32::from(global_col);
+    let g_row = i32::from(global_row);
+    let max_x = area.x.saturating_add(i32::from(area.width));
+    let max_y = area.y.saturating_add(i32::from(area.height));
+    if g_col < area.x || g_col >= max_x || g_row < area.y || g_row >= max_y {
+        return None;
+    }
+    Some(((g_col - area.x) as u16, (g_row - area.y) as u16))
+}
+
+/// Translates a global screen coordinate into a component-local coordinate,
+/// clamping to the nearest edge if it falls outside bounds.
+/// Use this for text selection dragging or scrollbar dragging where
+/// dragging past the edge means "select to the edge".
+#[inline]
+pub fn localize_coordinate_clamped(
+    area: LayoutRect,
+    global_col: u16,
+    global_row: u16,
+) -> Option<(u16, u16)> {
+    if area.width == 0 || area.height == 0 {
+        return None;
+    }
+    let max_x = area
+        .x
+        .saturating_add(i32::from(area.width))
+        .saturating_sub(1);
+    let max_y = area
+        .y
+        .saturating_add(i32::from(area.height))
+        .saturating_sub(1);
+    let clamped_col = i32::from(global_col).clamp(area.x, max_x) as u16;
+    let clamped_row = i32::from(global_row).clamp(area.y, max_y) as u16;
+    localize_coordinate(area, clamped_col, clamped_row)
 }
 
 pub fn color_to_ratatui(c: term_wm_core::theme::Color) -> Color {
@@ -172,18 +224,104 @@ mod tests {
     use term_wm_layout_engine::LayoutRect;
 
     #[test]
-    fn layout_rect_to_rect_converts() {
+    fn layout_rect_to_clipped_rect_on_screen() {
         let lr = LayoutRect {
             x: 5,
             y: 10,
             width: 20,
             height: 15,
         };
-        let r = layout_rect_to_rect(lr);
+        let r = layout_rect_to_clipped_rect(lr);
         assert_eq!(r.x, 5);
         assert_eq!(r.y, 10);
         assert_eq!(r.width, 20);
         assert_eq!(r.height, 15);
+    }
+
+    #[test]
+    fn layout_rect_to_clipped_rect_off_screen() {
+        let lr = LayoutRect {
+            x: -10,
+            y: -5,
+            width: 80,
+            height: 40,
+        };
+        let r = layout_rect_to_clipped_rect(lr);
+        assert_eq!(r.x, 0);
+        assert_eq!(r.y, 0);
+        assert_eq!(r.width, 70);
+        assert_eq!(r.height, 35);
+    }
+
+    #[test]
+    fn localize_coordinate_inside() {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
+        let result = localize_coordinate(area, 3, 5);
+        assert_eq!(result, Some((3, 5)));
+    }
+
+    #[test]
+    fn localize_coordinate_outside() {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
+        assert_eq!(localize_coordinate(area, 15, 5), None);
+        assert_eq!(localize_coordinate(area, 5, 15), None);
+    }
+
+    #[test]
+    fn localize_coordinate_negative_offset() {
+        let area = LayoutRect {
+            x: -10,
+            y: -5,
+            width: 80,
+            height: 40,
+        };
+        let result = localize_coordinate(area, 0, 0);
+        assert_eq!(result, Some((10, 5)));
+    }
+
+    #[test]
+    fn localize_coordinate_clamped_outside() {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
+        let result = localize_coordinate_clamped(area, 15, 5);
+        assert_eq!(result, Some((9, 5)));
+    }
+
+    #[test]
+    fn localize_coordinate_clamped_inside() {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
+        let result = localize_coordinate_clamped(area, 3, 5);
+        assert_eq!(result, Some((3, 5)));
+    }
+
+    #[test]
+    fn localize_coordinate_clamped_zero_area() {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        };
+        assert_eq!(localize_coordinate_clamped(area, 5, 5), None);
     }
 
     #[test]

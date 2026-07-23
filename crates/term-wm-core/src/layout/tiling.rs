@@ -142,6 +142,91 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
         }
     }
 
+    /// Swap two leaves in the tree by their IDs.
+    /// This preserves split ratios and weights while exchanging positions.
+    pub fn swap_leaves(&mut self, source: &Id, target: &Id) -> bool {
+        // Find paths to both source and target
+        let mut source_path = Vec::new();
+        let mut target_path = Vec::new();
+
+        if !self.find_leaf_path(source, &mut source_path, &mut Vec::new()) {
+            return false;
+        }
+        if !self.find_leaf_path(target, &mut target_path, &mut Vec::new()) {
+            return false;
+        }
+
+        // Get the source node's ID and replace it with a temporary void
+        let source_id = {
+            let source_node = self.node_at_path_mut(&source_path);
+            match source_node {
+                Some(LayoutNode::Leaf(id)) => *id,
+                _ => return false,
+            }
+        };
+
+        // Replace source with a temporary void
+        {
+            let source_node = self.node_at_path_mut(&source_path);
+            if let Some(node) = source_node {
+                *node = LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed));
+            }
+        }
+
+        // Get target node's ID and replace it with source
+        {
+            let target_node = self.node_at_path_mut(&target_path);
+            match target_node {
+                Some(LayoutNode::Leaf(target_id)) => {
+                    let target_id_copy = *target_id;
+                    // Replace target with source
+                    if let Some(node) = self.node_at_path_mut(&target_path) {
+                        *node = LayoutNode::Leaf(source_id);
+                    }
+                    // Replace the void with target
+                    if let Some(node) = self.node_at_path_mut(&source_path) {
+                        *node = LayoutNode::Leaf(target_id_copy);
+                    }
+                    true
+                }
+                _ => false,
+            }
+        }
+    }
+
+    /// Find the path to a leaf with the given ID.
+    fn find_leaf_path(&self, target: &Id, path: &mut Vec<usize>, current: &mut Vec<usize>) -> bool {
+        match self {
+            LayoutNode::Leaf(id) if id == target => {
+                path.extend_from_slice(current);
+                true
+            }
+            LayoutNode::Split { children, .. } => {
+                for (idx, child) in children.iter().enumerate() {
+                    current.push(idx);
+                    if child.find_leaf_path(target, path, current) {
+                        return true;
+                    }
+                    current.pop();
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// Get a mutable reference to a node at the given path.
+    fn node_at_path_mut(&mut self, path: &[usize]) -> Option<&mut LayoutNode<Id>> {
+        let mut current = self;
+        for &idx in path {
+            let LayoutNode::Split { children, .. } = current else {
+                return None;
+            };
+            current = children.get_mut(idx)?;
+        }
+        Some(current)
+    }
+
     /// Build a flat split node from a list of leaf IDs.
     pub fn build_flat(direction: Direction, ids: Vec<Id>) -> Self {
         if ids.is_empty() {
@@ -495,6 +580,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                             path: path.clone(),
                             index,
                             direction: *direction,
+                            hitbox_id: crate::hitbox_registry::HitboxId::new(),
                         });
                     }
                 }
@@ -639,6 +725,7 @@ pub struct SplitHandle {
     pub path: Vec<usize>,
     pub index: usize,
     pub direction: Direction,
+    pub hitbox_id: crate::hitbox_registry::HitboxId,
 }
 
 #[derive(Debug)]
@@ -655,6 +742,10 @@ pub struct TilingLayout<Id: Copy + Eq + Ord> {
     root: LayoutNode<Id>,
     drag: Option<DragState>,
     hover: Option<(u16, u16)>,
+    /// Whether monocle mode is active (terminal width < threshold)
+    monocle_active: bool,
+    /// Width threshold below which monocle mode activates (default: 80 columns)
+    monocle_width_threshold: u16,
 }
 
 impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
@@ -663,12 +754,37 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
             root,
             drag: None,
             hover: None,
+            monocle_active: false,
+            monocle_width_threshold: 80,
         }
     }
 
     pub fn new_void() -> Self {
         let void_id = VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
         Self::new(LayoutNode::Void(void_id))
+    }
+
+    /// Update monocle mode state based on terminal width.
+    pub fn update_monocle_state(&mut self, terminal_width: u16) {
+        let should_be_monocle = terminal_width < self.monocle_width_threshold;
+        if should_be_monocle != self.monocle_active {
+            self.monocle_active = should_be_monocle;
+        }
+    }
+
+    /// Check if monocle mode is active.
+    pub fn is_monocle(&self) -> bool {
+        self.monocle_active
+    }
+
+    /// Set the monocle width threshold.
+    pub fn set_monocle_width_threshold(&mut self, threshold: u16) {
+        self.monocle_width_threshold = threshold;
+    }
+
+    /// Get the monocle width threshold.
+    pub fn monocle_width_threshold(&self) -> u16 {
+        self.monocle_width_threshold
     }
 
     pub fn root(&self) -> &LayoutNode<Id> {
@@ -950,6 +1066,12 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
 
     pub fn replace_void_by_id(&mut self, void_id: usize, new_leaf: LayoutNode<Id>) -> bool {
         self.root.replace_void_by_id(void_id, new_leaf)
+    }
+
+    /// Swap two nodes in the layout tree by their IDs.
+    /// This preserves split ratios and weights while exchanging positions.
+    pub fn swap_nodes(&mut self, source: &Id, target: &Id) -> bool {
+        self.root.swap_leaves(source, target)
     }
 
     pub fn project_insert_void(&self, insert: Id, void_id: usize, area: Rect) -> Option<Rect> {
@@ -1486,5 +1608,523 @@ mod tests {
             left_width,
             right_width
         );
+    }
+
+    #[test]
+    fn monocle_mode_toggles_on_narrow_terminal() {
+        let root = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(1), LayoutNode::Leaf(2)],
+            weights: vec![1.0, 1.0],
+            constraints: vec![],
+            resizable: true,
+        };
+        let mut layout = TilingLayout::new(root);
+        assert!(!layout.is_monocle());
+        layout.update_monocle_state(60);
+        assert!(layout.is_monocle());
+    }
+
+    #[test]
+    fn monocle_mode_deactivates_on_wide_terminal() {
+        let root = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(1), LayoutNode::Leaf(2)],
+            weights: vec![1.0, 1.0],
+            constraints: vec![],
+            resizable: true,
+        };
+        let mut layout = TilingLayout::new(root);
+        layout.update_monocle_state(60);
+        assert!(layout.is_monocle());
+        layout.update_monocle_state(120);
+        assert!(!layout.is_monocle());
+    }
+
+    #[test]
+    fn normalize_weights_resets_to_equal() {
+        let mut node: LayoutNode<usize> = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2)],
+            weights: vec![3.0, 0.5],
+            constraints: vec![],
+            resizable: true,
+        };
+        node.normalize_weights();
+        if let LayoutNode::Split { weights, .. } = &node {
+            assert!(weights.iter().all(|w| (*w - 1.0).abs() < f32::EPSILON));
+        } else {
+            panic!("expected split");
+        }
+    }
+
+    #[test]
+    fn build_flat_empty_returns_void() {
+        let node: LayoutNode<usize> = LayoutNode::build_flat(Direction::Horizontal, vec![]);
+        assert!(node.unwrap_leaf().is_none());
+    }
+
+    #[test]
+    fn build_flat_single_returns_leaf() {
+        let node = LayoutNode::build_flat(Direction::Horizontal, vec![42]);
+        assert_eq!(node.unwrap_leaf(), Some(42));
+    }
+
+    #[test]
+    fn build_flat_multiple_returns_split() {
+        let node = LayoutNode::build_flat(Direction::Vertical, vec![1, 2, 3]);
+        if let LayoutNode::Split {
+            children,
+            weights,
+            direction,
+            ..
+        } = &node
+        {
+            assert_eq!(children.len(), 3);
+            assert_eq!(*direction, Direction::Vertical);
+            assert!(weights.iter().all(|w| (*w - 1.0).abs() < f32::EPSILON));
+        } else {
+            panic!("expected split");
+        }
+    }
+
+    #[test]
+    fn void_regions_returns_voids() {
+        let node: LayoutNode<usize> = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::Void(99)],
+            weights: vec![1.0, 1.0],
+            constraints: vec![],
+            resizable: true,
+        };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let voids = node.void_regions(area);
+        assert_eq!(voids.len(), 1);
+        assert_eq!(voids[0].0, 99);
+    }
+
+    #[test]
+    fn swap_leaves_exchanges_positions() {
+        let mut node: LayoutNode<usize> = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![
+                LayoutNode::leaf(1),
+                LayoutNode::leaf(2),
+                LayoutNode::leaf(3),
+            ],
+            weights: vec![1.0, 1.0, 1.0],
+            constraints: vec![],
+            resizable: true,
+        };
+        assert!(node.swap_leaves(&1, &3));
+        let leaves = node.collect_leaves();
+        assert_eq!(leaves, vec![3, 2, 1]);
+    }
+
+    #[test]
+    fn swap_leaves_same_id_returns_false() {
+        let mut node: LayoutNode<usize> = LayoutNode::leaf(1);
+        // Swapping a leaf with itself: source gets replaced with Void,
+        // then target lookup finds Void instead of the target leaf → returns false
+        assert!(!node.swap_leaves(&1, &1));
+    }
+
+    #[test]
+    fn swap_leaves_nonexistent_returns_false() {
+        let mut node: LayoutNode<usize> = LayoutNode::leaf(1);
+        assert!(!node.swap_leaves(&1, &2));
+    }
+
+    #[test]
+    fn cleanup_after_removes_void_children() {
+        let mut node: LayoutNode<usize> = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::Void(99)],
+            weights: vec![1.0, 1.0],
+            constraints: vec![],
+            resizable: true,
+        };
+        node.cleanup_after_removal();
+        // After removing void, single child should collapse to leaf
+        assert_eq!(node.unwrap_leaf(), Some(1));
+    }
+
+    #[test]
+    fn cleanup_all_voids_becomes_void() {
+        let mut node: LayoutNode<usize> = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Void(1), LayoutNode::Void(2)],
+            weights: vec![1.0, 1.0],
+            constraints: vec![],
+            resizable: true,
+        };
+        node.cleanup_after_removal();
+        assert!(matches!(node, LayoutNode::Void(_)));
+    }
+
+    #[test]
+    fn cleanup_empty_split_becomes_void() {
+        let mut node: LayoutNode<usize> = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![],
+            weights: vec![],
+            constraints: vec![],
+            resizable: true,
+        };
+        node.cleanup_after_removal();
+        assert!(matches!(node, LayoutNode::Void(_)));
+    }
+
+    #[test]
+    fn clear_leaf_replaces_with_void() {
+        let mut node: LayoutNode<usize> = LayoutNode::leaf(42);
+        assert!(node.clear_leaf(42));
+        assert!(matches!(node, LayoutNode::Void(_)));
+    }
+
+    #[test]
+    fn clear_leaf_wrong_id_returns_false() {
+        let mut node: LayoutNode<usize> = LayoutNode::leaf(42);
+        assert!(!node.clear_leaf(99));
+    }
+
+    #[test]
+    fn subtree_any_finds_matching_leaf() {
+        let node: LayoutNode<usize> = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2)],
+            weights: vec![1.0, 1.0],
+            constraints: vec![],
+            resizable: true,
+        };
+        assert!(node.subtree_any(|id| id == 2));
+        assert!(!node.subtree_any(|id| id == 99));
+    }
+
+    #[test]
+    fn node_at_path_returns_none_for_invalid_path() {
+        let node: LayoutNode<usize> = LayoutNode::leaf(1);
+        assert!(node.node_at_path(&[0]).is_none());
+    }
+
+    #[test]
+    fn collect_leaves_from_nested() {
+        let node: LayoutNode<usize> = LayoutNode::Split {
+            direction: Direction::Vertical,
+            children: vec![
+                LayoutNode::leaf(1),
+                LayoutNode::Split {
+                    direction: Direction::Horizontal,
+                    children: vec![LayoutNode::leaf(2), LayoutNode::leaf(3)],
+                    weights: vec![1.0, 1.0],
+                    constraints: vec![],
+                    resizable: true,
+                },
+            ],
+            weights: vec![1.0, 1.0],
+            constraints: vec![],
+            resizable: true,
+        };
+        assert_eq!(node.collect_leaves(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn insert_leaf_left_on_single() {
+        let mut node: LayoutNode<usize> = LayoutNode::leaf(1);
+        assert!(node.insert_leaf(1, 2, InsertPosition::Left));
+        let leaves = node.collect_leaves();
+        assert_eq!(leaves, vec![2, 1]);
+    }
+
+    #[test]
+    fn insert_leaf_top_on_single() {
+        let mut node: LayoutNode<usize> = LayoutNode::leaf(1);
+        assert!(node.insert_leaf(1, 2, InsertPosition::Top));
+        let leaves = node.collect_leaves();
+        assert_eq!(leaves, vec![2, 1]);
+    }
+
+    #[test]
+    fn insert_leaf_bottom_on_single() {
+        let mut node: LayoutNode<usize> = LayoutNode::leaf(1);
+        assert!(node.insert_leaf(1, 2, InsertPosition::Bottom));
+        let leaves = node.collect_leaves();
+        assert_eq!(leaves, vec![1, 2]);
+    }
+
+    #[test]
+    fn insert_leaf_nonexistent_target_returns_false() {
+        let mut node: LayoutNode<usize> = LayoutNode::leaf(1);
+        assert!(!node.insert_leaf(99, 2, InsertPosition::Right));
+    }
+
+    #[test]
+    fn insert_leaf_in_nested_split() {
+        let mut node: LayoutNode<usize> = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2)],
+            weights: vec![1.0, 1.0],
+            constraints: vec![],
+            resizable: true,
+        };
+        assert!(node.insert_leaf(2, 3, InsertPosition::Right));
+        let leaves = node.collect_leaves();
+        assert_eq!(leaves, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn tiling_layout_split_root_void_to_left() {
+        let mut layout = TilingLayout::new_void();
+        layout.split_root(1, InsertPosition::Left);
+        let leaves = layout.root().collect_leaves();
+        assert_eq!(leaves, vec![1]);
+    }
+
+    #[test]
+    fn tiling_layout_split_root_void_to_right() {
+        let mut layout = TilingLayout::new_void();
+        layout.split_root(1, InsertPosition::Right);
+        let leaves = layout.root().collect_leaves();
+        assert_eq!(leaves, vec![1]);
+    }
+
+    #[test]
+    fn tiling_layout_split_root_void_to_top() {
+        let mut layout = TilingLayout::new_void();
+        layout.split_root(1, InsertPosition::Top);
+        let leaves = layout.root().collect_leaves();
+        assert_eq!(leaves, vec![1]);
+    }
+
+    #[test]
+    fn tiling_layout_split_root_void_to_bottom() {
+        let mut layout = TilingLayout::new_void();
+        layout.split_root(1, InsertPosition::Bottom);
+        let leaves = layout.root().collect_leaves();
+        assert_eq!(leaves, vec![1]);
+    }
+
+    #[test]
+    fn tiling_layout_split_root_existing_to_right() {
+        let root = LayoutNode::leaf(1);
+        let mut layout = TilingLayout::new(root);
+        layout.split_root(2, InsertPosition::Right);
+        let leaves = layout.root().collect_leaves();
+        assert_eq!(leaves, vec![1, 2]);
+    }
+
+    #[test]
+    fn tiling_layout_split_root_existing_to_left() {
+        let root = LayoutNode::leaf(1);
+        let mut layout = TilingLayout::new(root);
+        layout.split_root(2, InsertPosition::Left);
+        let leaves = layout.root().collect_leaves();
+        assert_eq!(leaves, vec![2, 1]);
+    }
+
+    #[test]
+    fn tiling_layout_split_root_existing_to_top() {
+        let root = LayoutNode::leaf(1);
+        let mut layout = TilingLayout::new(root);
+        layout.split_root(2, InsertPosition::Top);
+        let leaves = layout.root().collect_leaves();
+        assert_eq!(leaves, vec![2, 1]);
+    }
+
+    #[test]
+    fn tiling_layout_split_root_existing_to_bottom() {
+        let root = LayoutNode::leaf(1);
+        let mut layout = TilingLayout::new(root);
+        layout.split_root(2, InsertPosition::Bottom);
+        let leaves = layout.root().collect_leaves();
+        assert_eq!(leaves, vec![1, 2]);
+    }
+
+    #[test]
+    fn tiling_layout_regions_returns_all_leaves() {
+        let root = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2)],
+            weights: vec![1.0, 1.0],
+            constraints: vec![],
+            resizable: true,
+        };
+        let layout = TilingLayout::new(root);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let regions = layout.regions(area);
+        assert_eq!(regions.len(), 2);
+    }
+
+    #[test]
+    fn tiling_layout_replace_void() {
+        let root = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::Void(42)],
+            weights: vec![1.0, 1.0],
+            constraints: vec![],
+            resizable: true,
+        };
+        let mut layout = TilingLayout::new(root);
+        assert!(layout.replace_void_by_id(42, LayoutNode::leaf(2)));
+        let leaves = layout.root().collect_leaves();
+        assert_eq!(leaves, vec![1, 2]);
+    }
+
+    #[test]
+    fn tiling_layout_swap_nodes() {
+        let root = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2)],
+            weights: vec![1.0, 1.0],
+            constraints: vec![],
+            resizable: true,
+        };
+        let mut layout = TilingLayout::new(root);
+        assert!(layout.swap_nodes(&1, &2));
+        let leaves = layout.root().collect_leaves();
+        assert_eq!(leaves, vec![2, 1]);
+    }
+
+    #[test]
+    fn tiling_layout_handles_returns_split_handles() {
+        let root = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2)],
+            weights: vec![1.0, 1.0],
+            constraints: vec![],
+            resizable: true,
+        };
+        let layout = TilingLayout::new(root);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let handles = layout.handles(area);
+        assert_eq!(handles.len(), 1);
+    }
+
+    #[test]
+    fn tiling_layout_project_insert() {
+        let root = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2)],
+            weights: vec![1.0, 1.0],
+            constraints: vec![],
+            resizable: true,
+        };
+        let layout = TilingLayout::new(root);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let rect = layout.project_insert(Some(1), 3, InsertPosition::Right, area);
+        assert!(rect.is_some());
+    }
+
+    #[test]
+    fn tiling_layout_project_insert_void() {
+        let root = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::Void(42)],
+            weights: vec![1.0, 1.0],
+            constraints: vec![],
+            resizable: true,
+        };
+        let layout = TilingLayout::new(root);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let rect = layout.project_insert_void(2, 42, area);
+        assert!(rect.is_some());
+    }
+
+    #[test]
+    fn layout_plan_regions_includes_floating() {
+        use crate::layout::FloatingPane;
+        use crate::layout::RectSpec;
+        let root = LayoutNode::leaf(1);
+        let mut plan = LayoutPlan::new(root);
+        plan.floating.push(FloatingPane {
+            key: 2,
+            rect: RectSpec::Absolute(Rect {
+                x: 10,
+                y: 10,
+                width: 20,
+                height: 10,
+            }),
+        });
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let regions = plan.regions(area);
+        assert!(regions.get(1).is_some());
+        assert!(regions.get(2).is_some());
+    }
+
+    #[test]
+    fn monocle_width_threshold_getter_setter() {
+        let root = LayoutNode::leaf(1);
+        let mut layout = TilingLayout::new(root);
+        assert_eq!(layout.monocle_width_threshold(), 80);
+        layout.set_monocle_width_threshold(60);
+        assert_eq!(layout.monocle_width_threshold(), 60);
+    }
+
+    #[test]
+    fn apply_drag_invalid_path_returns_false() {
+        let root = LayoutNode::leaf(1);
+        let mut node = root.clone();
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        assert!(!node.apply_drag(area, &[0], 0, Direction::Horizontal, 5));
+    }
+
+    #[test]
+    fn handle_event_non_mouse_returns_false() {
+        let root = LayoutNode::leaf(1);
+        let mut layout = TilingLayout::new(root);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let key_event = crate::events::Event::Key(crate::events::KeyEvent {
+            code: crate::events::KeyCode::Char('a'),
+            modifiers: crate::events::KeyModifiers::NONE,
+            kind: crate::events::KeyKind::Press,
+        });
+        assert!(!layout.handle_event(&key_event, area));
+    }
+
+    #[test]
+    fn void_id_counter_increments() {
+        let a = VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let b = VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+        assert!(b > a);
     }
 }

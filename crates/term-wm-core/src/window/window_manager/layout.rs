@@ -1,13 +1,14 @@
 use crate::Rect;
+use crate::actions::TermWmAction;
+use crate::components::{Component, Overlay, WmComponent};
 use crate::events::{Event, MouseEvent};
 
 use super::WindowManager;
 use crate::keybindings::ActionLayer;
-use crate::layout::floating::*;
 use crate::layout::{LayoutNode, LayoutPlan, RegionMap, SplitHandle, TilingLayout};
 use crate::window::{FloatRectSpec, WindowKey, WindowState};
 
-impl WindowManager {
+impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> WindowManager<C, L, O> {
     pub fn scroll(&self, key: WindowKey) -> super::ScrollState {
         self.scroll.get(&key).copied().unwrap_or_default()
     }
@@ -117,15 +118,11 @@ impl WindowManager {
             } else {
                 super::clamp_rect(rect, self.managed_area)
             };
-            if area.width < 3 || area.height < 4 {
-                return Rect::default();
-            }
-            Rect {
-                x: area.x + 1,
-                y: area.y + 2,
-                width: area.width.saturating_sub(2),
-                height: area.height.saturating_sub(3),
-            }
+            crate::chrome::content_rect(
+                area,
+                self.window_borders_enabled(key),
+                self.window_header_enabled(key),
+            )
         } else {
             rect
         }
@@ -158,8 +155,67 @@ impl WindowManager {
         self.managed_layout = None;
     }
 
+    /// Update monocle mode state based on terminal width.
+    /// Called during resize events to auto-activate/deactivate monocle mode.
+    pub fn update_monocle_mode(&mut self, terminal_width: u16) {
+        let prev = self.is_monocle();
+        if let Some(ref mut layout) = self.managed_layout {
+            layout.update_monocle_state(terminal_width);
+        }
+        let curr = self.is_monocle();
+        if prev == curr && !curr {
+            return;
+        }
+        // Turn borders off in monocle, on otherwise.
+        // Runs on every monocle frame so newly created windows also get
+        // borders disabled without waiting for a mode transition.
+        for (_, window) in self.windows.iter_mut() {
+            window.borders_enabled = !curr;
+        }
+    }
+
+    /// Check if monocle mode is active.
+    pub fn is_monocle(&self) -> bool {
+        self.managed_layout
+            .as_ref()
+            .map(|l| l.is_monocle())
+            .unwrap_or(false)
+    }
+
+    /// Whether the given window should render borders.
+    pub fn window_borders_enabled(&self, key: WindowKey) -> bool {
+        self.window(key).map(|w| w.borders_enabled).unwrap_or(false)
+    }
+
+    /// Whether the given window should render its header.
+    pub fn window_header_enabled(&self, key: WindowKey) -> bool {
+        self.window(key).map(|w| w.header_enabled).unwrap_or(false)
+    }
+
+    /// Handle mouse-click focus switching.
+    ///
+    /// In non-monocle mode, finds the topmost window under `(col, row)` and
+    /// focuses it.  In monocle mode this is a no-op because the focused window
+    /// fills the screen and clicking should not switch to a different window.
+    /// Must only be called for `MouseEventKind::Press` events.
+    pub fn handle_mouse_focus_click(&mut self, col: u16, row: u16) {
+        if self.is_monocle() || !self.mouse_focus_click_enabled() {
+            return;
+        }
+        let targets = self.managed_draw_order_all().to_vec();
+        for &key in targets.iter().rev() {
+            let rect = self.full_region_for_key(key);
+            if rect.width > 0 && rect.height > 0 && crate::layout::rect_contains(rect, col, row) {
+                self.focus_app_window(key);
+                break;
+            }
+        }
+    }
+
     pub fn set_panel_visible(&mut self, visible: bool) {
-        if let Some(p) = &mut self.top_component {
+        if let Some(p) =
+            self.get_semantic_component_mut(super::layer_manager::ComponentTag::TopPanel)
+        {
             p.set_visible(visible);
         }
     }
@@ -170,18 +226,22 @@ impl WindowManager {
 
     pub fn register_managed_layout(&mut self, area: Rect) {
         self.last_frame_area = area;
-        let active_layer = if self.config.wm_command_menu_enabled && self.command_menu_visible() {
-            ActionLayer::WmMode
-        } else {
-            ActionLayer::Global
-        };
+        // Show CommandPalette-filtered hints when the command palette is open,
+        // Global-only hints when closed.
         match self.hint_visibility {
             crate::wm_config::HintVisibility::Always => {
+                let layer = match self.input_mode {
+                    crate::actions::WmInputMode::CommandPalette => ActionLayer::CommandPalette,
+                    crate::actions::WmInputMode::Help => ActionLayer::Help,
+                    _ => ActionLayer::Global,
+                };
                 if self.config.wm_command_menu_enabled {
                     let hints = self
                         .keybindings()
-                        .bottom_hints_for_layer(crate::constants::MAX_BOTTOM_HINTS, active_layer);
-                    if let Some(p) = &mut self.bottom_component {
+                        .bottom_hints_for_layer(crate::constants::MAX_BOTTOM_HINTS, layer);
+                    if let Some(p) = self
+                        .get_semantic_component_mut(super::layer_manager::ComponentTag::BottomPanel)
+                    {
                         p.process_action(&crate::components::ComponentAction::SetKeybindingHints(
                             hints,
                         ));
@@ -190,7 +250,9 @@ impl WindowManager {
                     let hints = self
                         .keybindings()
                         .bottom_hints(crate::constants::MAX_BOTTOM_HINTS);
-                    if let Some(p) = &mut self.bottom_component {
+                    if let Some(p) = self
+                        .get_semantic_component_mut(super::layer_manager::ComponentTag::BottomPanel)
+                    {
                         p.process_action(&crate::components::ComponentAction::SetKeybindingHints(
                             hints,
                         ));
@@ -198,7 +260,9 @@ impl WindowManager {
                 }
             }
             _ => {
-                if let Some(p) = &mut self.bottom_component {
+                if let Some(p) =
+                    self.get_semantic_component_mut(super::layer_manager::ComponentTag::BottomPanel)
+                {
                     p.process_action(&crate::components::ComponentAction::SetKeybindingHints(
                         Vec::new(),
                     ));
@@ -207,15 +271,21 @@ impl WindowManager {
         }
         // Compute whether the panel should be active from config + visibility,
         // BEFORE calling consume_area (which needs this state to claim space).
-        let panel_active =
-            self.config.panel_enabled && self.top_component.as_ref().is_some_and(|p| p.visible());
+        let panel_active = self.config.panels_enabled
+            && self
+                .get_semantic_component(super::layer_manager::ComponentTag::TopPanel)
+                .is_some_and(|p| p.visible());
         // Push active state to the component so consume_area claims the right space
-        if let Some(p) = &mut self.top_component {
+        if let Some(p) =
+            self.get_semantic_component_mut(super::layer_manager::ComponentTag::TopPanel)
+        {
             p.process_action(&crate::components::ComponentAction::SetPanelActive(
                 panel_active,
             ));
         }
-        let has_hints = if let Some(p) = self.bottom_component.as_ref() {
+        let has_hints = if let Some(p) =
+            self.get_semantic_component(super::layer_manager::ComponentTag::BottomPanel)
+        {
             if let crate::components::ComponentResponse::Hints(h) =
                 p.query(&crate::components::ComponentQuery::KeybindingHints)
             {
@@ -226,15 +296,27 @@ impl WindowManager {
         } else {
             false
         };
-        let bottom_h = if has_hints || panel_active { 1u16 } else { 0 };
-        let (top_rect, after_top) = if let Some(p) = &mut self.top_component {
+        let bottom_h = if self.is_monocle() {
+            // In monocle mode, panels only show when the command palette is
+            // open — rendered as overlays, never claiming permanent space.
+            0
+        } else if has_hints || panel_active {
+            1u16
+        } else {
+            0
+        };
+        let (top_rect, after_top) = if let Some(p) =
+            self.get_semantic_component_mut(super::layer_manager::ComponentTag::TopPanel)
+        {
             let (claimed, rest) = p.consume_area(area);
             (claimed, rest)
         } else {
             (Rect::default(), area)
         };
         self.top_claimed = top_rect;
-        let (bottom_rect, managed_area) = if let Some(p) = &mut self.bottom_component {
+        let (bottom_rect, managed_area) = if let Some(p) =
+            self.get_semantic_component_mut(super::layer_manager::ComponentTag::BottomPanel)
+        {
             let bottom = Rect {
                 x: after_top.x,
                 y: after_top
@@ -298,9 +380,6 @@ impl WindowManager {
                     continue;
                 }
                 self.regions.set(*key, *rect);
-                if let Some(header) = floating_header_for_region(*key, *rect, self.managed_area) {
-                    self.floating_headers.push(header);
-                }
                 active_keys.push(*key);
             }
             let filtered_handles: Vec<SplitHandle> = handles
@@ -342,27 +421,11 @@ impl WindowManager {
             let Some(spec) = self.floating_rect(floating_key) else {
                 continue;
             };
-            let rect = spec.resolve(self.managed_area);
-            self.regions.set(floating_key, rect);
+
             let visible = self.visible_rect_from_spec(spec);
-            if visible.width > 0 && visible.height > 0 {
-                let is_maximized = self
-                    .windows
-                    .get(floating_key)
-                    .is_some_and(|w| w.is_maximized);
-                if !is_maximized {
-                    self.resize_handles.extend(resize_handles_for_region(
-                        floating_key,
-                        visible,
-                        self.managed_area,
-                    ));
-                }
-                if let Some(header) =
-                    floating_header_for_region(floating_key, visible, self.managed_area)
-                {
-                    self.floating_headers.push(header);
-                }
-            }
+            self.regions.set(floating_key, visible);
+            //
+            // Resize handle hitboxes are registered by the console during render.
             active_keys.push(floating_key);
         }
 
@@ -465,7 +528,6 @@ impl WindowManager {
     ) -> Vec<super::DrawTask> {
         let mut plan = Vec::new();
         let focused_window = self.focus.current();
-        let decorator = self.decorator();
         let _total = self.managed_draw_order.len() as f32;
         let num_app = self.managed_draw_order.len();
         for (i, &key) in self.managed_draw_order.iter().enumerate() {
@@ -474,16 +536,13 @@ impl WindowManager {
                 continue;
             }
             let dest = self.window_dest(key, full);
-            let inner = decorator.content_area(Rect {
-                x: 0,
-                y: 0,
-                width: full.width,
-                height: full.height,
-            });
+            // Content area equals full area — the console crate clips
+            // chrome regions during its own rendering pass.
+            let inner = full;
             if inner.width == 0 || inner.height == 0 {
                 continue;
             }
-            let z = super::WindowManager::compute_z_depth(i, num_app);
+            let z = Self::compute_z_depth(i, num_app);
             plan.push(super::DrawTask::App(super::WindowDrawContext {
                 key,
                 surface: super::WindowSurface {
@@ -501,22 +560,16 @@ impl WindowManager {
     }
 
     #[allow(dead_code)]
-    pub(super) fn hover_targets(&self) -> (Option<&SplitHandle>, Option<&ResizeHandle<WindowKey>>) {
-        let Some((column, row)) = self.hover else {
-            return (None, None);
-        };
+    pub(super) fn hover_targets(&self) -> Option<&SplitHandle> {
+        let (column, row) = self.hover?;
         let topmost = self.hit_test_region_topmost(column, row, &self.managed_draw_order);
-        let hovered = if topmost.is_none() {
+        if topmost.is_none() {
             self.handles
                 .iter()
                 .find(|handle| crate::layout::rect_contains(handle.rect, column, row))
         } else {
             None
-        };
-        let hovered_resize = self.resize_handles.iter().find(|handle| {
-            crate::layout::rect_contains(handle.rect, column, row) && topmost == Some(handle.key)
-        });
-        (hovered, hovered_resize)
+        }
     }
 
     pub fn window_dest(&self, key: WindowKey, fallback: Rect) -> crate::window::FloatRect {
