@@ -686,6 +686,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 TermWmAction::CloseWindow,
                 TermWmAction::ToggleDirectMode,
                 TermWmAction::ToggleMonocle,
+                TermWmAction::ToggleTiling,
             ]
         });
         let mouse_capture_enabled = config.mouse_capture_enabled;
@@ -1588,6 +1589,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                             return EventResult::Ignored;
                         }
                         self.bring_floating_to_front_key(*h_key);
+                        // Unset maximized so further resize/move isn't restricted,
+                        // but keep the current rect so the cursor stays on the handle.
+                        if let Some(w) = self.windows.get_mut(*h_key) {
+                            w.is_maximized = false;
+                            w.borders_enabled = true;
+                        }
                         let rect = self.full_region_for_key(*h_key);
                         let (start_x, start_y, start_width, start_height) =
                             if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
@@ -2391,10 +2398,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             symbol: "X",
         }];
         if !self.is_monocle() {
+            let focused = self.focused_window();
+            let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized);
             btns.push(WmButton {
                 action: TermWmAction::MaximizeWindow,
-                label: "Maximize Window",
-                symbol: "▢",
+                label: if is_maxed { "Restore Window" } else { "Maximize Window" },
+                symbol: if is_maxed { "─" } else { "▢" },
             });
             btns.push(WmButton {
                 action: TermWmAction::MinimizeWindow,
@@ -2486,6 +2495,19 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 icon: Some("▢"),
                 action: crate::actions::TermWmAction::ToggleMonocle,
                 disabled: false,
+            },
+            MenuItem {
+                label: {
+                    let mode = if self.managed_layout.is_some() {
+                        "Float"
+                    } else {
+                        "Tile"
+                    };
+                    format!("Toggle {mode} Mode").into()
+                },
+                icon: Some("⊞"),
+                action: crate::actions::TermWmAction::ToggleTiling,
+                disabled: self.is_monocle(),
             },
         ];
 

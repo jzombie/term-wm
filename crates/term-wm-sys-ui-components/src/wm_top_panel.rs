@@ -55,6 +55,8 @@ pub struct WmTopPanelComponent {
     focus_current: Option<WindowKey>,
     display_order: Vec<WindowKey>,
     status_line: Option<String>,
+    tiling_indicator: Option<(&'static str, term_wm_core::actions::TermWmAction)>,
+    tiling_rect: Option<LayoutRect>,
     menu_open: bool,
     window_labels: BTreeMap<WindowKey, String>,
     hitbox_id: HitboxId,
@@ -73,6 +75,8 @@ impl WmTopPanelComponent {
             focus_current: None,
             display_order: Vec::new(),
             status_line: None,
+            tiling_indicator: None,
+            tiling_rect: None,
             menu_open: false,
             window_labels: BTreeMap::new(),
             hitbox_id: HitboxId::new(),
@@ -82,6 +86,7 @@ impl WmTopPanelComponent {
     pub fn begin_frame(&mut self) {
         self.list.begin_frame();
         self.menu_rect = None;
+        self.tiling_rect = None;
     }
 
     pub fn visible(&self) -> bool {
@@ -251,6 +256,47 @@ impl WmTopPanelComponent {
         }
     }
 
+    /// Render the tiling indicator label (right-aligned) and store its rect.
+    fn render_tiling_indicator(
+        &mut self,
+        backend: &mut dyn term_wm_render::RenderBackend,
+        area: LayoutRect,
+        theme: &term_wm_core::theme::Theme,
+    ) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        let Some((label, _)) = &self.tiling_indicator else {
+            return;
+        };
+        let ratatui_backend = term_wm_ui_components::helpers::downcast_ratatui(backend);
+        let buffer = &mut ratatui_backend.buffer;
+        let ratatui_area = term_wm_ui_components::helpers::layout_rect_to_clipped_rect(area);
+        let bounds = ratatui_area.intersection(buffer.area);
+        if bounds.width == 0 || bounds.height == 0 {
+            return;
+        }
+        let y = area.y;
+        let max_x = area.x.saturating_add(i32::from(area.width));
+        let tw = label.chars().count() as u16;
+        let ix = max_x.saturating_sub(i32::from(tw));
+        if ix < area.x {
+            return;
+        }
+        let style = ratatui::style::Style::default()
+            .fg(color_to_ratatui(theme.success))
+            .add_modifier(ratatui::style::Modifier::BOLD);
+        term_wm_ui_components::helpers::safe_set_string(
+            buffer, bounds, ix as u16, y as u16, label, style,
+        );
+        self.tiling_rect = Some(term_wm_layout_engine::LayoutRect {
+            x: ix,
+            y,
+            width: tw,
+            height: 1,
+        });
+    }
+
     pub fn hit_test_window(&self, column: u16, row: u16) -> Option<WindowKey> {
         self.list
             .window_hits
@@ -272,10 +318,13 @@ impl Component<TermWmAction> for WmTopPanelComponent {
         ctx: &ComponentContext,
         _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
+        let theme = ctx.config().theme;
         if !self.active {
+            // Still render the tiling indicator even when inactive so the
+            // label is visible and tiling_rect is populated for clicks.
+            self.render_tiling_indicator(backend, area, &theme);
             return;
         }
-        let theme = ctx.config().theme;
         let app_name = ctx.app_name().to_string();
         if app_name != self.app_name {
             self.app_name = app_name;
@@ -295,6 +344,7 @@ impl Component<TermWmAction> for WmTopPanelComponent {
                 &theme,
             );
         }
+        self.render_tiling_indicator(backend, area, &theme);
     }
 
     fn handle_events(
@@ -331,6 +381,12 @@ impl Component<TermWmAction> for WmTopPanelComponent {
         if let Some(key) = self.hit_test_window(column, row) {
             return EventResult::Action(TermWmAction::FocusWindow(key));
         }
+        if let Some((_, action)) = &self.tiling_indicator
+            && let Some(rect) = self.tiling_rect
+            && rect_contains(rect, column, row)
+        {
+            return EventResult::Action(action.clone());
+        }
         EventResult::Ignored
     }
 }
@@ -361,6 +417,7 @@ impl WmComponent for WmTopPanelComponent {
                 self.display_order = state.display_order.clone();
                 self.status_line = state.status_line.clone();
                 self.menu_open = state.menu_open;
+                self.tiling_indicator = state.tiling_indicator.clone();
             }
             ComponentAction::SetWindowLabels(labels) => {
                 self.window_labels = labels.clone();
@@ -711,6 +768,7 @@ mod tests {
             display_order: vec![key],
             status_line: Some("ready".to_string()),
             menu_open: true,
+            tiling_indicator: None,
         };
         p.process_action(&ComponentAction::SetTopPanelState(Box::new(state)));
         assert_eq!(p.focus_current, Some(key));

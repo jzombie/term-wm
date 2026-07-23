@@ -658,6 +658,18 @@ pub fn render_panels<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Term
     let focus_current = wm.focused_window();
     let wm_overlay_visible = wm.command_menu_visible();
 
+    // Tiling indicator button (top-right of top panel)
+    let tiling_indicator: Option<(&str, TermWmAction)> = if !wm.is_monocle() {
+        let any_tiled = wm
+            .mapped_windows()
+            .iter()
+            .any(|k| !wm.is_window_floating(*k));
+        let label = if any_tiled { "[ tiled ]" } else { "[ float ]" };
+        Some((label, TermWmAction::ToggleTiling))
+    } else {
+        None
+    };
+
     // Top panel
     {
         if let Some(p) = wm.get_semantic_component_mut(ComponentTag::TopPanel) {
@@ -669,6 +681,7 @@ pub fn render_panels<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Term
                     display_order: display,
                     status_line,
                     menu_open: wm_overlay_visible,
+                    tiling_indicator,
                 },
             )));
         }
@@ -746,6 +759,7 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
                     display_order: display,
                     status_line: None,
                     menu_open: true,
+                    tiling_indicator: None,
                 },
             )));
 
