@@ -1090,18 +1090,16 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
             .copied()
             .unwrap();
 
-        // Split along the longer axis (accounting for terminal cell aspect ratio ~2:1)
-        let h_scaled = (largest_rect.height as u32) * 2;
-        let w = largest_rect.width as u32;
-
-        let pos = if w >= h_scaled * 3 / 2 {
-            InsertPosition::Right   // very wide (150%+ of scaled height) → columns
-        } else if h_scaled >= w * 3 / 2 {
-            InsertPosition::Bottom  // very tall → rows
-        } else if w >= h_scaled {
-            InsertPosition::Right   // wider after aspect correction → columns
+        // Anti-degeneracy: force direction when splitting would produce sub-threshold tiles
+        let pos = if largest_rect.width / 2 < crate::constants::MIN_TILE_WIDTH {
+            InsertPosition::Bottom   // horizontal split would create <20col ribbons
+        } else if largest_rect.height / 2 < crate::constants::MIN_TILE_HEIGHT {
+            InsertPosition::Right    // vertical split would create <6row stubs
         } else {
-            InsertPosition::Bottom  // taller after aspect correction → rows
+            // Cell aspect ratio: height is ~2x width, so scale before comparison
+            let visual_h = (largest_rect.height as u32) * crate::constants::CELL_ASPECT_RATIO;
+            let visual_w = largest_rect.width as u32;
+            if visual_w >= visual_h { InsertPosition::Right } else { InsertPosition::Bottom }
         };
 
         if !self.root.insert_leaf(largest_id, insert, pos) {

@@ -65,3 +65,10 @@ pub const MIN_FLOAT_WIDTH: u16 = 10;
 pub const MIN_FLOAT_HEIGHT: u16 = 3;
 /// Stagger offset (in cells) between cascading floating windows.
 pub const CASCADE_OFFSET_STEP: i32 = 2;
+
+/// Minimum width for a tiled window before monocle is forced.
+pub const MIN_TILE_WIDTH: u16 = 20;
+/// Minimum height for a tiled window before monocle is forced.
+pub const MIN_TILE_HEIGHT: u16 = 6;
+/// Terminal cell aspect ratio (height ~2x width) for visual split direction.
+pub const CELL_ASPECT_RATIO: u32 = 2;
