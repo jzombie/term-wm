@@ -526,19 +526,25 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// windows using core workspace constants.
     pub fn default_cascading_rect(&self, index: usize) -> Rect {
         let area = self.managed_area;
-        let w = crate::constants::DEFAULT_FLOAT_WIDTH.min(area.width).max(crate::constants::MIN_FLOAT_WIDTH);
-        let h = crate::constants::DEFAULT_FLOAT_HEIGHT.min(area.height).max(crate::constants::MIN_FLOAT_HEIGHT);
+        let w = crate::constants::DEFAULT_FLOAT_WIDTH
+            .min(area.width)
+            .max(crate::constants::MIN_FLOAT_WIDTH);
+        let h = crate::constants::DEFAULT_FLOAT_HEIGHT
+            .min(area.height)
+            .max(crate::constants::MIN_FLOAT_HEIGHT);
         let offset = (index as i32) * crate::constants::CASCADE_OFFSET_STEP;
         Rect {
             x: area.x + (area.width.saturating_sub(w) / 2) as i32 + offset,
             y: area.y + (area.height.saturating_sub(h) / 2) as i32 + offset,
-            width: w, height: h,
+            width: w,
+            height: h,
         }
     }
 
     /// Return the cached region for a window, or compute a safe cascading fallback.
     pub fn region_or_fallback(&self, key: WindowKey, index: usize) -> Rect {
-        self.regions.get(key)
+        self.regions
+            .get(key)
             .unwrap_or_else(|| self.default_cascading_rect(index))
     }
 
@@ -559,7 +565,11 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             return true;
         }
         if let Some(ref layout) = self.managed_layout {
-            if layout.regions(area).iter().any(|(_, r)| r.width < MIN_TILE_WIDTH || r.height < MIN_TILE_HEIGHT) {
+            if layout
+                .regions(area)
+                .iter()
+                .any(|(_, r)| r.width < MIN_TILE_WIDTH || r.height < MIN_TILE_HEIGHT)
+            {
                 return true;
             }
         } else {
@@ -2396,11 +2406,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             label: "Toggle Direct Mode",
             symbol: "D",
         });
-        btns.push(WmButton {
-            action: TermWmAction::ToggleMonocle,
-            label: "Toggle Monocle Mode",
-            symbol: "M",
-        });
         btns
     }
 
@@ -2473,6 +2478,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 label: "Exit UI".into(),
                 icon: Some("⏻"),
                 action: crate::actions::TermWmAction::ExitUi,
+                disabled: false,
+            },
+            MenuItem {
+                label: "Toggle Monocle Mode".into(),
+                icon: Some("M"),
+                action: crate::actions::TermWmAction::ToggleMonocle,
                 disabled: false,
             },
         ];
