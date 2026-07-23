@@ -28,22 +28,17 @@ use crate::components::AppRootComponent;
 ///
 /// fn main() -> io::Result<()> {
 ///     let mut app = TermWmApp::new(AppContext::new("myapp", "1.0"));
-///     let key = app.register(MyComponent::new());
+///     let key = app.open_window(MyComponent::new());
 ///     app.run()
 /// }
 /// ```
 pub struct TermWmApp {
     wm: WindowManager<AppRootComponent, LayerComponent, OverlayComponent>,
-    window_keys: Vec<WindowKey>,
     should_quit: bool,
     /// Core engine for draw plan generation.
     engine: CoreEngine,
     /// Draw plan renderer for rendering components.
     draw_renderer: DrawPlanRenderer,
-    /// Tracks previous window set to avoid recomputing layout every frame.
-    /// TODO: Wire into render pipeline when ready.
-    #[allow(dead_code)]
-    known_windows: Vec<WindowKey>,
 }
 
 impl TermWmApp {
@@ -116,11 +111,9 @@ impl TermWmApp {
     pub fn from_wm(wm: WindowManager<AppRootComponent, LayerComponent, OverlayComponent>) -> Self {
         Self {
             wm,
-            window_keys: Vec::new(),
             should_quit: false,
             engine: CoreEngine::new(),
             draw_renderer: DrawPlanRenderer::new(),
-            known_windows: Vec::new(),
         }
     }
 
@@ -129,18 +122,10 @@ impl TermWmApp {
         self.should_quit
     }
 
-    /// Register a component as a window. Returns the WindowKey for later access.
-    /// Calls `on_mount` on the component after registration.
-    pub fn register(&mut self, component: AppRootComponent) -> WindowKey {
-        let key = self.wm.spawn(component);
-        self.wm
-            .transition_window(key, term_wm_core::window::WindowState::Mapped);
-        if !self.wm.try_spawn_floating_default(key) {
-            self.wm.tile_window(key);
-        }
-        self.wm.set_focus(key);
-        self.window_keys.push(key);
-        key
+    /// Open a component as a visible window. Returns the `WindowKey` for
+    /// later access.
+    pub fn open_window(&mut self, component: AppRootComponent) -> WindowKey {
+        self.wm.open_window(component)
     }
 
     /// Borrow the WindowManager for configuration or direct access.

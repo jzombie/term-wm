@@ -29,9 +29,6 @@ pub trait WindowManagerHost<
     fn wm_new_window(&mut self) -> std::io::Result<()> {
         Ok(())
     }
-    fn wm_close_window(&mut self, _key: WindowKey) -> std::io::Result<()> {
-        Ok(())
-    }
     fn set_clipboard_enabled(&mut self, _enabled: bool) {}
     fn set_window_selection_enabled(&mut self, _enabled: bool) {}
     fn open_help_overlay(&mut self) {
@@ -118,6 +115,7 @@ fn drain_action_queue<
                 }
                 app.wm().focus_window_key(k);
             }
+            TermWmAction::Callback(f) => f(),
             action => {
                 let ctx = app.wm().component_context_for(true, key);
                 if let Some(comp) = app.wm().component_for_key_mut(key) {
@@ -273,12 +271,8 @@ where
                 app.on_panic();
             }
 
-            for id in app.wm().take_closed_windows() {
-                app.wm_close_window(id)?;
-            }
             // Process AppExited notifications — close windows whose PTY child
-            // exited.  Regular windows are handled entirely by
-            // WindowManager::close_window (destroy + remove from SlotMap).
+            // exited.
             for key in driver.take_exited_windows() {
                 app.wm().close_window(key);
             }
@@ -433,6 +427,7 @@ where
                                 app.wm()
                                     .push_notification(msg, std::time::Duration::from_secs(3));
                             }
+                            TermWmAction::Callback(f) => f(),
                             _ => {}
                         }
                     }

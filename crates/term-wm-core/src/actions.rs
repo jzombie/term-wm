@@ -35,6 +35,7 @@ pub enum ActionLayer {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[allow(unpredictable_function_pointer_comparisons)]
 pub enum TermWmAction {
     // --- Existing Action variants (all preserved except WmToggleOverlay) ---
     Quit,
@@ -123,6 +124,8 @@ pub enum TermWmAction {
     ConfirmSwap,
     /// Cancel the swap operation.
     CancelSwap,
+    /// Execute an inline callback.
+    Callback(fn()),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -190,8 +193,8 @@ impl TermWmAction {
             | TermWmAction::ProcessExited
             | TermWmAction::ProfileChange(_)
             | TermWmAction::RequestKeyboardFocus(_) => Category::System,
-
-            TermWmAction::CycleNextWindow
+            TermWmAction::Callback(_)
+            | TermWmAction::CycleNextWindow
             | TermWmAction::CyclePrevWindow
             | TermWmAction::FocusNext
             | TermWmAction::FocusPrev
@@ -337,6 +340,7 @@ impl fmt::Display for TermWmAction {
             TermWmAction::TapSwapTarget(_) => "Tap swap target",
             TermWmAction::ConfirmSwap => "Confirm swap",
             TermWmAction::CancelSwap => "Cancel swap",
+            TermWmAction::Callback(_) => "Callback",
         };
         write!(f, "{}", s)
     }

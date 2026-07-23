@@ -576,6 +576,129 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
             }
         }
     }
+
+    /// Build a BSP tree from non-overlapping rectangles using
+    /// Top-Down Floorplan Slicing.  Windows without spatial data
+    /// should use `insert_window_balanced` instead.
+    pub fn from_rects(rects: &[(Id, crate::Rect)]) -> Self {
+        if rects.is_empty() {
+            return Self::Void(0);
+        }
+        if rects.len() == 1 {
+            return Self::Leaf(rects[0].0);
+        }
+
+        let min_x = rects.iter().map(|(_, r)| r.x).min().unwrap_or(0);
+        let min_y = rects.iter().map(|(_, r)| r.y).min().unwrap_or(0);
+        let max_x = rects
+            .iter()
+            .map(|(_, r)| r.x.saturating_add(r.width as i32))
+            .max()
+            .unwrap_or(0);
+        let max_y = rects
+            .iter()
+            .map(|(_, r)| r.y.saturating_add(r.height as i32))
+            .max()
+            .unwrap_or(0);
+
+        // 1. Horizontal cut (y coordinate)
+        let mut y_candidates: Vec<i32> = rects
+            .iter()
+            .flat_map(|(_, r)| [r.y, r.y.saturating_add(r.height as i32)])
+            .collect();
+        y_candidates.sort_unstable();
+        y_candidates.dedup();
+
+        for &y in &y_candidates {
+            if y <= min_y || y >= max_y {
+                continue;
+            }
+            if rects.iter().any(|(_, r)| {
+                r.y < y && r.y.saturating_add(r.height as i32) > y
+            }) {
+                continue;
+            }
+            let mut top = Vec::new();
+            let mut bottom = Vec::new();
+            for &(k, r) in rects {
+                if r.y.saturating_add(r.height as i32) <= y {
+                    top.push((k, r));
+                } else {
+                    bottom.push((k, r));
+                }
+            }
+            if !top.is_empty() && !bottom.is_empty() {
+                return Self::Split {
+                    direction: Direction::Vertical,
+                    children: vec![
+                        Self::from_rects(&top),
+                        Self::from_rects(&bottom),
+                    ],
+                    weights: vec![
+                        (y - min_y).max(1) as u16,
+                        (max_y - y).max(1) as u16,
+                    ],
+                    resizable: true,
+                };
+            }
+        }
+
+        // 2. Vertical cut (x coordinate)
+        let mut x_candidates: Vec<i32> = rects
+            .iter()
+            .flat_map(|(_, r)| [r.x, r.x.saturating_add(r.width as i32)])
+            .collect();
+        x_candidates.sort_unstable();
+        x_candidates.dedup();
+
+        for &x in &x_candidates {
+            if x <= min_x || x >= max_x {
+                continue;
+            }
+            if rects.iter().any(|(_, r)| {
+                r.x < x && r.x.saturating_add(r.width as i32) > x
+            }) {
+                continue;
+            }
+            let mut left = Vec::new();
+            let mut right = Vec::new();
+            for &(k, r) in rects {
+                if r.x.saturating_add(r.width as i32) <= x {
+                    left.push((k, r));
+                } else {
+                    right.push((k, r));
+                }
+            }
+            if !left.is_empty() && !right.is_empty() {
+                return Self::Split {
+                    direction: Direction::Horizontal,
+                    children: vec![
+                        Self::from_rects(&left),
+                        Self::from_rects(&right),
+                    ],
+                    weights: vec![
+                        (x - min_x).max(1) as u16,
+                        (max_x - x).max(1) as u16,
+                    ],
+                    resizable: true,
+                };
+            }
+        }
+
+        // 3. Fallback: sort by y then x, split list
+        let mut sorted = rects.to_vec();
+        sorted.sort_unstable_by_key(|(_, r)| (r.y, r.x));
+        let mid = sorted.len() / 2;
+        Self::Split {
+            direction: Direction::Horizontal,
+            children: vec![
+                Self::from_rects(&sorted[..mid]),
+                Self::from_rects(&sorted[mid..]),
+            ],
+            weights: vec![1, 1],
+            resizable: true,
+        }
+    }
 }
 
 impl<Id: Copy + Eq + Ord> LayoutNode<Id> {

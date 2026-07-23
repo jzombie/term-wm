@@ -404,7 +404,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 if self.is_window_floating(*key) {
                     continue;
                 }
-                if self.window_state(*key) == Some(WindowState::Iconic) {
+                if self.window_state(*key) == Some(WindowState::Iconic) || self.window_state(*key) == Some(WindowState::Unmapped) {
                     continue;
                 }
                 self.regions.set(*key, *rect);
@@ -432,7 +432,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             .windows
             .iter()
             .filter_map(|(key, window)| {
-                if window.is_floating() && window.state != WindowState::Iconic {
+                if window.is_floating() && window.state != WindowState::Iconic && window.state != WindowState::Unmapped {
                     Some(key)
                 } else {
                     None

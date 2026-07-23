@@ -1,3 +1,5 @@
+- [ ] Duplicated layout code in core, which should be in the layout engine... but the layout engine MUST be agnostic!
+- [ ] The layout engine crate is currently NOT agnostic because it hardcodes magic numbers and has constants that prevent it from being used in other environments.  That *completely violates* being agnostic.
 - [ ] TODO!  FIX!  Major bug.  Tiling windows (and maybe other things) can close every single window except the active one!
 - [ ] Dragging a window into floating position moves all of the other windows down a couple of rows AND get smaller.  They should not move or risize at all (just become floating).  IF they are using "magic numbers" instead of constants that's an even greater flaw.
 - [ ] Creating a new window starts off maximized.  It should be smarter about size and position.

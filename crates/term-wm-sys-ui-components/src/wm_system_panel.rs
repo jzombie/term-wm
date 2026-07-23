@@ -44,6 +44,15 @@ impl WmSystemPanelComponent {
             "  Send Notification  ",
             TermWmAction::SendNotification("Hello from System Panel!".to_string()),
         )));
+        stack.add(PanelChild::Spacer(SpacerComponent::new(1)));
+        stack.add(PanelChild::Label(
+            LabelComponent::new("Debug utilities:").with_color(Color::DarkGray),
+        ));
+        stack.add(PanelChild::Spacer(SpacerComponent::new(1)));
+        stack.add(PanelChild::Button(ButtonComponent::new(
+            "  Trigger Panic  ",
+            TermWmAction::Callback(|| panic!("Manual panic from system panel")),
+        )));
 
         let scroll_view = ScrollViewComponent::new(stack);
         Self { scroll_view }

@@ -5,7 +5,7 @@ use term_wm_layout_engine::{EdgeResistance, LayoutRect, detect_corner_snap, dete
 
 use super::{SnapPreviewState, WindowManager};
 use crate::layout::{InsertPosition, LayoutNode, TilingLayout};
-use crate::window::WindowKey;
+use crate::window::{WindowKey, WindowState};
 
 /// Cells from screen edge that triggers edge-snap preview.
 const EDGE_SNAP_THRESHOLD: u16 = 3;
@@ -535,10 +535,48 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         if self.managed_layout.is_some() {
             self.float_all_windows();
         } else {
-            let keys = self.mapped_windows();
-            for key in &keys {
-                self.tile_window_key(*key);
+            use crate::layout::LayoutNode;
+
+            let keys: Vec<WindowKey> = self
+                .z_order
+                .iter()
+                .copied()
+                .filter(|&k| self.window_state(k) == Some(WindowState::Mapped))
+                .collect();
+            if keys.is_empty() {
+                return;
             }
+
+            let mut with_rects = Vec::new();
+            let mut without_rects = Vec::new();
+
+            for &k in &keys {
+                if let Some(spec) = self.floating_rect(k) {
+                    with_rects.push((k, spec.resolve(self.managed_area)));
+                } else {
+                    without_rects.push(k);
+                }
+                self.clear_floating_rect(k);
+            }
+
+            if !with_rects.is_empty() {
+                let root_node = LayoutNode::from_rects(&with_rects);
+                let mut layout = TilingLayout::new(root_node);
+                for key in without_rects {
+                    layout.insert_window_balanced(key, self.managed_area);
+                }
+                self.managed_layout = Some(layout);
+            } else if !without_rects.is_empty() {
+                let mut layout = TilingLayout::new(LayoutNode::leaf(without_rects[0]));
+                for &key in &without_rects[1..] {
+                    layout.insert_window_balanced(key, self.managed_area);
+                }
+                self.managed_layout = Some(layout);
+            }
+
+            // Synchronize draw order and layout projection
+            self.bifurcate_draw_order();
+            self.mark_layout_dirty();
         }
     }
 
