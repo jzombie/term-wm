@@ -1090,7 +1090,8 @@ pub fn render_handles_masked(
 
     // Pass 1: vertical bars (Direction::Horizontal splits)
     for handle in handles {
-        if handle.rect.width == 0 || handle.rect.height == 0
+        if handle.rect.width == 0
+            || handle.rect.height == 0
             || handle.direction != Direction::Horizontal
         {
             continue;
@@ -1101,7 +1102,8 @@ pub fn render_handles_masked(
     // Pass 2: horizontal bars (Direction::Vertical splits) — detect existing
     // verticals to draw proper T-junctions.
     for handle in handles {
-        if handle.rect.width == 0 || handle.rect.height == 0
+        if handle.rect.width == 0
+            || handle.rect.height == 0
             || handle.direction != Direction::Vertical
         {
             continue;
@@ -1136,14 +1138,12 @@ pub fn render_handles_masked(
                     let above_bar = y > 0
                         && buffer.cell((x, y - 1)).is_some_and(|c| {
                             let s = c.symbol();
-                            s == "│" || s == "┼" || s == "├" || s == "┤"
-                                || s == "┴" || s == "┬"
+                            s == "│" || s == "┼" || s == "├" || s == "┤" || s == "┴" || s == "┬"
                         });
                     let below_bar = y < h.saturating_sub(1)
                         && buffer.cell((x, y + 1)).is_some_and(|c| {
                             let s = c.symbol();
-                            s == "│" || s == "┼" || s == "├" || s == "┤"
-                                || s == "┴" || s == "┬"
+                            s == "│" || s == "┼" || s == "├" || s == "┤" || s == "┴" || s == "┬"
                         });
                     match (above_bar, below_bar) {
                         (true, true) => "┼",
@@ -1175,24 +1175,32 @@ pub fn render_handles_masked(
         let max_x = hr.x.saturating_add(hr.width).saturating_sub(1);
         let max_y = hr.y.saturating_add(hr.height).saturating_sub(1);
         for x in hr.x..=max_x {
-            if is_obscured(x, hr.y) { continue; }
+            if is_obscured(x, hr.y) {
+                continue;
+            }
             if let Some(cell) = buffer.cell_mut((x, hr.y)) {
                 cell.set_symbol("-");
                 cell.set_style(border_style);
             }
-            if is_obscured(x, max_y) { continue; }
+            if is_obscured(x, max_y) {
+                continue;
+            }
             if let Some(cell) = buffer.cell_mut((x, max_y)) {
                 cell.set_symbol("-");
                 cell.set_style(border_style);
             }
         }
         for y in hr.y..=max_y {
-            if is_obscured(hr.x, y) { continue; }
+            if is_obscured(hr.x, y) {
+                continue;
+            }
             if let Some(cell) = buffer.cell_mut((hr.x, y)) {
                 cell.set_symbol("|");
                 cell.set_style(border_style);
             }
-            if is_obscured(max_x, y) { continue; }
+            if is_obscured(max_x, y) {
+                continue;
+            }
             if let Some(cell) = buffer.cell_mut((max_x, y)) {
                 cell.set_symbol("|");
                 cell.set_style(border_style);
