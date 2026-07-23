@@ -88,9 +88,11 @@ impl MouseEvent {
     /// Translate a screen-space mouse event into local/virtual space relative
     /// to a bounding screen area, scroll offsets, and virtual content dimensions.
     ///
-    /// Point-trigger events (Press, Moved, Scroll*) outside bounds return `None`.
+    /// CATEGORY 1 — Viewport Spatial Gate.
+    /// Point-trigger events (Press, Moved, Scroll*) outside bounds return None.
     /// Continuous lifecycle events (Drag, Release) are retained and clamped to
     /// valid virtual coordinates to preserve input state machines.
+    /// This prevents click leakage across tiled panes.
     pub fn to_local_offset(
         &self,
         screen_area: LayoutRect,
@@ -99,8 +101,10 @@ impl MouseEvent {
         content_width: u16,
         content_height: u16,
     ) -> Option<Self> {
-        if screen_area.width == 0 || screen_area.height == 0
-            || content_width == 0 || content_height == 0
+        if screen_area.width == 0
+            || screen_area.height == 0
+            || content_width == 0
+            || content_height == 0
         {
             return None;
         }
@@ -109,10 +113,10 @@ impl MouseEvent {
         let m_y = i32::from(self.row);
 
         // Physical screen viewport bounds check
-        let in_physical_x = m_x >= screen_area.x
-            && m_x < screen_area.x + i32::from(screen_area.width);
-        let in_physical_y = m_y >= screen_area.y
-            && m_y < screen_area.y + i32::from(screen_area.height);
+        let in_physical_x =
+            m_x >= screen_area.x && m_x < screen_area.x + i32::from(screen_area.width);
+        let in_physical_y =
+            m_y >= screen_area.y && m_y < screen_area.y + i32::from(screen_area.height);
 
         // Virtual coordinate translation
         let v_x_raw = m_x - screen_area.x + offset_x as i32;
@@ -132,8 +136,7 @@ impl MouseEvent {
                 | MouseEventKind::ScrollRight
         );
 
-        if is_point_trigger
-            && (!in_physical_x || !in_physical_y || !in_virtual_x || !in_virtual_y)
+        if is_point_trigger && (!in_physical_x || !in_physical_y || !in_virtual_x || !in_virtual_y)
         {
             return None;
         }
@@ -148,6 +151,26 @@ impl MouseEvent {
             column: v_x,
             row: v_y,
         })
+    }
+
+    /// Unculled origin translation: converts screen-space coordinates relative
+    /// to (origin_x, origin_y) and clamps to [0, u16::MAX] without dropping any
+    /// events.
+    ///
+    /// CATEGORY 2 — Unculled Coordinate Transformer.
+    /// Never returns None. All events are accepted and clamped to valid u16
+    /// bounds. Intended for window manager event dispatching (localize_event,
+    /// localize_event_content) where PTY sessions must receive all inputs
+    /// even when they land on window chrome or borders.
+    pub fn to_clamped_origin(&self, origin_x: i32, origin_y: i32) -> Self {
+        let col = (i32::from(self.column) - origin_x).clamp(0, i32::from(u16::MAX)) as u16;
+        let row = (i32::from(self.row) - origin_y).clamp(0, i32::from(u16::MAX)) as u16;
+        Self {
+            kind: self.kind,
+            modifiers: self.modifiers,
+            column: col,
+            row,
+        }
     }
 }
 
@@ -276,11 +299,21 @@ mod tests {
     use term_wm_layout_engine::LayoutRect;
 
     fn make_screen() -> LayoutRect {
-        LayoutRect { x: 10, y: 5, width: 80, height: 24 }
+        LayoutRect {
+            x: 10,
+            y: 5,
+            width: 80,
+            height: 24,
+        }
     }
 
     fn mouse(col: u16, row: u16, kind: MouseEventKind) -> MouseEvent {
-        MouseEvent { kind, modifiers: KeyModifiers::NONE, column: col, row }
+        MouseEvent {
+            kind,
+            modifiers: KeyModifiers::NONE,
+            column: col,
+            row,
+        }
     }
 
     #[test]
@@ -325,12 +358,32 @@ mod tests {
 
     #[test]
     fn negative_screen_origin() {
-        let screen = LayoutRect { x: -5, y: -5, width: 80, height: 24 };
+        let screen = LayoutRect {
+            x: -5,
+            y: -5,
+            width: 80,
+            height: 24,
+        };
         let m = mouse(2, 2, MouseEventKind::Press(MouseButton::Left));
         let result = m.to_local_offset(screen, 0, 0, 80, 24);
         assert_eq!(result.map(|r| (r.column, r.row)), Some((7, 7)));
     }
 
+    #[test]
+    fn clamped_origin_inside_bounds() {
+        let m = mouse(15, 20, MouseEventKind::Press(MouseButton::Left));
+        let result = m.to_clamped_origin(10, 5);
+        assert_eq!(result.column, 5);
+        assert_eq!(result.row, 15);
+    }
+
+    #[test]
+    fn clamped_origin_negative_origin_clamps_lower() {
+        let m = mouse(2, 2, MouseEventKind::Press(MouseButton::Left));
+        let result = m.to_clamped_origin(10, 10);
+        assert_eq!(result.column, 0);
+        assert_eq!(result.row, 0);
+    }
     #[test]
     fn with_scroll_offset() {
         let m = mouse(15, 8, MouseEventKind::Press(MouseButton::Left));

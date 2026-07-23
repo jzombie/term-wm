@@ -52,8 +52,6 @@ impl<C> CanvasScrollView<C> {
     }
 }
 
-
-
 impl<C: Component<TermWmAction>> Component<TermWmAction> for CanvasScrollView<C> {
     fn desired_height(&self, width: u16) -> u16 {
         let eff_w = self.effective_width(width);
@@ -100,12 +98,18 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for CanvasScrollView<C>
                 None,
             )
             .with_screen_area(LayoutRect {
-                x: 0, y: 0, width: virtual_width, height: virtual_height,
+                x: 0,
+                y: 0,
+                width: virtual_width,
+                height: virtual_height,
             })
             .with_direct_mode(false);
 
         let virtual_area = LayoutRect {
-            x: 0, y: 0, width: virtual_width, height: virtual_height,
+            x: 0,
+            y: 0,
+            width: virtual_width,
+            height: virtual_height,
         };
 
         // Resize buffer BEFORE taking ownership — prevents stale dimension desync
@@ -113,7 +117,10 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for CanvasScrollView<C>
             || self.offscreen_buf.area.height != virtual_height
         {
             self.offscreen_buf = Buffer::empty(RatatuiRect::new(
-                0, 0, virtual_width.max(1), virtual_height.max(1),
+                0,
+                0,
+                virtual_width.max(1),
+                virtual_height.max(1),
             ));
         } else {
             self.offscreen_buf.reset();
@@ -124,7 +131,12 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for CanvasScrollView<C>
         let mut mock_backend = term_wm_console::RatatuiBackend::new(temp_buf, ratatui_area);
 
         let mut scratch_registry = HitboxRegistry::new();
-        self.inner.render(&mut mock_backend, virtual_area, &canvas_ctx, &mut scratch_registry);
+        self.inner.render(
+            &mut mock_backend,
+            virtual_area,
+            &canvas_ctx,
+            &mut scratch_registry,
+        );
         self.offscreen_buf = mock_backend.buffer;
 
         let translation_x = area.x - offset_x as i32;
@@ -147,17 +159,25 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for CanvasScrollView<C>
 
         for y in 0..copy_height {
             let dst_y = area.y + y as i32;
-            if dst_y < 0 || dst_y >= dst_buf.area.height as i32 { continue; }
+            if dst_y < 0 || dst_y >= dst_buf.area.height as i32 {
+                continue;
+            }
             for x in 0..copy_width {
                 let dst_x = area.x + x as i32;
-                if dst_x < 0 || dst_x >= dst_buf.area.width as i32 { continue; }
+                if dst_x < 0 || dst_x >= dst_buf.area.width as i32 {
+                    continue;
+                }
                 let src_cell = &self.offscreen_buf[(src_start_x + x, src_start_y + y)];
                 dst_buf[(dst_x as u16, dst_y as u16)] = src_cell.clone();
             }
         }
     }
 
-    fn handle_events(&mut self, event: &Event, ctx: &ComponentContext) -> EventResult<TermWmAction> {
+    fn handle_events(
+        &mut self,
+        event: &Event,
+        ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
         let screen_area = ctx.screen_area().unwrap_or_default();
 
         // Pre-render fallback: compute dimensions if first render hasn't run yet
@@ -178,32 +198,58 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for CanvasScrollView<C>
         let virtual_ctx = ctx
             .with_viewport(
                 ScrollViewport {
-                    offset_x: 0, offset_y: 0,
-                    width: cw as usize, height: ch as usize,
+                    offset_x: 0,
+                    offset_y: 0,
+                    width: cw as usize,
+                    height: ch as usize,
                 },
                 None,
             )
-            .with_screen_area(LayoutRect { x: 0, y: 0, width: cw, height: ch });
+            .with_screen_area(LayoutRect {
+                x: 0,
+                y: 0,
+                width: cw,
+                height: ch,
+            });
 
         // Translate mouse events using canonical centralized method
         let Event::Mouse(mouse) = event else {
             return self.inner.handle_events(event, &virtual_ctx);
         };
         let vp = ctx.viewport();
-        let Some(translated) = mouse.to_local_offset(screen_area, vp.offset_x, vp.offset_y, cw, ch) else {
+        let Some(translated) = mouse.to_local_offset(screen_area, vp.offset_x, vp.offset_y, cw, ch)
+        else {
             return EventResult::Ignored;
         };
-        self.inner.handle_events(&Event::Mouse(translated), &virtual_ctx)
+        self.inner
+            .handle_events(&Event::Mouse(translated), &virtual_ctx)
     }
 
-    fn update(&mut self, action: TermWmAction, ctx: &ComponentContext, actions: &mut VecDeque<(WindowKey, TermWmAction)>) {
+    fn update(
+        &mut self,
+        action: TermWmAction,
+        ctx: &ComponentContext,
+        actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+    ) {
         self.inner.update(action, ctx, actions);
     }
 
-    fn destroy(&mut self) { self.inner.destroy(); }
-    fn clear_selection(&mut self) { self.inner.clear_selection(); }
-    fn selection_status(&self) -> SelectionStatus { self.inner.selection_status() }
-    fn selection_text(&self) -> Option<String> { self.inner.selection_text() }
-    fn set_selection_enabled(&mut self, enabled: bool) { self.inner.set_selection_enabled(enabled); }
-    fn paste(&mut self, text: &str) -> bool { self.inner.paste(text) }
+    fn destroy(&mut self) {
+        self.inner.destroy();
+    }
+    fn clear_selection(&mut self) {
+        self.inner.clear_selection();
+    }
+    fn selection_status(&self) -> SelectionStatus {
+        self.inner.selection_status()
+    }
+    fn selection_text(&self) -> Option<String> {
+        self.inner.selection_text()
+    }
+    fn set_selection_enabled(&mut self, enabled: bool) {
+        self.inner.set_selection_enabled(enabled);
+    }
+    fn paste(&mut self, text: &str) -> bool {
+        self.inner.paste(text)
+    }
 }
