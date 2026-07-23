@@ -284,7 +284,8 @@ impl WmTopPanelComponent {
             return;
         }
         let style = ratatui::style::Style::default()
-            .fg(color_to_ratatui(theme.success));
+            .fg(color_to_ratatui(theme.success))
+            .add_modifier(ratatui::style::Modifier::BOLD);
         term_wm_ui_components::helpers::safe_set_string(
             buffer, bounds, ix as u16, y as u16, label, style,
         );
