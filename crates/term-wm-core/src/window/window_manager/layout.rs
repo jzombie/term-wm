@@ -187,6 +187,23 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         }
     }
 
+    /// True only for cramped monocle (auto or on a narrow viewport) where
+    /// panels should render as overlays.  Manual monocle on a wide viewport
+    /// leaves panels in their normal embedded position.
+    pub fn is_monocle_cramped(&self) -> bool {
+        match self.monocle_mode {
+            super::MonocleMode::Auto => {
+                self.last_terminal_width > 0
+                    && self.last_terminal_width < self.monocle_width_threshold
+            }
+            super::MonocleMode::On => {
+                self.last_terminal_width > 0
+                    && self.last_terminal_width < self.monocle_width_threshold
+            }
+            super::MonocleMode::Off => false,
+        }
+    }
+
     /// Cycle monocle mode: Auto → On → Off → Auto.
     pub fn toggle_monocle(&mut self) {
         self.monocle_mode = self.monocle_mode.cycle();
@@ -281,7 +298,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         }
         // Compute whether the panel should be active from config + visibility,
         // BEFORE calling consume_area (which needs this state to claim space).
-        let panel_active = self.config.panels_enabled
+        // In cramped monocle, panels never claim space.
+        let panel_active = !self.is_monocle_cramped()
+            && self.config.panels_enabled
             && self
                 .get_semantic_component(super::layer_manager::ComponentTag::TopPanel)
                 .is_some_and(|p| p.visible());
@@ -306,9 +325,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         } else {
             false
         };
-        let bottom_h = if self.is_monocle() {
-            // In monocle mode, panels only show when the command palette is
-            // open — rendered as overlays, never claiming permanent space.
+        let bottom_h = if self.is_monocle_cramped() {
+            // Cramped monocle — panels overlay on demand
             0
         } else if has_hints || panel_active {
             1u16

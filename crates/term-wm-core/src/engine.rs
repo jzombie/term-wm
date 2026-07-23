@@ -53,12 +53,7 @@ impl CoreEngine {
         // without mutating WindowManager.z_order
         if wm.is_monocle() {
             let focused_key = wm.focused_window();
-            let screen = LayoutRect {
-                x: 0,
-                y: 0,
-                width: width as u16,
-                height: height as u16,
-            };
+            let screen = wm.managed_area();
             self.draw_plan.apply_monocle_culling(focused_key, screen);
             self.draw_plan.apply_monocle_z_order(focused_key);
         }
