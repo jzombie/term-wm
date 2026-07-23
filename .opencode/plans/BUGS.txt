@@ -3,6 +3,7 @@
 - [ ] [TODO] In Direct Mode, route non-scrollbar mouse events to the PTY (click, right-click, etc.)
 - [ ] [TODO] Investigate a better Command Palette activation key binding.  Ctrl-G conflicts with Google Gemini when a Chrome browser is open.
 - [ ] [TODO] Make test_pty share same FD redirection utils as rest of crate, so it can be made cross-platform.
+- [ ] Text selection can just break and there is no indication as to why.  I think it can be reproduced by opening up the same client on multiple devices and resizing one of them or trying to break the layout. Direct mode still works.  Confirmed that closing term-wm and reopening it in the same client session works again, so it must not be remote client related.
 - [ ] Fix bracketed paste issue. Pasting long text into opencode can make it crash.
 - [ ] Fix issue where remote copy is not working.
 - [ ] [TODO] If the viewport is tall and narrow, consider *not* forcing monocle mode and use a smarter layout grid to stack vertically.
