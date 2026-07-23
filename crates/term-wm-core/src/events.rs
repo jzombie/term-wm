@@ -88,9 +88,11 @@ impl MouseEvent {
     /// Translate a screen-space mouse event into local/virtual space relative
     /// to a bounding screen area, scroll offsets, and virtual content dimensions.
     ///
-    /// Point-trigger events (Press, Moved, Scroll*) outside bounds return `None`.
+    /// CATEGORY 1 — Viewport Spatial Gate.
+    /// Point-trigger events (Press, Moved, Scroll*) outside bounds return None.
     /// Continuous lifecycle events (Drag, Release) are retained and clamped to
     /// valid virtual coordinates to preserve input state machines.
+    /// This prevents click leakage across tiled panes.
     pub fn to_local_offset(
         &self,
         screen_area: LayoutRect,
@@ -149,6 +151,26 @@ impl MouseEvent {
             column: v_x,
             row: v_y,
         })
+    }
+
+    /// Unculled origin translation: converts screen-space coordinates relative
+    /// to (origin_x, origin_y) and clamps to [0, u16::MAX] without dropping any
+    /// events.
+    ///
+    /// CATEGORY 2 — Unculled Coordinate Transformer.
+    /// Never returns None. All events are accepted and clamped to valid u16
+    /// bounds. Intended for window manager event dispatching (localize_event,
+    /// localize_event_content) where PTY sessions must receive all inputs
+    /// even when they land on window chrome or borders.
+    pub fn to_clamped_origin(&self, origin_x: i32, origin_y: i32) -> Self {
+        let col = (i32::from(self.column) - origin_x).clamp(0, i32::from(u16::MAX)) as u16;
+        let row = (i32::from(self.row) - origin_y).clamp(0, i32::from(u16::MAX)) as u16;
+        Self {
+            kind: self.kind,
+            modifiers: self.modifiers,
+            column: col,
+            row,
+        }
     }
 }
 

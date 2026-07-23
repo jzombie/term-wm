@@ -1,7 +1,7 @@
 use crate::Rect;
 use crate::actions::TermWmAction;
 use crate::components::{Component, Overlay, WmComponent};
-use crate::events::{Event, MouseEvent};
+use crate::events::Event;
 
 use super::WindowManager;
 use crate::keybindings::ActionLayer;
@@ -66,30 +66,25 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.localize_event_content(key, event)
     }
 
+    /// CATEGORY 2 — Unculled Coordinate Transformer (test-only).
+    /// Translates screen coordinates to window-local coordinates. Never drops events.
     #[cfg(test)]
     pub fn localize_event(&self, key: WindowKey, event: &Event) -> Option<Event> {
         let Event::Mouse(mouse) = event else { return None; };
         let dest = self.window_dest(key, self.full_region_for_key(key));
-        let r = crate::Rect { x: dest.x, y: dest.y, width: dest.width, height: dest.height };
-        mouse.to_local_offset(r, 0, 0, r.width, r.height).map(Event::Mouse)
+        Some(Event::Mouse(mouse.to_clamped_origin(dest.x, dest.y)))
     }
 
+    /// CATEGORY 2 — Unculled Coordinate Transformer.
+    /// Translates screen coordinates to content-area-local coordinates (accounting
+    /// for chrome offsets). Never drops events — PTY sessions must receive all input.
     pub(super) fn localize_event_content(&self, key: WindowKey, event: &Event) -> Option<Event> {
         let Event::Mouse(mouse) = event else { return None; };
         let dest = self.window_dest(key, self.full_region_for_key(key));
         let (offset_x, offset_y) = self.window_content_offset(key);
         let content_x = dest.x + i32::from(offset_x);
         let content_y = dest.y + i32::from(offset_y);
-        let column =
-            (i32::from(mouse.column) - content_x).clamp(0, i32::from(u16::MAX)) as u16;
-        let row =
-            (i32::from(mouse.row) - content_y).clamp(0, i32::from(u16::MAX)) as u16;
-        Some(Event::Mouse(MouseEvent {
-            column,
-            row,
-            kind: mouse.kind,
-            modifiers: mouse.modifiers,
-        }))
+        Some(Event::Mouse(mouse.to_clamped_origin(content_x, content_y)))
     }
 
     pub fn full_region_for_key(&self, key: WindowKey) -> Rect {

@@ -395,35 +395,17 @@ impl ComponentContext {
         ctx
     }
 
-    /// If `event` is a `Press` of the given `button` within this component's
-    /// screen area, returns the local coordinates `(col, row)` relative to
-    /// the component's top-left `(0, 0)`. Returns `None` otherwise.
+    /// CATEGORY 1 — Viewport Spatial Gate (convenience wrapper).
+    /// Extracts local (u16, u16) coordinates for a press of the given
+    /// `button` within this component's screen area. Returns None for
+    /// out-of-bounds clicks or non-matching event kinds.
     pub fn localize_mouse_click(&self, event: &Event, button: MouseButton) -> Option<(u16, u16)> {
-        let mouse = match event {
-            Event::Mouse(m) => m,
-            _ => return None,
-        };
-        if !matches!(mouse.kind, MouseEventKind::Press(b) if b == button) {
-            return None;
-        }
-        let area = self.screen_area?;
-
-        // Lift to i32 for sign-safe arithmetic against potentially negative origins
-        let m_x = i32::from(mouse.column);
-        let m_y = i32::from(mouse.row);
-        let w = i32::from(area.width);
-        let h = i32::from(area.height);
-
-        // Bounds check in i32 space
-        if m_x < area.x || m_x >= area.x + w || m_y < area.y || m_y >= area.y + h {
-            return None;
-        }
-
-        // Compute local offsets, clamp negatives, downcast
-        let local_x = (m_x - area.x).max(0) as u16;
-        let local_y = (m_y - area.y).max(0) as u16;
-
-        Some((local_x, local_y))
+        let Event::Mouse(mouse) = event else { return None; };
+        let MouseEventKind::Press(b) = mouse.kind else { return None; };
+        if b != button { return None; }
+        let screen_area = self.screen_area()?;
+        let local = mouse.to_local_offset(screen_area, 0, 0, screen_area.width, screen_area.height)?;
+        Some((local.column, local.row))
     }
 }
 

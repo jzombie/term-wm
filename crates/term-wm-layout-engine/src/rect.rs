@@ -102,6 +102,15 @@ impl LayoutRect {
         let b_bottom = other.y.saturating_add(i32::from(other.height));
         self.x < b_right && a_right > other.x && self.y < b_bottom && a_bottom > other.y
     }
+
+    /// Subtract the rect origin from screen coordinates to get local deltas.
+    ///
+    /// CATEGORY 3 — Scalar Geometry.
+    /// Pure arithmetic helper for text_renderer.rs and mouse_coord.rs.
+    /// Returns signed deltas that may be negative (positions outside the rect).
+    pub fn screen_to_local_point(&self, col: u16, row: u16) -> (i32, i32) {
+        (i32::from(col) - self.x, i32::from(row) - self.y)
+    }
 }
 
 /// Convenience wrapper around [`LayoutRect::contains`].
