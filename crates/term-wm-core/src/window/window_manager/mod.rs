@@ -234,6 +234,32 @@ pub enum DrawTask {
     App(WindowDrawContext),
 }
 
+/// Monocle display mode. Cycling: Auto → On → Off → Auto.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MonocleMode {
+    Auto,
+    On,
+    Off,
+}
+
+impl MonocleMode {
+    pub fn cycle(self) -> Self {
+        match self {
+            MonocleMode::Auto => MonocleMode::On,
+            MonocleMode::On => MonocleMode::Off,
+            MonocleMode::Off => MonocleMode::Auto,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            MonocleMode::Auto => "Auto",
+            MonocleMode::On => "On",
+            MonocleMode::Off => "Off",
+        }
+    }
+}
+
 pub struct WindowManager<
     C: Component<TermWmAction>,
     L: WmComponent = crate::components::NoopWmComponent,
@@ -254,12 +280,9 @@ pub struct WindowManager<
     pub(crate) managed_layout: Option<TilingLayout<WindowKey>>,
     closed_windows: Vec<WindowKey>,
     pub(crate) managed_area: Rect,
-    pub(crate) monocle_mode_active: bool,
+    pub(crate) monocle_mode: MonocleMode,
     monocle_width_threshold: u16,
     last_terminal_width: u16,
-    /// When true, auto-width monocle activation is suppressed because
-    /// the user explicitly toggled it off.  Reset when width is adequate.
-    monocle_auto_disabled: bool,
     pub(crate) hitbox_registry: HitboxRegistry,
     app_ctx: Arc<AppContext>,
     #[allow(dead_code)]
@@ -557,7 +580,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.window(key).is_some_and(|window| window.direct_mode)
     }
 
-
     pub fn set_direct_mode(&mut self, key: WindowKey, value: bool) {
         if let Some(w) = self.windows.get_mut(key) {
             w.direct_mode = value;
@@ -677,7 +699,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             macro_focus: layer_manager::MacroFocus::FocusRing(slotmap::DefaultKey::default()),
             layer_manager,
             windows: SlotMap::with_capacity(crate::constants::INITIAL_WINDOW_CAPACITY),
-            components: SlotMap::<ComponentKey, C>::with_capacity_and_key(crate::constants::INITIAL_COMPONENT_CAPACITY),
+            components: SlotMap::<ComponentKey, C>::with_capacity_and_key(
+                crate::constants::INITIAL_COMPONENT_CAPACITY,
+            ),
             regions: RegionMap::default(),
             scroll: BTreeMap::new(),
             handles: Vec::new(),
@@ -685,10 +709,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             managed_layout: None,
             closed_windows: Vec::new(),
             managed_area: Rect::default(),
-            monocle_mode_active: false,
+            monocle_mode: MonocleMode::Auto,
             monocle_width_threshold: crate::constants::MONOCLE_WIDTH_THRESHOLD,
             last_terminal_width: 0,
-            monocle_auto_disabled: false,
             hitbox_registry: HitboxRegistry::new(),
             app_ctx,
             supported_menu_actions,
@@ -2459,8 +2482,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 disabled: false,
             },
             MenuItem {
-                label: "Toggle Monocle Mode".into(),
-                icon: Some("M"),
+                label: format!("Monocle Mode: {}", self.monocle_mode.label()).into(),
+                icon: Some("▢"),
                 action: crate::actions::TermWmAction::ToggleMonocle,
                 disabled: false,
             },

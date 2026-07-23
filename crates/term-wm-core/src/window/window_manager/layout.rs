@@ -155,23 +155,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.managed_layout = None;
     }
 
-    /// Update monocle mode state based on terminal width and update
-    /// window borders for the current tiling/floating/monocle state.
+    /// Update borders and store terminal width for monocle auto-detection.
     /// Called every render frame.
     pub fn update_monocle_mode(&mut self, terminal_width: u16) {
         self.last_terminal_width = terminal_width;
         if let Some(ref mut layout) = self.managed_layout {
             layout.update_monocle_state(terminal_width);
-        }
-
-        // Auto-width detection: when adequate, re-enable auto and clear.
-        // When auto is not disabled, drive monocle_mode_active from width.
-        if terminal_width >= self.monocle_width_threshold {
-            self.monocle_auto_disabled = false;
-        }
-        if !self.monocle_auto_disabled {
-            self.monocle_mode_active =
-                terminal_width > 0 && terminal_width < self.monocle_width_threshold;
         }
 
         let monocle = self.is_monocle();
@@ -188,26 +177,19 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     /// Check if monocle mode is active.
     pub fn is_monocle(&self) -> bool {
-        if self.monocle_mode_active {
-            return true;
+        match self.monocle_mode {
+            super::MonocleMode::On => true,
+            super::MonocleMode::Off => false,
+            super::MonocleMode::Auto => {
+                self.last_terminal_width > 0
+                    && self.last_terminal_width < self.monocle_width_threshold
+            }
         }
-        if !self.monocle_auto_disabled
-            && self.last_terminal_width > 0
-            && self.last_terminal_width < self.monocle_width_threshold
-        {
-            return true;
-        }
-        false
     }
 
-    /// Toggle user-requested monocle mode on/off.
-    /// When turning off, suppress auto-width re-activation so a narrow
-    /// terminal doesn't immediately re-enter monocle.
+    /// Cycle monocle mode: Auto → On → Off → Auto.
     pub fn toggle_monocle(&mut self) {
-        self.monocle_mode_active = !self.monocle_mode_active;
-        if !self.monocle_mode_active {
-            self.monocle_auto_disabled = true;
-        }
+        self.monocle_mode = self.monocle_mode.cycle();
     }
 
     /// Whether the given window should render borders.
