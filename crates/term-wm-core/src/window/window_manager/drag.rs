@@ -1,7 +1,7 @@
 use crate::Rect;
 use crate::actions::TermWmAction;
 use crate::components::{Component, Overlay, WmComponent};
-use term_wm_layout_engine::{EdgeResistance, LayoutRect, SizeConstraints, detect_corner_snap, detect_edge_snap};
+use term_wm_layout_engine::{EdgeResistance, LayoutRect, detect_corner_snap, detect_edge_snap};
 
 use super::{SnapPreviewState, WindowManager};
 use crate::layout::{InsertPosition, LayoutNode, TilingLayout};
@@ -535,84 +535,43 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         if self.managed_layout.is_some() {
             self.float_all_windows();
         } else {
-            // Collect mapped windows in current Z-order sequence so BSP tree
-            // construction is deterministic and matches visual hierarchy.
+            use crate::layout::LayoutNode;
+
             let keys: Vec<WindowKey> = self
                 .z_order
                 .iter()
                 .copied()
                 .filter(|&k| self.window_state(k) == Some(WindowState::Mapped))
                 .collect();
-
             if keys.is_empty() {
                 return;
             }
 
-            // Partition: windows WITH floating_rect use spatial insertion;
-            // windows WITHOUT get appended via insert_window_balanced.
-            let mut with_rects: Vec<(WindowKey, crate::Rect)> = Vec::new();
-            let mut without_rects: Vec<WindowKey> = Vec::new();
+            let mut with_rects = Vec::new();
+            let mut without_rects = Vec::new();
+
             for &k in &keys {
                 if let Some(spec) = self.floating_rect(k) {
                     with_rects.push((k, spec.resolve(self.managed_area)));
                 } else {
                     without_rects.push(k);
                 }
+                self.clear_floating_rect(k);
             }
 
-            // Sort by area descending — largest windows anchor the macro-geometry
-            with_rects.sort_by_key(|(_, r)| u32::MAX - (r.width as u32) * (r.height as u32));
-
-            let constraints = SizeConstraints {
-                min_width: crate::constants::MIN_TILE_WIDTH,
-                min_height: crate::constants::MIN_TILE_HEIGHT,
-            };
-
-            // Build tree with spatial + constraint-aware insertion
-            for (i, (key, rect)) in with_rects.iter().enumerate() {
-                self.clear_floating_rect(*key);
-                if i == 0 {
-                    self.managed_layout =
-                        Some(TilingLayout::new(LayoutNode::leaf(*key)));
-                    continue;
-                }
-
-                if let Some(ref mut layout) = self.managed_layout {
-                    let (cx, cy) = rect.center();
-                    let regions = layout.regions(self.managed_area);
-                    let weight = crate::constants::CELL_ASPECT_RATIO;
-                    if let Some((target_key, target_rect)) =
-                        term_wm_layout_engine::resolve_target(cx, cy, &regions, weight)
-                    {
-                        let quad = term_wm_layout_engine::detect_quadrant(
-                            cx as u16,
-                            cy as u16,
-                            &target_rect,
-                        );
-                        let pos = quad.to_insert_position();
-                        if constraints.fits_split(&target_rect, pos.to_orientation()) {
-                            let inserted =
-                                layout.root_mut().insert_leaf(target_key, *key, pos);
-                            if !inserted {
-                                layout.split_root(*key, pos);
-                            }
-                        } else {
-                            layout.insert_window_balanced(*key, self.managed_area);
-                        }
-                    } else {
-                        layout.insert_window_balanced(*key, self.managed_area);
-                    }
-                }
-            }
-
-            // Append windows without floating rects via balanced insertion
-            for &key in &without_rects {
-                self.clear_floating_rect(key);
-                if let Some(ref mut layout) = self.managed_layout {
+            if !with_rects.is_empty() {
+                let root_node = LayoutNode::from_rects(&with_rects);
+                let mut layout = TilingLayout::new(root_node);
+                for key in without_rects {
                     layout.insert_window_balanced(key, self.managed_area);
-                } else {
-                    self.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(key)));
                 }
+                self.managed_layout = Some(layout);
+            } else if !without_rects.is_empty() {
+                let mut layout = TilingLayout::new(LayoutNode::leaf(without_rects[0]));
+                for &key in &without_rects[1..] {
+                    layout.insert_window_balanced(key, self.managed_area);
+                }
+                self.managed_layout = Some(layout);
             }
 
             // Synchronize draw order and layout projection
