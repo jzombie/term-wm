@@ -208,10 +208,7 @@ mod tests {
     fn quadrant_to_insert_position_mappings() {
         use crate::snap::InsertPosition;
         assert_eq!(Quadrant::North.to_insert_position(), InsertPosition::Top);
-        assert_eq!(
-            Quadrant::South.to_insert_position(),
-            InsertPosition::Bottom
-        );
+        assert_eq!(Quadrant::South.to_insert_position(), InsertPosition::Bottom);
         assert_eq!(Quadrant::West.to_insert_position(), InsertPosition::Left);
         assert_eq!(Quadrant::East.to_insert_position(), InsertPosition::Right);
     }
@@ -221,8 +218,18 @@ mod tests {
     #[test]
     fn resolve_target_exact_hit() {
         // Two rects separated by a 1-cell gutter
-        let left = LayoutRect { x: 0, y: 0, width: 50, height: 100 };
-        let right = LayoutRect { x: 51, y: 0, width: 50, height: 100 };
+        let left = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 50,
+            height: 100,
+        };
+        let right = LayoutRect {
+            x: 51,
+            y: 0,
+            width: 50,
+            height: 100,
+        };
         let regions = vec![(1u8, left), (2u8, right)];
         // Coordinate inside left rect — should return left
         let result = resolve_target(25, 50, &regions, 2);
@@ -232,8 +239,18 @@ mod tests {
     #[test]
     fn resolve_target_gap_nearest_left() {
         // Two rects with a gutter. The gutter is at x=50..51.
-        let left = LayoutRect { x: 0, y: 0, width: 50, height: 100 };
-        let right = LayoutRect { x: 51, y: 0, width: 50, height: 100 };
+        let left = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 50,
+            height: 100,
+        };
+        let right = LayoutRect {
+            x: 51,
+            y: 0,
+            width: 50,
+            height: 100,
+        };
         let regions = vec![(1u8, left), (2u8, right)];
         // Gutter center: x=50. Left center is at 25, right at 76.
         // With weight=2, distance to left: 625, distance to right: (26*2)^2=2704
@@ -243,8 +260,18 @@ mod tests {
 
     #[test]
     fn resolve_target_gap_nearest_right() {
-        let left = LayoutRect { x: 0, y: 0, width: 50, height: 100 };
-        let right = LayoutRect { x: 51, y: 0, width: 50, height: 100 };
+        let left = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 50,
+            height: 100,
+        };
+        let right = LayoutRect {
+            x: 51,
+            y: 0,
+            width: 50,
+            height: 100,
+        };
         let regions = vec![(1u8, left), (2u8, right)];
         // Place in gutter but closer to right's center
         let result = resolve_target(50, 75, &regions, 2);
@@ -258,8 +285,18 @@ mod tests {
         // Two rects at equal logical distance: one directly above (vertical),
         // one to the right (horizontal). With weight=2, the vertical neighbor
         // should appear farther and the horizontal should be selected.
-        let above = LayoutRect { x: 50, y: 0, width: 100, height: 48 };
-        let right = LayoutRect { x: 101, y: 49, width: 100, height: 48 };
+        let above = LayoutRect {
+            x: 50,
+            y: 0,
+            width: 100,
+            height: 48,
+        };
+        let right = LayoutRect {
+            x: 101,
+            y: 49,
+            width: 100,
+            height: 48,
+        };
         let regions = vec![(1u8, above), (2u8, right)];
         // Point between them: x=100, y=50
         // Above center (100, 24): dx=0, dy=26*2=52, dist=2704

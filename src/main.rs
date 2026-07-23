@@ -11,17 +11,12 @@ use term_wm::io::RenderTarget;
 use term_wm::runner::WindowManagerHost;
 use term_wm::term_wm_app::TermWmApp;
 use term_wm::unified_event_source::{UnifiedEvent, UnifiedEventSource};
-use term_wm::window::WindowKey;
 use term_wm::wm_config::WmConfig;
 use term_wm::{
     PtyStatus, ScrollKeyMode, ScrollViewComponent, TerminalComponent, default_shell_command,
 };
 use term_wm_console::console_render_target::ConsoleRenderTarget;
 use term_wm_core::components::Component;
-use term_wm_sys_ui_components::WmSystemPanelComponent;
-use term_wm_sys_ui_components::wm_debug_log::{
-    WmDebugLogComponent, install_panic_hook, set_global_debug_log,
-};
 use term_wm_ui_facade::core_component::CoreWmComponent;
 use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 
@@ -75,8 +70,6 @@ fn main() -> io::Result<()> {
 /// management, debug window, and system overlays.
 struct App {
     inner: TermWmApp,
-    debug_key: Option<WindowKey>,
-    system_panel_key: Option<WindowKey>,
     pty_wakeup_tx: Sender<UnifiedEvent>,
 }
 
@@ -128,50 +121,11 @@ impl App {
         let inner = TermWmApp::from_wm(wm);
         let mut app = Self {
             inner,
-            debug_key: None,
-            system_panel_key: None,
             pty_wakeup_tx,
         };
 
-        // Initialize debug log system window — created hidden (Unmapped),
-        // toggled visible via keybinding, and protected from destruction
-        // on close so it persists across show/hide cycles.
-        {
-            let (mut component, handle) = WmDebugLogComponent::new_default();
-            component.set_selection_enabled(app.inner.wm().clipboard_enabled());
-            set_global_debug_log(handle);
-            let debug_key = app
-                .inner
-                .wm()
-                .create_window(AppRootComponent::Core(CoreWmComponent::DebugLog(component)));
-            app.inner
-                .wm()
-                .set_close_policy(debug_key, term_wm::window::ClosePolicy::Unmap);
-            app.inner
-                .wm()
-                .transition_window(debug_key, term_wm::window::WindowState::Unmapped);
-            app.debug_key = Some(debug_key);
-            app.inner.wm().set_window_title(debug_key, "Debug Log");
-            install_panic_hook();
-            term_wm::logging::init_default();
-        }
-
-        // Initialize system panel — created hidden, toggled via keybinding,
-        // protected from destruction on close.
-        {
-            let component = WmSystemPanelComponent::new();
-            let key = app.inner.wm().create_window(AppRootComponent::Core(
-                CoreWmComponent::SystemPanel(component),
-            ));
-            app.inner
-                .wm()
-                .set_close_policy(key, term_wm::window::ClosePolicy::Unmap);
-            app.inner
-                .wm()
-                .transition_window(key, term_wm::window::WindowState::Unmapped);
-            app.system_panel_key = Some(key);
-            app.inner.wm().set_window_title(key, "System Panel");
-        }
+        // Initialize debug log and system panel windows.
+        app.inner.init_system_windows();
 
         // If commands provided, open one per command; otherwise open `num_windows`
         // shells using the default shell.
@@ -288,46 +242,15 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
     }
 
     fn on_panic(&mut self) {
-        if let Some(key) = self.debug_key {
-            self.inner
-                .wm()
-                .transition_window(key, term_wm::window::WindowState::Mapped);
-            self.inner.wm().focus_window_key(key);
-        }
+        self.inner.on_panic();
     }
 
     fn toggle_debug_window(&mut self) {
-        let Some(key) = self.debug_key else { return };
-        let is_mapped = self.inner.wm().window_state(key)
-            == Some(term_wm::window::WindowState::Mapped);
-        if is_mapped {
-            self.inner
-                .wm()
-                .transition_window(key, term_wm::window::WindowState::Unmapped);
-        } else {
-            self.inner
-                .wm()
-                .transition_window(key, term_wm::window::WindowState::Mapped);
-            self.inner.wm().focus_window_key(key);
-            self.inner.wm().set_focus(key);
-        }
+        self.inner.toggle_debug_window();
     }
 
     fn toggle_system_panel(&mut self) {
-        let Some(key) = self.system_panel_key else { return };
-        let is_mapped = self.inner.wm().window_state(key)
-            == Some(term_wm::window::WindowState::Mapped);
-        if is_mapped {
-            self.inner
-                .wm()
-                .transition_window(key, term_wm::window::WindowState::Unmapped);
-        } else {
-            self.inner
-                .wm()
-                .transition_window(key, term_wm::window::WindowState::Mapped);
-            self.inner.wm().focus_window_key(key);
-            self.inner.wm().set_focus(key);
-        }
+        self.inner.toggle_system_panel();
     }
 
     fn wm_new_window(&mut self) -> io::Result<()> {
