@@ -564,6 +564,14 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             })
             .collect();
 
+        // Also include windows from regions that might not be mapped (e.g., test windows)
+        for key in self.regions.ids() {
+            if !all_windows.iter().any(|(k, _)| *k == key) {
+                let full = self.regions.get(key).unwrap_or_else(|| self.region(key));
+                all_windows.push((key, full));
+            }
+        }
+
         // Ensure anchor is included even if not in regions (e.g., floating-only window)
         if !all_windows.iter().any(|(k, _)| *k == anchor_key) {
             let rect = self
