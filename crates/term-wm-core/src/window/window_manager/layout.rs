@@ -298,7 +298,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         }
         // Compute whether the panel should be active from config + visibility,
         // BEFORE calling consume_area (which needs this state to claim space).
-        let panel_active = self.config.panels_enabled
+        // In cramped monocle, panels never claim space.
+        let panel_active = !self.is_monocle_cramped()
+            && self.config.panels_enabled
             && self
                 .get_semantic_component(super::layer_manager::ComponentTag::TopPanel)
                 .is_some_and(|p| p.visible());
