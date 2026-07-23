@@ -753,7 +753,7 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
             drag: None,
             hover: None,
             monocle_active: false,
-            monocle_width_threshold: 80,
+            monocle_width_threshold: crate::constants::MONOCLE_WIDTH_THRESHOLD,
         }
     }
 
@@ -1913,7 +1913,7 @@ mod tests {
     fn monocle_width_threshold_getter_setter() {
         let root = LayoutNode::leaf(1);
         let mut layout = TilingLayout::new(root);
-        assert_eq!(layout.monocle_width_threshold(), 80);
+        assert_eq!(layout.monocle_width_threshold(), crate::constants::MONOCLE_WIDTH_THRESHOLD);
         layout.set_monocle_width_threshold(60);
         assert_eq!(layout.monocle_width_threshold(), 60);
     }

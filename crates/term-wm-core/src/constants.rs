@@ -72,3 +72,12 @@ pub const MIN_TILE_WIDTH: u16 = 20;
 pub const MIN_TILE_HEIGHT: u16 = 6;
 /// Terminal cell aspect ratio (height ~2x width) for visual split direction.
 pub const CELL_ASPECT_RATIO: u32 = 2;
+
+/// Width threshold (in columns) below which auto-monocle mode activates.
+pub const MONOCLE_WIDTH_THRESHOLD: u16 = 80;
+
+/// Initial allocation capacity for the window slot map.
+pub const INITIAL_WINDOW_CAPACITY: usize = 32;
+
+/// Initial allocation capacity for the component slot map.
+pub const INITIAL_COMPONENT_CAPACITY: usize = 32;
