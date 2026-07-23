@@ -369,7 +369,6 @@ mod tests {
         assert_eq!(result.map(|r| (r.column, r.row)), Some((7, 7)));
     }
 
-
     #[test]
     fn clamped_origin_inside_bounds() {
         let m = mouse(15, 20, MouseEventKind::Press(MouseButton::Left));

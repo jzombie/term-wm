@@ -400,11 +400,18 @@ impl ComponentContext {
     /// `button` within this component's screen area. Returns None for
     /// out-of-bounds clicks or non-matching event kinds.
     pub fn localize_mouse_click(&self, event: &Event, button: MouseButton) -> Option<(u16, u16)> {
-        let Event::Mouse(mouse) = event else { return None; };
-        let MouseEventKind::Press(b) = mouse.kind else { return None; };
-        if b != button { return None; }
+        let Event::Mouse(mouse) = event else {
+            return None;
+        };
+        let MouseEventKind::Press(b) = mouse.kind else {
+            return None;
+        };
+        if b != button {
+            return None;
+        }
         let screen_area = self.screen_area()?;
-        let local = mouse.to_local_offset(screen_area, 0, 0, screen_area.width, screen_area.height)?;
+        let local =
+            mouse.to_local_offset(screen_area, 0, 0, screen_area.width, screen_area.height)?;
         Some((local.column, local.row))
     }
 }
@@ -445,14 +452,19 @@ mod tests {
         assert!(ctx.direct_mode());
     }
 
-
-    use crate::events::{Event, KeyEvent, KeyCode, KeyKind, KeyModifiers, MouseEvent, MouseEventKind, MouseButton};
+    use crate::events::{
+        Event, KeyCode, KeyEvent, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
 
     #[test]
     fn localize_mouse_click_inside_bounds() {
-        let screen_area = crate::window::FloatRect { x: 10, y: 5, width: 40, height: 20 };
-        let ctx = ComponentContext::new(false)
-            .with_screen_area(screen_area);
+        let screen_area = crate::window::FloatRect {
+            x: 10,
+            y: 5,
+            width: 40,
+            height: 20,
+        };
+        let ctx = ComponentContext::new(false).with_screen_area(screen_area);
         let mouse = MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
             modifiers: KeyModifiers::NONE,
@@ -465,9 +477,13 @@ mod tests {
 
     #[test]
     fn localize_mouse_click_outside_bounds_returns_none() {
-        let screen_area = crate::window::FloatRect { x: 10, y: 5, width: 40, height: 20 };
-        let ctx = ComponentContext::new(false)
-            .with_screen_area(screen_area);
+        let screen_area = crate::window::FloatRect {
+            x: 10,
+            y: 5,
+            width: 40,
+            height: 20,
+        };
+        let ctx = ComponentContext::new(false).with_screen_area(screen_area);
         let mouse = MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
             modifiers: KeyModifiers::NONE,
@@ -480,9 +496,13 @@ mod tests {
 
     #[test]
     fn localize_mouse_click_wrong_button_returns_none() {
-        let screen_area = crate::window::FloatRect { x: 10, y: 5, width: 40, height: 20 };
-        let ctx = ComponentContext::new(false)
-            .with_screen_area(screen_area);
+        let screen_area = crate::window::FloatRect {
+            x: 10,
+            y: 5,
+            width: 40,
+            height: 20,
+        };
+        let ctx = ComponentContext::new(false).with_screen_area(screen_area);
         let mouse = MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
             modifiers: KeyModifiers::NONE,
@@ -495,9 +515,13 @@ mod tests {
 
     #[test]
     fn localize_mouse_click_non_mouse_returns_none() {
-        let screen_area = crate::window::FloatRect { x: 10, y: 5, width: 40, height: 20 };
-        let ctx = ComponentContext::new(false)
-            .with_screen_area(screen_area);
+        let screen_area = crate::window::FloatRect {
+            x: 10,
+            y: 5,
+            width: 40,
+            height: 20,
+        };
+        let ctx = ComponentContext::new(false).with_screen_area(screen_area);
         let key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE, KeyKind::Press);
         let result = ctx.localize_mouse_click(&Event::Key(key), MouseButton::Left);
         assert_eq!(result, None);

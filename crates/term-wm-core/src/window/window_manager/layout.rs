@@ -70,7 +70,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Translates screen coordinates to window-local coordinates. Never drops events.
     #[cfg(test)]
     pub fn localize_event(&self, key: WindowKey, event: &Event) -> Option<Event> {
-        let Event::Mouse(mouse) = event else { return None; };
+        let Event::Mouse(mouse) = event else {
+            return None;
+        };
         let dest = self.window_dest(key, self.full_region_for_key(key));
         Some(Event::Mouse(mouse.to_clamped_origin(dest.x, dest.y)))
     }
@@ -79,7 +81,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Translates screen coordinates to content-area-local coordinates (accounting
     /// for chrome offsets). Never drops events — PTY sessions must receive all input.
     pub(super) fn localize_event_content(&self, key: WindowKey, event: &Event) -> Option<Event> {
-        let Event::Mouse(mouse) = event else { return None; };
+        let Event::Mouse(mouse) = event else {
+            return None;
+        };
         let dest = self.window_dest(key, self.full_region_for_key(key));
         let (offset_x, offset_y) = self.window_content_offset(key);
         let content_x = dest.x + i32::from(offset_x);
@@ -827,13 +831,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{Event, MouseEvent, MouseEventKind};
-    use crate::components::NoopComponent;
     use crate::app_context::AppContext;
+    use crate::components::NoopComponent;
+    use crate::events::{Event, MouseEvent, MouseEventKind};
     use crate::wm_config::WmConfig;
     use std::sync::Arc;
 
@@ -853,11 +856,21 @@ mod tests {
         let key = wm.create_window(NoopComponent);
         wm.set_floating_rect(
             key,
-            Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
-                x: 10, y: 5, width: 40, height: 20,
-            })),
+            Some(crate::window::FloatRectSpec::Absolute(
+                crate::window::FloatRect {
+                    x: 10,
+                    y: 5,
+                    width: 40,
+                    height: 20,
+                },
+            )),
         );
-        wm.register_managed_layout(Rect { x: 0, y: 0, width: 80, height: 24 });
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
 
         let mouse = MouseEvent {
             kind: MouseEventKind::Press(crate::events::MouseButton::Left),
@@ -881,11 +894,21 @@ mod tests {
         let key = wm.create_window(NoopComponent);
         wm.set_floating_rect(
             key,
-            Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
-                x: 10, y: 5, width: 40, height: 20,
-            })),
+            Some(crate::window::FloatRectSpec::Absolute(
+                crate::window::FloatRect {
+                    x: 10,
+                    y: 5,
+                    width: 40,
+                    height: 20,
+                },
+            )),
         );
-        wm.register_managed_layout(Rect { x: 0, y: 0, width: 80, height: 24 });
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
 
         // Click on the visible portion of a window with chrome offset
         let mouse = MouseEvent {
@@ -905,11 +928,21 @@ mod tests {
         let key = wm.create_window(NoopComponent);
         wm.set_floating_rect(
             key,
-            Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
-                x: -10, y: -5, width: 40, height: 20,
-            })),
+            Some(crate::window::FloatRectSpec::Absolute(
+                crate::window::FloatRect {
+                    x: -10,
+                    y: -5,
+                    width: 40,
+                    height: 20,
+                },
+            )),
         );
-        wm.register_managed_layout(Rect { x: 0, y: 0, width: 80, height: 24 });
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
 
         // Click at screen (0, 0) which is on the visible portion of the offscreen window
         let mouse = MouseEvent {
@@ -925,18 +958,27 @@ mod tests {
         assert!(result.is_some());
     }
 
-
     #[test]
     fn localize_event_content_negative_origin() {
         let mut wm = make_wm();
         let key = wm.create_window(NoopComponent);
         wm.set_floating_rect(
             key,
-            Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
-                x: -5, y: -5, width: 40, height: 20,
-            })),
+            Some(crate::window::FloatRectSpec::Absolute(
+                crate::window::FloatRect {
+                    x: -5,
+                    y: -5,
+                    width: 40,
+                    height: 20,
+                },
+            )),
         );
-        wm.register_managed_layout(Rect { x: 0, y: 0, width: 80, height: 24 });
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
 
         let mouse = MouseEvent {
             kind: MouseEventKind::Press(crate::events::MouseButton::Left),
@@ -956,11 +998,21 @@ mod tests {
         let key = wm.create_window(NoopComponent);
         wm.set_floating_rect(
             key,
-            Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
-                x: 10, y: 5, width: 40, height: 20,
-            })),
+            Some(crate::window::FloatRectSpec::Absolute(
+                crate::window::FloatRect {
+                    x: 10,
+                    y: 5,
+                    width: 40,
+                    height: 20,
+                },
+            )),
         );
-        wm.register_managed_layout(Rect { x: 0, y: 0, width: 80, height: 24 });
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
 
         let mouse = MouseEvent {
             kind: MouseEventKind::Press(crate::events::MouseButton::Left),

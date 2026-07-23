@@ -423,10 +423,14 @@ mod tests {
         assert_eq!(resolved, r(50, 50, 50, 50));
     }
 
-
     #[test]
     fn screen_to_local_point_inside() {
-        let rect = LayoutRect { x: 10, y: 10, width: 80, height: 24 };
+        let rect = LayoutRect {
+            x: 10,
+            y: 10,
+            width: 80,
+            height: 24,
+        };
         let (dx, dy) = rect.screen_to_local_point(15, 25);
         assert_eq!(dx, 5);
         assert_eq!(dy, 15);
@@ -434,7 +438,12 @@ mod tests {
 
     #[test]
     fn screen_to_local_point_negative_delta() {
-        let rect = LayoutRect { x: 10, y: 10, width: 80, height: 24 };
+        let rect = LayoutRect {
+            x: 10,
+            y: 10,
+            width: 80,
+            height: 24,
+        };
         let (dx, dy) = rect.screen_to_local_point(2, 2);
         assert_eq!(dx, -8);
         assert_eq!(dy, -8);
