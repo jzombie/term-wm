@@ -99,8 +99,10 @@ impl MouseEvent {
         content_width: u16,
         content_height: u16,
     ) -> Option<Self> {
-        if screen_area.width == 0 || screen_area.height == 0
-            || content_width == 0 || content_height == 0
+        if screen_area.width == 0
+            || screen_area.height == 0
+            || content_width == 0
+            || content_height == 0
         {
             return None;
         }
@@ -109,10 +111,10 @@ impl MouseEvent {
         let m_y = i32::from(self.row);
 
         // Physical screen viewport bounds check
-        let in_physical_x = m_x >= screen_area.x
-            && m_x < screen_area.x + i32::from(screen_area.width);
-        let in_physical_y = m_y >= screen_area.y
-            && m_y < screen_area.y + i32::from(screen_area.height);
+        let in_physical_x =
+            m_x >= screen_area.x && m_x < screen_area.x + i32::from(screen_area.width);
+        let in_physical_y =
+            m_y >= screen_area.y && m_y < screen_area.y + i32::from(screen_area.height);
 
         // Virtual coordinate translation
         let v_x_raw = m_x - screen_area.x + offset_x as i32;
@@ -132,8 +134,7 @@ impl MouseEvent {
                 | MouseEventKind::ScrollRight
         );
 
-        if is_point_trigger
-            && (!in_physical_x || !in_physical_y || !in_virtual_x || !in_virtual_y)
+        if is_point_trigger && (!in_physical_x || !in_physical_y || !in_virtual_x || !in_virtual_y)
         {
             return None;
         }
@@ -276,11 +277,21 @@ mod tests {
     use term_wm_layout_engine::LayoutRect;
 
     fn make_screen() -> LayoutRect {
-        LayoutRect { x: 10, y: 5, width: 80, height: 24 }
+        LayoutRect {
+            x: 10,
+            y: 5,
+            width: 80,
+            height: 24,
+        }
     }
 
     fn mouse(col: u16, row: u16, kind: MouseEventKind) -> MouseEvent {
-        MouseEvent { kind, modifiers: KeyModifiers::NONE, column: col, row }
+        MouseEvent {
+            kind,
+            modifiers: KeyModifiers::NONE,
+            column: col,
+            row,
+        }
     }
 
     #[test]
@@ -325,7 +336,12 @@ mod tests {
 
     #[test]
     fn negative_screen_origin() {
-        let screen = LayoutRect { x: -5, y: -5, width: 80, height: 24 };
+        let screen = LayoutRect {
+            x: -5,
+            y: -5,
+            width: 80,
+            height: 24,
+        };
         let m = mouse(2, 2, MouseEventKind::Press(MouseButton::Left));
         let result = m.to_local_offset(screen, 0, 0, 80, 24);
         assert_eq!(result.map(|r| (r.column, r.row)), Some((7, 7)));

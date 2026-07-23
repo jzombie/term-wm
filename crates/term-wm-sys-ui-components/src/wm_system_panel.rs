@@ -7,8 +7,9 @@ use term_wm_core::components::{Component, SelectionStatus};
 use term_wm_core::impl_component_delegate;
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
-use term_wm_ui_components::{CanvasSizingPolicy, 
-    ButtonComponent, CanvasScrollView, LabelComponent, ScrollViewComponent, VerticalStackComponent,
+use term_wm_ui_components::{
+    ButtonComponent, CanvasScrollView, CanvasSizingPolicy, LabelComponent, ScrollViewComponent,
+    VerticalStackComponent,
 };
 
 /// Local enum wrapping all child types used in the system panel stack.
@@ -54,7 +55,10 @@ impl WmSystemPanelComponent {
             TermWmAction::Callback(|| panic!("Manual panic from system panel")),
         )));
 
-        let scroll_view = ScrollViewComponent::new(CanvasScrollView::new(stack, CanvasSizingPolicy::FitViewportWidth));
+        let scroll_view = ScrollViewComponent::new(CanvasScrollView::new(
+            stack,
+            CanvasSizingPolicy::FitViewportWidth,
+        ));
         Self { scroll_view }
     }
 }

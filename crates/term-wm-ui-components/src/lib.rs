@@ -20,7 +20,7 @@ pub mod vertical_stack;
 
 pub use ascii_image::AsciiImageComponent;
 pub use button::ButtonComponent;
-pub use canvas_scroll_view::{CanvasSizingPolicy, CanvasScrollView};
+pub use canvas_scroll_view::{CanvasScrollView, CanvasSizingPolicy};
 pub use center::CenterComponent;
 pub use command_palette::CommandPaletteComponent;
 pub use confirm_overlay::ConfirmOverlayComponent;
