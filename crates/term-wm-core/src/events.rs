@@ -369,6 +369,22 @@ mod tests {
         assert_eq!(result.map(|r| (r.column, r.row)), Some((7, 7)));
     }
 
+
+    #[test]
+    fn clamped_origin_inside_bounds() {
+        let m = mouse(15, 20, MouseEventKind::Press(MouseButton::Left));
+        let result = m.to_clamped_origin(10, 5);
+        assert_eq!(result.column, 5);
+        assert_eq!(result.row, 15);
+    }
+
+    #[test]
+    fn clamped_origin_negative_origin_clamps_lower() {
+        let m = mouse(2, 2, MouseEventKind::Press(MouseButton::Left));
+        let result = m.to_clamped_origin(10, 10);
+        assert_eq!(result.column, 0);
+        assert_eq!(result.row, 0);
+    }
     #[test]
     fn with_scroll_offset() {
         let m = mouse(15, 8, MouseEventKind::Press(MouseButton::Left));

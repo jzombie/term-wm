@@ -924,4 +924,51 @@ mod tests {
         // to_local_offset computes v_x = 0 - (-10) + 0 = 10 → local coord (10, ...)
         assert!(result.is_some());
     }
+
+
+    #[test]
+    fn localize_event_content_negative_origin() {
+        let mut wm = make_wm();
+        let key = wm.create_window(NoopComponent);
+        wm.set_floating_rect(
+            key,
+            Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
+                x: -5, y: -5, width: 40, height: 20,
+            })),
+        );
+        wm.register_managed_layout(Rect { x: 0, y: 0, width: 80, height: 24 });
+
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Press(crate::events::MouseButton::Left),
+            modifiers: crate::events::KeyModifiers::NONE,
+            column: 0,
+            row: 0,
+        };
+        let result = wm.localize_event_content(key, &Event::Mouse(mouse));
+        // dest.x = -5, offset_x = 0 → content_x = -5
+        // v_x = 0 - (-5) = 5 → should map correctly
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn localize_event_content_with_chrome_offset() {
+        let mut wm = make_wm();
+        let key = wm.create_window(NoopComponent);
+        wm.set_floating_rect(
+            key,
+            Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
+                x: 10, y: 5, width: 40, height: 20,
+            })),
+        );
+        wm.register_managed_layout(Rect { x: 0, y: 0, width: 80, height: 24 });
+
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Press(crate::events::MouseButton::Left),
+            modifiers: crate::events::KeyModifiers::NONE,
+            column: 15,
+            row: 8,
+        };
+        let result = wm.localize_event_content(key, &Event::Mouse(mouse));
+        assert!(result.is_some());
+    }
 }
