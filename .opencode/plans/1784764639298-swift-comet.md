@@ -9,7 +9,6 @@
 - [ ] If a window is snapped, the preview might not be accurate to the window which is being snapped.  Another one might snap to that position instead.
 - [ ] If a window is moved from snapped position to floating, and re-snapped back into the same position, the other windows might rotate their positions.
 - [ ] If a window is maximized, selecting another window no longer brings it on top. That was the entire point of making them floating when not tiled to begin with. Edit: I can't reprodue this behavior all the time, so it seems inconsistent (multiple code paths doing the same thing?  Bad behavior if so).
-- [ ] Monocle mode should be enforced if too crowded in tile mode
 - [ ] Add Command Palette option to manually toggle monocle mode
 - [ ] Tiling mode should keep window borders turned off, and only expose the tiling drag handles.  Returning to floating should turn back on these borders.  Ensure that it works okay even if navigating in/out of monocle mode.
 
