@@ -1589,6 +1589,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                             return EventResult::Ignored;
                         }
                         self.bring_floating_to_front_key(*h_key);
+                        // Unset maximized so further resize/move isn't restricted,
+                        // but keep the current rect so the cursor stays on the handle.
+                        if let Some(w) = self.windows.get_mut(*h_key) {
+                            w.is_maximized = false;
+                            w.borders_enabled = true;
+                        }
                         let rect = self.full_region_for_key(*h_key);
                         let (start_x, start_y, start_width, start_height) =
                             if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
