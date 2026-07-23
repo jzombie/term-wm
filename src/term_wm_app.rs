@@ -7,15 +7,19 @@ use term_wm_console::draw_plan_renderer::DrawPlanRenderer;
 use term_wm_core::actions::TermWmAction;
 use term_wm_core::app_context::AppContext;
 use term_wm_core::config::AppBuilder;
+use term_wm_core::debug_log::set_global_debug_log;
 use term_wm_core::engine::CoreEngine;
 use term_wm_core::io::{EventSource, RenderTarget};
 use term_wm_core::runner::{WindowManagerHost, run_with_defaults};
-use term_wm_core::window::{WindowKey, WindowManager};
+use term_wm_core::window::{ClosePolicy, WindowKey, WindowManager, WindowState};
 use term_wm_core::wm_config::WmConfig;
 
+use term_wm_sys_ui_components::WmSystemPanelComponent;
 use term_wm_sys_ui_components::wm_command_palette::WmCommandPaletteComponent;
+use term_wm_sys_ui_components::wm_debug_log::{WmDebugLogComponent, install_panic_hook};
 use term_wm_sys_ui_components::wm_help_overlay::WmHelpOverlayComponent;
 use term_wm_ui_components::confirm_overlay::ConfirmOverlayComponent;
+use term_wm_ui_facade::core_component::CoreWmComponent;
 use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 
 use crate::components::AppRootComponent;
@@ -28,22 +32,19 @@ use crate::components::AppRootComponent;
 ///
 /// fn main() -> io::Result<()> {
 ///     let mut app = TermWmApp::new(AppContext::new("myapp", "1.0"));
-///     let key = app.register(MyComponent::new());
+///     let key = app.open_window(MyComponent::new());
 ///     app.run()
 /// }
 /// ```
 pub struct TermWmApp {
     wm: WindowManager<AppRootComponent, LayerComponent, OverlayComponent>,
-    window_keys: Vec<WindowKey>,
+    debug_key: Option<WindowKey>,
+    system_panel_key: Option<WindowKey>,
     should_quit: bool,
     /// Core engine for draw plan generation.
     engine: CoreEngine,
     /// Draw plan renderer for rendering components.
     draw_renderer: DrawPlanRenderer,
-    /// Tracks previous window set to avoid recomputing layout every frame.
-    /// TODO: Wire into render pipeline when ready.
-    #[allow(dead_code)]
-    known_windows: Vec<WindowKey>,
 }
 
 impl TermWmApp {
@@ -116,11 +117,55 @@ impl TermWmApp {
     pub fn from_wm(wm: WindowManager<AppRootComponent, LayerComponent, OverlayComponent>) -> Self {
         Self {
             wm,
-            window_keys: Vec::new(),
+            debug_key: None,
+            system_panel_key: None,
             should_quit: false,
             engine: CoreEngine::new(),
             draw_renderer: DrawPlanRenderer::new(),
-            known_windows: Vec::new(),
+        }
+    }
+
+    /// Initialize standard system windows (debug log + system panel).
+    ///
+    /// Creates both windows in `Unmapped` (hidden) state with `ClosePolicy::Unmap`
+    /// so they persist across show/hide cycles. The debug log also installs the
+    /// panic hook and logging subscriber. Safe to call multiple times — subsequent
+    /// calls are no-ops.
+    pub fn init_system_windows(&mut self) {
+        if self.debug_key.is_some() || self.system_panel_key.is_some() {
+            return;
+        }
+
+        // Debug Log — hidden, toggled visible via keybinding, persists across close.
+        {
+            let (mut debug_comp, handle) = WmDebugLogComponent::new_default();
+            debug_comp.set_selection_enabled(self.wm.clipboard_enabled());
+            set_global_debug_log(handle);
+            let debug_key =
+                self.wm
+                    .create_window(AppRootComponent::Core(CoreWmComponent::DebugLog(
+                        debug_comp,
+                    )));
+            self.wm.set_close_policy(debug_key, ClosePolicy::Unmap);
+            self.wm.transition_window(debug_key, WindowState::Unmapped);
+            self.wm.set_window_title(debug_key, "Debug Log");
+            self.debug_key = Some(debug_key);
+            install_panic_hook();
+            crate::logging::init_default();
+        }
+
+        // System Panel — hidden, toggled via keybinding, persists across close.
+        {
+            let sys_panel = WmSystemPanelComponent::new();
+            let sys_key =
+                self.wm
+                    .create_window(AppRootComponent::Core(CoreWmComponent::SystemPanel(
+                        sys_panel,
+                    )));
+            self.wm.set_close_policy(sys_key, ClosePolicy::Unmap);
+            self.wm.transition_window(sys_key, WindowState::Unmapped);
+            self.wm.set_window_title(sys_key, "System Panel");
+            self.system_panel_key = Some(sys_key);
         }
     }
 
@@ -129,15 +174,10 @@ impl TermWmApp {
         self.should_quit
     }
 
-    /// Register a component as a window. Returns the WindowKey for later access.
-    /// Calls `on_mount` on the component after registration.
-    pub fn register(&mut self, component: AppRootComponent) -> WindowKey {
-        let key = self.wm.spawn(component);
-        self.wm
-            .transition_window(key, term_wm_core::window::WindowState::Mapped);
-        self.wm.tile_window(key);
-        self.window_keys.push(key);
-        key
+    /// Open a component as a visible window. Returns the `WindowKey` for
+    /// later access.
+    pub fn open_window(&mut self, component: AppRootComponent) -> WindowKey {
+        self.wm.open_window(component)
     }
 
     /// Borrow the WindowManager for configuration or direct access.
@@ -215,6 +255,35 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for T
             &mut self.engine,
             &mut self.draw_renderer,
         );
+    }
+
+    fn on_panic(&mut self) {
+        if let Some(key) = self.debug_key {
+            self.wm.transition_window(key, WindowState::Mapped);
+            self.wm.focus_window_key(key);
+        }
+    }
+
+    fn toggle_debug_window(&mut self) {
+        let Some(key) = self.debug_key else { return };
+        if self.wm.window_state(key) == Some(WindowState::Mapped) {
+            self.wm.transition_window(key, WindowState::Unmapped);
+        } else {
+            self.wm.transition_window(key, WindowState::Mapped);
+            self.wm.focus_window_key(key);
+        }
+    }
+
+    fn toggle_system_panel(&mut self) {
+        let Some(key) = self.system_panel_key else {
+            return;
+        };
+        if self.wm.window_state(key) == Some(WindowState::Mapped) {
+            self.wm.transition_window(key, WindowState::Unmapped);
+        } else {
+            self.wm.transition_window(key, WindowState::Mapped);
+            self.wm.focus_window_key(key);
+        }
     }
 
     fn open_command_palette(&mut self) {

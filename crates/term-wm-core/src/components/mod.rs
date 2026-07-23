@@ -539,12 +539,10 @@ pub struct TopPanelState {
     pub focus_current: Option<crate::window::WindowKey>,
     pub display_order: Vec<crate::window::WindowKey>,
     pub status_line: Option<String>,
-    pub mouse_capture_enabled: bool,
-    pub clipboard_enabled: bool,
-    pub window_selection_enabled: bool,
-    pub selection_active: bool,
-    pub selection_dragging: bool,
     pub menu_open: bool,
+    /// If set, render a clickable label in the top-right with this text
+    /// that dispatches the given action when clicked.
+    pub tiling_indicator: Option<(&'static str, crate::actions::TermWmAction)>,
 }
 
 /// Queries the engine can ask components.

@@ -264,6 +264,52 @@ impl HitboxRegistry {
             });
         }
     }
+
+    /// Merge entries from a scratch registry, applying a spatial translation
+    /// vector and clipping against a target viewport bounds.
+    pub fn merge_with_transform(
+        &mut self,
+        mut other: Self,
+        translation_x: i32,
+        translation_y: i32,
+        viewport: LayoutRect,
+    ) {
+        for mut entry in other.entries.drain(..) {
+            entry.area.x = entry.area.x.saturating_add(translation_x);
+            entry.area.y = entry.area.y.saturating_add(translation_y);
+            let mut clipped = entry.area;
+            // Clip against the viewport and any active clip rects
+            clipped = clipped.clamp(viewport);
+            for clip in &self.clip_stack {
+                clipped = clipped.clamp(*clip);
+            }
+            if clipped.width == 0 || clipped.height == 0 {
+                continue;
+            }
+            self.entries.push(HitboxEntry {
+                id: entry.id,
+                owner: entry.owner,
+                area: clipped,
+            });
+        }
+        for mut entry in other.overlay_entries.drain(..) {
+            entry.area.x = entry.area.x.saturating_add(translation_x);
+            entry.area.y = entry.area.y.saturating_add(translation_y);
+            let mut clipped = entry.area;
+            clipped = clipped.clamp(viewport);
+            for clip in &self.clip_stack {
+                clipped = clipped.clamp(*clip);
+            }
+            if clipped.width == 0 || clipped.height == 0 {
+                continue;
+            }
+            self.overlay_entries.push(HitboxEntry {
+                id: entry.id,
+                owner: entry.owner,
+                area: clipped,
+            });
+        }
+    }
 }
 
 impl Default for HitboxRegistry {

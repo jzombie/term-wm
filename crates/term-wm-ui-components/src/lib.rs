@@ -1,5 +1,6 @@
 pub mod ascii_image;
 pub mod button;
+pub mod canvas_scroll_view;
 pub mod center;
 pub mod command_palette;
 pub mod confirm_overlay;
@@ -19,6 +20,7 @@ pub mod vertical_stack;
 
 pub use ascii_image::AsciiImageComponent;
 pub use button::ButtonComponent;
+pub use canvas_scroll_view::{CanvasScrollView, CanvasSizingPolicy};
 pub use center::CenterComponent;
 pub use command_palette::CommandPaletteComponent;
 pub use confirm_overlay::ConfirmOverlayComponent;

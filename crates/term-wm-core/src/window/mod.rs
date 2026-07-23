@@ -21,7 +21,7 @@ slotmap::new_key_type! {
     pub struct ComponentKey;
 }
 
-pub use entry::WindowState;
+pub use entry::{ClosePolicy, WindowState};
 
 pub use window_manager::layer_manager::{ComponentTag, LayerId, LayerManager, MacroFocus, ZPlane};
 pub use window_manager::{
