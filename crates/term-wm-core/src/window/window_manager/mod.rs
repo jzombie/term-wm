@@ -2574,13 +2574,11 @@ fn map_layout_node(node: &LayoutNode<WindowKey>) -> LayoutNode<WindowKey> {
             direction,
             children,
             weights,
-            constraints,
             resizable,
         } => LayoutNode::Split {
             direction: *direction,
             children: children.iter().map(map_layout_node).collect(),
             weights: weights.clone(),
-            constraints: constraints.clone(),
             resizable: *resizable,
         },
         LayoutNode::Void(id) => LayoutNode::Void(*id),
@@ -2615,7 +2613,7 @@ mod tests {
     use crate::components::NoopOverlay;
     use crate::events::{KeyModifiers, MouseButton};
     use crate::hitbox_registry::HitboxId;
-    use crate::layout::{Constraint, Direction};
+    use crate::layout::Direction;
     use crate::window::test_component::{ActionRecorder, SelComponent, TestComponent};
     use std::collections::VecDeque;
     use term_wm_layout_engine::LayoutRect;
@@ -3488,8 +3486,7 @@ mod tests {
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(keys[1]), LayoutNode::Leaf(keys[2])],
-            weights: vec![1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         wm.managed_layout = Some(TilingLayout::new(split));
@@ -5093,8 +5090,7 @@ mod tests {
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
-            weights: vec![1.0, 1.0],
-            constraints: vec![Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         wm.set_managed_layout(TilingLayout::new(split));
@@ -5290,7 +5286,6 @@ mod tests {
 
     #[test]
     fn register_layout_handle_hitboxes_registers_entries() {
-        use crate::layout::Constraint;
         let mut wm = WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
@@ -5303,8 +5298,7 @@ mod tests {
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
-            weights: vec![1.0, 1.0],
-            constraints: vec![Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         wm.set_managed_layout(TilingLayout::new(split));

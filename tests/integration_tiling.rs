@@ -43,8 +43,7 @@ fn wm_with_two_windows() -> (WindowManager<NoopComponent>, [WindowKey; 2]) {
     let split = LayoutNode::Split {
         direction: Direction::Horizontal,
         children: vec![LayoutNode::Leaf(k0), LayoutNode::Leaf(k1)],
-        weights: vec![1.0, 1.0],
-        constraints: vec![],
+        weights: vec![1u16, 1u16],
         resizable: false,
     };
     wm.set_managed_layout(TilingLayout::new(split));
@@ -182,8 +181,7 @@ mod multi_window_tiling {
                 LayoutNode::leaf(2),
                 LayoutNode::leaf(3),
             ],
-            weights: vec![1.0, 1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16, 1u16],
             resizable: false,
         };
         let regions = root.layout(AREA);
@@ -208,13 +206,11 @@ mod multi_window_tiling {
                 LayoutNode::Split {
                     direction: Direction::Vertical,
                     children: vec![LayoutNode::leaf(2), LayoutNode::leaf(3)],
-                    weights: vec![1.0, 1.0],
-                    constraints: vec![],
+                        weights: vec![1u16, 1u16],
                     resizable: false,
                 },
             ],
-            weights: vec![1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16],
             resizable: false,
         };
         let regions = root.layout(AREA);
@@ -470,8 +466,7 @@ mod spatial_isolation {
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(k0), LayoutNode::Leaf(k1)],
-            weights: vec![1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16],
             resizable: false,
         };
         wm.set_managed_layout(TilingLayout::new(split));
@@ -486,13 +481,11 @@ mod spatial_isolation {
                 LayoutNode::Split {
                     direction: Direction::Vertical,
                     children: vec![LayoutNode::Leaf(k1), LayoutNode::Void(0)],
-                    weights: vec![1.0, 1.0],
-                    constraints: vec![],
+                        weights: vec![1u16, 1u16],
                     resizable: false,
                 },
             ],
-            weights: vec![1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16],
             resizable: false,
         };
         wm.set_managed_layout(TilingLayout::new(new_root));
@@ -628,8 +621,7 @@ mod drag_snap_pipeline {
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(k0), LayoutNode::Leaf(k1)],
-            weights: vec![1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         wm.set_managed_layout(TilingLayout::new(split));
@@ -1297,13 +1289,11 @@ mod property_tests {
                 direction,
                 children,
                 weights,
-                constraints,
                 ..
             } => LayoutNode::Split {
                 direction: *direction,
                 children: children.iter().map(make_non_resizable).collect(),
                 weights: weights.clone(),
-                constraints: constraints.clone(),
                 resizable: false,
             },
         }
@@ -1370,7 +1360,7 @@ mod property_tests {
             fn check(node: &LayoutNode<usize>) -> bool {
                 match node {
                     LayoutNode::Split { weights, children, .. } => {
-                        weights.iter().all(|w| *w > 0.0) && children.iter().all(check)
+                        weights.iter().all(|w| *w > 0) && children.iter().all(check)
                     }
                     _ => true,
                 }
@@ -1692,8 +1682,7 @@ mod floating_tiled_separation {
                 LayoutNode::Leaf(k1),
                 LayoutNode::Leaf(k2),
             ],
-            weights: vec![1.0, 1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16, 1u16],
             resizable: false,
         };
         wm.set_managed_layout(TilingLayout::new(split));

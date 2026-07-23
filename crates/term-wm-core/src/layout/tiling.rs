@@ -1,11 +1,12 @@
 use crate::Rect;
-use crate::layout::{Constraint, Direction, Layout};
+use crate::layout::Direction;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use term_wm_layout_engine::Orientation;
 use term_wm_layout_engine::LayoutRect;
 
 static VOID_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
-use super::{FloatingPane, RegionMap, gap_size, rect_contains};
+use super::{FloatingPane, RegionMap, rect_contains};
 
 #[derive(Debug, Clone)]
 pub enum LayoutNode<Id: Copy + Eq + Ord> {
@@ -14,10 +15,18 @@ pub enum LayoutNode<Id: Copy + Eq + Ord> {
     Split {
         direction: Direction,
         children: Vec<LayoutNode<Id>>,
-        weights: Vec<f32>,
-        constraints: Vec<Constraint>,
+        weights: Vec<u16>,
         resizable: bool,
     },
+}
+
+impl From<Direction> for Orientation {
+    fn from(d: Direction) -> Self {
+        match d {
+            Direction::Horizontal => Orientation::Horizontal,
+            Direction::Vertical => Orientation::Vertical,
+        }
+    }
 }
 
 pub use term_wm_layout_engine::InsertPosition;
@@ -38,20 +47,15 @@ impl<Id: Copy + Eq + Ord> From<term_wm_layout_engine::BspNode<Id>> for LayoutNod
                 };
                 let left_node: LayoutNode<Id> = LayoutNode::from(*left);
                 let right_node: LayoutNode<Id> = LayoutNode::from(*right);
-                let total = u32::from(ratio.total());
-                let weights = if total == 0 {
-                    vec![1.0, 1.0]
+                let weights = if ratio.total() == 0 {
+                    vec![1u16, 1u16]
                 } else {
-                    vec![
-                        f32::from(ratio.left_part()) / total as f32,
-                        f32::from(ratio.right_part()) / total as f32,
-                    ]
+                    vec![ratio.left_part(), ratio.right_part()]
                 };
                 LayoutNode::Split {
                     direction,
                     children: vec![left_node, right_node],
                     weights,
-                    constraints: Vec::new(),
                     resizable: true,
                 }
             }
@@ -66,21 +70,18 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
 
     pub fn split(
         direction: Direction,
-        constraints: Vec<Constraint>,
         children: Vec<LayoutNode<Id>>,
     ) -> Self {
         Self::Split {
             direction,
             children,
             weights: Vec::new(),
-            constraints,
             resizable: true,
         }
     }
 
     pub fn split_resizable(
         direction: Direction,
-        constraints: Vec<Constraint>,
         children: Vec<LayoutNode<Id>>,
         resizable: bool,
     ) -> Self {
@@ -88,7 +89,6 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
             direction,
             children,
             weights: Vec::new(),
-            constraints,
             resizable,
         }
     }
@@ -239,8 +239,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
         LayoutNode::Split {
             direction,
             children: ids.into_iter().map(LayoutNode::leaf).collect(),
-            weights: vec![1.0; n],
-            constraints: Vec::new(),
+            weights: vec![1u16; n],
             resizable: true,
         }
     }
@@ -295,7 +294,6 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
         let LayoutNode::Split {
             weights,
             children,
-            constraints,
             resizable,
             ..
         } = split
@@ -305,13 +303,18 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
         if !*resizable || children.len() < 2 || index + 1 >= children.len() {
             return false;
         }
-        let sizes = split_sizes(
+        let orientation = Orientation::from(direction);
+        let total_dim = match direction {
+            Direction::Horizontal => split_area.width,
+            Direction::Vertical => split_area.height,
+        };
+        let gap = term_wm_layout_engine::gap_size(orientation, total_dim, children.len(), *resizable);
+        let sizes = term_wm_layout_engine::split_sizes(
             split_area,
-            direction,
-            weights,
-            constraints,
+            orientation,
+            weights.as_slice(),
             children.len(),
-            *resizable,
+            gap,
         );
         if sizes.is_empty() {
             return false;
@@ -326,7 +329,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
         let right = total_pair - left;
         sizes[index] = left;
         sizes[index + 1] = right;
-        *weights = sizes.iter().map(|v| (*v).max(1) as f32).collect();
+        *weights = sizes.iter().map(|v| (*v).max(1) as u16).collect();
         true
     }
 
@@ -339,7 +342,6 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
             LayoutNode::Split {
                 children,
                 weights,
-                constraints,
                 ..
             } => {
                 let mut removed = false;
@@ -355,9 +357,6 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                         if index < weights.len() {
                             weights.remove(index);
                         }
-                        if index < constraints.len() {
-                            constraints.remove(index);
-                        }
                         removed = true;
                         break;
                     }
@@ -372,9 +371,6 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                             children.remove(index);
                             if index < weights.len() {
                                 weights.remove(index);
-                            }
-                            if index < constraints.len() {
-                                constraints.remove(index);
                             }
                         }
                         break;
@@ -418,36 +414,32 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                         *self = LayoutNode::Split {
                             direction: Direction::Horizontal,
                             children: vec![LayoutNode::leaf(insert), LayoutNode::leaf(*current)],
-                            weights: vec![1.0, 1.0],
-                            constraints: Vec::new(),
-                            resizable: true,
+                            weights: vec![1u16, 1u16],
+                                                        resizable: true,
                         };
                     }
                     InsertPosition::Right => {
                         *self = LayoutNode::Split {
                             direction: Direction::Horizontal,
                             children: vec![LayoutNode::leaf(*current), LayoutNode::leaf(insert)],
-                            weights: vec![1.0, 1.0],
-                            constraints: Vec::new(),
-                            resizable: true,
+                            weights: vec![1u16, 1u16],
+                                                        resizable: true,
                         };
                     }
                     InsertPosition::Top => {
                         *self = LayoutNode::Split {
                             direction: Direction::Vertical,
                             children: vec![LayoutNode::leaf(insert), LayoutNode::leaf(*current)],
-                            weights: vec![1.0, 1.0],
-                            constraints: Vec::new(),
-                            resizable: true,
+                            weights: vec![1u16, 1u16],
+                                                        resizable: true,
                         };
                     }
                     InsertPosition::Bottom => {
                         *self = LayoutNode::Split {
                             direction: Direction::Vertical,
                             children: vec![LayoutNode::leaf(*current), LayoutNode::leaf(insert)],
-                            weights: vec![1.0, 1.0],
-                            constraints: Vec::new(),
-                            resizable: true,
+                            weights: vec![1u16, 1u16],
+                                                        resizable: true,
                         };
                     }
                     InsertPosition::TopLeft => {
@@ -457,16 +449,14 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                                 LayoutNode::leaf(insert),
                                 LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed)),
                             ],
-                            weights: vec![1.0, 1.0],
-                            constraints: Vec::new(),
-                            resizable: true,
+                            weights: vec![1u16, 1u16],
+                                                        resizable: true,
                         };
                         *self = LayoutNode::Split {
                             direction: Direction::Horizontal,
                             children: vec![inner, LayoutNode::leaf(*current)],
-                            weights: vec![1.0, 1.0],
-                            constraints: Vec::new(),
-                            resizable: true,
+                            weights: vec![1u16, 1u16],
+                                                        resizable: true,
                         };
                     }
                     InsertPosition::TopRight => {
@@ -476,16 +466,14 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                                 LayoutNode::leaf(insert),
                                 LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed)),
                             ],
-                            weights: vec![1.0, 1.0],
-                            constraints: Vec::new(),
-                            resizable: true,
+                            weights: vec![1u16, 1u16],
+                                                        resizable: true,
                         };
                         *self = LayoutNode::Split {
                             direction: Direction::Horizontal,
                             children: vec![LayoutNode::leaf(*current), inner],
-                            weights: vec![1.0, 1.0],
-                            constraints: Vec::new(),
-                            resizable: true,
+                            weights: vec![1u16, 1u16],
+                                                        resizable: true,
                         };
                     }
                     InsertPosition::BottomLeft => {
@@ -495,16 +483,14 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                                 LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed)),
                                 LayoutNode::leaf(insert),
                             ],
-                            weights: vec![1.0, 1.0],
-                            constraints: Vec::new(),
-                            resizable: true,
+                            weights: vec![1u16, 1u16],
+                                                        resizable: true,
                         };
                         *self = LayoutNode::Split {
                             direction: Direction::Horizontal,
                             children: vec![inner, LayoutNode::leaf(*current)],
-                            weights: vec![1.0, 1.0],
-                            constraints: Vec::new(),
-                            resizable: true,
+                            weights: vec![1u16, 1u16],
+                                                        resizable: true,
                         };
                     }
                     InsertPosition::BottomRight => {
@@ -514,16 +500,14 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                                 LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed)),
                                 LayoutNode::leaf(insert),
                             ],
-                            weights: vec![1.0, 1.0],
-                            constraints: Vec::new(),
-                            resizable: true,
+                            weights: vec![1u16, 1u16],
+                                                        resizable: true,
                         };
                         *self = LayoutNode::Split {
                             direction: Direction::Horizontal,
                             children: vec![LayoutNode::leaf(*current), inner],
-                            weights: vec![1.0, 1.0],
-                            constraints: Vec::new(),
-                            resizable: true,
+                            weights: vec![1u16, 1u16],
+                                                        resizable: true,
                         };
                     }
                 }
@@ -557,16 +541,20 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                 direction,
                 children,
                 weights,
-                constraints,
                 resizable,
             } => {
-                let (rects, gaps) = split_rects_with_gaps(
-                    *direction,
+                let orientation = Orientation::from(*direction);
+                let total_dim = match direction {
+                    Direction::Horizontal => area.width,
+                    Direction::Vertical => area.height,
+                };
+                let gap = term_wm_layout_engine::gap_size(orientation, total_dim, children.len(), *resizable);
+                let (rects, gaps) = term_wm_layout_engine::split_rects_with_gaps(
                     area,
-                    weights,
-                    constraints,
+                    orientation,
+                    weights.as_slice(),
                     children.len(),
-                    *resizable,
+                    gap,
                 );
                 for (idx, (child, rect)) in children.iter().zip(rects.iter().copied()).enumerate() {
                     path.push(idx);
@@ -603,16 +591,20 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                 direction,
                 children,
                 weights,
-                constraints,
                 resizable,
             } => {
-                let (rects, _) = split_rects_with_gaps(
-                    *direction,
+                let orientation = Orientation::from(*direction);
+                let total_dim = match direction {
+                    Direction::Horizontal => area.width,
+                    Direction::Vertical => area.height,
+                };
+                let gap = term_wm_layout_engine::gap_size(orientation, total_dim, children.len(), *resizable);
+                let (rects, _) = term_wm_layout_engine::split_rects_with_gaps(
                     area,
-                    weights,
-                    constraints,
+                    orientation,
+                    weights.as_slice(),
                     children.len(),
-                    *resizable,
+                    gap,
                 );
                 for (child, sub) in children.iter().zip(rects) {
                     child.void_regions_recursive(sub, out);
@@ -637,23 +629,19 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
             LayoutNode::Split {
                 children,
                 weights,
-                constraints,
                 ..
             } => {
                 // Recurse first
                 for child in children.iter_mut() {
                     child.cleanup_after_removal();
                 }
-                // Remove Void children and corresponding weights/constraints
+                // Remove Void children and corresponding weights
                 let mut i = 0;
                 while i < children.len() {
                     if matches!(children[i], LayoutNode::Void(_)) {
                         children.remove(i);
                         if i < weights.len() {
                             weights.remove(i);
-                        }
-                        if i < constraints.len() {
-                            constraints.remove(i);
                         }
                         // Don't increment — next element shifted into this index
                     } else {
@@ -690,7 +678,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                 weights, children, ..
             } => {
                 for w in weights.iter_mut() {
-                    *w = 1.0;
+                    *w = 1;
                 }
                 for child in children.iter_mut() {
                     child.normalize_weights();
@@ -815,9 +803,8 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
                             LayoutNode::leaf(insert),
                             LayoutNode::Void(existing_void_id),
                         ],
-                        weights: vec![1.0, 1.0],
-                        constraints: Vec::new(),
-                        resizable: true,
+                        weights: vec![1u16, 1u16],
+                                                resizable: true,
                     }
                 }
                 InsertPosition::Right | InsertPosition::TopRight | InsertPosition::BottomRight => {
@@ -827,24 +814,21 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
                             LayoutNode::Void(existing_void_id),
                             LayoutNode::leaf(insert),
                         ],
-                        weights: vec![1.0, 1.0],
-                        constraints: Vec::new(),
-                        resizable: true,
+                        weights: vec![1u16, 1u16],
+                                                resizable: true,
                     }
                 }
                 InsertPosition::Top => LayoutNode::Split {
                     direction: Direction::Vertical,
                     children: vec![LayoutNode::leaf(insert), LayoutNode::Void(existing_void_id)],
-                    weights: vec![1.0, 1.0],
-                    constraints: Vec::new(),
-                    resizable: true,
+                    weights: vec![1u16, 1u16],
+                                        resizable: true,
                 },
                 InsertPosition::Bottom => LayoutNode::Split {
                     direction: Direction::Vertical,
                     children: vec![LayoutNode::Void(existing_void_id), LayoutNode::leaf(insert)],
-                    weights: vec![1.0, 1.0],
-                    constraints: Vec::new(),
-                    resizable: true,
+                    weights: vec![1u16, 1u16],
+                                        resizable: true,
                 },
             };
             return;
@@ -853,30 +837,26 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
             InsertPosition::Left => LayoutNode::Split {
                 direction: Direction::Horizontal,
                 children: vec![LayoutNode::leaf(insert), self.root.clone()],
-                weights: vec![1.0, 1.0],
-                constraints: Vec::new(),
-                resizable: true,
+                weights: vec![1u16, 1u16],
+                                resizable: true,
             },
             InsertPosition::Right => LayoutNode::Split {
                 direction: Direction::Horizontal,
                 children: vec![self.root.clone(), LayoutNode::leaf(insert)],
-                weights: vec![1.0, 1.0],
-                constraints: Vec::new(),
-                resizable: true,
+                weights: vec![1u16, 1u16],
+                                resizable: true,
             },
             InsertPosition::Top => LayoutNode::Split {
                 direction: Direction::Vertical,
                 children: vec![LayoutNode::leaf(insert), self.root.clone()],
-                weights: vec![1.0, 1.0],
-                constraints: Vec::new(),
-                resizable: true,
+                weights: vec![1u16, 1u16],
+                                resizable: true,
             },
             InsertPosition::Bottom => LayoutNode::Split {
                 direction: Direction::Vertical,
                 children: vec![self.root.clone(), LayoutNode::leaf(insert)],
-                weights: vec![1.0, 1.0],
-                constraints: Vec::new(),
-                resizable: true,
+                weights: vec![1u16, 1u16],
+                                resizable: true,
             },
             InsertPosition::TopLeft => {
                 // Extract all windows. D goes top-left, first remaining goes
@@ -898,15 +878,13 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
                             LayoutNode::Split {
                                 direction: Direction::Vertical,
                                 children: vec![LayoutNode::leaf(insert), LayoutNode::Void(void_id)],
-                                weights: vec![1.0, 1.0],
-                                constraints: Vec::new(),
-                                resizable: true,
+                                weights: vec![1u16, 1u16],
+                                                                resizable: true,
                             },
                             LayoutNode::leaf(first),
                         ],
-                        weights: vec![1.0, 1.0],
-                        constraints: Vec::new(),
-                        resizable: true,
+                        weights: vec![1u16, 1u16],
+                                                resizable: true,
                     };
                     return;
                 }
@@ -917,15 +895,13 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
                         LayoutNode::Split {
                             direction: Direction::Horizontal,
                             children: vec![LayoutNode::leaf(insert), LayoutNode::leaf(first)],
-                            weights: vec![1.0, 1.0],
-                            constraints: Vec::new(),
-                            resizable: true,
+                            weights: vec![1u16, 1u16],
+                                                        resizable: true,
                         },
                         bottom,
                     ],
-                    weights: vec![1.0, 1.0],
-                    constraints: Vec::new(),
-                    resizable: true,
+                    weights: vec![1u16, 1u16],
+                                        resizable: true,
                 }
             }
             InsertPosition::TopRight => {
@@ -944,14 +920,12 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
                             LayoutNode::Split {
                                 direction: Direction::Vertical,
                                 children: vec![LayoutNode::leaf(insert), LayoutNode::Void(void_id)],
-                                weights: vec![1.0, 1.0],
-                                constraints: Vec::new(),
-                                resizable: true,
+                                weights: vec![1u16, 1u16],
+                                                                resizable: true,
                             },
                         ],
-                        weights: vec![1.0, 1.0],
-                        constraints: Vec::new(),
-                        resizable: true,
+                        weights: vec![1u16, 1u16],
+                                                resizable: true,
                     };
                     return;
                 }
@@ -962,15 +936,13 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
                         LayoutNode::Split {
                             direction: Direction::Horizontal,
                             children: vec![LayoutNode::leaf(first), LayoutNode::leaf(insert)],
-                            weights: vec![1.0, 1.0],
-                            constraints: Vec::new(),
-                            resizable: true,
+                            weights: vec![1u16, 1u16],
+                                                        resizable: true,
                         },
                         bottom,
                     ],
-                    weights: vec![1.0, 1.0],
-                    constraints: Vec::new(),
-                    resizable: true,
+                    weights: vec![1u16, 1u16],
+                                        resizable: true,
                 }
             }
             InsertPosition::BottomLeft => {
@@ -988,15 +960,13 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
                             LayoutNode::Split {
                                 direction: Direction::Vertical,
                                 children: vec![LayoutNode::Void(void_id), LayoutNode::leaf(insert)],
-                                weights: vec![1.0, 1.0],
-                                constraints: Vec::new(),
-                                resizable: true,
+                                weights: vec![1u16, 1u16],
+                                                                resizable: true,
                             },
                             LayoutNode::leaf(first),
                         ],
-                        weights: vec![1.0, 1.0],
-                        constraints: Vec::new(),
-                        resizable: true,
+                        weights: vec![1u16, 1u16],
+                                                resizable: true,
                     };
                     return;
                 }
@@ -1008,14 +978,12 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
                         LayoutNode::Split {
                             direction: Direction::Horizontal,
                             children: vec![LayoutNode::leaf(insert), LayoutNode::leaf(first)],
-                            weights: vec![1.0, 1.0],
-                            constraints: Vec::new(),
-                            resizable: true,
+                            weights: vec![1u16, 1u16],
+                                                        resizable: true,
                         },
                     ],
-                    weights: vec![1.0, 1.0],
-                    constraints: Vec::new(),
-                    resizable: true,
+                    weights: vec![1u16, 1u16],
+                                        resizable: true,
                 }
             }
             InsertPosition::BottomRight => {
@@ -1034,14 +1002,12 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
                             LayoutNode::Split {
                                 direction: Direction::Vertical,
                                 children: vec![LayoutNode::Void(void_id), LayoutNode::leaf(insert)],
-                                weights: vec![1.0, 1.0],
-                                constraints: Vec::new(),
-                                resizable: true,
+                                weights: vec![1u16, 1u16],
+                                                                resizable: true,
                             },
                         ],
-                        weights: vec![1.0, 1.0],
-                        constraints: Vec::new(),
-                        resizable: true,
+                        weights: vec![1u16, 1u16],
+                                                resizable: true,
                     };
                     return;
                 }
@@ -1053,14 +1019,12 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
                         LayoutNode::Split {
                             direction: Direction::Horizontal,
                             children: vec![LayoutNode::leaf(first), LayoutNode::leaf(insert)],
-                            weights: vec![1.0, 1.0],
-                            constraints: Vec::new(),
-                            resizable: true,
+                            weights: vec![1u16, 1u16],
+                                                        resizable: true,
                         },
                     ],
-                    weights: vec![1.0, 1.0],
-                    constraints: Vec::new(),
-                    resizable: true,
+                    weights: vec![1u16, 1u16],
+                                        resizable: true,
                 }
             }
         };
@@ -1260,184 +1224,6 @@ impl<Id: Copy + Eq + Ord> LayoutPlan<Id> {
     }
 }
 
-fn split_rects(
-    direction: Direction,
-    area: Rect,
-    weights: &[f32],
-    constraints: &[Constraint],
-    child_count: usize,
-) -> Vec<Rect> {
-    if weights.len() == child_count && weights.iter().any(|value| *value > 0.0) {
-        return split_rects_weighted(direction, area, weights, child_count);
-    }
-    if constraints.len() == child_count {
-        return Layout::default()
-            .direction(direction)
-            .constraints(constraints.to_vec())
-            .split(area)
-            .to_vec();
-    }
-    split_rects_weighted(direction, area, weights, child_count)
-}
-
-fn split_rects_with_gaps(
-    direction: Direction,
-    area: Rect,
-    weights: &[f32],
-    constraints: &[Constraint],
-    child_count: usize,
-    resizable: bool,
-) -> (Vec<Rect>, Vec<Rect>) {
-    let gap = gap_size(direction, area, child_count, resizable);
-    if gap == 0 || child_count < 2 {
-        return (
-            split_rects(direction, area, weights, constraints, child_count),
-            Vec::new(),
-        );
-    }
-    let gap_total = gap.saturating_mul(child_count.saturating_sub(1) as u16);
-    let mut shrunk = area;
-    match direction {
-        Direction::Horizontal => {
-            shrunk.width = area.width.saturating_sub(gap_total);
-        }
-        Direction::Vertical => {
-            shrunk.height = area.height.saturating_sub(gap_total);
-        }
-    }
-    let raw = split_rects(direction, shrunk, weights, constraints, child_count);
-    let mut rects = Vec::with_capacity(raw.len());
-    for (idx, rect) in raw.into_iter().enumerate() {
-        let offset = gap.saturating_mul(idx as u16);
-        let shifted = match direction {
-            Direction::Horizontal => Rect {
-                x: rect.x.saturating_add(i32::from(offset)),
-                ..rect
-            },
-            Direction::Vertical => Rect {
-                y: rect.y.saturating_add(i32::from(offset)),
-                ..rect
-            },
-        };
-        rects.push(shifted);
-    }
-    let mut gaps = Vec::with_capacity(child_count.saturating_sub(1));
-    for rect in rects.iter().take(child_count.saturating_sub(1)) {
-        let rect = match direction {
-            Direction::Horizontal => Rect {
-                x: rect.x.saturating_add(i32::from(rect.width)),
-                y: area.y,
-                width: gap,
-                height: area.height,
-            },
-            Direction::Vertical => Rect {
-                x: area.x,
-                y: rect.y.saturating_add(i32::from(rect.height)),
-                width: area.width,
-                height: gap,
-            },
-        };
-        gaps.push(rect);
-    }
-    (rects, gaps)
-}
-
-fn split_rects_weighted(
-    direction: Direction,
-    area: Rect,
-    weights: &[f32],
-    child_count: usize,
-) -> Vec<Rect> {
-    let count = child_count.max(1);
-    let weights = if weights.len() == child_count {
-        weights.to_vec()
-    } else {
-        vec![1.0; child_count]
-    };
-    let total_weight: f32 = weights.iter().sum::<f32>().max(1.0);
-    let total = match direction {
-        Direction::Horizontal => area.width,
-        Direction::Vertical => area.height,
-    };
-    // If weights correspond exactly to pixels (common during resize), use them directly to avoid float drift.
-    let exact_match = (total_weight - total as f32).abs() < 0.01;
-
-    let mut sizes = Vec::with_capacity(count);
-    let mut used: u16 = 0;
-    for (idx, weight) in weights.iter().enumerate() {
-        let size = if idx + 1 == count {
-            total.saturating_sub(used)
-        } else if exact_match {
-            let s = weight.round() as u16;
-            used = used.saturating_add(s);
-            s
-        } else {
-            let portion = ((*weight / total_weight) * total as f32).floor() as u16;
-            used = used.saturating_add(portion);
-            portion
-        };
-        sizes.push(size);
-    }
-    build_rects_from_sizes(direction, area, &sizes)
-}
-
-fn split_sizes(
-    area: Rect,
-    direction: Direction,
-    weights: &[f32],
-    constraints: &[Constraint],
-    child_count: usize,
-    resizable: bool,
-) -> Vec<u16> {
-    let (rects, _) = split_rects_with_gaps(
-        direction,
-        area,
-        weights,
-        constraints,
-        child_count,
-        resizable,
-    );
-    rects
-        .iter()
-        .map(|rect| match direction {
-            Direction::Horizontal => rect.width,
-            Direction::Vertical => rect.height,
-        })
-        .collect()
-}
-
-fn build_rects_from_sizes(direction: Direction, area: Rect, sizes: &[u16]) -> Vec<Rect> {
-    let mut rects = Vec::with_capacity(sizes.len());
-    let mut cursor_x = area.x;
-    let mut cursor_y = area.y;
-    for size in sizes {
-        let rect = match direction {
-            Direction::Horizontal => {
-                let rect = Rect {
-                    x: cursor_x,
-                    y: area.y,
-                    width: *size,
-                    height: area.height,
-                };
-                cursor_x = cursor_x.saturating_add(i32::from(*size));
-                rect
-            }
-            Direction::Vertical => {
-                let rect = Rect {
-                    x: area.x,
-                    y: cursor_y,
-                    width: area.width,
-                    height: *size,
-                };
-                cursor_y = cursor_y.saturating_add(i32::from(*size));
-                rect
-            }
-        };
-        rects.push(rect);
-    }
-    rects
-}
-
 fn split_area_for_path<Id: Copy + Eq + Ord>(
     node: &LayoutNode<Id>,
     area: Rect,
@@ -1450,20 +1236,24 @@ fn split_area_for_path<Id: Copy + Eq + Ord>(
             direction,
             children,
             weights,
-            constraints,
             resizable,
             ..
         } = current
         else {
             return None;
         };
-        let (rects, _) = split_rects_with_gaps(
-            *direction,
+        let orientation = Orientation::from(*direction);
+        let total_dim = match direction {
+            Direction::Horizontal => area.width,
+            Direction::Vertical => area.height,
+        };
+        let gap = term_wm_layout_engine::gap_size(orientation, total_dim, children.len(), *resizable);
+        let (rects, _) = term_wm_layout_engine::split_rects_with_gaps(
             area,
-            weights,
-            constraints,
+            orientation,
+            weights.as_slice(),
             children.len(),
-            *resizable,
+            gap,
         );
         area = *rects.get(idx)?;
         current = children.get(idx)?;
@@ -1498,7 +1288,7 @@ mod tests {
             height: 3,
         };
         let sizes = [3u16, 7u16];
-        let rects = build_rects_from_sizes(Direction::Horizontal, area, &sizes);
+        let rects = term_wm_layout_engine::build_rects_from_sizes(area, Orientation::Horizontal, &sizes);
         assert_eq!(rects.len(), 2);
         assert_eq!(rects[0].width, 3);
         assert_eq!(rects[1].width, 7);
@@ -1515,7 +1305,7 @@ mod tests {
             height: 9,
         };
         let sizes = [2u16, 3u16, 4u16];
-        let rects = build_rects_from_sizes(Direction::Vertical, area, &sizes);
+        let rects = term_wm_layout_engine::build_rects_from_sizes(area, Orientation::Vertical, &sizes);
         assert_eq!(rects.len(), 3);
         assert_eq!(rects[0].height, 2);
         assert_eq!(rects[1].height, 3);
@@ -1524,17 +1314,17 @@ mod tests {
     }
 
     #[test]
-    fn split_rects_weighted_even() {
+    fn split_rects_nary_even() {
         let area = Rect {
             x: 0,
             y: 0,
             width: 11,
             height: 1,
         };
-        let weights = [1.0f32, 1.0f32];
-        let rects = split_rects_weighted(Direction::Horizontal, area, &weights, 2);
+        let weights = [1u16, 1u16];
+        let rects = term_wm_layout_engine::split_rects_weighted(area, Orientation::Horizontal, &weights, 2);
         assert_eq!(rects.len(), 2);
-        // floor division: first portion floor((1/2)*11)=5, remainder 6
+        // integer division: first portion (11*1/2)=5, remainder 6
         assert_eq!(rects[0].width, 5);
         assert_eq!(rects[1].width, 6);
     }
@@ -1582,8 +1372,8 @@ mod tests {
         let node = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(1), LayoutNode::Leaf(2)],
-            weights: vec![1.0, 1.0],
-            constraints: vec![Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)],
+            weights: vec![1u16, 1u16],
+
             resizable: true,
         };
         let (_, handles) = node.layout_with_handles(area);
@@ -1613,8 +1403,8 @@ mod tests {
         let mut layout = TilingLayout::new(LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(1), LayoutNode::Leaf(2)],
-            weights: vec![1.0, 1.0],
-            constraints: vec![Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)],
+            weights: vec![1u16, 1u16],
+
             resizable: true,
         });
 
@@ -1671,8 +1461,7 @@ mod tests {
         let root = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(1), LayoutNode::Leaf(2)],
-            weights: vec![1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         let mut layout = TilingLayout::new(root);
@@ -1686,8 +1475,7 @@ mod tests {
         let root = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(1), LayoutNode::Leaf(2)],
-            weights: vec![1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         let mut layout = TilingLayout::new(root);
@@ -1702,13 +1490,12 @@ mod tests {
         let mut node: LayoutNode<usize> = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2)],
-            weights: vec![3.0, 0.5],
-            constraints: vec![],
+            weights: vec![3u16, 1u16],
             resizable: true,
         };
         node.normalize_weights();
         if let LayoutNode::Split { weights, .. } = &node {
-            assert!(weights.iter().all(|w| (*w - 1.0).abs() < f32::EPSILON));
+            assert!(weights.iter().all(|w| *w == 1u16));
         } else {
             panic!("expected split");
         }
@@ -1738,7 +1525,7 @@ mod tests {
         {
             assert_eq!(children.len(), 3);
             assert_eq!(*direction, Direction::Vertical);
-            assert!(weights.iter().all(|w| (*w - 1.0).abs() < f32::EPSILON));
+            assert!(weights.iter().all(|w| *w == 1u16));
         } else {
             panic!("expected split");
         }
@@ -1749,8 +1536,7 @@ mod tests {
         let node: LayoutNode<usize> = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::leaf(1), LayoutNode::Void(99)],
-            weights: vec![1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         let area = Rect {
@@ -1773,8 +1559,7 @@ mod tests {
                 LayoutNode::leaf(2),
                 LayoutNode::leaf(3),
             ],
-            weights: vec![1.0, 1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16, 1u16],
             resizable: true,
         };
         assert!(node.swap_leaves(&1, &3));
@@ -1801,8 +1586,7 @@ mod tests {
         let mut node: LayoutNode<usize> = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::leaf(1), LayoutNode::Void(99)],
-            weights: vec![1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         node.cleanup_after_removal();
@@ -1815,8 +1599,7 @@ mod tests {
         let mut node: LayoutNode<usize> = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Void(1), LayoutNode::Void(2)],
-            weights: vec![1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         node.cleanup_after_removal();
@@ -1829,7 +1612,6 @@ mod tests {
             direction: Direction::Horizontal,
             children: vec![],
             weights: vec![],
-            constraints: vec![],
             resizable: true,
         };
         node.cleanup_after_removal();
@@ -1854,8 +1636,7 @@ mod tests {
         let node: LayoutNode<usize> = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2)],
-            weights: vec![1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         assert!(node.subtree_any(|id| id == 2));
@@ -1877,13 +1658,11 @@ mod tests {
                 LayoutNode::Split {
                     direction: Direction::Horizontal,
                     children: vec![LayoutNode::leaf(2), LayoutNode::leaf(3)],
-                    weights: vec![1.0, 1.0],
-                    constraints: vec![],
-                    resizable: true,
+                    weights: vec![1u16, 1u16],
+                            resizable: true,
                 },
             ],
-            weights: vec![1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         assert_eq!(node.collect_leaves(), vec![1, 2, 3]);
@@ -1924,8 +1703,7 @@ mod tests {
         let mut node: LayoutNode<usize> = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2)],
-            weights: vec![1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         assert!(node.insert_leaf(2, 3, InsertPosition::Right));
@@ -2006,8 +1784,7 @@ mod tests {
         let root = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2)],
-            weights: vec![1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         let layout = TilingLayout::new(root);
@@ -2026,8 +1803,7 @@ mod tests {
         let root = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::leaf(1), LayoutNode::Void(42)],
-            weights: vec![1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         let mut layout = TilingLayout::new(root);
@@ -2041,8 +1817,7 @@ mod tests {
         let root = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2)],
-            weights: vec![1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         let mut layout = TilingLayout::new(root);
@@ -2056,8 +1831,7 @@ mod tests {
         let root = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2)],
-            weights: vec![1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         let layout = TilingLayout::new(root);
@@ -2076,8 +1850,7 @@ mod tests {
         let root = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2)],
-            weights: vec![1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         let layout = TilingLayout::new(root);
@@ -2096,8 +1869,7 @@ mod tests {
         let root = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::leaf(1), LayoutNode::Void(42)],
-            weights: vec![1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         let layout = TilingLayout::new(root);
