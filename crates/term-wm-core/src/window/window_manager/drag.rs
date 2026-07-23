@@ -328,6 +328,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.snap_preview = None;
     }
 
+    #[allow(clippy::collapsible_if)]
     pub(super) fn apply_snap(&mut self, key: WindowKey) {
         use crate::layout::LayoutNode;
         if let Some((_target, position, _preview)) = self.drag_snap.take() {
@@ -352,10 +353,29 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 return;
             }
 
-            // Float all tiled windows so position-based layout handles them
-            self.execute_float_all(key);
+            // Remove key from existing tree before insertion (prevents duplicates)
+            if self.layout_contains(key) {
+                if let Some(layout) = &mut self.managed_layout {
+                    layout.root_mut().remove_leaf(key);
+                    layout.root_mut().cleanup_after_removal();
+                    layout.root_mut().clear_leaf(key);
+                    // If tree is now empty (single node was removed), clear it
+                    if layout.root().collect_leaves().is_empty() {
+                        self.managed_layout = None;
+                    }
+                }
+            }
 
-            self.apply_position_based_layout(key, position, self.managed_area);
+            // Branch based on layout state
+            self.snap_projection_cache = None;
+            if self.managed_layout.is_some() {
+                self.clear_floating_rect(key);
+                if let Some(ref mut layout) = self.managed_layout {
+                    layout.split_root(key, position);
+                }
+            } else {
+                self.apply_position_based_layout(key, position, self.managed_area);
+            }
         }
     }
 
@@ -370,32 +390,32 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// - No active tiling layout AND all existing windows are floating (or workspace empty)
     pub fn try_spawn_floating_default(&mut self, key: WindowKey) -> bool {
         if self.managed_layout.is_some() {
-            return false; // Active tiling layout, tile normally
+            return false;
         }
-        if !self.mapped_windows().is_empty() {
-            let all_floating = self
-                .mapped_windows()
-                .iter()
-                .all(|k| self.is_window_floating(*k));
-            if !all_floating {
-                return false; // Mixed state, let tile_window handle it
-            }
+        let existing: Vec<_> = self
+            .mapped_windows()
+            .into_iter()
+            .filter(|k| *k != key)
+            .collect();
+        if existing.is_empty() || !existing.iter().all(|k| self.is_window_floating(*k)) {
+            return false;
         }
         let area = self.managed_area;
-        let default_w = 80u16.min(area.width);
-        let default_h = 24u16.min(area.height);
-        let x = area.x + (area.width.saturating_sub(default_w) / 2) as i32;
-        let y = area.y + (area.height.saturating_sub(default_h) / 2) as i32;
+        let w = (80u16.min(area.width)).max(10);
+        let h = (24u16.min(area.height)).max(3);
+        let x = area.x + (area.width.saturating_sub(w) / 2) as i32;
+        let y = area.y + (area.height.saturating_sub(h) / 2) as i32;
         self.set_floating_rect(
             key,
             Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
                 x,
                 y,
-                width: default_w,
-                height: default_h,
+                width: w,
+                height: h,
             })),
         );
         self.focus_window_key(key);
+        self.bifurcate_draw_order();
         true
     }
 
@@ -476,8 +496,19 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
         let regions: Vec<_> = tiled_keys
             .iter()
-            .map(|key| {
-                let full = self.regions.get(*key).unwrap_or_else(|| self.region(*key));
+            .enumerate()
+            .map(|(idx, key)| {
+                let full = self.regions.get(*key).unwrap_or_else(|| {
+                    let area = self.managed_area;
+                    let w = (80u16.min(area.width)).max(10);
+                    let h = (24u16.min(area.height)).max(3);
+                    Rect {
+                        x: area.x + (area.width.saturating_sub(w) / 2) as i32 + (idx as i32) * 2,
+                        y: area.y + (area.height.saturating_sub(h) / 2) as i32 + (idx as i32) * 2,
+                        width: w,
+                        height: h,
+                    }
+                });
                 (*key, full)
             })
             .collect();
@@ -511,23 +542,27 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         snap_position: InsertPosition,
         area: Rect,
     ) {
-        let mut all_windows: Vec<_> = self
-            .mapped_windows()
-            .into_iter()
+        let mapped = self.mapped_windows();
+        let mut all_windows: Vec<_> = mapped
+            .iter()
+            .copied()
             .filter(|key| self.is_window_floating(*key))
-            .map(|key| {
-                let full = self.regions.get(key).unwrap_or_else(|| self.region(key));
+            .enumerate()
+            .map(|(idx, key)| {
+                let full = self.regions.get(key).unwrap_or_else(|| {
+                    let area = self.managed_area;
+                    let w = (80u16.min(area.width)).max(10);
+                    let h = (24u16.min(area.height)).max(3);
+                    Rect {
+                        x: area.x + (area.width.saturating_sub(w) / 2) as i32 + (idx as i32) * 2,
+                        y: area.y + (area.height.saturating_sub(h) / 2) as i32 + (idx as i32) * 2,
+                        width: w,
+                        height: h,
+                    }
+                });
                 (key, full)
             })
             .collect();
-
-        // Also include windows from regions that might not be mapped
-        for key in self.regions.ids() {
-            if !all_windows.iter().any(|(k, _)| *k == key) {
-                let full = self.regions.get(key).unwrap_or_else(|| self.region(key));
-                all_windows.push((key, full));
-            }
-        }
 
         // Ensure anchor is included even if not in regions (e.g., floating-only window)
         if !all_windows.iter().any(|(k, _)| *k == anchor_key) {
