@@ -170,6 +170,7 @@ impl WmTopPanelComponent {
                     st.bg = Some(color_to_ratatui(theme.bottom_panel_bg));
                     st.fg = Some(color_to_ratatui(theme.bottom_panel_fg));
                     cell.set_style(st);
+                    cell.set_symbol(" ");
                 }
             }
         }
