@@ -647,11 +647,6 @@ pub fn render_panels<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Term
         wm.window_titles().into_iter().collect();
     let panel_active = wm.panel_active();
     let focus_current = wm.focused_window();
-    let mouse_capture_enabled = wm.mouse_capture_enabled();
-    let clipboard_enabled = wm.clipboard_enabled();
-    let window_selection_enabled = wm.window_selection_enabled();
-    let selection_active = wm.selection_active();
-    let selection_dragging = wm.selection_dragging();
     let wm_overlay_visible = wm.command_menu_visible();
 
     // Top panel
@@ -664,11 +659,6 @@ pub fn render_panels<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Term
                     focus_current: Some(focus_current),
                     display_order: display,
                     status_line,
-                    mouse_capture_enabled,
-                    clipboard_enabled,
-                    window_selection_enabled,
-                    selection_active,
-                    selection_dragging,
                     menu_open: wm_overlay_visible,
                 },
             )));
@@ -730,11 +720,6 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
         let titles_map: std::collections::BTreeMap<WindowKey, String> =
             wm.window_titles().into_iter().collect();
         let focus_current = wm.focused_window();
-        let mc_enabled = wm.mouse_capture_enabled();
-        let cb_enabled = wm.clipboard_enabled();
-        let ws_enabled = wm.window_selection_enabled();
-        let sel_active = wm.selection_active();
-        let sel_dragging = wm.selection_dragging();
 
         let top_area = LayoutRect {
             x: 0,
@@ -751,11 +736,6 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
                     focus_current: Some(focus_current),
                     display_order: display,
                     status_line: None,
-                    mouse_capture_enabled: mc_enabled,
-                    clipboard_enabled: cb_enabled,
-                    window_selection_enabled: ws_enabled,
-                    selection_active: sel_active,
-                    selection_dragging: sel_dragging,
                     menu_open: true,
                 },
             )));
