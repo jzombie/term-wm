@@ -164,6 +164,16 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             layout.update_monocle_state(terminal_width);
         }
 
+        // Auto-width detection: when adequate, re-enable auto and clear.
+        // When auto is not disabled, drive monocle_mode_active from width.
+        if terminal_width >= self.monocle_width_threshold {
+            self.monocle_auto_disabled = false;
+        }
+        if !self.monocle_auto_disabled {
+            self.monocle_mode_active =
+                terminal_width > 0 && terminal_width < self.monocle_width_threshold;
+        }
+
         let monocle = self.is_monocle();
         for (_, window) in self.windows.iter_mut() {
             if monocle {
@@ -181,7 +191,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         if self.monocle_mode_active {
             return true;
         }
-        if self.last_terminal_width > 0
+        if !self.monocle_auto_disabled
+            && self.last_terminal_width > 0
             && self.last_terminal_width < self.monocle_width_threshold
         {
             return true;
@@ -190,8 +201,13 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     /// Toggle user-requested monocle mode on/off.
+    /// When turning off, suppress auto-width re-activation so a narrow
+    /// terminal doesn't immediately re-enter monocle.
     pub fn toggle_monocle(&mut self) {
         self.monocle_mode_active = !self.monocle_mode_active;
+        if !self.monocle_mode_active {
+            self.monocle_auto_disabled = true;
+        }
     }
 
     /// Whether the given window should render borders.

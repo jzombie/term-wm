@@ -257,6 +257,9 @@ pub struct WindowManager<
     pub(crate) monocle_mode_active: bool,
     monocle_width_threshold: u16,
     last_terminal_width: u16,
+    /// When true, auto-width monocle activation is suppressed because
+    /// the user explicitly toggled it off.  Reset when width is adequate.
+    monocle_auto_disabled: bool,
     pub(crate) hitbox_registry: HitboxRegistry,
     app_ctx: Arc<AppContext>,
     #[allow(dead_code)]
@@ -685,6 +688,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             monocle_mode_active: false,
             monocle_width_threshold: crate::constants::MONOCLE_WIDTH_THRESHOLD,
             last_terminal_width: 0,
+            monocle_auto_disabled: false,
             hitbox_registry: HitboxRegistry::new(),
             app_ctx,
             supported_menu_actions,
