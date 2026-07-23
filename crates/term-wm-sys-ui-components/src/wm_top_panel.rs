@@ -249,7 +249,6 @@ impl WmTopPanelComponent {
                 x = x.saturating_add(i32::from(chunk_width));
             }
         }
-
     }
 
     pub fn hit_test_window(&self, column: u16, row: u16) -> Option<WindowKey> {
@@ -517,15 +516,7 @@ mod tests {
         };
         let _ = p.split_area(true, area);
         let mut backend = make_backend(80, 24);
-        p.render_inner(
-            &mut backend,
-            true,
-            key,
-            &[key],
-            None,
-            false,
-            &NOIR,
-        );
+        p.render_inner(&mut backend, true, key, &[key], None, false, &NOIR);
         assert!(!p.list.window_hits.is_empty());
         let hit_rect = p.list.window_hits[0].rect;
         let hit_key = p.hit_test_window(hit_rect.x as u16 + 1, hit_rect.y as u16);
@@ -623,14 +614,7 @@ mod tests {
         let _ = p.split_area(true, area);
         let theme = NOIR;
         let mut backend = make_backend(80, 24);
-        p.render_inner(
-&mut backend,
-true,
-key,
-&[key],
-None,
-true,
-&theme);
+        p.render_inner(&mut backend, true, key, &[key], None, true, &theme);
         // Menu rect should be set after render
         assert!(p.menu_icon_rect().is_some());
     }
@@ -656,14 +640,7 @@ true,
         let _ = p.split_area(true, area);
         let theme = NOIR;
         let mut backend = make_backend(20, 1);
-        p.render_inner(
-&mut backend,
-true,
-key,
-&[key],
-None,
-false,
-&theme);
+        p.render_inner(&mut backend, true, key, &[key], None, false, &theme);
     }
 
     #[test]
@@ -859,14 +836,7 @@ false,
         let theme = NOIR;
         let mut backend = make_backend(80, 24);
         let key = WindowKey::default();
-        p.render_inner(
-&mut backend,
-true,
-key,
-&[],
-None,
-false,
-&theme);
+        p.render_inner(&mut backend, true, key, &[], None, false, &theme);
     }
 
     #[test]
@@ -886,14 +856,7 @@ false,
         let _ = p.split_area(true, area);
         let theme = NOIR;
         let mut backend = make_backend(80, 24);
-        p.render_inner(
-&mut backend,
-true,
-key,
-&[],
-None,
-false,
-&theme);
+        p.render_inner(&mut backend, true, key, &[], None, false, &theme);
     }
 
     #[test]
@@ -911,4 +874,3 @@ false,
         assert_eq!(managed.height, 23);
     }
 }
-

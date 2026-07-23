@@ -218,7 +218,10 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             detect_corner_snap(mouse_x, mouse_y, managed_layout_rect, CORNER_SNAP_THRESHOLD)
         {
             // Compute position-based layout cache for this snap position
-            if self.snap_preview_cache.needs_recalc(mouse_x, mouse_y, dragging_key) {
+            if self
+                .snap_preview_cache
+                .needs_recalc(mouse_x, mouse_y, dragging_key)
+            {
                 let floating: Vec<_> = self
                     .mapped_windows()
                     .into_iter()
@@ -229,8 +232,13 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                     let positions =
                         simulate_position_based_layout(floating, dragging_key, corner_pos, area);
                     let dragged_rect = self.region(dragging_key);
-                    self.snap_preview_cache
-                        .update(mouse_x, mouse_y, dragged_rect, dragging_key, positions);
+                    self.snap_preview_cache.update(
+                        mouse_x,
+                        mouse_y,
+                        dragged_rect,
+                        dragging_key,
+                        positions,
+                    );
                 } else {
                     self.snap_preview_cache.clear();
                 }
@@ -277,7 +285,10 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             detect_edge_snap(mouse_x, mouse_y, managed_layout_rect, EDGE_SNAP_THRESHOLD)
         {
             // Compute position-based layout cache for this snap position
-            if self.snap_preview_cache.needs_recalc(mouse_x, mouse_y, dragging_key) {
+            if self
+                .snap_preview_cache
+                .needs_recalc(mouse_x, mouse_y, dragging_key)
+            {
                 let floating: Vec<_> = self
                     .mapped_windows()
                     .into_iter()
@@ -288,8 +299,13 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                     let positions =
                         simulate_position_based_layout(floating, dragging_key, pos, area);
                     let dragged_rect = self.region(dragging_key);
-                    self.snap_preview_cache
-                        .update(mouse_x, mouse_y, dragged_rect, dragging_key, positions);
+                    self.snap_preview_cache.update(
+                        mouse_x,
+                        mouse_y,
+                        dragged_rect,
+                        dragging_key,
+                        positions,
+                    );
                 } else {
                     self.snap_preview_cache.clear();
                 }
@@ -303,11 +319,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 .filter(|_| self.snap_preview_cache.positions.len() > 1)
                 .map(|(_, r)| *r)
                 .or_else(|| {
-                    self.get_projected_preview(
-                        dragging_key,
-                        SnapPreviewState::Edge(pos),
-                        area,
-                    )
+                    self.get_projected_preview(dragging_key, SnapPreviewState::Edge(pos), area)
                 })
                 .unwrap_or_else(|| {
                     let ep = term_wm_layout_engine::edge_preview_rect(managed_layout_rect, pos);
@@ -398,12 +410,14 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         let rect = self.default_cascading_rect(existing.len());
         self.set_floating_rect(
             key,
-            Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
-                x: rect.x,
-                y: rect.y,
-                width: rect.width,
-                height: rect.height,
-            })),
+            Some(crate::window::FloatRectSpec::Absolute(
+                crate::window::FloatRect {
+                    x: rect.x,
+                    y: rect.y,
+                    width: rect.width,
+                    height: rect.height,
+                },
+            )),
         );
         self.focus_window_key(key);
         self.bifurcate_draw_order();
@@ -470,12 +484,14 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         for (key, rect) in regions {
             self.set_floating_rect(
                 key,
-                Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
-                    x: rect.x,
-                    y: rect.y,
-                    width: rect.width.max(1),
-                    height: rect.height.max(1),
-                })),
+                Some(crate::window::FloatRectSpec::Absolute(
+                    crate::window::FloatRect {
+                        x: rect.x,
+                        y: rect.y,
+                        width: rect.width.max(1),
+                        height: rect.height.max(1),
+                    },
+                )),
             );
         }
     }

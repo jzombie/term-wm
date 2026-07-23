@@ -206,7 +206,7 @@ mod multi_window_tiling {
                 LayoutNode::Split {
                     direction: Direction::Vertical,
                     children: vec![LayoutNode::leaf(2), LayoutNode::leaf(3)],
-                        weights: vec![1u16, 1u16],
+                    weights: vec![1u16, 1u16],
                     resizable: false,
                 },
             ],
@@ -481,7 +481,7 @@ mod spatial_isolation {
                 LayoutNode::Split {
                     direction: Direction::Vertical,
                     children: vec![LayoutNode::Leaf(k1), LayoutNode::Void(0)],
-                        weights: vec![1u16, 1u16],
+                    weights: vec![1u16, 1u16],
                     resizable: false,
                 },
             ],
