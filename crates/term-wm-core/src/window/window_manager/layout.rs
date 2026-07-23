@@ -155,22 +155,23 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.managed_layout = None;
     }
 
-    /// Update monocle mode state based on terminal width.
-    /// Called during resize events to auto-activate/deactivate monocle mode.
+    /// Update monocle mode state based on terminal width and update
+    /// window borders for the current tiling/floating/monocle state.
+    /// Called every render frame.
     pub fn update_monocle_mode(&mut self, terminal_width: u16) {
-        let prev = self.is_monocle();
         if let Some(ref mut layout) = self.managed_layout {
             layout.update_monocle_state(terminal_width);
         }
-        let curr = self.is_monocle();
-        if prev == curr && !curr {
-            return;
-        }
-        // Turn borders off in monocle, on otherwise.
-        // Runs on every monocle frame so newly created windows also get
-        // borders disabled without waiting for a mode transition.
+
+        let monocle = self.is_monocle();
         for (_, window) in self.windows.iter_mut() {
-            window.borders_enabled = !curr;
+            if monocle {
+                window.borders_enabled = false;
+            } else if self.managed_layout.is_some() {
+                window.borders_enabled = window.floating_rect.is_some();
+            } else {
+                window.borders_enabled = true;
+            }
         }
     }
 
