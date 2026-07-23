@@ -141,10 +141,19 @@ fn register_window_chrome_hitboxes(registry: &mut HitboxRegistry, params: &Chrom
         );
 
         // Window management buttons from centralized list
+        let btn_right = if *borders_enabled {
+            outer_right.saturating_sub(RIGHT_BORDER_WIDTH)
+        } else {
+            outer_right
+        };
         for (i, btn) in wm_buttons.iter().enumerate() {
-            let bx = outer_right
-                .saturating_sub(HEADER_BUTTON_GAP)
-                .saturating_sub(HEADER_BUTTON_GAP * i as u16);
+            let bx = if *borders_enabled {
+                btn_right
+                    .saturating_sub(HEADER_BUTTON_GAP)
+                    .saturating_sub(HEADER_BUTTON_GAP * i as u16)
+            } else {
+                btn_right.saturating_sub(HEADER_BUTTON_GAP * i as u16)
+            };
             let target = match btn.action {
                 TermWmAction::CloseWindow => ChromeTarget::CloseButton(*key),
                 TermWmAction::MaximizeWindow => ChromeTarget::MaximizeButton(*key),
@@ -962,19 +971,26 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
     };
 
     if header_enabled {
-        for x in outer_left.saturating_add(LEFT_BORDER_WIDTH)..outer_right {
+        let header_left = if borders_enabled {
+            outer_left.saturating_add(LEFT_BORDER_WIDTH)
+        } else {
+            outer_left
+        };
+        let header_right = if borders_enabled {
+            outer_right.saturating_sub(RIGHT_BORDER_WIDTH)
+        } else {
+            outer_right
+        };
+        for x in header_left..=header_right {
             if let Some(cell) = buffer.cell_mut((x, header_y)) {
                 cell.set_symbol(" ");
                 cell.set_style(header_style);
             }
         }
         let title_len = title.len() as u16;
-        let header_width = outer_right
-            .saturating_sub(outer_left)
-            .saturating_sub(RIGHT_BORDER_WIDTH);
+        let header_width = header_right.saturating_sub(header_left).saturating_add(1);
         if title_len <= header_width {
-            let start_x =
-                outer_left.saturating_add(LEFT_BORDER_WIDTH) + (header_width - title_len) / 2;
+            let start_x = header_left + (header_width - title_len) / 2;
             for (idx, ch) in title.chars().enumerate() {
                 let x = start_x + idx as u16;
                 if let Some(cell) = buffer.cell_mut((x, header_y)) {
@@ -987,9 +1003,13 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
             let contrast_fg = theme.menu_selected_fg.to_ratatui();
             // Buttons are laid out right-to-left from outer_right
             for (i, btn) in wm_buttons.iter().enumerate() {
-                let bx = outer_right
-                    .saturating_sub(HEADER_BUTTON_GAP)
-                    .saturating_sub(HEADER_BUTTON_GAP * i as u16);
+                let bx = if borders_enabled {
+                    header_right
+                        .saturating_sub(HEADER_BUTTON_GAP)
+                        .saturating_sub(HEADER_BUTTON_GAP * i as u16)
+                } else {
+                    header_right.saturating_sub(HEADER_BUTTON_GAP * i as u16)
+                };
                 if let Some(cell) = buffer.cell_mut((bx, header_y)) {
                     cell.set_symbol(btn.symbol);
                     let stoplight_fg = match btn.action {
