@@ -155,31 +155,41 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.managed_layout = None;
     }
 
-    /// Update monocle mode state based on terminal width.
-    /// Called during resize events to auto-activate/deactivate monocle mode.
+    /// Update borders and store terminal width for monocle auto-detection.
+    /// Called every render frame.
     pub fn update_monocle_mode(&mut self, terminal_width: u16) {
-        let prev = self.is_monocle();
+        self.last_terminal_width = terminal_width;
         if let Some(ref mut layout) = self.managed_layout {
             layout.update_monocle_state(terminal_width);
         }
-        let curr = self.is_monocle();
-        if prev == curr && !curr {
-            return;
-        }
-        // Turn borders off in monocle, on otherwise.
-        // Runs on every monocle frame so newly created windows also get
-        // borders disabled without waiting for a mode transition.
+
+        let monocle = self.is_monocle();
         for (_, window) in self.windows.iter_mut() {
-            window.borders_enabled = !curr;
+            if monocle {
+                window.borders_enabled = false;
+            } else if self.managed_layout.is_some() {
+                window.borders_enabled = window.floating_rect.is_some();
+            } else {
+                window.borders_enabled = true;
+            }
         }
     }
 
     /// Check if monocle mode is active.
     pub fn is_monocle(&self) -> bool {
-        self.managed_layout
-            .as_ref()
-            .map(|l| l.is_monocle())
-            .unwrap_or(false)
+        match self.monocle_mode {
+            super::MonocleMode::On => true,
+            super::MonocleMode::Off => false,
+            super::MonocleMode::Auto => {
+                self.last_terminal_width > 0
+                    && self.last_terminal_width < self.monocle_width_threshold
+            }
+        }
+    }
+
+    /// Cycle monocle mode: Auto → On → Off → Auto.
+    pub fn toggle_monocle(&mut self) {
+        self.monocle_mode = self.monocle_mode.cycle();
     }
 
     /// Whether the given window should render borders.

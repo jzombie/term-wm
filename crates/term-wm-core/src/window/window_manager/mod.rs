@@ -117,6 +117,64 @@ pub(crate) enum SnapPreviewState {
     VoidInsert(usize),
 }
 
+/// Cached snap preview state to avoid recalculating the full
+/// position-based layout on every drag frame.
+/// Invalidates when the cursor exits the cached rect or crosses
+/// a quadrant boundary.
+struct SnapPreviewCache {
+    positions: Vec<(WindowKey, Rect)>,
+    cached_rect: Option<Rect>,
+    cached_quadrant: Option<(bool, bool)>,
+    dragged_key: Option<WindowKey>,
+}
+
+impl SnapPreviewCache {
+    fn needs_recalc(&self, mouse_x: u16, mouse_y: u16, dragged: WindowKey) -> bool {
+        let Some(rect) = self.cached_rect else {
+            return true;
+        };
+        if self.dragged_key != Some(dragged) {
+            return true;
+        }
+        let mx = mouse_x as i32;
+        let my = mouse_y as i32;
+        let right = rect.x.saturating_add(i32::from(rect.width));
+        let bottom = rect.y.saturating_add(i32::from(rect.height));
+        let out_of_bounds = mx < rect.x || mx >= right || my < rect.y || my >= bottom;
+        let cur_q = (
+            mx >= rect.x.saturating_add(i32::from(rect.width) / 2),
+            my >= rect.y.saturating_add(i32::from(rect.height) / 2),
+        );
+        out_of_bounds || self.cached_quadrant != Some(cur_q)
+    }
+
+    fn update(
+        &mut self,
+        mouse_x: u16,
+        mouse_y: u16,
+        rect: Rect,
+        dragged: WindowKey,
+        pos: Vec<(WindowKey, Rect)>,
+    ) {
+        let mx = mouse_x as i32;
+        let my = mouse_y as i32;
+        self.cached_quadrant = Some((
+            mx >= rect.x.saturating_add(i32::from(rect.width) / 2),
+            my >= rect.y.saturating_add(i32::from(rect.height) / 2),
+        ));
+        self.cached_rect = Some(rect);
+        self.dragged_key = Some(dragged);
+        self.positions = pos;
+    }
+
+    fn clear(&mut self) {
+        self.cached_rect = None;
+        self.cached_quadrant = None;
+        self.dragged_key = None;
+        self.positions.clear();
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ScrollState {
     pub offset: usize,
@@ -176,6 +234,32 @@ pub enum DrawTask {
     App(WindowDrawContext),
 }
 
+/// Monocle display mode. Cycling: Auto → On → Off → Auto.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MonocleMode {
+    Auto,
+    On,
+    Off,
+}
+
+impl MonocleMode {
+    pub fn cycle(self) -> Self {
+        match self {
+            MonocleMode::Auto => MonocleMode::On,
+            MonocleMode::On => MonocleMode::Off,
+            MonocleMode::Off => MonocleMode::Auto,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            MonocleMode::Auto => "Auto",
+            MonocleMode::On => "On",
+            MonocleMode::Off => "Off",
+        }
+    }
+}
+
 pub struct WindowManager<
     C: Component<TermWmAction>,
     L: WmComponent = crate::components::NoopWmComponent,
@@ -196,6 +280,9 @@ pub struct WindowManager<
     pub(crate) managed_layout: Option<TilingLayout<WindowKey>>,
     closed_windows: Vec<WindowKey>,
     pub(crate) managed_area: Rect,
+    pub(crate) monocle_mode: MonocleMode,
+    monocle_width_threshold: u16,
+    last_terminal_width: u16,
     pub(crate) hitbox_registry: HitboxRegistry,
     app_ctx: Arc<AppContext>,
     #[allow(dead_code)]
@@ -243,6 +330,7 @@ pub struct WindowManager<
     /// Cache for BSP dry-run projection to avoid deep-cloning the layout
     /// tree on every drag frame. Keyed by (target, position, area).
     snap_projection_cache: Option<(SnapPreviewState, Rect, Option<Rect>)>,
+    snap_preview_cache: SnapPreviewCache,
     drag_last_event: Option<Instant>,
     next_window_seq: usize,
     next_title_seq: usize,
@@ -440,6 +528,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     fn clear_floating_rect(&mut self, key: WindowKey) {
         if let Some(w) = self.windows.get_mut(key) {
             w.floating_rect = None;
+            w.is_maximized = false;
         }
     }
 
@@ -459,6 +548,32 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     pub fn is_window_floating(&self, key: WindowKey) -> bool {
         self.window(key).is_some_and(|window| window.is_floating())
+    }
+
+    /// Compute a centered, cascading fallback rectangle for unrendered floating
+    /// windows using core workspace constants.
+    pub fn default_cascading_rect(&self, index: usize) -> Rect {
+        let area = self.managed_area;
+        let w = crate::constants::DEFAULT_FLOAT_WIDTH
+            .min(area.width)
+            .max(crate::constants::MIN_FLOAT_WIDTH);
+        let h = crate::constants::DEFAULT_FLOAT_HEIGHT
+            .min(area.height)
+            .max(crate::constants::MIN_FLOAT_HEIGHT);
+        let offset = (index as i32) * crate::constants::CASCADE_OFFSET_STEP;
+        Rect {
+            x: area.x + (area.width.saturating_sub(w) / 2) as i32 + offset,
+            y: area.y + (area.height.saturating_sub(h) / 2) as i32 + offset,
+            width: w,
+            height: h,
+        }
+    }
+
+    /// Return the cached region for a window, or compute a safe cascading fallback.
+    pub fn region_or_fallback(&self, key: WindowKey, index: usize) -> Rect {
+        self.regions
+            .get(key)
+            .unwrap_or_else(|| self.default_cascading_rect(index))
     }
 
     pub fn direct_mode(&self, key: WindowKey) -> bool {
@@ -570,6 +685,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 TermWmAction::MinimizeWindow,
                 TermWmAction::CloseWindow,
                 TermWmAction::ToggleDirectMode,
+                TermWmAction::ToggleMonocle,
             ]
         });
         let mouse_capture_enabled = config.mouse_capture_enabled;
@@ -582,8 +698,10 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             ),
             macro_focus: layer_manager::MacroFocus::FocusRing(slotmap::DefaultKey::default()),
             layer_manager,
-            windows: SlotMap::with_capacity(32),
-            components: SlotMap::<ComponentKey, C>::with_capacity_and_key(32),
+            windows: SlotMap::with_capacity(crate::constants::INITIAL_WINDOW_CAPACITY),
+            components: SlotMap::<ComponentKey, C>::with_capacity_and_key(
+                crate::constants::INITIAL_COMPONENT_CAPACITY,
+            ),
             regions: RegionMap::default(),
             scroll: BTreeMap::new(),
             handles: Vec::new(),
@@ -591,6 +709,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             managed_layout: None,
             closed_windows: Vec::new(),
             managed_area: Rect::default(),
+            monocle_mode: MonocleMode::Auto,
+            monocle_width_threshold: crate::constants::MONOCLE_WIDTH_THRESHOLD,
+            last_terminal_width: 0,
             hitbox_registry: HitboxRegistry::new(),
             app_ctx,
             supported_menu_actions,
@@ -623,6 +744,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             drag_snap: None,
             snap_preview: None,
             snap_projection_cache: None,
+            snap_preview_cache: SnapPreviewCache {
+                positions: Vec::new(),
+                cached_rect: None,
+                cached_quadrant: None,
+                dragged_key: None,
+            },
             drag_last_event: None,
             next_window_seq: 0,
             next_title_seq: 0,
@@ -1245,6 +1372,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                                 let drag_dist = col.abs_diff(*anchor_x) + row.abs_diff(*anchor_y);
                                 if drag_dist > 0 {
                                     self.detach_from_tiling_layout(*key);
+                                    self.execute_float_all(*key);
                                 }
                             }
                             // else: snap was already applied by Moved handler — the
@@ -2353,6 +2481,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 action: crate::actions::TermWmAction::ExitUi,
                 disabled: false,
             },
+            MenuItem {
+                label: format!("Monocle Mode: {}", self.monocle_mode.label()).into(),
+                icon: Some("▢"),
+                action: crate::actions::TermWmAction::ToggleMonocle,
+                disabled: false,
+            },
         ];
 
         let has_focused_window = self.window_count() > 0;
@@ -2441,13 +2575,11 @@ fn map_layout_node(node: &LayoutNode<WindowKey>) -> LayoutNode<WindowKey> {
             direction,
             children,
             weights,
-            constraints,
             resizable,
         } => LayoutNode::Split {
             direction: *direction,
             children: children.iter().map(map_layout_node).collect(),
             weights: weights.clone(),
-            constraints: constraints.clone(),
             resizable: *resizable,
         },
         LayoutNode::Void(id) => LayoutNode::Void(*id),
@@ -2482,7 +2614,7 @@ mod tests {
     use crate::components::NoopOverlay;
     use crate::events::{KeyModifiers, MouseButton};
     use crate::hitbox_registry::HitboxId;
-    use crate::layout::{Constraint, Direction};
+    use crate::layout::Direction;
     use crate::window::test_component::{ActionRecorder, SelComponent, TestComponent};
     use std::collections::VecDeque;
     use term_wm_layout_engine::LayoutRect;
@@ -3355,8 +3487,7 @@ mod tests {
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(keys[1]), LayoutNode::Leaf(keys[2])],
-            weights: vec![1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         wm.managed_layout = Some(TilingLayout::new(split));
@@ -4960,8 +5091,7 @@ mod tests {
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
-            weights: vec![1.0, 1.0],
-            constraints: vec![Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         wm.set_managed_layout(TilingLayout::new(split));
@@ -5157,7 +5287,6 @@ mod tests {
 
     #[test]
     fn register_layout_handle_hitboxes_registers_entries() {
-        use crate::layout::Constraint;
         let mut wm = WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
@@ -5170,8 +5299,7 @@ mod tests {
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
-            weights: vec![1.0, 1.0],
-            constraints: vec![Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         wm.set_managed_layout(TilingLayout::new(split));

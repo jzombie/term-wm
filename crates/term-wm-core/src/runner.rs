@@ -405,6 +405,9 @@ where
                                 let id = app.wm().focused_window();
                                 app.wm().toggle_direct_mode(id);
                             }
+                            TermWmAction::ToggleMonocle => {
+                                app.wm().toggle_monocle();
+                            }
                             TermWmAction::ToggleMouseCapture => app.wm().toggle_mouse_capture(),
                             TermWmAction::ToggleClipboardMode => {
                                 app.wm().toggle_clipboard_enabled()

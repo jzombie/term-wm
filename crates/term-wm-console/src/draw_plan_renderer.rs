@@ -641,21 +641,12 @@ pub fn render_panels<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Term
     backend: &mut dyn term_wm_render::RenderBackend,
     wm: &mut WindowManager<C, L, O>,
 ) {
-    let status_line = if wm.command_menu_visible() {
-        Some("Tab/Shift-Tab: cycle windows".to_string())
-    } else {
-        None
-    };
+    let status_line: Option<String> = None;
     let display = wm.build_display_order();
     let titles_map: std::collections::BTreeMap<WindowKey, String> =
         wm.window_titles().into_iter().collect();
     let panel_active = wm.panel_active();
     let focus_current = wm.focused_window();
-    let mouse_capture_enabled = wm.mouse_capture_enabled();
-    let clipboard_enabled = wm.clipboard_enabled();
-    let window_selection_enabled = wm.window_selection_enabled();
-    let selection_active = wm.selection_active();
-    let selection_dragging = wm.selection_dragging();
     let wm_overlay_visible = wm.command_menu_visible();
 
     // Top panel
@@ -668,11 +659,6 @@ pub fn render_panels<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Term
                     focus_current: Some(focus_current),
                     display_order: display,
                     status_line,
-                    mouse_capture_enabled,
-                    clipboard_enabled,
-                    window_selection_enabled,
-                    selection_active,
-                    selection_dragging,
                     menu_open: wm_overlay_visible,
                 },
             )));
@@ -734,11 +720,6 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
         let titles_map: std::collections::BTreeMap<WindowKey, String> =
             wm.window_titles().into_iter().collect();
         let focus_current = wm.focused_window();
-        let mc_enabled = wm.mouse_capture_enabled();
-        let cb_enabled = wm.clipboard_enabled();
-        let ws_enabled = wm.window_selection_enabled();
-        let sel_active = wm.selection_active();
-        let sel_dragging = wm.selection_dragging();
 
         let top_area = LayoutRect {
             x: 0,
@@ -754,12 +735,7 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
                 TopPanelState {
                     focus_current: Some(focus_current),
                     display_order: display,
-                    status_line: Some("Tab/Shift-Tab: cycle windows".to_string()),
-                    mouse_capture_enabled: mc_enabled,
-                    clipboard_enabled: cb_enabled,
-                    window_selection_enabled: ws_enabled,
-                    selection_active: sel_active,
-                    selection_dragging: sel_dragging,
+                    status_line: None,
                     menu_open: true,
                 },
             )));
@@ -1111,10 +1087,34 @@ pub fn render_handles_masked(
     use ratatui::style::{Modifier, Style};
 
     let hover_rect = hovered.map(|handle| handle.rect);
+
+    // Pass 1: vertical bars (Direction::Horizontal splits)
     for handle in handles {
-        if handle.rect.width == 0 || handle.rect.height == 0 {
+        if handle.rect.width == 0
+            || handle.rect.height == 0
+            || handle.direction != Direction::Horizontal
+        {
             continue;
         }
+        fill_handle_bar(buffer, handle, "│", hover_rect, is_obscured, theme);
+    }
+
+    // Pass 2: horizontal bars (Direction::Vertical splits) — detect existing
+    // verticals to draw proper T-junctions.
+    for handle in handles {
+        if handle.rect.width == 0
+            || handle.rect.height == 0
+            || handle.direction != Direction::Vertical
+        {
+            continue;
+        }
+        let hr = Rect {
+            x: handle.rect.x.max(0) as u16,
+            y: handle.rect.y.max(0) as u16,
+            width: handle.rect.width,
+            height: handle.rect.height,
+        };
+        let clip = hr.intersection(buffer.area);
         let is_hovered = hover_rect == Some(handle.rect);
         let style = if is_hovered {
             Style::default()
@@ -1123,124 +1123,137 @@ pub fn render_handles_masked(
         } else {
             Style::default().fg(theme.decorator_border_active.to_ratatui())
         };
+        if clip.width == 0 || clip.height == 0 {
+            continue;
+        }
+        let h = buffer.area.height;
+        for y in clip.y..clip.y.saturating_add(clip.height) {
+            for x in clip.x..clip.x.saturating_add(clip.width) {
+                if is_obscured(x, y) {
+                    continue;
+                }
+                // Precompute junction char: check neighbors for existing │
+                // (from pass 1 vertical handles) without holding a mutable borrow.
+                let ch = {
+                    let above_bar = y > 0
+                        && buffer.cell((x, y - 1)).is_some_and(|c| {
+                            let s = c.symbol();
+                            s == "│" || s == "┼" || s == "├" || s == "┤" || s == "┴" || s == "┬"
+                        });
+                    let below_bar = y < h.saturating_sub(1)
+                        && buffer.cell((x, y + 1)).is_some_and(|c| {
+                            let s = c.symbol();
+                            s == "│" || s == "┼" || s == "├" || s == "┤" || s == "┴" || s == "┬"
+                        });
+                    match (above_bar, below_bar) {
+                        (true, true) => "┼",
+                        (true, false) => "┴",
+                        (false, true) => "┬",
+                        (false, false) => "─",
+                    }
+                };
+                if let Some(cell) = buffer.cell_mut((x, y)) {
+                    cell.reset();
+                    cell.set_symbol(ch);
+                    cell.set_style(style);
+                }
+            }
+        }
+    }
+
+    // Pass 3: hover highlight borders (only for the hovered handle)
+    if let Some(handle) = hovered {
         let hr = Rect {
             x: handle.rect.x.max(0) as u16,
             y: handle.rect.y.max(0) as u16,
             width: handle.rect.width,
             height: handle.rect.height,
         };
-        let clip = hr.intersection(buffer.area);
-        if clip.width > 0 && clip.height > 0 {
-            for y in clip.y..clip.y.saturating_add(clip.height) {
-                for x in clip.x..clip.x.saturating_add(clip.width) {
-                    if is_obscured(x, y) {
-                        continue;
-                    }
-                    if let Some(cell) = buffer.cell_mut((x, y)) {
-                        cell.reset();
-                        cell.set_symbol("·");
-                        cell.set_style(style);
-                    }
-                }
+        let border_style = Style::default()
+            .fg(theme.accent_alt.to_ratatui())
+            .add_modifier(Modifier::BOLD);
+        let max_x = hr.x.saturating_add(hr.width).saturating_sub(1);
+        let max_y = hr.y.saturating_add(hr.height).saturating_sub(1);
+        for x in hr.x..=max_x {
+            if is_obscured(x, hr.y) {
+                continue;
+            }
+            if let Some(cell) = buffer.cell_mut((x, hr.y)) {
+                cell.set_symbol("-");
+                cell.set_style(border_style);
+            }
+            if is_obscured(x, max_y) {
+                continue;
+            }
+            if let Some(cell) = buffer.cell_mut((x, max_y)) {
+                cell.set_symbol("-");
+                cell.set_style(border_style);
             }
         }
-        match handle.direction {
-            Direction::Horizontal => {
-                let x = hr.x + hr.width / 2;
-                let y_center = hr.y + hr.height / 2;
-                for offset in 0..3 {
-                    let y = y_center.saturating_sub(1).saturating_add(offset);
-                    if y < hr.y || y >= hr.y.saturating_add(hr.height) {
-                        continue;
-                    }
-                    if is_obscured(x, y) {
-                        continue;
-                    }
-                    if let Some(cell) = buffer.cell_mut((x, y)) {
-                        cell.set_symbol(if is_hovered { "O" } else { "o" });
-                        cell.set_style(style);
-                    }
-                }
+        for y in hr.y..=max_y {
+            if is_obscured(hr.x, y) {
+                continue;
             }
-            Direction::Vertical => {
-                let y = hr.y + hr.height / 2;
-                let x_center = hr.x + hr.width / 2;
-                for offset in 0..3 {
-                    let x = x_center.saturating_sub(1).saturating_add(offset);
-                    if x < hr.x || x >= hr.x.saturating_add(hr.width) {
-                        continue;
-                    }
-                    if is_obscured(x, y) {
-                        continue;
-                    }
-                    if let Some(cell) = buffer.cell_mut((x, y)) {
-                        cell.set_symbol(if is_hovered { "O" } else { "o" });
-                        cell.set_style(style);
-                    }
-                }
+            if let Some(cell) = buffer.cell_mut((hr.x, y)) {
+                cell.set_symbol("|");
+                cell.set_style(border_style);
+            }
+            if is_obscured(max_x, y) {
+                continue;
+            }
+            if let Some(cell) = buffer.cell_mut((max_x, y)) {
+                cell.set_symbol("|");
+                cell.set_style(border_style);
             }
         }
-        if is_hovered {
-            let border_style = Style::default()
-                .fg(theme.accent_alt.to_ratatui())
-                .add_modifier(Modifier::BOLD);
-            let max_x = hr.x.saturating_add(hr.width).saturating_sub(1);
-            let max_y = hr.y.saturating_add(hr.height).saturating_sub(1);
-            for x in hr.x..=max_x {
-                if is_obscured(x, hr.y) {
-                    continue;
-                }
-                if let Some(cell) = buffer.cell_mut((x, hr.y)) {
-                    cell.set_symbol("-");
-                    cell.set_style(border_style);
-                }
-                if is_obscured(x, max_y) {
-                    continue;
-                }
-                if let Some(cell) = buffer.cell_mut((x, max_y)) {
-                    cell.set_symbol("-");
-                    cell.set_style(border_style);
-                }
-            }
-            for y in hr.y..=max_y {
-                if is_obscured(hr.x, y) {
-                    continue;
-                }
-                if let Some(cell) = buffer.cell_mut((hr.x, y)) {
-                    cell.set_symbol("|");
-                    cell.set_style(border_style);
-                }
-                if is_obscured(max_x, y) {
-                    continue;
-                }
-                if let Some(cell) = buffer.cell_mut((max_x, y)) {
-                    cell.set_symbol("|");
-                    cell.set_style(border_style);
-                }
-            }
-            if !is_obscured(hr.x, hr.y)
-                && let Some(cell) = buffer.cell_mut((hr.x, hr.y))
+        for (cx, cy) in [(hr.x, hr.y), (max_x, hr.y), (hr.x, max_y), (max_x, max_y)] {
+            if !is_obscured(cx, cy)
+                && let Some(cell) = buffer.cell_mut((cx, cy))
             {
                 cell.set_symbol("+");
                 cell.set_style(border_style);
             }
-            if !is_obscured(max_x, hr.y)
-                && let Some(cell) = buffer.cell_mut((max_x, hr.y))
-            {
-                cell.set_symbol("+");
-                cell.set_style(border_style);
+        }
+    }
+}
+
+/// Fill a handle's cells with a fixed bar character.
+fn fill_handle_bar(
+    buffer: &mut Buffer,
+    handle: &SplitHandle,
+    sym: &str,
+    hover_rect: Option<LayoutRect>,
+    is_obscured: &dyn Fn(u16, u16) -> bool,
+    theme: &Theme,
+) {
+    use ratatui::style::Style;
+    let is_hovered = hover_rect == Some(handle.rect);
+    let style = if is_hovered {
+        Style::default()
+            .fg(theme.menu_selected_bg.to_ratatui())
+            .add_modifier(ratatui::style::Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.decorator_border_active.to_ratatui())
+    };
+    let hr = Rect {
+        x: handle.rect.x.max(0) as u16,
+        y: handle.rect.y.max(0) as u16,
+        width: handle.rect.width,
+        height: handle.rect.height,
+    };
+    let clip = hr.intersection(buffer.area);
+    if clip.width == 0 || clip.height == 0 {
+        return;
+    }
+    for y in clip.y..clip.y.saturating_add(clip.height) {
+        for x in clip.x..clip.x.saturating_add(clip.width) {
+            if is_obscured(x, y) {
+                continue;
             }
-            if !is_obscured(hr.x, max_y)
-                && let Some(cell) = buffer.cell_mut((hr.x, max_y))
-            {
-                cell.set_symbol("+");
-                cell.set_style(border_style);
-            }
-            if !is_obscured(max_x, max_y)
-                && let Some(cell) = buffer.cell_mut((max_x, max_y))
-            {
-                cell.set_symbol("+");
-                cell.set_style(border_style);
+            if let Some(cell) = buffer.cell_mut((x, y)) {
+                cell.reset();
+                cell.set_symbol(sym);
+                cell.set_style(style);
             }
         }
     }

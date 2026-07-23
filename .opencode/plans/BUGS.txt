@@ -1,9 +1,10 @@
 - [ ] [TODO] Floating one window should make all of the other windows floating (and retain their current position, regardless if previous tiled or floating); conversely, snapping a window should snap the others, using an algorithm to smartly determine their new tiled positions, preferring a tiling layout which as closely mimics the current floating positions, while at the same time filling up the entire viewport with the floating windows.... AND, the snap preview *should not lie*, so it must already calculate those new positions when that preview is drawn.
 - [ ] [TODO] Implement changes in `FUTURE-SIMD-OPPORTUNITIES`
-- [ ] [TODO] In Direct Mode, route non-scrollbar mouse events to the PTY (click, right-click, etc.)
+- [ ] [TODO - MAY NEED FURTHER INVESTIGATION] In Direct Mode, route non-scrollbar mouse events to the PTY (click, right-click, etc.) NOTE: Somehow it must still work with text selection drags
 - [ ] [TODO] Investigate a better Command Palette activation key binding.  Ctrl-G conflicts with Google Gemini when a Chrome browser is open.
 - [X] [TODO] Make test_pty share same FD redirection utils as rest of crate, so it can be made cross-platform.
 - [ ] Bottom panel keybinding list might stop highlighting if text is truncated
+- [ ] In the command palette, arrowing up-down for options, it does not move the scrollbar with it.
 - [ ] Text selection can just break and there is no indication as to why.  I think it can be reproduced by opening up the same client on multiple devices and resizing one of them or trying to break the layout. Direct mode still works.  Confirmed that closing term-wm and reopening it in the same client session works again, so it must not be remote client related.
 - [ ] Fix bracketed paste issue. Pasting long text into opencode can make it crash.
 - [ ] Fix issue where remote copy is not working.
