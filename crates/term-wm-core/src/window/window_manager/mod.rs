@@ -2398,10 +2398,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             symbol: "X",
         }];
         if !self.is_monocle() {
+            let focused = self.focused_window();
+            let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized);
             btns.push(WmButton {
                 action: TermWmAction::MaximizeWindow,
-                label: "Maximize Window",
-                symbol: "▢",
+                label: if is_maxed { "Restore Window" } else { "Maximize Window" },
+                symbol: if is_maxed { "─" } else { "▢" },
             });
             btns.push(WmButton {
                 action: TermWmAction::MinimizeWindow,
