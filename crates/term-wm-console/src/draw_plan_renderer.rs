@@ -845,8 +845,11 @@ where
         };
         let local_y = if surface.dest.y < 0 {
             cy.saturating_add((-surface.dest.y) as u16)
+        } else if cy >= surface.dest.y as u16 {
+            cy - surface.dest.y as u16
         } else {
-            cy.saturating_sub(surface.dest.y as u16)
+            // Mouse is above the window — no button can be hovered
+            u16::MAX
         };
         (local_x, local_y)
     });
