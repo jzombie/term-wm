@@ -254,6 +254,7 @@ pub struct WindowManager<
     pub(crate) managed_layout: Option<TilingLayout<WindowKey>>,
     closed_windows: Vec<WindowKey>,
     pub(crate) managed_area: Rect,
+    pub(crate) monocle_mode_active: bool,
     pub(crate) hitbox_registry: HitboxRegistry,
     app_ctx: Arc<AppContext>,
     #[allow(dead_code)]
@@ -546,10 +547,14 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     /// Evaluate if monocle mode should be forced due to overcrowding.
-    /// Triggers when workspace is too small OR any window falls below min tile bounds.
+    /// Triggers when workspace is too small, BSP tiles degenerate,
+    /// or any floating window overflows the workspace area.
     pub fn is_monocle_forced(&self) -> bool {
         use crate::constants::{MIN_TILE_HEIGHT, MIN_TILE_WIDTH};
         let area = self.managed_area;
+        if area.width == 0 || area.height == 0 {
+            return false;
+        }
         if area.width < MIN_TILE_WIDTH || area.height < MIN_TILE_HEIGHT {
             return true;
         }
@@ -560,7 +565,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         } else {
             for key in self.mapped_windows() {
                 let region = self.region_or_fallback(key, 0);
-                if region.width < MIN_TILE_WIDTH || region.height < MIN_TILE_HEIGHT {
+                if region.width > area.width || region.height > area.height {
                     return true;
                 }
             }
@@ -694,6 +699,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             managed_layout: None,
             closed_windows: Vec::new(),
             managed_area: Rect::default(),
+            monocle_mode_active: false,
             hitbox_registry: HitboxRegistry::new(),
             app_ctx,
             supported_menu_actions,

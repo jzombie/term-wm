@@ -176,10 +176,18 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     /// Check if monocle mode is active.
     pub fn is_monocle(&self) -> bool {
+        if self.monocle_mode_active || self.is_monocle_forced() {
+            return true;
+        }
         self.managed_layout
             .as_ref()
             .map(|l| l.is_monocle())
             .unwrap_or(false)
+    }
+
+    /// Toggle user-requested monocle mode on/off.
+    pub fn toggle_monocle(&mut self) {
+        self.monocle_mode_active = !self.monocle_mode_active;
     }
 
     /// Whether the given window should render borders.

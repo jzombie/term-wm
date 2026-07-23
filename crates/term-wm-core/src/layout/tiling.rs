@@ -717,6 +717,16 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
             _ => false,
         }
     }
+
+    /// Check if this node is structurally empty (Void or all children are empty).
+    /// Non-allocating O(depth) tree traversal.
+    pub fn is_empty(&self) -> bool {
+        match self {
+            LayoutNode::Void(_) => true,
+            LayoutNode::Leaf(_) => false,
+            LayoutNode::Split { children, .. } => children.iter().all(|c| c.is_empty()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1208,6 +1218,19 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
             _ => {}
         }
         false
+    }
+
+    /// Encapsulated leaf removal: removes `key` from the tree, cleans up
+    /// degenerate splits, and clears the leaf node if it was the root.
+    pub fn remove_window(&mut self, key: Id) {
+        self.root.remove_leaf(key);
+        self.root.cleanup_after_removal();
+        self.root.clear_leaf(key);
+    }
+
+    /// Check if the layout tree is structurally empty (no live leaves).
+    pub fn is_empty(&self) -> bool {
+        self.root.is_empty()
     }
 }
 

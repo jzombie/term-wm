@@ -354,15 +354,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             }
 
             // Remove key from existing tree before insertion (prevents duplicates)
-            if self.layout_contains(key) {
-                if let Some(layout) = &mut self.managed_layout {
-                    layout.root_mut().remove_leaf(key);
-                    layout.root_mut().cleanup_after_removal();
-                    layout.root_mut().clear_leaf(key);
-                    // If tree is now empty (single node was removed), clear it
-                    if layout.root().collect_leaves().is_empty() {
-                        self.managed_layout = None;
-                    }
+            if self.layout_contains(key)
+                && let Some(layout) = &mut self.managed_layout
+            {
+                layout.remove_window(key);
+                if layout.is_empty() {
+                    self.managed_layout = None;
                 }
             }
 
@@ -415,50 +412,24 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     pub(super) fn tile_window_key(&mut self, key: WindowKey) -> bool {
         use crate::layout::LayoutNode;
-        if self.layout_contains(key) {
-            if self.is_window_floating(key) {
-                self.clear_floating_rect(key);
-            }
-            self.focus_window_key(key);
-            return true;
-        }
-        if self.managed_layout.is_none() {
-            self.managed_layout = Some(crate::layout::TilingLayout::new(LayoutNode::leaf(key)));
-            self.focus_window_key(key);
-            return true;
-        }
+        self.clear_floating_rect(key);
 
-        let current_focus = *self.focus.current();
-
-        let Some(layout) = self.managed_layout.as_mut() else {
-            return false;
-        };
-
-        let voids = layout.void_regions(self.managed_area);
-        if let Some((void_id, _)) = voids.first() {
-            layout.replace_void_by_id(*void_id, LayoutNode::leaf(key));
-            self.focus_window_key(key);
-            return true;
-        }
-
-        let target = self
-            .regions
-            .ids()
-            .iter()
-            .find(|r_key| **r_key == current_focus)
-            .copied();
-
-        if let Some(target) = target
-            && layout
-                .root_mut()
-                .insert_leaf(target, key, InsertPosition::Right)
+        if self.layout_contains(key)
+            && let Some(layout) = &mut self.managed_layout
         {
-            self.focus_window_key(key);
-            return true;
+            layout.remove_window(key);
+            if layout.is_empty() {
+                self.managed_layout = None;
+            }
         }
 
-        layout.split_root(key, InsertPosition::Right);
+        if let Some(ref mut layout) = self.managed_layout {
+            layout.insert_window_balanced(key, self.managed_area);
+        } else {
+            self.managed_layout = Some(crate::layout::TilingLayout::new(LayoutNode::leaf(key)));
+        }
         self.focus_window_key(key);
+        self.bifurcate_draw_order();
         true
     }
 
