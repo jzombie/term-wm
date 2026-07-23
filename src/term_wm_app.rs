@@ -135,7 +135,9 @@ impl TermWmApp {
         let key = self.wm.spawn(component);
         self.wm
             .transition_window(key, term_wm_core::window::WindowState::Mapped);
-        self.wm.tile_window(key);
+        if !self.wm.try_spawn_floating_default(key) {
+            self.wm.tile_window(key);
+        }
         self.window_keys.push(key);
         key
     }

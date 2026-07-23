@@ -163,14 +163,17 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             layout.update_monocle_state(terminal_width);
         }
         let curr = self.is_monocle();
-        if prev == curr && !curr {
+        // When all windows are floating (no managed_layout), check width directly
+        // so borders are still disabled on narrow screens.
+        let borders_off = curr || (self.managed_layout.is_none() && terminal_width < 80);
+        if prev == curr && !curr && !borders_off {
             return;
         }
-        // Turn borders off in monocle, on otherwise.
-        // Runs on every monocle frame so newly created windows also get
+        // Turn borders off in monocle/narrow mode, on otherwise.
+        // Runs on every frame so newly created windows also get
         // borders disabled without waiting for a mode transition.
         for (_, window) in self.windows.iter_mut() {
-            window.borders_enabled = !curr;
+            window.borders_enabled = !borders_off;
         }
     }
 

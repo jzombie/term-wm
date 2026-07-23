@@ -363,6 +363,34 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.tile_window_key(key)
     }
 
+    /// Try to spawn the first window as floating with a sensible default size
+    /// on wide screens. Returns true if the window was set floating.
+    pub fn try_spawn_floating_default(&mut self, key: WindowKey) -> bool {
+        if self.managed_layout.is_some() || !self.mapped_windows().is_empty() {
+            return false;
+        }
+        let area = self.managed_area;
+        const WIDE_SCREEN_THRESHOLD: u16 = 120;
+        if area.width <= WIDE_SCREEN_THRESHOLD {
+            return false;
+        }
+        let default_w = 80u16.min(area.width);
+        let default_h = 24u16.min(area.height);
+        let x = area.x + (area.width.saturating_sub(default_w) / 2) as i32;
+        let y = area.y + (area.height.saturating_sub(default_h) / 2) as i32;
+        self.set_floating_rect(
+            key,
+            Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
+                x,
+                y,
+                width: default_w,
+                height: default_h,
+            })),
+        );
+        self.focus_window_key(key);
+        true
+    }
+
     pub(super) fn tile_window_key(&mut self, key: WindowKey) -> bool {
         use crate::layout::LayoutNode;
         if self.layout_contains(key) {

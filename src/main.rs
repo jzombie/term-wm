@@ -258,7 +258,9 @@ impl App {
         }
 
         wm.set_focus(key);
-        wm.tile_window(key);
+        if !wm.try_spawn_floating_default(key) {
+            wm.tile_window(key);
+        }
         wm.set_window_title(key, format!("Shell {}", wm.window_count()));
         Ok(())
     }
@@ -355,7 +357,9 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
         }
 
         wm.set_focus(key);
-        wm.tile_window(key);
+        if !wm.try_spawn_floating_default(key) {
+            wm.tile_window(key);
+        }
         wm.set_window_title(key, format!("Shell {}", wm.window_count()));
         Ok(())
     }
