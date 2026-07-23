@@ -552,36 +552,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.window(key).is_some_and(|window| window.direct_mode)
     }
 
-    /// Evaluate if monocle mode should be forced due to overcrowding.
-    /// Triggers when workspace is too small, BSP tiles degenerate,
-    /// or any floating window overflows the workspace area.
-    pub fn is_monocle_forced(&self) -> bool {
-        use crate::constants::{MIN_TILE_HEIGHT, MIN_TILE_WIDTH};
-        let area = self.managed_area;
-        if area.width == 0 || area.height == 0 {
-            return false;
-        }
-        if area.width < MIN_TILE_WIDTH || area.height < MIN_TILE_HEIGHT {
-            return true;
-        }
-        if let Some(ref layout) = self.managed_layout {
-            if layout
-                .regions(area)
-                .iter()
-                .any(|(_, r)| r.width < MIN_TILE_WIDTH || r.height < MIN_TILE_HEIGHT)
-            {
-                return true;
-            }
-        } else {
-            for key in self.mapped_windows() {
-                let region = self.region_or_fallback(key, 0);
-                if region.width > area.width || region.height > area.height {
-                    return true;
-                }
-            }
-        }
-        false
-    }
 
     pub fn set_direct_mode(&mut self, key: WindowKey, value: bool) {
         if let Some(w) = self.windows.get_mut(key) {

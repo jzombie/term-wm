@@ -177,7 +177,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     /// Check if monocle mode is active.
     pub fn is_monocle(&self) -> bool {
-        if self.monocle_mode_active || self.is_monocle_forced() {
+        if self.monocle_mode_active {
             return true;
         }
         self.managed_layout
