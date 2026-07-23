@@ -988,9 +988,7 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
             }
         }
         let title_len = title.len() as u16;
-        let header_width = header_right
-            .saturating_sub(header_left)
-            .saturating_add(1);
+        let header_width = header_right.saturating_sub(header_left).saturating_add(1);
         if title_len <= header_width {
             let start_x = header_left + (header_width - title_len) / 2;
             for (idx, ch) in title.chars().enumerate() {
@@ -1010,8 +1008,7 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
                         .saturating_sub(HEADER_BUTTON_GAP)
                         .saturating_sub(HEADER_BUTTON_GAP * i as u16)
                 } else {
-                    header_right
-                        .saturating_sub(HEADER_BUTTON_GAP * i as u16)
+                    header_right.saturating_sub(HEADER_BUTTON_GAP * i as u16)
                 };
                 if let Some(cell) = buffer.cell_mut((bx, header_y)) {
                     cell.set_symbol(btn.symbol);
