@@ -724,7 +724,7 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
     // Use explicit SetPanelActive(true/false) because ComponentContext's active
     // flag does NOT control WmTopPanelComponent's internal self.active guard
     // (set at wm_top_panel.rs:462 via SetPanelActive action).
-    if wm.is_monocle() && wm.command_menu_visible() && !wm.is_tab_outline_active() {
+    if wm.is_monocle_cramped() && wm.command_menu_visible() && !wm.is_tab_outline_active() {
         let display = wm.build_display_order();
         let titles_map: std::collections::BTreeMap<WindowKey, String> =
             wm.window_titles().into_iter().collect();

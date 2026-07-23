@@ -2179,7 +2179,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     pub fn panel_active(&self) -> bool {
-        if self.is_monocle() {
+        if self.is_monocle_cramped() {
             return false;
         }
         self.config.panels_enabled

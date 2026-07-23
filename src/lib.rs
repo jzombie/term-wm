@@ -252,13 +252,13 @@ pub fn render_app<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmA
     // Render panels AFTER windows
     render_panels(backend, wm);
 
-    // Render FAB only in monocle/mobile mode — sole mobile navigation mechanism.
+    // Render FAB only in cramped monocle mode.
     // Hidden when command palette is open; the bottom panel overlay fills the row.
     let fab_layer_id = wm
         .semantic_registry
         .get(&term_wm_core::window::ComponentTag::FloatingActionButton)
         .copied();
-    if wm.is_monocle()
+    if wm.is_monocle_cramped()
         && !wm.command_menu_visible()
         && let Some(fab) =
             wm.get_semantic_component_mut(term_wm_core::window::ComponentTag::FloatingActionButton)
