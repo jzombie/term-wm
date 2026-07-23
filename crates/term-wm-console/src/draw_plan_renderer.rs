@@ -641,11 +641,7 @@ pub fn render_panels<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Term
     backend: &mut dyn term_wm_render::RenderBackend,
     wm: &mut WindowManager<C, L, O>,
 ) {
-    let status_line = if wm.command_menu_visible() {
-        Some("Tab/Shift-Tab: cycle windows".to_string())
-    } else {
-        None
-    };
+    let status_line: Option<String> = None;
     let display = wm.build_display_order();
     let titles_map: std::collections::BTreeMap<WindowKey, String> =
         wm.window_titles().into_iter().collect();
@@ -754,7 +750,7 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
                 TopPanelState {
                     focus_current: Some(focus_current),
                     display_order: display,
-                    status_line: Some("Tab/Shift-Tab: cycle windows".to_string()),
+                    status_line: None,
                     mouse_capture_enabled: mc_enabled,
                     clipboard_enabled: cb_enabled,
                     window_selection_enabled: ws_enabled,
