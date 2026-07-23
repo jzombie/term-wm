@@ -540,6 +540,9 @@ pub struct TopPanelState {
     pub display_order: Vec<crate::window::WindowKey>,
     pub status_line: Option<String>,
     pub menu_open: bool,
+    /// If set, render a clickable label in the top-right with this text
+    /// that dispatches the given action when clicked.
+    pub tiling_indicator: Option<(&'static str, crate::actions::TermWmAction)>,
 }
 
 /// Queries the engine can ask components.

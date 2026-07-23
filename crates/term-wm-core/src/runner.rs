@@ -107,6 +107,9 @@ fn drain_action_queue<
             TermWmAction::ToggleClipboardMode => {
                 app.wm().toggle_clipboard_enabled();
             }
+            TermWmAction::ToggleTiling => {
+                app.wm().toggle_tiling();
+            }
             TermWmAction::FocusWindow(k) => {
                 let state = app.wm().window_state(k);
                 if state == Some(crate::window::WindowState::Iconic) {
