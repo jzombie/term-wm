@@ -278,7 +278,6 @@ pub struct WindowManager<
     pub(crate) handles: Vec<SplitHandle>,
     pub(crate) managed_draw_order: Vec<WindowKey>,
     pub(crate) managed_layout: Option<TilingLayout<WindowKey>>,
-    closed_windows: Vec<WindowKey>,
     pub(crate) managed_area: Rect,
     pub(crate) monocle_mode: MonocleMode,
     monocle_width_threshold: u16,
@@ -384,6 +383,19 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         if let Some(comp) = self.component_for_key_mut(key) {
             comp.on_mount(key, &app_ctx);
         }
+        key
+    }
+
+    /// Atomic open transaction: spawn, map, place (tile or float), and focus.
+    /// Encapsulates the full window lifecycle so callers don't need to
+    /// manually drive state transitions or spatial placement.
+    pub fn open_window(&mut self, component: C) -> WindowKey {
+        let key = self.spawn(component);
+        self.transition_window(key, WindowState::Mapped);
+        if !self.try_spawn_floating_default(key) {
+            self.tile_window_key(key);
+        }
+        self.focus_window_key(key);
         key
     }
 
@@ -708,7 +720,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             handles: Vec::new(),
             managed_draw_order: Vec::new(),
             managed_layout: None,
-            closed_windows: Vec::new(),
             managed_area: Rect::default(),
             monocle_mode: MonocleMode::Auto,
             monocle_width_threshold: crate::constants::MONOCLE_WIDTH_THRESHOLD,
@@ -908,10 +919,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             self.focus.set_order(order);
         }
         self.focus.set_current(key);
-    }
-
-    pub fn take_closed_windows(&mut self) -> Vec<WindowKey> {
-        std::mem::take(&mut self.closed_windows)
     }
 
     pub fn take_synthetic_event(&mut self) -> Option<Event> {
@@ -2075,15 +2082,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         {
             self.pending_deadline = None;
         }
-    }
-
-    /// Register a component directly on a window in the SlotMap.
-    pub fn set_system_window(&mut self, component: C) -> WindowKey {
-        let key = self.create_window(component);
-        if let Some(w) = self.windows.get_mut(key) {
-            w.is_system_window = true;
-        }
-        key
     }
 
     /// Render-phase access: borrow component immutably.
@@ -3341,7 +3339,7 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let debug_key = wm.set_system_window(TestComponent::Noop(crate::components::NoopComponent));
+        let debug_key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.set_panel_visible(false);
         wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(debug_key)));
         wm.register_managed_layout(Rect {
@@ -4564,7 +4562,7 @@ mod tests {
             std::collections::HashMap::new(),
         );
 
-        let debug_key = wm.set_system_window(TestComponent::Noop(crate::components::NoopComponent));
+        let debug_key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.set_panel_visible(false);
         wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(debug_key)));
         wm.register_managed_layout(Rect {
@@ -4809,16 +4807,10 @@ mod tests {
         });
 
         wm.close_window(target);
-        // For a non-system window, close_window destroys the component
-        // and removes it from the SlotMap immediately.
         assert_eq!(
             wm.window_state(target),
             None,
             "window removed from SlotMap by close_window"
-        );
-        assert!(
-            wm.closed_windows.is_empty(),
-            "non-system windows are not queued"
         );
         assert!(!wm.z_order.contains(&target), "not in z_order");
         assert!(
@@ -4828,7 +4820,7 @@ mod tests {
     }
 
     #[test]
-    fn close_window_system_window_keeps_slotmap_entry() {
+    fn close_window_removes_all_windows_from_slotmap() {
         let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
@@ -4836,7 +4828,7 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let key = wm.set_system_window(TestComponent::Noop(crate::components::NoopComponent));
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.transition_window(key, WindowState::Mapped);
         wm.register_managed_layout(Rect {
             x: 0,
@@ -4846,14 +4838,10 @@ mod tests {
         });
 
         wm.close_window(key);
-        assert!(
-            wm.window(key).is_some(),
-            "SlotMap entry preserved for system window"
-        );
         assert_eq!(
             wm.window_state(key),
-            Some(WindowState::Unmapped),
-            "state is Unmapped"
+            None,
+            "window removed from SlotMap by close_window"
         );
     }
 

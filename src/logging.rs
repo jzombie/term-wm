@@ -8,7 +8,7 @@ use term_wm_core::debug_event_flags::trigger_error_pending;
 use term_wm_pty_engine::redirect_stdio::redirect_fd_to_tracing;
 
 #[cfg(feature = "sys-ui")]
-use term_wm_sys_ui_components::wm_debug_log::{DebugLogWriter, global_debug_log};
+use term_wm_core::debug_log::{DebugLogWriter, global_debug_log};
 
 struct ErrorNotifyLayer;
 

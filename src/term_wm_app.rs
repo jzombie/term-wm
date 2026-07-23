@@ -132,13 +132,7 @@ impl TermWmApp {
     /// Register a component as a window. Returns the WindowKey for later access.
     /// Calls `on_mount` on the component after registration.
     pub fn register(&mut self, component: AppRootComponent) -> WindowKey {
-        let key = self.wm.spawn(component);
-        self.wm
-            .transition_window(key, term_wm_core::window::WindowState::Mapped);
-        if !self.wm.try_spawn_floating_default(key) {
-            self.wm.tile_window(key);
-        }
-        self.wm.set_focus(key);
+        let key = self.wm.open_window(component);
         self.window_keys.push(key);
         key
     }

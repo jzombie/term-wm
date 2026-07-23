@@ -28,10 +28,6 @@ pub struct Window {
     pub prev_floating_rect: Option<FloatRectSpec>,
     pub creation_order: usize,
     pub direct_mode: bool,
-    /// Whether this window was created via `set_system_window`.
-    /// System windows are kept in the SlotMap after close so they can
-    /// be shown again later (debug log, help overlay, etc.).
-    pub is_system_window: bool,
     /// Decoupled maximization state flag.  Set when the window is maximized,
     /// cleared when restored.  Must NOT be derived from geometry comparison.
     pub is_maximized: bool,
@@ -59,7 +55,6 @@ impl Window {
             prev_floating_rect: None,
             creation_order,
             direct_mode: false,
-            is_system_window: false,
             is_maximized: false,
             borders_enabled: true,
             header_enabled: true,

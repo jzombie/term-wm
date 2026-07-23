@@ -20,7 +20,7 @@ use term_wm_console::console_render_target::ConsoleRenderTarget;
 use term_wm_core::components::Component;
 use term_wm_sys_ui_components::WmSystemPanelComponent;
 use term_wm_sys_ui_components::wm_debug_log::{
-    WmDebugLogComponent, install_panic_hook, set_global_debug_log,
+    WmDebugLogComponent, global_debug_log, install_panic_hook, set_global_debug_log,
 };
 use term_wm_ui_facade::core_component::CoreWmComponent;
 use term_wm_ui_facade::{LayerComponent, OverlayComponent};
@@ -137,7 +137,9 @@ impl App {
             pty_wakeup_tx,
         };
 
-        // Initialize debug log system window
+        // Initialize debug log system window — created hidden (Unmapped)
+        // and toggled visible via keybinding.  The global buffer lives in
+        // term-wm-core, so closing/re-opening preserves log history.
         {
             let (mut component, handle) = WmDebugLogComponent::new_default();
             component.set_selection_enabled(app.inner.wm().clipboard_enabled());
@@ -145,7 +147,7 @@ impl App {
             let debug_key = app
                 .inner
                 .wm()
-                .set_system_window(AppRootComponent::Core(CoreWmComponent::DebugLog(component)));
+                .create_window(AppRootComponent::Core(CoreWmComponent::DebugLog(component)));
             app.inner
                 .wm()
                 .transition_window(debug_key, term_wm::window::WindowState::Unmapped);
@@ -155,10 +157,10 @@ impl App {
             term_wm::logging::init_default();
         }
 
-        // Initialize system panel system window
+        // Initialize system panel — created hidden, toggled via keybinding.
         {
             let component = WmSystemPanelComponent::new();
-            let key = app.inner.wm().set_system_window(AppRootComponent::Core(
+            let key = app.inner.wm().create_window(AppRootComponent::Core(
                 CoreWmComponent::SystemPanel(component),
             ));
             app.inner
@@ -205,7 +207,6 @@ impl App {
     }
 
     // TODO: Extract to a reusable place
-    // TODO: Dedupe this and `wm_new_window`
     fn spawn_terminal_with_command(
         &mut self,
         cmd: portable_pty::CommandBuilder,
@@ -235,16 +236,14 @@ impl App {
         })));
         let mut sv = ScrollViewComponent::new(pane);
         sv.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
-        let wm = self.inner.wm();
-        let key = wm.create_window(AppRootComponent::Core(CoreWmComponent::Terminal(sv)));
-        wm.transition_window(key, term_wm::window::WindowState::Mapped);
-
-        // The key is now known — store it so the callback can use it.
+        let key = self
+            .inner
+            .wm()
+            .open_window(AppRootComponent::Core(CoreWmComponent::Terminal(sv)));
         let _ = key_holder.set(key);
 
-        // Enable selection for the new terminal.
-        let clipboard_enabled = wm.clipboard_enabled();
-        if let Some(comp) = wm.component_for_key_mut(key) {
+        let clipboard_enabled = self.inner.wm().clipboard_enabled();
+        if let Some(comp) = self.inner.wm().component_for_key_mut(key) {
             comp.set_selection_enabled(clipboard_enabled);
         }
 
@@ -252,16 +251,15 @@ impl App {
         if let Some(line) = command_to_send {
             let mut line = line;
             line.push_str(line_ending::LineEnding::from_current_platform().as_str());
-            if let Some(comp) = wm.component_for_key_mut(key) {
+            if let Some(comp) = self.inner.wm().component_for_key_mut(key) {
                 let _ = comp.paste(&line);
             }
         }
 
-        wm.set_focus(key);
-        if !wm.try_spawn_floating_default(key) {
-            wm.tile_window(key);
-        }
-        wm.set_window_title(key, format!("Shell {}", wm.window_count()));
+        let count = self.inner.wm().window_count();
+        self.inner
+            .wm()
+            .set_window_title(key, format!("Shell {}", count));
         Ok(())
     }
 }
@@ -289,33 +287,88 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
     fn on_panic(&mut self) {
         self.debug_visible = true;
         if let Some(key) = self.debug_key {
-            self.inner
-                .wm()
-                .transition_window(key, term_wm::window::WindowState::Mapped);
+            if self.inner.wm().has_window(key) {
+                self.inner
+                    .wm()
+                    .transition_window(key, term_wm::window::WindowState::Mapped);
+            } else {
+                // Window was closed — re-create from the global buffer.
+                if let Some(handle) = global_debug_log() {
+                    let comp = WmDebugLogComponent::from_handle(handle);
+                    let new_key = self.inner.wm().create_window(
+                        AppRootComponent::Core(CoreWmComponent::DebugLog(comp)),
+                    );
+                    self.inner.wm().set_window_title(new_key, "Debug Log");
+                    self.inner
+                        .wm()
+                        .transition_window(new_key, term_wm::window::WindowState::Mapped);
+                    self.debug_key = Some(new_key);
+                }
+            }
         }
     }
 
     fn toggle_debug_window(&mut self) {
         self.debug_visible = !self.debug_visible;
-        if let Some(key) = self.debug_key {
-            let state = if self.debug_visible {
-                term_wm::window::WindowState::Mapped
+        if self.debug_visible {
+            // Show: check if the window still exists (may have been closed).
+            if let Some(key) = self.debug_key
+                && self.inner.wm().has_window(key)
+            {
+                self.inner
+                    .wm()
+                    .transition_window(key, term_wm::window::WindowState::Mapped);
+                self.inner.wm().set_focus(key);
             } else {
-                term_wm::window::WindowState::Unmapped
-            };
-            self.inner.wm().transition_window(key, state);
+                // Re-create from the global buffer (preserves log history).
+                if let Some(handle) = global_debug_log() {
+                    let comp = WmDebugLogComponent::from_handle(handle);
+                    let key = self.inner.wm().create_window(
+                        AppRootComponent::Core(CoreWmComponent::DebugLog(comp)),
+                    );
+                    self.inner.wm().set_window_title(key, "Debug Log");
+                    self.inner
+                        .wm()
+                        .transition_window(key, term_wm::window::WindowState::Mapped);
+                    self.inner.wm().set_focus(key);
+                    self.debug_key = Some(key);
+                }
+            }
+        } else if let Some(key) = self.debug_key {
+            self.inner
+                .wm()
+                .transition_window(key, term_wm::window::WindowState::Unmapped);
         }
     }
 
     fn toggle_system_panel(&mut self) {
         self.system_panel_visible = !self.system_panel_visible;
-        if let Some(key) = self.system_panel_key {
-            let state = if self.system_panel_visible {
-                term_wm::window::WindowState::Mapped
+        if self.system_panel_visible {
+            // Show: check if the window still exists (may have been closed).
+            if let Some(key) = self.system_panel_key
+                && self.inner.wm().has_window(key)
+            {
+                self.inner
+                    .wm()
+                    .transition_window(key, term_wm::window::WindowState::Mapped);
+                self.inner.wm().set_focus(key);
             } else {
-                term_wm::window::WindowState::Unmapped
-            };
-            self.inner.wm().transition_window(key, state);
+                // Re-create.
+                let component = WmSystemPanelComponent::new();
+                let key = self.inner.wm().create_window(AppRootComponent::Core(
+                    CoreWmComponent::SystemPanel(component),
+                ));
+                self.inner.wm().set_window_title(key, "System Panel");
+                self.inner
+                    .wm()
+                    .transition_window(key, term_wm::window::WindowState::Mapped);
+                self.inner.wm().set_focus(key);
+                self.system_panel_key = Some(key);
+            }
+        } else if let Some(key) = self.system_panel_key {
+            self.inner
+                .wm()
+                .transition_window(key, term_wm::window::WindowState::Unmapped);
         }
     }
 
@@ -343,48 +396,19 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
         })));
         let mut sv = ScrollViewComponent::new(pane);
         sv.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
-        let wm = self.inner.wm();
-        let key = wm.create_window(AppRootComponent::Core(CoreWmComponent::Terminal(sv)));
-        wm.transition_window(key, term_wm::window::WindowState::Mapped);
-
-        // The key is now known — store it so the callback can use it.
+        let key = self
+            .inner
+            .wm()
+            .open_window(AppRootComponent::Core(CoreWmComponent::Terminal(sv)));
         let _ = key_holder.set(key);
-
-        // Enable selection for the new terminal.
-        let clipboard_enabled = wm.clipboard_enabled();
-        if let Some(comp) = wm.component_for_key_mut(key) {
+        let clipboard_enabled = self.inner.wm().clipboard_enabled();
+        if let Some(comp) = self.inner.wm().component_for_key_mut(key) {
             comp.set_selection_enabled(clipboard_enabled);
         }
-
-        wm.set_focus(key);
-        if !wm.try_spawn_floating_default(key) {
-            wm.tile_window(key);
-        }
-        wm.set_window_title(key, format!("Shell {}", wm.window_count()));
-        Ok(())
-    }
-
-    fn wm_close_window(&mut self, key: WindowKey) -> io::Result<()> {
-        if self.debug_key == Some(key) {
-            self.debug_visible = false;
-            self.inner
-                .wm()
-                .transition_window(key, term_wm::window::WindowState::Unmapped);
-            return Ok(());
-        }
-        if self.system_panel_key == Some(key) {
-            self.system_panel_visible = false;
-            self.inner
-                .wm()
-                .transition_window(key, term_wm::window::WindowState::Unmapped);
-            return Ok(());
-        }
-        // Call destroy on the component (kills child process).
-        // The component will be dropped after this, and the OS will
-        // clean up the child process. See also: Reaper for async reaping.
-        if let Some(comp) = self.inner.wm().component_for_key_mut(key) {
-            comp.destroy();
-        }
+        let count = self.inner.wm().window_count();
+        self.inner
+            .wm()
+            .set_window_title(key, format!("Shell {}", count));
         Ok(())
     }
 

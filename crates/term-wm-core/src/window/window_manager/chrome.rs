@@ -83,26 +83,22 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Close a window: transition to Unmapped, destroy the component
     /// (kills child PTY processes), and remove from the SlotMap.
     ///
-    /// System windows (debug log, etc.) are kept in the SlotMap so the
-    /// WM can re-show them later.  Their key is queued to `closed_windows`
-    /// so the app can perform any additional cleanup in `wm_close_window`.
+    /// All windows follow the same teardown path.  If the host application
+    /// needs a toggleable window (debug log, help overlay), it must manage
+    /// the show/hide lifecycle via `transition_window(key, Unmapped/Mapped)`
+    /// and handle re-creation itself on reactivation.
     pub fn close_window(&mut self, key: WindowKey) {
         tracing::debug!(window_key = ?key, "closing window");
         self.transition_window(key, WindowState::Unmapped);
 
-        let is_system = self.windows.get(key).is_some_and(|w| w.is_system_window);
-        if is_system {
-            self.closed_windows.push(key);
-        } else {
-            // Destroy the component (kills child PTY processes) then
-            // remove from SlotMap — all in one call, no API chaining.
-            if let Some(w) = self.windows.get_mut(key) {
-                if let Some(c) = self.components.get_mut(w.component_key) {
-                    c.destroy();
-                }
-                self.components.remove(w.component_key);
+        // Destroy the component (kills child PTY processes) then
+        // remove from SlotMap.
+        if let Some(w) = self.windows.get_mut(key) {
+            if let Some(c) = self.components.get_mut(w.component_key) {
+                c.destroy();
             }
-            self.windows.remove(key);
+            self.components.remove(w.component_key);
         }
+        self.windows.remove(key);
     }
 }
