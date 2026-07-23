@@ -1,3 +1,5 @@
+- [ ] Command Palette should stay in its original vertical position when typing so it doesn't bounce up and down.
+- [ ] Command Palette should show "[ no search results ]" when there are no search results for a given query.
 - [ ] [TODO] Floating one window should make all of the other windows floating (and retain their current position, regardless if previous tiled or floating); conversely, snapping a window should snap the others, using an algorithm to smartly determine their new tiled positions, preferring a tiling layout which as closely mimics the current floating positions, while at the same time filling up the entire viewport with the floating windows.... AND, the snap preview *should not lie*, so it must already calculate those new positions when that preview is drawn.
 - [ ] [TODO] Implement changes in `FUTURE-SIMD-OPPORTUNITIES`
 - [ ] [TODO - MAY NEED FURTHER INVESTIGATION] In Direct Mode, route non-scrollbar mouse events to the PTY (click, right-click, etc.) NOTE: Somehow it must still work with text selection drags

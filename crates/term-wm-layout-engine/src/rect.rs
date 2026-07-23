@@ -163,6 +163,19 @@ pub enum Quadrant {
     West,
 }
 
+impl Quadrant {
+    /// Map this quadrant to the corresponding tiling insertion position.
+    pub fn to_insert_position(self) -> crate::snap::InsertPosition {
+        use crate::snap::InsertPosition;
+        match self {
+            Quadrant::North => InsertPosition::Top,
+            Quadrant::South => InsertPosition::Bottom,
+            Quadrant::West => InsertPosition::Left,
+            Quadrant::East => InsertPosition::Right,
+        }
+    }
+}
+
 /// The direction children are stacked in a split container.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {

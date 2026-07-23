@@ -5,7 +5,7 @@ use crate::events::{Event, MouseEvent};
 
 use super::WindowManager;
 use crate::keybindings::ActionLayer;
-use crate::layout::{LayoutNode, LayoutPlan, RegionMap, SplitHandle, TilingLayout};
+use crate::layout::{InsertPosition, LayoutNode, LayoutPlan, RegionMap, SplitHandle, TilingLayout};
 use crate::window::{FloatRectSpec, WindowKey, WindowState};
 
 impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> WindowManager<C, L, O> {
@@ -782,7 +782,11 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         }
     }
 
-    /// Re-insert a window into the tiling layout (attaches next to current focus).
+    /// Re-insert a window into the tiling layout.
+    ///
+    /// Spatially-aware: uses the window's floating position to determine
+    /// the correct insertion target and split direction. Falls back to
+    /// `current_focus` + `Right` only when no floating rect is available.
     pub(super) fn reattach_to_tiling_layout(&mut self, key: WindowKey) {
         use crate::layout::LayoutNode;
         if self.layout_contains(key) {
@@ -792,21 +796,51 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             self.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(key)));
             return;
         }
+
+        // Capture state before mutable borrow of managed_layout
         let current_focus = *self.focus.current();
+        let floating_info = self
+            .window(key)
+            .and_then(|w| w.floating_rect)
+            .map(|spec| spec.resolve(self.managed_area));
+
         let Some(layout) = self.managed_layout.as_mut() else {
             return;
         };
+
+        // Try spatial placement via floating_rect
+        if let Some(rect) = floating_info {
+            let (cx, cy) = rect.center();
+            let regions = layout.regions(self.managed_area);
+            let weight = crate::constants::CELL_ASPECT_RATIO;
+            if let Some((target_key, target_rect)) =
+                term_wm_layout_engine::resolve_target(cx, cy, &regions, weight)
+            {
+                let quad = term_wm_layout_engine::detect_quadrant(
+                    cx as u16,
+                    cy as u16,
+                    &target_rect,
+                );
+                let pos = quad.to_insert_position();
+                let inserted = layout.root_mut().insert_leaf(target_key, key, pos);
+                if !inserted {
+                    layout.split_root(key, pos);
+                }
+                return;
+            }
+        }
+
+        // Absolute fallback: window was never floating — use current_focus
         if current_focus == key {
-            // Focus was previously set to this window; insert at root.
-            layout.split_root(key, crate::layout::InsertPosition::Right);
+            layout.split_root(key, InsertPosition::Right);
             return;
         }
         let inserted =
             layout
                 .root_mut()
-                .insert_leaf(current_focus, key, crate::layout::InsertPosition::Right);
+                .insert_leaf(current_focus, key, InsertPosition::Right);
         if !inserted {
-            layout.split_root(key, crate::layout::InsertPosition::Right);
+            layout.split_root(key, InsertPosition::Right);
         }
     }
 }
