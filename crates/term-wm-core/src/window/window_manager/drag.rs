@@ -363,17 +363,25 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.tile_window_key(key)
     }
 
-    /// Try to spawn the first window as floating with a sensible default size
-    /// on wide screens. Returns true if the window was set floating.
+    /// Try to spawn the window as floating with a sensible default size.
+    /// Returns true if the window was set floating.
+    ///
+    /// Succeeds when:
+    /// - No active tiling layout AND all existing windows are floating (or workspace empty)
     pub fn try_spawn_floating_default(&mut self, key: WindowKey) -> bool {
-        if self.managed_layout.is_some() || !self.mapped_windows().is_empty() {
-            return false;
+        if self.managed_layout.is_some() {
+            return false; // Active tiling layout, tile normally
+        }
+        if !self.mapped_windows().is_empty() {
+            let all_floating = self
+                .mapped_windows()
+                .iter()
+                .all(|k| self.is_window_floating(*k));
+            if !all_floating {
+                return false; // Mixed state, let tile_window handle it
+            }
         }
         let area = self.managed_area;
-        const WIDE_SCREEN_THRESHOLD: u16 = 120;
-        if area.width <= WIDE_SCREEN_THRESHOLD {
-            return false;
-        }
         let default_w = 80u16.min(area.width);
         let default_h = 24u16.min(area.height);
         let x = area.x + (area.width.saturating_sub(default_w) / 2) as i32;

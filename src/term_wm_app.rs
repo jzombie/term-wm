@@ -138,6 +138,7 @@ impl TermWmApp {
         if !self.wm.try_spawn_floating_default(key) {
             self.wm.tile_window(key);
         }
+        self.wm.set_focus(key);
         self.window_keys.push(key);
         key
     }
