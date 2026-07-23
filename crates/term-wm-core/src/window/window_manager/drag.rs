@@ -5,7 +5,7 @@ use term_wm_layout_engine::{EdgeResistance, LayoutRect, detect_corner_snap, dete
 
 use super::{SnapPreviewState, WindowManager};
 use crate::layout::{InsertPosition, LayoutNode, TilingLayout};
-use crate::window::WindowKey;
+use crate::window::{WindowKey, WindowState};
 
 /// Cells from screen edge that triggers edge-snap preview.
 const EDGE_SNAP_THRESHOLD: u16 = 3;
@@ -535,10 +535,35 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         if self.managed_layout.is_some() {
             self.float_all_windows();
         } else {
-            let keys = self.mapped_windows();
-            for key in &keys {
-                self.tile_window_key(*key);
+            // Collect mapped windows in current Z-order sequence so BSP tree
+            // construction is deterministic and matches visual hierarchy.
+            let keys: Vec<WindowKey> = self
+                .z_order
+                .iter()
+                .copied()
+                .filter(|&k| self.window_state(k) == Some(WindowState::Mapped))
+                .collect();
+
+            if keys.is_empty() {
+                return;
             }
+
+            // Step 1: Clear floating specs for all windows atomically
+            // so no per-window hook re-introduces floating mid-transition.
+            for &key in &keys {
+                self.clear_floating_rect(key);
+            }
+
+            // Step 2: Build a fresh balanced tiling layout tree in a single pass
+            let mut layout = crate::layout::TilingLayout::new(crate::layout::LayoutNode::leaf(keys[0]));
+            for &key in &keys[1..] {
+                layout.insert_window_balanced(key, self.managed_area);
+            }
+            self.managed_layout = Some(layout);
+
+            // Step 3: Re-evaluate draw order and mark dirty
+            self.bifurcate_draw_order();
+            self.mark_layout_dirty();
         }
     }
 

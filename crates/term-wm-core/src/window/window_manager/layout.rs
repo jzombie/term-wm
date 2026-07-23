@@ -750,25 +750,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     pub(super) fn bring_to_front_key(&mut self, key: WindowKey) {
-        let has_other_floating = self.windows.iter().any(|(k, w)| {
-            k != key && w.state == WindowState::Mapped && w.is_floating()
-        });
-
         if !self.is_window_floating(key) {
-            if has_other_floating {
-                // Promote to floating using its current region so it can
-                // move to the front of the draw order.
-                let current_region = self.region_or_fallback(key, 0);
-                self.detach_from_tiling_layout(key);
-                self.set_floating_rect(
-                    key,
-                    Some(crate::window::FloatRectSpec::Absolute(current_region)),
-                );
-            } else {
-                return;
-            }
+            return;
         }
-
         if let Some(pos) = self.z_order.iter().position(|&x| x == key) {
             let item = self.z_order.remove(pos);
             self.z_order.push(item);
