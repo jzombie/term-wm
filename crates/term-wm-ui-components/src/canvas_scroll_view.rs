@@ -52,27 +52,7 @@ impl<C> CanvasScrollView<C> {
     }
 }
 
-fn translate_mouse_event(
-    event: &Event,
-    screen_area: LayoutRect,
-    offset_x: usize,
-    offset_y: usize,
-) -> Option<Event> {
-    let Event::Mouse(mouse) = event else {
-        return Some(event.clone());
-    };
-    let v_x = i32::from(mouse.column) - screen_area.x + offset_x as i32;
-    let v_y = i32::from(mouse.row) - screen_area.y + offset_y as i32;
-    if v_x < 0 || v_y < 0 || v_x > u16::MAX as i32 || v_y > u16::MAX as i32 {
-        return None;
-    }
-    Some(Event::Mouse(term_wm_core::events::MouseEvent {
-        kind: mouse.kind,
-        modifiers: mouse.modifiers,
-        column: v_x as u16,
-        row: v_y as u16,
-    }))
-}
+
 
 impl<C: Component<TermWmAction>> Component<TermWmAction> for CanvasScrollView<C> {
     fn desired_height(&self, width: u16) -> u16 {
@@ -195,10 +175,6 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for CanvasScrollView<C>
             return EventResult::Ignored;
         }
 
-        let vp = ctx.viewport();
-        let Some(translated_event) = translate_mouse_event(event, screen_area, vp.offset_x, vp.offset_y)
-        else { return EventResult::Ignored; };
-
         let virtual_ctx = ctx
             .with_viewport(
                 ScrollViewport {
@@ -209,7 +185,15 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for CanvasScrollView<C>
             )
             .with_screen_area(LayoutRect { x: 0, y: 0, width: cw, height: ch });
 
-        self.inner.handle_events(&translated_event, &virtual_ctx)
+        // Translate mouse events using canonical centralized method
+        let Event::Mouse(mouse) = event else {
+            return self.inner.handle_events(event, &virtual_ctx);
+        };
+        let vp = ctx.viewport();
+        let Some(translated) = mouse.to_local_offset(screen_area, vp.offset_x, vp.offset_y, cw, ch) else {
+            return EventResult::Ignored;
+        };
+        self.inner.handle_events(&Event::Mouse(translated), &virtual_ctx)
     }
 
     fn update(&mut self, action: TermWmAction, ctx: &ComponentContext, actions: &mut VecDeque<(WindowKey, TermWmAction)>) {
