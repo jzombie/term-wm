@@ -1114,43 +1114,11 @@ pub fn render_handles_masked(
                     }
                     if let Some(cell) = buffer.cell_mut((x, y)) {
                         cell.reset();
-                        cell.set_symbol("·");
-                        cell.set_style(style);
-                    }
-                }
-            }
-        }
-        match handle.direction {
-            Direction::Horizontal => {
-                let x = hr.x + hr.width / 2;
-                let y_center = hr.y + hr.height / 2;
-                for offset in 0..3 {
-                    let y = y_center.saturating_sub(1).saturating_add(offset);
-                    if y < hr.y || y >= hr.y.saturating_add(hr.height) {
-                        continue;
-                    }
-                    if is_obscured(x, y) {
-                        continue;
-                    }
-                    if let Some(cell) = buffer.cell_mut((x, y)) {
-                        cell.set_symbol(if is_hovered { "O" } else { "o" });
-                        cell.set_style(style);
-                    }
-                }
-            }
-            Direction::Vertical => {
-                let y = hr.y + hr.height / 2;
-                let x_center = hr.x + hr.width / 2;
-                for offset in 0..3 {
-                    let x = x_center.saturating_sub(1).saturating_add(offset);
-                    if x < hr.x || x >= hr.x.saturating_add(hr.width) {
-                        continue;
-                    }
-                    if is_obscured(x, y) {
-                        continue;
-                    }
-                    if let Some(cell) = buffer.cell_mut((x, y)) {
-                        cell.set_symbol(if is_hovered { "O" } else { "o" });
+                        let sym = match handle.direction {
+                            Direction::Horizontal => "│",
+                            Direction::Vertical => "─",
+                        };
+                        cell.set_symbol(sym);
                         cell.set_style(style);
                     }
                 }
