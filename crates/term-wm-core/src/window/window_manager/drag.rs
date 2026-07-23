@@ -426,6 +426,13 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     pub(super) fn tile_window_key(&mut self, key: WindowKey) -> bool {
         use crate::layout::LayoutNode;
+
+        // Capture floating rect center BEFORE clearing it
+        let floating_info = self
+            .floating_rect(key)
+            .map(|spec| spec.resolve(self.managed_area))
+            .map(|r| r.center());
+
         self.clear_floating_rect(key);
 
         if self.layout_contains(key)
@@ -438,7 +445,28 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         }
 
         if let Some(ref mut layout) = self.managed_layout {
-            layout.insert_window_balanced(key, self.managed_area);
+            if let Some((cx, cy)) = floating_info {
+                let regions = layout.regions(self.managed_area);
+                let weight = crate::constants::CELL_ASPECT_RATIO;
+                if let Some((target_key, target_rect)) =
+                    term_wm_layout_engine::resolve_target(cx, cy, &regions, weight)
+                {
+                    let quad = term_wm_layout_engine::detect_quadrant(
+                        cx as u16,
+                        cy as u16,
+                        &target_rect,
+                    );
+                    let pos = quad.to_insert_position();
+                    let inserted = layout.root_mut().insert_leaf(target_key, key, pos);
+                    if !inserted {
+                        layout.split_root(key, pos);
+                    }
+                } else {
+                    layout.insert_window_balanced(key, self.managed_area);
+                }
+            } else {
+                layout.insert_window_balanced(key, self.managed_area);
+            }
         } else {
             self.managed_layout = Some(crate::layout::TilingLayout::new(LayoutNode::leaf(key)));
         }

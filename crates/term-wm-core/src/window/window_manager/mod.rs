@@ -5621,4 +5621,74 @@ mod tests {
         wm.close_command_menu();
         assert!(!wm.command_menu_visible());
     }
+
+    #[test]
+    fn tile_window_key_respects_quadrant() {
+        use crate::layout::{Direction, LayoutNode, TilingLayout};
+        use crate::window::{FloatRect, FloatRectSpec};
+
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.set_panel_visible(false);
+        let keys = make_keys(&mut wm, 2);
+
+        // Create a single-window tiled layout (keys[0]).
+        wm.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(keys[0])));
+        let area = Rect { x: 0, y: 0, width: 80, height: 24 };
+        wm.register_managed_layout(area);
+
+        // Verify starting state: 1 tiled window, no floating rect on keys[1].
+        assert!(wm.layout_contains(keys[0]));
+        assert!(!wm.layout_contains(keys[1]));
+        assert!(wm.floating_rect(keys[1]).is_none());
+
+        // Set keys[1] as floating with center in the EASTERN half of keys[0]'s tile.
+        // keys[0]'s region spans x=0..80, center at (40, 12).
+        // Place keys[1] center at (60, 12) — clearly in the East quadrant.
+        wm.set_floating_rect(
+            keys[1],
+            Some(FloatRectSpec::Absolute(FloatRect {
+                x: 50,
+                y: 6,
+                width: 20,
+                height: 12,
+            })),
+        );
+        assert!(wm.floating_rect(keys[1]).is_some());
+
+        // Tile keys[1] into the layout.
+        wm.tile_window_key(keys[1]);
+
+        // Both keys should now be in the tiling tree.
+        assert!(wm.layout_contains(keys[0]));
+        assert!(wm.layout_contains(keys[1]));
+
+        // The root of the layout should be a horizontal split (East → Right).
+        let root = wm.managed_layout.as_ref().unwrap().root();
+        match root {
+            LayoutNode::Split { direction, children, .. } => {
+                assert_eq!(*direction, Direction::Horizontal, "should split horizontally for East quadrant");
+                assert_eq!(children.len(), 2, "should have 2 children after split");
+            }
+            other => panic!("expected a Split at root, got {:?}", other),
+        }
+
+        // Compute regions from the layout tree and verify spatial ordering.
+        let layout = wm.managed_layout.as_ref().unwrap();
+        let regions = layout.root().layout(area);
+        let r0 = regions.iter().find(|(k, _)| *k == keys[0]).map(|(_, r)| *r).expect("keys[0] region");
+        let r1 = regions.iter().find(|(k, _)| *k == keys[1]).map(|(_, r)| *r).expect("keys[1] region");
+        assert!(
+            r1.x >= r0.x + i32::from(r0.width),
+            "keys[1] should be to the right of keys[0]: r1.x={} r0.x={} r0.w={}",
+            r1.x,
+            r0.x,
+            r0.width,
+        );
+    }
 }
