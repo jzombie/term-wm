@@ -2497,7 +2497,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                     };
                     format!("Toggle {mode} Mode").into()
                 },
-                icon: None,
+                icon: Some("⊞"),
                 action: crate::actions::TermWmAction::ToggleTiling,
                 disabled: self.is_monocle(),
             },
