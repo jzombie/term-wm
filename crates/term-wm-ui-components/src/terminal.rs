@@ -2608,7 +2608,9 @@ mod tests {
                 sticky_bottom: false,
             },
         ));
-        let handle = ScrollHandle { scroll: shared.clone() };
+        let handle = ScrollHandle {
+            scroll: shared.clone(),
+        };
         let ctx = make_ctx(50, handle);
         let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
         let mut queue = std::collections::VecDeque::new();
@@ -2637,7 +2639,9 @@ mod tests {
                 sticky_bottom: false,
             },
         ));
-        let handle = ScrollHandle { scroll: shared.clone() };
+        let handle = ScrollHandle {
+            scroll: shared.clone(),
+        };
         let ctx = make_ctx(50, handle);
         let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
         let mut queue = std::collections::VecDeque::new();
