@@ -247,14 +247,15 @@ impl Component<TermWmAction> for TerminalComponent {
     fn update(
         &mut self,
         action: TermWmAction,
-        _ctx: &ComponentContext,
+        ctx: &ComponentContext,
         _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
     ) {
         match action {
             TermWmAction::KeyToBytes(bytes) => {
                 self.selection.borrow_mut().clear();
-                if self.pane.borrow_mut().scrollback() > 0 {
-                    self.pane.borrow_mut().set_scrollback(0);
+                self.pane.borrow_mut().set_scrollback(0);
+                if let Some(handle) = ctx.scroll_handle() {
+                    handle.scroll_vertical_to(usize::MAX);
                 }
                 if let Err(err) = self.pane.borrow_mut().write_bytes(&bytes) {
                     tracing::warn!(?err, "terminal input write failed");
@@ -284,8 +285,9 @@ impl Component<TermWmAction> for TerminalComponent {
                     text.as_bytes().to_vec()
                 };
                 self.selection.borrow_mut().clear();
-                if self.pane.borrow_mut().scrollback() > 0 {
-                    self.pane.borrow_mut().set_scrollback(0);
+                self.pane.borrow_mut().set_scrollback(0);
+                if let Some(handle) = ctx.scroll_handle() {
+                    handle.scroll_vertical_to(usize::MAX);
                 }
                 if let Err(err) = self.pane.borrow_mut().write_bytes(&bytes) {
                     tracing::warn!(?err, "terminal paste write failed");
@@ -2588,6 +2590,42 @@ mod tests {
         assert_eq!(
             written, "",
             "ClipboardPaste with empty text must write nothing"
+        );
+    }
+
+    #[test]
+    fn key_to_bytes_scrolls_to_bottom() {
+        let (handle, shared) = make_handle();
+        let ctx = make_ctx(50, handle);
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        let mut queue = std::collections::VecDeque::new();
+
+        term.update(TermWmAction::KeyToBytes(vec![b'a']), &ctx, &mut queue);
+
+        assert_eq!(
+            shared.borrow().pending_offset_y,
+            Some(usize::MAX),
+            "KeyToBytes must set pending_offset_y to bottom"
+        );
+    }
+
+    #[test]
+    fn clipboard_paste_scrolls_to_bottom() {
+        let (handle, shared) = make_handle();
+        let ctx = make_ctx(50, handle);
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        let mut queue = std::collections::VecDeque::new();
+
+        term.update(
+            TermWmAction::ClipboardPaste("hello".into()),
+            &ctx,
+            &mut queue,
+        );
+
+        assert_eq!(
+            shared.borrow().pending_offset_y,
+            Some(usize::MAX),
+            "ClipboardPaste must set pending_offset_y to bottom"
         );
     }
 }
