@@ -255,6 +255,8 @@ pub struct WindowManager<
     closed_windows: Vec<WindowKey>,
     pub(crate) managed_area: Rect,
     pub(crate) monocle_mode_active: bool,
+    monocle_width_threshold: u16,
+    last_terminal_width: u16,
     pub(crate) hitbox_registry: HitboxRegistry,
     app_ctx: Arc<AppContext>,
     #[allow(dead_code)]
@@ -681,6 +683,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             closed_windows: Vec::new(),
             managed_area: Rect::default(),
             monocle_mode_active: false,
+            monocle_width_threshold: 80,
+            last_terminal_width: 0,
             hitbox_registry: HitboxRegistry::new(),
             app_ctx,
             supported_menu_actions,

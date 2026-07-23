@@ -159,6 +159,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// window borders for the current tiling/floating/monocle state.
     /// Called every render frame.
     pub fn update_monocle_mode(&mut self, terminal_width: u16) {
+        self.last_terminal_width = terminal_width;
         if let Some(ref mut layout) = self.managed_layout {
             layout.update_monocle_state(terminal_width);
         }
@@ -180,10 +181,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         if self.monocle_mode_active {
             return true;
         }
-        self.managed_layout
-            .as_ref()
-            .map(|l| l.is_monocle())
-            .unwrap_or(false)
+        if self.last_terminal_width > 0
+            && self.last_terminal_width < self.monocle_width_threshold
+        {
+            return true;
+        }
+        false
     }
 
     /// Toggle user-requested monocle mode on/off.
