@@ -678,6 +678,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 TermWmAction::MinimizeWindow,
                 TermWmAction::CloseWindow,
                 TermWmAction::ToggleDirectMode,
+                TermWmAction::ToggleMonocle,
             ]
         });
         let mouse_capture_enabled = config.mouse_capture_enabled;
@@ -2394,6 +2395,11 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             action: TermWmAction::ToggleDirectMode,
             label: "Toggle Direct Mode",
             symbol: "D",
+        });
+        btns.push(WmButton {
+            action: TermWmAction::ToggleMonocle,
+            label: "Toggle Monocle Mode",
+            symbol: "M",
         });
         btns
     }
