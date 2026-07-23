@@ -501,6 +501,19 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.float_all_windows();
     }
 
+    /// Toggle between tiled and floating layout.
+    /// If any windows are tiled, float all. Otherwise tile all floating windows.
+    pub fn toggle_tiling(&mut self) {
+        if self.managed_layout.is_some() {
+            self.float_all_windows();
+        } else {
+            let keys = self.mapped_windows();
+            for key in &keys {
+                self.tile_window_key(*key);
+            }
+        }
+    }
+
     /// Tile all windows using position-based layout.
     /// Non-anchor windows are sorted by Euclidean proximity to the anchor,
     /// then the anchor is inserted at the snap position.

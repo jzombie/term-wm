@@ -408,6 +408,9 @@ where
                             TermWmAction::ToggleMonocle => {
                                 app.wm().toggle_monocle();
                             }
+                            TermWmAction::ToggleTiling => {
+                                app.wm().toggle_tiling();
+                            }
                             TermWmAction::ToggleMouseCapture => app.wm().toggle_mouse_capture(),
                             TermWmAction::ToggleClipboardMode => {
                                 app.wm().toggle_clipboard_enabled()

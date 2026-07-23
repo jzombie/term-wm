@@ -686,6 +686,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 TermWmAction::CloseWindow,
                 TermWmAction::ToggleDirectMode,
                 TermWmAction::ToggleMonocle,
+                TermWmAction::ToggleTiling,
             ]
         });
         let mouse_capture_enabled = config.mouse_capture_enabled;
@@ -2486,6 +2487,19 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 icon: Some("▢"),
                 action: crate::actions::TermWmAction::ToggleMonocle,
                 disabled: false,
+            },
+            MenuItem {
+                label: {
+                    let mode = if self.managed_layout.is_some() {
+                        "Float"
+                    } else {
+                        "Tile"
+                    };
+                    format!("Toggle {mode} Mode").into()
+                },
+                icon: None,
+                action: crate::actions::TermWmAction::ToggleTiling,
+                disabled: self.is_monocle(),
             },
         ];
 
