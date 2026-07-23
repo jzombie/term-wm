@@ -521,9 +521,10 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 // If floating windows are present or there's no tiling layout,
                 // and this window has no floating spec, assign a default
                 // cascading rect so it floats with the rest of the workspace.
-                let has_other_floating = self.windows.values().any(|w| {
-                    w.state == WindowState::Mapped && w.is_floating()
-                });
+                let has_other_floating = self
+                    .windows
+                    .values()
+                    .any(|w| w.state == WindowState::Mapped && w.is_floating());
                 let floating_mode = self.managed_layout.is_none();
 
                 if !self.is_window_floating(key) && (has_other_floating || floating_mode) {
@@ -2430,7 +2431,11 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized);
             btns.push(WmButton {
                 action: TermWmAction::MaximizeWindow,
-                label: if is_maxed { "Restore Window" } else { "Maximize Window" },
+                label: if is_maxed {
+                    "Restore Window"
+                } else {
+                    "Maximize Window"
+                },
                 symbol: if is_maxed { "─" } else { "▢" },
             });
             btns.push(WmButton {
@@ -5688,7 +5693,12 @@ mod tests {
 
         // Create a single-window tiled layout (keys[0]).
         wm.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(keys[0])));
-        let area = Rect { x: 0, y: 0, width: 80, height: 24 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         wm.register_managed_layout(area);
 
         // Verify starting state: 1 tiled window, no floating rect on keys[1].
@@ -5720,8 +5730,16 @@ mod tests {
         // The root of the layout should be a horizontal split (East → Right).
         let root = wm.managed_layout.as_ref().unwrap().root();
         match root {
-            LayoutNode::Split { direction, children, .. } => {
-                assert_eq!(*direction, Direction::Horizontal, "should split horizontally for East quadrant");
+            LayoutNode::Split {
+                direction,
+                children,
+                ..
+            } => {
+                assert_eq!(
+                    *direction,
+                    Direction::Horizontal,
+                    "should split horizontally for East quadrant"
+                );
                 assert_eq!(children.len(), 2, "should have 2 children after split");
             }
             other => panic!("expected a Split at root, got {:?}", other),
@@ -5730,8 +5748,16 @@ mod tests {
         // Compute regions from the layout tree and verify spatial ordering.
         let layout = wm.managed_layout.as_ref().unwrap();
         let regions = layout.root().layout(area);
-        let r0 = regions.iter().find(|(k, _)| *k == keys[0]).map(|(_, r)| *r).expect("keys[0] region");
-        let r1 = regions.iter().find(|(k, _)| *k == keys[1]).map(|(_, r)| *r).expect("keys[1] region");
+        let r0 = regions
+            .iter()
+            .find(|(k, _)| *k == keys[0])
+            .map(|(_, r)| *r)
+            .expect("keys[0] region");
+        let r1 = regions
+            .iter()
+            .find(|(k, _)| *k == keys[1])
+            .map(|(_, r)| *r)
+            .expect("keys[1] region");
         assert!(
             r1.x >= r0.x + i32::from(r0.width),
             "keys[1] should be to the right of keys[0]: r1.x={} r0.x={} r0.w={}",

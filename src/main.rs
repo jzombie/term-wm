@@ -160,9 +160,12 @@ impl App {
         // protected from destruction on close.
         {
             let component = WmSystemPanelComponent::new();
-            let key = app.inner.wm().create_window(AppRootComponent::Core(
-                CoreWmComponent::SystemPanel(component),
-            ));
+            let key =
+                app.inner
+                    .wm()
+                    .create_window(AppRootComponent::Core(CoreWmComponent::SystemPanel(
+                        component,
+                    )));
             app.inner
                 .wm()
                 .set_close_policy(key, term_wm::window::ClosePolicy::Unmap);
@@ -298,8 +301,8 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
 
     fn toggle_debug_window(&mut self) {
         let Some(key) = self.debug_key else { return };
-        let is_mapped = self.inner.wm().window_state(key)
-            == Some(term_wm::window::WindowState::Mapped);
+        let is_mapped =
+            self.inner.wm().window_state(key) == Some(term_wm::window::WindowState::Mapped);
         if is_mapped {
             self.inner
                 .wm()
@@ -314,9 +317,11 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
     }
 
     fn toggle_system_panel(&mut self) {
-        let Some(key) = self.system_panel_key else { return };
-        let is_mapped = self.inner.wm().window_state(key)
-            == Some(term_wm::window::WindowState::Mapped);
+        let Some(key) = self.system_panel_key else {
+            return;
+        };
+        let is_mapped =
+            self.inner.wm().window_state(key) == Some(term_wm::window::WindowState::Mapped);
         if is_mapped {
             self.inner
                 .wm()

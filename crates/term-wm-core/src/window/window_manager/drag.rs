@@ -451,11 +451,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 if let Some((target_key, target_rect)) =
                     term_wm_layout_engine::resolve_target(cx, cy, &regions, weight)
                 {
-                    let quad = term_wm_layout_engine::detect_quadrant(
-                        cx as u16,
-                        cy as u16,
-                        &target_rect,
-                    );
+                    let quad =
+                        term_wm_layout_engine::detect_quadrant(cx as u16, cy as u16, &target_rect);
                     let pos = quad.to_insert_position();
                     let inserted = layout.root_mut().insert_leaf(target_key, key, pos);
                     if !inserted {

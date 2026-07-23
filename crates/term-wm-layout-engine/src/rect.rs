@@ -224,10 +224,12 @@ pub struct SizeConstraints {
 impl SizeConstraints {
     pub fn fits_split(&self, area: &LayoutRect, orientation: Orientation) -> bool {
         match orientation {
-            Orientation::Horizontal =>
-                area.width / 2 >= self.min_width && area.height >= self.min_height,
-            Orientation::Vertical =>
-                area.height / 2 >= self.min_height && area.width >= self.min_width,
+            Orientation::Horizontal => {
+                area.width / 2 >= self.min_width && area.height >= self.min_height
+            }
+            Orientation::Vertical => {
+                area.height / 2 >= self.min_height && area.width >= self.min_width
+            }
         }
     }
 }

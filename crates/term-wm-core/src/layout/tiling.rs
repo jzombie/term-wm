@@ -613,9 +613,10 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
             if y <= min_y || y >= max_y {
                 continue;
             }
-            if rects.iter().any(|(_, r)| {
-                r.y < y && r.y.saturating_add(r.height as i32) > y
-            }) {
+            if rects
+                .iter()
+                .any(|(_, r)| r.y < y && r.y.saturating_add(r.height as i32) > y)
+            {
                 continue;
             }
             let mut top = Vec::new();
@@ -630,14 +631,8 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
             if !top.is_empty() && !bottom.is_empty() {
                 return Self::Split {
                     direction: Direction::Vertical,
-                    children: vec![
-                        Self::from_rects(&top),
-                        Self::from_rects(&bottom),
-                    ],
-                    weights: vec![
-                        (y - min_y).max(1) as u16,
-                        (max_y - y).max(1) as u16,
-                    ],
+                    children: vec![Self::from_rects(&top), Self::from_rects(&bottom)],
+                    weights: vec![(y - min_y).max(1) as u16, (max_y - y).max(1) as u16],
                     resizable: true,
                 };
             }
@@ -655,9 +650,10 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
             if x <= min_x || x >= max_x {
                 continue;
             }
-            if rects.iter().any(|(_, r)| {
-                r.x < x && r.x.saturating_add(r.width as i32) > x
-            }) {
+            if rects
+                .iter()
+                .any(|(_, r)| r.x < x && r.x.saturating_add(r.width as i32) > x)
+            {
                 continue;
             }
             let mut left = Vec::new();
@@ -672,14 +668,8 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
             if !left.is_empty() && !right.is_empty() {
                 return Self::Split {
                     direction: Direction::Horizontal,
-                    children: vec![
-                        Self::from_rects(&left),
-                        Self::from_rects(&right),
-                    ],
-                    weights: vec![
-                        (x - min_x).max(1) as u16,
-                        (max_x - x).max(1) as u16,
-                    ],
+                    children: vec![Self::from_rects(&left), Self::from_rects(&right)],
+                    weights: vec![(x - min_x).max(1) as u16, (max_x - x).max(1) as u16],
                     resizable: true,
                 };
             }
