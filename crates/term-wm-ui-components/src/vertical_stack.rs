@@ -84,14 +84,6 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for VerticalStackCompon
             return;
         }
 
-        // Report content size to the enclosing ScrollView so it knows
-        // whether a scrollbar is needed.
-        let content_h = self.desired_height(area.width) as usize;
-        let content_w = area.width as usize;
-        if let Some(handle) = ctx.scroll_handle() {
-            handle.set_content_size(content_w, content_h);
-        }
-
         let parent_screen = ctx.screen_area().unwrap_or_default();
         let scroll_y = ctx
             .scroll_handle()
@@ -111,7 +103,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for VerticalStackCompon
 
                 let child_local = LayoutRect {
                     x: area.x,
-                    y: area.y + child_virtual_y - scroll_y,
+                    y: area.y + child_virtual_y,
                     width: area.width,
                     height: remaining,
                 };
@@ -124,7 +116,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for VerticalStackCompon
 
             let child_local = LayoutRect {
                 x: area.x,
-                y: area.y + child_virtual_y - scroll_y,
+                y: area.y + child_virtual_y,
                 width: area.width,
                 height: child_h,
             };
