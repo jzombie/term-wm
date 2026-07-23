@@ -498,7 +498,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 self.focus_add(key);
             }
             (_, WindowState::Unmapped) => {
-                self.clear_floating_rect(key);
+                // Preserve floating_rect so re-mapping restores previous
+                // geometry and placement mode (ClosePolicy::Unmap windows).
                 self.z_order.retain(|x| *x != key);
                 self.managed_draw_order.retain(|x| *x != key);
                 self.regions.remove(key);
@@ -516,8 +517,28 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 if !self.managed_draw_order.contains(&key) {
                     self.managed_draw_order.push(key);
                 }
-                self.reattach_to_tiling_layout(key);
+
+                // If floating windows are present or there's no tiling layout,
+                // and this window has no floating spec, assign a default
+                // cascading rect so it floats with the rest of the workspace.
+                let has_other_floating = self.windows.values().any(|w| {
+                    w.state == WindowState::Mapped && w.is_floating()
+                });
+                let floating_mode = self.managed_layout.is_none();
+
+                if !self.is_window_floating(key) && (has_other_floating || floating_mode) {
+                    let index = self.windows.len().saturating_sub(1);
+                    let fallback = self.default_cascading_rect(index);
+                    self.set_floating_rect(
+                        key,
+                        Some(crate::window::FloatRectSpec::Absolute(fallback)),
+                    );
+                } else if !self.is_window_floating(key) {
+                    self.reattach_to_tiling_layout(key);
+                }
+
                 self.focus_add(key);
+                self.bring_to_front_key(key);
             }
             (WindowState::Mapped, WindowState::Shaded) => {
                 // Keep in z-order and draw order so chrome renders,
@@ -4784,8 +4805,8 @@ mod tests {
         assert_eq!(wm.window_state(target), Some(WindowState::Unmapped));
         assert!(!wm.z_order.contains(&target), "removed from z_order");
         assert!(
-            wm.window(target).is_some_and(|w| w.floating_rect.is_none()),
-            "floating rect cleared"
+            wm.window(target).is_some_and(|w| w.floating_rect.is_some()),
+            "floating rect preserved across Unmap"
         );
         // Focus ring auto-fallbacks via set_order removing current → first()
         assert!(

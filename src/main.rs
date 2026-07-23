@@ -292,6 +292,7 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
             self.inner
                 .wm()
                 .transition_window(key, term_wm::window::WindowState::Mapped);
+            self.inner.wm().focus_window_key(key);
         }
     }
 
@@ -307,6 +308,7 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
             self.inner
                 .wm()
                 .transition_window(key, term_wm::window::WindowState::Mapped);
+            self.inner.wm().focus_window_key(key);
             self.inner.wm().set_focus(key);
         }
     }
@@ -323,6 +325,7 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
             self.inner
                 .wm()
                 .transition_window(key, term_wm::window::WindowState::Mapped);
+            self.inner.wm().focus_window_key(key);
             self.inner.wm().set_focus(key);
         }
     }
