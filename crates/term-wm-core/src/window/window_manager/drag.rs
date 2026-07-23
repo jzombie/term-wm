@@ -4,7 +4,7 @@ use crate::components::{Component, Overlay, WmComponent};
 use term_wm_layout_engine::{EdgeResistance, LayoutRect, detect_corner_snap, detect_edge_snap};
 
 use super::{SnapPreviewState, WindowManager};
-use crate::layout::InsertPosition;
+use crate::layout::{InsertPosition, LayoutNode, TilingLayout};
 use crate::window::WindowKey;
 
 /// Cells from screen edge that triggers edge-snap preview.
@@ -213,12 +213,44 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             height: area.height,
         };
 
+        // Pre-compute position-based layout for cache (tile-all preview)
+        if self.snap_preview_cache.needs_recalc(mouse_x, mouse_y, dragging_key) {
+            let floating: Vec<_> = self
+                .regions
+                .ids()
+                .iter()
+                .filter(|key| self.is_window_floating(**key))
+                .map(|key| (*key, self.region(*key)))
+                .collect();
+            if !floating.is_empty() {
+                let positions = simulate_position_based_layout(floating, dragging_key, area);
+                let dragged_rect = self.region(dragging_key);
+                self.snap_preview_cache
+                    .update(mouse_x, mouse_y, dragged_rect, dragging_key, positions);
+            } else {
+                self.snap_preview_cache.clear();
+            }
+        }
+
         // Priority 1: Corner snap (smallest spatial region)
         if let Some(corner_pos) =
             detect_corner_snap(mouse_x, mouse_y, managed_layout_rect, CORNER_SNAP_THRESHOLD)
         {
             let preview = self
-                .get_projected_preview(dragging_key, SnapPreviewState::Corner(corner_pos), area)
+                .snap_preview_cache
+                .positions
+                .iter()
+                .find(|(k, _)| *k == dragging_key)
+                // Only use cache for multi-window tile-all preview
+                .filter(|_| self.snap_preview_cache.positions.len() > 1)
+                .map(|(_, r)| *r)
+                .or_else(|| {
+                    self.get_projected_preview(
+                        dragging_key,
+                        SnapPreviewState::Corner(corner_pos),
+                        area,
+                    )
+                })
                 .unwrap_or_else(|| {
                     let ep =
                         term_wm_layout_engine::corner_preview_rect(managed_layout_rect, corner_pos);
@@ -246,7 +278,20 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             detect_edge_snap(mouse_x, mouse_y, managed_layout_rect, EDGE_SNAP_THRESHOLD)
         {
             let preview = self
-                .get_projected_preview(dragging_key, SnapPreviewState::Edge(pos), area)
+                .snap_preview_cache
+                .positions
+                .iter()
+                .find(|(k, _)| *k == dragging_key)
+                // Only use cache for multi-window tile-all preview
+                .filter(|_| self.snap_preview_cache.positions.len() > 1)
+                .map(|(_, r)| *r)
+                .or_else(|| {
+                    self.get_projected_preview(
+                        dragging_key,
+                        SnapPreviewState::Edge(pos),
+                        area,
+                    )
+                })
                 .unwrap_or_else(|| {
                     let ep = term_wm_layout_engine::edge_preview_rect(managed_layout_rect, pos);
                     Rect {
@@ -348,15 +393,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             }
             self.snap_projection_cache = None;
 
-            let mut pending_snap = Vec::new();
-            for r_key in self.regions.ids() {
-                if r_key != key && self.is_window_floating(r_key) {
-                    pending_snap.push(r_key);
-                }
-            }
-            for float_key in pending_snap {
-                self.tile_window_key(float_key);
-            }
+            self.apply_position_based_layout(key, position, self.managed_area);
         }
     }
 
@@ -412,4 +449,162 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.focus_window_key(key);
         true
     }
+
+    /// Float all tiled windows, preserving their current screen positions.
+    /// Atomically clears the layout tree and sets floating rects for all.
+    pub(super) fn float_all_windows(&mut self) {
+        let tiled_keys: Vec<_> = self
+            .regions
+            .ids()
+            .iter()
+            .filter(|key| !self.is_window_floating(**key))
+            .copied()
+            .collect();
+
+        if tiled_keys.is_empty() {
+            return;
+        }
+
+        let regions: Vec<_> = tiled_keys
+            .iter()
+            .map(|key| (*key, self.region(*key)))
+            .collect();
+
+        self.managed_layout = None;
+
+        for (key, rect) in regions {
+            self.set_floating_rect(
+                key,
+                Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
+                    x: rect.x,
+                    y: rect.y,
+                    width: rect.width.max(1),
+                    height: rect.height.max(1),
+                })),
+            );
+        }
+    }
+
+    /// Float all windows. Called when a window decouples from tiling.
+    pub(super) fn execute_float_all(&mut self, _key: WindowKey) {
+        self.float_all_windows();
+    }
+
+    /// Tile all windows using position-based layout.
+    /// Non-anchor windows are sorted by Euclidean proximity to the anchor,
+    /// then the anchor is inserted at the snap position.
+    pub(super) fn apply_position_based_layout(
+        &mut self,
+        anchor_key: WindowKey,
+        snap_position: InsertPosition,
+        area: Rect,
+    ) {
+        let mut all_windows: Vec<_> = self
+            .regions
+            .ids()
+            .iter()
+            .map(|key| (*key, self.region(*key)))
+            .collect();
+
+        // Ensure anchor is included even if not in regions (e.g., floating-only window)
+        if !all_windows.iter().any(|(k, _)| *k == anchor_key) {
+            let rect = self
+                .floating_rect(anchor_key)
+                .map(|spec| spec.resolve(area))
+                .unwrap_or_else(|| self.region(anchor_key));
+            all_windows.push((anchor_key, rect));
+        }
+
+        if all_windows.is_empty() {
+            return;
+        }
+
+        let target_rect = all_windows
+            .iter()
+            .find(|(k, _)| *k == anchor_key)
+            .map(|(_, r)| *r)
+            .unwrap();
+
+        let others: Vec<_> = all_windows
+            .iter()
+            .filter(|(k, _)| *k != anchor_key)
+            .copied()
+            .collect();
+
+        for (key, _) in &all_windows {
+            self.clear_floating_rect(*key);
+        }
+
+        if others.is_empty() {
+            // Create a void split to preserve snap geometry
+            let mut layout = TilingLayout::new_void();
+            layout.split_root(anchor_key, snap_position);
+            self.managed_layout = Some(layout);
+            return;
+        }
+
+        let sorted = calculate_tiling_order(others, target_rect);
+        let mut layout = TilingLayout::new(LayoutNode::leaf(sorted[0].0));
+        for (key, _) in &sorted[1..] {
+            layout.insert_window_balanced(*key, area);
+        }
+        layout.split_root(anchor_key, snap_position);
+        self.managed_layout = Some(layout);
+    }
+}
+
+/// Euclidean distance sort: sorts windows by squared distance from
+/// the target window's center. Y-axis distances are doubled to
+/// account for terminal cell aspect ratio (~2:1 height:width).
+fn calculate_tiling_order(
+    mut floating_rects: Vec<(WindowKey, Rect)>,
+    target_rect: Rect,
+) -> Vec<(WindowKey, Rect)> {
+    let target_center_y = target_rect.y + (target_rect.height as i32) / 2;
+    let target_center_x = target_rect.x + (target_rect.width as i32) / 2;
+
+    floating_rects.sort_by(|a, b| {
+        let a_dy = ((a.1.y + (a.1.height as i32) / 2) - target_center_y) * 2;
+        let a_dx = (a.1.x + (a.1.width as i32) / 2) - target_center_x;
+        let b_dy = ((b.1.y + (b.1.height as i32) / 2) - target_center_y) * 2;
+        let b_dx = (b.1.x + (b.1.width as i32) / 2) - target_center_x;
+
+        (a_dx * a_dx + a_dy * a_dy).cmp(&(b_dx * b_dx + b_dy * b_dy))
+    });
+    floating_rects
+}
+
+/// Pure simulation of the position-based layout for preview caching.
+/// Builds an ephemeral `TilingLayout`, projects against workspace bounds,
+/// and returns projected rects in sorted key order. Never mutates state.
+fn simulate_position_based_layout(
+    windows: Vec<(WindowKey, Rect)>,
+    anchor_key: WindowKey,
+    workspace_bounds: Rect,
+) -> Vec<(WindowKey, Rect)> {
+    if windows.is_empty() {
+        return Vec::new();
+    }
+
+    let target_rect = windows
+        .iter()
+        .find(|(k, _)| *k == anchor_key)
+        .map(|(_, r)| *r)
+        .expect("anchor_key must be in windows");
+
+    let sorted = calculate_tiling_order(windows, target_rect);
+
+    let mut layout = TilingLayout::new(LayoutNode::leaf(sorted[0].0));
+    for (key, _) in &sorted[1..] {
+        layout.insert_window_balanced(*key, workspace_bounds);
+    }
+
+    let mut regions = layout.regions(workspace_bounds);
+    sorted
+        .iter()
+        .filter_map(|(k, _)| {
+            let idx = regions.iter().position(|(rk, _)| rk == k)?;
+            Some((*k, regions.swap_remove(idx).1))
+        })
+        .collect()
 }

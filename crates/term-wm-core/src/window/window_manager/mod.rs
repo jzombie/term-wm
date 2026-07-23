@@ -117,6 +117,64 @@ pub(crate) enum SnapPreviewState {
     VoidInsert(usize),
 }
 
+/// Cached snap preview state to avoid recalculating the full
+/// position-based layout on every drag frame.
+/// Invalidates when the cursor exits the cached rect or crosses
+/// a quadrant boundary.
+struct SnapPreviewCache {
+    positions: Vec<(WindowKey, Rect)>,
+    cached_rect: Option<Rect>,
+    cached_quadrant: Option<(bool, bool)>,
+    dragged_key: Option<WindowKey>,
+}
+
+impl SnapPreviewCache {
+    fn needs_recalc(&self, mouse_x: u16, mouse_y: u16, dragged: WindowKey) -> bool {
+        let Some(rect) = self.cached_rect else {
+            return true;
+        };
+        if self.dragged_key != Some(dragged) {
+            return true;
+        }
+        let mx = mouse_x as i32;
+        let my = mouse_y as i32;
+        let right = rect.x.saturating_add(i32::from(rect.width));
+        let bottom = rect.y.saturating_add(i32::from(rect.height));
+        let out_of_bounds = mx < rect.x || mx >= right || my < rect.y || my >= bottom;
+        let cur_q = (
+            mx >= rect.x.saturating_add(i32::from(rect.width) / 2),
+            my >= rect.y.saturating_add(i32::from(rect.height) / 2),
+        );
+        out_of_bounds || self.cached_quadrant != Some(cur_q)
+    }
+
+    fn update(
+        &mut self,
+        mouse_x: u16,
+        mouse_y: u16,
+        rect: Rect,
+        dragged: WindowKey,
+        pos: Vec<(WindowKey, Rect)>,
+    ) {
+        let mx = mouse_x as i32;
+        let my = mouse_y as i32;
+        self.cached_quadrant = Some((
+            mx >= rect.x.saturating_add(i32::from(rect.width) / 2),
+            my >= rect.y.saturating_add(i32::from(rect.height) / 2),
+        ));
+        self.cached_rect = Some(rect);
+        self.dragged_key = Some(dragged);
+        self.positions = pos;
+    }
+
+    fn clear(&mut self) {
+        self.cached_rect = None;
+        self.cached_quadrant = None;
+        self.dragged_key = None;
+        self.positions.clear();
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ScrollState {
     pub offset: usize,
@@ -243,6 +301,7 @@ pub struct WindowManager<
     /// Cache for BSP dry-run projection to avoid deep-cloning the layout
     /// tree on every drag frame. Keyed by (target, position, area).
     snap_projection_cache: Option<(SnapPreviewState, Rect, Option<Rect>)>,
+    snap_preview_cache: SnapPreviewCache,
     drag_last_event: Option<Instant>,
     next_window_seq: usize,
     next_title_seq: usize,
@@ -623,6 +682,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             drag_snap: None,
             snap_preview: None,
             snap_projection_cache: None,
+            snap_preview_cache: SnapPreviewCache {
+                positions: Vec::new(),
+                cached_rect: None,
+                cached_quadrant: None,
+                dragged_key: None,
+            },
             drag_last_event: None,
             next_window_seq: 0,
             next_title_seq: 0,
@@ -1245,6 +1310,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                                 let drag_dist = col.abs_diff(*anchor_x) + row.abs_diff(*anchor_y);
                                 if drag_dist > 0 {
                                     self.detach_from_tiling_layout(*key);
+                                    self.execute_float_all(*key);
                                 }
                             }
                             // else: snap was already applied by Moved handler — the

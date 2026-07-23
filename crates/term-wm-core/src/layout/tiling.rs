@@ -1074,6 +1074,33 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
         self.root.swap_leaves(source, target)
     }
 
+    /// Topology-aware insertion: finds the largest leaf by area,
+    /// splits along its longer axis, inserts `insert` adjacent.
+    /// Used by both preview simulation and commit for balanced tiling.
+    pub fn insert_window_balanced(&mut self, insert: Id, area: Rect) {
+        let regions = self.regions(area);
+        if regions.is_empty() {
+            self.split_root(insert, InsertPosition::Right);
+            return;
+        }
+
+        let (largest_id, largest_rect) = regions
+            .iter()
+            .max_by_key(|(_, r)| (r.width as u32) * (r.height as u32))
+            .copied()
+            .unwrap();
+
+        let pos = if (largest_rect.width as u32) >= (largest_rect.height as u32) * 2 {
+            InsertPosition::Right
+        } else {
+            InsertPosition::Bottom
+        };
+
+        if !self.root.insert_leaf(largest_id, insert, pos) {
+            self.split_root(insert, pos);
+        }
+    }
+
     pub fn project_insert_void(&self, insert: Id, void_id: usize, area: Rect) -> Option<Rect> {
         let mut root = self.root.clone();
         root.remove_leaf(insert);
