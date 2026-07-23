@@ -389,9 +389,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Succeeds when:
     /// - No active tiling layout AND all existing windows are floating (or workspace empty)
     pub fn try_spawn_floating_default(&mut self, key: WindowKey) -> bool {
-        if self.managed_layout.is_some() {
-            return false;
-        }
         let existing: Vec<_> = self
             .mapped_windows()
             .into_iter()
@@ -400,18 +397,15 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         if existing.is_empty() || !existing.iter().all(|k| self.is_window_floating(*k)) {
             return false;
         }
-        let area = self.managed_area;
-        let w = (80u16.min(area.width)).max(10);
-        let h = (24u16.min(area.height)).max(3);
-        let x = area.x + (area.width.saturating_sub(w) / 2) as i32;
-        let y = area.y + (area.height.saturating_sub(h) / 2) as i32;
+        self.managed_layout = None;
+        let rect = self.default_cascading_rect(existing.len());
         self.set_floating_rect(
             key,
             Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
-                x,
-                y,
-                width: w,
-                height: h,
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
             })),
         );
         self.focus_window_key(key);
@@ -497,20 +491,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         let regions: Vec<_> = tiled_keys
             .iter()
             .enumerate()
-            .map(|(idx, key)| {
-                let full = self.regions.get(*key).unwrap_or_else(|| {
-                    let area = self.managed_area;
-                    let w = (80u16.min(area.width)).max(10);
-                    let h = (24u16.min(area.height)).max(3);
-                    Rect {
-                        x: area.x + (area.width.saturating_sub(w) / 2) as i32 + (idx as i32) * 2,
-                        y: area.y + (area.height.saturating_sub(h) / 2) as i32 + (idx as i32) * 2,
-                        width: w,
-                        height: h,
-                    }
-                });
-                (*key, full)
-            })
+            .map(|(idx, key)| (*key, self.region_or_fallback(*key, idx)))
             .collect();
 
         self.managed_layout = None;
@@ -548,20 +529,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             .copied()
             .filter(|key| self.is_window_floating(*key))
             .enumerate()
-            .map(|(idx, key)| {
-                let full = self.regions.get(key).unwrap_or_else(|| {
-                    let area = self.managed_area;
-                    let w = (80u16.min(area.width)).max(10);
-                    let h = (24u16.min(area.height)).max(3);
-                    Rect {
-                        x: area.x + (area.width.saturating_sub(w) / 2) as i32 + (idx as i32) * 2,
-                        y: area.y + (area.height.saturating_sub(h) / 2) as i32 + (idx as i32) * 2,
-                        width: w,
-                        height: h,
-                    }
-                });
-                (key, full)
-            })
+            .map(|(idx, key)| (key, self.region_or_fallback(key, idx)))
             .collect();
 
         // Also include windows from regions that might not be mapped (e.g., test windows)

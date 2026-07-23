@@ -54,3 +54,14 @@ pub const TAB_OUTLINE_DURATION: Duration = Duration::from_millis(500);
 pub const SHADOW_OFFSET_X: i32 = 2;
 /// Vertical offset (in rows) for floating window drop shadow.
 pub const SHADOW_OFFSET_Y: i32 = 1;
+
+/// Default width for unrendered floating windows (before first render pass).
+pub const DEFAULT_FLOAT_WIDTH: u16 = 80;
+/// Default height for unrendered floating windows.
+pub const DEFAULT_FLOAT_HEIGHT: u16 = 24;
+/// Minimum width for computed floating rects to avoid zero-size allocations.
+pub const MIN_FLOAT_WIDTH: u16 = 10;
+/// Minimum height for computed floating rects.
+pub const MIN_FLOAT_HEIGHT: u16 = 3;
+/// Stagger offset (in cells) between cascading floating windows.
+pub const CASCADE_OFFSET_STEP: i32 = 2;

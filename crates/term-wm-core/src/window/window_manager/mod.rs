@@ -521,6 +521,26 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.window(key).is_some_and(|window| window.is_floating())
     }
 
+    /// Compute a centered, cascading fallback rectangle for unrendered floating
+    /// windows using core workspace constants.
+    pub fn default_cascading_rect(&self, index: usize) -> Rect {
+        let area = self.managed_area;
+        let w = crate::constants::DEFAULT_FLOAT_WIDTH.min(area.width).max(crate::constants::MIN_FLOAT_WIDTH);
+        let h = crate::constants::DEFAULT_FLOAT_HEIGHT.min(area.height).max(crate::constants::MIN_FLOAT_HEIGHT);
+        let offset = (index as i32) * crate::constants::CASCADE_OFFSET_STEP;
+        Rect {
+            x: area.x + (area.width.saturating_sub(w) / 2) as i32 + offset,
+            y: area.y + (area.height.saturating_sub(h) / 2) as i32 + offset,
+            width: w, height: h,
+        }
+    }
+
+    /// Return the cached region for a window, or compute a safe cascading fallback.
+    pub fn region_or_fallback(&self, key: WindowKey, index: usize) -> Rect {
+        self.regions.get(key)
+            .unwrap_or_else(|| self.default_cascading_rect(index))
+    }
+
     pub fn direct_mode(&self, key: WindowKey) -> bool {
         self.window(key).is_some_and(|window| window.direct_mode)
     }
