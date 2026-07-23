@@ -1090,10 +1090,18 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
             .copied()
             .unwrap();
 
-        let pos = if (largest_rect.width as u32) >= (largest_rect.height as u32) * 2 {
-            InsertPosition::Right
+        // Split along the longer axis (accounting for terminal cell aspect ratio ~2:1)
+        let h_scaled = (largest_rect.height as u32) * 2;
+        let w = largest_rect.width as u32;
+
+        let pos = if w >= h_scaled * 3 / 2 {
+            InsertPosition::Right   // very wide (150%+ of scaled height) → columns
+        } else if h_scaled >= w * 3 / 2 {
+            InsertPosition::Bottom  // very tall → rows
+        } else if w >= h_scaled {
+            InsertPosition::Right   // wider after aspect correction → columns
         } else {
-            InsertPosition::Bottom
+            InsertPosition::Bottom  // taller after aspect correction → rows
         };
 
         if !self.root.insert_leaf(largest_id, insert, pos) {

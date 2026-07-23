@@ -213,29 +213,28 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             height: area.height,
         };
 
-        // Pre-compute position-based layout for cache (tile-all preview)
-        if self.snap_preview_cache.needs_recalc(mouse_x, mouse_y, dragging_key) {
-            let floating: Vec<_> = self
-                .regions
-                .ids()
-                .iter()
-                .filter(|key| self.is_window_floating(**key))
-                .map(|key| (*key, self.region(*key)))
-                .collect();
-            if !floating.is_empty() {
-                let positions = simulate_position_based_layout(floating, dragging_key, area);
-                let dragged_rect = self.region(dragging_key);
-                self.snap_preview_cache
-                    .update(mouse_x, mouse_y, dragged_rect, dragging_key, positions);
-            } else {
-                self.snap_preview_cache.clear();
-            }
-        }
-
         // Priority 1: Corner snap (smallest spatial region)
         if let Some(corner_pos) =
             detect_corner_snap(mouse_x, mouse_y, managed_layout_rect, CORNER_SNAP_THRESHOLD)
         {
+            // Compute position-based layout cache for this snap position
+            if self.snap_preview_cache.needs_recalc(mouse_x, mouse_y, dragging_key) {
+                let floating: Vec<_> = self
+                    .mapped_windows()
+                    .into_iter()
+                    .filter(|key| self.is_window_floating(*key))
+                    .map(|key| (key, self.region(key)))
+                    .collect();
+                if !floating.is_empty() {
+                    let positions =
+                        simulate_position_based_layout(floating, dragging_key, corner_pos, area);
+                    let dragged_rect = self.region(dragging_key);
+                    self.snap_preview_cache
+                        .update(mouse_x, mouse_y, dragged_rect, dragging_key, positions);
+                } else {
+                    self.snap_preview_cache.clear();
+                }
+            }
             let preview = self
                 .snap_preview_cache
                 .positions
@@ -277,6 +276,24 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         if let Some(pos) =
             detect_edge_snap(mouse_x, mouse_y, managed_layout_rect, EDGE_SNAP_THRESHOLD)
         {
+            // Compute position-based layout cache for this snap position
+            if self.snap_preview_cache.needs_recalc(mouse_x, mouse_y, dragging_key) {
+                let floating: Vec<_> = self
+                    .mapped_windows()
+                    .into_iter()
+                    .filter(|key| self.is_window_floating(*key))
+                    .map(|key| (key, self.region(key)))
+                    .collect();
+                if !floating.is_empty() {
+                    let positions =
+                        simulate_position_based_layout(floating, dragging_key, pos, area);
+                    let dragged_rect = self.region(dragging_key);
+                    self.snap_preview_cache
+                        .update(mouse_x, mouse_y, dragged_rect, dragging_key, positions);
+                } else {
+                    self.snap_preview_cache.clear();
+                }
+            }
             let preview = self
                 .snap_preview_cache
                 .positions
@@ -313,7 +330,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     pub(super) fn apply_snap(&mut self, key: WindowKey) {
         use crate::layout::LayoutNode;
-        if let Some((target, position, _preview)) = self.drag_snap.take() {
+        if let Some((_target, position, _preview)) = self.drag_snap.take() {
             // Void snap: replace the void placeholder in the BSP tree
             if let Some(SnapPreviewState::VoidInsert(void_id)) = self.snap_preview {
                 if self.is_window_floating(key) {
@@ -335,63 +352,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 return;
             }
 
-            if self.is_window_floating(key) {
-                self.clear_floating_rect(key);
-            }
-
-            if self.layout_contains(key)
-                && let Some(layout) = &mut self.managed_layout
-            {
-                let should_retile = match target {
-                    Some(target_key) => target_key != key,
-                    None => true,
-                };
-                if should_retile {
-                    layout.root_mut().remove_leaf(key);
-                    layout.root_mut().cleanup_after_removal();
-                    // If the tree was a single leaf matching key, remove_leaf
-                    // cannot remove it (Leaf nodes return false).  Clear it
-                    // explicitly so split_root doesn't create duplicates.
-                    layout.root_mut().clear_leaf(key);
-                } else {
-                    self.bring_to_front_key(key);
-                    return;
-                }
-            }
-
-            if let Some(target_key) = target
-                && self.is_window_floating(target_key)
-            {
-                self.clear_floating_rect(target_key);
-                if self.managed_layout.is_none() {
-                    self.managed_layout = Some(crate::layout::TilingLayout::new(LayoutNode::leaf(
-                        target_key,
-                    )));
-                }
-            }
-
-            if self.managed_layout.is_none() {
-                self.managed_layout = Some(crate::layout::TilingLayout::new_void());
-            }
-
-            if let Some(layout) = &mut self.managed_layout {
-                let success = if let Some(target_key) = target {
-                    layout.root_mut().insert_leaf(target_key, key, position)
-                } else {
-                    false
-                };
-
-                if !success {
-                    layout.split_root(key, position);
-                }
-
-                if let Some(pos) = self.z_order.iter().position(|&z_key| z_key == key) {
-                    self.z_order.remove(pos);
-                }
-                self.z_order.push(key);
-                self.bifurcate_draw_order();
-            }
-            self.snap_projection_cache = None;
+            // Float all tiled windows so position-based layout handles them
+            self.execute_float_all(key);
 
             self.apply_position_based_layout(key, position, self.managed_area);
         }
@@ -453,13 +415,24 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Float all tiled windows, preserving their current screen positions.
     /// Atomically clears the layout tree and sets floating rects for all.
     pub(super) fn float_all_windows(&mut self) {
-        let tiled_keys: Vec<_> = self
-            .regions
-            .ids()
-            .iter()
-            .filter(|key| !self.is_window_floating(**key))
-            .copied()
-            .collect();
+        // Collect tiled windows from regions AND the layout tree
+        let mut tiled_keys = Vec::new();
+
+        // Add windows from the layout tree (authoritative for tiled windows)
+        if let Some(layout) = &self.managed_layout {
+            for key in layout.root().collect_leaves() {
+                if !self.is_window_floating(key) && !tiled_keys.contains(&key) {
+                    tiled_keys.push(key);
+                }
+            }
+        }
+
+        // Add windows from regions not already captured
+        for key in self.regions.ids() {
+            if !self.is_window_floating(key) && !tiled_keys.contains(&key) {
+                tiled_keys.push(key);
+            }
+        }
 
         if tiled_keys.is_empty() {
             return;
@@ -467,7 +440,10 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
         let regions: Vec<_> = tiled_keys
             .iter()
-            .map(|key| (*key, self.region(*key)))
+            .map(|key| {
+                let full = self.regions.get(*key).unwrap_or_else(|| self.region(*key));
+                (*key, full)
+            })
             .collect();
 
         self.managed_layout = None;
@@ -500,11 +476,22 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         area: Rect,
     ) {
         let mut all_windows: Vec<_> = self
-            .regions
-            .ids()
-            .iter()
-            .map(|key| (*key, self.region(*key)))
+            .mapped_windows()
+            .into_iter()
+            .filter(|key| self.is_window_floating(*key))
+            .map(|key| {
+                let full = self.regions.get(key).unwrap_or_else(|| self.region(key));
+                (key, full)
+            })
             .collect();
+
+        // Also include windows from regions that might not be mapped
+        for key in self.regions.ids() {
+            if !all_windows.iter().any(|(k, _)| *k == key) {
+                let full = self.regions.get(key).unwrap_or_else(|| self.region(key));
+                all_windows.push((key, full));
+            }
+        }
 
         // Ensure anchor is included even if not in regions (e.g., floating-only window)
         if !all_windows.iter().any(|(k, _)| *k == anchor_key) {
@@ -580,6 +567,7 @@ fn calculate_tiling_order(
 fn simulate_position_based_layout(
     windows: Vec<(WindowKey, Rect)>,
     anchor_key: WindowKey,
+    snap_position: InsertPosition,
     workspace_bounds: Rect,
 ) -> Vec<(WindowKey, Rect)> {
     if windows.is_empty() {
@@ -592,19 +580,42 @@ fn simulate_position_based_layout(
         .map(|(_, r)| *r)
         .expect("anchor_key must be in windows");
 
-    let sorted = calculate_tiling_order(windows, target_rect);
+    let others: Vec<_> = windows
+        .iter()
+        .filter(|(k, _)| *k != anchor_key)
+        .copied()
+        .collect();
 
+    if others.is_empty() {
+        let mut layout = TilingLayout::new_void();
+        layout.split_root(anchor_key, snap_position);
+        return layout
+            .regions(workspace_bounds)
+            .into_iter()
+            .filter(|(k, _)| *k == anchor_key)
+            .collect();
+    }
+
+    let sorted = calculate_tiling_order(others, target_rect);
     let mut layout = TilingLayout::new(LayoutNode::leaf(sorted[0].0));
     for (key, _) in &sorted[1..] {
         layout.insert_window_balanced(*key, workspace_bounds);
     }
+    layout.split_root(anchor_key, snap_position);
 
     let mut regions = layout.regions(workspace_bounds);
-    sorted
+    let mut result = Vec::with_capacity(sorted.len() + 1);
+    if let Some(r) = regions
         .iter()
-        .filter_map(|(k, _)| {
-            let idx = regions.iter().position(|(rk, _)| rk == k)?;
-            Some((*k, regions.swap_remove(idx).1))
-        })
-        .collect()
+        .find(|(k, _)| *k == anchor_key)
+        .map(|(_, r)| *r)
+    {
+        result.push((anchor_key, r));
+    }
+    for (k, _) in &sorted {
+        if let Some(idx) = regions.iter().position(|(rk, _)| rk == k) {
+            result.push((*k, regions.swap_remove(idx).1));
+        }
+    }
+    result
 }

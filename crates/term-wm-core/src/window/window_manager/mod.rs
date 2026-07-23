@@ -499,6 +499,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     fn clear_floating_rect(&mut self, key: WindowKey) {
         if let Some(w) = self.windows.get_mut(key) {
             w.floating_rect = None;
+            w.is_maximized = false;
         }
     }
 
