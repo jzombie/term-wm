@@ -2,6 +2,16 @@ use super::ComponentKey;
 use super::FloatRectSpec;
 use crate::hitbox_registry::HitboxId;
 
+/// Controls what happens when a window is closed via `close_window`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ClosePolicy {
+    /// Destroy the component and remove the `WindowKey` from the SlotMap.
+    #[default]
+    Destroy,
+    /// Transition to `Unmapped` but keep the component and key alive.
+    Unmap,
+}
+
 /// Canonical window lifecycle states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowState {
@@ -37,6 +47,8 @@ pub struct Window {
     pub header_enabled: bool,
     /// Key into the WindowManager's component arena.
     pub component_key: ComponentKey,
+    /// What happens when this window is closed.
+    pub close_policy: ClosePolicy,
     /// Persistent HitboxId for the window's content area.
     pub content_hitbox_id: HitboxId,
     /// Which leaf component within this window currently holds keyboard focus.
@@ -59,6 +71,7 @@ impl Window {
             borders_enabled: true,
             header_enabled: true,
             component_key,
+            close_policy: ClosePolicy::default(),
             content_hitbox_id: HitboxId::new(),
             active_keyboard_focus: None,
         }

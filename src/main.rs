@@ -20,7 +20,7 @@ use term_wm_console::console_render_target::ConsoleRenderTarget;
 use term_wm_core::components::Component;
 use term_wm_sys_ui_components::WmSystemPanelComponent;
 use term_wm_sys_ui_components::wm_debug_log::{
-    WmDebugLogComponent, global_debug_log, install_panic_hook, set_global_debug_log,
+    WmDebugLogComponent, install_panic_hook, set_global_debug_log,
 };
 use term_wm_ui_facade::core_component::CoreWmComponent;
 use term_wm_ui_facade::{LayerComponent, OverlayComponent};
@@ -76,9 +76,7 @@ fn main() -> io::Result<()> {
 struct App {
     inner: TermWmApp,
     debug_key: Option<WindowKey>,
-    debug_visible: bool,
     system_panel_key: Option<WindowKey>,
-    system_panel_visible: bool,
     pty_wakeup_tx: Sender<UnifiedEvent>,
 }
 
@@ -131,15 +129,13 @@ impl App {
         let mut app = Self {
             inner,
             debug_key: None,
-            debug_visible: false,
             system_panel_key: None,
-            system_panel_visible: false,
             pty_wakeup_tx,
         };
 
-        // Initialize debug log system window — created hidden (Unmapped)
-        // and toggled visible via keybinding.  The global buffer lives in
-        // term-wm-core, so closing/re-opening preserves log history.
+        // Initialize debug log system window — created hidden (Unmapped),
+        // toggled visible via keybinding, and protected from destruction
+        // on close so it persists across show/hide cycles.
         {
             let (mut component, handle) = WmDebugLogComponent::new_default();
             component.set_selection_enabled(app.inner.wm().clipboard_enabled());
@@ -150,6 +146,9 @@ impl App {
                 .create_window(AppRootComponent::Core(CoreWmComponent::DebugLog(component)));
             app.inner
                 .wm()
+                .set_close_policy(debug_key, term_wm::window::ClosePolicy::Unmap);
+            app.inner
+                .wm()
                 .transition_window(debug_key, term_wm::window::WindowState::Unmapped);
             app.debug_key = Some(debug_key);
             app.inner.wm().set_window_title(debug_key, "Debug Log");
@@ -157,12 +156,16 @@ impl App {
             term_wm::logging::init_default();
         }
 
-        // Initialize system panel — created hidden, toggled via keybinding.
+        // Initialize system panel — created hidden, toggled via keybinding,
+        // protected from destruction on close.
         {
             let component = WmSystemPanelComponent::new();
             let key = app.inner.wm().create_window(AppRootComponent::Core(
                 CoreWmComponent::SystemPanel(component),
             ));
+            app.inner
+                .wm()
+                .set_close_policy(key, term_wm::window::ClosePolicy::Unmap);
             app.inner
                 .wm()
                 .transition_window(key, term_wm::window::WindowState::Unmapped);
@@ -285,90 +288,42 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
     }
 
     fn on_panic(&mut self) {
-        self.debug_visible = true;
         if let Some(key) = self.debug_key {
-            if self.inner.wm().has_window(key) {
-                self.inner
-                    .wm()
-                    .transition_window(key, term_wm::window::WindowState::Mapped);
-            } else {
-                // Window was closed — re-create from the global buffer.
-                if let Some(handle) = global_debug_log() {
-                    let comp = WmDebugLogComponent::from_handle(handle);
-                    let new_key = self.inner.wm().create_window(
-                        AppRootComponent::Core(CoreWmComponent::DebugLog(comp)),
-                    );
-                    self.inner.wm().set_window_title(new_key, "Debug Log");
-                    self.inner
-                        .wm()
-                        .transition_window(new_key, term_wm::window::WindowState::Mapped);
-                    self.debug_key = Some(new_key);
-                }
-            }
+            self.inner
+                .wm()
+                .transition_window(key, term_wm::window::WindowState::Mapped);
         }
     }
 
     fn toggle_debug_window(&mut self) {
-        self.debug_visible = !self.debug_visible;
-        if self.debug_visible {
-            // Show: check if the window still exists (may have been closed).
-            if let Some(key) = self.debug_key
-                && self.inner.wm().has_window(key)
-            {
-                self.inner
-                    .wm()
-                    .transition_window(key, term_wm::window::WindowState::Mapped);
-                self.inner.wm().set_focus(key);
-            } else {
-                // Re-create from the global buffer (preserves log history).
-                if let Some(handle) = global_debug_log() {
-                    let comp = WmDebugLogComponent::from_handle(handle);
-                    let key = self.inner.wm().create_window(
-                        AppRootComponent::Core(CoreWmComponent::DebugLog(comp)),
-                    );
-                    self.inner.wm().set_window_title(key, "Debug Log");
-                    self.inner
-                        .wm()
-                        .transition_window(key, term_wm::window::WindowState::Mapped);
-                    self.inner.wm().set_focus(key);
-                    self.debug_key = Some(key);
-                }
-            }
-        } else if let Some(key) = self.debug_key {
+        let Some(key) = self.debug_key else { return };
+        let is_mapped = self.inner.wm().window_state(key)
+            == Some(term_wm::window::WindowState::Mapped);
+        if is_mapped {
             self.inner
                 .wm()
                 .transition_window(key, term_wm::window::WindowState::Unmapped);
+        } else {
+            self.inner
+                .wm()
+                .transition_window(key, term_wm::window::WindowState::Mapped);
+            self.inner.wm().set_focus(key);
         }
     }
 
     fn toggle_system_panel(&mut self) {
-        self.system_panel_visible = !self.system_panel_visible;
-        if self.system_panel_visible {
-            // Show: check if the window still exists (may have been closed).
-            if let Some(key) = self.system_panel_key
-                && self.inner.wm().has_window(key)
-            {
-                self.inner
-                    .wm()
-                    .transition_window(key, term_wm::window::WindowState::Mapped);
-                self.inner.wm().set_focus(key);
-            } else {
-                // Re-create.
-                let component = WmSystemPanelComponent::new();
-                let key = self.inner.wm().create_window(AppRootComponent::Core(
-                    CoreWmComponent::SystemPanel(component),
-                ));
-                self.inner.wm().set_window_title(key, "System Panel");
-                self.inner
-                    .wm()
-                    .transition_window(key, term_wm::window::WindowState::Mapped);
-                self.inner.wm().set_focus(key);
-                self.system_panel_key = Some(key);
-            }
-        } else if let Some(key) = self.system_panel_key {
+        let Some(key) = self.system_panel_key else { return };
+        let is_mapped = self.inner.wm().window_state(key)
+            == Some(term_wm::window::WindowState::Mapped);
+        if is_mapped {
             self.inner
                 .wm()
                 .transition_window(key, term_wm::window::WindowState::Unmapped);
+        } else {
+            self.inner
+                .wm()
+                .transition_window(key, term_wm::window::WindowState::Mapped);
+            self.inner.wm().set_focus(key);
         }
     }
 

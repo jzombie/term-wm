@@ -8,6 +8,8 @@ mod overlays;
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+
+use crate::window::entry;
 use std::time::{Duration, Instant};
 
 use crate::Rect;
@@ -403,6 +405,13 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// O(1) — no component extraction or vtable resolution.
     pub fn has_window(&self, key: WindowKey) -> bool {
         self.windows.contains_key(key)
+    }
+
+    /// Set the close policy for a window (Destroy or Unmap).
+    pub fn set_close_policy(&mut self, key: WindowKey, policy: entry::ClosePolicy) {
+        if let Some(w) = self.windows.get_mut(key) {
+            w.close_policy = policy;
+        }
     }
 
     /// Access the Reaper for async child-process teardown.
@@ -4842,6 +4851,37 @@ mod tests {
             wm.window_state(key),
             None,
             "window removed from SlotMap by close_window"
+        );
+    }
+
+    #[test]
+    fn close_window_unmap_policy_preserves_slotmap_entry() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.set_close_policy(key, crate::window::ClosePolicy::Unmap);
+        wm.transition_window(key, WindowState::Mapped);
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        wm.close_window(key);
+        assert!(
+            wm.has_window(key),
+            "Unmap policy must preserve the SlotMap entry"
+        );
+        assert_eq!(
+            wm.window_state(key),
+            Some(WindowState::Unmapped),
+            "state must be Unmapped after close with Unmap policy"
         );
     }
 

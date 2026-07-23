@@ -2,7 +2,7 @@ use super::WindowManager;
 use crate::actions::TermWmAction;
 use crate::components::{Component, Overlay, WmComponent};
 use crate::window::WindowKey;
-use crate::window::entry::WindowState;
+use crate::window::entry::{ClosePolicy, WindowState};
 
 impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> WindowManager<C, L, O> {
     pub fn minimize_window(&mut self, key: WindowKey) {
@@ -80,25 +80,25 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.transition_window(key, WindowState::Mapped);
     }
 
-    /// Close a window: transition to Unmapped, destroy the component
-    /// (kills child PTY processes), and remove from the SlotMap.
+    /// Close a window according to its [`ClosePolicy`].
     ///
-    /// All windows follow the same teardown path.  If the host application
-    /// needs a toggleable window (debug log, help overlay), it must manage
-    /// the show/hide lifecycle via `transition_window(key, Unmapped/Mapped)`
-    /// and handle re-creation itself on reactivation.
+    /// - `Destroy`: transition to `Unmapped`, destroy the component, and
+    ///   remove the key from the SlotMap.
+    /// - `Unmap`: transition to `Unmapped` only.  The component and key
+    ///   stay alive so the window can be re-shown via `transition_window`.
     pub fn close_window(&mut self, key: WindowKey) {
         tracing::debug!(window_key = ?key, "closing window");
+        let policy = self.window(key).map(|w| w.close_policy).unwrap_or_default();
         self.transition_window(key, WindowState::Unmapped);
 
-        // Destroy the component (kills child PTY processes) then
-        // remove from SlotMap.
-        if let Some(w) = self.windows.get_mut(key) {
-            if let Some(c) = self.components.get_mut(w.component_key) {
-                c.destroy();
+        if policy == ClosePolicy::Destroy {
+            if let Some(w) = self.windows.get_mut(key) {
+                if let Some(c) = self.components.get_mut(w.component_key) {
+                    c.destroy();
+                }
+                self.components.remove(w.component_key);
             }
-            self.components.remove(w.component_key);
+            self.windows.remove(key);
         }
-        self.windows.remove(key);
     }
 }

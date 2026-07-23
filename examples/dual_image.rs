@@ -20,14 +20,14 @@ fn main() -> io::Result<()> {
     left.set_keep_aspect(true);
     left.set_colorize(true);
     left.load_from_path(&paths[0])?;
-    let left_key = app.register(AppRootComponent::SvgImage(left));
+    let left_key = app.open_window(AppRootComponent::SvgImage(left));
     app.set_window_title(left_key, "Left Image");
 
     let mut right = SvgImageComponent::new();
     right.set_keep_aspect(true);
     right.set_colorize(true);
     right.load_from_path(&paths[1])?;
-    let right_key = app.register(AppRootComponent::SvgImage(right));
+    let right_key = app.open_window(AppRootComponent::SvgImage(right));
     app.set_window_title(right_key, "Right Image");
 
     app.run()
