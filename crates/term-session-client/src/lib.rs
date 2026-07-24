@@ -85,6 +85,13 @@ const INITIAL_WAIT_ITERS: usize = 60;
 #[cfg(not(target_os = "windows"))]
 const INITIAL_WAIT_ITERS: usize = 20;
 
+/// Maximum buffered PTY output frames before backpressure kicks in.
+const PTY_OUTPUT_CHANNEL_CAPACITY: usize = 256;
+/// Maximum buffered clipboard events (human-driven, small capacity is fine).
+const CLIPBOARD_CHANNEL_CAPACITY: usize = 64;
+/// Maximum buffered input events (covers paste bursts without over-allocating).
+const INPUT_CHANNEL_CAPACITY: usize = 64;
+
 /// Initialize terminal for TUI mode: write startup escape sequences
 /// (alternate screen, hide cursor, bracketed paste, mouse capture) to
 /// the given writer, enable raw mode on stdin, and return a guard that
@@ -254,8 +261,8 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     // Channels for raw PTY output bytes and clipboard text from the subscription stream.
     // Using crossbeam so the main loop can block on both input and PTY output.
     // Bounded to cap head-of-line queuing under burst load.
-    let (push_tx, push_rx) = crossbeam_channel::bounded::<Vec<u8>>(256);
-    let (clip_tx, clip_rx) = crossbeam_channel::bounded::<String>(64);
+    let (push_tx, push_rx) = crossbeam_channel::bounded::<Vec<u8>>(PTY_OUTPUT_CHANNEL_CAPACITY);
+    let (clip_tx, clip_rx) = crossbeam_channel::bounded::<String>(CLIPBOARD_CHANNEL_CAPACITY);
 
     // Get terminal size
     let (term_cols, term_rows) = crossterm::terminal::size()?;
@@ -360,7 +367,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     let sigint = install_sigint_handler()?;
 
     // Channel for crossterm input events from a background thread
-    let (input_tx, input_rx) = crossbeam_channel::bounded::<Event>(64);
+    let (input_tx, input_rx) = crossbeam_channel::bounded::<Event>(INPUT_CHANNEL_CAPACITY);
 
     // Spawn background crossterm input thread.
     // Uses poll(50ms) so the thread can detect disconnection and exit
