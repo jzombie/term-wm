@@ -1507,4 +1507,323 @@ mod tests {
             sum_w
         );
     }
+
+
+    #[test]
+    fn split_rects_nary_even() {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 11,
+            height: 1,
+        };
+        let weights = [1u16, 1u16];
+        let rects = crate::split_rects_weighted(
+            area,
+            crate::Orientation::Horizontal,
+            &weights,
+            2,
+        );
+        assert_eq!(rects.len(), 2);
+        assert_eq!(rects[0].width, 5);
+        assert_eq!(rects[1].width, 6);
+    }
+
+
+    #[test]
+    fn insert_and_remove_leaf_and_split_area_for_path() {
+        let mut node = LayoutNode::<usize>::leaf(1);
+        assert!(node.insert_leaf(1, 2, InsertPosition::Right));
+        if let LayoutNode::Split { children, .. } = &node {
+            assert_eq!(children.len(), 2);
+            assert_eq!(children[0].unwrap_leaf(), Some(1));
+            assert_eq!(children[1].unwrap_leaf(), Some(2));
+        } else {
+            panic!("expected split after insert");
+        }
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 4,
+        };
+        let sub = split_area_for_path(&node, area, &[1]).expect("should get area for path");
+        assert!(sub.x > 0);
+        assert!(node.remove_leaf(2));
+        assert_eq!(node.unwrap_leaf(), Some(1));
+    }
+
+
+    #[test]
+    fn hit_test_handle_finds_gap() {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let node = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(1), LayoutNode::Leaf(2)],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        let (_, gaps) = node.layout_with_gaps(area);
+        assert_eq!(gaps.len(), 1, "2-window split must produce 1 gap");
+        let gap = &gaps[0];
+        assert_eq!(gap.direction, Direction::Horizontal);
+        assert_eq!(gap.index, 0);
+        assert!(gap.rect.width > 0);
+        assert_eq!(gap.rect.height, 24);
+        let center_col = (gap.rect.x + i32::from(gap.rect.width) / 2) as u16;
+        let center_row = (gap.rect.y + i32::from(gap.rect.height) / 2) as u16;
+        let found = node.hit_test_gap(area, center_col, center_row);
+        assert!(found.is_some(), "hit_test_gap must find the gap");
+        assert_eq!(found.unwrap().direction, Direction::Horizontal);
+    }
+
+
+    #[test]
+    fn normalize_weights_resets_to_equal() {
+        let mut node = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2)],
+            weights: vec![3u16, 1u16],
+            resizable: true,
+        };
+        node.normalize_weights();
+        if let LayoutNode::Split { weights, .. } = &node {
+            assert!(weights.iter().all(|w| *w == 1u16));
+        } else {
+            panic!("expected split");
+        }
+    }
+
+
+    #[test]
+    fn build_flat_empty_returns_void() {
+        let node = LayoutNode::build_flat(Direction::Horizontal, Vec::<usize>::new());
+        assert!(node.unwrap_leaf().is_none());
+    }
+
+
+    #[test]
+    fn build_flat_single_returns_leaf() {
+        let node = LayoutNode::build_flat(Direction::Horizontal, vec![42]);
+        assert_eq!(node.unwrap_leaf(), Some(42));
+    }
+
+
+    #[test]
+    fn build_flat_multiple_returns_split() {
+        let node = LayoutNode::build_flat(Direction::Vertical, vec![1, 2, 3]);
+        if let LayoutNode::Split {
+            children,
+            weights,
+            direction,
+            ..
+        } = &node
+        {
+            assert_eq!(children.len(), 3);
+            assert_eq!(*direction, Direction::Vertical);
+            assert!(weights.iter().all(|w| *w == 1u16));
+        } else {
+            panic!("expected split");
+        }
+    }
+
+
+    #[test]
+    fn void_regions_returns_voids() {
+        let node = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::Void(99)],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let voids = node.void_regions(area);
+        assert_eq!(voids.len(), 1);
+        assert_eq!(voids[0].0, 99);
+    }
+
+
+    #[test]
+    fn swap_leaves_exchanges_positions() {
+        let mut node = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![
+                LayoutNode::leaf(1),
+                LayoutNode::leaf(2),
+                LayoutNode::leaf(3),
+            ],
+            weights: vec![1u16, 1u16, 1u16],
+            resizable: true,
+        };
+        assert!(node.swap_leaves(&1, &3));
+        let leaves = node.collect_leaves();
+        assert_eq!(leaves, vec![3, 2, 1]);
+    }
+
+
+    #[test]
+    fn swap_leaves_same_id_returns_false() {
+        let mut node = LayoutNode::leaf(1);
+        assert!(!node.swap_leaves(&1, &1));
+    }
+
+
+    #[test]
+    fn swap_leaves_nonexistent_returns_false() {
+        let mut node = LayoutNode::leaf(1);
+        assert!(!node.swap_leaves(&1, &2));
+    }
+
+
+    #[test]
+    fn cleanup_after_removes_void_children() {
+        let mut node = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::Void(99)],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        node.cleanup_after_removal();
+        assert_eq!(node.unwrap_leaf(), Some(1));
+    }
+
+
+    #[test]
+    fn cleanup_all_voids_becomes_void() {
+        let mut node: LayoutNode<usize> = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Void(1), LayoutNode::Void(2)],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        node.cleanup_after_removal();
+        assert!(matches!(node, LayoutNode::Void(_)));
+    }
+
+
+    #[test]
+    fn cleanup_empty_split_becomes_void() {
+        let mut node: LayoutNode<usize> = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: Vec::new(),
+            weights: Vec::new(),
+            resizable: true,
+        };
+        node.cleanup_after_removal();
+        assert!(matches!(node, LayoutNode::Void(_)));
+    }
+
+
+    #[test]
+    fn clear_leaf_replaces_with_void() {
+        let mut node = LayoutNode::leaf(42);
+        assert!(node.clear_leaf(42));
+        assert!(matches!(node, LayoutNode::Void(_)));
+    }
+
+
+    #[test]
+    fn clear_leaf_wrong_id_returns_false() {
+        let mut node = LayoutNode::leaf(42);
+        assert!(!node.clear_leaf(99));
+    }
+
+
+    #[test]
+    fn subtree_any_finds_matching_leaf() {
+        let node = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2)],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        assert!(node.subtree_any(|id| id == 2));
+        assert!(!node.subtree_any(|id| id == 99));
+    }
+
+
+    #[test]
+    fn node_at_path_returns_none_for_invalid_path() {
+        let node = LayoutNode::leaf(1);
+        assert!(node.node_at_path(&[0]).is_none());
+    }
+
+
+    #[test]
+    fn collect_leaves_from_nested() {
+        let node = LayoutNode::Split {
+            direction: Direction::Vertical,
+            children: vec![
+                LayoutNode::leaf(1),
+                LayoutNode::Split {
+                    direction: Direction::Horizontal,
+                    children: vec![LayoutNode::leaf(2), LayoutNode::leaf(3)],
+                    weights: vec![1u16, 1u16],
+                    resizable: true,
+                },
+            ],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        assert_eq!(node.collect_leaves(), vec![1, 2, 3]);
+    }
+
+
+    #[test]
+    fn insert_leaf_left_on_single() {
+        let mut node = LayoutNode::leaf(1);
+        assert!(node.insert_leaf(1, 2, InsertPosition::Left));
+        let leaves = node.collect_leaves();
+        assert_eq!(leaves, vec![2, 1]);
+    }
+
+
+    #[test]
+    fn insert_leaf_top_on_single() {
+        let mut node = LayoutNode::leaf(1);
+        assert!(node.insert_leaf(1, 2, InsertPosition::Top));
+        let leaves = node.collect_leaves();
+        assert_eq!(leaves, vec![2, 1]);
+    }
+
+
+    #[test]
+    fn insert_leaf_bottom_on_single() {
+        let mut node = LayoutNode::leaf(1);
+        assert!(node.insert_leaf(1, 2, InsertPosition::Bottom));
+        let leaves = node.collect_leaves();
+        assert_eq!(leaves, vec![1, 2]);
+    }
+
+
+    #[test]
+    fn insert_leaf_nonexistent_target_returns_false() {
+        let mut node = LayoutNode::leaf(1);
+        assert!(!node.insert_leaf(99, 2, InsertPosition::Right));
+    }
+
+
+    #[test]
+    fn insert_leaf_in_nested_split() {
+        let mut node = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2)],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        assert!(node.insert_leaf(2, 3, InsertPosition::Right));
+        let leaves = node.collect_leaves();
+        assert_eq!(leaves, vec![1, 2, 3]);
+    }
+
 }
