@@ -641,7 +641,7 @@ mod drag_snap_pipeline {
             height: AREA.height,
         };
         let buf = Buffer::empty(area);
-        let mut backend = RatatuiBackend::new(buf, area);
+        let mut backend = RatatuiBackend::new_simple(buf, area);
         render_app(&mut backend, wm, engine, renderer);
     }
 
@@ -1426,7 +1426,7 @@ mod floating_tiled_separation {
             height: AREA.height,
         };
         let buf = Buffer::empty(area);
-        let mut backend = RatatuiBackend::new(buf, area);
+        let mut backend = RatatuiBackend::new_simple(buf, area);
         render_app(&mut backend, wm, engine, renderer);
     }
 
@@ -1821,7 +1821,7 @@ mod render_verification {
             height: AREA.height,
         };
         let buf = ratatui::buffer::Buffer::empty(area);
-        let mut backend = term_wm_console::RatatuiBackend::new(buf, area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, area);
         term_wm::render_app(
             &mut backend,
             &mut wm,

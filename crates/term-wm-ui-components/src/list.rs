@@ -289,7 +289,7 @@ mod tests {
             height: area.height,
         });
         {
-            let mut backend = term_wm_console::RatatuiBackend::new(
+            let mut backend = term_wm_console::RatatuiBackend::new_simple(
                 buffer,
                 ratatui::prelude::Rect {
                     x: area.x as u16,
@@ -311,7 +311,7 @@ mod tests {
                 width: area.width,
                 height: area.height,
             });
-            let mut backend = term_wm_console::RatatuiBackend::new(
+            let mut backend = term_wm_console::RatatuiBackend::new_simple(
                 buffer,
                 ratatui::prelude::Rect {
                     x: area.x as u16,
@@ -342,7 +342,7 @@ mod tests {
             width: area.width,
             height: area.height,
         });
-        let mut backend = term_wm_console::RatatuiBackend::new(
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
             buffer,
             ratatui::prelude::Rect {
                 x: area.x as u16,
@@ -371,7 +371,7 @@ mod tests {
             width: area.width,
             height: area.height,
         });
-        let mut backend = term_wm_console::RatatuiBackend::new(
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
             buffer,
             ratatui::prelude::Rect {
                 x: area.x as u16,

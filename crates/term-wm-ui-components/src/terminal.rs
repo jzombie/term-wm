@@ -1304,7 +1304,7 @@ mod tests {
             height: 24,
         };
         let buffer = Buffer::empty(area);
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
         let ctx = make_ctx(view_offset, handle);
         term.render(
             &mut backend,
@@ -1336,7 +1336,7 @@ mod tests {
             height: 24,
         };
         let buffer = Buffer::empty(area);
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
         let ctx = make_ctx(view_offset, handle);
         term.render(
             &mut backend,
@@ -1502,7 +1502,7 @@ mod tests {
             height: 24,
         };
         let buffer = Buffer::empty(area);
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
         let ctx = make_ctx(100, handle);
         term.render(
             &mut backend,
@@ -1574,7 +1574,7 @@ mod tests {
             height: 24,
         };
         let buffer = Buffer::empty(area);
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
         let ctx = make_ctx(0, handle);
         term.render(
             &mut backend,
@@ -1989,7 +1989,7 @@ mod tests {
             width: 80,
             height: 24,
         });
-        let mut backend = term_wm_console::RatatuiBackend::new(
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
             buffer,
             ratatui::prelude::Rect {
                 x: 0,
@@ -2087,7 +2087,7 @@ mod tests {
             width: 80,
             height: 24,
         });
-        let mut backend = term_wm_console::RatatuiBackend::new(
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
             buffer,
             ratatui::prelude::Rect {
                 x: 0,

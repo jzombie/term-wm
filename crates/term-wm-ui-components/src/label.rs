@@ -114,7 +114,8 @@ mod tests {
     fn label_render_writes_text() {
         let mut label = LabelComponent::new("Status");
         let buffer = Buffer::empty(Rect::new(0, 0, 40, 1));
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, Rect::new(0, 0, 40, 1));
+        let mut backend =
+            term_wm_console::RatatuiBackend::new_simple(buffer, Rect::new(0, 0, 40, 1));
         let ctx = ComponentContext::new(true);
         let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
         label.render(
@@ -141,7 +142,8 @@ mod tests {
     fn label_render_skips_when_width_zero() {
         let mut label = LabelComponent::new("X");
         let buffer = Buffer::empty(Rect::new(0, 0, 40, 1));
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, Rect::new(0, 0, 40, 1));
+        let mut backend =
+            term_wm_console::RatatuiBackend::new_simple(buffer, Rect::new(0, 0, 40, 1));
         let ctx = ComponentContext::new(true);
         let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
         label.render(
@@ -161,7 +163,8 @@ mod tests {
     fn label_render_skips_when_height_zero() {
         let mut label = LabelComponent::new("X");
         let buffer = Buffer::empty(Rect::new(0, 0, 40, 1));
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, Rect::new(0, 0, 40, 1));
+        let mut backend =
+            term_wm_console::RatatuiBackend::new_simple(buffer, Rect::new(0, 0, 40, 1));
         let ctx = ComponentContext::new(true);
         let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
         label.render(

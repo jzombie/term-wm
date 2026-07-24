@@ -190,7 +190,7 @@ impl<W: Write> RenderTarget for ConsoleRenderTarget<W> {
             .draw(move |frame| {
                 let area = frame.area();
                 let buffer = std::mem::replace(frame.buffer_mut(), Buffer::empty(area));
-                let mut backend = RatatuiBackend::new(buffer, area);
+                let mut backend = RatatuiBackend::new_simple(buffer, area);
                 f(&mut backend);
                 *frame.buffer_mut() = backend.buffer;
             })

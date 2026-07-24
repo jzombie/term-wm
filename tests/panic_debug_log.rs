@@ -47,7 +47,7 @@ impl RenderTarget for TestOutput {
             .draw(move |frame| {
                 let area = frame.area();
                 let buffer = Buffer::empty(area);
-                let mut backend = term_wm_console::RatatuiBackend::new(buffer, area);
+                let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
                 f(&mut backend);
                 // Copy rendered buffer back to the terminal frame
                 for y in 0..area.height {

@@ -128,7 +128,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for CanvasScrollView<C>
 
         let temp_buf = std::mem::take(&mut self.offscreen_buf);
         let ratatui_area = RatatuiRect::new(0, 0, virtual_width, virtual_height);
-        let mut mock_backend = term_wm_console::RatatuiBackend::new(temp_buf, ratatui_area);
+        let mut mock_backend = term_wm_console::RatatuiBackend::new_simple(temp_buf, ratatui_area);
 
         let mut scratch_registry = HitboxRegistry::new();
         self.inner.render(
