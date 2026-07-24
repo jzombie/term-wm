@@ -5,7 +5,7 @@
 | Decision | Choice |
 |---|---|
 | **Data layout** | Keep Ratatui's native `Buffer` / `Vec<Cell>` — no SoA conversion |
-| **SIMD approach** | No explicit SIMD; rely on LLVM auto-vectorization of slice ops |
+| **SIMD approach** | Strict Bounds Check Elimination (BCE) via slice iterators. Auto-vectorization strictly limited to `clone_from_slice` memory blitting. Conditional mutation loops (string checks, bitflag writes) are not SIMD-eligible. |
 | **Toolchain** | Stable Rust only (no nightly, no `std::simd`) |
 | **Libraries** | No new SIMD dependencies; `bytemuck` already transitive |
 | **Benchmarks** | Add Criterion microbenchmarks to `crates/term-bench` |
@@ -75,18 +75,54 @@ Apply same intersection clipping + row-slice pattern. Compute `main_clip = area.
 
 Replace per-cell `buf.cell_mut((x, y))` with direct indexing. Add intersection clipping against `buf.area`. Shadow color already computed once before loop — no change to that.
 
-### 4. Optimize other direct buffer writers
+### 4. Optimize other direct buffer writers — origin translation + slice iterators
 
-| Function | Lines | Pattern |
+Every function that writes to `&mut Buffer` via `cell_mut()` must be rewritten to use the **row-slice iterator pattern** with **origin-relative coordinate translation**.
+
+#### 4a. Exact implementation for `apply_dim_modifier` (template for all others)
+
+```rust
+fn apply_dim_modifier(&self, buffer: &mut Buffer) {
+    let area = buffer.area;
+    let buf_w = area.width as usize;
+
+    let y_start = area.y as usize;
+    let y_end = (area.y + area.height) as usize;
+    let x_start = area.x as usize;
+    let x_end = (area.x + area.width) as usize;
+    let dim_bit = ratatui::style::Modifier::DIM;
+
+    for y in y_start..y_end {
+        let relative_y = y - area.y as usize;
+        let relative_x_start = x_start - area.x as usize;
+        let relative_x_end = x_end - area.x as usize;
+
+        let row_start = relative_y * buf_w;
+        let row_slice = &mut buffer.content[row_start + relative_x_start .. row_start + relative_x_end];
+
+        for cell in row_slice.iter_mut() {
+            if !cell.symbol().starts_with(' ') {
+                cell.modifier.insert(dim_bit);
+            }
+        }
+    }
+}
+```
+
+#### 4b. Affected functions (same pattern applied to each)
+
+| Function | Lines | Fix |
 |---|---|---|
-| `apply_dim_modifier` | 614-625 | row-slice iteration, direct index |
-| `render_window` | 933-1114 | direct indexing for cell writes |
-| `render_handles_masked` | 1117-1255 | direct indexing |
-| `render_resize_outline` | 1301-1545 | direct indexing |
-| `render_ghost_preview` | 1549-1614 | direct indexing |
-| `render_cursor_overlay` | 1653-1682 | direct indexing |
+| `apply_dim_modifier` | 614-625 | Use origin translation + slice iterator as shown above |
+| `render_drop_shadow` | 808-826 | Translate `clip_x`/`clip_y` by `buf.area.x`/`buf.area.y` before slicing |
+| `render_window` | 933-1114 | Translate all `outer_*` coords by `buffer.area.x`/`buffer.area.y` |
+| `render_handles_masked` | 1117-1255 | Translate `clip.x`/`clip.y` AND neighbor reads |
+| `render_resize_outline` | 1301-1545 | Translate all edge coords by `buffer.area.x`/`buffer.area.y` |
+| `render_ghost_preview` | 1549-1614 | Translate `clip` coords by `buf.area.x`/`buf.area.y` |
+| `render_cursor_overlay` | 1653-1682 | Translate `hx`/`hy` by `buf.area.x`/`buf.area.y` |
+| `fill_handle_bar` | 1258-1297 | Translate `clip.x`/`clip.y` by `buffer.area.x`/`buffer.area.y` |
 
-Each writes to `&mut Buffer` via `cell_mut()` — replace with `&mut dst.content[idx]` using origin-relative indexing with intersection clipping.
+The row-slice iterator pattern eliminates bounds-check branches entirely (unlike `buffer.content[row_start + x]` which retains per-cell bounds checking). Origin translation prevents OOB panics on non-zero-area buffers.
 
 ### 5. Buffer management — keep swap pattern
 
@@ -384,11 +420,18 @@ for (cell, &mask) in buffer.content.iter_mut().zip(dim_mask.iter()) {
 | Risk | Low | Medium |
 | Tests | All pass | Need new tests |
 
-**Decision:** Path A is the right choice for now. Path B can be layered on later if profiling shows the dim/shadow passes are still hot after BCE. The current bottleneck is `blit_buffer` (already fixed with `clone_from_slice`), not the mutation passes.
+**Decision:** Path A (BCE) is the only acceptable path. The current implementation is broken — Section 4 above now contains the corrected slice-iterator code. All 8 functions must be rewritten using the template in Section 4a before any of these changes can be merged.
 
-## Required Actions
+## Required Actions (IMMEDIATE — no future deferral)
 
-1. Fix origin translation in ALL 8 functions listed in Appendix B
-2. Apply the row-slice iterator pattern (`let row_slice = &mut buffer.content[start..end]; for cell in row_slice.iter_mut() { ... }`)
-3. Use `clone_from_slice` for bulk copies (already done in `blit_buffer`)
-4. Add `blit_buffer` unit tests for fully contained, partial overlap, and no-overlap cases
+1. REWRITE `apply_dim_modifier` using Section 4a template (origin translation + slice iterator)
+2. REWRITE `render_drop_shadow` using same pattern (translate clip coords, slice row, iterate)
+3. REWRITE `render_ghost_preview` interior fill using same pattern
+4. REWRITE `fill_handle_bar` using same pattern
+5. REWRITE `render_handles_masked` passes 2 and 3 (translate neighbor reads + coords)
+6. REWRITE `render_cursor_overlay` using same pattern
+7. REWRITE `render_window` border/header fills using same pattern
+8. REWRITE `render_resize_outline` edge writes using same pattern
+9. Add `blit_buffer` unit tests for fully contained, partial overlap, and no-overlap cases
+10. `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+11. `cargo test -p term-wm-console` — all 15+ tests must pass
