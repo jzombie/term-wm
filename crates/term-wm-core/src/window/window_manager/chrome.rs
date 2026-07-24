@@ -1,18 +1,10 @@
-use std::sync::Arc;
-
 use super::WindowManager;
+use crate::actions::TermWmAction;
+use crate::components::{Component, Overlay, WmComponent};
 use crate::window::WindowKey;
-use crate::window::entry::WindowState;
+use crate::window::entry::{ClosePolicy, WindowState};
 
-impl WindowManager {
-    pub fn decorator(&self) -> Arc<dyn super::WindowDecorator> {
-        self.config.decorator()
-    }
-
-    pub fn set_decorator(&mut self, decorator: Arc<dyn super::WindowDecorator>) {
-        self.config.decorator = Some(decorator);
-    }
-
+impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> WindowManager<C, L, O> {
     pub fn minimize_window(&mut self, key: WindowKey) {
         self.transition_window(key, WindowState::Iconic);
     }
@@ -37,6 +29,7 @@ impl WindowManager {
                 }
                 if let Some(w) = self.windows.get_mut(key) {
                     w.is_maximized = false;
+                    w.borders_enabled = true;
                 }
             } else {
                 // Maximize: save current and expand
@@ -44,6 +37,7 @@ impl WindowManager {
                 self.set_floating_rect(key, Some(full));
                 if let Some(w) = self.windows.get_mut(key) {
                     w.is_maximized = true;
+                    w.borders_enabled = false;
                 }
             }
             self.bring_floating_to_front_key(key);
@@ -73,6 +67,7 @@ impl WindowManager {
         self.set_floating_rect(key, Some(full));
         if let Some(w) = self.windows.get_mut(key) {
             w.is_maximized = true;
+            w.borders_enabled = false;
         }
         self.bring_floating_to_front_key(key);
     }
@@ -85,24 +80,23 @@ impl WindowManager {
         self.transition_window(key, WindowState::Mapped);
     }
 
-    /// Close a window: transition to Unmapped, destroy the component
-    /// (kills child PTY processes), and remove from the SlotMap.
+    /// Close a window according to its [`ClosePolicy`].
     ///
-    /// System windows (debug log, etc.) are kept in the SlotMap so the
-    /// WM can re-show them later.  Their key is queued to `closed_windows`
-    /// so the app can perform any additional cleanup in `wm_close_window`.
+    /// - `Destroy`: transition to `Unmapped`, destroy the component, and
+    ///   remove the key from the SlotMap.
+    /// - `Unmap`: transition to `Unmapped` only.  The component and key
+    ///   stay alive so the window can be re-shown via `transition_window`.
     pub fn close_window(&mut self, key: WindowKey) {
         tracing::debug!(window_key = ?key, "closing window");
+        let policy = self.window(key).map(|w| w.close_policy).unwrap_or_default();
         self.transition_window(key, WindowState::Unmapped);
 
-        let is_system = self.windows.get(key).is_some_and(|w| w.is_system_window);
-        if is_system {
-            self.closed_windows.push(key);
-        } else {
-            // Destroy the component (kills child PTY processes) then
-            // remove from SlotMap — all in one call, no API chaining.
+        if policy == ClosePolicy::Destroy {
             if let Some(w) = self.windows.get_mut(key) {
-                w.component.destroy();
+                if let Some(c) = self.components.get_mut(w.component_key) {
+                    c.destroy();
+                }
+                self.components.remove(w.component_key);
             }
             self.windows.remove(key);
         }

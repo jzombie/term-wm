@@ -1,10 +1,8 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::actions::TermWmAction;
 use crate::keybindings::KeyBindings;
 use crate::theme::NOIR;
-use crate::window::decorator::{DefaultDecorator, WindowDecorator};
 
 fn super_passthrough_window_default() -> Duration {
     const ESC_PASSTHROUGH_DEFAULT: u64 = 600;
@@ -73,7 +71,7 @@ pub struct WmConfig {
     /// Support floating (draggable) windows alongside tiled windows.
     pub floating_windows_enabled: bool,
     /// Show the top/bottom status panel (window list, menu, indicators).
-    pub panel_enabled: bool,
+    pub panels_enabled: bool,
     /// Enable the WM command menu toggled by Escape.
     pub wm_command_menu_enabled: bool,
     /// Duration of the escape passthrough window.
@@ -103,8 +101,6 @@ pub struct WmConfig {
     /// Shadow color fades from `theme.shadow_tint` (bottom stack) to
     /// `theme.shadow_bg` (top stack) to reinforce the depth illusion.
     pub shadow_enabled: bool,
-    /// Custom window decorator (title bar + border renderer).
-    pub decorator: Option<Arc<dyn WindowDecorator>>,
     /// Configurable keybindings (defaults to `KeyBindings::default()`).
     pub keybindings: KeyBindings,
     /// Visibility mode for keybinding hints.
@@ -127,7 +123,7 @@ impl WmConfig {
         Self {
             chrome_enabled: true,
             floating_windows_enabled: true,
-            panel_enabled: true,
+            panels_enabled: true,
             wm_command_menu_enabled: true,
             super_passthrough_window: super_passthrough_window_default(),
             floating_resize_offscreen: true,
@@ -137,7 +133,6 @@ impl WmConfig {
             mouse_capture_enabled: true,
             keyboard_focus_enabled: true,
             mouse_focus_click_enabled: true,
-            decorator: Some(Arc::new(DefaultDecorator::new())),
             keybindings: validate_keybindings(&KeyBindings::standalone()),
             hint_visibility: HintVisibility::Always,
             menu_outline_timeout: Duration::from_millis(500),
@@ -152,7 +147,7 @@ impl WmConfig {
         Self {
             chrome_enabled: false,
             floating_windows_enabled: false,
-            panel_enabled: false,
+            panels_enabled: false,
             wm_command_menu_enabled: false,
             super_passthrough_window: super_passthrough_window_default(),
             floating_resize_offscreen: false,
@@ -162,7 +157,6 @@ impl WmConfig {
             mouse_capture_enabled: true,
             keyboard_focus_enabled: true,
             mouse_focus_click_enabled: true,
-            decorator: Some(Arc::new(DefaultDecorator::without_buttons())),
             keybindings: validate_keybindings(&KeyBindings::minimal()),
             hint_visibility: HintVisibility::Always,
             menu_outline_timeout: Duration::ZERO,
@@ -171,13 +165,7 @@ impl WmConfig {
         }
     }
 
-    pub fn decorator(&self) -> Arc<dyn WindowDecorator> {
-        self.decorator
-            .clone()
-            .unwrap_or_else(|| Arc::new(DefaultDecorator::without_buttons()))
-    }
-
     pub fn panel_active(&self) -> bool {
-        self.panel_enabled
+        self.panels_enabled
     }
 }

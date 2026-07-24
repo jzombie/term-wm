@@ -1,4 +1,5 @@
 use crate::Rect;
+use crate::hitbox_registry::HitboxId;
 use term_wm_layout_engine::LayoutRect;
 
 pub use term_wm_layout_engine::{FLOATING_MIN_HEIGHT, FLOATING_MIN_WIDTH, ResizeEdge};
@@ -8,6 +9,7 @@ pub struct ResizeHandle<K: Copy + Eq + Ord> {
     pub key: K,
     pub rect: Rect,
     pub edge: ResizeEdge,
+    pub hitbox_id: HitboxId,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -36,6 +38,7 @@ pub struct HeaderDrag<K: Copy + Eq + Ord> {
 pub struct DragHandle<K: Copy + Eq + Ord> {
     pub key: K,
     pub rect: Rect,
+    pub hitbox_id: HitboxId,
 }
 
 pub fn resize_handles_for_region<K: Copy + Eq + Ord>(
@@ -66,6 +69,7 @@ pub fn resize_handles_for_region<K: Copy + Eq + Ord>(
             height: 1,
         },
         edge: ResizeEdge::TopLeft,
+        hitbox_id: HitboxId::new(),
     });
     handles.push(ResizeHandle {
         key,
@@ -76,6 +80,7 @@ pub fn resize_handles_for_region<K: Copy + Eq + Ord>(
             height: 1,
         },
         edge: ResizeEdge::TopRight,
+        hitbox_id: HitboxId::new(),
     });
     handles.push(ResizeHandle {
         key,
@@ -86,6 +91,7 @@ pub fn resize_handles_for_region<K: Copy + Eq + Ord>(
             height: 1,
         },
         edge: ResizeEdge::BottomLeft,
+        hitbox_id: HitboxId::new(),
     });
     handles.push(ResizeHandle {
         key,
@@ -96,6 +102,7 @@ pub fn resize_handles_for_region<K: Copy + Eq + Ord>(
             height: 1,
         },
         edge: ResizeEdge::BottomRight,
+        hitbox_id: HitboxId::new(),
     });
     if rect.width > 2 && can_top {
         handles.push(ResizeHandle {
@@ -107,6 +114,7 @@ pub fn resize_handles_for_region<K: Copy + Eq + Ord>(
                 height: 1,
             },
             edge: ResizeEdge::Top,
+            hitbox_id: HitboxId::new(),
         });
     }
     if rect.width > 2 && can_bottom {
@@ -119,6 +127,7 @@ pub fn resize_handles_for_region<K: Copy + Eq + Ord>(
                 height: 1,
             },
             edge: ResizeEdge::Bottom,
+            hitbox_id: HitboxId::new(),
         });
     }
     if rect.height > 2 && can_left {
@@ -131,6 +140,7 @@ pub fn resize_handles_for_region<K: Copy + Eq + Ord>(
                 height: rect.height.saturating_sub(2),
             },
             edge: ResizeEdge::Left,
+            hitbox_id: HitboxId::new(),
         });
     }
     if rect.height > 2 && can_right {
@@ -143,6 +153,7 @@ pub fn resize_handles_for_region<K: Copy + Eq + Ord>(
                 height: rect.height.saturating_sub(2),
             },
             edge: ResizeEdge::Right,
+            hitbox_id: HitboxId::new(),
         });
     }
     handles.retain(|handle| match handle.edge {
@@ -178,6 +189,7 @@ pub fn floating_header_for_region<K: Copy + Eq + Ord>(
             width: rect.width.saturating_sub(2),
             height: 1,
         },
+        hitbox_id: HitboxId::new(),
     })
 }
 
@@ -300,5 +312,167 @@ mod tests {
         assert_eq!(res.width, 26);
         assert_eq!(res.y, 10);
         assert_eq!(res.height, 12);
+    }
+
+    #[test]
+    fn resize_handles_for_region_zero_size_returns_empty() {
+        let handles = resize_handles_for_region(
+            1,
+            Rect {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            },
+            Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            },
+        );
+        assert!(handles.is_empty());
+    }
+
+    #[test]
+    fn resize_handles_for_region_small_rect_returns_corners_only() {
+        let handles = resize_handles_for_region(
+            1,
+            Rect {
+                x: 10,
+                y: 10,
+                width: 2,
+                height: 2,
+            },
+            Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            },
+        );
+        // 2x2 rect: width>2 and height>2 are false, so only 4 corners
+        assert_eq!(handles.len(), 4);
+    }
+
+    #[test]
+    fn resize_handles_for_region_large_rect_includes_edges() {
+        let handles = resize_handles_for_region(
+            1,
+            Rect {
+                x: 10,
+                y: 10,
+                width: 10,
+                height: 10,
+            },
+            Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            },
+        );
+        // 10x10: 4 corners + 4 edges = 8
+        assert_eq!(handles.len(), 8);
+    }
+
+    #[test]
+    fn floating_header_for_region_too_small_returns_none() {
+        let result = floating_header_for_region(
+            1,
+            Rect {
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 2,
+            },
+            Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            },
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn floating_header_for_region_valid_rect_returns_handle() {
+        let result = floating_header_for_region(
+            1,
+            Rect {
+                x: 10,
+                y: 10,
+                width: 10,
+                height: 10,
+            },
+            Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            },
+        );
+        assert!(result.is_some());
+        let handle = result.unwrap();
+        assert_eq!(handle.key, 1);
+        assert_eq!(handle.rect.y, 11);
+        assert_eq!(handle.rect.height, 1);
+    }
+
+    #[test]
+    fn floating_header_for_region_header_outside_bounds_returns_none() {
+        let result = floating_header_for_region(
+            1,
+            Rect {
+                x: 10,
+                y: 90,
+                width: 10,
+                height: 10,
+            },
+            Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 90,
+            },
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn apply_resize_drag_right_increases_width() {
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+        };
+        let start = Rect {
+            x: 10,
+            y: 10,
+            width: 20,
+            height: 20,
+        };
+        let res = apply_resize_drag(start, ResizeEdge::Right, 25, 15, 20, 15, bounds, false);
+        assert!(res.width > start.width);
+    }
+
+    #[test]
+    fn apply_resize_drag_bottom_increases_height() {
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+        };
+        let start = Rect {
+            x: 10,
+            y: 10,
+            width: 20,
+            height: 20,
+        };
+        let res = apply_resize_drag(start, ResizeEdge::Bottom, 15, 25, 15, 20, bounds, false);
+        assert!(res.height > start.height);
     }
 }

@@ -10,7 +10,7 @@ use term_wm_core::events::Event;
 
 use std::sync::Arc;
 
-use crate::helpers::{layout_rect_to_rect, style_to_role};
+use crate::helpers::{layout_rect_to_clipped_rect, style_to_role};
 use crate::text_renderer::TextRendererComponent;
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext};
@@ -329,7 +329,7 @@ impl MarkdownViewerComponent {
     ) -> EventResult<TermWmAction> {
         let area = ctx
             .screen_area()
-            .map(layout_rect_to_rect)
+            .map(layout_rect_to_clipped_rect)
             .unwrap_or_default();
         self.handle_pointer_event_in_area(event, area, ctx)
     }
@@ -565,25 +565,26 @@ mod markdown_tests {
             width: 30,
             height: 4,
         };
+        let layout_area = LayoutRect {
+            x: area.x as i32,
+            y: area.y as i32,
+            width: area.width,
+            height: area.height,
+        };
 
         let mut with_scroll = Buffer::empty(area);
         {
             let mut backend = term_wm_console::RatatuiBackend::new(with_scroll, area);
             scroll.render(
                 &mut backend,
-                LayoutRect {
-                    x: area.x as i32,
-                    y: area.y as i32,
-                    width: area.width,
-                    height: area.height,
-                },
+                layout_area,
                 &ComponentContext::new(true),
                 &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
             );
             with_scroll = backend.buffer;
         }
 
-        let viewport = scroll.compute_layout(area);
+        let viewport = scroll.compute_layout(layout_area);
         assert_eq!(
             viewport.width + 1,
             area.width,

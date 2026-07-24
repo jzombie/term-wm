@@ -6,24 +6,269 @@ use term_wm_layout_engine::LayoutRect;
 use crate::RatatuiBackend;
 use term_wm_core::actions::TermWmAction;
 use term_wm_core::component_context::ComponentContext;
-use term_wm_core::components::{
-    Component, ComponentAction, ComponentQuery, ComponentResponse, MenuItem, TopPanelState,
-};
+use term_wm_core::components::{Component, ComponentAction, Overlay, TopPanelState, WmComponent};
 use term_wm_core::constants::{SHADOW_OFFSET_X, SHADOW_OFFSET_Y};
-use term_wm_core::draw_plan::{DrawPlan, RegionType, RenderRegion};
-use term_wm_core::hitbox_registry::HitboxRegistry;
+use term_wm_core::draw_plan::{DrawPlan, RegionType, RenderRegion, ZLayer};
+use term_wm_core::hitbox_registry::{HitboxId, HitboxRegistry};
 use term_wm_core::layout::floating::{ResizeEdge, ResizeHandle};
 use term_wm_core::layout::rect_contains;
 use term_wm_core::layout::tiling::SplitHandle;
 use term_wm_core::layout::{Direction, FloatingPane, RectSpec, RegionMap};
 use term_wm_core::term_color::lerp_color;
 use term_wm_core::theme::{Color, Theme};
-use term_wm_core::window::decorator::WindowRenderCtx;
-use term_wm_core::window::wm_menu_items;
-use term_wm_core::window::{OverlayId, WindowKey, WindowManager, WindowSurface};
+use term_wm_core::window::{ComponentTag, WindowKey, WindowManager, WindowSurface};
+
+/// Render context for window chrome (owned by console, not core).
+pub struct ChromeCtx<'a> {
+    pub title: &'a str,
+    pub focused: bool,
+    pub floating: bool,
+    pub direct_mode: bool,
+    pub hover_pos: Option<(u16, u16)>,
+    pub theme: term_wm_core::theme::Theme,
+    pub wm_buttons: Vec<term_wm_core::window::WmButton>,
+    pub borders_enabled: bool,
+    pub header_enabled: bool,
+}
+
+use term_wm_core::chrome::{
+    LEFT_BORDER_WIDTH, RIGHT_BORDER_WIDTH, TOP_BORDER_HEIGHT, content_rect,
+};
+
+// ── Chrome layout constants (console-specific) ──────────────
+const HEADER_BUTTON_GAP: u16 = 2;
+const EDGE_INDEX_ADJUST: u16 = 1;
+
+/// Register chrome hitboxes for a window (resize, drag, close, maximize buttons).
+/// Parameters for chrome hitbox registration.
+struct ChromeHitboxParams {
+    key: WindowKey,
+    frame_size: (u16, u16),
+    screen_origin: (i16, i16),
+    content_hitbox_id: HitboxId,
+    wm_buttons: Vec<term_wm_core::window::WmButton>,
+    borders_enabled: bool,
+    header_enabled: bool,
+}
+
+/// Register chrome hitboxes for a window (resize, drag, close, maximize buttons).
+/// `frame_size` is (width, height) of the window frame. `screen_origin` is the screen-space
+/// top-left coordinate (x, y). Also registers a content-area hitbox.
+fn register_window_chrome_hitboxes(registry: &mut HitboxRegistry, params: &ChromeHitboxParams) {
+    use term_wm_core::chrome::ChromeTarget;
+    use term_wm_core::hitbox_registry::ComponentOwner;
+    use term_wm_core::layout::floating::ResizeEdge;
+
+    let ChromeHitboxParams {
+        key,
+        frame_size,
+        screen_origin,
+        content_hitbox_id,
+        wm_buttons,
+        borders_enabled,
+        header_enabled,
+    } = params;
+    let (width, height) = *frame_size;
+    let (ox, oy) = *screen_origin;
+
+    // Build screen-space rect from local offsets — no double-translation risk
+    let to_screen = |lx: u16, ly: u16, lw: u16, lh: u16| -> LayoutRect {
+        LayoutRect {
+            x: i32::from(ox) + i32::from(lx),
+            y: i32::from(oy) + i32::from(ly),
+            width: lw,
+            height: lh,
+        }
+    };
+
+    let outer_right = width.saturating_sub(EDGE_INDEX_ADJUST);
+    let bottom_y = height.saturating_sub(EDGE_INDEX_ADJUST);
+
+    // Resize handles at each edge (only if borders are enabled)
+    if *borders_enabled {
+        for (edge, lx, ly, lw, lh) in [
+            (ResizeEdge::Left, 0u16, 1u16, 1u16, height.saturating_sub(2)),
+            (
+                ResizeEdge::Right,
+                outer_right,
+                1u16,
+                1u16,
+                height.saturating_sub(2),
+            ),
+            (ResizeEdge::Top, 1u16, 0u16, width.saturating_sub(2), 1u16),
+            (
+                ResizeEdge::Bottom,
+                1u16,
+                bottom_y,
+                width.saturating_sub(2),
+                1u16,
+            ),
+        ] {
+            registry.register(
+                HitboxId::new(),
+                ComponentOwner::Chrome(ChromeTarget::Resize(*key, edge)),
+                to_screen(lx, ly, lw, lh),
+            );
+        }
+    }
+
+    // Drag handle at the header area (only if header is enabled)
+    if *header_enabled {
+        let drag_y = if *borders_enabled {
+            TOP_BORDER_HEIGHT
+        } else {
+            0
+        };
+        let drag_x = if *borders_enabled {
+            LEFT_BORDER_WIDTH
+        } else {
+            0
+        };
+        let buttons_width = if wm_buttons.is_empty() {
+            0
+        } else {
+            HEADER_BUTTON_GAP + HEADER_BUTTON_GAP * (wm_buttons.len() - 1) as u16
+        };
+        let drag_w = if *borders_enabled {
+            width.saturating_sub(LEFT_BORDER_WIDTH + RIGHT_BORDER_WIDTH + buttons_width)
+        } else {
+            width.saturating_sub(buttons_width)
+        };
+        registry.register(
+            HitboxId::new(),
+            ComponentOwner::Chrome(ChromeTarget::Drag(*key)),
+            to_screen(drag_x, drag_y, drag_w, 1),
+        );
+
+        // Window management buttons from centralized list
+        let btn_right = if *borders_enabled {
+            outer_right.saturating_sub(RIGHT_BORDER_WIDTH)
+        } else {
+            outer_right
+        };
+        for (i, btn) in wm_buttons.iter().enumerate() {
+            let bx = if *borders_enabled {
+                btn_right
+                    .saturating_sub(HEADER_BUTTON_GAP)
+                    .saturating_sub(HEADER_BUTTON_GAP * i as u16)
+            } else {
+                btn_right.saturating_sub(HEADER_BUTTON_GAP * i as u16)
+            };
+            let target = match btn.action {
+                TermWmAction::CloseWindow => ChromeTarget::CloseButton(*key),
+                TermWmAction::MaximizeWindow => ChromeTarget::MaximizeButton(*key),
+                TermWmAction::MinimizeWindow => ChromeTarget::MinimizeButton(*key),
+                TermWmAction::ToggleDirectMode => ChromeTarget::ToggleDirectMode(*key),
+                _ => continue,
+            };
+            registry.register(
+                HitboxId::new(),
+                ComponentOwner::Chrome(target),
+                to_screen(bx, drag_y, 1, 1),
+            );
+        }
+    }
+
+    // Corner resize hitboxes (registered after edges for LIFO priority)
+    if *borders_enabled {
+        for (edge, lx, ly) in [
+            (ResizeEdge::TopLeft, 0u16, 0u16),
+            (ResizeEdge::TopRight, outer_right, 0u16),
+            (ResizeEdge::BottomLeft, 0u16, bottom_y),
+            (ResizeEdge::BottomRight, outer_right, bottom_y),
+        ] {
+            registry.register(
+                HitboxId::new(),
+                ComponentOwner::Chrome(ChromeTarget::Resize(*key, edge)),
+                to_screen(lx, ly, 1, 1),
+            );
+        }
+    }
+
+    // Content area hitbox — use shared content_rect function
+    let content_full = term_wm_core::Rect {
+        x: 0,
+        y: 0,
+        width,
+        height,
+    };
+    let inner = content_rect(content_full, *borders_enabled, *header_enabled);
+    registry.register(
+        *content_hitbox_id,
+        ComponentOwner::Window(*key),
+        to_screen(inner.x as u16, inner.y as u16, inner.width, inner.height),
+    );
+}
+
+/// Single-pass window chrome rendering: draw chrome, register hitboxes (chrome + content),
+/// return inner content bounds. `frame_size` is (width, height) of the window frame.
+/// `screen_origin` is the screen-space top-left coordinate (x as i16, y as i16).
+pub fn render_window_chrome(
+    buffer: &mut Buffer,
+    registry: &mut HitboxRegistry,
+    key: WindowKey,
+    frame_size: (u16, u16),
+    screen_origin: (i16, i16),
+    content_hitbox_id: HitboxId,
+    ctx: &ChromeCtx<'_>,
+) -> LayoutRect {
+    let (width, height) = frame_size;
+    let local_bounds = LayoutRect {
+        x: 0,
+        y: 0,
+        width,
+        height,
+    };
+
+    // Draw chrome using existing renderer
+    render_window(
+        buffer,
+        local_bounds,
+        ChromeCtx {
+            title: ctx.title,
+            focused: ctx.focused,
+            floating: ctx.floating,
+            direct_mode: ctx.direct_mode,
+            hover_pos: ctx.hover_pos,
+            theme: ctx.theme,
+            wm_buttons: ctx.wm_buttons.clone(),
+            borders_enabled: ctx.borders_enabled,
+            header_enabled: ctx.header_enabled,
+        },
+    );
+
+    // Register chrome hitboxes + content hitbox (atomic)
+    register_window_chrome_hitboxes(
+        registry,
+        &ChromeHitboxParams {
+            key,
+            frame_size,
+            screen_origin,
+            content_hitbox_id,
+            wm_buttons: ctx.wm_buttons.clone(),
+            borders_enabled: ctx.borders_enabled,
+            header_enabled: ctx.header_enabled,
+        },
+    );
+
+    // Return inner content bounds (single source of truth: content_rect)
+    let full_area = term_wm_core::Rect {
+        x: 0,
+        y: 0,
+        width,
+        height,
+    };
+    let inner = content_rect(full_area, ctx.borders_enabled, ctx.header_enabled);
+    LayoutRect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: inner.height,
+    }
+}
 
 /// Convert LayoutRect to Ratatui Rect
-fn layout_rect_to_rect(layout: LayoutRect) -> Rect {
+fn layout_rect_to_clipped_rect(layout: LayoutRect) -> Rect {
     Rect {
         x: layout.x as u16,
         y: layout.y as u16,
@@ -75,20 +320,25 @@ impl DrawPlanRenderer {
     }
 
     /// Render the draw plan directly to a buffer (no Frame needed).
-    pub fn render_to_buffer(
+    pub fn render_to_buffer<C: Component<TermWmAction>>(
         &mut self,
         target_buf: &mut Buffer,
         draw_plan: &DrawPlan,
-        wm: &mut WindowManager,
+        wm: &mut WindowManager<C>,
         hitbox_registry: &mut HitboxRegistry,
     ) {
         for region in draw_plan.regions() {
-            let area = layout_rect_to_rect(region.bounds);
+            // Skip hidden regions (used for monocle mode culling)
+            if region.hidden {
+                continue;
+            }
+
+            let area = layout_rect_to_clipped_rect(region.bounds);
 
             match &region.region_type {
                 RegionType::Window(key) => {
                     if let Some(component) = wm.component_for_key_mut(*key) {
-                        if region.z_index < 10 {
+                        if region.layer <= ZLayer::TiledWindow {
                             self.render_window_composite_to_buffer(
                                 target_buf,
                                 area,
@@ -115,16 +365,37 @@ impl DrawPlanRenderer {
                         .wrap(Wrap { trim: true })
                         .render(area, target_buf);
                 }
+                RegionType::FloatingWindow(key) => {
+                    // Floating windows are rendered like regular windows
+                    if let Some(component) = wm.component_for_key_mut(*key) {
+                        self.render_direct_to_buffer(target_buf, area, component, region);
+                    }
+                }
+                RegionType::Panel(_) => {
+                    // TOOD: Address
+                    // Panels are rendered by the WindowManager
+                    // This is a placeholder for now
+                }
+                RegionType::Overlay => {
+                    // TOOD: Address
+                    // Overlays are rendered by the WindowManager
+                    // This is a placeholder for now
+                }
+                RegionType::TargetHighlight(_key) => {
+                    // TOOD: Address
+                    // Target highlight is a pulsing border overlay
+                    // This is a placeholder for now
+                }
             }
         }
     }
 
     /// Render a window with offscreen compositing into a target buffer.
-    fn render_window_composite_to_buffer(
+    fn render_window_composite_to_buffer<C: Component<TermWmAction>>(
         &mut self,
         target_buf: &mut Buffer,
         area: Rect,
-        component: &mut dyn Component<TermWmAction>,
+        component: &mut C,
         region: &RenderRegion,
         hitbox_registry: &mut HitboxRegistry,
     ) {
@@ -145,11 +416,11 @@ impl DrawPlanRenderer {
     }
 
     /// Render directly into target buffer (panels, overlays).
-    fn render_direct_to_buffer(
+    fn render_direct_to_buffer<C: Component<TermWmAction>>(
         &mut self,
         target_buf: &mut Buffer,
         area: Rect,
-        component: &mut dyn Component<TermWmAction>,
+        component: &mut C,
         region: &RenderRegion,
     ) {
         let mut buffer = std::mem::replace(&mut self.direct_buffer, Buffer::empty(Rect::ZERO));
@@ -177,17 +448,19 @@ impl DrawPlanRenderer {
         msg: &str,
     ) {
         use ratatui::style::{Color, Style};
-        use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
+        use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget, Wrap};
 
         let Some(rb) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() else {
             return;
         };
         let buf = &mut rb.buffer;
         Clear.render(area, buf);
+
         let block = Block::default()
             .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(Color::White))
-            .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+            .style(Style::default().bg(Color::Reset).fg(Color::White));
         Paragraph::new(msg)
             .block(block)
             .wrap(Wrap { trim: true })
@@ -196,22 +469,25 @@ impl DrawPlanRenderer {
 
     /// Render the draw plan to the terminal frame.
     /// This is the ONLY place where Ratatui types are used for rendering.
-    pub fn render(
+    pub fn render<C: Component<TermWmAction>>(
         &mut self,
         frame: &mut Frame,
         draw_plan: &DrawPlan,
-        wm: &mut WindowManager,
+        wm: &mut WindowManager<C>,
         hitbox_registry: &mut HitboxRegistry,
     ) {
         for region in draw_plan.regions() {
-            let area = layout_rect_to_rect(region.bounds);
+            // Skip hidden regions (used for monocle mode culling)
+            if region.hidden {
+                continue;
+            }
+
+            let area = layout_rect_to_clipped_rect(region.bounds);
 
             match &region.region_type {
                 RegionType::Window(key) => {
                     if let Some(component) = wm.component_for_key_mut(*key) {
-                        // TODO: Don't hardcode magic number
-                        // For window content, use offscreen compositing
-                        if region.z_index < 10 {
+                        if region.layer <= ZLayer::TiledWindow {
                             self.render_window_composite(
                                 frame,
                                 area,
@@ -220,7 +496,6 @@ impl DrawPlanRenderer {
                                 hitbox_registry,
                             );
                         } else {
-                            // For panels/overlays, render directly to frame
                             self.render_direct(frame, area, component, region);
                         }
                     }
@@ -240,16 +515,34 @@ impl DrawPlanRenderer {
                         .wrap(Wrap { trim: true })
                         .render(area, buf);
                 }
+                RegionType::FloatingWindow(key) => {
+                    // Floating windows are rendered like regular windows
+                    if let Some(component) = wm.component_for_key_mut(*key) {
+                        self.render_direct(frame, area, component, region);
+                    }
+                }
+                RegionType::Panel(_) => {
+                    // Panels are rendered by the WindowManager
+                    // This is a placeholder for now
+                }
+                RegionType::Overlay => {
+                    // Overlays are rendered by the WindowManager
+                    // This is a placeholder for now
+                }
+                RegionType::TargetHighlight(_key) => {
+                    // Target highlight is a pulsing border overlay
+                    // This is a placeholder for now
+                }
             }
         }
     }
 
     /// Render a window with offscreen compositing (swap-based, zero-allocation).
-    fn render_window_composite(
+    fn render_window_composite<C: Component<TermWmAction>>(
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        component: &mut dyn Component<TermWmAction>,
+        component: &mut C,
         region: &RenderRegion,
         hitbox_registry: &mut HitboxRegistry,
     ) {
@@ -282,11 +575,11 @@ impl DrawPlanRenderer {
     }
 
     /// Render directly to frame (panels, overlays).
-    fn render_direct(
+    fn render_direct<C: Component<TermWmAction>>(
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        component: &mut dyn Component<TermWmAction>,
+        component: &mut C,
         region: &RenderRegion,
     ) {
         // Swap direct buffer out
@@ -353,37 +646,33 @@ impl Default for DrawPlanRenderer {
 
 // ── Rendering functions (called by render_app in lib.rs) ──────────────
 
-pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut WindowManager) {
-    let status_line = if wm.command_menu_visible() {
-        let esc_state = if let Some(remaining) = wm.super_passthrough_remaining() {
-            format!("Super passthrough: active ({}ms)", remaining.as_millis())
-        } else {
-            "Super passthrough: inactive".to_string()
-        };
-        Some(format!("{esc_state} · Tab/Shift-Tab: cycle windows"))
-    } else {
-        wm.super_pending_remaining().map(|remaining| {
-            format!(
-                "Super pending: {}ms · press Super again within window to open menu",
-                remaining.as_millis()
-            )
-        })
-    };
+pub fn render_panels<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>>(
+    backend: &mut dyn term_wm_render::RenderBackend,
+    wm: &mut WindowManager<C, L, O>,
+) {
+    let status_line: Option<String> = None;
     let display = wm.build_display_order();
     let titles_map: std::collections::BTreeMap<WindowKey, String> =
         wm.window_titles().into_iter().collect();
     let panel_active = wm.panel_active();
     let focus_current = wm.focused_window();
-    let mouse_capture_enabled = wm.mouse_capture_enabled();
-    let clipboard_enabled = wm.clipboard_enabled();
-    let window_selection_enabled = wm.window_selection_enabled();
-    let selection_active = wm.selection_active();
-    let selection_dragging = wm.selection_dragging();
     let wm_overlay_visible = wm.command_menu_visible();
+
+    // Tiling indicator button (top-right of top panel)
+    let tiling_indicator: Option<(&str, TermWmAction)> = if !wm.is_monocle() {
+        let any_tiled = wm
+            .mapped_windows()
+            .iter()
+            .any(|k| !wm.is_window_floating(*k));
+        let label = if any_tiled { "[ tiled ]" } else { "[ float ]" };
+        Some((label, TermWmAction::ToggleTiling))
+    } else {
+        None
+    };
 
     // Top panel
     {
-        if let Some(p) = wm.top_component_mut() {
+        if let Some(p) = wm.get_semantic_component_mut(ComponentTag::TopPanel) {
             p.process_action(&ComponentAction::SetPanelActive(panel_active));
             p.process_action(&ComponentAction::SetWindowLabels(titles_map));
             p.process_action(&ComponentAction::SetTopPanelState(Box::new(
@@ -391,12 +680,8 @@ pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut W
                     focus_current: Some(focus_current),
                     display_order: display,
                     status_line,
-                    mouse_capture_enabled,
-                    clipboard_enabled,
-                    window_selection_enabled,
-                    selection_active,
-                    selection_dragging,
                     menu_open: wm_overlay_visible,
+                    tiling_indicator,
                 },
             )));
         }
@@ -405,7 +690,7 @@ pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut W
     let top_ctx = wm.component_context(false);
     {
         let mut local_hb = HitboxRegistry::new();
-        if let Some(p) = wm.top_component_mut() {
+        if let Some(p) = wm.get_semantic_component_mut(ComponentTag::TopPanel) {
             p.render(backend, top_area, &top_ctx, &mut local_hb);
         }
         wm.hitbox_registry_mut().merge(local_hb);
@@ -415,7 +700,7 @@ pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut W
     let bottom_ctx = wm.component_context(panel_active);
     {
         let mut local_hb = HitboxRegistry::new();
-        if let Some(p) = wm.bottom_component_mut() {
+        if let Some(p) = wm.get_semantic_component_mut(ComponentTag::BottomPanel) {
             p.render(backend, bottom_area, &bottom_ctx, &mut local_hb);
         }
         wm.hitbox_registry_mut().merge(local_hb);
@@ -424,8 +709,8 @@ pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut W
 
 /// Returns (shadow_rect, z_depth) pairs for all visible overlays
 /// that request a drop shadow.
-pub fn overlay_shadow_data(
-    wm: &WindowManager,
+pub fn overlay_shadow_data<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>>(
+    wm: &WindowManager<C, L, O>,
     area: LayoutRect,
     z_base: usize,
     z_total: usize,
@@ -433,7 +718,7 @@ pub fn overlay_shadow_data(
     let mut data = Vec::new();
     for (idx, (_, overlay)) in wm.overlays().iter().enumerate() {
         if let Some(rect) = overlay.shadow_rect(area) {
-            let z = WindowManager::compute_z_depth(z_base + idx, z_total);
+            let z = WindowManager::<C, L, O>::compute_z_depth(z_base + idx, z_total);
             data.push((rect, z));
         }
     }
@@ -441,55 +726,78 @@ pub fn overlay_shadow_data(
 }
 
 /// Render all active overlays (command menu, help, exit confirm).
-pub fn render_overlays(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut WindowManager) {
+pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>>(
+    backend: &mut dyn term_wm_render::RenderBackend,
+    wm: &mut WindowManager<C, L, O>,
+) {
     let full_area = wm.managed_area();
-    let hover_pos = wm.hover_pos();
 
-    // Compute anchor from top component
-    let anchor = wm.top_component().and_then(|p| {
-        if let ComponentResponse::Rect(r) = p.query(&ComponentQuery::MenuIconRect) {
-            r.map(|r| (r.x.max(0) as u16, (r.y + i32::from(r.height)).max(0) as u16))
-        } else {
-            None
+    // Panel overlay in monocle mode — render BEFORE command menu so the panel
+    // header (including hamburger icon) appears as a visual context layer.
+    // Use explicit SetPanelActive(true/false) because ComponentContext's active
+    // flag does NOT control WmTopPanelComponent's internal self.active guard
+    // (set at wm_top_panel.rs:462 via SetPanelActive action).
+    if wm.is_monocle_cramped() && wm.command_menu_visible() && !wm.is_tab_outline_active() {
+        let display = wm.build_display_order();
+        let titles_map: std::collections::BTreeMap<WindowKey, String> =
+            wm.window_titles().into_iter().collect();
+        let focus_current = wm.focused_window();
+
+        let top_area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: full_area.width,
+            height: 1,
+        };
+        let mut top_hb = HitboxRegistry::new();
+        if let Some(p) = wm.get_semantic_component_mut(ComponentTag::TopPanel) {
+            p.process_action(&ComponentAction::SetPanelActive(true));
+            p.process_action(&ComponentAction::SetWindowLabels(titles_map));
+            p.process_action(&ComponentAction::SetTopPanelState(Box::new(
+                TopPanelState {
+                    focus_current: Some(focus_current),
+                    display_order: display,
+                    status_line: None,
+                    menu_open: true,
+                    tiling_indicator: None,
+                },
+            )));
+
+            let ctx = ComponentContext::new(false).with_screen_area(top_area);
+            p.render(backend, top_area, &ctx, &mut top_hb);
+
+            // Revert to layout-derived state — the next render_panels call will
+            // set the correct active state based on panel_active().
+            p.process_action(&ComponentAction::SetPanelActive(false));
         }
-    });
+        wm.hitbox_registry_mut().merge(top_hb);
 
-    // Pre-compute overlay IDs
-    let overlay_ids: Vec<OverlayId> = wm.overlays().keys().copied().collect();
-
-    // Command menu — extract all bools before mutable borrow
-    let menu_visible = wm.command_menu_visible();
-    let mc_enabled = wm.mouse_capture_enabled();
-    let cb_enabled = wm.clipboard_enabled();
-    let ws_enabled = wm.window_selection_enabled();
-    let supported = wm.supported_menu_actions().to_vec();
-
-    if menu_visible && let Some(menu) = wm.command_menu_component_mut() {
-        let items = wm_menu_items(mc_enabled, cb_enabled, ws_enabled);
-        let items: Vec<MenuItem<TermWmAction>> = items
-            .into_iter()
-            .filter(|item| supported.contains(&item.action))
-            .collect();
-        menu.process_action(&ComponentAction::SetMenuItems(items));
-        menu.process_action(&ComponentAction::SetManagedArea(full_area));
-        menu.process_action(&ComponentAction::SetMenuAnchor(anchor));
-
-        let mut hitbox = HitboxRegistry::new();
-        let ctx = ComponentContext::new(false)
-            .with_overlay(true)
-            .with_screen_area(full_area)
-            .with_hover_pos(hover_pos);
-        menu.render(backend, full_area, &ctx, &mut hitbox);
-        wm.hitbox_registry_mut().merge(hitbox);
+        // Bottom panel overlay in monocle mode — keybinding hints
+        let bottom_area = LayoutRect {
+            x: full_area.x,
+            y: full_area.y + i32::from(full_area.height).saturating_sub(1),
+            width: full_area.width,
+            height: 1,
+        };
+        let mut bottom_hb = HitboxRegistry::new();
+        if let Some(p) = wm.get_semantic_component_mut(ComponentTag::BottomPanel) {
+            let ctx = ComponentContext::new(false).with_screen_area(bottom_area);
+            p.render(backend, bottom_area, &ctx, &mut bottom_hb);
+        }
+        wm.hitbox_registry_mut().merge(bottom_hb);
     }
 
-    // Overlays (help, exit confirm)
-    for id in overlay_ids {
-        if let Some(overlay) = wm.overlays_mut().get_mut(&id) {
+    let hover_pos = wm.hover_pos();
+
+    // Overlays (help, exit confirm, command palette)
+    let overlay_keys = wm.overlay_keys();
+    for key in overlay_keys {
+        if let Some(overlay) = wm.overlay_for_key_mut(key) {
             let mut hitbox = HitboxRegistry::new();
             let ctx = ComponentContext::new(false)
                 .with_overlay(true)
-                .with_screen_area(full_area);
+                .with_screen_area(full_area)
+                .with_hover_pos(hover_pos);
             overlay.render(backend, full_area, &ctx, &mut hitbox);
             wm.hitbox_registry_mut().merge(hitbox);
         }
@@ -521,18 +829,21 @@ pub fn render_drop_shadow(buf: &mut Buffer, dest: LayoutRect, z_depth: f32, them
 /// Uses the provided `scratch` buffer for offscreen compositing — callers
 /// should hold a persistent buffer (e.g. from `DrawPlanRenderer::take_scratch`)
 /// to avoid per-frame allocation.
+/// Returns the inner content bounds (after chrome inset) and the chrome hitbox registry.
 pub fn composite_window<F>(
     backend: &mut dyn term_wm_render::RenderBackend,
     surface: &WindowSurface,
-    _decorator: &dyn term_wm_core::window::decorator::WindowDecorator,
-    mut ctx: WindowRenderCtx<'_>,
+    key: WindowKey,
+    content_hitbox_id: HitboxId,
+    mut ctx: ChromeCtx<'_>,
     mut render_content: F,
     scratch: &mut Buffer,
-) where
-    F: FnMut(&mut dyn term_wm_render::RenderBackend, &mut HitboxRegistry),
+) -> (LayoutRect, HitboxRegistry)
+where
+    F: FnMut(&mut dyn term_wm_render::RenderBackend, LayoutRect),
 {
     if surface.dest.width == 0 || surface.dest.height == 0 {
-        return;
+        return (LayoutRect::default(), HitboxRegistry::new());
     }
     let local_area = Rect {
         x: 0,
@@ -548,8 +859,11 @@ pub fn composite_window<F>(
         };
         let local_y = if surface.dest.y < 0 {
             cy.saturating_add((-surface.dest.y) as u16)
+        } else if cy >= surface.dest.y as u16 {
+            cy - surface.dest.y as u16
         } else {
-            cy.saturating_sub(surface.dest.y as u16)
+            // Mouse is above the window — no button can be hovered
+            u16::MAX
         };
         (local_x, local_y)
     });
@@ -560,19 +874,21 @@ pub fn composite_window<F>(
     scratch.resize(local_area);
     scratch.reset();
     let mut buffer = std::mem::replace(scratch, Buffer::empty(Rect::ZERO));
+    let inner_bounds: LayoutRect;
+    let mut chrome_registry = HitboxRegistry::new();
     {
         let mut offscreen = RatatuiBackend::new(buffer, local_area);
-        render_window(
+        // Atomic single-pass: draw chrome + register hitboxes + get inner bounds
+        inner_bounds = render_window_chrome(
             &mut offscreen.buffer,
-            LayoutRect {
-                x: 0,
-                y: 0,
-                width: surface.dest.width,
-                height: surface.dest.height,
-            },
-            ctx,
+            &mut chrome_registry,
+            key,
+            (surface.dest.width, surface.dest.height),
+            (surface.dest.x as i16, surface.dest.y as i16),
+            content_hitbox_id,
+            &ctx,
         );
-        render_content(&mut offscreen, &mut HitboxRegistry::new());
+        render_content(&mut offscreen, inner_bounds);
         buffer = offscreen.buffer;
     }
     if !focused {
@@ -583,7 +899,7 @@ pub fn composite_window<F>(
     let Some(ratatui_backend) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() else {
         // Return buffer to caller before early return
         *scratch = buffer;
-        return;
+        return (inner_bounds, chrome_registry);
     };
     let main_buf = &mut ratatui_backend.buffer;
     if surface.draw_shadow {
@@ -610,23 +926,23 @@ pub fn composite_window<F>(
     }
     // Return the resized buffer to the caller's scratch for reuse next frame
     *scratch = buffer;
+    (inner_bounds, chrome_registry)
 }
 
 /// Render window chrome (borders, title bar, hover-aware buttons, direct mode indicator).
-fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: WindowRenderCtx<'_>) {
+fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
     use ratatui::style::{Color, Modifier, Style};
-    use term_wm_core::window::decorator::{
-        EDGE_INDEX_ADJUST, HeaderAction as HA, LEFT_BORDER_WIDTH, RIGHT_BORDER_WIDTH,
-        TOP_BORDER_HEIGHT, header_buttons,
-    };
 
-    let WindowRenderCtx {
+    let ChromeCtx {
         title,
         focused,
         floating,
         direct_mode,
         hover_pos,
         theme,
+        wm_buttons,
+        borders_enabled,
+        header_enabled,
     } = ctx;
 
     let focused_header_style = Style::default()
@@ -665,103 +981,134 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: WindowRenderCtx<'_>
     let outer_bottom = outer_top
         .saturating_add(rect.height)
         .saturating_sub(EDGE_INDEX_ADJUST);
-    let header_y = outer_top.saturating_add(TOP_BORDER_HEIGHT);
+    let header_y = if borders_enabled {
+        outer_top.saturating_add(TOP_BORDER_HEIGHT)
+    } else {
+        outer_top
+    };
 
-    for x in outer_left.saturating_add(LEFT_BORDER_WIDTH)..outer_right {
-        if let Some(cell) = buffer.cell_mut((x, header_y)) {
-            cell.set_symbol(" ");
-            cell.set_style(header_style);
-        }
-    }
-    let title_len = title.len() as u16;
-    let header_width = outer_right
-        .saturating_sub(outer_left)
-        .saturating_sub(RIGHT_BORDER_WIDTH);
-    if title_len <= header_width {
-        let start_x = outer_left.saturating_add(LEFT_BORDER_WIDTH) + (header_width - title_len) / 2;
-        for (idx, ch) in title.chars().enumerate() {
-            let x = start_x + idx as u16;
+    if header_enabled {
+        let header_left = if borders_enabled {
+            outer_left.saturating_add(LEFT_BORDER_WIDTH)
+        } else {
+            outer_left
+        };
+        let header_right = if borders_enabled {
+            outer_right.saturating_sub(RIGHT_BORDER_WIDTH)
+        } else {
+            outer_right
+        };
+        for x in header_left..=header_right {
             if let Some(cell) = buffer.cell_mut((x, header_y)) {
-                cell.set_symbol(&ch.to_string());
+                cell.set_symbol(" ");
                 cell.set_style(header_style);
             }
         }
-    }
-    {
-        let contrast_fg = theme.menu_selected_fg.to_ratatui();
-        for (bx, action, sym) in header_buttons(outer_right) {
-            if let Some(cell) = buffer.cell_mut((bx, header_y)) {
-                cell.set_symbol(sym);
-                let stoplight_fg = match action {
-                    HA::Close => theme.error.to_ratatui(),
-                    HA::Minimize => theme.warning.to_ratatui(),
-                    HA::Maximize => theme.accent.to_ratatui(),
-                    _ => theme.decorator_header_fg.to_ratatui(),
-                };
-                let is_hovered = hover_pos == Some((bx, header_y));
-                let style = if is_hovered {
-                    let (hover_bg, hover_fg) = match action {
-                        HA::Close => (theme.error.to_ratatui(), contrast_fg),
-                        HA::Minimize => (theme.warning.to_ratatui(), contrast_fg),
-                        HA::Maximize => (theme.accent.to_ratatui(), contrast_fg),
-                        _ => (theme.accent_alt.to_ratatui(), contrast_fg),
-                    };
-                    Style::default()
-                        .bg(hover_bg)
-                        .fg(hover_fg)
-                        .add_modifier(Modifier::BOLD)
-                } else if action == HA::ToggleDirectMode && direct_mode && focused {
-                    Style::default()
-                        .bg(theme.decorator_header_fg.to_ratatui())
-                        .fg(theme.decorator_header_bg.to_ratatui())
+        let title_len = title.len() as u16;
+        let header_width = header_right.saturating_sub(header_left).saturating_add(1);
+        if title_len <= header_width {
+            let start_x = header_left + (header_width - title_len) / 2;
+            for (idx, ch) in title.chars().enumerate() {
+                let x = start_x + idx as u16;
+                if let Some(cell) = buffer.cell_mut((x, header_y)) {
+                    cell.set_symbol(&ch.to_string());
+                    cell.set_style(header_style);
+                }
+            }
+        }
+        {
+            let contrast_fg = theme.menu_selected_fg.to_ratatui();
+            // Buttons are laid out right-to-left from outer_right
+            for (i, btn) in wm_buttons.iter().enumerate() {
+                let bx = if borders_enabled {
+                    header_right
+                        .saturating_sub(HEADER_BUTTON_GAP)
+                        .saturating_sub(HEADER_BUTTON_GAP * i as u16)
                 } else {
-                    Style::default().bg(header_bg.to_ratatui()).fg(stoplight_fg)
+                    header_right.saturating_sub(HEADER_BUTTON_GAP * i as u16)
                 };
-                cell.set_style(style);
+                if let Some(cell) = buffer.cell_mut((bx, header_y)) {
+                    cell.set_symbol(btn.symbol);
+                    let stoplight_fg = match btn.action {
+                        TermWmAction::CloseWindow => theme.error.to_ratatui(),
+                        TermWmAction::MinimizeWindow => theme.warning.to_ratatui(),
+                        TermWmAction::MaximizeWindow => theme.accent.to_ratatui(),
+                        _ => theme.decorator_header_fg.to_ratatui(),
+                    };
+                    let is_hovered = hover_pos == Some((bx, header_y));
+                    let style = if is_hovered {
+                        let (hover_bg, hover_fg) = match btn.action {
+                            TermWmAction::CloseWindow => (theme.error.to_ratatui(), contrast_fg),
+                            TermWmAction::MinimizeWindow => {
+                                (theme.warning.to_ratatui(), contrast_fg)
+                            }
+                            TermWmAction::MaximizeWindow => {
+                                (theme.accent.to_ratatui(), contrast_fg)
+                            }
+                            _ => (theme.accent_alt.to_ratatui(), contrast_fg),
+                        };
+                        Style::default()
+                            .bg(hover_bg)
+                            .fg(hover_fg)
+                            .add_modifier(Modifier::BOLD)
+                    } else if matches!(btn.action, TermWmAction::ToggleDirectMode)
+                        && direct_mode
+                        && focused
+                    {
+                        Style::default()
+                            .bg(theme.decorator_header_fg.to_ratatui())
+                            .fg(theme.decorator_header_bg.to_ratatui())
+                    } else {
+                        Style::default().bg(header_bg.to_ratatui()).fg(stoplight_fg)
+                    };
+                    cell.set_style(style);
+                }
             }
         }
     }
 
     // Borders — rounded corners for floating windows
-    let (tl, tr, bl, br) = if floating {
-        ("╭", "╮", "╰", "╯")
-    } else {
-        ("┌", "┐", "└", "┘")
-    };
-    for x in outer_left..=outer_right {
-        if let Some(cell) = buffer.cell_mut((x, outer_top)) {
-            let sym = if x == outer_left {
-                tl
-            } else if x == outer_right {
-                tr
-            } else {
-                "─"
-            };
-            cell.set_symbol(sym);
-            cell.set_style(border_style);
+    if borders_enabled {
+        let (tl, tr, bl, br) = if floating {
+            ("╭", "╮", "╰", "╯")
+        } else {
+            ("┌", "┐", "└", "┘")
+        };
+        for x in outer_left..=outer_right {
+            if let Some(cell) = buffer.cell_mut((x, outer_top)) {
+                let sym = if x == outer_left {
+                    tl
+                } else if x == outer_right {
+                    tr
+                } else {
+                    "─"
+                };
+                cell.set_symbol(sym);
+                cell.set_style(border_style);
+            }
         }
-    }
-    for x in outer_left..=outer_right {
-        if let Some(cell) = buffer.cell_mut((x, outer_bottom)) {
-            let sym = if x == outer_left {
-                bl
-            } else if x == outer_right {
-                br
-            } else {
-                "─"
-            };
-            cell.set_symbol(sym);
-            cell.set_style(border_style);
+        for x in outer_left..=outer_right {
+            if let Some(cell) = buffer.cell_mut((x, outer_bottom)) {
+                let sym = if x == outer_left {
+                    bl
+                } else if x == outer_right {
+                    br
+                } else {
+                    "─"
+                };
+                cell.set_symbol(sym);
+                cell.set_style(border_style);
+            }
         }
-    }
-    for y in outer_top.saturating_add(TOP_BORDER_HEIGHT)..outer_bottom {
-        if let Some(cell) = buffer.cell_mut((outer_left, y)) {
-            cell.set_symbol("│");
-            cell.set_style(border_style);
-        }
-        if let Some(cell) = buffer.cell_mut((outer_right, y)) {
-            cell.set_symbol("│");
-            cell.set_style(border_style);
+        for y in outer_top.saturating_add(TOP_BORDER_HEIGHT)..outer_bottom {
+            if let Some(cell) = buffer.cell_mut((outer_left, y)) {
+                cell.set_symbol("│");
+                cell.set_style(border_style);
+            }
+            if let Some(cell) = buffer.cell_mut((outer_right, y)) {
+                cell.set_symbol("│");
+                cell.set_style(border_style);
+            }
         }
     }
 }
@@ -777,10 +1124,34 @@ pub fn render_handles_masked(
     use ratatui::style::{Modifier, Style};
 
     let hover_rect = hovered.map(|handle| handle.rect);
+
+    // Pass 1: vertical bars (Direction::Horizontal splits)
     for handle in handles {
-        if handle.rect.width == 0 || handle.rect.height == 0 {
+        if handle.rect.width == 0
+            || handle.rect.height == 0
+            || handle.direction != Direction::Horizontal
+        {
             continue;
         }
+        fill_handle_bar(buffer, handle, "│", hover_rect, is_obscured, theme);
+    }
+
+    // Pass 2: horizontal bars (Direction::Vertical splits) — detect existing
+    // verticals to draw proper T-junctions.
+    for handle in handles {
+        if handle.rect.width == 0
+            || handle.rect.height == 0
+            || handle.direction != Direction::Vertical
+        {
+            continue;
+        }
+        let hr = Rect {
+            x: handle.rect.x.max(0) as u16,
+            y: handle.rect.y.max(0) as u16,
+            width: handle.rect.width,
+            height: handle.rect.height,
+        };
+        let clip = hr.intersection(buffer.area);
         let is_hovered = hover_rect == Some(handle.rect);
         let style = if is_hovered {
             Style::default()
@@ -789,124 +1160,137 @@ pub fn render_handles_masked(
         } else {
             Style::default().fg(theme.decorator_border_active.to_ratatui())
         };
+        if clip.width == 0 || clip.height == 0 {
+            continue;
+        }
+        let h = buffer.area.height;
+        for y in clip.y..clip.y.saturating_add(clip.height) {
+            for x in clip.x..clip.x.saturating_add(clip.width) {
+                if is_obscured(x, y) {
+                    continue;
+                }
+                // Precompute junction char: check neighbors for existing │
+                // (from pass 1 vertical handles) without holding a mutable borrow.
+                let ch = {
+                    let above_bar = y > 0
+                        && buffer.cell((x, y - 1)).is_some_and(|c| {
+                            let s = c.symbol();
+                            s == "│" || s == "┼" || s == "├" || s == "┤" || s == "┴" || s == "┬"
+                        });
+                    let below_bar = y < h.saturating_sub(1)
+                        && buffer.cell((x, y + 1)).is_some_and(|c| {
+                            let s = c.symbol();
+                            s == "│" || s == "┼" || s == "├" || s == "┤" || s == "┴" || s == "┬"
+                        });
+                    match (above_bar, below_bar) {
+                        (true, true) => "┼",
+                        (true, false) => "┴",
+                        (false, true) => "┬",
+                        (false, false) => "─",
+                    }
+                };
+                if let Some(cell) = buffer.cell_mut((x, y)) {
+                    cell.reset();
+                    cell.set_symbol(ch);
+                    cell.set_style(style);
+                }
+            }
+        }
+    }
+
+    // Pass 3: hover highlight borders (only for the hovered handle)
+    if let Some(handle) = hovered {
         let hr = Rect {
             x: handle.rect.x.max(0) as u16,
             y: handle.rect.y.max(0) as u16,
             width: handle.rect.width,
             height: handle.rect.height,
         };
-        let clip = hr.intersection(buffer.area);
-        if clip.width > 0 && clip.height > 0 {
-            for y in clip.y..clip.y.saturating_add(clip.height) {
-                for x in clip.x..clip.x.saturating_add(clip.width) {
-                    if is_obscured(x, y) {
-                        continue;
-                    }
-                    if let Some(cell) = buffer.cell_mut((x, y)) {
-                        cell.reset();
-                        cell.set_symbol("·");
-                        cell.set_style(style);
-                    }
-                }
+        let border_style = Style::default()
+            .fg(theme.accent_alt.to_ratatui())
+            .add_modifier(Modifier::BOLD);
+        let max_x = hr.x.saturating_add(hr.width).saturating_sub(1);
+        let max_y = hr.y.saturating_add(hr.height).saturating_sub(1);
+        for x in hr.x..=max_x {
+            if is_obscured(x, hr.y) {
+                continue;
+            }
+            if let Some(cell) = buffer.cell_mut((x, hr.y)) {
+                cell.set_symbol("-");
+                cell.set_style(border_style);
+            }
+            if is_obscured(x, max_y) {
+                continue;
+            }
+            if let Some(cell) = buffer.cell_mut((x, max_y)) {
+                cell.set_symbol("-");
+                cell.set_style(border_style);
             }
         }
-        match handle.direction {
-            Direction::Horizontal => {
-                let x = hr.x + hr.width / 2;
-                let y_center = hr.y + hr.height / 2;
-                for offset in 0..3 {
-                    let y = y_center.saturating_sub(1).saturating_add(offset);
-                    if y < hr.y || y >= hr.y.saturating_add(hr.height) {
-                        continue;
-                    }
-                    if is_obscured(x, y) {
-                        continue;
-                    }
-                    if let Some(cell) = buffer.cell_mut((x, y)) {
-                        cell.set_symbol(if is_hovered { "O" } else { "o" });
-                        cell.set_style(style);
-                    }
-                }
+        for y in hr.y..=max_y {
+            if is_obscured(hr.x, y) {
+                continue;
             }
-            Direction::Vertical => {
-                let y = hr.y + hr.height / 2;
-                let x_center = hr.x + hr.width / 2;
-                for offset in 0..3 {
-                    let x = x_center.saturating_sub(1).saturating_add(offset);
-                    if x < hr.x || x >= hr.x.saturating_add(hr.width) {
-                        continue;
-                    }
-                    if is_obscured(x, y) {
-                        continue;
-                    }
-                    if let Some(cell) = buffer.cell_mut((x, y)) {
-                        cell.set_symbol(if is_hovered { "O" } else { "o" });
-                        cell.set_style(style);
-                    }
-                }
+            if let Some(cell) = buffer.cell_mut((hr.x, y)) {
+                cell.set_symbol("|");
+                cell.set_style(border_style);
+            }
+            if is_obscured(max_x, y) {
+                continue;
+            }
+            if let Some(cell) = buffer.cell_mut((max_x, y)) {
+                cell.set_symbol("|");
+                cell.set_style(border_style);
             }
         }
-        if is_hovered {
-            let border_style = Style::default()
-                .fg(theme.accent_alt.to_ratatui())
-                .add_modifier(Modifier::BOLD);
-            let max_x = hr.x.saturating_add(hr.width).saturating_sub(1);
-            let max_y = hr.y.saturating_add(hr.height).saturating_sub(1);
-            for x in hr.x..=max_x {
-                if is_obscured(x, hr.y) {
-                    continue;
-                }
-                if let Some(cell) = buffer.cell_mut((x, hr.y)) {
-                    cell.set_symbol("-");
-                    cell.set_style(border_style);
-                }
-                if is_obscured(x, max_y) {
-                    continue;
-                }
-                if let Some(cell) = buffer.cell_mut((x, max_y)) {
-                    cell.set_symbol("-");
-                    cell.set_style(border_style);
-                }
-            }
-            for y in hr.y..=max_y {
-                if is_obscured(hr.x, y) {
-                    continue;
-                }
-                if let Some(cell) = buffer.cell_mut((hr.x, y)) {
-                    cell.set_symbol("|");
-                    cell.set_style(border_style);
-                }
-                if is_obscured(max_x, y) {
-                    continue;
-                }
-                if let Some(cell) = buffer.cell_mut((max_x, y)) {
-                    cell.set_symbol("|");
-                    cell.set_style(border_style);
-                }
-            }
-            if !is_obscured(hr.x, hr.y)
-                && let Some(cell) = buffer.cell_mut((hr.x, hr.y))
+        for (cx, cy) in [(hr.x, hr.y), (max_x, hr.y), (hr.x, max_y), (max_x, max_y)] {
+            if !is_obscured(cx, cy)
+                && let Some(cell) = buffer.cell_mut((cx, cy))
             {
                 cell.set_symbol("+");
                 cell.set_style(border_style);
             }
-            if !is_obscured(max_x, hr.y)
-                && let Some(cell) = buffer.cell_mut((max_x, hr.y))
-            {
-                cell.set_symbol("+");
-                cell.set_style(border_style);
+        }
+    }
+}
+
+/// Fill a handle's cells with a fixed bar character.
+fn fill_handle_bar(
+    buffer: &mut Buffer,
+    handle: &SplitHandle,
+    sym: &str,
+    hover_rect: Option<LayoutRect>,
+    is_obscured: &dyn Fn(u16, u16) -> bool,
+    theme: &Theme,
+) {
+    use ratatui::style::Style;
+    let is_hovered = hover_rect == Some(handle.rect);
+    let style = if is_hovered {
+        Style::default()
+            .fg(theme.menu_selected_bg.to_ratatui())
+            .add_modifier(ratatui::style::Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.decorator_border_active.to_ratatui())
+    };
+    let hr = Rect {
+        x: handle.rect.x.max(0) as u16,
+        y: handle.rect.y.max(0) as u16,
+        width: handle.rect.width,
+        height: handle.rect.height,
+    };
+    let clip = hr.intersection(buffer.area);
+    if clip.width == 0 || clip.height == 0 {
+        return;
+    }
+    for y in clip.y..clip.y.saturating_add(clip.height) {
+        for x in clip.x..clip.x.saturating_add(clip.width) {
+            if is_obscured(x, y) {
+                continue;
             }
-            if !is_obscured(hr.x, max_y)
-                && let Some(cell) = buffer.cell_mut((hr.x, max_y))
-            {
-                cell.set_symbol("+");
-                cell.set_style(border_style);
-            }
-            if !is_obscured(max_x, max_y)
-                && let Some(cell) = buffer.cell_mut((max_x, max_y))
-            {
-                cell.set_symbol("+");
-                cell.set_style(border_style);
+            if let Some(cell) = buffer.cell_mut((x, y)) {
+                cell.reset();
+                cell.set_symbol(sym);
+                cell.set_style(style);
             }
         }
     }
@@ -1164,7 +1548,7 @@ pub fn render_resize_outline(
 /// Used during drag operations to show where a window will land when released.
 pub fn render_ghost_preview(buf: &mut Buffer, preview_rect: LayoutRect, theme: &Theme) {
     use ratatui::style::Modifier;
-    let rect = layout_rect_to_rect(preview_rect);
+    let rect = layout_rect_to_clipped_rect(preview_rect);
     let clip = rect.intersection(buf.area);
     if clip.width < 2 || clip.height < 2 {
         return;
@@ -1266,7 +1650,15 @@ impl ColorConvert for Color {
 /// Uses style-modifier overrides only — no character replacement — so the
 /// underlying text is fully preserved.  The active state (drag/resize) also
 /// inverts an adjacent cell as a visual "badge", clamped to buffer boundaries.
-pub fn render_cursor_overlay(buf: &mut Buffer, wm: &WindowManager, _theme: &Theme) {
+pub fn render_cursor_overlay<
+    C: Component<TermWmAction>,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+>(
+    buf: &mut Buffer,
+    wm: &WindowManager<C, L, O>,
+    _theme: &Theme,
+) {
     use ratatui::style::Modifier;
 
     // Don't render when mouse capture is disabled — the last hover position
@@ -1298,10 +1690,36 @@ mod tests {
     use ratatui::style::Style;
     use std::sync::Arc;
     use term_wm_core::app_context::AppContext;
+    use term_wm_core::components::NoopComponent;
     use term_wm_core::theme::NOIR;
     use term_wm_core::window::FloatRect;
-    use term_wm_core::window::decorator::{DefaultDecorator, WindowRenderCtx};
+    use term_wm_core::window::WmButton;
     use term_wm_core::wm_config::WmConfig;
+
+    fn test_wm_buttons() -> Vec<WmButton> {
+        vec![
+            WmButton {
+                action: TermWmAction::CloseWindow,
+                label: "Close Window",
+                symbol: "X",
+            },
+            WmButton {
+                action: TermWmAction::MaximizeWindow,
+                label: "Maximize Window",
+                symbol: "▢",
+            },
+            WmButton {
+                action: TermWmAction::MinimizeWindow,
+                label: "Minimize Window",
+                symbol: "_",
+            },
+            WmButton {
+                action: TermWmAction::ToggleDirectMode,
+                label: "Toggle Direct Mode",
+                symbol: "D",
+            },
+        ]
+    }
 
     #[test]
     fn composite_window_skips_negative_dest_x() {
@@ -1340,14 +1758,16 @@ mod tests {
             z_depth: 0.5,
         };
 
-        let decorator = DefaultDecorator::without_buttons();
-        let ctx = WindowRenderCtx {
+        let ctx = ChromeCtx {
             title: "test",
             focused: false,
             floating: false,
             direct_mode: false,
             hover_pos: None,
             theme: NOIR,
+            wm_buttons: test_wm_buttons(),
+            borders_enabled: true,
+            header_enabled: true,
         };
 
         let mut scratch = Buffer::empty(RatatuiRect {
@@ -1356,12 +1776,13 @@ mod tests {
             width: 30,
             height: 8,
         });
-        composite_window(
+        let (_inner, _chrome_hb) = composite_window(
             &mut backend,
             &surface,
-            &decorator,
+            term_wm_core::window::WindowKey::default(),
+            HitboxId::new(),
             ctx,
-            |b, _registry| {
+            |b, _inner| {
                 let rb = b.as_any_mut().downcast_mut::<RatatuiBackend>().unwrap();
                 if let Some(cell) = rb.buffer.cell_mut((5, 2)) {
                     cell.set_symbol("X");
@@ -1393,12 +1814,115 @@ mod tests {
         );
     }
 
+    #[test]
+    fn content_hitbox_clipped_when_dest_x_negative() {
+        // A 30-col window at dest.x=-5 should have its content hitbox
+        // clipped from x=-4,width=28 to x=0,width=24 (managed_area is
+        // {0,0,50,20} from screen_bounds in ChromeCtx).
+        let main_area = RatatuiRect {
+            x: 0,
+            y: 0,
+            width: 50,
+            height: 20,
+        };
+        let main_buffer = Buffer::empty(main_area);
+        let mut backend = RatatuiBackend::new(main_buffer, main_area);
+
+        let surface = WindowSurface {
+            full: term_wm_core::Rect {
+                x: 0,
+                y: 0,
+                width: 30,
+                height: 8,
+            },
+            inner: term_wm_core::Rect {
+                x: 0,
+                y: 0,
+                width: 30,
+                height: 8,
+            },
+            dest: FloatRect {
+                x: -5,
+                y: 0,
+                width: 30,
+                height: 8,
+            },
+            draw_shadow: false,
+            z_depth: 0.5,
+        };
+
+        let ctx = ChromeCtx {
+            title: "test",
+            focused: false,
+            floating: false,
+            direct_mode: false,
+            hover_pos: None,
+            theme: NOIR,
+            wm_buttons: test_wm_buttons(),
+            borders_enabled: true,
+            header_enabled: true,
+        };
+
+        let mut scratch = Buffer::empty(RatatuiRect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 8,
+        });
+        let (_, chrome_hb) = composite_window(
+            &mut backend,
+            &surface,
+            term_wm_core::window::WindowKey::default(),
+            HitboxId::new(),
+            ctx,
+            |_, _| {},
+            &mut scratch,
+        );
+
+        use term_wm_core::mouse_coord::{CoordSpace, MousePosition};
+        let screen = |col, row| MousePosition {
+            column: col,
+            row,
+            space: CoordSpace::Screen,
+        };
+
+        // Column 0 is inside the visible window content → must hit
+        assert!(
+            chrome_hb.hit_test(screen(0, 3)).is_some(),
+            "click at col 0 should hit the floating window (visible content)"
+        );
+
+        // Column 23 is inside visible content (width=24 covers [0,24))
+        assert!(
+            chrome_hb.hit_test(screen(23, 3)).is_some(),
+            "click at col 23 should hit the floating window (right edge of content)"
+        );
+
+        // Column 25 is right beyond the visible window edge (dest.x=-5, width=30,
+        // right edge at screen col 25, content hitbox clipped to [0,24), right
+        // resize edge sits at col 24). Column 25 must NOT hit the floating window.
+        assert!(
+            chrome_hb.hit_test(screen(25, 3)).is_none(),
+            "click at col 25 should NOT hit the floating window (one past right edge)"
+        );
+        assert!(
+            chrome_hb.hit_test(screen(30, 3)).is_none(),
+            "click at col 30 should NOT hit the floating window (way past right edge)"
+        );
+    }
+
     // ── render_cursor_overlay tests ──────────────────────────────────────
 
-    fn make_wm() -> WindowManager {
+    fn make_wm() -> WindowManager<NoopComponent> {
         let config = WmConfig::default();
         let app_ctx = Arc::new(AppContext::new("test", "0.1.0"));
-        WindowManager::with_config(config, app_ctx, None, None, None, None)
+        WindowManager::<NoopComponent>::with_config(
+            config,
+            app_ctx,
+            None,
+            term_wm_core::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        )
     }
 
     fn make_buf(width: u16, height: u16) -> Buffer {

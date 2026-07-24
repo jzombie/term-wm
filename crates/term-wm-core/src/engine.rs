@@ -1,5 +1,6 @@
-use crate::constants::NOTIFICATION_Z_INDEX;
-use crate::draw_plan::{DrawPlan, RegionType, RenderRegion};
+use crate::actions::TermWmAction;
+use crate::components::{Component, Overlay, WmComponent};
+use crate::draw_plan::{DrawPlan, RegionType, RenderRegion, ZLayer};
 use crate::window::WindowManager;
 use term_wm_layout_engine::LayoutRect;
 
@@ -25,15 +26,19 @@ impl CoreEngine {
 
     /// Project the current draw plan without causing heap allocation.
     /// Returns a reference to the draw plan struct.
-    pub fn project_draw_plan(
+    pub fn project_draw_plan<
+        C: Component<TermWmAction>,
+        L: WmComponent,
+        O: Overlay<TermWmAction>,
+    >(
         &mut self,
         width: u32,
         height: u32,
-        wm: &mut WindowManager,
+        wm: &mut WindowManager<C, L, O>,
     ) -> &DrawPlan {
         // Check if either the engine or the WindowManager has changed
         if !self.is_dirty && !wm.layout_dirty() {
-            self.draw_plan.sort_by_z_index();
+            self.draw_plan.sort_by_layer();
             return &self.draw_plan;
         }
 
@@ -43,8 +48,18 @@ impl CoreEngine {
         // Generate new regions from layout state
         self.generate_regions(width, height, wm);
 
-        // Sort by z-index for correct layering
-        self.draw_plan.sort_by_z_index();
+        // Apply monocle mode if active
+        // This hides non-focused windows and reorders Z-indices
+        // without mutating WindowManager.z_order
+        if wm.is_monocle() {
+            let focused_key = wm.focused_window();
+            let screen = wm.managed_area();
+            self.draw_plan.apply_monocle_culling(focused_key, screen);
+            self.draw_plan.apply_monocle_z_order(focused_key);
+        }
+
+        // Sort by layer for correct layering
+        self.draw_plan.sort_by_layer();
 
         // Mark as clean
         self.is_dirty = false;
@@ -54,7 +69,12 @@ impl CoreEngine {
     }
 
     /// Generate render regions from current layout state.
-    fn generate_regions(&mut self, _width: u32, _height: u32, wm: &WindowManager) {
+    fn generate_regions<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>>(
+        &mut self,
+        _width: u32,
+        _height: u32,
+        wm: &mut WindowManager<C, L, O>,
+    ) {
         // 1. Generate terminal window regions
         for &window_key in &wm.managed_draw_order {
             let region = wm.full_region_for_key(window_key);
@@ -74,16 +94,19 @@ impl CoreEngine {
 
             self.draw_plan.push(RenderRegion {
                 bounds: layout_rect,
-                z_index: 0, // Windows at base layer
+                layer: ZLayer::TiledWindow,
                 dimmed: !is_focused,
                 region_type: RegionType::Window(window_key),
+                hidden: false,
             });
         }
 
+        // TODO: Remove?
         // 2. Generate panel regions (top and bottom)
         // Panels are rendered by the WindowManager, not as window regions
         // Their z-index is higher than windows
 
+        // TODO: Remove?
         // 3. Generate overlay regions (if active)
         // Overlays are rendered by the WindowManager
         // Their z-index is highest
@@ -112,13 +135,21 @@ impl CoreEngine {
 ///
 /// Extracted as a standalone function so that the geometric circuit-breaker
 /// early return only skips notification layers — not the entire pipeline.
-fn generate_notification_regions(plan: &mut DrawPlan, wm: &WindowManager) {
+fn generate_notification_regions<
+    C: Component<TermWmAction>,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+>(
+    plan: &mut DrawPlan,
+    wm: &WindowManager<C, L, O>,
+) {
     use std::sync::Arc;
     use textwrap::Options;
 
     const TOAST_W: u16 = 40;
-    const MARGIN: u16 = 2;
-    const GAP: u16 = 1;
+    const H_MARGIN: u16 = 2;
+    const Y_OFFSET: u16 = 0;
+    const GAP: u16 = 0;
 
     let managed = wm.managed_area();
     let notif_count = wm.notifications().len();
@@ -127,15 +158,15 @@ fn generate_notification_regions(plan: &mut DrawPlan, wm: &WindowManager) {
     }
 
     // Circuit breaker — terminal too narrow; skip notification layers only.
-    if managed.width <= MARGIN.saturating_mul(2).saturating_add(2) {
+    if managed.width <= H_MARGIN.saturating_mul(2).saturating_add(2) {
         return;
     }
 
-    let actual_w = TOAST_W.min(managed.width.saturating_sub(MARGIN.saturating_mul(2)));
+    let actual_w = TOAST_W.min(managed.width.saturating_sub(H_MARGIN.saturating_mul(2)));
     let inner_w = actual_w.saturating_sub(2) as usize;
     let wrap_opts = Options::new(inner_w);
 
-    let mut y_offset: u16 = MARGIN;
+    let mut y_offset: u16 = Y_OFFSET;
 
     for notification in wm.notifications().renderable().rev() {
         let lines = textwrap::wrap(&notification.message, &wrap_opts);
@@ -143,7 +174,7 @@ fn generate_notification_regions(plan: &mut DrawPlan, wm: &WindowManager) {
         let h = h.min(
             managed
                 .height
-                .saturating_sub(y_offset.saturating_add(MARGIN)),
+                .saturating_sub(y_offset.saturating_add(H_MARGIN)),
         );
         if h < 3 {
             break;
@@ -153,7 +184,7 @@ fn generate_notification_regions(plan: &mut DrawPlan, wm: &WindowManager) {
             .x
             .saturating_add(managed.width as i32)
             .saturating_sub(actual_w as i32)
-            .saturating_sub(MARGIN as i32);
+            .saturating_sub(H_MARGIN as i32);
 
         plan.push(RenderRegion {
             bounds: LayoutRect {
@@ -162,9 +193,10 @@ fn generate_notification_regions(plan: &mut DrawPlan, wm: &WindowManager) {
                 width: actual_w,
                 height: h,
             },
-            z_index: NOTIFICATION_Z_INDEX,
+            layer: ZLayer::Notification,
             dimmed: false,
             region_type: RegionType::Notification(Arc::clone(&notification.message)),
+            hidden: false,
         });
 
         y_offset = y_offset.saturating_add(h).saturating_add(GAP);

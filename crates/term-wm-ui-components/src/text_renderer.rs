@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 use term_wm_core::events::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-use crate::helpers::{color_to_ratatui, layout_rect_to_rect, linkified_to_text};
+use crate::helpers::{color_to_ratatui, layout_rect_to_clipped_rect, linkified_to_text};
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::component_context::{ScrollHandle, ScrollViewport};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
@@ -48,7 +48,7 @@ impl Component<TermWmAction> for TextRendererComponent {
         ctx: &ComponentContext,
         _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
-        let area = layout_rect_to_rect(area);
+        let area = layout_rect_to_clipped_rect(area);
         self.apply_focus_state(ctx.focused());
         if area.width == 0 || area.height == 0 {
             return;
@@ -94,15 +94,11 @@ impl Component<TermWmAction> for TextRendererComponent {
         use crate::helpers::safe_set_string;
 
         const RULE_PLACEHOLDER: &str = "\0RULE\0";
-        let usable = usable_width;
 
         let mut visual_heights: Vec<usize> = Vec::with_capacity(self.text.lines.len());
         for line in &self.text.lines {
-            let w = line.width();
-            let vh = if w == 0 {
-                1
-            } else if self.wrap {
-                (w + usable - 1).div_euclid(usable)
+            let vh = if self.wrap {
+                actual_wrapped_height(line, area.width)
             } else {
                 1
             };
@@ -722,18 +718,41 @@ impl SelectionHost for TextRendererComponent {
     }
 }
 
-fn compute_display_lines(text: &Text<'_>, width: u16) -> usize {
+fn actual_wrapped_height(line: &Line<'_>, width: u16) -> usize {
+    let w = line.width();
+    if w == 0 {
+        return 1;
+    }
     let usable = width.max(1) as usize;
+    // Upper-bound estimate: worst case, word wrapping adds at most 1 extra line
+    // per visual line compared to character-level breaking.
+    let est = (w + usable - 1).div_euclid(usable) + 1;
+    let area = ratatui::layout::Rect {
+        x: 0,
+        y: 0,
+        width: width.max(1),
+        height: est.min(65535) as u16,
+    };
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let text = ratatui::text::Text::from(vec![line.clone()]);
+    ratatui::widgets::Paragraph::new(text)
+        .wrap(ratatui::widgets::Wrap { trim: false })
+        .render(area, &mut buf);
+    let mut last = 0usize;
+    for y in 0..buf.area.height as usize {
+        let has_content =
+            (0..buf.area.width).any(|x| buf.cell((x, y as u16)).is_some_and(|c| c.symbol() != " "));
+        if has_content {
+            last = y + 1;
+        }
+    }
+    last.max(1)
+}
+
+fn compute_display_lines(text: &Text<'_>, width: u16) -> usize {
     text.lines
         .iter()
-        .map(|line| {
-            let w = line.width();
-            if w == 0 {
-                1
-            } else {
-                (w + usable - 1).div_euclid(usable)
-            }
-        })
+        .map(|line| actual_wrapped_height(line, width))
         .sum::<usize>()
         .max(1)
 }
@@ -748,7 +767,7 @@ impl Default for TextRendererComponent {
 mod tests {
     use super::*;
     use crate::ScrollViewComponent;
-    use ratatui::{buffer::Buffer, text::Text};
+    use ratatui::{buffer::Buffer, text::Line, text::Text};
     use term_wm_core::events::{
         Event, KeyCode, KeyEvent, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
@@ -1021,6 +1040,48 @@ mod tests {
         let ctx = ComponentContext::new(true).with_screen_area(area);
         let result = renderer.on_mouse_press(0, 0, MouseButton::Left, KeyModifiers::NONE, &ctx);
         assert!(result.is_ignored());
+    }
+
+    #[test]
+    fn actual_wrapped_height_accounts_for_word_boundaries() {
+        // A 132-char paragraph at width 67 wraps to 3 visual lines because
+        // word boundaries prevent breaking at column 67.  The old formula
+        // (w + usable - 1) / usable gave 2, truncating the third line.
+        let line = Line::from(vec![
+            ratatui::text::Span::raw(
+                "To send Ctrl+G to the currently focused application, press Ctrl+G",
+            ),
+            ratatui::text::Span::raw(
+                " twice quickly. (The second press is forwarded to the active window.)",
+            ),
+        ]);
+        let w = line.width();
+        let char_based = w.div_ceil(67);
+        // Sanity: the character-width formula undercounts for this paragraph
+        assert!(
+            char_based < actual_wrapped_height(&line, 67),
+            "character-width formula should undercount, but actual={} char-based={}",
+            actual_wrapped_height(&line, 67),
+            char_based
+        );
+        // actual_wrapped_height counts word-wrapped lines correctly
+        assert!(
+            actual_wrapped_height(&line, 67) >= 3,
+            "wrapping 132+ chars at width 67 needs at least 3 lines, got {}",
+            actual_wrapped_height(&line, 67)
+        );
+    }
+
+    #[test]
+    fn actual_wrapped_height_empty_line() {
+        let line = Line::from("");
+        assert_eq!(actual_wrapped_height(&line, 67), 1);
+    }
+
+    #[test]
+    fn actual_wrapped_height_single_short_line() {
+        let line = Line::from("hello");
+        assert_eq!(actual_wrapped_height(&line, 67), 1);
     }
 }
 

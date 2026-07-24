@@ -7,7 +7,7 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 
 use crate::dialog_overlay::DialogOverlayComponent;
-use crate::helpers::{color_to_ratatui, layout_rect_to_rect, safe_set_string};
+use crate::helpers::{color_to_ratatui, layout_rect_to_clipped_rect, safe_set_string};
 use term_wm_core::actions::{ConfirmAction, EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext, Overlay};
 use term_wm_core::layout::rect_contains;
@@ -48,7 +48,7 @@ impl Component<TermWmAction> for ConfirmOverlayComponent {
         if !self.visible || area.width == 0 || area.height == 0 {
             return;
         }
-        let area = layout_rect_to_rect(area);
+        let area = layout_rect_to_clipped_rect(area);
         let dialog_ctx = ctx.with_overlay(true).with_focus(true);
         let backend = crate::helpers::downcast_ratatui(backend);
         self.dialog.render(
@@ -185,6 +185,9 @@ impl Component<TermWmAction> for ConfirmOverlayComponent {
 impl Overlay<TermWmAction> for ConfirmOverlayComponent {
     fn visible(&self) -> bool {
         self.visible
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
     fn handle_confirm_event(&mut self, event: &Event) -> Option<ConfirmAction> {
         self.handle_confirm_event(event)

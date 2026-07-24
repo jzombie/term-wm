@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::app_context::AppContext;
 use crate::events::{Event, MouseButton, MouseEventKind};
+use crate::hitbox_registry::HitboxId;
 use crate::keybindings::KeyBindings;
 use crate::window::WindowKey;
 use crate::wm_config::WmConfig;
@@ -44,6 +45,14 @@ pub struct ComponentContext {
     /// Set during render so that components can convert screen-space mouse
     /// positions to local coordinates via `position.to_local(screen_area)`.
     screen_area: Option<term_wm_layout_engine::LayoutRect>,
+    /// The HitboxId of the topmost hitbox under the mouse cursor.
+    /// Set during event dispatch by the WindowManager after a hit-test.
+    /// Components use this for self-identification: `ctx.active_hitbox() == Some(self.hitbox_id)`.
+    active_hitbox: Option<HitboxId>,
+    /// The HitboxId of the component that currently holds keyboard focus
+    /// within the focused window. Set by the WindowManager when routing
+    /// keyboard events. Components check this to accept/reject key input.
+    keyboard_focus_id: Option<HitboxId>,
 }
 
 /// Viewport metadata describing how the component is projected into a
@@ -222,6 +231,8 @@ impl ComponentContext {
                 .get_or_init(|| Arc::new(WmConfig::standalone()))
                 .clone(),
             screen_area: None,
+            active_hitbox: None,
+            keyboard_focus_id: None,
         }
     }
 
@@ -357,35 +368,51 @@ impl ComponentContext {
         ctx
     }
 
-    /// If `event` is a `Press` of the given `button` within this component's
-    /// screen area, returns the local coordinates `(col, row)` relative to
-    /// the component's top-left `(0, 0)`. Returns `None` otherwise.
+    /// Returns the HitboxId of the topmost hitbox under the cursor.
+    /// Set by the WindowManager after a spatial hit-test.
+    pub fn active_hitbox(&self) -> Option<HitboxId> {
+        self.active_hitbox
+    }
+
+    /// Return a new `ComponentContext` with an active hitbox ID.
+    pub fn with_active_hitbox(&self, id: HitboxId) -> Self {
+        let mut ctx = self.clone();
+        ctx.active_hitbox = Some(id);
+        ctx
+    }
+
+    /// Returns the HitboxId of the component holding keyboard focus
+    /// within the focused window. Set by the WindowManager when routing
+    /// keyboard events.
+    pub fn keyboard_focus_id(&self) -> Option<HitboxId> {
+        self.keyboard_focus_id
+    }
+
+    /// Return a new `ComponentContext` with a keyboard focus ID.
+    pub fn with_keyboard_focus_id(&self, id: HitboxId) -> Self {
+        let mut ctx = self.clone();
+        ctx.keyboard_focus_id = Some(id);
+        ctx
+    }
+
+    /// CATEGORY 1 — Viewport Spatial Gate (convenience wrapper).
+    /// Extracts local (u16, u16) coordinates for a press of the given
+    /// `button` within this component's screen area. Returns None for
+    /// out-of-bounds clicks or non-matching event kinds.
     pub fn localize_mouse_click(&self, event: &Event, button: MouseButton) -> Option<(u16, u16)> {
-        let mouse = match event {
-            Event::Mouse(m) => m,
-            _ => return None,
+        let Event::Mouse(mouse) = event else {
+            return None;
         };
-        if !matches!(mouse.kind, MouseEventKind::Press(b) if b == button) {
+        let MouseEventKind::Press(b) = mouse.kind else {
+            return None;
+        };
+        if b != button {
             return None;
         }
-        let area = self.screen_area?;
-
-        // Lift to i32 for sign-safe arithmetic against potentially negative origins
-        let m_x = i32::from(mouse.column);
-        let m_y = i32::from(mouse.row);
-        let w = i32::from(area.width);
-        let h = i32::from(area.height);
-
-        // Bounds check in i32 space
-        if m_x < area.x || m_x >= area.x + w || m_y < area.y || m_y >= area.y + h {
-            return None;
-        }
-
-        // Compute local offsets, clamp negatives, downcast
-        let local_x = (m_x - area.x).max(0) as u16;
-        let local_y = (m_y - area.y).max(0) as u16;
-
-        Some((local_x, local_y))
+        let screen_area = self.screen_area()?;
+        let local =
+            mouse.to_local_offset(screen_area, 0, 0, screen_area.width, screen_area.height)?;
+        Some((local.column, local.row))
     }
 }
 
@@ -423,5 +450,80 @@ mod tests {
         let ctx = ComponentContext::new(false).with_direct_mode(true);
         assert!(!ctx.focused());
         assert!(ctx.direct_mode());
+    }
+
+    use crate::events::{
+        Event, KeyCode, KeyEvent, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
+
+    #[test]
+    fn localize_mouse_click_inside_bounds() {
+        let screen_area = crate::window::FloatRect {
+            x: 10,
+            y: 5,
+            width: 40,
+            height: 20,
+        };
+        let ctx = ComponentContext::new(false).with_screen_area(screen_area);
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            modifiers: KeyModifiers::NONE,
+            column: 25,
+            row: 10,
+        };
+        let result = ctx.localize_mouse_click(&Event::Mouse(mouse), MouseButton::Left);
+        assert_eq!(result, Some((15, 5)));
+    }
+
+    #[test]
+    fn localize_mouse_click_outside_bounds_returns_none() {
+        let screen_area = crate::window::FloatRect {
+            x: 10,
+            y: 5,
+            width: 40,
+            height: 20,
+        };
+        let ctx = ComponentContext::new(false).with_screen_area(screen_area);
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            modifiers: KeyModifiers::NONE,
+            column: 0,
+            row: 0,
+        };
+        let result = ctx.localize_mouse_click(&Event::Mouse(mouse), MouseButton::Left);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn localize_mouse_click_wrong_button_returns_none() {
+        let screen_area = crate::window::FloatRect {
+            x: 10,
+            y: 5,
+            width: 40,
+            height: 20,
+        };
+        let ctx = ComponentContext::new(false).with_screen_area(screen_area);
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            modifiers: KeyModifiers::NONE,
+            column: 25,
+            row: 10,
+        };
+        let result = ctx.localize_mouse_click(&Event::Mouse(mouse), MouseButton::Right);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn localize_mouse_click_non_mouse_returns_none() {
+        let screen_area = crate::window::FloatRect {
+            x: 10,
+            y: 5,
+            width: 40,
+            height: 20,
+        };
+        let ctx = ComponentContext::new(false).with_screen_area(screen_area);
+        let key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE, KeyKind::Press);
+        let result = ctx.localize_mouse_click(&Event::Key(key), MouseButton::Left);
+        assert_eq!(result, None);
     }
 }

@@ -25,6 +25,7 @@ members = [
     "crates/term-wm-render",
     "crates/term-wm-sys-ui-components",
     "crates/term-wm-ui-components",
+    "crates/term-wm-ui-facade",
 ]
 resolver = "2"
 
@@ -41,6 +42,7 @@ arboard = "3.6.1"
 arc-swap = "1.9.2"
 base64 = "0.22.1"
 bitcode = "0.6.9"
+bitflags = "2.13.1"
 clap = { version = "4.6.1", features = ["derive"] }
 console = "0.16.4"
 crossbeam-channel = "0.5.15"
@@ -58,6 +60,7 @@ muxio-rpc-service-endpoint = "0.12.0-alpha"
 muxio-tokio-mpsc-adapter = "0.12.0-alpha"
 muxio-tokio-rpc-ipc-client = "0.12.0-alpha"
 muxio-tokio-rpc-ipc-server = "0.12.0-alpha"
+nucleo-matcher = { version = "0.3", features = ["unicode-casefold", "unicode-normalization", "unicode-segmentation"] }
 portable-pty = "0.9.0"
 proptest = "1.11.0"
 pulldown-cmark = "0.13.0"
@@ -77,6 +80,7 @@ term-wm-pty-engine = { path = "crates/term-wm-pty-engine", version = "0.8.20-alp
 term-wm-render = { path = "crates/term-wm-render", version = "0.8.20-alpha" }
 term-wm-sys-ui-components = { path = "crates/term-wm-sys-ui-components", version = "0.8.20-alpha" }
 term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.8.20-alpha" }
+term-wm-ui-facade = { path = "crates/term-wm-ui-facade", version = "0.8.20-alpha" }
 textwrap = "0.16.2"
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["full"] }
@@ -96,17 +100,20 @@ sys-ui = ["dep:term-wm-sys-ui-components"]
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
-crossterm = { workspace = true }
+crossterm = { workspace = true, features = ["bracketed-paste"] }
 hostname = { workspace = true }
+libc = { workspace = true }
 line-ending = { workspace = true }
 portable-pty = { workspace = true }
 ratatui = { workspace = true }
 term-wm-console = { workspace = true }
 term-wm-core = { workspace = true }
 term-wm-layout-engine = { workspace = true }
+term-wm-pty-engine = { workspace = true }
 term-wm-render = { workspace = true }
 term-wm-sys-ui-components = { workspace = true, optional = true }
 term-wm-ui-components = { workspace = true }
+term-wm-ui-facade = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 webbrowser = { workspace = true }
@@ -120,7 +127,6 @@ muxio-tokio-mpsc-adapter = { workspace = true }
 muxio-tokio-rpc-ipc-client = { workspace = true }
 proptest = { workspace = true }
 tempfile = { workspace = true }
-term-bench = { path = "crates/term-bench" }
 term-session-client = { path = "crates/term-session-client" }
 term-session-muxio-service-definitions = { path = "crates/term-session-muxio-service-definitions" }
 term-session-server = { path = "crates/term-session-server" }

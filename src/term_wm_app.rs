@@ -6,13 +6,23 @@ use term_wm_console::console_render_target::ConsoleRenderTarget;
 use term_wm_console::draw_plan_renderer::DrawPlanRenderer;
 use term_wm_core::actions::TermWmAction;
 use term_wm_core::app_context::AppContext;
-use term_wm_core::components::{Component, component_downcast_mut};
 use term_wm_core::config::AppBuilder;
+use term_wm_core::debug_log::set_global_debug_log;
 use term_wm_core::engine::CoreEngine;
 use term_wm_core::io::{EventSource, RenderTarget};
 use term_wm_core::runner::{WindowManagerHost, run_with_defaults};
-use term_wm_core::window::{WindowKey, WindowManager};
+use term_wm_core::window::{ClosePolicy, WindowKey, WindowManager, WindowState};
 use term_wm_core::wm_config::WmConfig;
+
+use term_wm_sys_ui_components::WmSystemPanelComponent;
+use term_wm_sys_ui_components::wm_command_palette::WmCommandPaletteComponent;
+use term_wm_sys_ui_components::wm_debug_log::{WmDebugLogComponent, install_panic_hook};
+use term_wm_sys_ui_components::wm_help_overlay::WmHelpOverlayComponent;
+use term_wm_ui_components::confirm_overlay::ConfirmOverlayComponent;
+use term_wm_ui_facade::core_component::CoreWmComponent;
+use term_wm_ui_facade::{LayerComponent, OverlayComponent};
+
+use crate::components::AppRootComponent;
 
 /// A self-contained window manager app that eliminates dual-trait boilerplate.
 ///
@@ -22,23 +32,19 @@ use term_wm_core::wm_config::WmConfig;
 ///
 /// fn main() -> io::Result<()> {
 ///     let mut app = TermWmApp::new(AppContext::new("myapp", "1.0"));
-///     let key = app.register(MyComponent::new());
+///     let key = app.open_window(MyComponent::new());
 ///     app.run()
 /// }
 /// ```
 pub struct TermWmApp {
-    wm: WindowManager,
-    window_keys: Vec<WindowKey>,
+    wm: WindowManager<AppRootComponent, LayerComponent, OverlayComponent>,
+    debug_key: Option<WindowKey>,
+    system_panel_key: Option<WindowKey>,
     should_quit: bool,
-    empty_message: String,
     /// Core engine for draw plan generation.
     engine: CoreEngine,
     /// Draw plan renderer for rendering components.
     draw_renderer: DrawPlanRenderer,
-    /// Tracks previous window set to avoid recomputing layout every frame.
-    /// TODO: Wire into render pipeline when ready.
-    #[allow(dead_code)]
-    known_windows: Vec<WindowKey>,
 }
 
 impl TermWmApp {
@@ -50,18 +56,21 @@ impl TermWmApp {
         let hostname = app_ctx.hostname.clone();
 
         use term_wm_sys_ui_components::{
-            WmBottomPanelComponent, WmMenuOverlay, WmTopPanelComponent,
+            WmBottomPanelComponent, WmFabComponent, WmNotificationAreaComponent,
+            WmTopPanelComponent,
         };
 
-        let wm = AppBuilder::bare()
+        let wm = AppBuilder::<LayerComponent>::bare()
             .app_ctx(Arc::new(app_ctx))
-            .top_panel(Box::new(WmTopPanelComponent::new(&app_name)))
-            .bottom_panel(Box::new(WmBottomPanelComponent::new(
+            .top_panel(LayerComponent::TopPanel(WmTopPanelComponent::new(
+                &app_name,
+            )))
+            .bottom_panel(LayerComponent::BottomPanel(WmBottomPanelComponent::new(
                 &app_name,
                 &app_version,
                 hostname.as_deref(),
             )))
-            .command_menu(Box::new(WmMenuOverlay::new()))
+            .fab(LayerComponent::Fab(WmFabComponent::new()))
             .supported_menu_actions(vec![
                 TermWmAction::CloseMenu,
                 TermWmAction::ToggleMouseCapture,
@@ -71,6 +80,10 @@ impl TermWmApp {
             ])
             .build()
             .expect("standalone build");
+        let mut wm = wm;
+        wm.set_notification_component(LayerComponent::NotificationArea(
+            WmNotificationAreaComponent::new(),
+        ));
         Self::from_wm(wm)
     }
 
@@ -82,7 +95,7 @@ impl TermWmApp {
 
     /// Create a bare standalone app without system chrome.
     pub fn bare(app_ctx: AppContext) -> Self {
-        let wm = AppBuilder::bare()
+        let wm = AppBuilder::<LayerComponent>::bare()
             .app_ctx(Arc::new(app_ctx))
             .build()
             .expect("bare standalone build");
@@ -92,7 +105,7 @@ impl TermWmApp {
     /// Create an embedded app without command menu, suitable for
     /// embedding in an existing Ratatui application.
     pub fn embedded(app_ctx: AppContext) -> Self {
-        let wm = AppBuilder::bare()
+        let wm = AppBuilder::<LayerComponent>::bare()
             .config(WmConfig::minimal())
             .app_ctx(Arc::new(app_ctx))
             .build()
@@ -101,27 +114,59 @@ impl TermWmApp {
     }
 
     /// Create from an already-constructed WindowManager.
-    pub fn from_wm(wm: WindowManager) -> Self {
+    pub fn from_wm(wm: WindowManager<AppRootComponent, LayerComponent, OverlayComponent>) -> Self {
         Self {
             wm,
-            window_keys: Vec::new(),
+            debug_key: None,
+            system_panel_key: None,
             should_quit: false,
-            empty_message: "No windows".to_string(),
             engine: CoreEngine::new(),
             draw_renderer: DrawPlanRenderer::new(),
-            known_windows: Vec::new(),
         }
     }
 
-    /// Set the message shown when no windows are registered.
-    pub fn empty_message(mut self, msg: impl Into<String>) -> Self {
-        self.empty_message = msg.into();
-        self
-    }
+    /// Initialize standard system windows (debug log + system panel).
+    ///
+    /// Creates both windows in `Unmapped` (hidden) state with `ClosePolicy::Unmap`
+    /// so they persist across show/hide cycles. The debug log also installs the
+    /// panic hook and logging subscriber. Safe to call multiple times — subsequent
+    /// calls are no-ops.
+    pub fn init_system_windows(&mut self) {
+        if self.debug_key.is_some() || self.system_panel_key.is_some() {
+            return;
+        }
 
-    /// Get the message shown when no windows are registered.
-    pub fn empty_message_str(&self) -> &str {
-        &self.empty_message
+        // Debug Log — hidden, toggled visible via keybinding, persists across close.
+        {
+            let (mut debug_comp, handle) = WmDebugLogComponent::new_default();
+            debug_comp.set_selection_enabled(self.wm.clipboard_enabled());
+            set_global_debug_log(handle);
+            let debug_key =
+                self.wm
+                    .create_window(AppRootComponent::Core(CoreWmComponent::DebugLog(
+                        debug_comp,
+                    )));
+            self.wm.set_close_policy(debug_key, ClosePolicy::Unmap);
+            self.wm.transition_window(debug_key, WindowState::Unmapped);
+            self.wm.set_window_title(debug_key, "Debug Log");
+            self.debug_key = Some(debug_key);
+            install_panic_hook();
+            crate::logging::init_default();
+        }
+
+        // System Panel — hidden, toggled via keybinding, persists across close.
+        {
+            let sys_panel = WmSystemPanelComponent::new();
+            let sys_key =
+                self.wm
+                    .create_window(AppRootComponent::Core(CoreWmComponent::SystemPanel(
+                        sys_panel,
+                    )));
+            self.wm.set_close_policy(sys_key, ClosePolicy::Unmap);
+            self.wm.transition_window(sys_key, WindowState::Unmapped);
+            self.wm.set_window_title(sys_key, "System Panel");
+            self.system_panel_key = Some(sys_key);
+        }
     }
 
     /// Whether a quit has been requested.
@@ -129,33 +174,14 @@ impl TermWmApp {
         self.should_quit
     }
 
-    /// Register a component as a window. Returns the WindowKey for later access.
-    /// Calls `on_mount` on the component after registration.
-    pub fn register<C>(&mut self, component: C) -> WindowKey
-    where
-        C: Component<TermWmAction> + 'static,
-    {
-        let key = self.wm.spawn(component);
-        self.wm
-            .transition_window(key, term_wm_core::window::WindowState::Mapped);
-        self.wm.tile_window(key);
-        self.window_keys.push(key);
-        key
-    }
-
-    /// Register a pre-boxed component (for dynamic dispatch scenarios).
-    /// Calls `on_mount` on the component after registration, matching `register`.
-    pub fn register_boxed(&mut self, component: Box<dyn Component<TermWmAction>>) -> WindowKey {
-        let key = self.wm.spawn_boxed(component);
-        self.wm
-            .transition_window(key, term_wm_core::window::WindowState::Mapped);
-        self.wm.tile_window(key);
-        self.window_keys.push(key);
-        key
+    /// Open a component as a visible window. Returns the `WindowKey` for
+    /// later access.
+    pub fn open_window(&mut self, component: AppRootComponent) -> WindowKey {
+        self.wm.open_window(component)
     }
 
     /// Borrow the WindowManager for configuration or direct access.
-    pub fn wm(&mut self) -> &mut WindowManager {
+    pub fn wm(&mut self) -> &mut WindowManager<AppRootComponent, LayerComponent, OverlayComponent> {
         &mut self.wm
     }
 
@@ -172,13 +198,6 @@ impl TermWmApp {
     /// Set the display title for a registered window.
     pub fn set_window_title(&mut self, key: WindowKey, title: impl Into<String>) {
         self.wm.set_window_title(key, title);
-    }
-
-    /// Get a mutable reference to a registered component by key.
-    pub fn component_mut<T: 'static>(&mut self, key: WindowKey) -> Option<&mut T> {
-        self.wm
-            .component_for_key_mut(key)
-            .and_then(|c| component_downcast_mut::<T>(c))
     }
 
     /// Request the app to quit after the current event cycle.
@@ -220,17 +239,13 @@ impl TermWmApp {
     }
 }
 
-impl WindowManagerHost for TermWmApp {
-    fn wm(&mut self) -> &mut WindowManager {
+impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for TermWmApp {
+    fn wm(&mut self) -> &mut WindowManager<AppRootComponent, LayerComponent, OverlayComponent> {
         &mut self.wm
     }
 
     fn quit_requested(&self) -> bool {
         self.should_quit
-    }
-
-    fn empty_window_message(&self) -> &str {
-        &self.empty_message
     }
 
     fn render(&mut self, backend: &mut dyn term_wm_render::RenderBackend) {
@@ -240,5 +255,69 @@ impl WindowManagerHost for TermWmApp {
             &mut self.engine,
             &mut self.draw_renderer,
         );
+    }
+
+    fn on_panic(&mut self) {
+        if let Some(key) = self.debug_key {
+            self.wm.transition_window(key, WindowState::Mapped);
+            self.wm.focus_window_key(key);
+        }
+    }
+
+    fn toggle_debug_window(&mut self) {
+        let Some(key) = self.debug_key else { return };
+        if self.wm.window_state(key) == Some(WindowState::Mapped) {
+            self.wm.transition_window(key, WindowState::Unmapped);
+        } else {
+            self.wm.transition_window(key, WindowState::Mapped);
+            self.wm.focus_window_key(key);
+        }
+    }
+
+    fn toggle_system_panel(&mut self) {
+        let Some(key) = self.system_panel_key else {
+            return;
+        };
+        if self.wm.window_state(key) == Some(WindowState::Mapped) {
+            self.wm.transition_window(key, WindowState::Unmapped);
+        } else {
+            self.wm.transition_window(key, WindowState::Mapped);
+            self.wm.focus_window_key(key);
+        }
+    }
+
+    fn open_command_palette(&mut self) {
+        let mut palette = WmCommandPaletteComponent::new();
+        palette.show();
+        let items = self.wm.wm_menu_items();
+        let supported = self.wm.supported_menu_actions();
+        let items: Vec<_> = items
+            .into_iter()
+            .filter(|item| {
+                supported.contains(&item.action)
+                    || matches!(item.action, TermWmAction::FocusWindow(_))
+            })
+            .collect();
+        palette.set_items(items);
+        self.wm
+            .open_command_palette_overlay(OverlayComponent::CommandPalette(palette));
+    }
+
+    fn open_help_overlay(&mut self) {
+        let kb = self.wm.keybindings().clone();
+        let mut h = WmHelpOverlayComponent::new(self.wm.app_ctx(), kb);
+        h.show();
+        h.set_selection_enabled(self.wm.clipboard_enabled());
+        self.wm.open_help_overlay(OverlayComponent::Help(h));
+    }
+
+    fn open_exit_confirm(&mut self) {
+        let mut confirm = ConfirmOverlayComponent::new();
+        confirm.open(
+            "Exit App",
+            "Exit the application?\nUnsaved changes will be lost.",
+        );
+        self.wm
+            .open_exit_confirm_overlay(OverlayComponent::ExitConfirm(confirm));
     }
 }

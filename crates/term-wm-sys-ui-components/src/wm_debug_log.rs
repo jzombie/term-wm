@@ -1,8 +1,7 @@
 // TODO: Look into https://crates.io/crates/tui-logger
 
 use std::collections::VecDeque;
-use std::io::{self, Write};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use ratatui::text::{Line, Text};
 use term_wm_core::events::Event;
@@ -11,21 +10,15 @@ use term_wm_layout_engine::LayoutRect;
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::debug_event_flags;
-use term_wm_core::utils::ansi::strip_ansi_escapes;
 use term_wm_core::window::WindowKey;
 use term_wm_ui_components::{ScrollViewComponent, TextRendererComponent};
 
-const DEFAULT_MAX_LINES: usize = 2000;
-static GLOBAL_LOG: OnceLock<DebugLogHandle> = OnceLock::new();
+// Re-export from core so callers don't need two imports.
+pub use term_wm_core::debug_log::{
+    DebugLogHandle, DebugLogWriter, global_debug_log, set_global_debug_log,
+};
+
 static PANIC_HOOK_INSTALLED: OnceLock<()> = OnceLock::new();
-
-pub fn set_global_debug_log(handle: DebugLogHandle) -> bool {
-    GLOBAL_LOG.set(handle).is_ok()
-}
-
-pub fn global_debug_log() -> Option<DebugLogHandle> {
-    GLOBAL_LOG.get().cloned()
-}
 
 pub fn trigger_error() {
     debug_event_flags::trigger_error_pending();
@@ -36,7 +29,6 @@ pub fn install_panic_hook() {
         return;
     }
     let _ = PANIC_HOOK_INSTALLED.set(());
-    let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let mut lines: Vec<String> = Vec::new();
         lines.push("=== PANIC ===".to_string());
@@ -62,116 +54,19 @@ pub fn install_panic_hook() {
         lines.push("============".to_string());
 
         // Write to debug log buffer (for in-app viewing).
-        if let Some(handle) = GLOBAL_LOG.get() {
+        // The buffer lives in term-wm-core and persists across component
+        // destruction/re-creation cycles.
+        if let Some(handle) = global_debug_log() {
             for line in &lines {
                 handle.push(line.to_string());
             }
         }
 
         debug_event_flags::trigger_panic_pending();
-        prev(info);
+        // IMPORTANT!  Do *not* call take_hook. It blows up the terminal
+        // and prevents the debug log from properly opening
+        tracing::error!("{}", lines.join("\n"));
     }));
-}
-
-#[derive(Debug)]
-struct DebugLogBuffer {
-    lines: VecDeque<String>,
-    max_lines: usize,
-}
-
-impl DebugLogBuffer {
-    fn new(max_lines: usize) -> Self {
-        Self {
-            lines: VecDeque::new(),
-            max_lines: max_lines.max(1),
-        }
-    }
-
-    fn push_line(&mut self, line: String) {
-        self.lines.push_back(line);
-        while self.lines.len() > self.max_lines {
-            self.lines.pop_front();
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct DebugLogHandle {
-    inner: Arc<Mutex<DebugLogBuffer>>,
-}
-
-impl DebugLogHandle {
-    pub fn push(&self, line: impl Into<String>) {
-        if let Ok(mut buffer) = self.inner.lock() {
-            buffer.push_line(line.into());
-        }
-    }
-
-    pub fn writer(&self) -> DebugLogWriter {
-        DebugLogWriter::new(self.clone())
-    }
-
-    /// Read back all log lines (clones the internal buffer).
-    pub fn lines(&self) -> Vec<String> {
-        self.inner
-            .lock()
-            .map(|buf| buf.lines.iter().cloned().collect())
-            .unwrap_or_default()
-    }
-}
-
-#[derive(Debug)]
-pub struct DebugLogWriter {
-    handle: DebugLogHandle,
-    pending: Vec<u8>,
-}
-
-impl DebugLogWriter {
-    pub fn new(handle: DebugLogHandle) -> Self {
-        Self {
-            handle,
-            pending: Vec::new(),
-        }
-    }
-
-    fn flush_pending(&mut self, force: bool) {
-        if self.pending.is_empty() {
-            return;
-        }
-        if force {
-            let text = strip_ansi_escapes(&String::from_utf8_lossy(&self.pending));
-            self.pending.clear();
-            for line in text.split('\n') {
-                if !line.is_empty() || force {
-                    self.handle.push(line.to_string());
-                }
-            }
-            return;
-        }
-        let Some(pos) = self.pending.iter().rposition(|b| *b == b'\n') else {
-            return;
-        };
-        let drained: Vec<u8> = self.pending.drain(..=pos).collect();
-        let text = strip_ansi_escapes(&String::from_utf8_lossy(&drained));
-        for line in text.split('\n') {
-            if !line.is_empty() {
-                self.handle.push(line.to_string());
-            }
-        }
-    }
-}
-
-impl Write for DebugLogWriter {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.pending.extend_from_slice(buf);
-        self.flush_pending(false);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.flush_pending(true);
-        Ok(())
-    }
 }
 
 #[derive(Debug)]
@@ -191,12 +86,7 @@ impl Component<TermWmAction> for WmDebugLogComponent {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        let lines = if let Ok(buffer) = self.handle.inner.lock() {
-            buffer.lines.iter().cloned().collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
-
+        let lines = self.handle.lines();
         let text = Text::from(lines.into_iter().map(Line::from).collect::<Vec<_>>());
         {
             let mut content = self.scroll_view.content.borrow_mut();
@@ -237,9 +127,7 @@ impl Component<TermWmAction> for WmDebugLogComponent {
 
 impl WmDebugLogComponent {
     pub fn new(max_lines: usize) -> (Self, DebugLogHandle) {
-        let handle = DebugLogHandle {
-            inner: Arc::new(Mutex::new(DebugLogBuffer::new(max_lines))),
-        };
+        let handle = DebugLogHandle::new(max_lines);
         let mut renderer = TextRendererComponent::new();
         renderer.set_wrap(false);
         let mut scroll_view = ScrollViewComponent::new(renderer);
@@ -254,7 +142,19 @@ impl WmDebugLogComponent {
     }
 
     pub fn new_default() -> (Self, DebugLogHandle) {
-        Self::new(DEFAULT_MAX_LINES)
+        Self::new(term_wm_core::debug_log::DEFAULT_MAX_LINES)
+    }
+
+    /// Create from an existing handle (preserves log history).
+    pub fn from_handle(handle: DebugLogHandle) -> Self {
+        let mut renderer = TextRendererComponent::new();
+        renderer.set_wrap(false);
+        let mut scroll_view = ScrollViewComponent::new(renderer);
+        scroll_view.set_sticky_bottom(true);
+        Self {
+            handle,
+            scroll_view,
+        }
     }
 
     pub fn set_selection_enabled(&mut self, enabled: bool) {
@@ -279,12 +179,9 @@ mod tests {
         handle.push("two");
         handle.push("three");
         handle.push("four");
-        if let Ok(buf) = handle.inner.lock() {
-            assert_eq!(buf.lines.len(), 3);
-            assert_eq!(buf.lines.front().unwrap().as_str(), "two");
-        } else {
-            panic!("lock failed");
-        }
+        let lines = handle.lines();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].as_str(), "two");
     }
 
     #[test]
@@ -293,11 +190,10 @@ mod tests {
         let mut writer = handle.writer();
         let _ = writer.write(b"first line\nsecond line\npartial");
         writer.flush().unwrap();
-        if let Ok(buf) = handle.inner.lock() {
-            assert!(buf.lines.iter().any(|s| s == "first line"));
-            assert!(buf.lines.iter().any(|s| s == "second line"));
-            assert!(buf.lines.iter().any(|s| s == "partial"));
-        }
+        let lines = handle.lines();
+        assert!(lines.iter().any(|s| s == "first line"));
+        assert!(lines.iter().any(|s| s == "second line"));
+        assert!(lines.iter().any(|s| s == "partial"));
     }
 
     #[test]
@@ -312,7 +208,7 @@ mod tests {
             width: 10,
             height: 5,
         };
-        let ratatui_area = term_wm_ui_components::helpers::layout_rect_to_rect(area);
+        let ratatui_area = term_wm_ui_components::helpers::layout_rect_to_clipped_rect(area);
         let buf = ratatui::buffer::Buffer::empty(ratatui_area);
         let mut backend = term_wm_console::RatatuiBackend::new(buf, ratatui_area);
         {
@@ -354,5 +250,87 @@ mod tests {
             comp.update(action, &ctx, &mut VecDeque::new());
         }
         assert!(vh.info().offset_y >= before);
+    }
+
+    #[test]
+    fn debug_log_buffer_persists_after_component_recreation() {
+        // Create a component with a shared global-like handle
+        let (_comp1, handle) = WmDebugLogComponent::new(100);
+        handle.push("before-destroy");
+        handle.push("still-here");
+
+        // Simulate destroying the old component and creating a new one
+        // from the SAME handle (as would happen via global_debug_log())
+        let comp2 = WmDebugLogComponent::from_handle(handle.clone());
+
+        // The new component sees the same log history
+        let lines = comp2.handle.lines();
+        assert!(
+            lines.iter().any(|l| l == "before-destroy"),
+            "new component must see logs from before re-creation"
+        );
+        assert!(
+            lines.iter().any(|l| l == "still-here"),
+            "new component must see all pre-existing logs"
+        );
+
+        // Writing to the handle after re-creation is visible to the new component
+        handle.push("after-recreation");
+        let lines = comp2.handle.lines();
+        assert!(
+            lines.iter().any(|l| l == "after-recreation"),
+            "new component must see logs written after re-creation"
+        );
+    }
+
+    #[test]
+    fn debug_log_captures_logs_while_component_not_rendered() {
+        // The global buffer persists even when no WmDebugLogComponent exists.
+        // Simulate this by writing to the handle, then creating a component
+        // and verifying the logs are there.
+        let (_comp, handle) = WmDebugLogComponent::new(100);
+
+        // Simulate logs arriving while no component is mounted
+        handle.push("log-while-unmounted-1");
+        handle.push("log-while-unmounted-2");
+
+        // Now create a new component from that handle
+        let comp = WmDebugLogComponent::from_handle(handle);
+        let lines = comp.handle.lines();
+        assert!(
+            lines.iter().any(|l| l == "log-while-unmounted-1"),
+            "component must capture logs that arrived while unmounted"
+        );
+        assert!(
+            lines.iter().any(|l| l == "log-while-unmounted-2"),
+            "component must capture all logs that arrived while unmounted"
+        );
+    }
+
+    #[test]
+    fn debug_log_global_buffer_survives_across_recreations() {
+        // Write via one handle, recreate from global, verify persistence
+        let (_comp1, handle) = WmDebugLogComponent::new(50);
+
+        // Set as global (simulating what main.rs does)
+        set_global_debug_log(handle.clone());
+
+        handle.push("first-session-line");
+
+        // Drop the component (simulating close_window)
+        drop(_comp1);
+
+        // Re-create from the global handle (simulating toggle)
+        let global = global_debug_log().expect("global should be set");
+        let comp2 = WmDebugLogComponent::from_handle(global);
+        let lines = comp2.handle.lines();
+        assert!(
+            lines.iter().any(|l| l == "first-session-line"),
+            "global buffer must survive component destruction and re-creation"
+        );
+
+        // Clean up: replace global so other tests aren't affected
+        let (_comp3, fresh_handle) = WmDebugLogComponent::new(50);
+        set_global_debug_log(fresh_handle);
     }
 }

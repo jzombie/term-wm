@@ -25,7 +25,7 @@ pub use floating::{
     DragHandle, FLOATING_MIN_HEIGHT, FLOATING_MIN_WIDTH, HeaderDrag, ResizeDrag, ResizeEdge,
     ResizeHandle, apply_resize_drag_signed, floating_header_for_region, resize_handles_for_region,
 };
-pub use hit_test::{detect_quadrant, hit_test_leaf};
+pub use hit_test::{detect_quadrant, find_closest_region, hit_test_leaf, resolve_target};
 pub use layout::LayoutEngine;
 pub use node::{BspNode, NaryNode};
 pub use ordering::{FocusRing, ZOrder};
@@ -44,3 +44,6 @@ pub use split::{
     build_rects_from_sizes, gap_size, handle_thickness, split_rect_bsp, split_rects_nary,
     split_rects_weighted, split_rects_with_gaps, split_sizes,
 };
+
+mod tiling;
+pub use tiling::{Direction, LayoutNode, SplitGap, split_area_for_path, split_at_path_mut};
