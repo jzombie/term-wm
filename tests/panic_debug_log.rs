@@ -16,6 +16,7 @@ use term_wm::runner::{WindowManagerHost, run_event_loop};
 use term_wm::task_scheduler::TaskScheduler;
 use term_wm::window::{WindowKey, WindowManager};
 use term_wm_core::components::{NoopComponent, NoopOverlay, NoopWmComponent};
+use term_wm_core::power_profile::PowerProfile;
 
 #[derive(Debug)]
 struct TestOutput {
@@ -88,6 +89,15 @@ impl EventSource for ImmediateDriver {
 
     fn next_mouse(&mut self) -> io::Result<MouseEvent> {
         Err(io::Error::other("not used"))
+    }
+
+    fn current_profile(&self) -> PowerProfile {
+        // Return Streaming so the runner's FramePacer arms on idle ticks.
+        // The default PowerSaver would prevent the pacer from ever arming
+        // (poll always returns false, never enters Some(evt)), causing
+        // try_expire() to always return false and the draw closure to
+        // never execute.
+        PowerProfile::Streaming
     }
 }
 
