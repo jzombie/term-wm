@@ -8,7 +8,7 @@ use term_wm_core::components::{Component, ComponentContext};
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
 
-use crate::helpers::layout_rect_to_rect;
+use crate::helpers::layout_rect_to_clipped_rect;
 
 /// A single-line text label.
 #[derive(Debug)]
@@ -46,7 +46,7 @@ impl Component<TermWmAction> for LabelComponent {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        let rect = layout_rect_to_rect(area);
+        let rect = layout_rect_to_clipped_rect(area);
         let backend = crate::helpers::downcast_ratatui(backend);
         let para = Paragraph::new(Line::from(Span::styled(
             self.text.as_str(),
@@ -114,7 +114,8 @@ mod tests {
     fn label_render_writes_text() {
         let mut label = LabelComponent::new("Status");
         let buffer = Buffer::empty(Rect::new(0, 0, 40, 1));
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, Rect::new(0, 0, 40, 1));
+        let mut backend =
+            term_wm_console::RatatuiBackend::new_simple(buffer, Rect::new(0, 0, 40, 1));
         let ctx = ComponentContext::new(true);
         let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
         label.render(
@@ -141,7 +142,8 @@ mod tests {
     fn label_render_skips_when_width_zero() {
         let mut label = LabelComponent::new("X");
         let buffer = Buffer::empty(Rect::new(0, 0, 40, 1));
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, Rect::new(0, 0, 40, 1));
+        let mut backend =
+            term_wm_console::RatatuiBackend::new_simple(buffer, Rect::new(0, 0, 40, 1));
         let ctx = ComponentContext::new(true);
         let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
         label.render(
@@ -161,7 +163,8 @@ mod tests {
     fn label_render_skips_when_height_zero() {
         let mut label = LabelComponent::new("X");
         let buffer = Buffer::empty(Rect::new(0, 0, 40, 1));
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, Rect::new(0, 0, 40, 1));
+        let mut backend =
+            term_wm_console::RatatuiBackend::new_simple(buffer, Rect::new(0, 0, 40, 1));
         let ctx = ComponentContext::new(true);
         let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
         label.render(
