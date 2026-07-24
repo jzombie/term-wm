@@ -41,7 +41,7 @@ Step 3 (damage rect culling) was evaluated and rejected. Ratatui is an immediate
   ```rust
   frame_pacer.notify_pending();
   ```
-- In the `None` branch, wrap `output.draw(...)` call (lines 523-526):
+- In the `None` branch, replace the unconditional `begin_frame()` / `prepare_draw()` / `output.draw()` block:
   ```rust
   let is_dragging = app.wm().is_dragging_window();
   frame_pacer.set_interval(if is_dragging {
@@ -51,14 +51,22 @@ Step 3 (damage rect culling) was evaluated and rejected. Ratatui is an immediate
   });
 
   if frame_pacer.try_expire() {
+      // Clear frame state only when we're about to render.
+      // HitboxRegistry is cleared in begin_frame() and repopulated during
+      // output.draw() — running one without the other would empty the
+      // registry and make all click/drag events fall through.
+      app.wm().begin_frame();
+      app.wm().prepare_draw();
       did_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
           output.draw(|frame| draw(frame, app))
       })).is_err();
   }
-  // No draw this cycle — state is still up to date for next frame
+  // Hitboxes from the LAST frame persist between renders, so input
+  // processing (dispatch_mouse, handle_events) still works during the
+  // idle interval.  flush_state_changes runs unconditionally.
   ```
-- IMPORTANT: `begin_frame()` and `prepare_draw()` still run unconditionally (they're cheap state management). Only `output.draw()` is gated.
-- The `flush_state_changes` still runs after the draw (or skip) — this handles dirty window consumption and power profile updates.
+- `begin_frame()` / `prepare_draw()` are INSIDE `try_expire()` to preserve `HitboxRegistry` state between renders. Running them outside the gate would clear hitboxes on every idle tick without repopulating them, causing all click/drag events to fall through an empty registry.
+- `flush_state_changes` still runs after the block — handles dirty window consumption and power profile updates without clearing hitboxes.
 
 ## Step 2: Grid-cell snap preview deduplication
 
