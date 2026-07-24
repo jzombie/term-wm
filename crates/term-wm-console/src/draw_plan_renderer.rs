@@ -6,63 +6,331 @@ use term_wm_layout_engine::LayoutRect;
 use crate::RatatuiBackend;
 use term_wm_core::actions::TermWmAction;
 use term_wm_core::component_context::ComponentContext;
-use term_wm_core::components::{
-    Component, ComponentAction, ComponentQuery, ComponentResponse, MenuItem, TopPanelState,
-};
+use term_wm_core::components::{Component, ComponentAction, Overlay, TopPanelState, WmComponent};
 use term_wm_core::constants::{SHADOW_OFFSET_X, SHADOW_OFFSET_Y};
-use term_wm_core::draw_plan::{DrawPlan, RegionType, RenderRegion};
-use term_wm_core::hitbox_registry::HitboxRegistry;
+use term_wm_core::draw_plan::{DrawPlan, RegionType, RenderRegion, ZLayer};
+use term_wm_core::hitbox_registry::{HitboxId, HitboxRegistry};
 use term_wm_core::layout::floating::{ResizeEdge, ResizeHandle};
 use term_wm_core::layout::rect_contains;
 use term_wm_core::layout::tiling::SplitHandle;
 use term_wm_core::layout::{Direction, FloatingPane, RectSpec, RegionMap};
 use term_wm_core::term_color::lerp_color;
 use term_wm_core::theme::{Color, Theme};
-use term_wm_core::window::decorator::WindowRenderCtx;
-use term_wm_core::window::wm_menu_items;
-use term_wm_core::window::{OverlayId, WindowKey, WindowManager, WindowSurface};
+use term_wm_core::window::{ComponentTag, WindowKey, WindowManager, WindowSurface};
 
-/// Convert LayoutRect to Ratatui Rect
-fn layout_rect_to_rect(layout: LayoutRect) -> Rect {
+/// Render context for window chrome (owned by console, not core).
+pub struct ChromeCtx<'a> {
+    pub title: &'a str,
+    pub focused: bool,
+    pub floating: bool,
+    pub direct_mode: bool,
+    pub hover_pos: Option<(u16, u16)>,
+    pub theme: term_wm_core::theme::Theme,
+    pub wm_buttons: Vec<term_wm_core::window::WmButton>,
+    pub borders_enabled: bool,
+    pub header_enabled: bool,
+}
+
+use term_wm_core::chrome::{
+    LEFT_BORDER_WIDTH, RIGHT_BORDER_WIDTH, TOP_BORDER_HEIGHT, content_rect,
+};
+
+// ── Chrome layout constants (console-specific) ──────────────
+const HEADER_BUTTON_GAP: u16 = 2;
+const EDGE_INDEX_ADJUST: u16 = 1;
+
+/// Register chrome hitboxes for a window (resize, drag, close, maximize buttons).
+/// Parameters for chrome hitbox registration.
+struct ChromeHitboxParams {
+    key: WindowKey,
+    frame_size: (u16, u16),
+    screen_origin: (i16, i16),
+    content_hitbox_id: HitboxId,
+    wm_buttons: Vec<term_wm_core::window::WmButton>,
+    borders_enabled: bool,
+    header_enabled: bool,
+}
+
+/// Register chrome hitboxes for a window (resize, drag, close, maximize buttons).
+/// `frame_size` is (width, height) of the window frame. `screen_origin` is the screen-space
+/// top-left coordinate (x, y). Also registers a content-area hitbox.
+fn register_window_chrome_hitboxes(registry: &mut HitboxRegistry, params: &ChromeHitboxParams) {
+    use term_wm_core::chrome::ChromeTarget;
+    use term_wm_core::hitbox_registry::ComponentOwner;
+    use term_wm_core::layout::floating::ResizeEdge;
+
+    let ChromeHitboxParams {
+        key,
+        frame_size,
+        screen_origin,
+        content_hitbox_id,
+        wm_buttons,
+        borders_enabled,
+        header_enabled,
+    } = params;
+    let (width, height) = *frame_size;
+    let (ox, oy) = *screen_origin;
+
+    // Build screen-space rect from local offsets — no double-translation risk
+    let to_screen = |lx: u16, ly: u16, lw: u16, lh: u16| -> LayoutRect {
+        LayoutRect {
+            x: i32::from(ox) + i32::from(lx),
+            y: i32::from(oy) + i32::from(ly),
+            width: lw,
+            height: lh,
+        }
+    };
+
+    let outer_right = width.saturating_sub(EDGE_INDEX_ADJUST);
+    let bottom_y = height.saturating_sub(EDGE_INDEX_ADJUST);
+
+    // Resize handles at each edge (only if borders are enabled)
+    if *borders_enabled {
+        for (edge, lx, ly, lw, lh) in [
+            (ResizeEdge::Left, 0u16, 1u16, 1u16, height.saturating_sub(2)),
+            (
+                ResizeEdge::Right,
+                outer_right,
+                1u16,
+                1u16,
+                height.saturating_sub(2),
+            ),
+            (ResizeEdge::Top, 1u16, 0u16, width.saturating_sub(2), 1u16),
+            (
+                ResizeEdge::Bottom,
+                1u16,
+                bottom_y,
+                width.saturating_sub(2),
+                1u16,
+            ),
+        ] {
+            registry.register(
+                HitboxId::new(),
+                ComponentOwner::Chrome(ChromeTarget::Resize(*key, edge)),
+                to_screen(lx, ly, lw, lh),
+            );
+        }
+    }
+
+    // Drag handle at the header area (only if header is enabled)
+    if *header_enabled {
+        let drag_y = if *borders_enabled {
+            TOP_BORDER_HEIGHT
+        } else {
+            0
+        };
+        let drag_x = if *borders_enabled {
+            LEFT_BORDER_WIDTH
+        } else {
+            0
+        };
+        let buttons_width = if wm_buttons.is_empty() {
+            0
+        } else {
+            HEADER_BUTTON_GAP + HEADER_BUTTON_GAP * (wm_buttons.len() - 1) as u16
+        };
+        let drag_w = if *borders_enabled {
+            width.saturating_sub(LEFT_BORDER_WIDTH + RIGHT_BORDER_WIDTH + buttons_width)
+        } else {
+            width.saturating_sub(buttons_width)
+        };
+        registry.register(
+            HitboxId::new(),
+            ComponentOwner::Chrome(ChromeTarget::Drag(*key)),
+            to_screen(drag_x, drag_y, drag_w, 1),
+        );
+
+        // Window management buttons from centralized list
+        let btn_right = if *borders_enabled {
+            outer_right.saturating_sub(RIGHT_BORDER_WIDTH)
+        } else {
+            outer_right
+        };
+        for (i, btn) in wm_buttons.iter().enumerate() {
+            let bx = if *borders_enabled {
+                btn_right
+                    .saturating_sub(HEADER_BUTTON_GAP)
+                    .saturating_sub(HEADER_BUTTON_GAP * i as u16)
+            } else {
+                btn_right.saturating_sub(HEADER_BUTTON_GAP * i as u16)
+            };
+            let target = match btn.action {
+                TermWmAction::CloseWindow => ChromeTarget::CloseButton(*key),
+                TermWmAction::MaximizeWindow => ChromeTarget::MaximizeButton(*key),
+                TermWmAction::MinimizeWindow => ChromeTarget::MinimizeButton(*key),
+                TermWmAction::ToggleDirectMode => ChromeTarget::ToggleDirectMode(*key),
+                _ => continue,
+            };
+            registry.register(
+                HitboxId::new(),
+                ComponentOwner::Chrome(target),
+                to_screen(bx, drag_y, 1, 1),
+            );
+        }
+    }
+
+    // Corner resize hitboxes (registered after edges for LIFO priority)
+    if *borders_enabled {
+        for (edge, lx, ly) in [
+            (ResizeEdge::TopLeft, 0u16, 0u16),
+            (ResizeEdge::TopRight, outer_right, 0u16),
+            (ResizeEdge::BottomLeft, 0u16, bottom_y),
+            (ResizeEdge::BottomRight, outer_right, bottom_y),
+        ] {
+            registry.register(
+                HitboxId::new(),
+                ComponentOwner::Chrome(ChromeTarget::Resize(*key, edge)),
+                to_screen(lx, ly, 1, 1),
+            );
+        }
+    }
+
+    // Content area hitbox — use shared content_rect function
+    let content_full = term_wm_core::Rect {
+        x: 0,
+        y: 0,
+        width,
+        height,
+    };
+    let inner = content_rect(content_full, *borders_enabled, *header_enabled);
+    registry.register(
+        *content_hitbox_id,
+        ComponentOwner::Window(*key),
+        to_screen(inner.x as u16, inner.y as u16, inner.width, inner.height),
+    );
+}
+
+/// Single-pass window chrome rendering: draw chrome, register hitboxes (chrome + content),
+/// return inner content bounds. `frame_size` is (width, height) of the window frame.
+/// `screen_origin` is the screen-space top-left coordinate (x as i16, y as i16).
+pub fn render_window_chrome(
+    buffer: &mut Buffer,
+    registry: &mut HitboxRegistry,
+    key: WindowKey,
+    frame_size: (u16, u16),
+    screen_origin: (i16, i16),
+    content_hitbox_id: HitboxId,
+    ctx: &ChromeCtx<'_>,
+) -> LayoutRect {
+    let (width, height) = frame_size;
+    let local_bounds = LayoutRect {
+        x: 0,
+        y: 0,
+        width,
+        height,
+    };
+
+    // Draw chrome using existing renderer
+    render_window(
+        buffer,
+        local_bounds,
+        ChromeCtx {
+            title: ctx.title,
+            focused: ctx.focused,
+            floating: ctx.floating,
+            direct_mode: ctx.direct_mode,
+            hover_pos: ctx.hover_pos,
+            theme: ctx.theme,
+            wm_buttons: ctx.wm_buttons.clone(),
+            borders_enabled: ctx.borders_enabled,
+            header_enabled: ctx.header_enabled,
+        },
+    );
+
+    // Register chrome hitboxes + content hitbox (atomic)
+    register_window_chrome_hitboxes(
+        registry,
+        &ChromeHitboxParams {
+            key,
+            frame_size,
+            screen_origin,
+            content_hitbox_id,
+            wm_buttons: ctx.wm_buttons.clone(),
+            borders_enabled: ctx.borders_enabled,
+            header_enabled: ctx.header_enabled,
+        },
+    );
+
+    // Return inner content bounds (single source of truth: content_rect)
+    let full_area = term_wm_core::Rect {
+        x: 0,
+        y: 0,
+        width,
+        height,
+    };
+    let inner = content_rect(full_area, ctx.borders_enabled, ctx.header_enabled);
+    LayoutRect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: inner.height,
+    }
+}
+
+/// Convert LayoutRect to Ratatui Rect with proportional truncation.
+/// Negative coordinates are clamped to 0; width/height are reduced by the
+/// same amount to prevent phantom column projection.
+fn layout_rect_to_clipped_rect(layout: LayoutRect) -> Rect {
+    let x_trunc = if layout.x < 0 { (-layout.x) as u16 } else { 0 };
+    let y_trunc = if layout.y < 0 { (-layout.y) as u16 } else { 0 };
     Rect {
-        x: layout.x as u16,
-        y: layout.y as u16,
-        width: layout.width,
-        height: layout.height,
+        x: layout.x.max(0) as u16,
+        y: layout.y.max(0) as u16,
+        width: layout.width.saturating_sub(x_trunc),
+        height: layout.height.saturating_sub(y_trunc),
     }
 }
 
 /// Copy cells from source buffer to destination buffer within the given area.
-fn blit_buffer(src: &Buffer, dst: &mut Buffer, area: Rect) {
-    for y in area.y..area.y.saturating_add(area.height) {
-        for x in area.x..area.x.saturating_add(area.width) {
-            if let Some(cell) = src.cell((x, y))
-                && let Some(dst_cell) = dst.cell_mut((x, y))
-            {
-                *dst_cell = cell.clone();
-            }
-        }
+/// Uses direct row-slice indexing to eliminate per-cell bounds checks,
+/// with explicit intersection clipping for safety.
+pub fn blit_buffer(src: &Buffer, dst: &mut Buffer, area: Rect) {
+    let clip = area.intersection(src.area).intersection(dst.area);
+    if clip.width == 0 || clip.height == 0 {
+        return;
+    }
+
+    let src_w = src.area.width as usize;
+    let dst_w = dst.area.width as usize;
+    let copy_w = clip.width as usize;
+    let y_end = clip.y.saturating_add(clip.height);
+
+    for y in clip.y..y_end {
+        let src_y = (y - src.area.y) as usize;
+        let dst_y = (y - dst.area.y) as usize;
+        let src_x = (clip.x - src.area.x) as usize;
+        let dst_x = (clip.x - dst.area.x) as usize;
+
+        let src_start = src_y * src_w + src_x;
+        let dst_start = dst_y * dst_w + dst_x;
+
+        dst.content[dst_start..dst_start + copy_w]
+            .clone_from_slice(&src.content[src_start..src_start + copy_w]);
     }
 }
 
 /// Draw plan renderer that consumes the spatial IR and renders components.
 /// Uses swap-based rendering for zero-allocation steady-state.
-/// Holds persistent offscreen buffers that are swapped (not reallocated)
-/// each frame.  The caller takes a buffer via `take_scratch()`, resizes
-/// it for the current window, renders into it, blits the result to the
-/// main buffer, then returns it via `put_scratch()`.  After the first
-/// frame the Buffer capacity is stable — no heap allocations in steady
-/// state.
+/// Holds persistent offscreen buffers AND mask buffers that are swapped
+/// (not reallocated) each frame.  The caller takes a buffer via
+/// `take_scratch()`, resizes it for the current window, renders into it,
+/// blits the result to the main buffer, then returns it via `put_scratch()`.
+/// After the first frame the Buffer and mask capacity is stable — no heap
+/// allocations in steady state.
 pub struct DrawPlanRenderer {
     scratch_buffer: Buffer,
+    scratch_mask: Vec<u8>,
     direct_buffer: Buffer,
+    direct_mask: Vec<u8>,
 }
 
 impl DrawPlanRenderer {
     pub fn new() -> Self {
         Self {
             scratch_buffer: Buffer::empty(Rect::ZERO),
+            scratch_mask: Vec::new(),
             direct_buffer: Buffer::empty(Rect::ZERO),
+            direct_mask: Vec::new(),
         }
     }
 
@@ -75,20 +343,25 @@ impl DrawPlanRenderer {
     }
 
     /// Render the draw plan directly to a buffer (no Frame needed).
-    pub fn render_to_buffer(
+    pub fn render_to_buffer<C: Component<TermWmAction>>(
         &mut self,
         target_buf: &mut Buffer,
         draw_plan: &DrawPlan,
-        wm: &mut WindowManager,
+        wm: &mut WindowManager<C>,
         hitbox_registry: &mut HitboxRegistry,
     ) {
         for region in draw_plan.regions() {
-            let area = layout_rect_to_rect(region.bounds);
+            // Skip hidden regions (used for monocle mode culling)
+            if region.hidden {
+                continue;
+            }
+
+            let area = layout_rect_to_clipped_rect(region.bounds);
 
             match &region.region_type {
                 RegionType::Window(key) => {
                     if let Some(component) = wm.component_for_key_mut(*key) {
-                        if region.z_index < 10 {
+                        if region.layer <= ZLayer::TiledWindow {
                             self.render_window_composite_to_buffer(
                                 target_buf,
                                 area,
@@ -115,48 +388,78 @@ impl DrawPlanRenderer {
                         .wrap(Wrap { trim: true })
                         .render(area, target_buf);
                 }
+                RegionType::FloatingWindow(key) => {
+                    // Floating windows are rendered like regular windows
+                    if let Some(component) = wm.component_for_key_mut(*key) {
+                        self.render_direct_to_buffer(target_buf, area, component, region);
+                    }
+                }
+                RegionType::Panel(_) => {
+                    // TOOD: Address
+                    // Panels are rendered by the WindowManager
+                    // This is a placeholder for now
+                }
+                RegionType::Overlay => {
+                    // TOOD: Address
+                    // Overlays are rendered by the WindowManager
+                    // This is a placeholder for now
+                }
+                RegionType::TargetHighlight(_key) => {
+                    // TOOD: Address
+                    // Target highlight is a pulsing border overlay
+                    // This is a placeholder for now
+                }
             }
         }
     }
 
     /// Render a window with offscreen compositing into a target buffer.
-    fn render_window_composite_to_buffer(
+    fn render_window_composite_to_buffer<C: Component<TermWmAction>>(
         &mut self,
         target_buf: &mut Buffer,
         area: Rect,
-        component: &mut dyn Component<TermWmAction>,
+        component: &mut C,
         region: &RenderRegion,
         hitbox_registry: &mut HitboxRegistry,
     ) {
         let mut buffer = std::mem::replace(&mut self.scratch_buffer, Buffer::empty(Rect::ZERO));
+        let mask = std::mem::take(&mut self.scratch_mask);
         buffer.resize(area);
         buffer.reset();
 
-        let mut backend = RatatuiBackend::new(buffer, area);
+        let mut backend = RatatuiBackend::new(buffer, area, mask);
         let ctx = ComponentContext::new(!region.dimmed).with_screen_area(region.bounds);
         component.render(&mut backend, region.bounds, &ctx, hitbox_registry);
 
         if region.dimmed {
-            self.apply_dim_modifier(&mut backend.buffer);
+            let mut tmp_mask = std::mem::take(&mut backend.mask_buffer);
+            let buf_len = backend.buffer.content.len();
+            if tmp_mask.len() < buf_len {
+                tmp_mask.resize(buf_len, 0);
+            }
+            Self::apply_dim_modifier(&mut backend.buffer, &mut tmp_mask[..buf_len]);
+            backend.mask_buffer = tmp_mask;
         }
 
         blit_buffer(&backend.buffer, target_buf, area);
         self.scratch_buffer = backend.buffer;
+        self.scratch_mask = backend.mask_buffer;
     }
 
     /// Render directly into target buffer (panels, overlays).
-    fn render_direct_to_buffer(
+    fn render_direct_to_buffer<C: Component<TermWmAction>>(
         &mut self,
         target_buf: &mut Buffer,
         area: Rect,
-        component: &mut dyn Component<TermWmAction>,
+        component: &mut C,
         region: &RenderRegion,
     ) {
         let mut buffer = std::mem::replace(&mut self.direct_buffer, Buffer::empty(Rect::ZERO));
+        let mask = std::mem::take(&mut self.direct_mask);
         buffer.resize(area);
         buffer.reset();
 
-        let mut backend = RatatuiBackend::new(buffer, area);
+        let mut backend = RatatuiBackend::new(buffer, area, mask);
         let ctx = ComponentContext::new(true).with_screen_area(region.bounds);
         component.render(
             &mut backend,
@@ -167,6 +470,7 @@ impl DrawPlanRenderer {
 
         blit_buffer(&backend.buffer, target_buf, area);
         self.direct_buffer = backend.buffer;
+        self.direct_mask = backend.mask_buffer;
     }
 
     /// Render a notification toast into the target buffer.
@@ -177,17 +481,19 @@ impl DrawPlanRenderer {
         msg: &str,
     ) {
         use ratatui::style::{Color, Style};
-        use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
+        use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget, Wrap};
 
         let Some(rb) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() else {
             return;
         };
         let buf = &mut rb.buffer;
         Clear.render(area, buf);
+
         let block = Block::default()
             .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(Color::White))
-            .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+            .style(Style::default().bg(Color::Reset).fg(Color::White));
         Paragraph::new(msg)
             .block(block)
             .wrap(Wrap { trim: true })
@@ -196,22 +502,25 @@ impl DrawPlanRenderer {
 
     /// Render the draw plan to the terminal frame.
     /// This is the ONLY place where Ratatui types are used for rendering.
-    pub fn render(
+    pub fn render<C: Component<TermWmAction>>(
         &mut self,
         frame: &mut Frame,
         draw_plan: &DrawPlan,
-        wm: &mut WindowManager,
+        wm: &mut WindowManager<C>,
         hitbox_registry: &mut HitboxRegistry,
     ) {
         for region in draw_plan.regions() {
-            let area = layout_rect_to_rect(region.bounds);
+            // Skip hidden regions (used for monocle mode culling)
+            if region.hidden {
+                continue;
+            }
+
+            let area = layout_rect_to_clipped_rect(region.bounds);
 
             match &region.region_type {
                 RegionType::Window(key) => {
                     if let Some(component) = wm.component_for_key_mut(*key) {
-                        // TODO: Don't hardcode magic number
-                        // For window content, use offscreen compositing
-                        if region.z_index < 10 {
+                        if region.layer <= ZLayer::TiledWindow {
                             self.render_window_composite(
                                 frame,
                                 area,
@@ -220,7 +529,6 @@ impl DrawPlanRenderer {
                                 hitbox_registry,
                             );
                         } else {
-                            // For panels/overlays, render directly to frame
                             self.render_direct(frame, area, component, region);
                         }
                     }
@@ -240,69 +548,88 @@ impl DrawPlanRenderer {
                         .wrap(Wrap { trim: true })
                         .render(area, buf);
                 }
+                RegionType::FloatingWindow(key) => {
+                    // Floating windows are rendered like regular windows
+                    if let Some(component) = wm.component_for_key_mut(*key) {
+                        self.render_direct(frame, area, component, region);
+                    }
+                }
+                RegionType::Panel(_) => {
+                    // Panels are rendered by the WindowManager
+                    // This is a placeholder for now
+                }
+                RegionType::Overlay => {
+                    // Overlays are rendered by the WindowManager
+                    // This is a placeholder for now
+                }
+                RegionType::TargetHighlight(_key) => {
+                    // Target highlight is a pulsing border overlay
+                    // This is a placeholder for now
+                }
             }
         }
     }
 
     /// Render a window with offscreen compositing (swap-based, zero-allocation).
-    fn render_window_composite(
+    fn render_window_composite<C: Component<TermWmAction>>(
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        component: &mut dyn Component<TermWmAction>,
+        component: &mut C,
         region: &RenderRegion,
         hitbox_registry: &mut HitboxRegistry,
     ) {
-        // Swap persistent buffer out (leaves empty buffer in place)
+        // Swap persistent buffer AND mask out (leaves empty in place)
         let mut buffer = std::mem::replace(&mut self.scratch_buffer, Buffer::empty(Rect::ZERO));
-
-        // Resize and clear the swapped buffer (no allocation after warmup)
-        buffer.resize(area);
-        buffer.reset();
-
-        // Create backend owning the buffer (satisfies 'static for Any)
-        let mut backend = RatatuiBackend::new(buffer, area);
-
-        // Create component context with screen area
-        let ctx = ComponentContext::new(!region.dimmed).with_screen_area(region.bounds);
-
-        // Component renders itself into the backend
-        component.render(&mut backend, region.bounds, &ctx, hitbox_registry);
-
-        // Apply dim modifier if needed
-        if region.dimmed {
-            self.apply_dim_modifier(&mut backend.buffer);
-        }
-
-        // Blit to main frame
-        blit_buffer(&backend.buffer, frame.buffer_mut(), area);
-
-        // Swap buffer back to preserve capacity (zero-allocation)
-        self.scratch_buffer = backend.buffer;
-    }
-
-    /// Render directly to frame (panels, overlays).
-    fn render_direct(
-        &mut self,
-        frame: &mut Frame,
-        area: Rect,
-        component: &mut dyn Component<TermWmAction>,
-        region: &RenderRegion,
-    ) {
-        // Swap direct buffer out
-        let mut buffer = std::mem::replace(&mut self.direct_buffer, Buffer::empty(Rect::ZERO));
+        let mask = std::mem::take(&mut self.scratch_mask);
 
         // Resize and clear (no allocation after warmup)
         buffer.resize(area);
         buffer.reset();
 
-        // Create backend owning the buffer
-        let mut backend = RatatuiBackend::new(buffer, area);
+        // Create backend owning the buffer and mask
+        let mut backend = RatatuiBackend::new(buffer, area, mask);
 
-        // Create component context
+        let ctx = ComponentContext::new(!region.dimmed).with_screen_area(region.bounds);
+        component.render(&mut backend, region.bounds, &ctx, hitbox_registry);
+
+        // Apply dim modifier via two-pass mask if needed
+        if region.dimmed {
+            let mut tmp_mask = std::mem::take(&mut backend.mask_buffer);
+            let buf_len = backend.buffer.content.len();
+            if tmp_mask.len() < buf_len {
+                tmp_mask.resize(buf_len, 0);
+            }
+            Self::apply_dim_modifier(&mut backend.buffer, &mut tmp_mask[..buf_len]);
+            backend.mask_buffer = tmp_mask;
+        }
+
+        // Blit to main frame
+        blit_buffer(&backend.buffer, frame.buffer_mut(), area);
+
+        // Swap buffer + mask back to preserve capacity
+        self.scratch_buffer = backend.buffer;
+        self.scratch_mask = backend.mask_buffer;
+    }
+
+    /// Render directly to frame (panels, overlays).
+    fn render_direct<C: Component<TermWmAction>>(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        component: &mut C,
+        region: &RenderRegion,
+    ) {
+        // Swap direct buffer AND mask out
+        let mut buffer = std::mem::replace(&mut self.direct_buffer, Buffer::empty(Rect::ZERO));
+        let mask = std::mem::take(&mut self.direct_mask);
+
+        buffer.resize(area);
+        buffer.reset();
+
+        let mut backend = RatatuiBackend::new(buffer, area, mask);
+
         let ctx = ComponentContext::new(true).with_screen_area(region.bounds);
-
-        // Component renders into the swapped buffer
         component.render(
             &mut backend,
             region.bounds,
@@ -310,22 +637,37 @@ impl DrawPlanRenderer {
             &mut HitboxRegistry::new(),
         );
 
-        // Blit to frame
         blit_buffer(&backend.buffer, frame.buffer_mut(), area);
 
-        // Swap buffer back to preserve capacity
         self.direct_buffer = backend.buffer;
+        self.direct_mask = backend.mask_buffer;
     }
 
-    /// Apply DIM modifier to a buffer (for unfocused windows).
-    fn apply_dim_modifier(&self, buffer: &mut Buffer) {
-        let area = buffer.area;
-        for y in area.y..area.y + area.height {
-            for x in area.x..area.x + area.width {
-                if let Some(cell) = buffer.cell_mut((x, y))
-                    && !cell.symbol().starts_with(' ')
-                {
-                    cell.modifier.insert(ratatui::style::Modifier::DIM);
+    /// Apply DIM modifier using persistent mask (no heap alloc).
+    /// Two-pass SoA bitmask pattern:
+    ///   Pass 1: Sequential AoS string check → set mask bytes
+    ///   Pass 2: Row-sliced mask apply → bitwise buffer mutation
+    fn apply_dim_modifier(buffer: &mut Buffer, mask: &mut [u8]) {
+        let active_mask = &mut mask[..buffer.content.len()];
+        active_mask.fill(0);
+
+        // Pass 1: Sequential AoS — check symbol, set mask
+        for (i, cell) in buffer.content.iter().enumerate() {
+            if !cell.symbol().starts_with(' ') {
+                active_mask[i] = 1;
+            }
+        }
+
+        // Pass 2: Row-sliced mask apply — SIMD-friendly bitwise mutation
+        let buf_w = buffer.area.width as usize;
+        let dim_bit = ratatui::style::Modifier::DIM;
+        for y in 0..buffer.area.height as usize {
+            let row_start = y * buf_w;
+            let row_slice = &mut buffer.content[row_start..row_start + buf_w];
+            let mask_slice = &active_mask[row_start..row_start + buf_w];
+            for (cell, &val) in row_slice.iter_mut().zip(mask_slice.iter()) {
+                if val == 1 {
+                    cell.modifier.insert(dim_bit);
                 }
             }
         }
@@ -339,9 +681,19 @@ impl DrawPlanRenderer {
         std::mem::replace(&mut self.scratch_buffer, Buffer::empty(Rect::ZERO))
     }
 
+    /// Take the persistent scratch mask alongside the scratch buffer.
+    pub fn take_scratch_mask(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.scratch_mask)
+    }
+
     /// Return a scratch buffer taken with `take_scratch`.
     pub fn put_scratch(&mut self, buf: Buffer) {
         self.scratch_buffer = buf;
+    }
+
+    /// Return a scratch mask taken with `take_scratch_mask`.
+    pub fn put_scratch_mask(&mut self, mask: Vec<u8>) {
+        self.scratch_mask = mask;
     }
 }
 
@@ -353,37 +705,33 @@ impl Default for DrawPlanRenderer {
 
 // ── Rendering functions (called by render_app in lib.rs) ──────────────
 
-pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut WindowManager) {
-    let status_line = if wm.command_menu_visible() {
-        let esc_state = if let Some(remaining) = wm.super_passthrough_remaining() {
-            format!("Super passthrough: active ({}ms)", remaining.as_millis())
-        } else {
-            "Super passthrough: inactive".to_string()
-        };
-        Some(format!("{esc_state} · Tab/Shift-Tab: cycle windows"))
-    } else {
-        wm.super_pending_remaining().map(|remaining| {
-            format!(
-                "Super pending: {}ms · press Super again within window to open menu",
-                remaining.as_millis()
-            )
-        })
-    };
+pub fn render_panels<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>>(
+    backend: &mut dyn term_wm_render::RenderBackend,
+    wm: &mut WindowManager<C, L, O>,
+) {
+    let status_line: Option<String> = None;
     let display = wm.build_display_order();
     let titles_map: std::collections::BTreeMap<WindowKey, String> =
         wm.window_titles().into_iter().collect();
     let panel_active = wm.panel_active();
     let focus_current = wm.focused_window();
-    let mouse_capture_enabled = wm.mouse_capture_enabled();
-    let clipboard_enabled = wm.clipboard_enabled();
-    let window_selection_enabled = wm.window_selection_enabled();
-    let selection_active = wm.selection_active();
-    let selection_dragging = wm.selection_dragging();
     let wm_overlay_visible = wm.command_menu_visible();
+
+    // Tiling indicator button (top-right of top panel)
+    let tiling_indicator: Option<(&str, TermWmAction)> = if !wm.is_monocle() {
+        let any_tiled = wm
+            .mapped_windows()
+            .iter()
+            .any(|k| !wm.is_window_floating(*k));
+        let label = if any_tiled { "[ tiled ]" } else { "[ float ]" };
+        Some((label, TermWmAction::ToggleTiling))
+    } else {
+        None
+    };
 
     // Top panel
     {
-        if let Some(p) = wm.top_component_mut() {
+        if let Some(p) = wm.get_semantic_component_mut(ComponentTag::TopPanel) {
             p.process_action(&ComponentAction::SetPanelActive(panel_active));
             p.process_action(&ComponentAction::SetWindowLabels(titles_map));
             p.process_action(&ComponentAction::SetTopPanelState(Box::new(
@@ -391,12 +739,8 @@ pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut W
                     focus_current: Some(focus_current),
                     display_order: display,
                     status_line,
-                    mouse_capture_enabled,
-                    clipboard_enabled,
-                    window_selection_enabled,
-                    selection_active,
-                    selection_dragging,
                     menu_open: wm_overlay_visible,
+                    tiling_indicator,
                 },
             )));
         }
@@ -405,7 +749,7 @@ pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut W
     let top_ctx = wm.component_context(false);
     {
         let mut local_hb = HitboxRegistry::new();
-        if let Some(p) = wm.top_component_mut() {
+        if let Some(p) = wm.get_semantic_component_mut(ComponentTag::TopPanel) {
             p.render(backend, top_area, &top_ctx, &mut local_hb);
         }
         wm.hitbox_registry_mut().merge(local_hb);
@@ -415,7 +759,7 @@ pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut W
     let bottom_ctx = wm.component_context(panel_active);
     {
         let mut local_hb = HitboxRegistry::new();
-        if let Some(p) = wm.bottom_component_mut() {
+        if let Some(p) = wm.get_semantic_component_mut(ComponentTag::BottomPanel) {
             p.render(backend, bottom_area, &bottom_ctx, &mut local_hb);
         }
         wm.hitbox_registry_mut().merge(local_hb);
@@ -424,8 +768,8 @@ pub fn render_panels(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut W
 
 /// Returns (shadow_rect, z_depth) pairs for all visible overlays
 /// that request a drop shadow.
-pub fn overlay_shadow_data(
-    wm: &WindowManager,
+pub fn overlay_shadow_data<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>>(
+    wm: &WindowManager<C, L, O>,
     area: LayoutRect,
     z_base: usize,
     z_total: usize,
@@ -433,7 +777,7 @@ pub fn overlay_shadow_data(
     let mut data = Vec::new();
     for (idx, (_, overlay)) in wm.overlays().iter().enumerate() {
         if let Some(rect) = overlay.shadow_rect(area) {
-            let z = WindowManager::compute_z_depth(z_base + idx, z_total);
+            let z = WindowManager::<C, L, O>::compute_z_depth(z_base + idx, z_total);
             data.push((rect, z));
         }
     }
@@ -441,55 +785,78 @@ pub fn overlay_shadow_data(
 }
 
 /// Render all active overlays (command menu, help, exit confirm).
-pub fn render_overlays(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut WindowManager) {
+pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>>(
+    backend: &mut dyn term_wm_render::RenderBackend,
+    wm: &mut WindowManager<C, L, O>,
+) {
     let full_area = wm.managed_area();
-    let hover_pos = wm.hover_pos();
 
-    // Compute anchor from top component
-    let anchor = wm.top_component().and_then(|p| {
-        if let ComponentResponse::Rect(r) = p.query(&ComponentQuery::MenuIconRect) {
-            r.map(|r| (r.x.max(0) as u16, (r.y + i32::from(r.height)).max(0) as u16))
-        } else {
-            None
+    // Panel overlay in monocle mode — render BEFORE command menu so the panel
+    // header (including hamburger icon) appears as a visual context layer.
+    // Use explicit SetPanelActive(true/false) because ComponentContext's active
+    // flag does NOT control WmTopPanelComponent's internal self.active guard
+    // (set at wm_top_panel.rs:462 via SetPanelActive action).
+    if wm.is_monocle_cramped() && wm.command_menu_visible() && !wm.is_tab_outline_active() {
+        let display = wm.build_display_order();
+        let titles_map: std::collections::BTreeMap<WindowKey, String> =
+            wm.window_titles().into_iter().collect();
+        let focus_current = wm.focused_window();
+
+        let top_area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: full_area.width,
+            height: 1,
+        };
+        let mut top_hb = HitboxRegistry::new();
+        if let Some(p) = wm.get_semantic_component_mut(ComponentTag::TopPanel) {
+            p.process_action(&ComponentAction::SetPanelActive(true));
+            p.process_action(&ComponentAction::SetWindowLabels(titles_map));
+            p.process_action(&ComponentAction::SetTopPanelState(Box::new(
+                TopPanelState {
+                    focus_current: Some(focus_current),
+                    display_order: display,
+                    status_line: None,
+                    menu_open: true,
+                    tiling_indicator: None,
+                },
+            )));
+
+            let ctx = ComponentContext::new(false).with_screen_area(top_area);
+            p.render(backend, top_area, &ctx, &mut top_hb);
+
+            // Revert to layout-derived state — the next render_panels call will
+            // set the correct active state based on panel_active().
+            p.process_action(&ComponentAction::SetPanelActive(false));
         }
-    });
+        wm.hitbox_registry_mut().merge(top_hb);
 
-    // Pre-compute overlay IDs
-    let overlay_ids: Vec<OverlayId> = wm.overlays().keys().copied().collect();
-
-    // Command menu — extract all bools before mutable borrow
-    let menu_visible = wm.command_menu_visible();
-    let mc_enabled = wm.mouse_capture_enabled();
-    let cb_enabled = wm.clipboard_enabled();
-    let ws_enabled = wm.window_selection_enabled();
-    let supported = wm.supported_menu_actions().to_vec();
-
-    if menu_visible && let Some(menu) = wm.command_menu_component_mut() {
-        let items = wm_menu_items(mc_enabled, cb_enabled, ws_enabled);
-        let items: Vec<MenuItem<TermWmAction>> = items
-            .into_iter()
-            .filter(|item| supported.contains(&item.action))
-            .collect();
-        menu.process_action(&ComponentAction::SetMenuItems(items));
-        menu.process_action(&ComponentAction::SetManagedArea(full_area));
-        menu.process_action(&ComponentAction::SetMenuAnchor(anchor));
-
-        let mut hitbox = HitboxRegistry::new();
-        let ctx = ComponentContext::new(false)
-            .with_overlay(true)
-            .with_screen_area(full_area)
-            .with_hover_pos(hover_pos);
-        menu.render(backend, full_area, &ctx, &mut hitbox);
-        wm.hitbox_registry_mut().merge(hitbox);
+        // Bottom panel overlay in monocle mode — keybinding hints
+        let bottom_area = LayoutRect {
+            x: full_area.x,
+            y: full_area.y + i32::from(full_area.height).saturating_sub(1),
+            width: full_area.width,
+            height: 1,
+        };
+        let mut bottom_hb = HitboxRegistry::new();
+        if let Some(p) = wm.get_semantic_component_mut(ComponentTag::BottomPanel) {
+            let ctx = ComponentContext::new(false).with_screen_area(bottom_area);
+            p.render(backend, bottom_area, &ctx, &mut bottom_hb);
+        }
+        wm.hitbox_registry_mut().merge(bottom_hb);
     }
 
-    // Overlays (help, exit confirm)
-    for id in overlay_ids {
-        if let Some(overlay) = wm.overlays_mut().get_mut(&id) {
+    let hover_pos = wm.hover_pos();
+
+    // Overlays (help, exit confirm, command palette)
+    let overlay_keys = wm.overlay_keys();
+    for key in overlay_keys {
+        if let Some(overlay) = wm.overlay_for_key_mut(key) {
             let mut hitbox = HitboxRegistry::new();
             let ctx = ComponentContext::new(false)
                 .with_overlay(true)
-                .with_screen_area(full_area);
+                .with_screen_area(full_area)
+                .with_hover_pos(hover_pos);
             overlay.render(backend, full_area, &ctx, &mut hitbox);
             wm.hitbox_registry_mut().merge(hitbox);
         }
@@ -497,20 +864,81 @@ pub fn render_overlays(backend: &mut dyn term_wm_render::RenderBackend, wm: &mut
 }
 
 /// Render a drop-shadow behind a floating window or overlay.
-pub fn render_drop_shadow(buf: &mut Buffer, dest: LayoutRect, z_depth: f32, theme: &Theme) {
-    use ratatui::style::Modifier;
+/// Two-pass SoA bitmask pattern via persistent mask.
+/// Pass 1: set DIM_BIT + SHADOW_BIT in mask.
+/// Pass 2: row-sliced mask apply — SIMD-friendly bitwise mutation.
+const DIM_BIT: u8 = 0b01;
+const SHADOW_BIT: u8 = 0b10;
 
-    let shadow_color = lerp_color(theme.shadow_tint, theme.shadow_bg, z_depth).to_ratatui();
+pub fn render_drop_shadow(
+    buf: &mut Buffer,
+    mask: &mut [u8],
+    dest: LayoutRect,
+    z_depth: f32,
+    theme: &Theme,
+) {
+    let active_mask = &mut mask[..buf.content.len()];
+    active_mask.fill(0);
+
+    // Pure i32 intersection — no u16 truncation, no width anchoring
     let sx = dest.x.saturating_add(SHADOW_OFFSET_X);
     let sy = dest.y.saturating_add(SHADOW_OFFSET_Y);
     let ex = sx.saturating_add(i32::from(dest.width));
     let ey = sy.saturating_add(i32::from(dest.height));
-    for y in sy.max(0)..ey.min(buf.area.height as i32) {
-        for x in sx.max(0)..ex.min(buf.area.width as i32) {
-            if let Some(cell) = buf.cell_mut((x as u16, y as u16)) {
-                if !cell.symbol().starts_with(' ') {
-                    cell.modifier.insert(Modifier::DIM);
-                }
+
+    let buf_x = buf.area.x as i32;
+    let buf_y = buf.area.y as i32;
+    let buf_ex = buf_x + buf.area.width as i32;
+    let buf_ey = buf_y + buf.area.height as i32;
+
+    let clip_x = sx.max(buf_x);
+    let clip_y = sy.max(buf_y);
+    let clip_ex = ex.min(buf_ex);
+    let clip_ey = ey.min(buf_ey);
+
+    if clip_x >= clip_ex || clip_y >= clip_ey {
+        return;
+    }
+
+    let buf_w = buf.area.width as usize;
+    let rel_x_start = (clip_x - buf_x) as usize;
+    let copy_width = (clip_ex - clip_x) as usize;
+
+    let y_start = clip_y as usize;
+    let y_end = clip_ey as usize;
+
+    // Pass 1: Set mask bits — pre-computed start/end per row
+    for y in y_start..y_end {
+        let rel_y = y - buf.area.y as usize;
+        let row_start = rel_y * buf_w;
+        let start_idx = row_start + rel_x_start;
+        let end_idx = start_idx + copy_width;
+
+        for (i, m) in active_mask[start_idx..end_idx].iter_mut().enumerate() {
+            let cell_idx = start_idx + i;
+            *m |= SHADOW_BIT;
+            if !buf.content[cell_idx].symbol().starts_with(' ') {
+                *m |= DIM_BIT;
+            }
+        }
+    }
+
+    // Pass 2: Row-sliced mask apply
+    let shadow_color = lerp_color(theme.shadow_tint, theme.shadow_bg, z_depth).to_ratatui();
+    for y in y_start..y_end {
+        let rel_y = y - buf.area.y as usize;
+        let row_start = rel_y * buf_w;
+        let start_idx = row_start + rel_x_start;
+        let end_idx = start_idx + copy_width;
+
+        let row_slice = &mut buf.content[start_idx..end_idx];
+        let mask_slice = &active_mask[start_idx..end_idx];
+
+        for (cell, &val) in row_slice.iter_mut().zip(mask_slice.iter()) {
+            if val & DIM_BIT != 0 {
+                cell.modifier.insert(ratatui::style::Modifier::DIM);
+            }
+            if val & SHADOW_BIT != 0 {
                 cell.set_bg(shadow_color);
             }
         }
@@ -521,18 +949,21 @@ pub fn render_drop_shadow(buf: &mut Buffer, dest: LayoutRect, z_depth: f32, them
 /// Uses the provided `scratch` buffer for offscreen compositing — callers
 /// should hold a persistent buffer (e.g. from `DrawPlanRenderer::take_scratch`)
 /// to avoid per-frame allocation.
+/// Returns the inner content bounds (after chrome inset) and the chrome hitbox registry.
 pub fn composite_window<F>(
     backend: &mut dyn term_wm_render::RenderBackend,
     surface: &WindowSurface,
-    _decorator: &dyn term_wm_core::window::decorator::WindowDecorator,
-    mut ctx: WindowRenderCtx<'_>,
+    key: WindowKey,
+    content_hitbox_id: HitboxId,
+    mut ctx: ChromeCtx<'_>,
     mut render_content: F,
     scratch: &mut Buffer,
-) where
-    F: FnMut(&mut dyn term_wm_render::RenderBackend, &mut HitboxRegistry),
+) -> (LayoutRect, HitboxRegistry)
+where
+    F: FnMut(&mut dyn term_wm_render::RenderBackend, LayoutRect),
 {
     if surface.dest.width == 0 || surface.dest.height == 0 {
-        return;
+        return (LayoutRect::default(), HitboxRegistry::new());
     }
     let local_area = Rect {
         x: 0,
@@ -548,8 +979,11 @@ pub fn composite_window<F>(
         };
         let local_y = if surface.dest.y < 0 {
             cy.saturating_add((-surface.dest.y) as u16)
+        } else if cy >= surface.dest.y as u16 {
+            cy - surface.dest.y as u16
         } else {
-            cy.saturating_sub(surface.dest.y as u16)
+            // Mouse is above the window — no button can be hovered
+            u16::MAX
         };
         (local_x, local_y)
     });
@@ -560,19 +994,21 @@ pub fn composite_window<F>(
     scratch.resize(local_area);
     scratch.reset();
     let mut buffer = std::mem::replace(scratch, Buffer::empty(Rect::ZERO));
+    let inner_bounds: LayoutRect;
+    let mut chrome_registry = HitboxRegistry::new();
     {
-        let mut offscreen = RatatuiBackend::new(buffer, local_area);
-        render_window(
+        let mut offscreen = RatatuiBackend::new_simple(buffer, local_area);
+        // Atomic single-pass: draw chrome + register hitboxes + get inner bounds
+        inner_bounds = render_window_chrome(
             &mut offscreen.buffer,
-            LayoutRect {
-                x: 0,
-                y: 0,
-                width: surface.dest.width,
-                height: surface.dest.height,
-            },
-            ctx,
+            &mut chrome_registry,
+            key,
+            (surface.dest.width, surface.dest.height),
+            (surface.dest.x as i16, surface.dest.y as i16),
+            content_hitbox_id,
+            &ctx,
         );
-        render_content(&mut offscreen, &mut HitboxRegistry::new());
+        render_content(&mut offscreen, inner_bounds);
         buffer = offscreen.buffer;
     }
     if !focused {
@@ -583,50 +1019,75 @@ pub fn composite_window<F>(
     let Some(ratatui_backend) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() else {
         // Return buffer to caller before early return
         *scratch = buffer;
-        return;
+        return (inner_bounds, chrome_registry);
     };
     let main_buf = &mut ratatui_backend.buffer;
     if surface.draw_shadow {
-        render_drop_shadow(main_buf, surface.dest, 1.0 - surface.z_depth, &theme);
+        // Take mask ownership to avoid borrow conflicts with main_buf
+        let mut tmp_mask = std::mem::take(&mut ratatui_backend.mask_buffer);
+        let buf_len = main_buf.content.len();
+        if tmp_mask.len() < buf_len {
+            tmp_mask.resize(buf_len, 0);
+        }
+        render_drop_shadow(
+            main_buf,
+            &mut tmp_mask[..buf_len],
+            surface.dest,
+            1.0 - surface.z_depth,
+            &theme,
+        );
+        ratatui_backend.mask_buffer = tmp_mask;
     }
+    // Compute desired destination rect and clip to main buffer
     let src_off_x = u16::try_from(-surface.dest.x.min(0)).unwrap_or(0);
     let src_off_y = u16::try_from(-surface.dest.y.min(0)).unwrap_or(0);
     let dest_x = surface.dest.x.max(0) as u16;
     let dest_y = surface.dest.y.max(0) as u16;
     let copy_w = local_area.width.saturating_sub(src_off_x);
     let copy_h = local_area.height.saturating_sub(src_off_y);
-    for y in 0..copy_h {
-        for x in 0..copy_w {
-            let dst_x = dest_x.saturating_add(x);
-            let dst_y = dest_y.saturating_add(y);
-            if let Some(src) = buffer.cell((x + src_off_x, y + src_off_y))
-                && dst_x < main_buf.area.width
-                && dst_y < main_buf.area.height
-                && let Some(dst) = main_buf.cell_mut((dst_x, dst_y))
-            {
-                *dst = src.clone();
-            }
+    let dst_area = Rect::new(dest_x, dest_y, copy_w, copy_h);
+    let dst_clip = dst_area.intersection(main_buf.area);
+    if dst_clip.width > 0 && dst_clip.height > 0 {
+        let src_clip = Rect {
+            x: src_off_x + (dst_clip.x - dest_x),
+            y: src_off_y + (dst_clip.y - dest_y),
+            width: dst_clip.width,
+            height: dst_clip.height,
+        };
+        let src_w = buffer.area.width as usize;
+        let dst_w = main_buf.area.width as usize;
+        let copy_w = dst_clip.width as usize;
+        let y_end = dst_clip.y.saturating_add(dst_clip.height);
+        for y in dst_clip.y..y_end {
+            let src_y = (y - dst_clip.y + src_clip.y) as usize;
+            let dst_y = (y - main_buf.area.y) as usize;
+            let src_x = src_clip.x as usize;
+            let dst_x = (dst_clip.x - main_buf.area.x) as usize;
+            let src_start = src_y * src_w + src_x;
+            let dst_start = dst_y * dst_w + dst_x;
+            main_buf.content[dst_start..dst_start + copy_w]
+                .clone_from_slice(&buffer.content[src_start..src_start + copy_w]);
         }
     }
     // Return the resized buffer to the caller's scratch for reuse next frame
     *scratch = buffer;
+    (inner_bounds, chrome_registry)
 }
 
 /// Render window chrome (borders, title bar, hover-aware buttons, direct mode indicator).
-fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: WindowRenderCtx<'_>) {
+fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
     use ratatui::style::{Color, Modifier, Style};
-    use term_wm_core::window::decorator::{
-        EDGE_INDEX_ADJUST, HeaderAction as HA, LEFT_BORDER_WIDTH, RIGHT_BORDER_WIDTH,
-        TOP_BORDER_HEIGHT, header_buttons,
-    };
 
-    let WindowRenderCtx {
+    let ChromeCtx {
         title,
         focused,
         floating,
         direct_mode,
         hover_pos,
         theme,
+        wm_buttons,
+        borders_enabled,
+        header_enabled,
     } = ctx;
 
     let focused_header_style = Style::default()
@@ -665,52 +1126,88 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: WindowRenderCtx<'_>
     let outer_bottom = outer_top
         .saturating_add(rect.height)
         .saturating_sub(EDGE_INDEX_ADJUST);
-    let header_y = outer_top.saturating_add(TOP_BORDER_HEIGHT);
+    let header_y = if borders_enabled {
+        outer_top.saturating_add(TOP_BORDER_HEIGHT)
+    } else {
+        outer_top
+    };
 
-    for x in outer_left.saturating_add(LEFT_BORDER_WIDTH)..outer_right {
-        if let Some(cell) = buffer.cell_mut((x, header_y)) {
-            cell.set_symbol(" ");
-            cell.set_style(header_style);
+    if header_enabled {
+        let header_left = if borders_enabled {
+            outer_left.saturating_add(LEFT_BORDER_WIDTH)
+        } else {
+            outer_left
+        };
+        let header_right = if borders_enabled {
+            outer_right.saturating_sub(RIGHT_BORDER_WIDTH)
+        } else {
+            outer_right
+        };
+        // Header bar fill — row-slice BCE
+        {
+            let buf_w = buffer.area.width as usize;
+            let rel_y = header_y as usize - buffer.area.y as usize;
+            let rel_x_start = header_left as usize - buffer.area.x as usize;
+            let rel_x_end = (header_right + 1) as usize - buffer.area.x as usize;
+            let row_slice =
+                &mut buffer.content[rel_y * buf_w + rel_x_start..rel_y * buf_w + rel_x_end];
+            for cell in row_slice.iter_mut() {
+                cell.set_symbol(" ");
+                cell.set_style(header_style);
+            }
         }
-    }
-    let title_len = title.len() as u16;
-    let header_width = outer_right
-        .saturating_sub(outer_left)
-        .saturating_sub(RIGHT_BORDER_WIDTH);
-    if title_len <= header_width {
-        let start_x = outer_left.saturating_add(LEFT_BORDER_WIDTH) + (header_width - title_len) / 2;
-        for (idx, ch) in title.chars().enumerate() {
-            let x = start_x + idx as u16;
-            if let Some(cell) = buffer.cell_mut((x, header_y)) {
+        let title_len = title.len() as u16;
+        let header_width = header_right.saturating_sub(header_left).saturating_add(1);
+        if title_len <= header_width {
+            let start_x = header_left + (header_width - title_len) / 2;
+            let buf_w = buffer.area.width as usize;
+            let rel_y = header_y as usize - buffer.area.y as usize;
+            for (idx, ch) in title.chars().enumerate() {
+                let x = start_x + idx as u16;
+                let rel_x = x as usize - buffer.area.x as usize;
+                let cell = &mut buffer.content[rel_y * buf_w + rel_x];
                 cell.set_symbol(&ch.to_string());
                 cell.set_style(header_style);
             }
         }
-    }
-    {
-        let contrast_fg = theme.menu_selected_fg.to_ratatui();
-        for (bx, action, sym) in header_buttons(outer_right) {
-            if let Some(cell) = buffer.cell_mut((bx, header_y)) {
-                cell.set_symbol(sym);
-                let stoplight_fg = match action {
-                    HA::Close => theme.error.to_ratatui(),
-                    HA::Minimize => theme.warning.to_ratatui(),
-                    HA::Maximize => theme.accent.to_ratatui(),
+        {
+            let contrast_fg = theme.menu_selected_fg.to_ratatui();
+            let buf_w = buffer.area.width as usize;
+            let rel_y = header_y as usize - buffer.area.y as usize;
+            // Buttons are laid out right-to-left from outer_right
+            for (i, btn) in wm_buttons.iter().enumerate() {
+                let bx = if borders_enabled {
+                    header_right
+                        .saturating_sub(HEADER_BUTTON_GAP)
+                        .saturating_sub(HEADER_BUTTON_GAP * i as u16)
+                } else {
+                    header_right.saturating_sub(HEADER_BUTTON_GAP * i as u16)
+                };
+                let rel_x = bx as usize - buffer.area.x as usize;
+                let cell = &mut buffer.content[rel_y * buf_w + rel_x];
+                cell.set_symbol(btn.symbol);
+                let stoplight_fg = match btn.action {
+                    TermWmAction::CloseWindow => theme.error.to_ratatui(),
+                    TermWmAction::MinimizeWindow => theme.warning.to_ratatui(),
+                    TermWmAction::MaximizeWindow => theme.accent.to_ratatui(),
                     _ => theme.decorator_header_fg.to_ratatui(),
                 };
                 let is_hovered = hover_pos == Some((bx, header_y));
                 let style = if is_hovered {
-                    let (hover_bg, hover_fg) = match action {
-                        HA::Close => (theme.error.to_ratatui(), contrast_fg),
-                        HA::Minimize => (theme.warning.to_ratatui(), contrast_fg),
-                        HA::Maximize => (theme.accent.to_ratatui(), contrast_fg),
+                    let (hover_bg, hover_fg) = match btn.action {
+                        TermWmAction::CloseWindow => (theme.error.to_ratatui(), contrast_fg),
+                        TermWmAction::MinimizeWindow => (theme.warning.to_ratatui(), contrast_fg),
+                        TermWmAction::MaximizeWindow => (theme.accent.to_ratatui(), contrast_fg),
                         _ => (theme.accent_alt.to_ratatui(), contrast_fg),
                     };
                     Style::default()
                         .bg(hover_bg)
                         .fg(hover_fg)
                         .add_modifier(Modifier::BOLD)
-                } else if action == HA::ToggleDirectMode && direct_mode && focused {
+                } else if matches!(btn.action, TermWmAction::ToggleDirectMode)
+                    && direct_mode
+                    && focused
+                {
                     Style::default()
                         .bg(theme.decorator_header_fg.to_ratatui())
                         .fg(theme.decorator_header_bg.to_ratatui())
@@ -723,45 +1220,62 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: WindowRenderCtx<'_>
     }
 
     // Borders — rounded corners for floating windows
-    let (tl, tr, bl, br) = if floating {
-        ("╭", "╮", "╰", "╯")
-    } else {
-        ("┌", "┐", "└", "┘")
-    };
-    for x in outer_left..=outer_right {
-        if let Some(cell) = buffer.cell_mut((x, outer_top)) {
-            let sym = if x == outer_left {
-                tl
-            } else if x == outer_right {
-                tr
-            } else {
-                "─"
-            };
-            cell.set_symbol(sym);
-            cell.set_style(border_style);
-        }
-    }
-    for x in outer_left..=outer_right {
-        if let Some(cell) = buffer.cell_mut((x, outer_bottom)) {
-            let sym = if x == outer_left {
-                bl
-            } else if x == outer_right {
-                br
-            } else {
-                "─"
-            };
-            cell.set_symbol(sym);
-            cell.set_style(border_style);
-        }
-    }
-    for y in outer_top.saturating_add(TOP_BORDER_HEIGHT)..outer_bottom {
-        if let Some(cell) = buffer.cell_mut((outer_left, y)) {
-            cell.set_symbol("│");
-            cell.set_style(border_style);
-        }
-        if let Some(cell) = buffer.cell_mut((outer_right, y)) {
-            cell.set_symbol("│");
-            cell.set_style(border_style);
+    if borders_enabled {
+        let (tl, tr, bl, br) = if floating {
+            ("╭", "╮", "╰", "╯")
+        } else {
+            ("┌", "┐", "└", "┘")
+        };
+        {
+            let buf_w = buffer.area.width as usize;
+            let rel_top = outer_top as usize - buffer.area.y as usize;
+            let rel_bottom = outer_bottom as usize - buffer.area.y as usize;
+            let rel_left = outer_left as usize - buffer.area.x as usize;
+            let rel_right = outer_right as usize - buffer.area.x as usize;
+
+            // Top border — zipped for corner symbols
+            let top_row_start = rel_top * buf_w;
+            for (x, cell) in (outer_left..=outer_right).zip(
+                buffer.content[top_row_start + rel_left..top_row_start + rel_right + 1].iter_mut(),
+            ) {
+                let sym = if x == outer_left {
+                    tl
+                } else if x == outer_right {
+                    tr
+                } else {
+                    "─"
+                };
+                cell.set_symbol(sym);
+                cell.set_style(border_style);
+            }
+
+            // Bottom border — zipped for corner symbols
+            let bottom_row_start = rel_bottom * buf_w;
+            for (x, cell) in (outer_left..=outer_right).zip(
+                buffer.content[bottom_row_start + rel_left..bottom_row_start + rel_right + 1]
+                    .iter_mut(),
+            ) {
+                let sym = if x == outer_left {
+                    bl
+                } else if x == outer_right {
+                    br
+                } else {
+                    "─"
+                };
+                cell.set_symbol(sym);
+                cell.set_style(border_style);
+            }
+
+            // Vertical borders — origin-translated direct index (strided, not contiguous)
+            for rel_y in (outer_top.saturating_add(TOP_BORDER_HEIGHT) as usize
+                - buffer.area.y as usize)..rel_bottom
+            {
+                let row_start = rel_y * buf_w;
+                buffer.content[row_start + rel_left].set_symbol("│");
+                buffer.content[row_start + rel_left].set_style(border_style);
+                buffer.content[row_start + rel_right].set_symbol("│");
+                buffer.content[row_start + rel_right].set_style(border_style);
+            }
         }
     }
 }
@@ -777,10 +1291,34 @@ pub fn render_handles_masked(
     use ratatui::style::{Modifier, Style};
 
     let hover_rect = hovered.map(|handle| handle.rect);
+
+    // Pass 1: vertical bars (Direction::Horizontal splits)
     for handle in handles {
-        if handle.rect.width == 0 || handle.rect.height == 0 {
+        if handle.rect.width == 0
+            || handle.rect.height == 0
+            || handle.direction != Direction::Horizontal
+        {
             continue;
         }
+        fill_handle_bar(buffer, handle, "│", hover_rect, is_obscured, theme);
+    }
+
+    // Pass 2: horizontal bars (Direction::Vertical splits) — detect existing
+    // verticals to draw proper T-junctions.
+    for handle in handles {
+        if handle.rect.width == 0
+            || handle.rect.height == 0
+            || handle.direction != Direction::Vertical
+        {
+            continue;
+        }
+        let hr = Rect {
+            x: handle.rect.x.max(0) as u16,
+            y: handle.rect.y.max(0) as u16,
+            width: handle.rect.width,
+            height: handle.rect.height,
+        };
+        let clip = hr.intersection(buffer.area);
         let is_hovered = hover_rect == Some(handle.rect);
         let style = if is_hovered {
             Style::default()
@@ -789,125 +1327,174 @@ pub fn render_handles_masked(
         } else {
             Style::default().fg(theme.decorator_border_active.to_ratatui())
         };
+        if clip.width == 0 || clip.height == 0 {
+            continue;
+        }
+        let buf_w = buffer.area.width as usize;
+        let buf_h = buffer.area.height as usize;
+        let origin_y = buffer.area.y as usize;
+        let origin_x = buffer.area.x as usize;
+        let y_end = clip.y.saturating_add(clip.height);
+        for y in clip.y..y_end {
+            let rel_y = y as usize - origin_y;
+            let row_start = rel_y * buf_w;
+            let rel_x_start = clip.x as usize - origin_x;
+            let copy_width = clip.width as usize;
+            let x_start = clip.x;
+            let x_end = clip.x + clip.width;
+            // Compute junction chars per cell (reads neighbors — can't borrow buffer.content mutably yet)
+            let mut junction_chars: Vec<&str> = Vec::with_capacity(copy_width);
+            for x in x_start..x_end {
+                if is_obscured(x, y) {
+                    junction_chars.push("");
+                    continue;
+                }
+                let rel_x = x as usize - origin_x;
+                let above_bar = rel_y > 0 && {
+                    let s = buffer.content[(rel_y - 1) * buf_w + rel_x].symbol();
+                    s == "│" || s == "┼" || s == "├" || s == "┤" || s == "┴" || s == "┬"
+                };
+                let below_bar = rel_y + 1 < buf_h && {
+                    let s = buffer.content[(rel_y + 1) * buf_w + rel_x].symbol();
+                    s == "│" || s == "┼" || s == "├" || s == "┤" || s == "┴" || s == "┬"
+                };
+                let ch = match (above_bar, below_bar) {
+                    (true, true) => "┼",
+                    (true, false) => "┴",
+                    (false, true) => "┬",
+                    (false, false) => "─",
+                };
+                junction_chars.push(ch);
+            }
+            // Apply via row-slice BCE (no neighbor reads — no borrow conflict)
+            let row_slice =
+                &mut buffer.content[row_start + rel_x_start..row_start + rel_x_start + copy_width];
+            for (cell, &ch) in row_slice.iter_mut().zip(junction_chars.iter()) {
+                if ch.is_empty() {
+                    continue;
+                }
+                cell.reset();
+                cell.set_symbol(ch);
+                cell.set_style(style);
+            }
+        }
+    }
+
+    // Pass 3: hover highlight borders (only for the hovered handle)
+    if let Some(handle) = hovered {
         let hr = Rect {
             x: handle.rect.x.max(0) as u16,
             y: handle.rect.y.max(0) as u16,
             width: handle.rect.width,
             height: handle.rect.height,
         };
-        let clip = hr.intersection(buffer.area);
-        if clip.width > 0 && clip.height > 0 {
-            for y in clip.y..clip.y.saturating_add(clip.height) {
-                for x in clip.x..clip.x.saturating_add(clip.width) {
-                    if is_obscured(x, y) {
-                        continue;
-                    }
-                    if let Some(cell) = buffer.cell_mut((x, y)) {
-                        cell.reset();
-                        cell.set_symbol("·");
-                        cell.set_style(style);
-                    }
-                }
-            }
-        }
-        match handle.direction {
-            Direction::Horizontal => {
-                let x = hr.x + hr.width / 2;
-                let y_center = hr.y + hr.height / 2;
-                for offset in 0..3 {
-                    let y = y_center.saturating_sub(1).saturating_add(offset);
-                    if y < hr.y || y >= hr.y.saturating_add(hr.height) {
-                        continue;
-                    }
-                    if is_obscured(x, y) {
-                        continue;
-                    }
-                    if let Some(cell) = buffer.cell_mut((x, y)) {
-                        cell.set_symbol(if is_hovered { "O" } else { "o" });
-                        cell.set_style(style);
-                    }
-                }
-            }
-            Direction::Vertical => {
-                let y = hr.y + hr.height / 2;
-                let x_center = hr.x + hr.width / 2;
-                for offset in 0..3 {
-                    let x = x_center.saturating_sub(1).saturating_add(offset);
-                    if x < hr.x || x >= hr.x.saturating_add(hr.width) {
-                        continue;
-                    }
-                    if is_obscured(x, y) {
-                        continue;
-                    }
-                    if let Some(cell) = buffer.cell_mut((x, y)) {
-                        cell.set_symbol(if is_hovered { "O" } else { "o" });
-                        cell.set_style(style);
-                    }
-                }
-            }
-        }
-        if is_hovered {
-            let border_style = Style::default()
-                .fg(theme.accent_alt.to_ratatui())
-                .add_modifier(Modifier::BOLD);
-            let max_x = hr.x.saturating_add(hr.width).saturating_sub(1);
-            let max_y = hr.y.saturating_add(hr.height).saturating_sub(1);
-            for x in hr.x..=max_x {
+        let border_style = Style::default()
+            .fg(theme.accent_alt.to_ratatui())
+            .add_modifier(Modifier::BOLD);
+        let max_x = hr.x.saturating_add(hr.width).saturating_sub(1);
+        let max_y = hr.y.saturating_add(hr.height).saturating_sub(1);
+        let buf_w = buffer.area.width as usize;
+        let origin_x = buffer.area.x as usize;
+        let origin_y = buffer.area.y as usize;
+        {
+            let top_rel_y = hr.y as usize - origin_y;
+            let bottom_rel_y = max_y as usize - origin_y;
+            let rel_x_start = hr.x as usize - origin_x;
+            let copy_width = (max_x - hr.x + 1) as usize;
+
+            let top_row_start = top_rel_y * buf_w + rel_x_start;
+            let bottom_row_start = bottom_rel_y * buf_w + rel_x_start;
+            for (x, cell) in (hr.x..=max_x)
+                .zip(buffer.content[top_row_start..top_row_start + copy_width].iter_mut())
+            {
                 if is_obscured(x, hr.y) {
                     continue;
                 }
-                if let Some(cell) = buffer.cell_mut((x, hr.y)) {
-                    cell.set_symbol("-");
-                    cell.set_style(border_style);
-                }
+                cell.set_symbol("-");
+                cell.set_style(border_style);
+            }
+            for (x, cell) in (hr.x..=max_x)
+                .zip(buffer.content[bottom_row_start..bottom_row_start + copy_width].iter_mut())
+            {
                 if is_obscured(x, max_y) {
                     continue;
                 }
-                if let Some(cell) = buffer.cell_mut((x, max_y)) {
-                    cell.set_symbol("-");
-                    cell.set_style(border_style);
-                }
-            }
-            for y in hr.y..=max_y {
-                if is_obscured(hr.x, y) {
-                    continue;
-                }
-                if let Some(cell) = buffer.cell_mut((hr.x, y)) {
-                    cell.set_symbol("|");
-                    cell.set_style(border_style);
-                }
-                if is_obscured(max_x, y) {
-                    continue;
-                }
-                if let Some(cell) = buffer.cell_mut((max_x, y)) {
-                    cell.set_symbol("|");
-                    cell.set_style(border_style);
-                }
-            }
-            if !is_obscured(hr.x, hr.y)
-                && let Some(cell) = buffer.cell_mut((hr.x, hr.y))
-            {
-                cell.set_symbol("+");
+                cell.set_symbol("-");
                 cell.set_style(border_style);
             }
-            if !is_obscured(max_x, hr.y)
-                && let Some(cell) = buffer.cell_mut((max_x, hr.y))
-            {
-                cell.set_symbol("+");
-                cell.set_style(border_style);
+        }
+        for y in hr.y..=max_y {
+            let rel_y = y as usize - origin_y;
+            let left_idx = rel_y * buf_w + hr.x as usize - origin_x;
+            let right_idx = rel_y * buf_w + max_x as usize - origin_x;
+            if is_obscured(hr.x, y) {
+                continue;
             }
-            if !is_obscured(hr.x, max_y)
-                && let Some(cell) = buffer.cell_mut((hr.x, max_y))
-            {
-                cell.set_symbol("+");
-                cell.set_style(border_style);
+            buffer.content[left_idx].set_symbol("|");
+            buffer.content[left_idx].set_style(border_style);
+            if is_obscured(max_x, y) {
+                continue;
             }
-            if !is_obscured(max_x, max_y)
-                && let Some(cell) = buffer.cell_mut((max_x, max_y))
-            {
-                cell.set_symbol("+");
-                cell.set_style(border_style);
+            buffer.content[right_idx].set_symbol("|");
+            buffer.content[right_idx].set_style(border_style);
+        }
+        for (cx, cy) in [(hr.x, hr.y), (max_x, hr.y), (hr.x, max_y), (max_x, max_y)] {
+            if !is_obscured(cx, cy) {
+                let rel_cx = cx as usize - origin_x;
+                let rel_cy = cy as usize - origin_y;
+                buffer.content[rel_cy * buf_w + rel_cx].set_symbol("+");
+                buffer.content[rel_cy * buf_w + rel_cx].set_style(border_style);
             }
+        }
+    }
+}
+
+/// Fill a handle's cells with a fixed bar character.
+fn fill_handle_bar(
+    buffer: &mut Buffer,
+    handle: &SplitHandle,
+    sym: &str,
+    hover_rect: Option<LayoutRect>,
+    is_obscured: &dyn Fn(u16, u16) -> bool,
+    theme: &Theme,
+) {
+    use ratatui::style::Style;
+    let is_hovered = hover_rect == Some(handle.rect);
+    let style = if is_hovered {
+        Style::default()
+            .fg(theme.menu_selected_bg.to_ratatui())
+            .add_modifier(ratatui::style::Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.decorator_border_active.to_ratatui())
+    };
+    let hr = Rect {
+        x: handle.rect.x.max(0) as u16,
+        y: handle.rect.y.max(0) as u16,
+        width: handle.rect.width,
+        height: handle.rect.height,
+    };
+    let clip = hr.intersection(buffer.area);
+    if clip.width == 0 || clip.height == 0 {
+        return;
+    }
+    let buf_w = buffer.area.width as usize;
+    let origin_x = buffer.area.x as usize;
+    let origin_y = buffer.area.y as usize;
+    let y_end = clip.y.saturating_add(clip.height);
+    for y in clip.y..y_end {
+        let rel_y = y as usize - origin_y;
+        let row_start = rel_y * buf_w;
+        let rel_x_start = clip.x as usize - origin_x;
+        let copy_width = clip.width as usize;
+        let row_slice =
+            &mut buffer.content[row_start + rel_x_start..row_start + rel_x_start + copy_width];
+        for (x, cell) in (clip.x..clip.x + clip.width).zip(row_slice.iter_mut()) {
+            if is_obscured(x, y) {
+                continue;
+            }
+            cell.reset();
+            cell.set_symbol(sym);
+            cell.set_style(style);
         }
     }
 }
@@ -1003,16 +1590,23 @@ pub fn render_resize_outline(
         .fg(theme.accent_alt.to_ratatui())
         .add_modifier(Modifier::BOLD);
 
+    let buf_w = buffer.area.width as usize;
+    let origin_x = buffer.area.x as usize;
+    let origin_y = buffer.area.y as usize;
+
     let Some(edge) = target_edge else { return };
     match edge {
         ResizeEdge::Top => {
             if ry >= by && ry < by.saturating_add(bh) && rect.width > 2 {
-                for x in rx.saturating_add(1)..=right.saturating_sub(1) {
-                    if x >= bx
-                        && x < bx.saturating_add(bw)
-                        && !is_obscured(x, ry)
-                        && let Some(cell) = buffer.cell_mut((x, ry))
-                    {
+                let rel_y = ry as usize - origin_y;
+                let row_start = rel_y * buf_w;
+                let x_start = rx.saturating_add(1) as usize - origin_x;
+                let x_end = right.saturating_sub(1) as usize - origin_x + 1;
+                let row_slice = &mut buffer.content[row_start + x_start..row_start + x_end];
+                for (x, cell) in
+                    (rx.saturating_add(1)..=right.saturating_sub(1)).zip(row_slice.iter_mut())
+                {
+                    if x >= bx && x < bx.saturating_add(bw) && !is_obscured(x, ry) {
                         cell.set_symbol("═");
                         cell.set_style(style);
                     }
@@ -1021,12 +1615,15 @@ pub fn render_resize_outline(
         }
         ResizeEdge::Bottom => {
             if bottom >= by && bottom < by.saturating_add(bh) && rect.width > 2 {
-                for x in rx.saturating_add(1)..=right.saturating_sub(1) {
-                    if x >= bx
-                        && x < bx.saturating_add(bw)
-                        && !is_obscured(x, bottom)
-                        && let Some(cell) = buffer.cell_mut((x, bottom))
-                    {
+                let rel_y = bottom as usize - origin_y;
+                let row_start = rel_y * buf_w;
+                let x_start = rx.saturating_add(1) as usize - origin_x;
+                let x_end = right.saturating_sub(1) as usize - origin_x + 1;
+                let row_slice = &mut buffer.content[row_start + x_start..row_start + x_end];
+                for (x, cell) in
+                    (rx.saturating_add(1)..=right.saturating_sub(1)).zip(row_slice.iter_mut())
+                {
+                    if x >= bx && x < bx.saturating_add(bw) && !is_obscured(x, bottom) {
                         cell.set_symbol("═");
                         cell.set_style(style);
                     }
@@ -1036,11 +1633,9 @@ pub fn render_resize_outline(
         ResizeEdge::Left => {
             if rx >= bx && rx < bx.saturating_add(bw) && rect.height > 2 {
                 for y in ry.saturating_add(1)..=bottom.saturating_sub(1) {
-                    if y >= by
-                        && y < by.saturating_add(bh)
-                        && !is_obscured(rx, y)
-                        && let Some(cell) = buffer.cell_mut((rx, y))
-                    {
+                    if y >= by && y < by.saturating_add(bh) && !is_obscured(rx, y) {
+                        let cell = &mut buffer.content
+                            [(y as usize - origin_y) * buf_w + (rx as usize - origin_x)];
                         cell.set_symbol("║");
                         cell.set_style(style);
                     }
@@ -1050,11 +1645,9 @@ pub fn render_resize_outline(
         ResizeEdge::Right => {
             if right >= bx && right < bx.saturating_add(bw) && rect.height > 2 {
                 for y in ry.saturating_add(1)..=bottom.saturating_sub(1) {
-                    if y >= by
-                        && y < by.saturating_add(bh)
-                        && !is_obscured(right, y)
-                        && let Some(cell) = buffer.cell_mut((right, y))
-                    {
+                    if y >= by && y < by.saturating_add(bh) && !is_obscured(right, y) {
+                        let cell = &mut buffer.content
+                            [(y as usize - origin_y) * buf_w + (right as usize - origin_x)];
                         cell.set_symbol("║");
                         cell.set_style(style);
                     }
@@ -1062,73 +1655,61 @@ pub fn render_resize_outline(
             }
         }
         ResizeEdge::TopLeft => {
-            if rx >= bx
-                && ry >= by
-                && !is_obscured(rx, ry)
-                && let Some(cell) = buffer.cell_mut((rx, ry))
-            {
-                cell.set_symbol("╔");
-                cell.set_style(style);
+            if rx >= bx && ry >= by && !is_obscured(rx, ry) {
+                buffer.content[(ry as usize - origin_y) * buf_w + (rx as usize - origin_x)]
+                    .set_symbol("╔");
+                buffer.content[(ry as usize - origin_y) * buf_w + (rx as usize - origin_x)]
+                    .set_style(style);
             }
-            if ry >= by
-                && ry < by.saturating_add(bh)
-                && let Some(cell) = buffer.cell_mut((rx.saturating_add(1), ry))
-            {
+            if ry >= by && ry < by.saturating_add(bh) {
+                let cell = &mut buffer.content
+                    [(ry as usize - origin_y) * buf_w + ((rx as usize + 1) - origin_x)];
                 cell.set_symbol("═");
                 cell.set_style(style);
             }
-            if rx >= bx
-                && rx < bx.saturating_add(bw)
-                && let Some(cell) = buffer.cell_mut((rx, ry.saturating_add(1)))
-            {
+            if rx >= bx && rx < bx.saturating_add(bw) {
+                let cell = &mut buffer.content
+                    [((ry as usize + 1) - origin_y) * buf_w + (rx as usize - origin_x)];
                 cell.set_symbol("║");
                 cell.set_style(style);
             }
         }
         ResizeEdge::TopRight => {
-            if right < bx.saturating_add(bw)
-                && ry >= by
-                && !is_obscured(right, ry)
-                && let Some(cell) = buffer.cell_mut((right, ry))
-            {
-                cell.set_symbol("╗");
-                cell.set_style(style);
+            if right < bx.saturating_add(bw) && ry >= by && !is_obscured(right, ry) {
+                buffer.content[(ry as usize - origin_y) * buf_w + (right as usize - origin_x)]
+                    .set_symbol("╗");
+                buffer.content[(ry as usize - origin_y) * buf_w + (right as usize - origin_x)]
+                    .set_style(style);
             }
-            if ry >= by
-                && ry < by.saturating_add(bh)
-                && let Some(cell) = buffer.cell_mut((right.saturating_sub(1), ry))
-            {
+            if ry >= by && ry < by.saturating_add(bh) {
+                let cell = &mut buffer.content
+                    [(ry as usize - origin_y) * buf_w + ((right as usize - 1) - origin_x)];
                 cell.set_symbol("═");
                 cell.set_style(style);
             }
-            if right >= bx
-                && right < bx.saturating_add(bw)
-                && let Some(cell) = buffer.cell_mut((right, ry.saturating_add(1)))
-            {
+            if right >= bx && right < bx.saturating_add(bw) {
+                let cell = &mut buffer.content
+                    [((ry as usize + 1) - origin_y) * buf_w + (right as usize - origin_x)];
                 cell.set_symbol("║");
                 cell.set_style(style);
             }
         }
         ResizeEdge::BottomLeft => {
-            if rx >= bx
-                && bottom < by.saturating_add(bh)
-                && !is_obscured(rx, bottom)
-                && let Some(cell) = buffer.cell_mut((rx, bottom))
-            {
-                cell.set_symbol("╚");
-                cell.set_style(style);
+            if rx >= bx && bottom < by.saturating_add(bh) && !is_obscured(rx, bottom) {
+                buffer.content[(bottom as usize - origin_y) * buf_w + (rx as usize - origin_x)]
+                    .set_symbol("╚");
+                buffer.content[(bottom as usize - origin_y) * buf_w + (rx as usize - origin_x)]
+                    .set_style(style);
             }
-            if bottom >= by
-                && bottom < by.saturating_add(bh)
-                && let Some(cell) = buffer.cell_mut((rx.saturating_add(1), bottom))
-            {
+            if bottom >= by && bottom < by.saturating_add(bh) {
+                let cell = &mut buffer.content
+                    [(bottom as usize - origin_y) * buf_w + ((rx as usize + 1) - origin_x)];
                 cell.set_symbol("═");
                 cell.set_style(style);
             }
-            if rx >= bx
-                && rx < bx.saturating_add(bw)
-                && let Some(cell) = buffer.cell_mut((rx, bottom.saturating_sub(1)))
-            {
+            if rx >= bx && rx < bx.saturating_add(bw) {
+                let cell = &mut buffer.content
+                    [((bottom as usize - 1) - origin_y) * buf_w + (rx as usize - origin_x)];
                 cell.set_symbol("║");
                 cell.set_style(style);
             }
@@ -1137,22 +1718,21 @@ pub fn render_resize_outline(
             if right < bx.saturating_add(bw)
                 && bottom < by.saturating_add(bh)
                 && !is_obscured(right, bottom)
-                && let Some(cell) = buffer.cell_mut((right, bottom))
             {
-                cell.set_symbol("╝");
-                cell.set_style(style);
+                buffer.content[(bottom as usize - origin_y) * buf_w + (right as usize - origin_x)]
+                    .set_symbol("╝");
+                buffer.content[(bottom as usize - origin_y) * buf_w + (right as usize - origin_x)]
+                    .set_style(style);
             }
-            if bottom >= by
-                && bottom < by.saturating_add(bh)
-                && let Some(cell) = buffer.cell_mut((right.saturating_sub(1), bottom))
-            {
+            if bottom >= by && bottom < by.saturating_add(bh) {
+                let cell = &mut buffer.content
+                    [(bottom as usize - origin_y) * buf_w + ((right as usize - 1) - origin_x)];
                 cell.set_symbol("═");
                 cell.set_style(style);
             }
-            if right >= bx
-                && right < bx.saturating_add(bw)
-                && let Some(cell) = buffer.cell_mut((right, bottom.saturating_sub(1)))
-            {
+            if right >= bx && right < bx.saturating_add(bw) {
+                let cell = &mut buffer.content
+                    [((bottom as usize - 1) - origin_y) * buf_w + (right as usize - origin_x)];
                 cell.set_symbol("║");
                 cell.set_style(style);
             }
@@ -1164,7 +1744,7 @@ pub fn render_resize_outline(
 /// Used during drag operations to show where a window will land when released.
 pub fn render_ghost_preview(buf: &mut Buffer, preview_rect: LayoutRect, theme: &Theme) {
     use ratatui::style::Modifier;
-    let rect = layout_rect_to_rect(preview_rect);
+    let rect = layout_rect_to_clipped_rect(preview_rect);
     let clip = rect.intersection(buf.area);
     if clip.width < 2 || clip.height < 2 {
         return;
@@ -1175,55 +1755,68 @@ pub fn render_ghost_preview(buf: &mut Buffer, preview_rect: LayoutRect, theme: &
     let right = clip.x + clip.width - 1;
     let top = clip.y;
     let bottom = clip.y + clip.height - 1;
+    let buf_w = buf.area.width as usize;
+    let origin_x = buf.area.x as usize;
+    let origin_y = buf.area.y as usize;
 
-    // Corners
-    for &(pos, sym) in &[
+    // Corners — origin-translated direct index
+    for &((cx, cy), sym) in &[
         ((left, top), "┌"),
         ((right, top), "┐"),
         ((left, bottom), "└"),
         ((right, bottom), "┘"),
     ] {
-        if let Some(cell) = buf.cell_mut(pos) {
-            cell.set_symbol(sym);
-            cell.set_fg(fg_color);
-            cell.modifier.insert(Modifier::DIM);
-        }
+        let rel_x = cx as usize - origin_x;
+        let rel_y = cy as usize - origin_y;
+        let cell = &mut buf.content[rel_y * buf_w + rel_x];
+        cell.set_symbol(sym);
+        cell.set_fg(fg_color);
+        cell.modifier.insert(Modifier::DIM);
     }
 
-    // Top/bottom edges (horizontal dashes)
+    // Top/bottom edges (horizontal dashes) — row-slice BCE
     if clip.width > 2 {
-        for x in (left + 1)..right {
-            for &y in &[top, bottom] {
-                if let Some(cell) = buf.cell_mut((x, y)) {
-                    cell.set_symbol("─");
-                    cell.set_fg(fg_color);
-                    cell.modifier.insert(Modifier::DIM);
-                }
+        let rel_x_start = (left + 1) as usize - origin_x;
+        let rel_x_end = right as usize - origin_x;
+        for &y in &[top, bottom] {
+            let rel_y = y as usize - origin_y;
+            let row_start = rel_y * buf_w;
+            let row_slice = &mut buf.content[row_start + rel_x_start..row_start + rel_x_end];
+            for cell in row_slice.iter_mut() {
+                cell.set_symbol("─");
+                cell.set_fg(fg_color);
+                cell.modifier.insert(Modifier::DIM);
             }
         }
     }
 
-    // Left/right edges (vertical dashes)
+    // Left/right edges (vertical dashes) — origin-translated direct index
     if clip.height > 2 {
         for y in (top + 1)..bottom {
+            let rel_y = y as usize - origin_y;
+            let row_start = rel_y * buf_w;
             for &x in &[left, right] {
-                if let Some(cell) = buf.cell_mut((x, y)) {
-                    cell.set_symbol("│");
-                    cell.set_fg(fg_color);
-                    cell.modifier.insert(Modifier::DIM);
-                }
+                let rel_x = x as usize - origin_x;
+                let cell = &mut buf.content[row_start + rel_x];
+                cell.set_symbol("│");
+                cell.set_fg(fg_color);
+                cell.modifier.insert(Modifier::DIM);
             }
         }
     }
 
-    // Interior shade fill — pure background tint, preserves underlying text
+    // Interior shade fill — LICM-hoisted BCE row-slice iterator
     if clip.width > 2 && clip.height > 2 {
         let preview_bg = theme.accent.to_ratatui();
-        for y in (top + 1)..bottom {
-            for x in (left + 1)..right {
-                if let Some(cell) = buf.cell_mut((x, y)) {
-                    cell.set_bg(preview_bg);
-                }
+        let buf_w = buf.area.width as usize;
+        let rel_x_start = (left + 1) as usize - buf.area.x as usize;
+        let rel_x_end = right as usize - buf.area.x as usize;
+        for y in (top + 1) as usize..bottom as usize {
+            let rel_y = y - buf.area.y as usize;
+            let row_start = rel_y * buf_w;
+            let row_slice = &mut buf.content[row_start + rel_x_start..row_start + rel_x_end];
+            for cell in row_slice.iter_mut() {
+                cell.set_bg(preview_bg);
             }
         }
     }
@@ -1266,7 +1859,15 @@ impl ColorConvert for Color {
 /// Uses style-modifier overrides only — no character replacement — so the
 /// underlying text is fully preserved.  The active state (drag/resize) also
 /// inverts an adjacent cell as a visual "badge", clamped to buffer boundaries.
-pub fn render_cursor_overlay(buf: &mut Buffer, wm: &WindowManager, _theme: &Theme) {
+pub fn render_cursor_overlay<
+    C: Component<TermWmAction>,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+>(
+    buf: &mut Buffer,
+    wm: &WindowManager<C, L, O>,
+    _theme: &Theme,
+) {
     use ratatui::style::Modifier;
 
     // Don't render when mouse capture is disabled — the last hover position
@@ -1284,9 +1885,9 @@ pub fn render_cursor_overlay(buf: &mut Buffer, wm: &WindowManager, _theme: &Them
     }
 
     // Apply REVERSED to cell under cursor (preserves text).
-    if let Some(cell) = buf.cell_mut((hx, hy)) {
-        cell.set_style(cell.style().add_modifier(Modifier::REVERSED));
-    }
+    let buf_w = buf.area.width as usize;
+    let cell = &mut buf.content[hy as usize * buf_w + hx as usize];
+    cell.set_style(cell.style().add_modifier(Modifier::REVERSED));
 }
 
 #[cfg(test)]
@@ -1298,10 +1899,36 @@ mod tests {
     use ratatui::style::Style;
     use std::sync::Arc;
     use term_wm_core::app_context::AppContext;
+    use term_wm_core::components::NoopComponent;
     use term_wm_core::theme::NOIR;
     use term_wm_core::window::FloatRect;
-    use term_wm_core::window::decorator::{DefaultDecorator, WindowRenderCtx};
+    use term_wm_core::window::WmButton;
     use term_wm_core::wm_config::WmConfig;
+
+    fn test_wm_buttons() -> Vec<WmButton> {
+        vec![
+            WmButton {
+                action: TermWmAction::CloseWindow,
+                label: "Close Window",
+                symbol: "X",
+            },
+            WmButton {
+                action: TermWmAction::MaximizeWindow,
+                label: "Maximize Window",
+                symbol: "▢",
+            },
+            WmButton {
+                action: TermWmAction::MinimizeWindow,
+                label: "Minimize Window",
+                symbol: "_",
+            },
+            WmButton {
+                action: TermWmAction::ToggleDirectMode,
+                label: "Toggle Direct Mode",
+                symbol: "D",
+            },
+        ]
+    }
 
     #[test]
     fn composite_window_skips_negative_dest_x() {
@@ -1315,7 +1942,7 @@ mod tests {
         for cell in main_buffer.content.iter_mut() {
             cell.set_symbol(".");
         }
-        let mut backend = RatatuiBackend::new(main_buffer, main_area);
+        let mut backend = RatatuiBackend::new_simple(main_buffer, main_area);
 
         let surface = WindowSurface {
             full: term_wm_core::Rect {
@@ -1340,14 +1967,16 @@ mod tests {
             z_depth: 0.5,
         };
 
-        let decorator = DefaultDecorator::without_buttons();
-        let ctx = WindowRenderCtx {
+        let ctx = ChromeCtx {
             title: "test",
             focused: false,
             floating: false,
             direct_mode: false,
             hover_pos: None,
             theme: NOIR,
+            wm_buttons: test_wm_buttons(),
+            borders_enabled: true,
+            header_enabled: true,
         };
 
         let mut scratch = Buffer::empty(RatatuiRect {
@@ -1356,12 +1985,13 @@ mod tests {
             width: 30,
             height: 8,
         });
-        composite_window(
+        let (_inner, _chrome_hb) = composite_window(
             &mut backend,
             &surface,
-            &decorator,
+            term_wm_core::window::WindowKey::default(),
+            HitboxId::new(),
             ctx,
-            |b, _registry| {
+            |b, _inner| {
                 let rb = b.as_any_mut().downcast_mut::<RatatuiBackend>().unwrap();
                 if let Some(cell) = rb.buffer.cell_mut((5, 2)) {
                     cell.set_symbol("X");
@@ -1393,12 +2023,196 @@ mod tests {
         );
     }
 
+    #[test]
+    fn content_hitbox_clipped_when_dest_x_negative() {
+        // A 30-col window at dest.x=-5 should have its content hitbox
+        // clipped from x=-4,width=28 to x=0,width=24 (managed_area is
+        // {0,0,50,20} from screen_bounds in ChromeCtx).
+        let main_area = RatatuiRect {
+            x: 0,
+            y: 0,
+            width: 50,
+            height: 20,
+        };
+        let main_buffer = Buffer::empty(main_area);
+        let mut backend = RatatuiBackend::new_simple(main_buffer, main_area);
+
+        let surface = WindowSurface {
+            full: term_wm_core::Rect {
+                x: 0,
+                y: 0,
+                width: 30,
+                height: 8,
+            },
+            inner: term_wm_core::Rect {
+                x: 0,
+                y: 0,
+                width: 30,
+                height: 8,
+            },
+            dest: FloatRect {
+                x: -5,
+                y: 0,
+                width: 30,
+                height: 8,
+            },
+            draw_shadow: false,
+            z_depth: 0.5,
+        };
+
+        let ctx = ChromeCtx {
+            title: "test",
+            focused: false,
+            floating: false,
+            direct_mode: false,
+            hover_pos: None,
+            theme: NOIR,
+            wm_buttons: test_wm_buttons(),
+            borders_enabled: true,
+            header_enabled: true,
+        };
+
+        let mut scratch = Buffer::empty(RatatuiRect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 8,
+        });
+        let (_, chrome_hb) = composite_window(
+            &mut backend,
+            &surface,
+            term_wm_core::window::WindowKey::default(),
+            HitboxId::new(),
+            ctx,
+            |_, _| {},
+            &mut scratch,
+        );
+
+        use term_wm_core::mouse_coord::{CoordSpace, MousePosition};
+        let screen = |col, row| MousePosition {
+            column: col,
+            row,
+            space: CoordSpace::Screen,
+        };
+
+        // Column 0 is inside the visible window content → must hit
+        assert!(
+            chrome_hb.hit_test(screen(0, 3)).is_some(),
+            "click at col 0 should hit the floating window (visible content)"
+        );
+
+        // Column 23 is inside visible content (width=24 covers [0,24))
+        assert!(
+            chrome_hb.hit_test(screen(23, 3)).is_some(),
+            "click at col 23 should hit the floating window (right edge of content)"
+        );
+
+        // Column 25 is right beyond the visible window edge (dest.x=-5, width=30,
+        // right edge at screen col 25, content hitbox clipped to [0,24), right
+        // resize edge sits at col 24). Column 25 must NOT hit the floating window.
+        assert!(
+            chrome_hb.hit_test(screen(25, 3)).is_none(),
+            "click at col 25 should NOT hit the floating window (one past right edge)"
+        );
+        assert!(
+            chrome_hb.hit_test(screen(30, 3)).is_none(),
+            "click at col 30 should NOT hit the floating window (way past right edge)"
+        );
+    }
+
+    // ── blit_buffer tests ────────────────────────────────────────────────
+
+    #[test]
+    fn blit_buffer_fully_contained() {
+        let mut src = Buffer::empty(RatatuiRect::new(0, 0, 80, 24));
+        let mut dst = Buffer::empty(RatatuiRect::new(0, 0, 80, 24));
+        // Fill src with a known pattern
+        for (i, cell) in src.content.iter_mut().enumerate() {
+            let ch = char::from(b'a' + (i % 26) as u8);
+            cell.set_symbol(&ch.to_string());
+        }
+        let area = RatatuiRect::new(10, 5, 30, 10);
+        blit_buffer(&src, &mut dst, area);
+        for y in area.y..area.y + area.height {
+            for x in area.x..area.x + area.width {
+                let src_cell = src.cell((x, y)).unwrap();
+                let dst_cell = dst.cell((x, y)).unwrap();
+                assert_eq!(
+                    src_cell.symbol(),
+                    dst_cell.symbol(),
+                    "cell mismatch at ({}, {})",
+                    x,
+                    y
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn blit_buffer_partial_overlap() {
+        let src = Buffer::empty(RatatuiRect::new(0, 0, 160, 48));
+        let mut dst = Buffer::empty(RatatuiRect::new(0, 0, 80, 24));
+        let before = dst.clone();
+        // Area that partially overlaps dst (extends beyond right and bottom)
+        let area = RatatuiRect::new(40, 12, 80, 24);
+        blit_buffer(&src, &mut dst, area);
+        // Cells within the clipped intersection should be copied
+        let clip = area.intersection(dst.area);
+        for y in clip.y..clip.y + clip.height {
+            for x in clip.x..clip.x + clip.width {
+                let dst_cell = dst.cell((x, y)).unwrap();
+                assert_eq!(
+                    dst_cell.symbol(),
+                    " ",
+                    "clipped cell at ({}, {}) should be empty from src",
+                    x,
+                    y
+                );
+            }
+        }
+        // Cells outside the intersection should be unchanged
+        let mut any_outside_unchanged = false;
+        for y in dst.area.y..dst.area.y + dst.area.height {
+            for x in dst.area.x..dst.area.x + dst.area.width {
+                if x >= clip.x && x < clip.x + clip.width && y >= clip.y && y < clip.y + clip.height
+                {
+                    continue;
+                }
+                let old = before.cell((x, y)).unwrap().symbol();
+                let new = dst.cell((x, y)).unwrap().symbol();
+                assert_eq!(old, new, "cell outside clip at ({}, {}) changed", x, y);
+                any_outside_unchanged = true;
+            }
+        }
+        assert!(
+            any_outside_unchanged,
+            "at least one cell should be outside the clip"
+        );
+    }
+
+    #[test]
+    fn blit_buffer_no_overlap_short_circuit() {
+        let src = Buffer::empty(RatatuiRect::new(0, 0, 80, 24));
+        let mut dst = Buffer::empty(RatatuiRect::new(0, 0, 80, 24));
+        // Area completely disjoint from both buffers
+        let area = RatatuiRect::new(200, 200, 10, 10);
+        let before = dst.clone();
+        blit_buffer(&src, &mut dst, area);
+        assert_eq!(dst, before, "no-overlap blit must not modify dst");
+    }
+
     // ── render_cursor_overlay tests ──────────────────────────────────────
 
-    fn make_wm() -> WindowManager {
+    fn make_wm() -> WindowManager<NoopComponent> {
         let config = WmConfig::default();
         let app_ctx = Arc::new(AppContext::new("test", "0.1.0"));
-        WindowManager::with_config(config, app_ctx, None, None, None, None)
+        WindowManager::<NoopComponent>::with_config(
+            config,
+            app_ctx,
+            None,
+            term_wm_core::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        )
     }
 
     fn make_buf(width: u16, height: u16) -> Buffer {

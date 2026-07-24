@@ -4,7 +4,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem};
 use term_wm_core::events::Event;
 
-use crate::helpers::{color_to_ratatui, layout_rect_to_rect};
+use crate::helpers::{color_to_ratatui, layout_rect_to_clipped_rect};
 use ratatui::widgets::Widget;
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext};
@@ -32,7 +32,7 @@ impl Component<TermWmAction> for ToggleListComponent {
         ctx: &ComponentContext,
         _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
-        let area = layout_rect_to_rect(area);
+        let area = layout_rect_to_clipped_rect(area);
         let backend = crate::helpers::downcast_ratatui(backend);
         let block = if ctx.focused() {
             Block::default()
@@ -351,7 +351,8 @@ mod tests {
     fn render_empty_list() {
         let mut t = ToggleListComponent::new("empty");
         let buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 40, 10));
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, Rect::new(0, 0, 40, 10));
+        let mut backend =
+            term_wm_console::RatatuiBackend::new_simple(buffer, Rect::new(0, 0, 40, 10));
         let ctx = ComponentContext::new(true);
         let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
         t.render(

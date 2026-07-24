@@ -25,7 +25,7 @@ mod tests {
         // It splits as 9 and 10 usually, or 10 and 9.
 
         // Let's check initial state
-        let (regions, _) = node.layout_with_handles(area);
+        let regions = node.layout_rects(area);
         let h1_start = regions.iter().find(|(id, _)| *id == 1).unwrap().1.height;
 
         let mut current_height = h1_start;
@@ -33,10 +33,10 @@ mod tests {
         // Perform 5 separate 1-pixel drag operations
         for _ in 0..5 {
             // Drag handle #0 (vertical) by +1
-            let success = node.apply_drag(area, &[], 0, Direction::Vertical, 1);
+            let success = node.apply_drag(area, &[], 0, Direction::Vertical, 1, 4);
             assert!(success, "apply_drag returned false");
 
-            let (regions, _) = node.layout_with_handles(area);
+            let regions = node.layout_rects(area);
             let h1_new = regions.iter().find(|(id, _)| *id == 1).unwrap().1.height;
 
             assert!(
