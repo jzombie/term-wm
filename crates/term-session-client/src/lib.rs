@@ -21,12 +21,11 @@ use portable_pty::PtySize;
 use term_session_muxio_service_definitions::{
     STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
 };
-use term_wm_core::events::{Event, KeyKind};
+use term_wm_core::events::{Event, KeyKind, MouseEventKind};
 use term_wm_pty_engine::Pane;
 use term_wm_pty_engine::clipboard::{Clipboard, Osc52Extractor};
 use term_wm_pty_engine::input_encoding::{key_to_bytes, mouse_event_to_bytes};
 use term_wm_pty_engine::signal::install_sigint_handler;
-use tokio::sync::mpsc;
 use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
 /// Redirect an OS-level file descriptor (stdout or stderr) into `tracing`.
@@ -129,6 +128,85 @@ impl<W: Write> Drop for TerminalGuard<W> {
     }
 }
 
+/// Convert a crossterm event into a core Event for use in the event-driven loop.
+fn convert_crossterm_event(evt: crossterm::event::Event) -> Option<Event> {
+    use term_wm_core::events::KeyCode;
+    match evt {
+        crossterm_event::Event::Key(key) => Some(Event::Key(term_wm_core::events::KeyEvent {
+            code: match key.code {
+                crossterm_event::KeyCode::Char(c) => KeyCode::Char(c),
+                crossterm_event::KeyCode::Enter => KeyCode::Enter,
+                crossterm_event::KeyCode::Tab => KeyCode::Tab,
+                crossterm_event::KeyCode::Backspace => KeyCode::Backspace,
+                crossterm_event::KeyCode::Esc => KeyCode::Esc,
+                crossterm_event::KeyCode::Left => KeyCode::Left,
+                crossterm_event::KeyCode::Right => KeyCode::Right,
+                crossterm_event::KeyCode::Up => KeyCode::Up,
+                crossterm_event::KeyCode::Down => KeyCode::Down,
+                crossterm_event::KeyCode::Home => KeyCode::Home,
+                crossterm_event::KeyCode::End => KeyCode::End,
+                crossterm_event::KeyCode::PageUp => KeyCode::PageUp,
+                crossterm_event::KeyCode::PageDown => KeyCode::PageDown,
+                crossterm_event::KeyCode::Delete => KeyCode::Delete,
+                crossterm_event::KeyCode::Insert => KeyCode::Insert,
+                crossterm_event::KeyCode::F(n) => KeyCode::F(n),
+                _ => return None,
+            },
+            modifiers: term_wm_core::events::KeyModifiers {
+                shift: key.modifiers.contains(crossterm_event::KeyModifiers::SHIFT),
+                control: key.modifiers.contains(crossterm_event::KeyModifiers::CONTROL),
+                alt: key.modifiers.contains(crossterm_event::KeyModifiers::ALT),
+            },
+            kind: match key.kind {
+                crossterm_event::KeyEventKind::Press => KeyKind::Press,
+                crossterm_event::KeyEventKind::Repeat => KeyKind::Repeat,
+                crossterm_event::KeyEventKind::Release => KeyKind::Release,
+            },
+        })),
+        crossterm_event::Event::Mouse(mouse) => Some(Event::Mouse(term_wm_core::events::MouseEvent {
+            kind: match mouse.kind {
+                crossterm_event::MouseEventKind::Down(btn) => {
+                    MouseEventKind::Press(match btn {
+                        crossterm_event::MouseButton::Left => term_wm_core::events::MouseButton::Left,
+                        crossterm_event::MouseButton::Right => term_wm_core::events::MouseButton::Right,
+                        crossterm_event::MouseButton::Middle => term_wm_core::events::MouseButton::Middle,
+                    })
+                }
+                crossterm_event::MouseEventKind::Up(btn) => {
+                    MouseEventKind::Release(match btn {
+                        crossterm_event::MouseButton::Left => term_wm_core::events::MouseButton::Left,
+                        crossterm_event::MouseButton::Right => term_wm_core::events::MouseButton::Right,
+                        crossterm_event::MouseButton::Middle => term_wm_core::events::MouseButton::Middle,
+                    })
+                }
+                crossterm_event::MouseEventKind::Drag(btn) => {
+                    MouseEventKind::Drag(match btn {
+                        crossterm_event::MouseButton::Left => term_wm_core::events::MouseButton::Left,
+                        crossterm_event::MouseButton::Right => term_wm_core::events::MouseButton::Right,
+                        crossterm_event::MouseButton::Middle => term_wm_core::events::MouseButton::Middle,
+                    })
+                }
+                crossterm_event::MouseEventKind::Moved => MouseEventKind::Moved,
+                crossterm_event::MouseEventKind::ScrollUp => MouseEventKind::ScrollUp,
+                crossterm_event::MouseEventKind::ScrollDown => MouseEventKind::ScrollDown,
+                crossterm_event::MouseEventKind::ScrollLeft => MouseEventKind::ScrollLeft,
+                crossterm_event::MouseEventKind::ScrollRight => MouseEventKind::ScrollRight,
+            },
+            modifiers: term_wm_core::events::KeyModifiers {
+                shift: mouse.modifiers.contains(crossterm_event::KeyModifiers::SHIFT),
+                control: mouse.modifiers.contains(crossterm_event::KeyModifiers::CONTROL),
+                alt: mouse.modifiers.contains(crossterm_event::KeyModifiers::ALT),
+            },
+            column: mouse.column,
+            row: mouse.row,
+        })),
+        crossterm_event::Event::Resize(w, h) => Some(Event::Resize(w, h)),
+        crossterm_event::Event::FocusGained => Some(Event::FocusGained),
+        crossterm_event::Event::FocusLost => Some(Event::FocusLost),
+        crossterm_event::Event::Paste(text) => Some(Event::Paste(text)),
+    }
+}
+
 /// Connect to a term-session-server and run the TUI viewer.
 ///
 /// This function is synchronous. It creates a background tokio runtime
@@ -149,11 +227,10 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         .block_on(RpcIpcClient::new(socket_path))
         .map_err(|e| io::Error::new(io::ErrorKind::ConnectionRefused, format!("{e:?}")))?;
 
-    // Channel for raw PTY output bytes from the subscription stream
-    let (push_tx, push_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-
-    // Side-channel for intercepted OSC 52 clipboard text
-    let (clip_tx, mut clip_rx) = mpsc::unbounded_channel::<String>();
+    // Channels for raw PTY output bytes and clipboard text from the subscription stream.
+    // Using crossbeam so the main loop can block on both input and PTY output.
+    let (push_tx, push_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+    let (clip_tx, clip_rx) = crossbeam_channel::unbounded::<String>();
 
     // Get terminal size
     let (term_cols, term_rows) = crossterm::terminal::size()?;
@@ -175,7 +252,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             .map_err(|e| io::Error::other(format!("subscribe: {e:?}")))?;
 
         // Forward response chunks to push_tx.  When the stream ends
-        // (session exits), push_tx is dropped, and `drain_pushes`
+        // (session exits), the sender is dropped, and `drain_pushes`
         // detects the disconnect.
         // Intercept OSC 52 clipboard sequences from the raw byte stream
         // before the VT100 parser can consume them.
@@ -228,7 +305,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         rt.handle().clone(),
         term_cols,
         term_rows,
-        push_rx,
+        push_rx.clone(),
         input_writer,
     );
 
@@ -252,6 +329,32 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     let mut clipboard = Clipboard::new();
     let sigint = install_sigint_handler()?;
 
+    // Channel for crossterm input events from a background thread
+    let (input_tx, input_rx) = crossbeam_channel::unbounded::<Event>();
+
+    // Spawn background crossterm input thread.
+    // Uses poll(50ms) so the thread can detect disconnection and exit
+    // promptly when run_session terminates.
+    std::thread::Builder::new()
+        .name("crossterm-input".into())
+        .spawn(move || {
+            loop {
+                match crossterm::event::poll(Duration::from_millis(50)) {
+                    Ok(true) => {
+                        if let Ok(crossterm_evt) = crossterm::event::read()
+                            && let Some(e) = convert_crossterm_event(crossterm_evt)
+                            && input_tx.send(e).is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Ok(false) => continue,
+                    Err(_) => break,
+                }
+            }
+        })
+        .map_err(|e| io::Error::other(format!("spawn input thread: {e}")))?;
+
     // Initial full screen render
     {
         let parser = pane.shared_parser();
@@ -266,151 +369,52 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     let mut prev_parser: Option<vt100::Parser> = None;
 
     loop {
-        let frame_start = std::time::Instant::now();
+        // Block until either user input or PTY output arrives (0 CPU when idle)
+        let input_event = crossbeam_channel::select! {
+            recv(input_rx) -> msg => {
+                match msg {
+                    Ok(evt) => Some(evt),
+                    Err(_) => return Err(io::Error::other("input thread died")),
+                }
+            }
+            recv(push_rx) -> msg => {
+                match msg {
+                    Ok(data) => {
+                        // PTY output — process directly into parser
+                        let shared = pane.shared_parser();
+                        let mut parser = shared.lock().unwrap();
+                        parser.process(&data);
+                        None
+                    }
+                    Err(_) => {
+                        // push channel disconnected → will be detected
+                        // by drain_pushes() below
+                        None
+                    }
+                }
+            }
+        };
 
-        // Drain pushes from the server (this updates the parser).
-        // Returns true if any new data was processed (screen may have changed).
-        let has_new_data = pane.drain_pushes();
+        // Drain any additional buffered PTY data
+        let has_new_data = pane.drain_pushes() || input_event.is_none();
 
-        // Drain any clipboard texts intercepted by the reader task
+        // Drain clipboard
         while let Ok(text) = clip_rx.try_recv() {
             let _ = clipboard.set(&text);
         }
 
-        // Check connection health
-        if !client.is_connected() {
-            return Err(io::Error::other("connection to session server lost"));
-        }
-
-        // Drain SIGINT (Ctrl-C) — send 0x03 through the input stream
+        // Handle SIGINT
         if sigint.received() {
             sigint.ack();
             let _ = pane.write_bytes(&[0x03]);
         }
 
-        // Poll input with a short timeout
-        let had_input = if crossterm_event::poll(Duration::from_millis(4))? {
-            let crossterm_evt = crossterm_event::read()?;
-            // Convert crossterm event to core-owned event
-            let evt = match crossterm_evt {
-                crossterm_event::Event::Key(key) => Event::Key(term_wm_core::events::KeyEvent {
-                    code: match key.code {
-                        crossterm_event::KeyCode::Char(c) => term_wm_core::events::KeyCode::Char(c),
-                        crossterm_event::KeyCode::Enter => term_wm_core::events::KeyCode::Enter,
-                        crossterm_event::KeyCode::Tab => term_wm_core::events::KeyCode::Tab,
-                        crossterm_event::KeyCode::Backspace => {
-                            term_wm_core::events::KeyCode::Backspace
-                        }
-                        crossterm_event::KeyCode::Esc => term_wm_core::events::KeyCode::Esc,
-                        crossterm_event::KeyCode::Left => term_wm_core::events::KeyCode::Left,
-                        crossterm_event::KeyCode::Right => term_wm_core::events::KeyCode::Right,
-                        crossterm_event::KeyCode::Up => term_wm_core::events::KeyCode::Up,
-                        crossterm_event::KeyCode::Down => term_wm_core::events::KeyCode::Down,
-                        crossterm_event::KeyCode::Home => term_wm_core::events::KeyCode::Home,
-                        crossterm_event::KeyCode::End => term_wm_core::events::KeyCode::End,
-                        crossterm_event::KeyCode::PageUp => term_wm_core::events::KeyCode::PageUp,
-                        crossterm_event::KeyCode::PageDown => {
-                            term_wm_core::events::KeyCode::PageDown
-                        }
-                        crossterm_event::KeyCode::Delete => term_wm_core::events::KeyCode::Delete,
-                        crossterm_event::KeyCode::Insert => term_wm_core::events::KeyCode::Insert,
-                        crossterm_event::KeyCode::F(n) => term_wm_core::events::KeyCode::F(n),
-                        _ => continue,
-                    },
-                    modifiers: term_wm_core::events::KeyModifiers {
-                        shift: key.modifiers.contains(crossterm_event::KeyModifiers::SHIFT),
-                        control: key
-                            .modifiers
-                            .contains(crossterm_event::KeyModifiers::CONTROL),
-                        alt: key.modifiers.contains(crossterm_event::KeyModifiers::ALT),
-                    },
-                    kind: match key.kind {
-                        crossterm_event::KeyEventKind::Press => KeyKind::Press,
-                        crossterm_event::KeyEventKind::Repeat => KeyKind::Repeat,
-                        crossterm_event::KeyEventKind::Release => KeyKind::Release,
-                    },
-                }),
-                crossterm_event::Event::Mouse(mouse) => {
-                    Event::Mouse(term_wm_core::events::MouseEvent {
-                        kind: match mouse.kind {
-                            crossterm_event::MouseEventKind::Down(btn) => {
-                                term_wm_core::events::MouseEventKind::Press(match btn {
-                                    crossterm_event::MouseButton::Left => {
-                                        term_wm_core::events::MouseButton::Left
-                                    }
-                                    crossterm_event::MouseButton::Right => {
-                                        term_wm_core::events::MouseButton::Right
-                                    }
-                                    crossterm_event::MouseButton::Middle => {
-                                        term_wm_core::events::MouseButton::Middle
-                                    }
-                                })
-                            }
-                            crossterm_event::MouseEventKind::Up(btn) => {
-                                term_wm_core::events::MouseEventKind::Release(match btn {
-                                    crossterm_event::MouseButton::Left => {
-                                        term_wm_core::events::MouseButton::Left
-                                    }
-                                    crossterm_event::MouseButton::Right => {
-                                        term_wm_core::events::MouseButton::Right
-                                    }
-                                    crossterm_event::MouseButton::Middle => {
-                                        term_wm_core::events::MouseButton::Middle
-                                    }
-                                })
-                            }
-                            crossterm_event::MouseEventKind::Drag(btn) => {
-                                term_wm_core::events::MouseEventKind::Drag(match btn {
-                                    crossterm_event::MouseButton::Left => {
-                                        term_wm_core::events::MouseButton::Left
-                                    }
-                                    crossterm_event::MouseButton::Right => {
-                                        term_wm_core::events::MouseButton::Right
-                                    }
-                                    crossterm_event::MouseButton::Middle => {
-                                        term_wm_core::events::MouseButton::Middle
-                                    }
-                                })
-                            }
-                            crossterm_event::MouseEventKind::Moved => {
-                                term_wm_core::events::MouseEventKind::Moved
-                            }
-                            crossterm_event::MouseEventKind::ScrollUp => {
-                                term_wm_core::events::MouseEventKind::ScrollUp
-                            }
-                            crossterm_event::MouseEventKind::ScrollDown => {
-                                term_wm_core::events::MouseEventKind::ScrollDown
-                            }
-                            crossterm_event::MouseEventKind::ScrollLeft => {
-                                term_wm_core::events::MouseEventKind::ScrollLeft
-                            }
-                            crossterm_event::MouseEventKind::ScrollRight => {
-                                term_wm_core::events::MouseEventKind::ScrollRight
-                            }
-                        },
-                        modifiers: term_wm_core::events::KeyModifiers {
-                            shift: mouse
-                                .modifiers
-                                .contains(crossterm_event::KeyModifiers::SHIFT),
-                            control: mouse
-                                .modifiers
-                                .contains(crossterm_event::KeyModifiers::CONTROL),
-                            alt: mouse.modifiers.contains(crossterm_event::KeyModifiers::ALT),
-                        },
-                        column: mouse.column,
-                        row: mouse.row,
-                    })
-                }
-                crossterm_event::Event::Resize(w, h) => Event::Resize(w, h),
-                crossterm_event::Event::FocusGained => Event::FocusGained,
-                crossterm_event::Event::FocusLost => Event::FocusLost,
-                crossterm_event::Event::Paste(text) => Event::Paste(text),
-            };
+        // Handle the input event (if any)
+        if let Some(evt) = input_event {
             match evt {
                 Event::Key(ref key)
                     if key.kind == KeyKind::Press || key.kind == KeyKind::Repeat =>
                 {
-                    // Convert core-owned KeyEvent to pty-engine KeyEvent
                     let pty_key = term_wm_pty_engine::input_encoding::KeyEvent {
                         code: match key.code {
                             term_wm_core::events::KeyCode::Char(c) => {
@@ -473,7 +477,6 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                     if !bytes.is_empty() {
                         let _ = pane.write_bytes(&bytes);
                     }
-                    true
                 }
                 Event::Mouse(ref mouse) => {
                     let mouse_active = {
@@ -482,7 +485,6 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                         parser.screen().mouse_protocol_mode() != MouseProtocolMode::None
                     };
                     if mouse_active {
-                        // Convert core-owned MouseEvent to pty-engine MouseEvent
                         let pty_mouse = term_wm_pty_engine::input_encoding::MouseEvent {
                             kind: match mouse.kind {
                                 term_wm_core::events::MouseEventKind::Press(btn) => term_wm_pty_engine::input_encoding::MouseEventKind::Press(match btn {
@@ -519,7 +521,6 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                             let _ = pane.write_bytes(&bytes);
                         }
                     }
-                    mouse_active
                 }
                 Event::Resize(w, h) => {
                     let size = PtySize {
@@ -530,7 +531,6 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                     };
                     prev_content = None;
                     let _ = pane.resize(size);
-                    true
                 }
                 Event::Paste(text) => {
                     let mut wrapped = Vec::with_capacity(text.len() + 12);
@@ -538,13 +538,15 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                     wrapped.extend_from_slice(text.as_bytes());
                     wrapped.extend_from_slice(b"\x1b[201~");
                     let _ = pane.write_bytes(&wrapped);
-                    true
                 }
-                _ => false,
+                _ => {}
             }
-        } else {
-            false
-        };
+        }
+
+        // Connection health — check after wakeup
+        if !client.is_connected() {
+            return Err(io::Error::other("connection to session server lost"));
+        }
 
         // Diff-based incremental render
         if has_new_data || prev_content.is_none() {
@@ -556,9 +558,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             let diff = match &prev_content {
                 Some(prev) => {
                     let p = prev_parser.get_or_insert_with(|| vt100::Parser::new(rows, cols, 0));
-                    // Sync dimensions in case of terminal resize
                     p.screen_mut().set_size(rows, cols);
-                    // RIS: reset parser attributes and screen in-place
                     p.process(b"\x1bc");
                     p.process(prev);
                     screen.contents_diff(p.screen())
@@ -577,14 +577,6 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         // Exit on session exit
         if pane.has_exited() {
             return Ok(());
-        }
-
-        // Pace the loop
-        if !has_new_data && !had_input {
-            let elapsed = frame_start.elapsed();
-            if elapsed < Duration::from_millis(8) {
-                std::thread::sleep(Duration::from_millis(8) - elapsed);
-            }
         }
     }
 }

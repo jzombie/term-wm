@@ -1,17 +1,17 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use muxio_core::rpc::rpc_internals::RpcStreamEvent;
 use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;
 use muxio_rpc_service_endpoint::{RpcServiceEndpointInterface, StreamResponder};
 use muxio_tokio_rpc_ipc_server::{RpcIpcServer, RpcIpcServerEvent};
 use portable_pty::PtySize;
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot, Notify};
 
 use term_session_muxio_service_definitions::{
     CloseSession, ListSessions, ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
     Spawn, WriteInput,
 };
+use term_wm_pty_engine::PtyStatus;
 
 use crate::session::Session;
 
@@ -35,15 +35,32 @@ struct ServerState {
     session: Option<Session>,
     clients: Vec<ClientEntry>,
     subscribers: Vec<SubscriberEntry>,
+    notify: Arc<Notify>,
 }
 
 impl ServerState {
-    fn new() -> Self {
+    fn new(notify: Arc<Notify>) -> Self {
         Self {
             session: None,
             clients: Vec::new(),
             subscribers: Vec::new(),
+            notify,
         }
+    }
+
+    /// Replace the current session and attach the Notify callback
+    /// so the background polling task is woken on PTY output.
+    fn set_session(&mut self, mut session: Session) {
+        let n = self.notify.clone();
+        session.set_status_callback(Some(Box::new(move |status| {
+            if matches!(status, PtyStatus::Wakeup | PtyStatus::Exited) {
+                n.notify_one();
+            }
+        })));
+        self.session = Some(session);
+        // Prime notify to process initial startup output generated
+        // before the callback was registered.
+        self.notify.notify_one();
     }
 }
 
@@ -53,7 +70,8 @@ type SharedState = Arc<Mutex<ServerState>>;
 pub async fn run_server(
     config: SessionServerConfig,
 ) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
-    let state: SharedState = Arc::new(Mutex::new(ServerState::new()));
+    let notify = Arc::new(Notify::new());
+    let state: SharedState = Arc::new(Mutex::new(ServerState::new(notify.clone())));
 
     // Spawn initial session
     {
@@ -64,7 +82,7 @@ pub async fn run_server(
             Some(config.cmd.clone())
         };
         let session = Session::spawn(1, cmd, config.cols, config.rows)?;
-        st.session = Some(session);
+        st.set_session(session);
     }
 
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -102,7 +120,7 @@ pub async fn run_server(
 
                 let id = 1;
                 let session = Session::spawn(id, cmd, cols, rows)?;
-                guard.session = Some(session);
+                guard.set_session(session);
                 Spawn::encode_response(id)
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
             }
@@ -282,15 +300,15 @@ pub async fn run_server(
         }
     });
 
-    // Output polling and push via stored StreamResponders.
+    // Output polling via Notify — blocks until PTY produces output.
     // When the session exits, the exit code is sent back through this
     // channel so run_server can return it.
     let (exit_tx, mut exit_rx) = oneshot::channel::<i32>();
     let st = Arc::clone(&state);
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_millis(8));
         loop {
-            interval.tick().await;
+            // Block until PTY actually produces output — 0 wakeups when idle
+            notify.notified().await;
 
             let mut guard = st.lock().await;
 

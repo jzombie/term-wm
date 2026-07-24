@@ -2,14 +2,13 @@ use std::cell::Cell;
 use std::io;
 use std::sync::{Arc, Mutex};
 
+use crossbeam_channel::{Receiver, TryRecvError};
 use muxio_rpc_service::error::RpcServiceError;
 use muxio_tokio_rpc_ipc_client::RpcIpcClient;
 use portable_pty::{ExitStatus, PtySize};
 use term_session_muxio_service_definitions::{CloseSession, ResizePty};
 use term_wm_pty_engine::{Pane, PtyResult};
 use tokio::runtime::Handle;
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::TryRecvError;
 
 type InputWriter = Box<dyn FnMut(&[u8]) -> io::Result<()> + Send>;
 
@@ -19,7 +18,7 @@ pub struct RemotePane {
     rt: Handle,
     parser: Arc<Mutex<vt100::Parser>>,
     exited: Cell<bool>,
-    push_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    push_rx: Receiver<Vec<u8>>,
     input_writer: InputWriter,
 }
 
@@ -30,7 +29,7 @@ impl RemotePane {
         rt: Handle,
         cols: u16,
         rows: u16,
-        push_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+        push_rx: Receiver<Vec<u8>>,
         input_writer: InputWriter,
     ) -> Self {
         Self {
@@ -143,5 +142,56 @@ impl Pane for RemotePane {
 
     fn take_pending_title(&mut self) -> Option<String> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::runtime::Builder as RtBuilder;
+
+    #[test]
+    #[cfg(unix)]
+    fn test_drain_pushes_returns_dirty_flag() {
+        let rt = RtBuilder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let (push_tx, push_rx) = crossbeam_channel::unbounded();
+        let input_writer: InputWriter = Box::new(|_| Ok(()));
+
+        // Bind a temporary socket so RpcIpcClient::new can connect.
+        // drain_pushes never touches the client, but RemotePane::new
+        // requires a valid Arc<RpcIpcClient>.
+        let socket_path = std::env::temp_dir()
+            .join(format!("test_remote_pane_{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&socket_path);
+        let _listener = rt.block_on(async {
+            tokio::net::UnixListener::bind(&socket_path).unwrap()
+        });
+
+        let client = Arc::new(
+            rt.block_on(RpcIpcClient::new(
+                socket_path.to_str().unwrap(),
+            ))
+            .unwrap(),
+        );
+
+        let mut pane = RemotePane::new(
+            1, client, rt.handle().clone(), 80, 24, push_rx, input_writer,
+        );
+
+        // 1. Idle call with no pending messages must return false
+        assert!(!pane.drain_pushes());
+
+        // 2. Ingesting bytes must return true
+        push_tx.send(b"hello world".to_vec()).unwrap();
+        assert!(pane.drain_pushes());
+
+        // 3. Subsequent call on drained buffer must return false
+        assert!(!pane.drain_pushes());
+
+        let _ = std::fs::remove_file(&socket_path);
     }
 }
