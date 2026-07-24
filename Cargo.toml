@@ -44,7 +44,6 @@ base64 = "0.22.1"
 bitcode = "0.6.9"
 bitflags = "2.13.1"
 clap = { version = "4.6.1", features = ["derive"] }
-criterion = { version = "0.8.2", default-features = false }
 console = "0.16.4"
 criterion = { version = "0.8.2", default-features = false }
 crossbeam-channel = "0.5.15"
