@@ -2,81 +2,83 @@
 
 ## Root Cause
 
-`LayoutNode::from_rects()` (`crates/term-wm-core/src/layout/tiling.rs:583-691`) computes split **weights using global spatial distances** — e.g., `(x - min_x).max(1)` as u16 — where `min_x`/`max_x` are the global bounding box of ALL windows.
+`LayoutNode::from_rects()` (`crates/term-wm-core/src/layout/tiling.rs:583-691`) uses two flawed weight schemes:
 
-When floating windows don't span the full bounding box (common with cascaded or gapped floating windows), the global distance on one side includes dead space from windows in the **other** partition. This gives that side a disproportionately large weight. The layout engine's `split_rects_weighted` faithfully divides space proportionally to these skewed weights, producing very thin columns for the small-weight side.
+### Problem 1: Global spatial distance weights (cut paths)
+At lines 635 and 672, weights are computed as `(x - min_x).max(1)` — the distance from the cut to the global bounding box edge. This includes dead space from windows in OTHER partitions, inflating their weight. **Fixed in previous iteration with per-partition bounding spans.**
+
+### Problem 2: Equal weights bypass proportional distribution (both cut paths AND fallback)
+Even with correct bounding spans, a 1-vs-2 partition split (e.g., [A] vs [B, C] where both sides have equal X-axis extent) gives each side 50%. The 2-window side then subdivides its 50%, giving each window only 25% — the "thin column" complaint.
+
+### Problem 3: Fallback always uses [1, 1]
+When no clean cut is available (case 3 in `from_rects`, line 688), weights are hardcoded to `[1, 1]`, ignoring group sizes entirely.
 
 ## Fix
 
-Replace global-bounding-span weights with **per-partition 1D bounding span** along the split axis. This measures the actual horizontal/vertical footprint of windows within each partition, excluding dead space from other partitions.
+Replace bounding-span weights with **count-based weights** (number of windows in each partition). This ensures each window gets an equal share regardless of spatial overlap or group size.
 
-### Why not sum of raw widths/heights?
+### Why count-based?
 
-Summing raw `r.width` across all windows in a vertical-cut partition **double-counts orthogonally-stacked windows**. For example, 3 vertically stacked windows each of width 40 would sum to 120, but their true horizontal footprint is 40 — inflating that partition's weight by 3x.
-
-Per-partition bounding span (`max_extent - min_extent` of the partition's rects along the split axis) correctly handles both gapped and stacked layouts:
-
-| Layout | Global span (current) | Sum of widths (wrong) | Per-partition span (correct) |
-|--------|----------------------|----------------------|------------------------------|
-| 3 stacked windows (w=40) vs 1 side (w=40) | 40 vs 40 (✓) | 120 vs 40 (✗) | 40 vs 40 (✓) |
-| Gapped A(x=0,w=40) vs B(x=100,w=40) | 40 vs 100 (✗) | 40 vs 40 (✓) | 40 vs 40 (✓) |
+The "tile all floating windows" operation purpose is to organize messy floating windows into a clean tiling. Equal distribution per window is the most intuitive default. This is also consistent with `insert_window_balanced`, which finds the largest leaf (by count, not by spatial extent).
 
 ### Code changes in `from_rects` (tiling.rs)
 
-**Line 635** — horizontal cut along y axis (direction: Vertical):
+**Line 635** — horizontal cut (direction: Vertical):
 ```rust
-// OLD (global Y span):
+// OLD (global Y distance):
 weights: vec![(y - min_y).max(1) as u16, (max_y - y).max(1) as u16],
 
-// NEW (per-partition Y bounding span, clamped to u16::MAX):
-let top_span = {
-    let min = top.iter().map(|(_, r)| r.y).min().unwrap_or(min_y);
-    let max = top.iter().map(|(_, r)| r.y.saturating_add(r.height as i32)).max().unwrap_or(y);
-    max.saturating_sub(min).clamp(1, i32::from(u16::MAX)) as u16
-};
-let bot_span = {
-    let min = bottom.iter().map(|(_, r)| r.y).min().unwrap_or(y);
-    let max = bottom.iter().map(|(_, r)| r.y.saturating_add(r.height as i32)).max().unwrap_or(max_y);
-    max.saturating_sub(min).clamp(1, i32::from(u16::MAX)) as u16
-};
-weights: vec![top_span, bot_span],
+// NEW (count-based):
+weights: vec![top.len() as u16, bottom.len() as u16],
 ```
 
-**Line 672** — vertical cut along x axis (direction: Horizontal):
+**Line 672** — vertical cut (direction: Horizontal):
 ```rust
-// OLD (global X span):
-weights: vec![(x - min_x).max(1) as u16, (max_x - x).max(1) as u16],
-
-// NEW (per-partition X bounding span, clamped to u16::MAX):
-let left_span = {
-    let min = left.iter().map(|(_, r)| r.x).min().unwrap_or(min_x);
-    let max = left.iter().map(|(_, r)| r.x.saturating_add(r.width as i32)).max().unwrap_or(x);
-    max.saturating_sub(min).clamp(1, i32::from(u16::MAX)) as u16
-};
-let right_span = {
-    let min = right.iter().map(|(_, r)| r.x).min().unwrap_or(x);
-    let max = right.iter().map(|(_, r)| r.x.saturating_add(r.width as i32)).max().unwrap_or(max_x);
-    max.saturating_sub(min).clamp(1, i32::from(u16::MAX)) as u16
-};
-weights: vec![left_span, right_span],
+// NEW (count-based):
+weights: vec![left.len() as u16, right.len() as u16],
 ```
+
+**Line 688** — fallback:
+```rust
+// OLD:
+weights: vec![1, 1],
+
+// NEW (count-based):
+weights: vec![sorted[..mid].len() as u16, sorted[mid..].len() as u16],
+```
+
+### Effect on scenarios
+
+**User's 3-window scenario** (A overlapped with B, clean cut at x=50):
+- `from_rects` finds vertical cut at x=50: left=[A], right=[B, C]
+- weights before: `[50, 50]` → A=50%, B+C=50% → B=25%, C=25% ❌
+- weights after `[1, 2]` → A=33%, B+C=67% → B=33.5%, C=33.5% ✓
+
+**Gapped windows** (A at x=0, w=40; B at x=100, w=40):
+- cut at x=40: left=[A], right=[B]
+- weights `[1, 1]` → A=50%, B=50% ✓
+
+**Mixed sizes** (A w=80, B w=20):
+- cut at x=80: left=[A], right=[B]
+- weights `[1, 1]` → A=50%, B=50% (loses original size proportion, but consistent with equal-tile UX)
 
 ### Files to modify
 
-1. `crates/term-wm-core/src/layout/tiling.rs` — weight computation at lines 635 and 672
+1. `crates/term-wm-core/src/layout/tiling.rs` — weight computation at lines 635, 672, and 688
 
-### Add unit tests for `from_rects`
+### Unit tests
 
-Add a `#[cfg(test)]` module at the end of `crates/term-wm-core/src/layout/tiling.rs` with:
+Add `#[cfg(test)]` module tests in `crates/term-wm-core/src/layout/tiling.rs`:
 
-1. **gapped_windows_equal_columns**: Two windows with a large gap between them produce equal-width columns.
-2. **stacked_vs_side_window_equal_columns**: 3 vertically stacked windows (all same width) vs 1 side window produce equal-width columns.
-3. **cascaded_windows_reasonable_proportions**: Cascaded overlapping windows produce reasonable proportional sizes.
-4. **single_window_returns_leaf**: Verify the `len() == 1` early return.
-5. **empty_input_returns_void**: Verify empty input returns Void.
+1. **`from_rects_1v2_equal_span** — [A] vs [B, C] with equal bounding spans → weights [1, 2] (A gets 33%)
+2. **`from_rects_gapped_windows`** — A(x=0,w=40) vs B(x=100,w=40) → weights [1, 1] (50/50)
+3. **`from_rects_stacked_vs_side`** — 3 stacked (w=40) vs 1 side (w=40) → weights [3, 1] (75/25)
+4. **`from_rects_empty_returns_void`** — empty → Void
+5. **`from_rects_single_leaf`** — 1 rect → Leaf
+6. **regression: re-tile 3-window scenario** — the exact user reproduction case
 
 ## Verification
 
 1. `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-2. `cargo test` — existing tests must pass, new from_rects tests must pass
-3. Manual: create 3+ cascaded floating windows, toggle tiling, verify each column has reasonable width
+2. `cargo test` — existing + new tests pass
+3. Manual: create 3 windows tiled as A-top/B-bottom-left/C-bottom-right, toggle float, move A to overlap with B/C, re-tile → verify roughly equal columns
