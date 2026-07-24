@@ -253,8 +253,9 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
 
     // Channels for raw PTY output bytes and clipboard text from the subscription stream.
     // Using crossbeam so the main loop can block on both input and PTY output.
-    let (push_tx, push_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
-    let (clip_tx, clip_rx) = crossbeam_channel::unbounded::<String>();
+    // Bounded to cap head-of-line queuing under burst load.
+    let (push_tx, push_rx) = crossbeam_channel::bounded::<Vec<u8>>(256);
+    let (clip_tx, clip_rx) = crossbeam_channel::bounded::<String>(64);
 
     // Get terminal size
     let (term_cols, term_rows) = crossterm::terminal::size()?;
@@ -286,9 +287,9 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
 
             while let Some(chunk) = reader.recv().await {
                 match chunk {
-                    Ok(data) => {
+                    Ok(mut data) => {
                         if let Some(text) = osc52.push(&data, &prev_tail) {
-                            let _ = clip_tx.send(text);
+                            let _ = clip_tx.try_send(text);
                         }
 
                         let n = data.len();
@@ -299,7 +300,12 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                             prev_tail[8 - n..].copy_from_slice(&data[..n]);
                         }
 
-                        let _ = push_tx.send(data);
+                        // Non-blocking push; if saturated, sleep 1ms to allow
+                        // the main loop to drain the channel without CPU spinning.
+                        while let Err(crossbeam_channel::TrySendError::Full(pending)) = push_tx.try_send(data) {
+                            data = pending;
+                            tokio::time::sleep(Duration::from_millis(1)).await;
+                        }
                     }
                     Err(_) => break,
                 }
@@ -354,7 +360,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     let sigint = install_sigint_handler()?;
 
     // Channel for crossterm input events from a background thread
-    let (input_tx, input_rx) = crossbeam_channel::unbounded::<Event>();
+    let (input_tx, input_rx) = crossbeam_channel::bounded::<Event>(64);
 
     // Spawn background crossterm input thread.
     // Uses poll(50ms) so the thread can detect disconnection and exit
