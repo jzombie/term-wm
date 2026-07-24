@@ -46,6 +46,7 @@ bitflags = "2.13.1"
 clap = { version = "4.6.1", features = ["derive"] }
 criterion = { version = "0.8.2", default-features = false }
 console = "0.16.4"
+criterion = { version = "0.8.2", default-features = false }
 crossbeam-channel = "0.5.15"
 crossterm = "0.29.0"
 ctrlc = "3.5.2"
