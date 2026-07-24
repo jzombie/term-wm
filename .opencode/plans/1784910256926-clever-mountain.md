@@ -497,29 +497,43 @@ for (x, cell) in (clip.x .. clip.x + clip.width).zip(row_slice.iter_mut()) {
 }
 ```
 
-### 3. Rewrite `render_handles_masked` passes 2 and 3 with zipped occlusion
+### 3. Rewrite `render_handles_masked` passes 2 and 3 with zipped occlusion + origin-translated neighbor reads
 
-Same zip pattern: iterate `(clip.x .. clip.x + clip.width).zip(row_slice.iter_mut())` to feed both `is_obscured(x, y)` and the cell mutation.
+Pass 2 writes junction characters by reading cells above and below. Neighbor reads MUST use origin-translated coordinates — absolute coords panic on non-zero-area buffers:
+
+```rust
+let rel_x = x - buffer.area.x as usize;
+let rel_y = y - buffer.area.y as usize;
+let row_above = (rel_y.saturating_sub(1)) * buf_w + rel_x;
+let row_below = (rel_y + 1) * buf_w + rel_x;
+let symbol_above = buffer.content[row_above].symbol();
+let symbol_below = buffer.content[row_below].symbol();
+```
+
+Pass 3 hover borders: zip occlusion + origin-translated direct index for both horizontal (row-slice) and vertical (per-cell) writes.
 
 ### 4. Rewrite `render_resize_outline` — horizontal BCE + vertical direct index
 
-**Horizontal edges** (Top, Bottom) — row-slice iterators over the edge range:
+**Horizontal edges** (Top, Bottom) — row-slice iterators over the edge range, **with occlusion zipping**:
 ```rust
 let row_slice = &mut buffer.content[row_start + rel_x_start .. row_start + rel_x_end];
-for cell in row_slice.iter_mut() {
+for (x, cell) in (rx.saturating_add(1) .. right).zip(row_slice.iter_mut()) {
+    if is_obscured(x, ry) { continue; }
     cell.set_symbol("═");
     cell.set_style(style);
 }
 ```
 
-**Vertical edges** (Left, Right) — origin-translated direct index per cell (strided, not contiguous):
+**Vertical edges** (Left, Right) — origin-translated direct index per cell (strided, not contiguous), **with occlusion guard**:
 ```rust
 let cell = &mut buffer.content[rel_y * buf_w + rel_x];
-cell.set_symbol("║");
-cell.set_style(style);
+if !is_obscured(rx, y) {
+    cell.set_symbol("║");
+    cell.set_style(style);
+}
 ```
 
-**Corners** (TopLeft, TopRight, BottomLeft, BottomRight) — 1-3 cells each, origin-translated direct index.
+**Corners** (TopLeft, TopRight, BottomLeft, BottomRight) — 1-3 cells each, origin-translated direct index with occlusion guard.
 
 ## Critical (SEV-2 — blocks merge)
 
