@@ -322,6 +322,10 @@ pub struct WindowManager<
     command_palette_key: Option<OverlayKey>,
     /// When `Some(instant)`, tab outline mode is active until that instant.
     pub(crate) tab_outline_until: Option<Instant>,
+    /// Tracks last cell coordinate passed to `update_snap_preview` for
+    /// deduplication — skip the BSP projection when the cursor hasn't
+    /// moved to a new grid cell (pure function of u16 × u16).
+    last_snap_cursor: Option<(u16, u16)>,
     scroll_keyboard_enabled_default: bool,
     floating_resize_offscreen: bool,
     pub(crate) z_order: Vec<WindowKey>,
@@ -809,6 +813,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             exit_confirm_key: None,
             command_palette_key: None,
             tab_outline_until: None,
+            last_snap_cursor: None,
             input_mode: crate::actions::WmInputMode::Passthrough,
             fab_enabled: true,
             tap_swap_state: None,
@@ -1379,7 +1384,15 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                                     let dx_total = col.abs_diff(*start_x);
                                     let dy_total = row.abs_diff(*start_y);
                                     if dx_total + dy_total > 2 {
-                                        self.update_snap_preview(*key, col, row, detach_coordinate);
+                                        if self.last_snap_cursor != Some((col, row)) {
+                                            self.update_snap_preview(
+                                                *key,
+                                                col,
+                                                row,
+                                                detach_coordinate,
+                                            );
+                                            self.last_snap_cursor = Some((col, row));
+                                        }
                                     } else {
                                         self.drag_snap = None;
                                     }
@@ -1419,6 +1432,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                             // NOT detach it again.
                             self.snap_preview = None;
                             self.snap_projection_cache = None;
+                            self.last_snap_cursor = None;
                             // Only clear the double-click timer if a drag actually
                             // occurred.  A click-only release preserves the timer so
                             // a subsequent click can still be detected as a
@@ -1950,6 +1964,16 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// effects, no deadline pruning.  Safe to call from the render path.
     pub fn is_mouse_captured(&self) -> bool {
         self.mouse_capture.is_some()
+    }
+
+    /// Returns `true` when a window drag is in progress (not resize,
+    /// component interaction, or layout handle).  Used by FramePacer to
+    /// select a throttled 30 FPS interval during drag.
+    pub(crate) fn is_dragging_window(&self) -> bool {
+        matches!(
+            self.mouse_capture,
+            Some(MouseCaptureState::DraggingWindow { .. })
+        )
     }
 
     pub fn keyboard_focus_enabled(&self) -> bool {

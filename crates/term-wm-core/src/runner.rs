@@ -1,4 +1,5 @@
 use std::io;
+use std::time::{Duration, Instant};
 
 use crate::events::{Event, KeyKind, MouseEventKind};
 use term_wm_render::RenderTarget;
@@ -15,6 +16,7 @@ use crate::event_loop::{ControlFlow, EventLoop};
 use crate::events::core_event_to_wm;
 use crate::hitbox_registry::HitboxRegistry;
 use crate::io::EventSource;
+use crate::io::FramePacer;
 use crate::layout::{LayoutNode, TilingLayout};
 use crate::task_scheduler::TaskScheduler;
 use crate::window::{WindowKey, WindowManager};
@@ -236,6 +238,7 @@ where
     let system_handle = system_scheduler.handle();
     let mut profile_tracker =
         crate::power_profile::PowerProfileTracker::new(driver.current_profile());
+    let mut frame_pacer = FramePacer::new();
     let mut event_loop = EventLoop::new(driver);
     event_loop
         .driver()
@@ -264,6 +267,11 @@ where
                 }
             }
 
+            // System tasks may have mutated state (notifications, tab outline,
+            // drag snap, temporal dwell) — request a redraw so the None branch
+            // arms the FramePacer even without a crossterm input event.
+            driver.request_redraw();
+
             if debug_event_flags::take_panic_pending() {
                 app.on_panic();
             }
@@ -276,13 +284,24 @@ where
             for key in driver.take_exited_windows() {
                 app.wm().close_window(key);
             }
+            // PTY child exit removed a window — redraw the layout.
+            driver.request_redraw();
 
             // Update monocle mode on resize
             if let Some(Event::Resize(width, _height)) = &event {
                 app.wm().update_monocle_mode(*width);
             }
 
-            let mut flush_state_changes = |app: &mut A, flow: ControlFlow, consume_dirty: bool| {
+            // Precompute driver work flag so the None branch can arm the
+            // pacer without borrowing driver (the closure also needs driver).
+            let driver_has_work =
+                driver.current_profile() != crate::power_profile::PowerProfile::PowerSaver;
+            let mut flush_state_changes = |app: &mut A,
+                                           driver: &mut D,
+                                           flow: ControlFlow,
+                                           consume_dirty: bool,
+                                           fp_deadline: Option<std::time::Duration>|
+             -> io::Result<ControlFlow> {
                 if let Some(enabled) = app.wm().take_mouse_capture_change() {
                     let _ = driver.set_mouse_capture(enabled);
                 }
@@ -302,16 +321,27 @@ where
                 // Clamp the driver's sleep duration to the next scheduler
                 // deadline so PowerSaver's 3600s interval doesn't block
                 // past a pending task timeout (e.g. SuperPassthrough).
-                driver.set_max_sleep_duration(system_handle.time_until_next());
+                // Also clamp to the FramePacer deadline so the poll wakes
+                // up when a delayed render is due, even without input.
+                let deadline = match (fp_deadline, system_handle.time_until_next()) {
+                    (Some(fp), Some(sys)) => Some(fp.min(sys)),
+                    (Some(fp), None) => Some(fp),
+                    (None, sys_or_none) => sys_or_none,
+                };
+                driver.set_max_sleep_duration(deadline);
                 if let Some(profile) = profile_tracker.poll(driver.current_profile()) {
                     app.wm().set_power_profile(profile);
                 }
                 Ok(flow)
             };
             let mut did_panic = false;
+            let mut did_render = false;
+            let now = Instant::now();
             if let Some(evt) = event {
                 // Synthesized key event from bottom-panel hint click takes priority
                 let evt = app.wm().take_synthetic_event().unwrap_or(evt);
+
+                frame_pacer.notify_pending(Instant::now());
 
                 // Pre-compute the keybinding action using the configured
                 // KeyBindings from WindowManager (not hardcoded defaults).
@@ -326,13 +356,13 @@ where
                         }
                     }
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue, false);
+                    return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
 
                 if app.wm().help_overlay_visible() {
                     let _ = app.wm().handle_help_event(&evt);
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue, false);
+                    return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
 
                 // Command palette toggle (runs BEFORE the barrier so toggle works)
@@ -351,7 +381,7 @@ where
                         app.open_command_palette();
                     }
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue, false);
+                    return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
 
                 // In tab outline mode, any non-focus key closes the palette immediately.
@@ -363,7 +393,7 @@ where
                 {
                     app.wm().close_command_palette();
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue, false);
+                    return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
 
                 // Command palette absolute event barrier (same pattern as help overlay)
@@ -434,10 +464,16 @@ where
                     // Focus routing while menu is open (Tab/Shift+Tab)
                     if matches!(&evt, Event::Key(_)) && app.wm().handle_focus_event(&evt) {
                         update_selection_snapshot(app);
-                        return flush_state_changes(app, ControlFlow::Continue, false);
+                        return flush_state_changes(
+                            app,
+                            driver,
+                            ControlFlow::Continue,
+                            false,
+                            None,
+                        );
                     }
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue, false);
+                    return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
 
                 // If keyboard capture is disabled for the focused window, key events
@@ -452,21 +488,27 @@ where
                         // Direct mode — forward to terminal immediately.
                         let _ = handle_focused_app_event(&evt, app);
                         update_selection_snapshot(app);
-                        return flush_state_changes(app, ControlFlow::Continue, false);
+                        return flush_state_changes(
+                            app,
+                            driver,
+                            ControlFlow::Continue,
+                            false,
+                            None,
+                        );
                     }
                 }
 
                 // Layer 2c: App-level event handler (before WM actions, after overlays)
                 if app.handle_app_event(&evt) {
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue, false);
+                    return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
 
                 // Mouse capture check
 
                 if matches!(evt, Event::Mouse(_)) && !app.wm().mouse_capture_enabled() {
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue, false);
+                    return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
                 // Direct focus switching for mouse clicks.  Uses the live window
                 // set from managed_draw_order (repopulated every draw) instead of
@@ -485,11 +527,11 @@ where
                 {
                     app.open_exit_confirm();
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue, false);
+                    return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
                 if !wm_mode && matches!(evt, Event::Key(_)) && app.wm().handle_focus_event(&evt) {
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue, false);
+                    return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
 
                 // Layer 3: Pass-through to focused component
@@ -507,30 +549,56 @@ where
             } else {
                 if app.quit_requested() || app.wm().quit_requested() {
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Quit, false);
+                    return flush_state_changes(app, driver, ControlFlow::Quit, false, None);
                 }
                 update_selection_snapshot(app);
-                app.wm().begin_frame();
-                app.wm().prepare_draw();
-                // Catch render panics (e.g. u16 subtraction overflow with a
-                // tiny viewport, or a component panic) so they don't take
-                // down the event loop.  The panic hook records details in
-                // the debug log.  I/O errors from the draw are propagated.
-                // After a panic, repair the terminal so the next draw starts
-                // from a clean slate (partial escape sequences, wrong cursor
-                // position, etc. are reset).
-                did_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    output.draw(|frame| {
-                        // TODO: Get area from DrawPlan or terminal size, not from frame
-                        draw(frame, app)
-                    })
-                }))
-                .is_err();
-                if did_panic {
-                    output.repair()?;
+
+                // Arm the pacer when any component requested a redraw or the
+                // driver has background work (PTY data) that bypassed Some(evt).
+                if driver.take_redraw_request() || driver_has_work {
+                    frame_pacer.notify_pending(now);
+                }
+
+                frame_pacer.set_interval(if app.wm().is_dragging_window() {
+                    Duration::from_millis(33) // 30 FPS during drag
+                } else {
+                    Duration::from_millis(16) // 60 FPS otherwise
+                });
+
+                if frame_pacer.try_expire(now) {
+                    // Gate BOTH frame init AND render together so the
+                    // HitboxRegistry survives between frames.  Running
+                    // begin_frame() without output.draw() would clear
+                    // hitboxes on every idle tick, making clicks vanish.
+                    app.wm().begin_frame();
+                    app.wm().prepare_draw();
+                    // Catch render panics (e.g. u16 subtraction overflow with a
+                    // tiny viewport, or a component panic) so they don't take
+                    // down the event loop.  The panic hook records details in
+                    // the debug log.  I/O errors from the draw are propagated.
+                    // After a panic, repair the terminal so the next draw starts
+                    // from a clean slate (partial escape sequences, wrong cursor
+                    // position, etc. are reset).
+                    did_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        output.draw(|frame| {
+                            // TODO: Get area from DrawPlan or terminal size, not from frame
+                            draw(frame, app)
+                        })
+                    }))
+                    .is_err();
+                    did_render = true;
+                    if did_panic {
+                        output.repair()?;
+                    }
                 }
             }
-            flush_state_changes(app, ControlFlow::Continue, !did_panic)
+            flush_state_changes(
+                app,
+                driver,
+                ControlFlow::Continue,
+                did_render && !did_panic,
+                frame_pacer.time_until_deadline(now),
+            )
         };
 
         let handler_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(handler));
