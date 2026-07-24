@@ -1196,7 +1196,12 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
             .map(|(_, r)| r)
     }
 
-    pub fn project_insert_void(&self, insert: Id, void_id: usize, area: LayoutRect) -> Option<LayoutRect> {
+    pub fn project_insert_void(
+        &self,
+        insert: Id,
+        void_id: usize,
+        area: LayoutRect,
+    ) -> Option<LayoutRect> {
         let mut root = self.clone();
         root.remove_leaf(insert);
         if root.replace_void_by_id(void_id, LayoutNode::leaf(insert)) {
