@@ -203,11 +203,15 @@ These functions compute distinct symbols per cell based on position (borders, ju
 | `render_resize_outline` | Edge-specific ═ ║ ╔ ╗ ╚ ╝ per position |
 | `render_cursor_overlay` | REVERSED modifier at single cursor cell |
 
-### 5. Persistent mask buffer in `RatatuiBackend` (via `RenderBackend` trait)
+### 5. Persistent mask buffer with swap semantics
 
-The mask buffer cannot live in `DrawPlanRenderer` alone — functions like `composite_window`, `render_panels`, and `render_overlays` are called from `render_app` (in `src/lib.rs`) which receives `&mut dyn RenderBackend` but not `&DrawPlanRenderer`. To avoid forcing those call sites to allocate their own masks, the mask must be accessible through the backend trait.
+The mask buffer must be accessible from two contexts:
+- **Global backend** (main screen buffer) — for `render_drop_shadow`, `render_panels`, `render_overlays` called from `render_app` via `&mut dyn RenderBackend`
+- **Offscreen swap buffers** (per-window scratch/direct buffers in `DrawPlanRenderer`) — for `render_window_composite`, `render_direct`
 
-#### Add `acquire_mask` to `RenderBackend` trait
+Both use the same swap pattern: persistent mask `Vec<u8>` is held alongside its buffer, transferred into `RatatuiBackend` during construction, and reclaimed after use to preserve capacity across frames.
+
+#### 5a. Add `acquire_mask` to `RenderBackend` trait
 
 **File:** `crates/term-wm-render/src/lib.rs`
 
@@ -219,7 +223,7 @@ pub trait RenderBackend: std::any::Any {
 }
 ```
 
-#### Host the mask in `RatatuiBackend`
+#### 5b. Host the mask in `RatatuiBackend` with full swap lifecycle
 
 **File:** `crates/term-wm-console/src/lib.rs`
 
@@ -227,7 +231,13 @@ pub trait RenderBackend: std::any::Any {
 pub struct RatatuiBackend {
     pub buffer: Buffer,
     pub area: Rect,
-    pub(crate) mask_buffer: Vec<u8>, // Persistent — zero allocations in steady state
+    pub(crate) mask_buffer: Vec<u8>, // Transferred in/out via swap
+}
+
+impl RatatuiBackend {
+    pub fn new(buffer: Buffer, area: Rect, mask_buffer: Vec<u8>) -> Self {
+        Self { buffer, area, mask_buffer }
+    }
 }
 
 impl RenderBackend for RatatuiBackend {
@@ -241,7 +251,68 @@ impl RenderBackend for RatatuiBackend {
 }
 ```
 
-Any function that receives `&mut dyn RenderBackend` can call `backend.acquire_mask()` to get a pre-allocated, correctly-sized mask. No dynamic allocations in steady state (resize only when terminal grows).
+#### 5c. `DrawPlanRenderer` holds persistent masks alongside buffers
+
+```rust
+pub struct DrawPlanRenderer {
+    scratch_buffer: Buffer,
+    scratch_mask: Vec<u8>,
+    direct_buffer: Buffer,
+    direct_mask: Vec<u8>,
+}
+
+impl DrawPlanRenderer {
+    pub fn new() -> Self {
+        Self {
+            scratch_buffer: Buffer::empty(Rect::ZERO),
+            scratch_mask: Vec::new(),
+            direct_buffer: Buffer::empty(Rect::ZERO),
+            direct_mask: Vec::new(),
+        }
+    }
+}
+```
+
+#### 5d. Offscreen compositing with mask swap (example: `render_window_composite`)
+
+```rust
+fn render_window_composite<C: Component<TermWmAction>>(
+    &mut self,
+    frame: &mut Frame,
+    area: Rect,
+    component: &mut C,
+    region: &RenderRegion,
+    hitbox_registry: &mut HitboxRegistry,
+) {
+    let mut buffer = std::mem::replace(&mut self.scratch_buffer, Buffer::empty(Rect::ZERO));
+    let mask = std::mem::replace(&mut self.scratch_mask, Vec::new());
+
+    buffer.resize(area);
+    buffer.reset();
+
+    let mut backend = RatatuiBackend::new(buffer, area, mask);
+
+    let ctx = ComponentContext::new(!region.dimmed).with_screen_area(region.bounds);
+    component.render(&mut backend, region.bounds, &ctx, hitbox_registry);
+
+    if region.dimmed {
+        let mask_slice = backend.acquire_mask();
+        self.apply_dim_modifier(&mut backend.buffer, mask_slice);
+    }
+
+    blit_buffer(&backend.buffer, frame.buffer_mut(), area);
+
+    // Reclaim — preserve capacity for next frame
+    self.scratch_buffer = backend.buffer;
+    self.scratch_mask = backend.mask_buffer;
+}
+```
+
+The same swap pattern applies to `render_direct` (using `self.direct_mask`) and `composite_window` (using the caller's scratch mask alongside the scratch buffer).
+
+#### 5e. Global backend (main screen) — single persistent mask
+
+For the main `ConsoleRenderTarget`, a single `RatatuiBackend` wraps the terminal's frame buffer. Its `mask_buffer` is created once at startup and lives for the program's lifetime. `acquire_mask()` on the global backend returns the same pre-sized `Vec<u8>` every frame — zero allocations.
 
 ### 6. Buffer management — keep swap pattern
 
@@ -309,9 +380,10 @@ cargo run
 
 ## Required Actions
 
-### Persistent infrastructure
-1. Add `acquire_mask()` to `RenderBackend` trait in `crates/term-wm-render/src/lib.rs`
-2. Add `mask_buffer: Vec<u8>` field to `RatatuiBackend` in `crates/term-wm-console/src/lib.rs`; implement `acquire_mask()`
+### Persistent infrastructure (three tiers)
+1. Add `acquire_mask(&mut self) -> &mut [u8]` to `RenderBackend` trait in `crates/term-wm-render/src/lib.rs`
+2. Add `mask_buffer: Vec<u8>` to `RatatuiBackend`; update constructor to accept `Vec<u8>` by value; implement `acquire_mask()`
+3. Add `scratch_mask: Vec<u8>` and `direct_mask: Vec<u8>` to `DrawPlanRenderer`; implement swap-and-reclaim in `render_window_composite`, `render_direct`, and `composite_window`
 
 ### Two-pass mask pattern (uniform modifiers — row-sliced zipping)
 2. REWRITE `apply_dim_modifier` using Section 4a two-pass mask template
