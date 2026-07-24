@@ -44,3 +44,6 @@ pub use split::{
     build_rects_from_sizes, gap_size, handle_thickness, split_rect_bsp, split_rects_nary,
     split_rects_weighted, split_rects_with_gaps, split_sizes,
 };
+
+mod tiling;
+pub use tiling::{Direction, LayoutNode, SplitGap, split_area_for_path, split_at_path_mut};
