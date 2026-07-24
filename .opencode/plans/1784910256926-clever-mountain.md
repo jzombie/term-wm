@@ -20,18 +20,14 @@ Even with the dirty-set fix, the event loop calls `driver.poll(driver.poll_inter
 - After `flush_state_changes`, clamp the driver's sleep duration to `frame_pacer.time_until_deadline()` by calling `driver.set_max_sleep_duration()` with the lesser of the existing scheduler deadline and the FramePacer deadline.
 - This ensures the poll wakes up when the FramePacer expires, even without input events.
 
-Implementation: in `flush_state_changes` (inside the `driver.set_max_sleep_duration(...)` call at line 308), also clamp to `frame_pacer.time_until_deadline()`:
-
+Implementation: `flush_state_changes` accepts `fp_deadline: Option<Duration>` and clamps `set_max_sleep_duration`:
 ```rust
-let fp_deadline = frame_pacer.time_until_deadline();
-let deadline = system_handle.time_until_next();
-// Clamp to the FramePacer deadline so the poll wakes up when
-// a delayed render is due, even without external input.
-driver.set_max_sleep_duration(match (fp_deadline, deadline) {
+let deadline = match (fp_deadline, system_handle.time_until_next()) {
     (Some(fp), Some(sys)) => Some(fp.min(sys)),
     (Some(fp), None) => Some(fp),
     (None, sys_or_none) => sys_or_none,
-});
+};
+driver.set_max_sleep_duration(deadline);
 ```
 
 This completes the FramePacer lifecycle: input events → `notify_pending()` arms a deadline → `try_expire()` gates the draw → `time_until_deadline()` clamps the poll → poll wakes at the deadline → loop re-checks `try_expire()`.
@@ -163,7 +159,7 @@ The simplest approach: skip injection point 3. The `Some(evt)` path already has 
   // interrogate individual sources (PTY wakeups, overlays, etc.).
   // The `current_profile()` check is a catch-all for PTY wakeups
   // that don't flow through request_redraw().
-  if app.take_redraw_request()
+  if driver.take_redraw_request()
       || driver.current_profile() != crate::power_profile::PowerProfile::PowerSaver
   {
       frame_pacer.notify_pending();
@@ -188,11 +184,33 @@ The simplest approach: skip injection point 3. The `Some(evt)` path already has 
   }
   ```
 - Add `let mut did_render = false;` beside `let mut did_panic = false;`
-- Change the final `flush_state_changes` call to:
+- Change the final `flush_state_changes` call to pass the FramePacer deadline explicitly:
   ```rust
-  flush_state_changes(app, ControlFlow::Continue, did_render && !did_panic)
+  flush_state_changes(
+      app,
+      ControlFlow::Continue,
+      did_render && !did_panic,
+      frame_pacer.time_until_deadline(),
+  )
   ```
-- In `flush_state_changes`, clamp `set_max_sleep_duration` to the FramePacer deadline as described in the architecture notes above.
+- Update `flush_state_changes` to accept the deadline as a parameter and use it to clamp `set_max_sleep_duration`:
+  ```rust
+  let mut flush_state_changes =
+      |app: &mut A,
+       flow: ControlFlow,
+       consume_dirty: bool,
+       fp_deadline: Option<std::time::Duration>|
+       -> io::Result<ControlFlow> {
+      // ... existing body ...
+      let deadline = match (fp_deadline, system_handle.time_until_next()) {
+          (Some(fp), Some(sys)) => Some(fp.min(sys)),
+          (Some(fp), None) => Some(fp),
+          (None, sys_or_none) => sys_or_none,
+      };
+      driver.set_max_sleep_duration(deadline);
+      Ok(flow)
+  };
+  ```
 
 #### 1d. Summary of the final None-branch lifecycle
 ```
