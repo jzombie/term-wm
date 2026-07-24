@@ -3674,7 +3674,12 @@ mod tests {
             width: 80,
             height: 24,
         };
-        let regions = wm.managed_layout.as_ref().unwrap().root().layout_rects(area);
+        let regions = wm
+            .managed_layout
+            .as_ref()
+            .unwrap()
+            .root()
+            .layout_rects(area);
         assert_eq!(regions.len(), 2, "layout must produce 2 regions");
 
         // Verify no overlapping regions.

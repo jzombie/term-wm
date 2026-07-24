@@ -1,9 +1,9 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::BspNode;
 use crate::rect::{LayoutRect, Orientation, rect_contains as engine_rect_contains};
 use crate::snap::InsertPosition;
 use crate::split;
-use crate::BspNode;
 
 static VOID_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
@@ -119,10 +119,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
         self.layout_with_gaps(area).0
     }
 
-    pub fn layout_with_gaps(
-        &self,
-        area: LayoutRect,
-    ) -> (Vec<(Id, LayoutRect)>, Vec<SplitGap>) {
+    pub fn layout_with_gaps(&self, area: LayoutRect) -> (Vec<(Id, LayoutRect)>, Vec<SplitGap>) {
         let mut regions = Vec::new();
         let mut gaps = Vec::new();
         self.layout_recursive(area, &mut regions, &mut gaps, &mut Vec::new());
@@ -198,12 +195,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
         }
     }
 
-    fn find_leaf_path(
-        &self,
-        target: &Id,
-        path: &mut Vec<usize>,
-        current: &mut Vec<usize>,
-    ) -> bool {
+    fn find_leaf_path(&self, target: &Id, path: &mut Vec<usize>, current: &mut Vec<usize>) -> bool {
         match self {
             LayoutNode::Leaf(id) if id == target => {
                 path.extend_from_slice(current);
@@ -656,12 +648,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                     Direction::Horizontal => area.width,
                     Direction::Vertical => area.height,
                 };
-                let gap = split::gap_size(
-                    orientation,
-                    total_dim,
-                    children.len(),
-                    *resizable,
-                );
+                let gap = split::gap_size(orientation, total_dim, children.len(), *resizable);
                 let (rects, split_gaps) = split::split_rects_with_gaps(
                     area,
                     orientation,
@@ -758,8 +745,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
             }
 
             if !top.is_empty() && !bottom.is_empty() {
-                let balance_delta =
-                    (top.len() as isize - bottom.len() as isize).unsigned_abs();
+                let balance_delta = (top.len() as isize - bottom.len() as isize).unsigned_abs();
                 let top_span = {
                     let min = top.iter().map(|(_, r)| r.y).min().unwrap_or(min_y);
                     let max = top
@@ -823,8 +809,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
             }
 
             if !left.is_empty() && !right.is_empty() {
-                let balance_delta =
-                    (left.len() as isize - right.len() as isize).unsigned_abs();
+                let balance_delta = (left.len() as isize - right.len() as isize).unsigned_abs();
                 let left_span = {
                     let min = left.iter().map(|(_, r)| r.x).min().unwrap_or(min_x);
                     let max = left
@@ -855,8 +840,9 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
             }
         }
 
-        if let Some(best) =
-            candidates.into_iter().min_by_key(|c| (c.straddles, c.balance_delta))
+        if let Some(best) = candidates
+            .into_iter()
+            .min_by_key(|c| (c.straddles, c.balance_delta))
         {
             return Self::Split {
                 direction: best.direction,
@@ -927,10 +913,7 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
         };
         Self::Split {
             direction,
-            children: vec![
-                Self::from_rects(left_slice),
-                Self::from_rects(right_slice),
-            ],
+            children: vec![Self::from_rects(left_slice), Self::from_rects(right_slice)],
             weights: vec![weight_a, weight_b],
             resizable: true,
         }
@@ -1007,15 +990,30 @@ mod tests {
 
     #[test]
     fn from_rects_single_leaf() {
-        let rect = LayoutRect { x: 0, y: 0, width: 40, height: 24 };
+        let rect = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 24,
+        };
         let result = LayoutNode::from_rects(&[(1, rect)]);
         assert!(matches!(result, LayoutNode::Leaf(1)));
     }
 
     #[test]
     fn from_rects_gapped_windows_equal_columns() {
-        let a = LayoutRect { x: 0, y: 0, width: 40, height: 24 };
-        let b = LayoutRect { x: 100, y: 0, width: 40, height: 24 };
+        let a = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 24,
+        };
+        let b = LayoutRect {
+            x: 100,
+            y: 0,
+            width: 40,
+            height: 24,
+        };
         let result = LayoutNode::from_rects(&[(1, a), (2, b)]);
         match result {
             LayoutNode::Split {
@@ -1025,7 +1023,11 @@ mod tests {
                 ..
             } => {
                 assert_eq!(children.len(), 2);
-                assert_eq!(weights, vec![40, 40], "gapped windows should get equal bounding spans");
+                assert_eq!(
+                    weights,
+                    vec![40, 40],
+                    "gapped windows should get equal bounding spans"
+                );
             }
             other => panic!("Expected Split, got {:?}", other),
         }
@@ -1033,8 +1035,18 @@ mod tests {
 
     #[test]
     fn from_rects_unequal_widths_preserves_proportion() {
-        let a = LayoutRect { x: 0, y: 0, width: 80, height: 24 };
-        let b = LayoutRect { x: 80, y: 0, width: 20, height: 24 };
+        let a = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let b = LayoutRect {
+            x: 80,
+            y: 0,
+            width: 20,
+            height: 24,
+        };
         let result = LayoutNode::from_rects(&[(1, a), (2, b)]);
         match result {
             LayoutNode::Split {
@@ -1044,7 +1056,11 @@ mod tests {
                 ..
             } => {
                 assert_eq!(children.len(), 2);
-                assert_eq!(weights, vec![80, 20], "bounding span weights match window widths");
+                assert_eq!(
+                    weights,
+                    vec![80, 20],
+                    "bounding span weights match window widths"
+                );
             }
             other => panic!("Expected Horizontal Split, got {:?}", other),
         }
@@ -1052,9 +1068,24 @@ mod tests {
 
     #[test]
     fn from_rects_3_windows_top_bottom() {
-        let a = LayoutRect { x: 0, y: 0, width: 100, height: 25 };
-        let b = LayoutRect { x: 0, y: 25, width: 50, height: 25 };
-        let c = LayoutRect { x: 50, y: 25, width: 50, height: 25 };
+        let a = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 25,
+        };
+        let b = LayoutRect {
+            x: 0,
+            y: 25,
+            width: 50,
+            height: 25,
+        };
+        let c = LayoutRect {
+            x: 50,
+            y: 25,
+            width: 50,
+            height: 25,
+        };
         let result = LayoutNode::from_rects(&[(1, a), (2, b), (3, c)]);
         match result {
             LayoutNode::Split {
@@ -1072,10 +1103,30 @@ mod tests {
 
     #[test]
     fn from_rects_1v3_stacked_equal_width() {
-        let a = LayoutRect { x: 0, y: 0, width: 40, height: 48 };
-        let b = LayoutRect { x: 40, y: 0, width: 40, height: 16 };
-        let c = LayoutRect { x: 40, y: 16, width: 40, height: 16 };
-        let d = LayoutRect { x: 40, y: 32, width: 40, height: 16 };
+        let a = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 48,
+        };
+        let b = LayoutRect {
+            x: 40,
+            y: 0,
+            width: 40,
+            height: 16,
+        };
+        let c = LayoutRect {
+            x: 40,
+            y: 16,
+            width: 40,
+            height: 16,
+        };
+        let d = LayoutRect {
+            x: 40,
+            y: 32,
+            width: 40,
+            height: 16,
+        };
         let result = LayoutNode::from_rects(&[(1, a), (2, b), (3, c), (4, d)]);
         match result {
             LayoutNode::Split {
@@ -1084,8 +1135,16 @@ mod tests {
                 weights,
                 ..
             } => {
-                assert_eq!(children.len(), 2, "should split into left=[A], right=[B,C,D]");
-                assert_eq!(weights, vec![40, 40], "1-vs-3 stacked with same width = equal X-span");
+                assert_eq!(
+                    children.len(),
+                    2,
+                    "should split into left=[A], right=[B,C,D]"
+                );
+                assert_eq!(
+                    weights,
+                    vec![40, 40],
+                    "1-vs-3 stacked with same width = equal X-span"
+                );
             }
             other => panic!("Expected Horizontal Split, got {:?}", other),
         }
@@ -1093,9 +1152,24 @@ mod tests {
 
     #[test]
     fn from_rects_overlapping_fallback() {
-        let a = LayoutRect { x: 0, y: 0, width: 50, height: 50 };
-        let b = LayoutRect { x: 10, y: 10, width: 50, height: 50 };
-        let c = LayoutRect { x: 20, y: 20, width: 50, height: 50 };
+        let a = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 50,
+            height: 50,
+        };
+        let b = LayoutRect {
+            x: 10,
+            y: 10,
+            width: 50,
+            height: 50,
+        };
+        let c = LayoutRect {
+            x: 20,
+            y: 20,
+            width: 50,
+            height: 50,
+        };
         let result = LayoutNode::from_rects(&[(1, a), (2, b), (3, c)]);
         assert!(matches!(result, LayoutNode::Split { .. }));
     }
@@ -1103,11 +1177,32 @@ mod tests {
     #[test]
     fn from_rects_with_layout_consistency() {
         let rects = [
-            (1, LayoutRect { x: 0, y: 0, width: 40, height: 24 }),
-            (2, LayoutRect { x: 60, y: 0, width: 40, height: 24 }),
+            (
+                1,
+                LayoutRect {
+                    x: 0,
+                    y: 0,
+                    width: 40,
+                    height: 24,
+                },
+            ),
+            (
+                2,
+                LayoutRect {
+                    x: 60,
+                    y: 0,
+                    width: 40,
+                    height: 24,
+                },
+            ),
         ];
         let node = LayoutNode::from_rects(&rects);
-        let area = LayoutRect { x: 0, y: 0, width: 100, height: 24 };
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 24,
+        };
         let (regions, _) = node.layout_with_gaps(area);
         assert_eq!(regions.len(), 2);
         let sum_w: u16 = regions.iter().map(|(_, r)| r.width).sum();

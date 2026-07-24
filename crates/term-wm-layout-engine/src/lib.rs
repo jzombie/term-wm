@@ -46,6 +46,4 @@ pub use split::{
 };
 
 mod tiling;
-pub use tiling::{
-    Direction, LayoutNode, SplitGap, split_area_for_path, split_at_path_mut,
-};
+pub use tiling::{Direction, LayoutNode, SplitGap, split_area_for_path, split_at_path_mut};

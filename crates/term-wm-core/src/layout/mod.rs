@@ -1,9 +1,9 @@
 pub mod floating;
 pub mod tiling;
 
+pub use term_wm_layout_engine::Direction;
 pub use tiling::TilingLayout;
 pub use tiling::{InsertPosition, LayoutNode, LayoutPlan, SplitHandle};
-pub use term_wm_layout_engine::Direction;
 
 use crate::Rect;
 use std::collections::BTreeMap;
@@ -107,10 +107,33 @@ mod tests {
 
     #[test]
     fn rect_spec_resolve_percent_and_absolute() {
-        let area = Rect { x: 10, y: 20, width: 200, height: 100 };
-        let abs = RectSpec::Absolute(Rect { x: 1, y: 2, width: 3, height: 4 });
-        assert_eq!(abs.resolve(area), Rect { x: 1, y: 2, width: 3, height: 4 });
-        let pct = RectSpec::Percent { x: 50, y: 50, width: 50, height: 50 };
+        let area = Rect {
+            x: 10,
+            y: 20,
+            width: 200,
+            height: 100,
+        };
+        let abs = RectSpec::Absolute(Rect {
+            x: 1,
+            y: 2,
+            width: 3,
+            height: 4,
+        });
+        assert_eq!(
+            abs.resolve(area),
+            Rect {
+                x: 1,
+                y: 2,
+                width: 3,
+                height: 4
+            }
+        );
+        let pct = RectSpec::Percent {
+            x: 50,
+            y: 50,
+            width: 50,
+            height: 50,
+        };
         let r = pct.resolve(area);
         assert_eq!(r.width, 100);
         assert_eq!(r.height, 50);
@@ -119,8 +142,18 @@ mod tests {
     #[test]
     fn region_map_set_get_hit_test() {
         let mut map = RegionMap::default();
-        let a = Rect { x: 0, y: 0, width: 5, height: 5 };
-        let b = Rect { x: 6, y: 0, width: 5, height: 5 };
+        let a = Rect {
+            x: 0,
+            y: 0,
+            width: 5,
+            height: 5,
+        };
+        let b = Rect {
+            x: 6,
+            y: 0,
+            width: 5,
+            height: 5,
+        };
         map.set(1u8, a);
         map.set(2u8, b);
         assert_eq!(map.get(1u8), Some(a));
@@ -131,9 +164,19 @@ mod tests {
 
     #[test]
     fn rect_contains_edge_cases() {
-        let r = Rect { x: 0, y: 0, width: 0, height: 5 };
+        let r = Rect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 5,
+        };
         assert!(!rect_contains(r, 0, 0));
-        let r2 = Rect { x: 1, y: 1, width: 3, height: 3 };
+        let r2 = Rect {
+            x: 1,
+            y: 1,
+            width: 3,
+            height: 3,
+        };
         assert!(rect_contains(r2, 1, 1));
         assert!(!rect_contains(r2, 4, 1));
     }

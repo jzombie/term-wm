@@ -7,7 +7,6 @@ pub use term_wm_layout_engine::SplitGap;
 pub use term_wm_layout_engine::split_area_for_path;
 pub use term_wm_layout_engine::split_at_path_mut;
 
-
 use super::{FloatingPane, RegionMap};
 
 use crate::Rect;
@@ -521,10 +520,18 @@ mod tests {
 
     #[test]
     fn split_rects_nary_even() {
-        let area = Rect { x: 0, y: 0, width: 11, height: 1 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 11,
+            height: 1,
+        };
         let weights = [1u16, 1u16];
         let rects = term_wm_layout_engine::split_rects_weighted(
-            area, term_wm_layout_engine::Orientation::Horizontal, &weights, 2,
+            area,
+            term_wm_layout_engine::Orientation::Horizontal,
+            &weights,
+            2,
         );
         assert_eq!(rects.len(), 2);
         assert_eq!(rects[0].width, 5);
@@ -542,7 +549,12 @@ mod tests {
         } else {
             panic!("expected split after insert");
         }
-        let area = Rect { x: 0, y: 0, width: 10, height: 4 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 4,
+        };
         let sub = split_area_for_path(&node, area, &[1]).expect("should get area for path");
         assert!(sub.x > 0);
         assert!(node.remove_leaf(2));
@@ -551,7 +563,12 @@ mod tests {
 
     #[test]
     fn hit_test_handle_finds_gap() {
-        let area = Rect { x: 0, y: 0, width: 80, height: 24 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         let node = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(1), LayoutNode::Leaf(2)],
@@ -574,7 +591,12 @@ mod tests {
 
     #[test]
     fn tiling_handle_event_direct() {
-        let area = Rect { x: 0, y: 0, width: 80, height: 24 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         let root = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(1), LayoutNode::Leaf(2)],
@@ -676,7 +698,13 @@ mod tests {
     #[test]
     fn build_flat_multiple_returns_split() {
         let node = LayoutNode::build_flat(Direction::Vertical, vec![1, 2, 3]);
-        if let LayoutNode::Split { children, weights, direction, .. } = &node {
+        if let LayoutNode::Split {
+            children,
+            weights,
+            direction,
+            ..
+        } = &node
+        {
             assert_eq!(children.len(), 3);
             assert_eq!(*direction, Direction::Vertical);
             assert!(weights.iter().all(|w| *w == 1u16));
@@ -693,7 +721,12 @@ mod tests {
             weights: vec![1u16, 1u16],
             resizable: true,
         };
-        let area = Rect { x: 0, y: 0, width: 80, height: 24 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         let voids = node.void_regions(area);
         assert_eq!(voids.len(), 1);
         assert_eq!(voids[0].0, 99);
@@ -703,7 +736,11 @@ mod tests {
     fn swap_leaves_exchanges_positions() {
         let mut node = LayoutNode::Split {
             direction: Direction::Horizontal,
-            children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2), LayoutNode::leaf(3)],
+            children: vec![
+                LayoutNode::leaf(1),
+                LayoutNode::leaf(2),
+                LayoutNode::leaf(3),
+            ],
             weights: vec![1u16, 1u16, 1u16],
             resizable: true,
         };
@@ -930,7 +967,12 @@ mod tests {
             resizable: true,
         };
         let layout = TilingLayout::new(root);
-        let area = Rect { x: 0, y: 0, width: 80, height: 24 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         let regions = layout.regions(area);
         assert_eq!(regions.len(), 2);
     }
@@ -972,7 +1014,12 @@ mod tests {
             resizable: true,
         };
         let layout = TilingLayout::new(root);
-        let area = Rect { x: 0, y: 0, width: 80, height: 24 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         let handles = layout.handles(area);
         assert_eq!(handles.len(), 1);
     }
@@ -986,7 +1033,12 @@ mod tests {
             resizable: true,
         };
         let layout = TilingLayout::new(root);
-        let area = Rect { x: 0, y: 0, width: 80, height: 24 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         let rect = layout.project_insert(Some(1), 3, InsertPosition::Right, area);
         assert!(rect.is_some());
     }
@@ -1000,7 +1052,12 @@ mod tests {
             resizable: true,
         };
         let layout = TilingLayout::new(root);
-        let area = Rect { x: 0, y: 0, width: 80, height: 24 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         let rect = layout.project_insert_void(2, 42, area);
         assert!(rect.is_some());
     }
@@ -1013,9 +1070,19 @@ mod tests {
         let mut plan = LayoutPlan::new(root);
         plan.floating.push(FloatingPane {
             key: 2,
-            rect: RectSpec::Absolute(Rect { x: 10, y: 10, width: 20, height: 10 }),
+            rect: RectSpec::Absolute(Rect {
+                x: 10,
+                y: 10,
+                width: 20,
+                height: 10,
+            }),
         });
-        let area = Rect { x: 0, y: 0, width: 80, height: 24 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         let regions = plan.regions(area);
         assert!(regions.get(1).is_some());
         assert!(regions.get(2).is_some());
@@ -1037,7 +1104,12 @@ mod tests {
     fn apply_drag_invalid_path_returns_false() {
         let root = LayoutNode::leaf(1);
         let mut node = root.clone();
-        let area = Rect { x: 0, y: 0, width: 80, height: 24 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         assert!(!node.apply_drag(area, &[0], 0, Direction::Horizontal, 5, 4));
     }
 
@@ -1045,7 +1117,12 @@ mod tests {
     fn handle_event_non_mouse_returns_false() {
         let root = LayoutNode::leaf(1);
         let mut layout = TilingLayout::new(root);
-        let area = Rect { x: 0, y: 0, width: 80, height: 24 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         let key_event = crate::events::Event::Key(crate::events::KeyEvent {
             code: crate::events::KeyCode::Char('a'),
             modifiers: crate::events::KeyModifiers::NONE,
