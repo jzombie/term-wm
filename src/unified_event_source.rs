@@ -80,6 +80,10 @@ pub struct UnifiedEventSource {
     /// [`poll`]: EventSource::poll
     /// [`set_max_sleep_duration`]: EventSource::set_max_sleep_duration
     max_sleep_duration: Option<Duration>,
+    /// Global dirty bit — set by `request_redraw()`, consumed by
+    /// `take_redraw_request()` in the runner's `None` branch to arm
+    /// the FramePacer for non-input-driven state changes.
+    pending_redraw: bool,
 }
 
 impl UnifiedEventSource {
@@ -129,6 +133,7 @@ impl UnifiedEventSource {
             shutdown,
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -520,6 +525,14 @@ impl EventSource for UnifiedEventSource {
     fn take_dirty_windows(&mut self) -> HashSet<WindowKey> {
         std::mem::take(&mut self.dirty_windows)
     }
+
+    fn request_redraw(&mut self) {
+        self.pending_redraw = true;
+    }
+
+    fn take_redraw_request(&mut self) -> bool {
+        std::mem::replace(&mut self.pending_redraw, false)
+    }
 }
 
 impl Drop for UnifiedEventSource {
@@ -545,6 +558,7 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -635,6 +649,7 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -712,6 +727,7 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -754,6 +770,7 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -811,6 +828,7 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: set,
             exited_windows: Vec::new(),
+            pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -837,6 +855,7 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -861,6 +880,7 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -895,6 +915,7 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: vec![key],
+            pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -935,6 +956,7 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: set,
             exited_windows: Vec::new(),
+            pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -967,6 +989,7 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,

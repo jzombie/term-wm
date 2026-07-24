@@ -267,6 +267,11 @@ where
                 }
             }
 
+            // System tasks may have mutated state (notifications, tab outline,
+            // drag snap, temporal dwell) — request a redraw so the None branch
+            // arms the FramePacer even without a crossterm input event.
+            driver.request_redraw();
+
             if debug_event_flags::take_panic_pending() {
                 app.on_panic();
             }
@@ -279,16 +284,25 @@ where
             for key in driver.take_exited_windows() {
                 app.wm().close_window(key);
             }
+            // PTY child exit removed a window — redraw the layout.
+            driver.request_redraw();
 
             // Update monocle mode on resize
             if let Some(Event::Resize(width, _height)) = &event {
                 app.wm().update_monocle_mode(*width);
             }
 
-            // Pre-compute FramePacer deadline so flush_state_changes
-            // does not borrow frame_pacer (also mutated outside the closure).
-            let fp_deadline = frame_pacer.time_until_deadline();
-            let mut flush_state_changes = |app: &mut A, flow: ControlFlow, consume_dirty: bool| {
+            // Precompute driver work flag so the None branch can arm the
+            // pacer without borrowing driver (the closure also needs driver).
+            let driver_has_work =
+                driver.current_profile() != crate::power_profile::PowerProfile::PowerSaver;
+            let mut flush_state_changes =
+                |app: &mut A,
+                 driver: &mut D,
+                 flow: ControlFlow,
+                 consume_dirty: bool,
+                 fp_deadline: Option<std::time::Duration>|
+                 -> io::Result<ControlFlow> {
                 if let Some(enabled) = app.wm().take_mouse_capture_change() {
                     let _ = driver.set_mouse_capture(enabled);
                 }
@@ -342,13 +356,13 @@ where
                         }
                     }
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue, false);
+                    return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
 
                 if app.wm().help_overlay_visible() {
                     let _ = app.wm().handle_help_event(&evt);
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue, false);
+                    return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
 
                 // Command palette toggle (runs BEFORE the barrier so toggle works)
@@ -367,7 +381,7 @@ where
                         app.open_command_palette();
                     }
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue, false);
+                    return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
 
                 // In tab outline mode, any non-focus key closes the palette immediately.
@@ -379,7 +393,7 @@ where
                 {
                     app.wm().close_command_palette();
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue, false);
+                    return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
 
                 // Command palette absolute event barrier (same pattern as help overlay)
@@ -450,10 +464,10 @@ where
                     // Focus routing while menu is open (Tab/Shift+Tab)
                     if matches!(&evt, Event::Key(_)) && app.wm().handle_focus_event(&evt) {
                         update_selection_snapshot(app);
-                        return flush_state_changes(app, ControlFlow::Continue, false);
+                        return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                     }
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue, false);
+                    return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
 
                 // If keyboard capture is disabled for the focused window, key events
@@ -468,21 +482,21 @@ where
                         // Direct mode — forward to terminal immediately.
                         let _ = handle_focused_app_event(&evt, app);
                         update_selection_snapshot(app);
-                        return flush_state_changes(app, ControlFlow::Continue, false);
+                        return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                     }
                 }
 
                 // Layer 2c: App-level event handler (before WM actions, after overlays)
                 if app.handle_app_event(&evt) {
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue, false);
+                    return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
 
                 // Mouse capture check
 
                 if matches!(evt, Event::Mouse(_)) && !app.wm().mouse_capture_enabled() {
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue, false);
+                    return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
                 // Direct focus switching for mouse clicks.  Uses the live window
                 // set from managed_draw_order (repopulated every draw) instead of
@@ -501,11 +515,11 @@ where
                 {
                     app.open_exit_confirm();
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue, false);
+                    return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
                 if !wm_mode && matches!(evt, Event::Key(_)) && app.wm().handle_focus_event(&evt) {
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Continue, false);
+                    return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
 
                 // Layer 3: Pass-through to focused component
@@ -523,9 +537,15 @@ where
             } else {
                 if app.quit_requested() || app.wm().quit_requested() {
                     update_selection_snapshot(app);
-                    return flush_state_changes(app, ControlFlow::Quit, false);
+                    return flush_state_changes(app, driver, ControlFlow::Quit, false, None);
                 }
                 update_selection_snapshot(app);
+
+                // Arm the pacer when any component requested a redraw or the
+                // driver has background work (PTY data) that bypassed Some(evt).
+                if driver.take_redraw_request() || driver_has_work {
+                    frame_pacer.notify_pending();
+                }
 
                 frame_pacer.set_interval(if app.wm().is_dragging_window() {
                     Duration::from_millis(33)  // 30 FPS during drag
@@ -560,7 +580,7 @@ where
                     }
                 }
             }
-            flush_state_changes(app, ControlFlow::Continue, did_render && !did_panic)
+            flush_state_changes(app, driver, ControlFlow::Continue, did_render && !did_panic, frame_pacer.time_until_deadline())
         };
 
         let handler_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(handler));
