@@ -64,6 +64,15 @@ pub trait EventSource {
     fn take_dirty_windows(&mut self) -> std::collections::HashSet<crate::window::WindowKey> {
         std::collections::HashSet::new()
     }
+
+    /// Signal that the application needs a redraw on the next frame.
+    /// Default no-op — override in concrete drivers that support it.
+    fn request_redraw(&mut self) {}
+
+    /// Consume the pending redraw flag. Override in concrete drivers.
+    fn take_redraw_request(&mut self) -> bool {
+        false
+    }
 }
 
 impl<T: EventSource + ?Sized> EventSource for &mut T {
@@ -109,6 +118,14 @@ impl<T: EventSource + ?Sized> EventSource for &mut T {
 
     fn take_dirty_windows(&mut self) -> std::collections::HashSet<crate::window::WindowKey> {
         (**self).take_dirty_windows()
+    }
+
+    fn request_redraw(&mut self) {
+        (**self).request_redraw()
+    }
+
+    fn take_redraw_request(&mut self) -> bool {
+        (**self).take_redraw_request()
     }
 }
 

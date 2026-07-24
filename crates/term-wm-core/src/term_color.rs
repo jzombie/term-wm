@@ -1,3 +1,4 @@
+// TODO: This and theme can likely migrate to the `term-wm-console` crate
 use crate::theme::Color;
 
 /// Linear RGB interpolation between two colors.

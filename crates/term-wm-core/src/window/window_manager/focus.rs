@@ -1,10 +1,11 @@
+use crate::components::{Component, Overlay, WmComponent};
 use crate::events::{Event, MouseEventKind};
 
 use super::WindowManager;
 use crate::actions::{EventResult, TermWmAction};
 use crate::window::WindowKey;
 
-impl WindowManager {
+impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> WindowManager<C, L, O> {
     pub fn set_focus_order(&mut self, order: Vec<WindowKey>) {
         self.focus.set_order(order);
     }
@@ -53,6 +54,31 @@ impl WindowManager {
         self.focus.set_current(key);
         self.bring_to_front_key(key);
         self.mark_layout_dirty();
+
+        // If the command palette is open, rebuild its items with the new
+        // focus state so "Switch to" and window management buttons reflect
+        // the currently focused window.
+        if !self.command_menu_visible() {
+            return;
+        }
+        let Some(palette_key) = self.command_palette_key else {
+            return;
+        };
+
+        // Build fresh items BEFORE accessing the overlay (borrow checker).
+        let items = self.wm_menu_items();
+        let supported = &self.supported_menu_actions;
+        let filtered: Vec<_> = items
+            .into_iter()
+            .filter(|item| {
+                supported.contains(&item.action)
+                    || matches!(item.action, crate::actions::TermWmAction::FocusWindow(_))
+            })
+            .collect();
+
+        if let Some(overlay) = self.overlays.get_mut(palette_key) {
+            overlay.set_menu_items(filtered);
+        }
     }
 
     #[expect(dead_code)]
@@ -74,6 +100,7 @@ impl WindowManager {
             }
             if let Some(w) = self.windows.get_mut(key) {
                 w.is_maximized = false;
+                w.borders_enabled = true;
             }
         }
     }
@@ -108,6 +135,7 @@ impl WindowManager {
         self.focus.advance(forward);
         let focused = *self.focus.current();
         self.focus_window_key(focused);
+        self.set_tab_outline_mode(crate::constants::TAB_OUTLINE_DURATION);
     }
 
     pub(super) fn select_fallback_focus(&mut self) {

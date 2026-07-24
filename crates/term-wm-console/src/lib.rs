@@ -10,21 +10,45 @@ pub use term_wm_render::RenderBackend;
 /// Concrete Ratatui backend implementation.
 /// Owns the Buffer by value (satisfying 'static for Any downcasting).
 /// Swap-based rendering preserves buffer capacity without allocation.
+/// Owns persistent mask_buffer for two-pass SoA rendering.
 pub struct RatatuiBackend {
     pub buffer: Buffer,
     pub area: RatatuiRect,
+    pub mask_buffer: Vec<u8>,
 }
 
 impl RenderBackend for RatatuiBackend {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
+
+    fn acquire_mask(&mut self) -> &mut [u8] {
+        let needed = self.buffer.content.len();
+        if self.mask_buffer.len() < needed {
+            self.mask_buffer.resize(needed, 0);
+        }
+        &mut self.mask_buffer[..needed]
+    }
 }
 
 impl RatatuiBackend {
-    /// Create a backend owning the given buffer.
-    pub fn new(buffer: Buffer, area: RatatuiRect) -> Self {
-        Self { buffer, area }
+    /// Create a backend owning the given buffer and mask.
+    pub fn new(buffer: Buffer, area: RatatuiRect, mask_buffer: Vec<u8>) -> Self {
+        Self {
+            buffer,
+            area,
+            mask_buffer,
+        }
+    }
+
+    /// Create a backend without a persistent mask (test/component convenience).
+    /// Uses an empty Vec that will be resized on first acquire_mask() call.
+    pub fn new_simple(buffer: Buffer, area: RatatuiRect) -> Self {
+        Self {
+            buffer,
+            area,
+            mask_buffer: Vec::new(),
+        }
     }
 
     /// Get mutable reference to the underlying Ratatui buffer.
