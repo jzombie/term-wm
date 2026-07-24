@@ -44,12 +44,16 @@ impl RemotePane {
         }
     }
 
-    pub fn drain_pushes(&mut self) {
+    /// Drain pushes from the server, updating the parser.
+    /// Returns `true` if at least one chunk was processed (screen may have changed).
+    pub fn drain_pushes(&mut self) -> bool {
+        let mut updated = false;
         loop {
             match self.push_rx.try_recv() {
                 Ok(data) => {
                     let mut parser = self.parser.lock().unwrap();
                     parser.process(&data);
+                    updated = true;
                 }
                 Err(TryRecvError::Disconnected) => {
                     self.exited.set(true);
@@ -58,6 +62,7 @@ impl RemotePane {
                 Err(TryRecvError::Empty) => break,
             }
         }
+        updated
     }
 
     fn rpc_to_pty<E: std::fmt::Display>(e: E) -> Box<dyn std::error::Error + Send + Sync> {

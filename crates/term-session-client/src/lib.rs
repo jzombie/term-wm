@@ -263,20 +263,14 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     }
 
     let mut prev_content: Option<Vec<u8>> = None;
+    let mut prev_parser: Option<vt100::Parser> = None;
 
     loop {
         let frame_start = std::time::Instant::now();
 
-        // Drain pushes from the server (this updates the parser)
-        pane.drain_pushes();
-
-        // Detect screen changes
-        let current_content = {
-            let parser = pane.shared_parser();
-            let parser = parser.lock().unwrap();
-            parser.screen().contents_formatted()
-        };
-        let has_new_data = prev_content.as_deref() != Some(&current_content);
+        // Drain pushes from the server (this updates the parser).
+        // Returns true if any new data was processed (screen may have changed).
+        let has_new_data = pane.drain_pushes();
 
         // Drain any clipboard texts intercepted by the reader task
         while let Ok(text) = clip_rx.try_recv() {
@@ -539,7 +533,8 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                     true
                 }
                 Event::Paste(text) => {
-                    let mut wrapped = b"\x1b[200~".to_vec();
+                    let mut wrapped = Vec::with_capacity(text.len() + 12);
+                    wrapped.extend_from_slice(b"\x1b[200~");
                     wrapped.extend_from_slice(text.as_bytes());
                     wrapped.extend_from_slice(b"\x1b[201~");
                     let _ = pane.write_bytes(&wrapped);
@@ -560,9 +555,15 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
 
             let diff = match &prev_content {
                 Some(prev) => {
-                    let mut prev_parser = vt100::Parser::new(rows, cols, 0);
-                    prev_parser.process(prev);
-                    screen.contents_diff(prev_parser.screen())
+                    let p = prev_parser.get_or_insert_with(|| {
+                        vt100::Parser::new(rows, cols, 0)
+                    });
+                    // Sync dimensions in case of terminal resize
+                    p.screen_mut().set_size(rows, cols);
+                    // RIS: reset parser attributes and screen in-place
+                    p.process(b"\x1bc");
+                    p.process(prev);
+                    screen.contents_diff(p.screen())
                 }
                 None => screen.contents_formatted(),
             };
