@@ -163,15 +163,7 @@ mod tests {
         let (push_tx, push_rx) = crossbeam_channel::unbounded();
         let input_writer: InputWriter = Box::new(|_| Ok(()));
 
-        let mut pane = RemotePane::new(
-            1,
-            None,
-            rt.handle().clone(),
-            80,
-            24,
-            push_rx,
-            input_writer,
-        );
+        let mut pane = RemotePane::new(1, None, rt.handle().clone(), 80, 24, push_rx, input_writer);
 
         // 1. Idle call with no pending messages must return false
         assert!(!pane.drain_pushes());

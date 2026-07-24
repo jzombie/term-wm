@@ -154,7 +154,9 @@ fn convert_crossterm_event(evt: crossterm::event::Event) -> Option<Event> {
             },
             modifiers: term_wm_core::events::KeyModifiers {
                 shift: key.modifiers.contains(crossterm_event::KeyModifiers::SHIFT),
-                control: key.modifiers.contains(crossterm_event::KeyModifiers::CONTROL),
+                control: key
+                    .modifiers
+                    .contains(crossterm_event::KeyModifiers::CONTROL),
                 alt: key.modifiers.contains(crossterm_event::KeyModifiers::ALT),
             },
             kind: match key.kind {
@@ -163,43 +165,65 @@ fn convert_crossterm_event(evt: crossterm::event::Event) -> Option<Event> {
                 crossterm_event::KeyEventKind::Release => KeyKind::Release,
             },
         })),
-        crossterm_event::Event::Mouse(mouse) => Some(Event::Mouse(term_wm_core::events::MouseEvent {
-            kind: match mouse.kind {
-                crossterm_event::MouseEventKind::Down(btn) => {
-                    MouseEventKind::Press(match btn {
-                        crossterm_event::MouseButton::Left => term_wm_core::events::MouseButton::Left,
-                        crossterm_event::MouseButton::Right => term_wm_core::events::MouseButton::Right,
-                        crossterm_event::MouseButton::Middle => term_wm_core::events::MouseButton::Middle,
-                    })
-                }
-                crossterm_event::MouseEventKind::Up(btn) => {
-                    MouseEventKind::Release(match btn {
-                        crossterm_event::MouseButton::Left => term_wm_core::events::MouseButton::Left,
-                        crossterm_event::MouseButton::Right => term_wm_core::events::MouseButton::Right,
-                        crossterm_event::MouseButton::Middle => term_wm_core::events::MouseButton::Middle,
-                    })
-                }
-                crossterm_event::MouseEventKind::Drag(btn) => {
-                    MouseEventKind::Drag(match btn {
-                        crossterm_event::MouseButton::Left => term_wm_core::events::MouseButton::Left,
-                        crossterm_event::MouseButton::Right => term_wm_core::events::MouseButton::Right,
-                        crossterm_event::MouseButton::Middle => term_wm_core::events::MouseButton::Middle,
-                    })
-                }
-                crossterm_event::MouseEventKind::Moved => MouseEventKind::Moved,
-                crossterm_event::MouseEventKind::ScrollUp => MouseEventKind::ScrollUp,
-                crossterm_event::MouseEventKind::ScrollDown => MouseEventKind::ScrollDown,
-                crossterm_event::MouseEventKind::ScrollLeft => MouseEventKind::ScrollLeft,
-                crossterm_event::MouseEventKind::ScrollRight => MouseEventKind::ScrollRight,
-            },
-            modifiers: term_wm_core::events::KeyModifiers {
-                shift: mouse.modifiers.contains(crossterm_event::KeyModifiers::SHIFT),
-                control: mouse.modifiers.contains(crossterm_event::KeyModifiers::CONTROL),
-                alt: mouse.modifiers.contains(crossterm_event::KeyModifiers::ALT),
-            },
-            column: mouse.column,
-            row: mouse.row,
-        })),
+        crossterm_event::Event::Mouse(mouse) => {
+            Some(Event::Mouse(term_wm_core::events::MouseEvent {
+                kind: match mouse.kind {
+                    crossterm_event::MouseEventKind::Down(btn) => {
+                        MouseEventKind::Press(match btn {
+                            crossterm_event::MouseButton::Left => {
+                                term_wm_core::events::MouseButton::Left
+                            }
+                            crossterm_event::MouseButton::Right => {
+                                term_wm_core::events::MouseButton::Right
+                            }
+                            crossterm_event::MouseButton::Middle => {
+                                term_wm_core::events::MouseButton::Middle
+                            }
+                        })
+                    }
+                    crossterm_event::MouseEventKind::Up(btn) => {
+                        MouseEventKind::Release(match btn {
+                            crossterm_event::MouseButton::Left => {
+                                term_wm_core::events::MouseButton::Left
+                            }
+                            crossterm_event::MouseButton::Right => {
+                                term_wm_core::events::MouseButton::Right
+                            }
+                            crossterm_event::MouseButton::Middle => {
+                                term_wm_core::events::MouseButton::Middle
+                            }
+                        })
+                    }
+                    crossterm_event::MouseEventKind::Drag(btn) => MouseEventKind::Drag(match btn {
+                        crossterm_event::MouseButton::Left => {
+                            term_wm_core::events::MouseButton::Left
+                        }
+                        crossterm_event::MouseButton::Right => {
+                            term_wm_core::events::MouseButton::Right
+                        }
+                        crossterm_event::MouseButton::Middle => {
+                            term_wm_core::events::MouseButton::Middle
+                        }
+                    }),
+                    crossterm_event::MouseEventKind::Moved => MouseEventKind::Moved,
+                    crossterm_event::MouseEventKind::ScrollUp => MouseEventKind::ScrollUp,
+                    crossterm_event::MouseEventKind::ScrollDown => MouseEventKind::ScrollDown,
+                    crossterm_event::MouseEventKind::ScrollLeft => MouseEventKind::ScrollLeft,
+                    crossterm_event::MouseEventKind::ScrollRight => MouseEventKind::ScrollRight,
+                },
+                modifiers: term_wm_core::events::KeyModifiers {
+                    shift: mouse
+                        .modifiers
+                        .contains(crossterm_event::KeyModifiers::SHIFT),
+                    control: mouse
+                        .modifiers
+                        .contains(crossterm_event::KeyModifiers::CONTROL),
+                    alt: mouse.modifiers.contains(crossterm_event::KeyModifiers::ALT),
+                },
+                column: mouse.column,
+                row: mouse.row,
+            }))
+        }
         crossterm_event::Event::Resize(w, h) => Some(Event::Resize(w, h)),
         crossterm_event::Event::FocusGained => Some(Event::FocusGained),
         crossterm_event::Event::FocusLost => Some(Event::FocusLost),

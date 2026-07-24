@@ -5,7 +5,7 @@ use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;
 use muxio_rpc_service_endpoint::{RpcServiceEndpointInterface, StreamResponder};
 use muxio_tokio_rpc_ipc_server::{RpcIpcServer, RpcIpcServerEvent};
 use portable_pty::PtySize;
-use tokio::sync::{Mutex, mpsc, oneshot, Notify};
+use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 
 use term_session_muxio_service_definitions::{
     CloseSession, ListSessions, ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
