@@ -1,7 +1,7 @@
-use criterion::{criterion_group, criterion_main, Criterion};
-use std::hint::black_box;
+use criterion::{Criterion, criterion_group, criterion_main};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use std::hint::black_box;
 
 // The blit_buffer function is pub in draw_plan_renderer.
 // We import from the crate root.

@@ -458,7 +458,13 @@ pub fn render_app<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmA
                 tmp_mask.resize(buf_len, 0);
             }
             for (rect, z) in overlay_shadow_data(wm, area, num_windows, total) {
-                render_drop_shadow(&mut rb.buffer, &mut tmp_mask[..buf_len], rect, 1.0 - z, &theme);
+                render_drop_shadow(
+                    &mut rb.buffer,
+                    &mut tmp_mask[..buf_len],
+                    rect,
+                    1.0 - z,
+                    &theme,
+                );
             }
             rb.mask_buffer = tmp_mask;
         }

@@ -644,30 +644,30 @@ impl DrawPlanRenderer {
     ///   Pass 1: Sequential AoS string check → set mask bytes
     ///   Pass 2: Row-sliced mask apply → bitwise buffer mutation
     fn apply_dim_modifier(buffer: &mut Buffer, mask: &mut [u8]) {
-    let active_mask = &mut mask[..buffer.content.len()];
-    active_mask.fill(0);
+        let active_mask = &mut mask[..buffer.content.len()];
+        active_mask.fill(0);
 
-    // Pass 1: Sequential AoS — check symbol, set mask
-    for (i, cell) in buffer.content.iter().enumerate() {
-        if !cell.symbol().starts_with(' ') {
-            active_mask[i] = 1;
+        // Pass 1: Sequential AoS — check symbol, set mask
+        for (i, cell) in buffer.content.iter().enumerate() {
+            if !cell.symbol().starts_with(' ') {
+                active_mask[i] = 1;
+            }
         }
-    }
 
-    // Pass 2: Row-sliced mask apply — SIMD-friendly bitwise mutation
-    let buf_w = buffer.area.width as usize;
-    let dim_bit = ratatui::style::Modifier::DIM;
-    for y in 0..buffer.area.height as usize {
-        let row_start = y * buf_w;
-        let row_slice = &mut buffer.content[row_start..row_start + buf_w];
-        let mask_slice = &active_mask[row_start..row_start + buf_w];
-        for (cell, &val) in row_slice.iter_mut().zip(mask_slice.iter()) {
-            if val == 1 {
-                cell.modifier.insert(dim_bit);
+        // Pass 2: Row-sliced mask apply — SIMD-friendly bitwise mutation
+        let buf_w = buffer.area.width as usize;
+        let dim_bit = ratatui::style::Modifier::DIM;
+        for y in 0..buffer.area.height as usize {
+            let row_start = y * buf_w;
+            let row_slice = &mut buffer.content[row_start..row_start + buf_w];
+            let mask_slice = &active_mask[row_start..row_start + buf_w];
+            for (cell, &val) in row_slice.iter_mut().zip(mask_slice.iter()) {
+                if val == 1 {
+                    cell.modifier.insert(dim_bit);
+                }
             }
         }
     }
-}
 
     /// Take the persistent scratch buffer for offscreen compositing.
     /// Leaves a zero-sized Buffer in its place so the caller can resize
@@ -866,7 +866,13 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
 const DIM_BIT: u8 = 0b01;
 const SHADOW_BIT: u8 = 0b10;
 
-pub fn render_drop_shadow(buf: &mut Buffer, mask: &mut [u8], dest: LayoutRect, z_depth: f32, theme: &Theme) {
+pub fn render_drop_shadow(
+    buf: &mut Buffer,
+    mask: &mut [u8],
+    dest: LayoutRect,
+    z_depth: f32,
+    theme: &Theme,
+) {
     let active_mask = &mut mask[..buf.content.len()];
     active_mask.fill(0);
 
@@ -875,7 +881,12 @@ pub fn render_drop_shadow(buf: &mut Buffer, mask: &mut [u8], dest: LayoutRect, z
     let sy = dest.y.saturating_add(SHADOW_OFFSET_Y);
     let ex = sx.saturating_add(i32::from(dest.width));
     let ey = sy.saturating_add(i32::from(dest.height));
-    let dest_rect = Rect::new(sx.max(0) as u16, sy.max(0) as u16, (ex - sx) as u16, (ey - sy) as u16);
+    let dest_rect = Rect::new(
+        sx.max(0) as u16,
+        sy.max(0) as u16,
+        (ex - sx) as u16,
+        (ey - sy) as u16,
+    );
     let clip = dest_rect.intersection(buf.area);
     if clip.width == 0 || clip.height == 0 {
         return;
@@ -919,8 +930,12 @@ pub fn render_drop_shadow(buf: &mut Buffer, mask: &mut [u8], dest: LayoutRect, z
         let mask_slice = &active_mask[start_idx..end_idx];
 
         for (cell, &val) in row_slice.iter_mut().zip(mask_slice.iter()) {
-            if val & DIM_BIT != 0 { cell.modifier.insert(ratatui::style::Modifier::DIM); }
-            if val & SHADOW_BIT != 0 { cell.set_bg(shadow_color); }
+            if val & DIM_BIT != 0 {
+                cell.modifier.insert(ratatui::style::Modifier::DIM);
+            }
+            if val & SHADOW_BIT != 0 {
+                cell.set_bg(shadow_color);
+            }
         }
     }
 }
@@ -1009,7 +1024,13 @@ where
         if tmp_mask.len() < buf_len {
             tmp_mask.resize(buf_len, 0);
         }
-        render_drop_shadow(main_buf, &mut tmp_mask[..buf_len], surface.dest, 1.0 - surface.z_depth, &theme);
+        render_drop_shadow(
+            main_buf,
+            &mut tmp_mask[..buf_len],
+            surface.dest,
+            1.0 - surface.z_depth,
+            &theme,
+        );
         ratatui_backend.mask_buffer = tmp_mask;
     }
     // Compute desired destination rect and clip to main buffer
@@ -1304,16 +1325,14 @@ pub fn render_handles_masked(
                 let (above_bar, below_bar) = {
                     let xi = x as usize;
                     let yi = y as usize;
-                    let above = yi > 0
-                        && {
-                            let s = buffer.content[(yi - 1) * buf_w + xi].symbol();
-                            s == "│" || s == "┼" || s == "├" || s == "┤" || s == "┴" || s == "┬"
-                        };
-                    let below = yi + 1 < h
-                        && {
-                            let s = buffer.content[(yi + 1) * buf_w + xi].symbol();
-                            s == "│" || s == "┼" || s == "├" || s == "┤" || s == "┴" || s == "┬"
-                        };
+                    let above = yi > 0 && {
+                        let s = buffer.content[(yi - 1) * buf_w + xi].symbol();
+                        s == "│" || s == "┼" || s == "├" || s == "┤" || s == "┴" || s == "┬"
+                    };
+                    let below = yi + 1 < h && {
+                        let s = buffer.content[(yi + 1) * buf_w + xi].symbol();
+                        s == "│" || s == "┼" || s == "├" || s == "┤" || s == "┴" || s == "┬"
+                    };
                     (above, below)
                 };
                 let ch = match (above_bar, below_bar) {

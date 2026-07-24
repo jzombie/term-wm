@@ -34,13 +34,21 @@ impl RenderBackend for RatatuiBackend {
 impl RatatuiBackend {
     /// Create a backend owning the given buffer and mask.
     pub fn new(buffer: Buffer, area: RatatuiRect, mask_buffer: Vec<u8>) -> Self {
-        Self { buffer, area, mask_buffer }
+        Self {
+            buffer,
+            area,
+            mask_buffer,
+        }
     }
 
     /// Create a backend without a persistent mask (test/component convenience).
     /// Uses an empty Vec that will be resized on first acquire_mask() call.
     pub fn new_simple(buffer: Buffer, area: RatatuiRect) -> Self {
-        Self { buffer, area, mask_buffer: Vec::new() }
+        Self {
+            buffer,
+            area,
+            mask_buffer: Vec::new(),
+        }
     }
 
     /// Get mutable reference to the underlying Ratatui buffer.

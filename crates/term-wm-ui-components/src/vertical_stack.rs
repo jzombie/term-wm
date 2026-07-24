@@ -304,8 +304,10 @@ mod tests {
         let mut stack = VerticalStackComponent::<FixedHeight>::new();
         stack.add(FixedHeight::new(3));
         let buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 40, 20));
-        let mut backend =
-            term_wm_console::RatatuiBackend::new_simple(buffer, ratatui::layout::Rect::new(0, 0, 40, 20));
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
+            buffer,
+            ratatui::layout::Rect::new(0, 0, 40, 20),
+        );
         let ctx = ComponentContext::new(true);
         let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
         // zero width
@@ -340,8 +342,10 @@ mod tests {
         stack.add(FixedHeight::new(3));
         stack.add(FixedHeight::new(5));
         let buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 40, 20));
-        let mut backend =
-            term_wm_console::RatatuiBackend::new_simple(buffer, ratatui::layout::Rect::new(0, 0, 40, 20));
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
+            buffer,
+            ratatui::layout::Rect::new(0, 0, 40, 20),
+        );
         let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
             x: 0,
             y: 0,
@@ -368,8 +372,10 @@ mod tests {
         stack.add(FixedHeight::new(3));
         stack.add(FixedHeight::new(0)); // height 0 = stretch
         let buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 40, 20));
-        let mut backend =
-            term_wm_console::RatatuiBackend::new_simple(buffer, ratatui::layout::Rect::new(0, 0, 40, 20));
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
+            buffer,
+            ratatui::layout::Rect::new(0, 0, 40, 20),
+        );
         let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
             x: 0,
             y: 0,
@@ -396,8 +402,10 @@ mod tests {
         stack.add(FixedHeight::new(100)); // exceeds area
         stack.add(FixedHeight::new(0));
         let buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 40, 10));
-        let mut backend =
-            term_wm_console::RatatuiBackend::new_simple(buffer, ratatui::layout::Rect::new(0, 0, 40, 10));
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
+            buffer,
+            ratatui::layout::Rect::new(0, 0, 40, 10),
+        );
         let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
             x: 0,
             y: 0,

@@ -176,7 +176,8 @@ mod tests {
     fn system_panel_render_does_not_panic() {
         let mut panel = WmSystemPanelComponent::new();
         let buffer = Buffer::empty(Rect::new(0, 0, 60, 20));
-        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, Rect::new(0, 0, 60, 20));
+        let mut backend =
+            term_wm_console::RatatuiBackend::new_simple(buffer, Rect::new(0, 0, 60, 20));
         let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
             x: 0,
             y: 0,
@@ -250,7 +251,8 @@ mod tests {
     fn spacer_render_is_noop() {
         let mut spacer = SpacerComponent::new(3);
         let buffer = Buffer::empty(Rect::new(0, 0, 40, 10));
-        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, Rect::new(0, 0, 40, 10));
+        let mut backend =
+            term_wm_console::RatatuiBackend::new_simple(buffer, Rect::new(0, 0, 40, 10));
         let ctx = ComponentContext::new(true);
         let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
         spacer.render(
