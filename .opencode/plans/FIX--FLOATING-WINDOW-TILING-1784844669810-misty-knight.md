@@ -2,83 +2,103 @@
 
 ## Root Cause
 
-`LayoutNode::from_rects()` (`crates/term-wm-core/src/layout/tiling.rs:583-691`) uses two flawed weight schemes:
+`LayoutNode::from_rects()` (`crates/term-wm-core/src/layout/tiling.rs:583-691`) has two fatal flaws:
 
-### Problem 1: Global spatial distance weights (cut paths)
-At lines 635 and 672, weights are computed as `(x - min_x).max(1)` — the distance from the cut to the global bounding box edge. This includes dead space from windows in OTHER partitions, inflating their weight. **Fixed in previous iteration with per-partition bounding spans.**
+### Flaw 1: Strict zero-straddle rejection → no valid cuts → fallback to forced vertical columns
 
-### Problem 2: Equal weights bypass proportional distribution (both cut paths AND fallback)
-Even with correct bounding spans, a 1-vs-2 partition split (e.g., [A] vs [B, C] where both sides have equal X-axis extent) gives each side 50%. The 2-window side then subdivides its 50%, giving each window only 25% — the "thin column" complaint.
+When a moved floating window overlaps others (common after the user "moves top window"), NO candidate cut passes the strict straddle check:
 
-### Problem 3: Fallback always uses [1, 1]
-When no clean cut is available (case 3 in `from_rects`, line 688), weights are hardcoded to `[1, 1]`, ignoring group sizes entirely.
+```rust
+if rects.iter().any(|(_, r)| r.x < x && r.x.saturating_add(r.width as i32) > x) {
+    continue; // Skips ALL straddled cuts
+}
+```
+
+With no valid cuts, the algorithm falls through to step 3, which **hardcodes `Direction::Horizontal`** (vertical column divider). This explains why 3 windows always became 3 thin vertical strips.
+
+### Flaw 2: Weights don't reflect group size
+
+Even when a clean cut is found (non-overlapping case), weights are based on spatial distances which ignore the **number of windows per partition**. A 1-vs-2 split with equal bounding spans gives each side 50% — the 2-window side subdivides to 25% per window.
 
 ## Fix
 
-Replace bounding-span weights with **count-based weights** (number of windows in each partition). This ensures each window gets an equal share regardless of spatial overlap or group size.
+### Part A: Straddle-tolerant cut evaluation
 
-### Why count-based?
+Instead of strict rejection, evaluate ALL candidate cuts (both axes) and select the best via multi-criteria scoring:
 
-The "tile all floating windows" operation purpose is to organize messy floating windows into a clean tiling. Equal distribution per window is the most intuitive default. This is also consistent with `insert_window_balanced`, which finds the largest leaf (by count, not by spatial extent).
+1. **Straddle count** (primary) — fewest straddled windows
+2. **Balance delta** `|count(a) - count(b)|` (secondary) — most balanced partition
+3. **Aspect ratio** (tertiary) — prefer the axis that aligns with the bounding box shape
 
-### Code changes in `from_rects` (tiling.rs)
+Straddled windows get assigned to the partition containing more of their area (midpoint heuristic).
 
-**Line 635** — horizontal cut (direction: Vertical):
+### Part B: Count-based weights
+
+Use the NUMBER of windows in each partition as weights instead of bounding spans. This ensures each window gets an equal share:
+
 ```rust
-// OLD (global Y distance):
-weights: vec![(y - min_y).max(1) as u16, (max_y - y).max(1) as u16],
-
-// NEW (count-based):
-weights: vec![top.len() as u16, bottom.len() as u16],
+// For any cut:
+weights: vec![partition_a.len() as u16, partition_b.len() as u16],
 ```
 
-**Line 672** — vertical cut (direction: Horizontal):
+### Part C: Aspect-aware fallback direction
+
+Instead of hardcoded `Direction::Horizontal`, derive fallback direction from bounding box aspect ratio (accounting for ~2:1 character cell aspect):
+
 ```rust
-// NEW (count-based):
-weights: vec![left.len() as u16, right.len() as u16],
+let total_w = max_x - min_x;
+let total_h = (max_y - min_y) * 2;  // cell aspect ratio
+let direction = if total_w >= total_h {
+    Direction::Horizontal  // wider → vertical split (columns)
+} else {
+    Direction::Vertical    // taller → horizontal split (rows)
+};
 ```
 
-**Line 688** — fallback:
-```rust
-// OLD:
-weights: vec![1, 1],
+### Algorithm flow (revised `from_rects`)
 
-// NEW (count-based):
-weights: vec![sorted[..mid].len() as u16, sorted[mid..].len() as u16],
+```
+1. Handle trivial cases (empty → Void, 1 → Leaf)
+
+2. Compute bounding box (min/max x/y)
+
+3. Evaluate ALL Y-axis cuts (Direction::Vertical):
+   For each candidate y (window top/bottom edges):
+     - Partitions fall into top/bottom/undecided
+     - Straddled rects assigned to side with more area
+     - Record: straddle count, balance delta, weights (count-based)
+     - Collect as candidate
+
+4. Evaluate ALL X-axis cuts (Direction::Horizontal):
+   For each candidate x (window left/right edges):
+     - Partitions fall into left/right/undecided
+     - Straddled rects assigned to side with more area
+     - Record: straddle count, balance delta, weights (count-based)
+     - Collect as candidate
+
+5. Select candidate by (straddle_count ASC, balance_delta ASC)
+
+6. If no candidate found (all partitions empty):
+   Fallback: sort by aspect-aware axis, split at midpoint,
+   use count-based weights
 ```
 
-### Effect on scenarios
+### File to modify
 
-**User's 3-window scenario** (A overlapped with B, clean cut at x=50):
-- `from_rects` finds vertical cut at x=50: left=[A], right=[B, C]
-- weights before: `[50, 50]` → A=50%, B+C=50% → B=25%, C=25% ❌
-- weights after `[1, 2]` → A=33%, B+C=67% → B=33.5%, C=33.5% ✓
-
-**Gapped windows** (A at x=0, w=40; B at x=100, w=40):
-- cut at x=40: left=[A], right=[B]
-- weights `[1, 1]` → A=50%, B=50% ✓
-
-**Mixed sizes** (A w=80, B w=20):
-- cut at x=80: left=[A], right=[B]
-- weights `[1, 1]` → A=50%, B=50% (loses original size proportion, but consistent with equal-tile UX)
-
-### Files to modify
-
-1. `crates/term-wm-core/src/layout/tiling.rs` — weight computation at lines 635, 672, and 688
+- `crates/term-wm-core/src/layout/tiling.rs` — replace `from_rects` body (lines 583-691), add tests
 
 ### Unit tests
 
-Add `#[cfg(test)]` module tests in `crates/term-wm-core/src/layout/tiling.rs`:
-
-1. **`from_rects_1v2_equal_span** — [A] vs [B, C] with equal bounding spans → weights [1, 2] (A gets 33%)
-2. **`from_rects_gapped_windows`** — A(x=0,w=40) vs B(x=100,w=40) → weights [1, 1] (50/50)
-3. **`from_rects_stacked_vs_side`** — 3 stacked (w=40) vs 1 side (w=40) → weights [3, 1] (75/25)
-4. **`from_rects_empty_returns_void`** — empty → Void
-5. **`from_rects_single_leaf`** — 1 rect → Leaf
-6. **regression: re-tile 3-window scenario** — the exact user reproduction case
+1. **`from_rects_1_top_2_bottom`** — A(top, full width) vs B/C(bottom, side-by-side) → Y-cut, weights [1, 2]
+2. **`from_rects_3_vertical`** — 3 windows side by side → X-cut, weights [1, 1, 1] (via recursion)
+3. **`from_rects_overlapped`** — A moved to overlap B, no clean cut → fallback (not strict rejection)
+4. **`from_rects_empty`** — empty input → Void
+5. **`from_rects_single`** — 1 rect → Leaf
+6. **`from_rects_gapped`** — A(x=0,w=40) vs B(x=100,w=40) → clean X-cut
+7. **`from_rects_with_layout_consistency`** — output layout covers full area (fix rounding assertion)
 
 ## Verification
 
 1. `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-2. `cargo test` — existing + new tests pass
-3. Manual: create 3 windows tiled as A-top/B-bottom-left/C-bottom-right, toggle float, move A to overlap with B/C, re-tile → verify roughly equal columns
+2. `cargo test` — all 339+ existing + new tests pass
+3. Manual: 3 windows tiled (A top/BL/BR), toggle float, move A to overlap B, re-tile → verify 3 roughly equal columns (not 3 thin strips)
