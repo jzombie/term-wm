@@ -39,39 +39,98 @@ This completes the FramePacer lifecycle: input events → `notify_pending()` arm
 ### SEV-3: PTY background updates bypass the FramePacer ("Wiggle to Update" deadlock)
 
 The `PtyWakeup` flow does NOT generate a crossterm `Event`:
-1. PTY reader thread sends `UnifiedEvent::PtyWakeup(WindowKey)` via crossbeam channel
-2. `UnifiedEventSource::poll()` calls `drain_pending()` which inserts the key into `dirty_windows`
-3. `poll()` returns `Ok(false)` (no crossterm `Event` to read)
-4. `EventLoop::run()` falls through to `handler(None)` — the render branch
-5. But the runner's `FramePacer` was never armed because `notify_pending()` only lives in `Some(evt)`
+1. PTY reader sends `UnifiedEvent::PtyWakeup(key)` via crossbeam channel
+2. `UnifiedEventSource::poll()` calls `drain_pending()`, inserts into `dirty_windows`
+3. `poll()` returns `Ok(false)` (no crossterm `Event`)
+4. Falls through to `handler(None)` — the render branch
+5. Runner's `FramePacer` never armed because `notify_pending()` only lives in `Some(evt)`
 6. `try_expire()` returns false -> draw skipped -> dirty state unrendered
 
-**The fix**: In the `None` branch, arm the pacer when the driver has pending work. Check `driver.current_profile()` — when dirty windows exist or input was recently received, the profile is `Streaming` or `Interactive` (not `PowerSaver`). This is a non-consuming check:
+Chasing individual dirty flags (PTY wakeups, overlay dirty, cursor blink, notifications) is an architectural anti-pattern. The fix is a **Global Dirty Bit** — a single `redraw_requested: bool` on the `WindowManagerHost` trait.
+
+### The Global Dirty Bit Architecture
+
+The flag lives on the `EventSource` trait with default no-op implementations so no app code changes are needed:
+
+**Add to `EventSource` trait** (`crates/term-wm-core/src/io/event_source.rs`):
 
 ```rust
-update_selection_snapshot(app);
+pub trait EventSource {
+    // ... existing methods ...
 
-// Arm the pacer if the driver has pending work (PTY data, etc.)
-// that didn't arrive as a crossterm Event through Some(evt).
-if driver.current_profile() != crate::power_profile::PowerProfile::PowerSaver {
-    frame_pacer.notify_pending();
+    /// Signal that the application needs a redraw on the next frame.
+    /// Default no-op — override in concrete drivers that support it.
+    fn request_redraw(&mut self) {}
+
+    /// Consume the pending redraw flag. Override in concrete drivers.
+    fn take_redraw_request(&mut self) -> bool { false }
 }
-
-frame_pacer.set_interval(if app.wm().is_dragging_window() {
-    Duration::from_millis(33)
-} else {
-    Duration::from_millis(16)
-});
 ```
 
-When the driver is in `PowerSaver` (no dirty windows, no recent input, no active work), `notify_pending()` is skipped entirely and `try_expire()` returns false — the loop goes to sleep without rendering. This preserves the CPU savings from throttled idle frames.
+**Implement on `UnifiedEventSource`** (`src/unified_event_source.rs`):
+
+```rust
+pub struct UnifiedEventSource {
+    // ... existing fields ...
+    pending_redraw: bool,
+}
+
+fn request_redraw(&mut self) {
+    self.pending_redraw = true;
+}
+
+fn take_redraw_request(&mut self) -> bool {
+    std::mem::replace(&mut self.pending_redraw, false)
+}
+```
+
+Zero trait changes to `WindowManagerHost`. Zero App struct changes. Only the one real driver (`UnifiedEventSource`) overrides the defaults.
+
+**In the runner (`runner.rs`)** — arm the pacer from the driver's redraw flag:
+
+```rust
+if driver.take_redraw_request()
+    || driver.current_profile() != crate::power_profile::PowerProfile::PowerSaver
+{
+    frame_pacer.notify_pending();
+}
+```
+
+The `current_profile()` catch-all ensures PTY wakeups (which flow through `dirty_windows` → `Streaming` profile) still arm the pacer even without an explicit `request_redraw()` call through that path.
+
+**Injection points** — call `driver.request_redraw()` wherever state mutates outside the `Some(evt)` path:
+
+1. In `run_event_loop` handler, after system task processing:
+   ```rust
+   // System tasks that mutated state need a redraw.
+   driver.request_redraw();
+   ```
+
+2. In `run_event_loop` handler, after `AppExited` processing:
+   ```rust
+   // Window closed due to PTY exit — redraw the layout.
+   driver.request_redraw();
+   ```
+
+3. In `drain_action_queue()`, after pop_front and action dispatch:
+   ```rust
+   app.request_redraw();  // → calls driver.request_redraw() internally
+   ```
+
+Wait — `drain_action_queue` takes `app: &mut A` not `driver: &mut D`. It doesn't have access to the driver. So for injection point 3, we'd need to either:
+- Pass the driver to `drain_action_queue`, or
+- Use a different mechanism
+
+The simplest approach: skip injection point 3. The `Some(evt)` path already has `notify_pending()` at the top, which arms the pacer for ALL input-triggered events. Actions dispatched from event handlers will be rendered on the next frame. The only missing cases are non-event-driven paths (system tasks, timers, PTY wakeups), which injection points 1 and 2 cover.
 
 ## Step 1: Wire FramePacer into `runner.rs` with dynamic drag rate
 
 ### Files to modify
 - `crates/term-wm-core/src/io/frame_pacer.rs`
-- `crates/term-wm-core/src/runner.rs`
+- `crates/term-wm-core/src/io/event_source.rs` (add `request_redraw()`/`take_redraw_request()` to `EventSource` trait)
+- `crates/term-wm-core/src/runner.rs` (inject `driver.request_redraw()` after system tasks and AppExited; check `driver.take_redraw_request()` in `None` branch)
 - `crates/term-wm-core/src/window/window_manager/mod.rs` (add `is_dragging_window()`)
+- `src/unified_event_source.rs` (implement `pending_redraw` field, override `request_redraw()`/`take_redraw_request()`)
 
 ### Changes
 
@@ -99,12 +158,14 @@ When the driver is in `PowerSaver` (no dirty windows, no recent input, no active
   ```rust
   update_selection_snapshot(app);
 
-  // Arm the pacer when the driver has background work (PTY data, etc.)
-  // that didn't arrive as a crossterm Event through Some(evt).
-  // Streaming/Interactive profiles indicate pending dirty windows or
-  // recent input — skip notify_pending() only when truly idle (PowerSaver)
-  // so idle frames don't keep the pacer armed unnecessarily.
-  if driver.current_profile() != crate::power_profile::PowerProfile::PowerSaver {
+  // Any component that changed state since the last frame can
+  // request a redraw through the global dirty bit — no need to
+  // interrogate individual sources (PTY wakeups, overlays, etc.).
+  // The `current_profile()` check is a catch-all for PTY wakeups
+  // that don't flow through request_redraw().
+  if app.take_redraw_request()
+      || driver.current_profile() != crate::power_profile::PowerProfile::PowerSaver
+  {
       frame_pacer.notify_pending();
   }
 
