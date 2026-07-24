@@ -671,4 +671,35 @@ mod tests {
             "init/teardown roundtrip must contain disable \\x1b[?2004l"
         );
     }
+
+    /// Proves that reusing a parser via set_size + RIS + process yields
+    /// identical screen state to a freshly allocated parser.
+    #[test]
+    fn test_prev_parser_resize_sync_matches_fresh_parser() {
+        let mut prev_parser = vt100::Parser::new(24, 80, 0);
+        prev_parser.process(b"initial screen content");
+
+        // Simulate terminal window resize to 40x120
+        let (new_rows, new_cols) = (40, 120);
+        let new_formatted_content = {
+            let mut p = vt100::Parser::new(new_rows, new_cols, 0);
+            p.process(b"resized screen content");
+            p.screen().contents_formatted().to_vec()
+        };
+
+        // Re-use prev_parser using dimension sync + RIS reset
+        prev_parser.screen_mut().set_size(new_rows, new_cols);
+        prev_parser.process(b"\x1bc");
+        prev_parser.process(&new_formatted_content);
+
+        // Verify against a freshly created parser
+        let mut fresh_parser = vt100::Parser::new(new_rows, new_cols, 0);
+        fresh_parser.process(&new_formatted_content);
+
+        assert_eq!(
+            prev_parser.screen().contents_formatted(),
+            fresh_parser.screen().contents_formatted(),
+            "Reused parser state after set_size + RIS must match fresh parser"
+        );
+    }
 }

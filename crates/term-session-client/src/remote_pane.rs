@@ -162,21 +162,29 @@ mod tests {
         let input_writer: InputWriter = Box::new(|_| Ok(()));
 
         // Bind a temporary socket so RpcIpcClient::new can connect.
-        // drain_pushes never touches the client, but RemotePane::new
+        // drain_pushes never uses the client, but RemotePane::new
         // requires a valid Arc<RpcIpcClient>.
         let socket_path = std::env::temp_dir()
             .join(format!("test_remote_pane_{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&socket_path);
-        let _listener = rt.block_on(async {
-            tokio::net::UnixListener::bind(&socket_path).unwrap()
-        });
 
-        let client = Arc::new(
-            rt.block_on(RpcIpcClient::new(
-                socket_path.to_str().unwrap(),
-            ))
-            .unwrap(),
-        );
+        // Use std UnixListener (synchronous bind + accept)
+        let _listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+        // Accept in the background so connect succeeds
+        std::thread::spawn({
+            let path = socket_path.clone();
+            move || {
+                let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+                let _ = listener.accept();
+            }
+        });
+        // Brief yield to let the accept thread start
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        let client = rt.block_on(RpcIpcClient::new(
+            socket_path.to_str().unwrap(),
+        ))
+        .unwrap();
 
         let mut pane = RemotePane::new(
             1, client, rt.handle().clone(), 80, 24, push_rx, input_writer,
