@@ -5,7 +5,7 @@
 | Decision | Choice |
 |---|---|
 | **Data layout** | Keep Ratatui's native `Buffer` / `Vec<Cell>` — no SoA conversion |
-| **SIMD approach** | Strict Bounds Check Elimination (BCE) via slice iterators. Auto-vectorization strictly limited to `clone_from_slice` memory blitting. Conditional mutation loops (string checks, bitflag writes) are not SIMD-eligible. |
+| **SIMD approach** | Intermediate SoA bitmask (`Vec<u8>`) decouples conditional string checks from bitwise buffer mutation. Mask operations are SIMD-friendly (contiguous byte array, no branching). Two-pass: (1) evaluate condition → set mask byte, (2) apply mask → mutate buffer. |
 | **Toolchain** | Stable Rust only (no nightly, no `std::simd`) |
 | **Libraries** | No new SIMD dependencies; `bytemuck` already transitive |
 | **Benchmarks** | Add Criterion microbenchmarks to `crates/term-bench` |
@@ -79,50 +79,71 @@ Replace per-cell `buf.cell_mut((x, y))` with direct indexing. Add intersection c
 
 Every function that writes to `&mut Buffer` via `cell_mut()` must be rewritten to use the **row-slice iterator pattern** with **origin-relative coordinate translation**.
 
-#### 4a. Exact implementation for `apply_dim_modifier` (template for all others)
+#### 4a. Core pattern: SoA bitmask decoupling
+
+All conditional mutation passes follow a two-pass structure:
+
+**Pass 1:** Evaluate condition → set byte in flat mask (`Vec<u8>`)
+**Pass 2:** Apply mask → mutate buffer cells
+
+The mask operations are SIMD-friendly (contiguous byte array, zero branching). This avoids SIMD-incompatible conditional branches on non-POD `Cell` structs.
 
 ```rust
 fn apply_dim_modifier(&self, buffer: &mut Buffer) {
-    let area = buffer.area;
-    let buf_w = area.width as usize;
+    let len = buffer.content.len();
+    let mut mask = vec![0u8; len];
 
-    let y_start = area.y as usize;
-    let y_end = (area.y + area.height) as usize;
-    let x_start = area.x as usize;
-    let x_end = (area.x + area.width) as usize;
+    // Pass 1: conditional string check → flat byte mask
+    // (not SIMD-eligible, but decoupled from bitwise mutation)
+    for (i, cell) in buffer.content.iter().enumerate() {
+        if !cell.symbol().starts_with(' ') {
+            mask[i] = 1;
+        }
+    }
+
+    // Pass 2: apply mask → mutate buffer
+    // (SIMD-friendly: contiguous u8, no branching)
     let dim_bit = ratatui::style::Modifier::DIM;
-
-    for y in y_start..y_end {
-        let relative_y = y - area.y as usize;
-        let relative_x_start = x_start - area.x as usize;
-        let relative_x_end = x_end - area.x as usize;
-
-        let row_start = relative_y * buf_w;
-        let row_slice = &mut buffer.content[row_start + relative_x_start .. row_start + relative_x_end];
-
-        for cell in row_slice.iter_mut() {
-            if !cell.symbol().starts_with(' ') {
-                cell.modifier.insert(dim_bit);
-            }
+    for (cell, &val) in buffer.content.iter_mut().zip(mask.iter()) {
+        if val == 1 {
+            cell.modifier.insert(dim_bit);
         }
     }
 }
 ```
 
-#### 4b. Affected functions (same pattern applied to each)
+For `render_drop_shadow`, the mask carries two bits (DIM + shadow background):
 
-| Function | Lines | Fix |
+```rust
+const DIM_BIT: u8 = 0b01;
+const SHADOW_BIT: u8 = 0b10;
+
+// Pass 1: compute mask
+// Pass 2: apply mask
+for (cell, &val) in buffer.content.iter_mut().zip(mask.iter()) {
+    if val & DIM_BIT != 0 {
+        cell.modifier.insert(Modifier::DIM);
+    }
+    if val & SHADOW_BIT != 0 {
+        cell.set_bg(shadow_color);
+    }
+}
+```
+
+#### 4b. Affected functions (two-pass masking applied to each)
+
+| Function | Condition | Mask Bits |
 |---|---|---|
-| `apply_dim_modifier` | 614-625 | Use origin translation + slice iterator as shown above |
-| `render_drop_shadow` | 808-826 | Translate `clip_x`/`clip_y` by `buf.area.x`/`buf.area.y` before slicing |
-| `render_window` | 933-1114 | Translate all `outer_*` coords by `buffer.area.x`/`buffer.area.y` |
-| `render_handles_masked` | 1117-1255 | Translate `clip.x`/`clip.y` AND neighbor reads |
-| `render_resize_outline` | 1301-1545 | Translate all edge coords by `buffer.area.x`/`buffer.area.y` |
-| `render_ghost_preview` | 1549-1614 | Translate `clip` coords by `buf.area.x`/`buf.area.y` |
-| `render_cursor_overlay` | 1653-1682 | Translate `hx`/`hy` by `buf.area.x`/`buf.area.y` |
-| `fill_handle_bar` | 1258-1297 | Translate `clip.x`/`clip.y` by `buffer.area.x`/`buffer.area.y` |
+| `apply_dim_modifier` | `!cell.symbol().starts_with(' ')` | DIM |
+| `render_drop_shadow` | Inside shadow rect + `!cell.symbol().starts_with(' ')` | DIM + SHADOW_BG |
+| `render_ghost_preview` interior | Inside interior rect | SHADOW_BG only |
+| `render_cursor_overlay` | At cursor position | REVERSED |
+| `fill_handle_bar` | Inside clip rect + not obscured | SYMBOL + STYLE |
+| `render_handles_masked` pass 2 | Inside clip + not obscured + junction char | SYMBOL + STYLE |
+| `render_window` header/borders | Inside header/border rect | SYMBOL + STYLE |
+| `render_resize_outline` | At edge + not obscured | SYMBOL + STYLE |
 
-The row-slice iterator pattern eliminates bounds-check branches entirely (unlike `buffer.content[row_start + x]` which retains per-cell bounds checking). Origin translation prevents OOB panics on non-zero-area buffers.
+For functions that write distinct symbols/styles per cell (junction chars, resize corners), the mask indicates which cells to touch but the per-cell value is computed inline in Pass 2 using the same coordinate math as before.
 
 ### 5. Buffer management — keep swap pattern
 
@@ -420,18 +441,16 @@ for (cell, &mask) in buffer.content.iter_mut().zip(dim_mask.iter()) {
 | Risk | Low | Medium |
 | Tests | All pass | Need new tests |
 
-**Decision:** Path A (BCE) is the only acceptable path. The current implementation is broken — Section 4 above now contains the corrected slice-iterator code. All 8 functions must be rewritten using the template in Section 4a before any of these changes can be merged.
+## Required Actions (IMMEDIATE — SoA bitmask execution)
 
-## Required Actions (IMMEDIATE — no future deferral)
-
-1. REWRITE `apply_dim_modifier` using Section 4a template (origin translation + slice iterator)
-2. REWRITE `render_drop_shadow` using same pattern (translate clip coords, slice row, iterate)
-3. REWRITE `render_ghost_preview` interior fill using same pattern
-4. REWRITE `fill_handle_bar` using same pattern
-5. REWRITE `render_handles_masked` passes 2 and 3 (translate neighbor reads + coords)
-6. REWRITE `render_cursor_overlay` using same pattern
-7. REWRITE `render_window` border/header fills using same pattern
-8. REWRITE `render_resize_outline` edge writes using same pattern
+1. REWRITE `apply_dim_modifier` using Section 4a two-pass mask pattern
+2. REWRITE `render_drop_shadow` using two-pass mask with DIM_BIT + SHADOW_BIT
+3. REWRITE `render_ghost_preview` interior fill using mask pattern
+4. REWRITE `fill_handle_bar` using mask pattern
+5. REWRITE `render_handles_masked` passes 2 and 3 using mask pattern
+6. REWRITE `render_cursor_overlay` using mask pattern
+7. REWRITE `render_window` border/header fills using mask pattern
+8. REWRITE `render_resize_outline` edge writes using mask pattern
 9. Add `blit_buffer` unit tests for fully contained, partial overlap, and no-overlap cases
 10. `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 11. `cargo test -p term-wm-console` — all 15+ tests must pass
