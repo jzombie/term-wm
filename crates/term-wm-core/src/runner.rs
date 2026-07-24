@@ -296,13 +296,12 @@ where
             // pacer without borrowing driver (the closure also needs driver).
             let driver_has_work =
                 driver.current_profile() != crate::power_profile::PowerProfile::PowerSaver;
-            let mut flush_state_changes =
-                |app: &mut A,
-                 driver: &mut D,
-                 flow: ControlFlow,
-                 consume_dirty: bool,
-                 fp_deadline: Option<std::time::Duration>|
-                 -> io::Result<ControlFlow> {
+            let mut flush_state_changes = |app: &mut A,
+                                           driver: &mut D,
+                                           flow: ControlFlow,
+                                           consume_dirty: bool,
+                                           fp_deadline: Option<std::time::Duration>|
+             -> io::Result<ControlFlow> {
                 if let Some(enabled) = app.wm().take_mouse_capture_change() {
                     let _ = driver.set_mouse_capture(enabled);
                 }
@@ -464,7 +463,13 @@ where
                     // Focus routing while menu is open (Tab/Shift+Tab)
                     if matches!(&evt, Event::Key(_)) && app.wm().handle_focus_event(&evt) {
                         update_selection_snapshot(app);
-                        return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
+                        return flush_state_changes(
+                            app,
+                            driver,
+                            ControlFlow::Continue,
+                            false,
+                            None,
+                        );
                     }
                     update_selection_snapshot(app);
                     return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
@@ -482,7 +487,13 @@ where
                         // Direct mode — forward to terminal immediately.
                         let _ = handle_focused_app_event(&evt, app);
                         update_selection_snapshot(app);
-                        return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
+                        return flush_state_changes(
+                            app,
+                            driver,
+                            ControlFlow::Continue,
+                            false,
+                            None,
+                        );
                     }
                 }
 
@@ -548,9 +559,9 @@ where
                 }
 
                 frame_pacer.set_interval(if app.wm().is_dragging_window() {
-                    Duration::from_millis(33)  // 30 FPS during drag
+                    Duration::from_millis(33) // 30 FPS during drag
                 } else {
-                    Duration::from_millis(16)  // 60 FPS otherwise
+                    Duration::from_millis(16) // 60 FPS otherwise
                 });
 
                 if frame_pacer.try_expire() {
@@ -580,7 +591,13 @@ where
                     }
                 }
             }
-            flush_state_changes(app, driver, ControlFlow::Continue, did_render && !did_panic, frame_pacer.time_until_deadline())
+            flush_state_changes(
+                app,
+                driver,
+                ControlFlow::Continue,
+                did_render && !did_panic,
+                frame_pacer.time_until_deadline(),
+            )
         };
 
         let handler_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(handler));

@@ -1385,7 +1385,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                                     let dy_total = row.abs_diff(*start_y);
                                     if dx_total + dy_total > 2 {
                                         if self.last_snap_cursor != Some((col, row)) {
-                                            self.update_snap_preview(*key, col, row, detach_coordinate);
+                                            self.update_snap_preview(
+                                                *key,
+                                                col,
+                                                row,
+                                                detach_coordinate,
+                                            );
                                             self.last_snap_cursor = Some((col, row));
                                         }
                                     } else {
@@ -1965,7 +1970,10 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// component interaction, or layout handle).  Used by FramePacer to
     /// select a throttled 30 FPS interval during drag.
     pub(crate) fn is_dragging_window(&self) -> bool {
-        matches!(self.mouse_capture, Some(MouseCaptureState::DraggingWindow { .. }))
+        matches!(
+            self.mouse_capture,
+            Some(MouseCaptureState::DraggingWindow { .. })
+        )
     }
 
     pub fn keyboard_focus_enabled(&self) -> bool {
