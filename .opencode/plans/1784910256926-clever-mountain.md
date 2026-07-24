@@ -118,7 +118,7 @@ fn apply_dim_modifier(&self, buffer: &mut Buffer, mask: &mut [u8]) {
 }
 ```
 
-For `render_drop_shadow`, the mask carries two bits and is applied per-row over the clipped region only. All coordinates are translated to buffer-relative indices. Mask is truncated to `buf.content.len()` before `fill(0)` to avoid zeroing unused capacity.
+For `render_drop_shadow`, the mask carries two bits and is applied per-row over the clipped region only. All invariant arithmetic is hoisted outside loops. The `Rect::intersection` call explicitly guarantees memory safety.
 
 ```rust
 const DIM_BIT: u8 = 0b01;
@@ -129,19 +129,31 @@ fn render_drop_shadow(buf: &mut Buffer, mask: &mut [u8], dest: LayoutRect, z_dep
     let active_mask = &mut mask[..buf.content.len()];
     active_mask.fill(0);
 
-    // Compute clipped shadow bounds (absolute screen coordinates)
-    let (clip_x, clip_y, clip_ex, clip_ey) = ...;
+    // Explicit intersection clipping guarantees memory safety
+    let dest_rect = Rect::new(dest.x as u16, dest.y as u16, dest.width, dest.height);
+    let clip = dest_rect.intersection(buf.area);
+    if clip.width == 0 || clip.height == 0 {
+        return;
+    }
+
     let buf_w = buf.area.width as usize;
     let origin_x = buf.area.x as usize;
     let origin_y = buf.area.y as usize;
 
-    // Pass 1: set mask bits using RELATIVE coordinates
-    for y in clip_y as usize .. clip_ey as usize {
+    // Hoist all X-axis invariant arithmetic outside loops
+    let rel_x_start = clip.x as usize - origin_x;
+    let copy_width = clip.width as usize;
+    let y_start = clip.y as usize;
+    let y_end = (clip.y + clip.height) as usize;
+
+    // Pass 1: Set mask bits — pre-computed start/end per row
+    for y in y_start..y_end {
         let rel_y = y - origin_y;
         let row_start = rel_y * buf_w;
-        for x in clip_x as usize .. clip_ex as usize {
-            let rel_x = x - origin_x;
-            let i = row_start + rel_x;
+        let start_idx = row_start + rel_x_start;
+        let end_idx = start_idx + copy_width;
+
+        for i in start_idx..end_idx {
             active_mask[i] |= SHADOW_BIT;
             if !buf.content[i].symbol().starts_with(' ') {
                 active_mask[i] |= DIM_BIT;
@@ -149,16 +161,17 @@ fn render_drop_shadow(buf: &mut Buffer, mask: &mut [u8], dest: LayoutRect, z_dep
         }
     }
 
-    // Pass 2: Row-sliced mask apply — only the clipped rows
-    let shadow_color = ...;
-    for y in clip_y as usize .. clip_ey as usize {
+    // Pass 2: Row-sliced mask apply
+    let shadow_color = lerp_color(theme.shadow_tint, theme.shadow_bg, z_depth).to_ratatui();
+    for y in y_start..y_end {
         let rel_y = y - origin_y;
         let row_start = rel_y * buf_w;
-        let rel_x_start = clip_x as usize - origin_x;
-        let rel_x_end = clip_ex as usize - origin_x;
+        let start_idx = row_start + rel_x_start;
+        let end_idx = start_idx + copy_width;
 
-        let row_slice = &mut buf.content[row_start + rel_x_start .. row_start + rel_x_end];
-        let mask_slice = &active_mask[row_start + rel_x_start .. row_start + rel_x_end];
+        let row_slice = &mut buf.content[start_idx..end_idx];
+        let mask_slice = &active_mask[start_idx..end_idx];
+
         for (cell, &val) in row_slice.iter_mut().zip(mask_slice.iter()) {
             if val & DIM_BIT != 0 { cell.modifier.insert(Modifier::DIM); }
             if val & SHADOW_BIT != 0 { cell.set_bg(shadow_color); }
