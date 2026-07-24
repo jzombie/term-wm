@@ -2,6 +2,7 @@ pub mod clipboard;
 pub mod input_encoding;
 pub mod pane;
 pub mod pty;
+pub mod redirect_stdio;
 pub mod signal;
 pub mod title;
 

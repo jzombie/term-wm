@@ -1,13 +1,14 @@
 use crate::Rect;
-use crate::events::{Event, MouseEvent};
+use crate::actions::TermWmAction;
+use crate::components::{Component, Overlay, WmComponent};
+use crate::events::Event;
 
 use super::WindowManager;
 use crate::keybindings::ActionLayer;
-use crate::layout::floating::*;
-use crate::layout::{LayoutNode, LayoutPlan, RegionMap, SplitHandle, TilingLayout};
+use crate::layout::{InsertPosition, LayoutNode, LayoutPlan, RegionMap, SplitHandle, TilingLayout};
 use crate::window::{FloatRectSpec, WindowKey, WindowState};
 
-impl WindowManager {
+impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> WindowManager<C, L, O> {
     pub fn scroll(&self, key: WindowKey) -> super::ScrollState {
         self.scroll.get(&key).copied().unwrap_or_default()
     }
@@ -65,44 +66,29 @@ impl WindowManager {
         self.localize_event_content(key, event)
     }
 
+    /// CATEGORY 2 — Unculled Coordinate Transformer (test-only).
+    /// Translates screen coordinates to window-local coordinates. Never drops events.
     #[cfg(test)]
     pub fn localize_event(&self, key: WindowKey, event: &Event) -> Option<Event> {
-        match event {
-            Event::Mouse(mouse) => {
-                let dest = self.window_dest(key, self.full_region_for_key(key));
-                let column =
-                    (i32::from(mouse.column) - dest.x).clamp(0, i32::from(u16::MAX)) as u16;
-                let row = (i32::from(mouse.row) - dest.y).clamp(0, i32::from(u16::MAX)) as u16;
-                Some(Event::Mouse(MouseEvent {
-                    column,
-                    row,
-                    kind: mouse.kind,
-                    modifiers: mouse.modifiers,
-                }))
-            }
-            _ => None,
-        }
+        let Event::Mouse(mouse) = event else {
+            return None;
+        };
+        let dest = self.window_dest(key, self.full_region_for_key(key));
+        Some(Event::Mouse(mouse.to_clamped_origin(dest.x, dest.y)))
     }
 
+    /// CATEGORY 2 — Unculled Coordinate Transformer.
+    /// Translates screen coordinates to content-area-local coordinates (accounting
+    /// for chrome offsets). Never drops events — PTY sessions must receive all input.
     pub(super) fn localize_event_content(&self, key: WindowKey, event: &Event) -> Option<Event> {
-        match event {
-            Event::Mouse(mouse) => {
-                let dest = self.window_dest(key, self.full_region_for_key(key));
-                let (offset_x, offset_y) = self.window_content_offset(key);
-                let content_x = dest.x + i32::from(offset_x);
-                let content_y = dest.y + i32::from(offset_y);
-                let column =
-                    (i32::from(mouse.column) - content_x).clamp(0, i32::from(u16::MAX)) as u16;
-                let row = (i32::from(mouse.row) - content_y).clamp(0, i32::from(u16::MAX)) as u16;
-                Some(Event::Mouse(MouseEvent {
-                    column,
-                    row,
-                    kind: mouse.kind,
-                    modifiers: mouse.modifiers,
-                }))
-            }
-            _ => None,
-        }
+        let Event::Mouse(mouse) = event else {
+            return None;
+        };
+        let dest = self.window_dest(key, self.full_region_for_key(key));
+        let (offset_x, offset_y) = self.window_content_offset(key);
+        let content_x = dest.x + i32::from(offset_x);
+        let content_y = dest.y + i32::from(offset_y);
+        Some(Event::Mouse(mouse.to_clamped_origin(content_x, content_y)))
     }
 
     pub fn full_region_for_key(&self, key: WindowKey) -> Rect {
@@ -117,15 +103,11 @@ impl WindowManager {
             } else {
                 super::clamp_rect(rect, self.managed_area)
             };
-            if area.width < 3 || area.height < 4 {
-                return Rect::default();
-            }
-            Rect {
-                x: area.x + 1,
-                y: area.y + 2,
-                width: area.width.saturating_sub(2),
-                height: area.height.saturating_sub(3),
-            }
+            crate::chrome::content_rect(
+                area,
+                self.window_borders_enabled(key),
+                self.window_header_enabled(key),
+            )
         } else {
             rect
         }
@@ -133,13 +115,13 @@ impl WindowManager {
 
     pub fn set_regions_from_layout(&mut self, layout: &LayoutNode<WindowKey>, area: Rect) {
         self.regions = RegionMap::default();
-        for (key, rect) in layout.layout(area) {
+        for (key, rect) in layout.layout_rects(area) {
             self.regions.set(key, rect);
         }
     }
 
     pub fn register_tiling_layout(&mut self, layout: &TilingLayout<WindowKey>, area: Rect) {
-        let (regions, handles) = layout.root().layout_with_handles(area);
+        let (regions, handles) = (layout.regions(area), layout.handles(area));
         for (key, rect) in regions {
             self.regions.set(key, rect);
         }
@@ -158,8 +140,94 @@ impl WindowManager {
         self.managed_layout = None;
     }
 
+    /// Update borders and store terminal width for monocle auto-detection.
+    /// Called every render frame.
+    pub fn update_monocle_mode(&mut self, terminal_width: u16) {
+        self.last_terminal_width = terminal_width;
+        if let Some(ref mut layout) = self.managed_layout {
+            layout.update_monocle_state(terminal_width);
+        }
+
+        let monocle = self.is_monocle();
+        for (_, window) in self.windows.iter_mut() {
+            if monocle {
+                window.borders_enabled = false;
+            } else if self.managed_layout.is_some() {
+                window.borders_enabled = window.floating_rect.is_some();
+            } else {
+                window.borders_enabled = true;
+            }
+        }
+    }
+
+    /// Check if monocle mode is active.
+    pub fn is_monocle(&self) -> bool {
+        match self.monocle_mode {
+            super::MonocleMode::On => true,
+            super::MonocleMode::Off => false,
+            super::MonocleMode::Auto => {
+                self.last_terminal_width > 0
+                    && self.last_terminal_width < self.monocle_width_threshold
+            }
+        }
+    }
+
+    /// True only for cramped monocle (auto or on a narrow viewport) where
+    /// panels should render as overlays.  Manual monocle on a wide viewport
+    /// leaves panels in their normal embedded position.
+    pub fn is_monocle_cramped(&self) -> bool {
+        match self.monocle_mode {
+            super::MonocleMode::Auto => {
+                self.last_terminal_width > 0
+                    && self.last_terminal_width < self.monocle_width_threshold
+            }
+            super::MonocleMode::On => {
+                self.last_terminal_width > 0
+                    && self.last_terminal_width < self.monocle_width_threshold
+            }
+            super::MonocleMode::Off => false,
+        }
+    }
+
+    /// Cycle monocle mode: Auto → On → Off → Auto.
+    pub fn toggle_monocle(&mut self) {
+        self.monocle_mode = self.monocle_mode.cycle();
+    }
+
+    /// Whether the given window should render borders.
+    pub fn window_borders_enabled(&self, key: WindowKey) -> bool {
+        self.window(key).map(|w| w.borders_enabled).unwrap_or(false)
+    }
+
+    /// Whether the given window should render its header.
+    pub fn window_header_enabled(&self, key: WindowKey) -> bool {
+        self.window(key).map(|w| w.header_enabled).unwrap_or(false)
+    }
+
+    /// Handle mouse-click focus switching.
+    ///
+    /// In non-monocle mode, finds the topmost window under `(col, row)` and
+    /// focuses it.  In monocle mode this is a no-op because the focused window
+    /// fills the screen and clicking should not switch to a different window.
+    /// Must only be called for `MouseEventKind::Press` events.
+    pub fn handle_mouse_focus_click(&mut self, col: u16, row: u16) {
+        if self.is_monocle() || !self.mouse_focus_click_enabled() {
+            return;
+        }
+        let targets = self.managed_draw_order_all().to_vec();
+        for &key in targets.iter().rev() {
+            let rect = self.full_region_for_key(key);
+            if rect.width > 0 && rect.height > 0 && crate::layout::rect_contains(rect, col, row) {
+                self.focus_app_window(key);
+                break;
+            }
+        }
+    }
+
     pub fn set_panel_visible(&mut self, visible: bool) {
-        if let Some(p) = &mut self.top_component {
+        if let Some(p) =
+            self.get_semantic_component_mut(super::layer_manager::ComponentTag::TopPanel)
+        {
             p.set_visible(visible);
         }
     }
@@ -170,18 +238,22 @@ impl WindowManager {
 
     pub fn register_managed_layout(&mut self, area: Rect) {
         self.last_frame_area = area;
-        let active_layer = if self.config.wm_command_menu_enabled && self.command_menu_visible() {
-            ActionLayer::WmMode
-        } else {
-            ActionLayer::Global
-        };
+        // Show CommandPalette-filtered hints when the command palette is open,
+        // Global-only hints when closed.
         match self.hint_visibility {
             crate::wm_config::HintVisibility::Always => {
+                let layer = match self.input_mode {
+                    crate::actions::WmInputMode::CommandPalette => ActionLayer::CommandPalette,
+                    crate::actions::WmInputMode::Help => ActionLayer::Help,
+                    _ => ActionLayer::Global,
+                };
                 if self.config.wm_command_menu_enabled {
                     let hints = self
                         .keybindings()
-                        .bottom_hints_for_layer(crate::constants::MAX_BOTTOM_HINTS, active_layer);
-                    if let Some(p) = &mut self.bottom_component {
+                        .bottom_hints_for_layer(crate::constants::MAX_BOTTOM_HINTS, layer);
+                    if let Some(p) = self
+                        .get_semantic_component_mut(super::layer_manager::ComponentTag::BottomPanel)
+                    {
                         p.process_action(&crate::components::ComponentAction::SetKeybindingHints(
                             hints,
                         ));
@@ -190,7 +262,9 @@ impl WindowManager {
                     let hints = self
                         .keybindings()
                         .bottom_hints(crate::constants::MAX_BOTTOM_HINTS);
-                    if let Some(p) = &mut self.bottom_component {
+                    if let Some(p) = self
+                        .get_semantic_component_mut(super::layer_manager::ComponentTag::BottomPanel)
+                    {
                         p.process_action(&crate::components::ComponentAction::SetKeybindingHints(
                             hints,
                         ));
@@ -198,7 +272,9 @@ impl WindowManager {
                 }
             }
             _ => {
-                if let Some(p) = &mut self.bottom_component {
+                if let Some(p) =
+                    self.get_semantic_component_mut(super::layer_manager::ComponentTag::BottomPanel)
+                {
                     p.process_action(&crate::components::ComponentAction::SetKeybindingHints(
                         Vec::new(),
                     ));
@@ -207,15 +283,23 @@ impl WindowManager {
         }
         // Compute whether the panel should be active from config + visibility,
         // BEFORE calling consume_area (which needs this state to claim space).
-        let panel_active =
-            self.config.panel_enabled && self.top_component.as_ref().is_some_and(|p| p.visible());
+        // In cramped monocle, panels never claim space.
+        let panel_active = !self.is_monocle_cramped()
+            && self.config.panels_enabled
+            && self
+                .get_semantic_component(super::layer_manager::ComponentTag::TopPanel)
+                .is_some_and(|p| p.visible());
         // Push active state to the component so consume_area claims the right space
-        if let Some(p) = &mut self.top_component {
+        if let Some(p) =
+            self.get_semantic_component_mut(super::layer_manager::ComponentTag::TopPanel)
+        {
             p.process_action(&crate::components::ComponentAction::SetPanelActive(
                 panel_active,
             ));
         }
-        let has_hints = if let Some(p) = self.bottom_component.as_ref() {
+        let has_hints = if let Some(p) =
+            self.get_semantic_component(super::layer_manager::ComponentTag::BottomPanel)
+        {
             if let crate::components::ComponentResponse::Hints(h) =
                 p.query(&crate::components::ComponentQuery::KeybindingHints)
             {
@@ -226,15 +310,26 @@ impl WindowManager {
         } else {
             false
         };
-        let bottom_h = if has_hints || panel_active { 1u16 } else { 0 };
-        let (top_rect, after_top) = if let Some(p) = &mut self.top_component {
+        let bottom_h = if self.is_monocle_cramped() {
+            // Cramped monocle — panels overlay on demand
+            0
+        } else if has_hints || panel_active {
+            1u16
+        } else {
+            0
+        };
+        let (top_rect, after_top) = if let Some(p) =
+            self.get_semantic_component_mut(super::layer_manager::ComponentTag::TopPanel)
+        {
             let (claimed, rest) = p.consume_area(area);
             (claimed, rest)
         } else {
             (Rect::default(), area)
         };
         self.top_claimed = top_rect;
-        let (bottom_rect, managed_area) = if let Some(p) = &mut self.bottom_component {
+        let (bottom_rect, managed_area) = if let Some(p) =
+            self.get_semantic_component_mut(super::layer_manager::ComponentTag::BottomPanel)
+        {
             let bottom = Rect {
                 x: after_top.x,
                 y: after_top
@@ -282,7 +377,8 @@ impl WindowManager {
         let mut active_keys: Vec<WindowKey> = Vec::new();
 
         if let Some(layout) = self.managed_layout.as_ref() {
-            let (regions, handles) = layout.root().layout_with_handles(self.managed_area);
+            let regions = layout.regions(self.managed_area);
+            let handles = layout.handles(self.managed_area);
             for (key, rect) in &regions {
                 // Skip stale keys no longer in the SlotMap (e.g. after
                 // finalize_window_removal).  These would otherwise be
@@ -294,13 +390,12 @@ impl WindowManager {
                 if self.is_window_floating(*key) {
                     continue;
                 }
-                if self.window_state(*key) == Some(WindowState::Iconic) {
+                if self.window_state(*key) == Some(WindowState::Iconic)
+                    || self.window_state(*key) == Some(WindowState::Unmapped)
+                {
                     continue;
                 }
                 self.regions.set(*key, *rect);
-                if let Some(header) = floating_header_for_region(*key, *rect, self.managed_area) {
-                    self.floating_headers.push(header);
-                }
                 active_keys.push(*key);
             }
             let filtered_handles: Vec<SplitHandle> = handles
@@ -325,7 +420,10 @@ impl WindowManager {
             .windows
             .iter()
             .filter_map(|(key, window)| {
-                if window.is_floating() && window.state != WindowState::Iconic {
+                if window.is_floating()
+                    && window.state != WindowState::Iconic
+                    && window.state != WindowState::Unmapped
+                {
                     Some(key)
                 } else {
                     None
@@ -342,27 +440,11 @@ impl WindowManager {
             let Some(spec) = self.floating_rect(floating_key) else {
                 continue;
             };
-            let rect = spec.resolve(self.managed_area);
-            self.regions.set(floating_key, rect);
+
             let visible = self.visible_rect_from_spec(spec);
-            if visible.width > 0 && visible.height > 0 {
-                let is_maximized = self
-                    .windows
-                    .get(floating_key)
-                    .is_some_and(|w| w.is_maximized);
-                if !is_maximized {
-                    self.resize_handles.extend(resize_handles_for_region(
-                        floating_key,
-                        visible,
-                        self.managed_area,
-                    ));
-                }
-                if let Some(header) =
-                    floating_header_for_region(floating_key, visible, self.managed_area)
-                {
-                    self.floating_headers.push(header);
-                }
-            }
+            self.regions.set(floating_key, visible);
+            //
+            // Resize handle hitboxes are registered by the console during render.
             active_keys.push(floating_key);
         }
 
@@ -465,7 +547,6 @@ impl WindowManager {
     ) -> Vec<super::DrawTask> {
         let mut plan = Vec::new();
         let focused_window = self.focus.current();
-        let decorator = self.decorator();
         let _total = self.managed_draw_order.len() as f32;
         let num_app = self.managed_draw_order.len();
         for (i, &key) in self.managed_draw_order.iter().enumerate() {
@@ -474,16 +555,13 @@ impl WindowManager {
                 continue;
             }
             let dest = self.window_dest(key, full);
-            let inner = decorator.content_area(Rect {
-                x: 0,
-                y: 0,
-                width: full.width,
-                height: full.height,
-            });
+            // Content area equals full area — the console crate clips
+            // chrome regions during its own rendering pass.
+            let inner = full;
             if inner.width == 0 || inner.height == 0 {
                 continue;
             }
-            let z = super::WindowManager::compute_z_depth(i, num_app);
+            let z = Self::compute_z_depth(i, num_app);
             plan.push(super::DrawTask::App(super::WindowDrawContext {
                 key,
                 surface: super::WindowSurface {
@@ -501,22 +579,16 @@ impl WindowManager {
     }
 
     #[allow(dead_code)]
-    pub(super) fn hover_targets(&self) -> (Option<&SplitHandle>, Option<&ResizeHandle<WindowKey>>) {
-        let Some((column, row)) = self.hover else {
-            return (None, None);
-        };
+    pub(super) fn hover_targets(&self) -> Option<&SplitHandle> {
+        let (column, row) = self.hover?;
         let topmost = self.hit_test_region_topmost(column, row, &self.managed_draw_order);
-        let hovered = if topmost.is_none() {
+        if topmost.is_none() {
             self.handles
                 .iter()
                 .find(|handle| crate::layout::rect_contains(handle.rect, column, row))
         } else {
             None
-        };
-        let hovered_resize = self.resize_handles.iter().find(|handle| {
-            crate::layout::rect_contains(handle.rect, column, row) && topmost == Some(handle.key)
-        });
-        (hovered, hovered_resize)
+        }
     }
 
     pub fn window_dest(&self, key: WindowKey, fallback: Rect) -> crate::window::FloatRect {
@@ -701,7 +773,11 @@ impl WindowManager {
         }
     }
 
-    /// Re-insert a window into the tiling layout (attaches next to current focus).
+    /// Re-insert a window into the tiling layout.
+    ///
+    /// Spatially-aware: uses the window's floating position to determine
+    /// the correct insertion target and split direction. Falls back to
+    /// `current_focus` + `Right` only when no floating rect is available.
     pub(super) fn reattach_to_tiling_layout(&mut self, key: WindowKey) {
         use crate::layout::LayoutNode;
         if self.layout_contains(key) {
@@ -711,21 +787,241 @@ impl WindowManager {
             self.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(key)));
             return;
         }
+
+        // Capture state before mutable borrow of managed_layout
         let current_focus = *self.focus.current();
+        let floating_info = self
+            .window(key)
+            .and_then(|w| w.floating_rect)
+            .map(|spec| spec.resolve(self.managed_area));
+
         let Some(layout) = self.managed_layout.as_mut() else {
             return;
         };
+
+        // Try spatial placement via floating_rect
+        if let Some(rect) = floating_info {
+            let (cx, cy) = rect.center();
+            let regions = layout.regions(self.managed_area);
+            let weight = crate::constants::CELL_ASPECT_RATIO;
+            if let Some((target_key, target_rect)) =
+                term_wm_layout_engine::resolve_target(cx, cy, &regions, weight)
+            {
+                let quad =
+                    term_wm_layout_engine::detect_quadrant(cx as u16, cy as u16, &target_rect);
+                let pos = quad.to_insert_position();
+                let inserted = layout.root_mut().insert_leaf(target_key, key, pos);
+                if !inserted {
+                    layout.split_root(key, pos);
+                }
+                return;
+            }
+        }
+
+        // Absolute fallback: window was never floating — use current_focus
         if current_focus == key {
-            // Focus was previously set to this window; insert at root.
-            layout.split_root(key, crate::layout::InsertPosition::Right);
+            layout.split_root(key, InsertPosition::Right);
             return;
         }
-        let inserted =
-            layout
-                .root_mut()
-                .insert_leaf(current_focus, key, crate::layout::InsertPosition::Right);
+        let inserted = layout
+            .root_mut()
+            .insert_leaf(current_focus, key, InsertPosition::Right);
         if !inserted {
-            layout.split_root(key, crate::layout::InsertPosition::Right);
+            layout.split_root(key, InsertPosition::Right);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_context::AppContext;
+    use crate::components::NoopComponent;
+    use crate::events::{Event, MouseEvent, MouseEventKind};
+    use crate::wm_config::WmConfig;
+    use std::sync::Arc;
+
+    fn make_wm() -> WindowManager<NoopComponent> {
+        WindowManager::<NoopComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        )
+    }
+
+    #[test]
+    fn localize_event_inside_window() {
+        let mut wm = make_wm();
+        let key = wm.create_window(NoopComponent);
+        wm.set_floating_rect(
+            key,
+            Some(crate::window::FloatRectSpec::Absolute(
+                crate::window::FloatRect {
+                    x: 10,
+                    y: 5,
+                    width: 40,
+                    height: 20,
+                },
+            )),
+        );
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Press(crate::events::MouseButton::Left),
+            modifiers: crate::events::KeyModifiers::NONE,
+            column: 25,
+            row: 10,
+        };
+        let result = wm.localize_event(key, &Event::Mouse(mouse));
+        let translated = result.expect("should translate inside window");
+        if let Event::Mouse(m) = translated {
+            assert_eq!(m.column, 15);
+            assert_eq!(m.row, 5);
+        } else {
+            panic!("expected Mouse event");
+        }
+    }
+
+    #[test]
+    fn localize_event_content_uses_content_region() {
+        let mut wm = make_wm();
+        let key = wm.create_window(NoopComponent);
+        wm.set_floating_rect(
+            key,
+            Some(crate::window::FloatRectSpec::Absolute(
+                crate::window::FloatRect {
+                    x: 10,
+                    y: 5,
+                    width: 40,
+                    height: 20,
+                },
+            )),
+        );
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        // Click on the visible portion of a window with chrome offset
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Press(crate::events::MouseButton::Left),
+            modifiers: crate::events::KeyModifiers::NONE,
+            column: 12,
+            row: 8,
+        };
+        let result = wm.localize_event_content(key, &Event::Mouse(mouse));
+        // Should return a translated event (content region exists)
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn localize_event_content_offscreen_negative_origin() {
+        let mut wm = make_wm();
+        let key = wm.create_window(NoopComponent);
+        wm.set_floating_rect(
+            key,
+            Some(crate::window::FloatRectSpec::Absolute(
+                crate::window::FloatRect {
+                    x: -10,
+                    y: -5,
+                    width: 40,
+                    height: 20,
+                },
+            )),
+        );
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        // Click at screen (0, 0) which is on the visible portion of the offscreen window
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Press(crate::events::MouseButton::Left),
+            modifiers: crate::events::KeyModifiers::NONE,
+            column: 0,
+            row: 0,
+        };
+        let result = wm.localize_event_content(key, &Event::Mouse(mouse));
+        // With chrome offset, content starts at dest + offset.
+        // dest = (-10, -5), offset = (0, 0) → content_area.x = -10
+        // to_local_offset computes v_x = 0 - (-10) + 0 = 10 → local coord (10, ...)
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn localize_event_content_negative_origin() {
+        let mut wm = make_wm();
+        let key = wm.create_window(NoopComponent);
+        wm.set_floating_rect(
+            key,
+            Some(crate::window::FloatRectSpec::Absolute(
+                crate::window::FloatRect {
+                    x: -5,
+                    y: -5,
+                    width: 40,
+                    height: 20,
+                },
+            )),
+        );
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Press(crate::events::MouseButton::Left),
+            modifiers: crate::events::KeyModifiers::NONE,
+            column: 0,
+            row: 0,
+        };
+        let result = wm.localize_event_content(key, &Event::Mouse(mouse));
+        // dest.x = -5, offset_x = 0 → content_x = -5
+        // v_x = 0 - (-5) = 5 → should map correctly
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn localize_event_content_with_chrome_offset() {
+        let mut wm = make_wm();
+        let key = wm.create_window(NoopComponent);
+        wm.set_floating_rect(
+            key,
+            Some(crate::window::FloatRectSpec::Absolute(
+                crate::window::FloatRect {
+                    x: 10,
+                    y: 5,
+                    width: 40,
+                    height: 20,
+                },
+            )),
+        );
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Press(crate::events::MouseButton::Left),
+            modifiers: crate::events::KeyModifiers::NONE,
+            column: 15,
+            row: 8,
+        };
+        let result = wm.localize_event_content(key, &Event::Mouse(mouse));
+        assert!(result.is_some());
     }
 }

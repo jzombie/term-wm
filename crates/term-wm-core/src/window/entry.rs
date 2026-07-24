@@ -1,6 +1,16 @@
+use super::ComponentKey;
 use super::FloatRectSpec;
-use crate::actions::TermWmAction;
-use crate::components::Component;
+use crate::hitbox_registry::HitboxId;
+
+/// Controls what happens when a window is closed via `close_window`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ClosePolicy {
+    /// Destroy the component and remove the `WindowKey` from the SlotMap.
+    #[default]
+    Destroy,
+    /// Transition to `Unmapped` but keep the component and key alive.
+    Unmap,
+}
 
 /// Canonical window lifecycle states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,20 +38,27 @@ pub struct Window {
     pub prev_floating_rect: Option<FloatRectSpec>,
     pub creation_order: usize,
     pub direct_mode: bool,
-    /// Whether this window was created via `set_system_window`.
-    /// System windows are kept in the SlotMap after close so they can
-    /// be shown again later (debug log, help overlay, etc.).
-    pub is_system_window: bool,
     /// Decoupled maximization state flag.  Set when the window is maximized,
     /// cleared when restored.  Must NOT be derived from geometry comparison.
     pub is_maximized: bool,
-    /// The renderable component. Every window has one.
-    /// For chrome-only windows, use `NoopComponent`.
-    pub component: Box<dyn Component<TermWmAction>>,
+    /// Render window borders (left, right, bottom, corners).
+    pub borders_enabled: bool,
+    /// Render window header (title bar, buttons).
+    pub header_enabled: bool,
+    /// Key into the WindowManager's component arena.
+    pub component_key: ComponentKey,
+    /// What happens when this window is closed.
+    pub close_policy: ClosePolicy,
+    /// Persistent HitboxId for the window's content area.
+    pub content_hitbox_id: HitboxId,
+    /// Which leaf component within this window currently holds keyboard focus.
+    /// Set when a component returns `TermWmAction::RequestKeyboardFocus`.
+    /// Cleared automatically when `FocusRing` switches to a different window.
+    pub active_keyboard_focus: Option<HitboxId>,
 }
 
 impl Window {
-    pub fn new(creation_order: usize, component: Box<dyn Component<TermWmAction>>) -> Self {
+    pub fn new(creation_order: usize, component_key: ComponentKey) -> Self {
         Self {
             title: None,
             title_set_order: None,
@@ -50,9 +67,13 @@ impl Window {
             prev_floating_rect: None,
             creation_order,
             direct_mode: false,
-            is_system_window: false,
             is_maximized: false,
-            component,
+            borders_enabled: true,
+            header_enabled: true,
+            component_key,
+            close_policy: ClosePolicy::default(),
+            content_hitbox_id: HitboxId::new(),
+            active_keyboard_focus: None,
         }
     }
 

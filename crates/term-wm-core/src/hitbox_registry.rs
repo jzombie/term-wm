@@ -1,27 +1,50 @@
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use term_wm_layout_engine::LayoutRect;
 
+use crate::chrome::ChromeTarget;
 use crate::mouse_coord::MousePosition;
-use crate::window::OverlayId;
-use crate::window::WindowKey;
-use crate::window::decorator::HeaderAction;
+use crate::window::{LayerId, OverlayKey, WindowKey};
 
-/// Opaque identifier for a component instance that registered a hitbox.
+/// Globally unique opaque identifier for a clickable surface / widget.
 ///
-/// Assigned once per interactive component (e.g. in `new()` or on first
-/// render). Unique within a window, but two components in different windows
-/// may share the same ID without conflict because `HitTarget::Component`
-/// pairs it with a `WindowKey`.
-pub type ComponentId = u32;
+/// Assigned once at entity construction time and never changes across frames.
+/// The `HitboxRegistry` stores only these IDs — no domain knowledge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct HitboxId(pub u64);
 
-/// Generate a globally unique component ID.
+impl HitboxId {
+    pub fn new() -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+        Self(NEXT_ID.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl Default for HitboxId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Identifies which component instance owns a hitbox entry.
 ///
-/// Uses an atomic counter so IDs are unique across all windows and frames.
-pub fn next_component_id() -> ComponentId {
-    static NEXT_CID: AtomicU32 = AtomicU32::new(1);
-    NEXT_CID.fetch_add(1, Ordering::Relaxed)
+/// Every registered hitbox must have exactly one owner. The `dispatch_mouse`
+/// function uses this tag to route events directly to the owning component
+/// in O(1) — no iteration over handle lists, no `content_hitbox_id == id`
+/// equality checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComponentOwner {
+    /// Hitbox belongs to a window's component tree.
+    Window(WindowKey),
+    /// Hitbox belongs to an overlay (command palette, help, confirm dialog).
+    Overlay(OverlayKey),
+    /// Hitbox belongs to a system layer (panels, FAB, notification area).
+    Layer(LayerId),
+    /// Strongly-typed chrome element (resize edge, drag handle, button, split).
+    Chrome(ChromeTarget),
+    /// Test-only owner for standalone component unit tests.
+    /// Unconditional so integration tests in tests/*.rs can reference it.
+    Test,
 }
 
 /// Maximum depth of nested clipping containers (ScrollViews, overlay bounds,
@@ -36,33 +59,12 @@ pub fn next_component_id() -> ComponentId {
 /// stack-allocated in the common case.
 const CLIP_STACK_INLINE_CAPACITY: usize = 8;
 
-/// Target identified by a hit-test result.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HitTarget {
-    /// Click on a window's content area (not chrome).
-    Window(WindowKey),
-    /// Click on a specific component inside a window.
-    Component(WindowKey, ComponentId),
-    /// Click on an overlay (help, exit confirm, etc.).
-    Overlay(OverlayId),
-    /// Click on the top panel area.
-    TopPanel,
-    /// Click on the bottom panel area.
-    BottomPanel,
-    /// Click on a window's resize edge.
-    ChromeResize(WindowKey, crate::layout::floating::ResizeEdge),
-    /// Click on a window's header button (close, maximize, etc.).
-    ChromeHeader(WindowKey, HeaderAction),
-    /// Click on a tiling layout split handle.
-    LayoutHandle,
-    /// Click on a notification toast — event is consumed, no passthrough.
-    Notification,
-}
-
 /// A single entry in the hitbox registry.
 #[derive(Debug, Clone, Copy)]
 pub struct HitboxEntry {
-    pub target: HitTarget,
+    pub id: HitboxId,
+    /// The component that owns this hitbox — NEVER optional.
+    pub owner: ComponentOwner,
     /// Absolute screen coordinates (post-clip intersection).
     pub area: LayoutRect,
 }
@@ -78,34 +80,58 @@ pub struct HitboxEntry {
 /// no coordinate mutation.
 #[derive(Debug, Clone)]
 pub struct HitboxRegistry {
+    /// Standard hitboxes: windows, chrome, layers.
     entries: Vec<HitboxEntry>,
+    /// Overlay hitboxes: checked FIRST by hit_test, highest Z-layer.
+    /// Modal overlays register a full-screen blocker here.
+    overlay_entries: Vec<HitboxEntry>,
     /// Active clip rects from scroll containers.  Inline storage avoids
     /// heap allocation for the common case (depth ≤ 5). Falls back to heap
     /// only in pathological nesting > CLIP_STACK_INLINE_CAPACITY levels deep.
     clip_stack: smallvec::SmallVec<[LayoutRect; CLIP_STACK_INLINE_CAPACITY]>,
+    /// The component owner currently being populated. Set via
+    /// `set_active_owner()` before each render unit. `register()` panics
+    /// if this is `None`, ensuring every entry has a concrete owner.
+    active_owner: Option<ComponentOwner>,
 }
 
 impl HitboxRegistry {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
+            overlay_entries: Vec::new(),
             clip_stack: smallvec::SmallVec::new(),
+            active_owner: None,
         }
     }
 
-    /// Reset for a new frame.  Clears both the entry list and the clip stack.
+    /// Create a registry pre-configured with an active owner.
+    /// Use for scratch/offscreen registries that will be merged
+    /// into the main registry after rendering.
+    pub fn with_owner(owner: ComponentOwner) -> Self {
+        Self {
+            entries: Vec::new(),
+            overlay_entries: Vec::new(),
+            clip_stack: smallvec::SmallVec::new(),
+            active_owner: Some(owner),
+        }
+    }
+
+    /// Reset for a new frame.  Clears entries, clip stack, and active owner.
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.overlay_entries.clear();
         self.clip_stack.clear();
     }
 
-    /// Register a clickable area.
+    /// Register a clickable area with an explicit owner.
+    /// Atomic — no stateful `set_active_owner` needed.
     ///
     /// The `area` is intersected with the current clip stack before storing.
     /// If the intersection yields an empty rect, the entry is skipped entirely.
     /// This means scrolled-off components simply don't appear in the registry
     /// — no `rect_contains` needed at event time.
-    pub fn register(&mut self, target: HitTarget, area: LayoutRect) {
+    pub fn register(&mut self, id: HitboxId, owner: ComponentOwner, area: LayoutRect) {
         let mut clipped = area;
         for clip in &self.clip_stack {
             clipped = clipped.clamp(*clip);
@@ -113,10 +139,28 @@ impl HitboxRegistry {
         if clipped.width == 0 || clipped.height == 0 {
             return;
         }
-        self.entries.push(HitboxEntry {
-            target,
+        let entry = HitboxEntry {
+            id,
+            owner,
             area: clipped,
-        });
+        };
+        if matches!(owner, ComponentOwner::Overlay(_)) {
+            self.overlay_entries.push(entry);
+        } else {
+            self.entries.push(entry);
+        }
+    }
+
+    /// Register a clickable area using the registry's `active_owner`.
+    ///
+    /// Panics if `active_owner` is `None` — callers must ensure the registry
+    /// was created via `with_owner()` or had `set_active_owner()` called.
+    /// The `area` is clipped and culled identically to [`Self::register`].
+    pub fn register_active(&mut self, id: HitboxId, area: LayoutRect) {
+        let owner = self
+            .active_owner
+            .expect("register_active called without active_owner");
+        self.register(id, owner, area);
     }
 
     /// Push a clip rect (called by `ScrollViewComponent` before rendering
@@ -138,64 +182,40 @@ impl HitboxRegistry {
     }
 
     /// Query: reverse scan (front-to-back = top-most first) for the top-most
-    /// entry whose area contains `position`. Returns the `HitTarget` and its
-    /// exact screen-space `Rect` if found.
+    /// entry whose area contains `position`. Returns the `HitboxId`, its
+    /// `ComponentOwner`, and its exact screen-space `Rect` if found.
     ///
     /// Entries are registered in render order (back-to-front), so iterating
     /// in reverse yields the top-most (last-rendered, highest z-order) match.
-    pub fn hit_test(&self, position: MousePosition) -> Option<(HitTarget, LayoutRect)> {
+    pub fn hit_test(
+        &self,
+        position: MousePosition,
+    ) -> Option<(HitboxId, ComponentOwner, LayoutRect)> {
+        // 1. Overlay entries first (LIFO — last-registered overlay wins)
+        if let Some(entry) = self
+            .overlay_entries
+            .iter()
+            .rev()
+            .find(|entry| position.is_inside(entry.area))
+        {
+            return Some((entry.id, entry.owner, entry.area));
+        }
+        // 2. Standard entries second (LIFO — last-registered child wins over parent)
         self.entries
             .iter()
             .rev()
             .find(|entry| position.is_inside(entry.area))
-            .map(|entry| (entry.target, entry.area))
-    }
-
-    /// Build a dispatch map from `(WindowKey, ComponentId)` pairs to entry
-    /// indices in the entries vec.  Used by the window manager to route
-    /// `HitTarget::Component` hits to the correct component.
-    ///
-    /// Returns `None` if no component entries exist (avoids allocating the map).
-    pub fn build_component_map(&self) -> Option<HashMap<(WindowKey, ComponentId), usize>> {
-        let mut map = HashMap::new();
-        for (idx, entry) in self.entries.iter().enumerate() {
-            if let HitTarget::Component(key, id) = entry.target {
-                map.insert((key, id), idx);
-            }
-        }
-        if map.is_empty() { None } else { Some(map) }
+            .map(|entry| (entry.id, entry.owner, entry.area))
     }
 
     /// Returns the number of registered entries (for diagnostics / metrics).
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.entries.len() + self.overlay_entries.len()
     }
 
     /// Returns `true` if no entries are registered.
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    /// Find the screen-space area for a specific component by key.
-    /// Used by Phase 1 (ComponentInteraction) capture to inject
-    /// `screen_area` into the context when routing events to the
-    /// captured component.
-    pub fn component_area(&self, key: WindowKey) -> Option<LayoutRect> {
-        self.entries
-            .iter()
-            .rev()
-            .find(|entry| matches!(entry.target, HitTarget::Component(k, _) if k == key))
-            .map(|entry| entry.area)
-    }
-
-    /// Find the screen-space area for a window by key.
-    /// Used for system windows (debug log) that aren't in the tiling layout.
-    pub fn window_area(&self, key: WindowKey) -> Option<LayoutRect> {
-        self.entries
-            .iter()
-            .rev()
-            .find(|entry| matches!(entry.target, HitTarget::Window(k) if k == key))
-            .map(|entry| entry.area)
+        self.entries.is_empty() && self.overlay_entries.is_empty()
     }
 
     /// Atomically swap all entries with another registry.
@@ -205,7 +225,9 @@ impl HitboxRegistry {
     /// registry without copying or re-scanning.
     pub fn swap_entries(&mut self, other: &mut Self) {
         std::mem::swap(&mut self.entries, &mut other.entries);
+        std::mem::swap(&mut self.overlay_entries, &mut other.overlay_entries);
         std::mem::swap(&mut self.clip_stack, &mut other.clip_stack);
+        std::mem::swap(&mut self.active_owner, &mut other.active_owner);
     }
 
     /// Merge all entries from another registry into this one.
@@ -213,7 +235,80 @@ impl HitboxRegistry {
     /// Appends entries from `other` to `self`, preserving Z-ordering.
     /// The source registry is consumed (entries moved, not copied).
     pub fn merge(&mut self, other: Self) {
-        self.entries.extend(other.entries);
+        for entry in other.entries {
+            let mut clipped = entry.area;
+            for clip in &self.clip_stack {
+                clipped = clipped.clamp(*clip);
+            }
+            if clipped.width == 0 || clipped.height == 0 {
+                continue;
+            }
+            self.entries.push(HitboxEntry {
+                id: entry.id,
+                owner: entry.owner,
+                area: clipped,
+            });
+        }
+        for entry in other.overlay_entries {
+            let mut clipped = entry.area;
+            for clip in &self.clip_stack {
+                clipped = clipped.clamp(*clip);
+            }
+            if clipped.width == 0 || clipped.height == 0 {
+                continue;
+            }
+            self.overlay_entries.push(HitboxEntry {
+                id: entry.id,
+                owner: entry.owner,
+                area: clipped,
+            });
+        }
+    }
+
+    /// Merge entries from a scratch registry, applying a spatial translation
+    /// vector and clipping against a target viewport bounds.
+    pub fn merge_with_transform(
+        &mut self,
+        mut other: Self,
+        translation_x: i32,
+        translation_y: i32,
+        viewport: LayoutRect,
+    ) {
+        for mut entry in other.entries.drain(..) {
+            entry.area.x = entry.area.x.saturating_add(translation_x);
+            entry.area.y = entry.area.y.saturating_add(translation_y);
+            let mut clipped = entry.area;
+            // Clip against the viewport and any active clip rects
+            clipped = clipped.clamp(viewport);
+            for clip in &self.clip_stack {
+                clipped = clipped.clamp(*clip);
+            }
+            if clipped.width == 0 || clipped.height == 0 {
+                continue;
+            }
+            self.entries.push(HitboxEntry {
+                id: entry.id,
+                owner: entry.owner,
+                area: clipped,
+            });
+        }
+        for mut entry in other.overlay_entries.drain(..) {
+            entry.area.x = entry.area.x.saturating_add(translation_x);
+            entry.area.y = entry.area.y.saturating_add(translation_y);
+            let mut clipped = entry.area;
+            clipped = clipped.clamp(viewport);
+            for clip in &self.clip_stack {
+                clipped = clipped.clamp(*clip);
+            }
+            if clipped.width == 0 || clipped.height == 0 {
+                continue;
+            }
+            self.overlay_entries.push(HitboxEntry {
+                id: entry.id,
+                owner: entry.owner,
+                area: clipped,
+            });
+        }
     }
 }
 
@@ -239,8 +334,10 @@ mod tests {
     #[test]
     fn register_and_hit() {
         let mut reg = HitboxRegistry::new();
+        let id = HitboxId::new();
         reg.register(
-            HitTarget::Window(WindowKey::default()),
+            id,
+            ComponentOwner::Test,
             LayoutRect {
                 x: 0,
                 y: 0,
@@ -248,14 +345,20 @@ mod tests {
                 height: 10,
             },
         );
-        assert!(reg.hit_test(screen_pos(5, 5)).is_some());
+        let result = reg.hit_test(screen_pos(5, 5));
+        assert!(result.is_some());
+        let (hit_id, owner, _rect) = result.unwrap();
+        assert_eq!(hit_id, id);
+        assert_eq!(owner, ComponentOwner::Test);
     }
 
     #[test]
     fn miss_outside_area() {
         let mut reg = HitboxRegistry::new();
+        let id = HitboxId::new();
         reg.register(
-            HitTarget::Window(WindowKey::default()),
+            id,
+            ComponentOwner::Test,
             LayoutRect {
                 x: 0,
                 y: 0,
@@ -269,11 +372,11 @@ mod tests {
     #[test]
     fn front_to_back_priority() {
         let mut reg = HitboxRegistry::new();
-        let key1 = WindowKey::default();
-        let key2 = WindowKey::default();
-        // Register back rect first
+        let id1 = HitboxId::new();
+        let id2 = HitboxId::new();
         reg.register(
-            HitTarget::Window(key1),
+            id1,
+            ComponentOwner::Test,
             LayoutRect {
                 x: 0,
                 y: 0,
@@ -281,9 +384,9 @@ mod tests {
                 height: 20,
             },
         );
-        // Register smaller front rect second
         reg.register(
-            HitTarget::Window(key2),
+            id2,
+            ComponentOwner::Test,
             LayoutRect {
                 x: 5,
                 y: 5,
@@ -291,10 +394,8 @@ mod tests {
                 height: 10,
             },
         );
-
-        // Point inside both rects should hit the front (last-registered)
-        let (hit, _rect) = reg.hit_test(screen_pos(7, 7)).unwrap();
-        assert_eq!(hit, HitTarget::Window(key2));
+        let (hit, _owner, _rect) = reg.hit_test(screen_pos(7, 7)).unwrap();
+        assert_eq!(hit, id2);
     }
 
     #[test]
@@ -306,9 +407,10 @@ mod tests {
             width: 10,
             height: 10,
         });
-        // Register a rect that is entirely outside the clip
+        let id = HitboxId::new();
         reg.register(
-            HitTarget::Window(WindowKey::default()),
+            id,
+            ComponentOwner::Test,
             LayoutRect {
                 x: 20,
                 y: 20,
@@ -329,9 +431,10 @@ mod tests {
             width: 10,
             height: 10,
         });
-        // Register a rect that partially overlaps the clip
+        let id = HitboxId::new();
         reg.register(
-            HitTarget::Window(WindowKey::default()),
+            id,
+            ComponentOwner::Test,
             LayoutRect {
                 x: 5,
                 y: 5,
@@ -340,12 +443,58 @@ mod tests {
             },
         );
         assert_eq!(reg.len(), 1);
-        // The registered area should be clipped to (5,5,5,5) — the overlap
-        let (hit, _rect) = reg.hit_test(screen_pos(7, 7)).unwrap();
-        assert_eq!(hit, HitTarget::Window(WindowKey::default()));
-        // Point in the original rect but outside the clip should miss
+        let (hit, _owner, _rect) = reg.hit_test(screen_pos(7, 7)).unwrap();
+        assert_eq!(hit, id);
         assert!(reg.hit_test(screen_pos(15, 15)).is_none());
         reg.pop_clip();
+    }
+
+    #[test]
+    fn merge_clips_against_active_clip_stack() {
+        let mut main = HitboxRegistry::new();
+        // Push a managed-area clip (x=0, width=20)
+        main.push_clip(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 20,
+        });
+
+        // Create a sub-registry with an entry that extends off-screen left
+        let mut sub = HitboxRegistry::new();
+        sub.register(
+            HitboxId::new(),
+            ComponentOwner::Test,
+            LayoutRect {
+                x: -5,
+                y: 2,
+                width: 30,
+                height: 10,
+            },
+        );
+
+        // Merge — the entry should be clipped to x=0, width=15 (right edge
+        // at -5+30=25, clipped to min(25,20)=20, width = 20-0 = 15)
+        main.merge(sub);
+
+        assert_eq!(main.len(), 1, "clipped entry should survive merge");
+        // Column 0 (inside clipped area) → must hit
+        assert!(main.hit_test(screen_pos(0, 5)).is_some());
+        // Column 14 (inside clipped area, 20-1... actually 15-1=14)
+        assert!(main.hit_test(screen_pos(14, 5)).is_some());
+        // Column 15 IS inside the clipped area [0, 20)
+        assert!(
+            main.hit_test(screen_pos(15, 5)).is_some(),
+            "click at col 15 SHOULD hit; clipped width is 20 (right edge at 20)"
+        );
+
+        // Column 20 is at the right edge of clipped area (semi-open [0,20))
+        assert!(
+            main.hit_test(screen_pos(20, 5)).is_none(),
+            "click at col 20 should NOT hit; width was clipped from 30 to 20"
+        );
+
+        main.pop_clip();
     }
 
     #[test]
@@ -363,9 +512,10 @@ mod tests {
             width: 20,
             height: 20,
         });
-        // This rect is inside the first clip but completely outside the second
+        let id = HitboxId::new();
         reg.register(
-            HitTarget::Window(WindowKey::default()),
+            id,
+            ComponentOwner::Test,
             LayoutRect {
                 x: 0,
                 y: 0,
@@ -393,9 +543,10 @@ mod tests {
             width: 20,
             height: 20,
         });
-        // This rect partially overlaps the second clip — should be clipped
+        let id = HitboxId::new();
         reg.register(
-            HitTarget::Window(WindowKey::default()),
+            id,
+            ComponentOwner::Test,
             LayoutRect {
                 x: 5,
                 y: 5,
@@ -404,7 +555,6 @@ mod tests {
             },
         );
         assert_eq!(reg.len(), 1);
-        // Check that the result is clipped to the inner clip's bounds
         let entry = reg.entries[0];
         assert_eq!(entry.area.x, 10);
         assert_eq!(entry.area.y, 10);
@@ -423,8 +573,10 @@ mod tests {
             width: 10,
             height: 10,
         });
+        let id = HitboxId::new();
         reg.register(
-            HitTarget::Window(WindowKey::default()),
+            id,
+            ComponentOwner::Test,
             LayoutRect {
                 x: 0,
                 y: 0,
@@ -439,41 +591,115 @@ mod tests {
     }
 
     #[test]
-    fn build_component_map_empty_when_no_components() {
-        let mut reg = HitboxRegistry::new();
-        reg.register(
-            HitTarget::Window(WindowKey::default()),
-            LayoutRect {
-                x: 0,
-                y: 0,
-                width: 10,
-                height: 10,
-            },
-        );
-        assert!(reg.build_component_map().is_none());
-    }
-
-    #[test]
-    fn build_component_map_returns_component_entries() {
-        let mut reg = HitboxRegistry::new();
-        reg.register(
-            HitTarget::Component(WindowKey::default(), 42),
-            LayoutRect {
-                x: 0,
-                y: 0,
-                width: 10,
-                height: 10,
-            },
-        );
-        let map = reg.build_component_map().unwrap();
-        assert_eq!(map.len(), 1);
-        assert!(map.contains_key(&(WindowKey::default(), 42)));
-    }
-
-    #[test]
     #[should_panic(expected = "clip_stack pop without matching push")]
     fn pop_empty_clip_panics() {
         let mut reg = HitboxRegistry::new();
         reg.pop_clip();
+    }
+
+    #[test]
+    #[should_panic(expected = "register_active called without active_owner")]
+    fn register_active_panics_without_owner() {
+        let mut reg = HitboxRegistry::new();
+        reg.register_active(
+            HitboxId::new(),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
+        );
+    }
+
+    #[test]
+    fn register_active_with_owner_succeeds() {
+        let mut reg = HitboxRegistry::with_owner(ComponentOwner::Test);
+        let id = HitboxId::new();
+        reg.register_active(
+            id,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
+        );
+        assert_eq!(reg.len(), 1);
+        let (hit_id, owner, _rect) = reg.hit_test(screen_pos(5, 5)).unwrap();
+        assert_eq!(hit_id, id);
+        assert_eq!(owner, ComponentOwner::Test);
+    }
+
+    #[test]
+    fn overlay_entries_hit_before_standard() {
+        let mut reg = HitboxRegistry::new();
+        let standard_id = HitboxId::new();
+        let overlay_id = HitboxId::new();
+        let mut slotmap = slotmap::SlotMap::<OverlayKey, ()>::with_key();
+        let overlay_key = slotmap.insert(());
+        reg.register(
+            standard_id,
+            ComponentOwner::Test,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 20,
+                height: 20,
+            },
+        );
+        reg.register(
+            overlay_id,
+            ComponentOwner::Overlay(overlay_key),
+            LayoutRect {
+                x: 5,
+                y: 5,
+                width: 10,
+                height: 10,
+            },
+        );
+        let (hit_id, owner, _rect) = reg.hit_test(screen_pos(7, 7)).unwrap();
+        assert_eq!(hit_id, overlay_id);
+        assert!(matches!(owner, ComponentOwner::Overlay(_)));
+    }
+
+    #[test]
+    fn swap_entries_exchanges_registries() {
+        let mut a = HitboxRegistry::new();
+        let mut b = HitboxRegistry::new();
+        let id_a = HitboxId::new();
+        let id_b = HitboxId::new();
+        a.register(
+            id_a,
+            ComponentOwner::Test,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 5,
+                height: 5,
+            },
+        );
+        b.register(
+            id_b,
+            ComponentOwner::Test,
+            LayoutRect {
+                x: 10,
+                y: 10,
+                width: 5,
+                height: 5,
+            },
+        );
+        a.swap_entries(&mut b);
+        assert!(a.hit_test(screen_pos(2, 2)).is_none());
+        assert!(a.hit_test(screen_pos(12, 12)).is_some());
+        assert!(b.hit_test(screen_pos(2, 2)).is_some());
+        assert!(b.hit_test(screen_pos(12, 12)).is_none());
+    }
+
+    #[test]
+    fn with_owner_sets_active_owner() {
+        let reg = HitboxRegistry::with_owner(ComponentOwner::Test);
+        assert!(reg.active_owner.is_some());
+        assert_eq!(reg.active_owner.unwrap(), ComponentOwner::Test);
     }
 }

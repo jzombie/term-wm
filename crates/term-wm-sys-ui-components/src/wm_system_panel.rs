@@ -2,35 +2,63 @@ use std::collections::VecDeque;
 
 use ratatui::style::Color;
 use term_wm_core::actions::{EventResult, TermWmAction};
-use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
+use term_wm_core::component_context::ComponentContext;
+use term_wm_core::components::{Component, SelectionStatus};
+use term_wm_core::impl_component_delegate;
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
 use term_wm_ui_components::{
-    ButtonComponent, LabelComponent, ScrollViewComponent, VerticalStackComponent,
+    ButtonComponent, CanvasScrollView, CanvasSizingPolicy, LabelComponent, ScrollViewComponent,
+    VerticalStackComponent,
 };
+
+/// Local enum wrapping all child types used in the system panel stack.
+enum PanelChild {
+    Label(LabelComponent),
+    Button(ButtonComponent),
+    Spacer(SpacerComponent),
+}
+
+impl_component_delegate!(PanelChild {
+    Label,
+    Button,
+    Spacer,
+});
 
 /// A system panel with utility buttons, built from declarative components.
 pub struct WmSystemPanelComponent {
-    scroll_view: ScrollViewComponent<VerticalStackComponent>,
+    scroll_view: ScrollViewComponent<CanvasScrollView<VerticalStackComponent<PanelChild>>>,
 }
 
 impl WmSystemPanelComponent {
     pub fn new() -> Self {
-        let mut stack = VerticalStackComponent::new();
-        stack.add(Box::new(
+        let mut stack = VerticalStackComponent::<PanelChild>::new();
+        stack.add(PanelChild::Label(
             LabelComponent::new("Notification test panel").with_color(Color::DarkGray),
         ));
-        stack.add(Box::new(SpacerComponent::new(1)));
-        stack.add(Box::new(
+        stack.add(PanelChild::Spacer(SpacerComponent::new(1)));
+        stack.add(PanelChild::Label(
             LabelComponent::new("Click below to send a test toast:").with_color(Color::DarkGray),
         ));
-        stack.add(Box::new(SpacerComponent::new(1)));
-        stack.add(Box::new(ButtonComponent::new(
+        stack.add(PanelChild::Spacer(SpacerComponent::new(1)));
+        stack.add(PanelChild::Button(ButtonComponent::new(
             "  Send Notification  ",
             TermWmAction::SendNotification("Hello from System Panel!".to_string()),
         )));
+        stack.add(PanelChild::Spacer(SpacerComponent::new(1)));
+        stack.add(PanelChild::Label(
+            LabelComponent::new("Debug utilities:").with_color(Color::DarkGray),
+        ));
+        stack.add(PanelChild::Spacer(SpacerComponent::new(1)));
+        stack.add(PanelChild::Button(ButtonComponent::new(
+            "  Trigger Panic  ",
+            TermWmAction::Callback(|| panic!("Manual panic from system panel")),
+        )));
 
-        let scroll_view = ScrollViewComponent::new(stack);
+        let scroll_view = ScrollViewComponent::new(CanvasScrollView::new(
+            stack,
+            CanvasSizingPolicy::FitViewportWidth,
+        ));
         Self { scroll_view }
     }
 }
@@ -148,7 +176,8 @@ mod tests {
     fn system_panel_render_does_not_panic() {
         let mut panel = WmSystemPanelComponent::new();
         let buffer = Buffer::empty(Rect::new(0, 0, 60, 20));
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, Rect::new(0, 0, 60, 20));
+        let mut backend =
+            term_wm_console::RatatuiBackend::new_simple(buffer, Rect::new(0, 0, 60, 20));
         let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
             x: 0,
             y: 0,
@@ -222,7 +251,8 @@ mod tests {
     fn spacer_render_is_noop() {
         let mut spacer = SpacerComponent::new(3);
         let buffer = Buffer::empty(Rect::new(0, 0, 40, 10));
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, Rect::new(0, 0, 40, 10));
+        let mut backend =
+            term_wm_console::RatatuiBackend::new_simple(buffer, Rect::new(0, 0, 40, 10));
         let ctx = ComponentContext::new(true);
         let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
         spacer.render(
