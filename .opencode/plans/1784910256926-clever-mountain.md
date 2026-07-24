@@ -574,3 +574,139 @@ for y in (top + 1) as usize .. bottom as usize {
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test -p term-wm-console
 ```
+
+---
+
+---
+
+# APPENDIX E: Drop Shadow Cartesian Truncation Bug — SEV-1
+
+## Root Cause
+`render_drop_shadow` constructs a `Rect` by clamping `sx.max(0) as u16` but using the full original width `(ex - sx) as u16`. When `dest.x` is negative (window moved left), `sx` gets clamped to 0 but the width remains the full pre-clamp extent. The shadow's right edge anchors at `0 + full_width` instead of the correct `clipped_right - clipped_left`, making the shadow appear to stretch as the window moves left.
+
+## Affected code path
+
+**File:** `crates/term-wm-console/src/draw_plan_renderer.rs:884-890`
+
+```rust
+let dest_rect = Rect::new(
+    sx.max(0) as u16,    // clamps left to 0 — correct
+    sy.max(0) as u16,
+    (ex - sx) as u16,    // BUG: uses full width, not clipped width
+    (ey - sy) as u16,
+);
+let clip = dest_rect.intersection(buf.area);
+```
+
+When `dest.x = -5, dest.width = 30`: `sx = -5 + 2 = -3`, `ex = -3 + 30 = 27`. The rect becomes `x=0, width=30` but the actual visible extent is only 27 columns (0..27). Width should be 27.
+
+## Fix
+
+Replace the `u16`-based intersection with pure `i32` math — derive clipped width from `clip_ex - clip_x`, never from the original extent.
+
+Replace the entire function body with pure `i32` intersection math:
+
+```rust
+pub fn render_drop_shadow(buf: &mut Buffer, mask: &mut [u8], dest: LayoutRect, z_depth: f32, theme: &Theme) {
+    let active_mask = &mut mask[..buf.content.len()];
+    active_mask.fill(0);
+
+    let sx = dest.x.saturating_add(SHADOW_OFFSET_X as i32);
+    let sy = dest.y.saturating_add(SHADOW_OFFSET_Y as i32);
+    let ex = sx.saturating_add(i32::from(dest.width));
+    let ey = sy.saturating_add(i32::from(dest.height));
+
+    let buf_x = buf.area.x as i32;
+    let buf_y = buf.area.y as i32;
+    let buf_ex = buf_x + buf.area.width as i32;
+    let buf_ey = buf_y + buf.area.height as i32;
+
+    let clip_x = sx.max(buf_x);
+    let clip_y = sy.max(buf_y);
+    let clip_ex = ex.min(buf_ex);
+    let clip_ey = ey.min(buf_ey);
+
+    if clip_x >= clip_ex || clip_y >= clip_ey {
+        return;
+    }
+
+    let buf_w = buf.area.width as usize;
+    let rel_x_start = (clip_x - buf_x) as usize;
+    let copy_width = (clip_ex - clip_x) as usize;
+
+    let y_start = clip_y as usize;
+    let y_end = clip_ey as usize;
+
+    // Pass 1: Set mask bits
+    for y in y_start..y_end {
+        let rel_y = y - buf.area.y as usize;
+        let row_start = rel_y * buf_w;
+        let start_idx = row_start + rel_x_start;
+        let end_idx = start_idx + copy_width;
+
+        for i in start_idx..end_idx {
+            active_mask[i] |= SHADOW_BIT;
+            if !buf.content[i].symbol().starts_with(' ') {
+                active_mask[i] |= DIM_BIT;
+            }
+        }
+    }
+
+    // Pass 2: Row-sliced mask application
+    let shadow_color = lerp_color(theme.shadow_tint, theme.shadow_bg, z_depth).to_ratatui();
+    for y in y_start..y_end {
+        let rel_y = y - buf.area.y as usize;
+        let row_start = rel_y * buf_w;
+        let start_idx = row_start + rel_x_start;
+        let end_idx = start_idx + copy_width;
+
+        let row_slice = &mut buf.content[start_idx..end_idx];
+        let mask_slice = &active_mask[start_idx..end_idx];
+
+        for (cell, &val) in row_slice.iter_mut().zip(mask_slice.iter()) {
+            if val & DIM_BIT != 0 { cell.modifier.insert(ratatui::style::Modifier::DIM); }
+            if val & SHADOW_BIT != 0 { cell.set_bg(shadow_color); }
+        }
+    }
+}
+```
+
+## Systemic risk: `layout_rect_to_clipped_rect`
+
+**File:** `draw_plan_renderer.rs:271-278`
+
+Current: `Rect { x: layout.x as u16, y: layout.y as u16, width: layout.width, height: layout.height }`
+
+When `layout.x` is negative, `as u16` wraps to `65535 - |x|`. Simple `max(0)` clamping without proportional width truncation causes the same Cartesian anchoring bug as the original drop shadow: setting `x=0` while keeping full `width` projects phantom columns.
+
+Fix: subtract X-truncation from width, Y-truncation from height:
+```rust
+fn layout_rect_to_clipped_rect(layout: LayoutRect) -> Rect {
+    let x_trunc = if layout.x < 0 { (-layout.x) as u16 } else { 0 };
+    let y_trunc = if layout.y < 0 { (-layout.y) as u16 } else { 0 };
+    Rect {
+        x: layout.x.max(0) as u16,
+        y: layout.y.max(0) as u16,
+        width: layout.width.saturating_sub(x_trunc),
+        height: layout.height.saturating_sub(y_trunc),
+    }
+}
+```
+
+## Appendix D Item 4 fix: occlusion before memory access
+
+Vertical edge traversal in `render_resize_outline` must evaluate `is_obscured` BEFORE indexing into `buffer.content`:
+
+```rust
+if !is_obscured(rx, y) {
+    let cell = &mut buffer.content[rel_y * buf_w + rel_x];
+    cell.set_symbol("║");
+    cell.set_style(style);
+}
+```
+
+## Verification
+```bash
+cargo test -p term-wm-console
+# Visual: move a floating window partially off the left edge — shadow must not grow or stretch
+```
