@@ -452,9 +452,15 @@ pub fn render_app<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmA
         use term_wm_console::RatatuiBackend;
         if let Some(rb) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() {
             let theme = wm.config().theme;
-            for (rect, z) in overlay_shadow_data(wm, area, num_windows, total) {
-                render_drop_shadow(&mut rb.buffer, rect, 1.0 - z, &theme);
+            let mut tmp_mask = std::mem::take(&mut rb.mask_buffer);
+            let buf_len = rb.buffer.content.len();
+            if tmp_mask.len() < buf_len {
+                tmp_mask.resize(buf_len, 0);
             }
+            for (rect, z) in overlay_shadow_data(wm, area, num_windows, total) {
+                render_drop_shadow(&mut rb.buffer, &mut tmp_mask[..buf_len], rect, 1.0 - z, &theme);
+            }
+            rb.mask_buffer = tmp_mask;
         }
     }
     // Render overlays (command menu, help, exit confirm)

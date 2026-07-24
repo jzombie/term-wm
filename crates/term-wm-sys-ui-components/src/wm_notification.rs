@@ -64,7 +64,7 @@ mod tests {
     fn make_backend(area: LayoutRect) -> term_wm_console::RatatuiBackend {
         let ratatui_area = term_wm_ui_components::helpers::layout_rect_to_clipped_rect(area);
         let buf = Buffer::empty(ratatui_area);
-        term_wm_console::RatatuiBackend::new(buf, ratatui_area)
+        term_wm_console::RatatuiBackend::new_simple(buf, ratatui_area)
     }
 
     #[test]

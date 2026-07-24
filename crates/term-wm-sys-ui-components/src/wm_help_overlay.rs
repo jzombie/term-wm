@@ -289,7 +289,7 @@ mod tests {
             height: 24,
         };
         let buffer = Buffer::empty(area);
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
         {
             let layout_area = LayoutRect {
                 x: 0,

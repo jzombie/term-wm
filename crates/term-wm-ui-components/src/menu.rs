@@ -456,7 +456,7 @@ mod tests {
             height: 10,
         };
         let buf = Buffer::empty(area);
-        let mut backend = term_wm_console::RatatuiBackend::new(buf, area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, area);
         let ctx = ComponentContext::new(true);
         menu.render(
             &mut backend,

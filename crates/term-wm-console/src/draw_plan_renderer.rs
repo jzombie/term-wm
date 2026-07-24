@@ -307,22 +307,26 @@ pub fn blit_buffer(src: &Buffer, dst: &mut Buffer, area: Rect) {
 
 /// Draw plan renderer that consumes the spatial IR and renders components.
 /// Uses swap-based rendering for zero-allocation steady-state.
-/// Holds persistent offscreen buffers that are swapped (not reallocated)
-/// each frame.  The caller takes a buffer via `take_scratch()`, resizes
-/// it for the current window, renders into it, blits the result to the
-/// main buffer, then returns it via `put_scratch()`.  After the first
-/// frame the Buffer capacity is stable — no heap allocations in steady
-/// state.
+/// Holds persistent offscreen buffers AND mask buffers that are swapped
+/// (not reallocated) each frame.  The caller takes a buffer via
+/// `take_scratch()`, resizes it for the current window, renders into it,
+/// blits the result to the main buffer, then returns it via `put_scratch()`.
+/// After the first frame the Buffer and mask capacity is stable — no heap
+/// allocations in steady state.
 pub struct DrawPlanRenderer {
     scratch_buffer: Buffer,
+    scratch_mask: Vec<u8>,
     direct_buffer: Buffer,
+    direct_mask: Vec<u8>,
 }
 
 impl DrawPlanRenderer {
     pub fn new() -> Self {
         Self {
             scratch_buffer: Buffer::empty(Rect::ZERO),
+            scratch_mask: Vec::new(),
             direct_buffer: Buffer::empty(Rect::ZERO),
+            direct_mask: Vec::new(),
         }
     }
 
@@ -415,19 +419,27 @@ impl DrawPlanRenderer {
         hitbox_registry: &mut HitboxRegistry,
     ) {
         let mut buffer = std::mem::replace(&mut self.scratch_buffer, Buffer::empty(Rect::ZERO));
+        let mask = std::mem::take(&mut self.scratch_mask);
         buffer.resize(area);
         buffer.reset();
 
-        let mut backend = RatatuiBackend::new(buffer, area);
+        let mut backend = RatatuiBackend::new(buffer, area, mask);
         let ctx = ComponentContext::new(!region.dimmed).with_screen_area(region.bounds);
         component.render(&mut backend, region.bounds, &ctx, hitbox_registry);
 
         if region.dimmed {
-            self.apply_dim_modifier(&mut backend.buffer);
+            let mut tmp_mask = std::mem::take(&mut backend.mask_buffer);
+            let buf_len = backend.buffer.content.len();
+            if tmp_mask.len() < buf_len {
+                tmp_mask.resize(buf_len, 0);
+            }
+            Self::apply_dim_modifier(&mut backend.buffer, &mut tmp_mask[..buf_len]);
+            backend.mask_buffer = tmp_mask;
         }
 
         blit_buffer(&backend.buffer, target_buf, area);
         self.scratch_buffer = backend.buffer;
+        self.scratch_mask = backend.mask_buffer;
     }
 
     /// Render directly into target buffer (panels, overlays).
@@ -439,10 +451,11 @@ impl DrawPlanRenderer {
         region: &RenderRegion,
     ) {
         let mut buffer = std::mem::replace(&mut self.direct_buffer, Buffer::empty(Rect::ZERO));
+        let mask = std::mem::take(&mut self.direct_mask);
         buffer.resize(area);
         buffer.reset();
 
-        let mut backend = RatatuiBackend::new(buffer, area);
+        let mut backend = RatatuiBackend::new(buffer, area, mask);
         let ctx = ComponentContext::new(true).with_screen_area(region.bounds);
         component.render(
             &mut backend,
@@ -453,6 +466,7 @@ impl DrawPlanRenderer {
 
         blit_buffer(&backend.buffer, target_buf, area);
         self.direct_buffer = backend.buffer;
+        self.direct_mask = backend.mask_buffer;
     }
 
     /// Render a notification toast into the target buffer.
@@ -561,32 +575,37 @@ impl DrawPlanRenderer {
         region: &RenderRegion,
         hitbox_registry: &mut HitboxRegistry,
     ) {
-        // Swap persistent buffer out (leaves empty buffer in place)
+        // Swap persistent buffer AND mask out (leaves empty in place)
         let mut buffer = std::mem::replace(&mut self.scratch_buffer, Buffer::empty(Rect::ZERO));
+        let mask = std::mem::take(&mut self.scratch_mask);
 
-        // Resize and clear the swapped buffer (no allocation after warmup)
+        // Resize and clear (no allocation after warmup)
         buffer.resize(area);
         buffer.reset();
 
-        // Create backend owning the buffer (satisfies 'static for Any)
-        let mut backend = RatatuiBackend::new(buffer, area);
+        // Create backend owning the buffer and mask
+        let mut backend = RatatuiBackend::new(buffer, area, mask);
 
-        // Create component context with screen area
         let ctx = ComponentContext::new(!region.dimmed).with_screen_area(region.bounds);
-
-        // Component renders itself into the backend
         component.render(&mut backend, region.bounds, &ctx, hitbox_registry);
 
-        // Apply dim modifier if needed
+        // Apply dim modifier via two-pass mask if needed
         if region.dimmed {
-            self.apply_dim_modifier(&mut backend.buffer);
+            let mut tmp_mask = std::mem::take(&mut backend.mask_buffer);
+            let buf_len = backend.buffer.content.len();
+            if tmp_mask.len() < buf_len {
+                tmp_mask.resize(buf_len, 0);
+            }
+            Self::apply_dim_modifier(&mut backend.buffer, &mut tmp_mask[..buf_len]);
+            backend.mask_buffer = tmp_mask;
         }
 
         // Blit to main frame
         blit_buffer(&backend.buffer, frame.buffer_mut(), area);
 
-        // Swap buffer back to preserve capacity (zero-allocation)
+        // Swap buffer + mask back to preserve capacity
         self.scratch_buffer = backend.buffer;
+        self.scratch_mask = backend.mask_buffer;
     }
 
     /// Render directly to frame (panels, overlays).
@@ -597,20 +616,16 @@ impl DrawPlanRenderer {
         component: &mut C,
         region: &RenderRegion,
     ) {
-        // Swap direct buffer out
+        // Swap direct buffer AND mask out
         let mut buffer = std::mem::replace(&mut self.direct_buffer, Buffer::empty(Rect::ZERO));
+        let mask = std::mem::take(&mut self.direct_mask);
 
-        // Resize and clear (no allocation after warmup)
         buffer.resize(area);
         buffer.reset();
 
-        // Create backend owning the buffer
-        let mut backend = RatatuiBackend::new(buffer, area);
+        let mut backend = RatatuiBackend::new(buffer, area, mask);
 
-        // Create component context
         let ctx = ComponentContext::new(true).with_screen_area(region.bounds);
-
-        // Component renders into the swapped buffer
         component.render(
             &mut backend,
             region.bounds,
@@ -618,34 +633,41 @@ impl DrawPlanRenderer {
             &mut HitboxRegistry::new(),
         );
 
-        // Blit to frame
         blit_buffer(&backend.buffer, frame.buffer_mut(), area);
 
-        // Swap buffer back to preserve capacity
         self.direct_buffer = backend.buffer;
+        self.direct_mask = backend.mask_buffer;
     }
 
-    /// Apply DIM modifier to a buffer (for unfocused windows).
-    /// Uses direct row-slice indexing for bounds-check-free iteration.
-    fn apply_dim_modifier(&self, buffer: &mut Buffer) {
-        let area = buffer.area;
-        let buf_w = area.width as usize;
-        let y_start = area.y as usize;
-        let y_end = (area.y + area.height) as usize;
-        let x_start = area.x as usize;
-        let x_end = (area.x + area.width) as usize;
-        let dim_bit = ratatui::style::Modifier::DIM;
+    /// Apply DIM modifier using persistent mask (no heap alloc).
+    /// Two-pass SoA bitmask pattern:
+    ///   Pass 1: Sequential AoS string check → set mask bytes
+    ///   Pass 2: Row-sliced mask apply → bitwise buffer mutation
+    fn apply_dim_modifier(buffer: &mut Buffer, mask: &mut [u8]) {
+    let active_mask = &mut mask[..buffer.content.len()];
+    active_mask.fill(0);
 
-        for y in y_start..y_end {
-            let row_start = y * buf_w;
-            for x in x_start..x_end {
-                let cell = &mut buffer.content[row_start + x];
-                if !cell.symbol().starts_with(' ') {
-                    cell.modifier.insert(dim_bit);
-                }
+    // Pass 1: Sequential AoS — check symbol, set mask
+    for (i, cell) in buffer.content.iter().enumerate() {
+        if !cell.symbol().starts_with(' ') {
+            active_mask[i] = 1;
+        }
+    }
+
+    // Pass 2: Row-sliced mask apply — SIMD-friendly bitwise mutation
+    let buf_w = buffer.area.width as usize;
+    let dim_bit = ratatui::style::Modifier::DIM;
+    for y in 0..buffer.area.height as usize {
+        let row_start = y * buf_w;
+        let row_slice = &mut buffer.content[row_start..row_start + buf_w];
+        let mask_slice = &active_mask[row_start..row_start + buf_w];
+        for (cell, &val) in row_slice.iter_mut().zip(mask_slice.iter()) {
+            if val == 1 {
+                cell.modifier.insert(dim_bit);
             }
         }
     }
+}
 
     /// Take the persistent scratch buffer for offscreen compositing.
     /// Leaves a zero-sized Buffer in its place so the caller can resize
@@ -655,9 +677,19 @@ impl DrawPlanRenderer {
         std::mem::replace(&mut self.scratch_buffer, Buffer::empty(Rect::ZERO))
     }
 
+    /// Take the persistent scratch mask alongside the scratch buffer.
+    pub fn take_scratch_mask(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.scratch_mask)
+    }
+
     /// Return a scratch buffer taken with `take_scratch`.
     pub fn put_scratch(&mut self, buf: Buffer) {
         self.scratch_buffer = buf;
+    }
+
+    /// Return a scratch mask taken with `take_scratch_mask`.
+    pub fn put_scratch_mask(&mut self, mask: Vec<u8>) {
+        self.scratch_mask = mask;
     }
 }
 
@@ -828,41 +860,67 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
 }
 
 /// Render a drop-shadow behind a floating window or overlay.
-/// Uses direct row-slice indexing with intersection clipping.
-pub fn render_drop_shadow(buf: &mut Buffer, dest: LayoutRect, z_depth: f32, theme: &Theme) {
-    use ratatui::style::Modifier;
+/// Two-pass SoA bitmask pattern via persistent mask.
+/// Pass 1: set DIM_BIT + SHADOW_BIT in mask.
+/// Pass 2: row-sliced mask apply — SIMD-friendly bitwise mutation.
+const DIM_BIT: u8 = 0b01;
+const SHADOW_BIT: u8 = 0b10;
 
-    let shadow_color = lerp_color(theme.shadow_tint, theme.shadow_bg, z_depth).to_ratatui();
+pub fn render_drop_shadow(buf: &mut Buffer, mask: &mut [u8], dest: LayoutRect, z_depth: f32, theme: &Theme) {
+    let active_mask = &mut mask[..buf.content.len()];
+    active_mask.fill(0);
+
+    // Explicit intersection clipping guarantees memory safety
     let sx = dest.x.saturating_add(SHADOW_OFFSET_X);
     let sy = dest.y.saturating_add(SHADOW_OFFSET_Y);
     let ex = sx.saturating_add(i32::from(dest.width));
     let ey = sy.saturating_add(i32::from(dest.height));
-
-    let clip_x = sx.max(0) as u16;
-    let clip_y = sy.max(0) as u16;
-    let clip_ex = ex.min(buf.area.width as i32) as u16;
-    let clip_ey = ey.min(buf.area.height as i32) as u16;
-
-    if clip_x >= clip_ex || clip_y >= clip_ey {
+    let dest_rect = Rect::new(sx.max(0) as u16, sy.max(0) as u16, (ex - sx) as u16, (ey - sy) as u16);
+    let clip = dest_rect.intersection(buf.area);
+    if clip.width == 0 || clip.height == 0 {
         return;
     }
 
-    let width = clip_ex - clip_x;
-    let height = clip_ey - clip_y;
     let buf_w = buf.area.width as usize;
-    let y_start = clip_y as usize;
-    let x_start = clip_x as usize;
+    let origin_x = buf.area.x as usize;
+    let origin_y = buf.area.y as usize;
 
-    let dim_bit = Modifier::DIM;
+    // Hoist all X-axis invariant arithmetic outside loops
+    let rel_x_start = clip.x as usize - origin_x;
+    let copy_width = clip.width as usize;
+    let y_start = clip.y as usize;
+    let y_end = (clip.y + clip.height) as usize;
 
-    for y in y_start..y_start + height as usize {
-        let row_start = y * buf_w;
-        for x in x_start..x_start + width as usize {
-            let cell = &mut buf.content[row_start + x];
-            if !cell.symbol().starts_with(' ') {
-                cell.modifier.insert(dim_bit);
+    // Pass 1: Set mask bits — pre-computed start/end per row
+    for y in y_start..y_end {
+        let rel_y = y - origin_y;
+        let row_start = rel_y * buf_w;
+        let start_idx = row_start + rel_x_start;
+        let end_idx = start_idx + copy_width;
+
+        for (i, m) in active_mask[start_idx..end_idx].iter_mut().enumerate() {
+            let cell_idx = start_idx + i;
+            *m |= SHADOW_BIT;
+            if !buf.content[cell_idx].symbol().starts_with(' ') {
+                *m |= DIM_BIT;
             }
-            cell.set_bg(shadow_color);
+        }
+    }
+
+    // Pass 2: Row-sliced mask apply
+    let shadow_color = lerp_color(theme.shadow_tint, theme.shadow_bg, z_depth).to_ratatui();
+    for y in y_start..y_end {
+        let rel_y = y - origin_y;
+        let row_start = rel_y * buf_w;
+        let start_idx = row_start + rel_x_start;
+        let end_idx = start_idx + copy_width;
+
+        let row_slice = &mut buf.content[start_idx..end_idx];
+        let mask_slice = &active_mask[start_idx..end_idx];
+
+        for (cell, &val) in row_slice.iter_mut().zip(mask_slice.iter()) {
+            if val & DIM_BIT != 0 { cell.modifier.insert(ratatui::style::Modifier::DIM); }
+            if val & SHADOW_BIT != 0 { cell.set_bg(shadow_color); }
         }
     }
 }
@@ -919,7 +977,7 @@ where
     let inner_bounds: LayoutRect;
     let mut chrome_registry = HitboxRegistry::new();
     {
-        let mut offscreen = RatatuiBackend::new(buffer, local_area);
+        let mut offscreen = RatatuiBackend::new_simple(buffer, local_area);
         // Atomic single-pass: draw chrome + register hitboxes + get inner bounds
         inner_bounds = render_window_chrome(
             &mut offscreen.buffer,
@@ -945,7 +1003,14 @@ where
     };
     let main_buf = &mut ratatui_backend.buffer;
     if surface.draw_shadow {
-        render_drop_shadow(main_buf, surface.dest, 1.0 - surface.z_depth, &theme);
+        // Take mask ownership to avoid borrow conflicts with main_buf
+        let mut tmp_mask = std::mem::take(&mut ratatui_backend.mask_buffer);
+        let buf_len = main_buf.content.len();
+        if tmp_mask.len() < buf_len {
+            tmp_mask.resize(buf_len, 0);
+        }
+        render_drop_shadow(main_buf, &mut tmp_mask[..buf_len], surface.dest, 1.0 - surface.z_depth, &theme);
+        ratatui_backend.mask_buffer = tmp_mask;
     }
     // Compute desired destination rect and clip to main buffer
     let src_off_x = u16::try_from(-surface.dest.x.min(0)).unwrap_or(0);
@@ -1797,7 +1862,7 @@ mod tests {
         for cell in main_buffer.content.iter_mut() {
             cell.set_symbol(".");
         }
-        let mut backend = RatatuiBackend::new(main_buffer, main_area);
+        let mut backend = RatatuiBackend::new_simple(main_buffer, main_area);
 
         let surface = WindowSurface {
             full: term_wm_core::Rect {
@@ -1890,7 +1955,7 @@ mod tests {
             height: 20,
         };
         let main_buffer = Buffer::empty(main_area);
-        let mut backend = RatatuiBackend::new(main_buffer, main_area);
+        let mut backend = RatatuiBackend::new_simple(main_buffer, main_area);
 
         let surface = WindowSurface {
             full: term_wm_core::Rect {

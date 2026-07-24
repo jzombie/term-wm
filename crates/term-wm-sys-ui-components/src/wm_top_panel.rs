@@ -471,7 +471,7 @@ mod tests {
 
     fn make_backend(w: u16, h: u16) -> term_wm_console::RatatuiBackend {
         let buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, w, h));
-        term_wm_console::RatatuiBackend::new(buf, ratatui::layout::Rect::new(0, 0, w, h))
+        term_wm_console::RatatuiBackend::new_simple(buf, ratatui::layout::Rect::new(0, 0, w, h))
     }
 
     #[test]

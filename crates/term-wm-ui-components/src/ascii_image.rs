@@ -672,7 +672,7 @@ mod tests {
             height: 4,
         };
         let buf = Buffer::empty(RatRect::new(0, 0, 4, 4));
-        let mut backend = term_wm_console::RatatuiBackend::new(buf, RatRect::new(0, 0, 4, 4));
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, RatRect::new(0, 0, 4, 4));
         let ctx = term_wm_core::components::ComponentContext::new(true);
         let mut reg = term_wm_core::hitbox_registry::HitboxRegistry::new();
         img.render(&mut backend, area, &ctx, &mut reg);
@@ -696,7 +696,7 @@ mod tests {
             height: 4,
         };
         let buf = Buffer::empty(RatRect::new(0, 0, 4, 4));
-        let mut backend = term_wm_console::RatatuiBackend::new(buf, RatRect::new(0, 0, 4, 4));
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, RatRect::new(0, 0, 4, 4));
         let ctx = term_wm_core::components::ComponentContext::new(true);
         let mut reg = term_wm_core::hitbox_registry::HitboxRegistry::new();
         img.render(&mut backend, area, &ctx, &mut reg);
@@ -723,7 +723,7 @@ mod tests {
             height: 4,
         };
         let buf = Buffer::empty(RatRect::new(0, 0, 4, 4));
-        let mut backend = term_wm_console::RatatuiBackend::new(buf, RatRect::new(0, 0, 4, 4));
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, RatRect::new(0, 0, 4, 4));
         let ctx = term_wm_core::components::ComponentContext::new(true);
         let mut reg = term_wm_core::hitbox_registry::HitboxRegistry::new();
         img.render(&mut backend, area, &ctx, &mut reg);
@@ -745,7 +745,7 @@ mod tests {
             height: 0,
         };
         let buf = Buffer::empty(RatRect::new(0, 0, 10, 10));
-        let mut backend = term_wm_console::RatatuiBackend::new(buf, RatRect::new(0, 0, 10, 10));
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, RatRect::new(0, 0, 10, 10));
         let ctx = term_wm_core::components::ComponentContext::new(true);
         let mut reg = term_wm_core::hitbox_registry::HitboxRegistry::new();
         img.render(&mut backend, area, &ctx, &mut reg);
@@ -768,7 +768,7 @@ mod tests {
             height: 4,
         };
         let buf = Buffer::empty(RatRect::new(0, 0, 4, 4));
-        let mut backend = term_wm_console::RatatuiBackend::new(buf, RatRect::new(0, 0, 4, 4));
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, RatRect::new(0, 0, 4, 4));
         let ctx = term_wm_core::components::ComponentContext::new(true);
         let mut reg = term_wm_core::hitbox_registry::HitboxRegistry::new();
         img.render(&mut backend, area, &ctx, &mut reg);
@@ -776,7 +776,7 @@ mod tests {
         // Render again with same area and dirty=false — should reuse cache
         img.dirty.set(false);
         let buf2 = Buffer::empty(RatRect::new(0, 0, 4, 4));
-        let mut backend2 = term_wm_console::RatatuiBackend::new(buf2, RatRect::new(0, 0, 4, 4));
+        let mut backend2 = term_wm_console::RatatuiBackend::new_simple(buf2, RatRect::new(0, 0, 4, 4));
         img.render(&mut backend2, area, &ctx, &mut reg);
         assert_eq!(img.cached.borrow().len(), cache_len_1);
     }
@@ -797,7 +797,7 @@ mod tests {
             height: 4,
         };
         let buf = Buffer::empty(RatRect::new(0, 0, 4, 4));
-        let mut backend = term_wm_console::RatatuiBackend::new(buf, RatRect::new(0, 0, 4, 4));
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, RatRect::new(0, 0, 4, 4));
         let ctx = term_wm_core::components::ComponentContext::new(true);
         let mut reg = term_wm_core::hitbox_registry::HitboxRegistry::new();
         img.render(&mut backend, area, &ctx, &mut reg);
@@ -820,7 +820,7 @@ mod tests {
             height: 4,
         };
         let buf = Buffer::empty(RatRect::new(0, 0, 4, 4));
-        let mut backend = term_wm_console::RatatuiBackend::new(buf, RatRect::new(0, 0, 4, 4));
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, RatRect::new(0, 0, 4, 4));
         let ctx = term_wm_core::components::ComponentContext::new(true);
         let mut reg = term_wm_core::hitbox_registry::HitboxRegistry::new();
         img.render(&mut backend, area, &ctx, &mut reg);
@@ -843,7 +843,7 @@ mod tests {
             height: 5,
         };
         let buf = Buffer::empty(RatRect::new(0, 0, 5, 5));
-        let mut backend = term_wm_console::RatatuiBackend::new(buf, RatRect::new(0, 0, 5, 5));
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, RatRect::new(0, 0, 5, 5));
         let ctx = term_wm_core::components::ComponentContext::new(true);
         let mut reg = term_wm_core::hitbox_registry::HitboxRegistry::new();
         img.render(&mut backend, area, &ctx, &mut reg);
@@ -864,7 +864,7 @@ mod tests {
             height: 4,
         };
         let buf = Buffer::empty(RatRect::new(0, 0, 4, 4));
-        let mut backend = term_wm_console::RatatuiBackend::new(buf, RatRect::new(0, 0, 4, 4));
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, RatRect::new(0, 0, 4, 4));
         let ctx = term_wm_core::components::ComponentContext::new(true);
         let mut reg = term_wm_core::hitbox_registry::HitboxRegistry::new();
         img.render(&mut backend, area, &ctx, &mut reg);
