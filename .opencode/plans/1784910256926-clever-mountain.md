@@ -83,7 +83,7 @@ Every function that writes to `&mut Buffer` via `cell_mut()` must be rewritten t
 
 Two-pass pattern applies strictly to operations that apply **uniform stylistic modifiers** across an area (dim, shadow bg, ghost fill). Does NOT apply to operations that compute distinct symbols per cell.
 
-All such functions receive `mask: &mut [u8]` from the renderer's persistent `mask_buffer`. Zero allocations in steady state — `mask.fill(0)` maps to SIMD-optimized `memset`.
+All such functions receive `mask: &mut [u8]` obtained via `backend.acquire_mask()`. Zero allocations in steady state — `mask.fill(0)` maps to SIMD-optimized `memset`.
 
 **Pass 1:** Sequential AoS traversal (unvectorizable). Sets bytes in flat mask.
 **Pass 2:** Row-sliced bitwise ops — slice BOTH buffer and mask per discrete row to respect 2D geometry in 1D storage. No global full-buffer zipping.
@@ -203,19 +203,45 @@ These functions compute distinct symbols per cell based on position (borders, ju
 | `render_resize_outline` | Edge-specific ═ ║ ╔ ╗ ╚ ╝ per position |
 | `render_cursor_overlay` | REVERSED modifier at single cursor cell |
 
-### 5. Persistent mask buffer in `DrawPlanRenderer`
+### 5. Persistent mask buffer in `RatatuiBackend` (via `RenderBackend` trait)
 
-Add a persistent `mask_buffer: Vec<u8>` to `DrawPlanRenderer` to avoid per-frame heap allocation. Resize only when terminal dimensions change.
+The mask buffer cannot live in `DrawPlanRenderer` alone — functions like `composite_window`, `render_panels`, and `render_overlays` are called from `render_app` (in `src/lib.rs`) which receives `&mut dyn RenderBackend` but not `&DrawPlanRenderer`. To avoid forcing those call sites to allocate their own masks, the mask must be accessible through the backend trait.
+
+#### Add `acquire_mask` to `RenderBackend` trait
+
+**File:** `crates/term-wm-render/src/lib.rs`
 
 ```rust
-pub struct DrawPlanRenderer {
-    scratch_buffer: Buffer,
-    direct_buffer: Buffer,
-    mask_buffer: Vec<u8>, // Persistent SoA mask — zero allocations in steady state
+pub trait RenderBackend: std::any::Any {
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+    /// Returns a zero-initialized persistent mask slice sized to the current buffer.
+    fn acquire_mask(&mut self) -> &mut [u8];
 }
 ```
 
-All conditional mutation functions receive `&mut [u8]` (a slice of this persistent mask). All functions truncate to `buffer.content.len()` before operations. See Section 4a for the exact `apply_dim_modifier` and `render_drop_shadow` implementations.
+#### Host the mask in `RatatuiBackend`
+
+**File:** `crates/term-wm-console/src/lib.rs`
+
+```rust
+pub struct RatatuiBackend {
+    pub buffer: Buffer,
+    pub area: Rect,
+    pub(crate) mask_buffer: Vec<u8>, // Persistent — zero allocations in steady state
+}
+
+impl RenderBackend for RatatuiBackend {
+    fn acquire_mask(&mut self) -> &mut [u8] {
+        let needed = self.buffer.content.len();
+        if self.mask_buffer.len() < needed {
+            self.mask_buffer.resize(needed, 0);
+        }
+        &mut self.mask_buffer[..needed]
+    }
+}
+```
+
+Any function that receives `&mut dyn RenderBackend` can call `backend.acquire_mask()` to get a pre-allocated, correctly-sized mask. No dynamic allocations in steady state (resize only when terminal grows).
 
 ### 6. Buffer management — keep swap pattern
 
@@ -284,7 +310,8 @@ cargo run
 ## Required Actions
 
 ### Persistent infrastructure
-1. Add `mask_buffer: Vec<u8>` field to `DrawPlanRenderer`
+1. Add `acquire_mask()` to `RenderBackend` trait in `crates/term-wm-render/src/lib.rs`
+2. Add `mask_buffer: Vec<u8>` field to `RatatuiBackend` in `crates/term-wm-console/src/lib.rs`; implement `acquire_mask()`
 
 ### Two-pass mask pattern (uniform modifiers — row-sliced zipping)
 2. REWRITE `apply_dim_modifier` using Section 4a two-pass mask template
