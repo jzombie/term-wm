@@ -401,3 +401,152 @@ cargo run
 10. Add `blit_buffer` unit tests (fully contained, partial overlap, no overlap)
 11. `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 12. `cargo test -p term-wm-console` — all tests pass
+
+---
+
+---
+
+# POST-IMPLEMENTATION VERIFICATION
+
+## Summary
+
+| # | Item | Status |
+|---|------|--------|
+| 1 | `acquire_mask` on `RenderBackend` trait | ✅ YES |
+| 2 | `mask_buffer` on `RatatuiBackend` + ctor + impl | ✅ YES |
+| 3 | `scratch_mask`/`direct_mask` + swap-and-reclaim | ✅ YES |
+| 4 | `apply_dim_modifier` two-pass mask | ✅ YES |
+| 5 | `render_drop_shadow` two-pass mask | ✅ YES |
+| 6 | `render_ghost_preview` interior fill mask pattern | ❌ NO - uses direct index, no mask |
+| 7 | `render_window` row-sliced BCE iterators | ❌ NO - per-cell direct index; title/buttons still `cell_mut()` |
+| 8 | `fill_handle_bar` row-sliced BCE iterators | ❌ NO - per-cell direct index |
+| 9 | `render_handles_masked` passes 2/3 row-sliced BCE | ❌ NO - per-cell direct index |
+| 10 | `render_resize_outline` row-sliced BCE iterators | ❌ NO - **still uses `cell_mut()` everywhere** |
+| 11 | `render_cursor_overlay` direct index | ✅ YES |
+| 12 | `blit_buffer` unit tests | ❌ NO - not added |
+| 13 | clippy passes | ✅ YES |
+| 14 | `cargo test` passes | ✅ YES |
+
+## Deviation Analysis
+
+### 6 items match, 5 items deviate, 3 pass verification
+
+### ✅ MATCH — Core infrastructure (Items 1-5)
+The two-pass mask pattern for `apply_dim_modifier` and `render_drop_shadow` is implemented exactly per the plan's Section 4a template: origin translation, intersection clipping, LICM-hoisted arithmetic, row-sliced mask zipping.
+
+### ❌ DEVIATION — `render_ghost_preview` (Item 6)
+Uses per-cell direct index instead of mask. Since all interior cells get identical `set_bg()`, a mask is not strictly needed. But the plan listed this under "mask pattern."
+
+### ❌ DEVIATION — `render_window`, `fill_handle_bar`, `render_handles_masked` (Items 7-9)
+These use per-cell direct indexing (`buffer.content[row_start + x]`) instead of the row-slice iterator pattern (`let row_slice = &mut buffer.content[start..end]; for cell in row_slice.iter_mut()`). Both eliminate `cell_mut()` bounds checks, but the slice iterator gives the compiler more optimization surface.
+
+### ❌ DEVIATION — `render_resize_outline` (Item 10)
+**Still uses `cell_mut()`** — completely unoptimized. This was missed during implementation.
+
+### ❌ DEVIATION — `blit_buffer` unit tests (Item 12)
+Not added despite being explicitly listed in Required Actions.
+
+## Merge Recommendation
+
+**FAIL — DO NOT MERGE**
+
+---
+
+---
+
+# APPENDIX D: Required Fixes — BCE Enforcement
+
+## Critical (SEV-1 — blocks merge)
+
+### 1. Rewrite `render_window` with BCE iterators + origin-translated verticals
+
+**Horizontal fills** (header fill, top border, bottom border) — row-slice iterators:
+```rust
+let rel_y = y - buf.area.y as usize;
+let row_start = rel_y * buf_w;
+let rel_x_start = start_x - buf.area.x as usize;
+let rel_x_end = end_x - buf.area.x as usize;
+let row_slice = &mut buffer.content[row_start + rel_x_start .. row_start + rel_x_end];
+for cell in row_slice.iter_mut() {
+    cell.set_symbol("─");
+    cell.set_style(border_style);
+}
+```
+
+**Vertical fills** (left/right borders) — origin-translated direct indexing only (vertical lines are strided, not contiguous):
+```rust
+let rel_y = y - buf.area.y as usize;
+let rel_x = x - buf.area.x as usize;
+let cell = &mut buffer.content[rel_y * buf_w + rel_x];
+cell.set_symbol("│");
+cell.set_style(border_style);
+```
+
+**Title text, buttons, corners** — origin-translated direct index per cell.
+
+### 2. Rewrite `fill_handle_bar` with zipped occlusion probing
+
+Must preserve X-coordinate for `is_obscured(x, y)`:
+```rust
+let row_slice = &mut buffer.content[row_start + rel_x_start .. row_start + rel_x_end];
+for (x, cell) in (clip.x .. clip.x + clip.width).zip(row_slice.iter_mut()) {
+    if is_obscured(x, y) { continue; }
+    cell.reset();
+    cell.set_symbol(sym);
+    cell.set_style(style);
+}
+```
+
+### 3. Rewrite `render_handles_masked` passes 2 and 3 with zipped occlusion
+
+Same zip pattern: iterate `(clip.x .. clip.x + clip.width).zip(row_slice.iter_mut())` to feed both `is_obscured(x, y)` and the cell mutation.
+
+### 4. Rewrite `render_resize_outline` — horizontal BCE + vertical direct index
+
+**Horizontal edges** (Top, Bottom) — row-slice iterators over the edge range:
+```rust
+let row_slice = &mut buffer.content[row_start + rel_x_start .. row_start + rel_x_end];
+for cell in row_slice.iter_mut() {
+    cell.set_symbol("═");
+    cell.set_style(style);
+}
+```
+
+**Vertical edges** (Left, Right) — origin-translated direct index per cell (strided, not contiguous):
+```rust
+let cell = &mut buffer.content[rel_y * buf_w + rel_x];
+cell.set_symbol("║");
+cell.set_style(style);
+```
+
+**Corners** (TopLeft, TopRight, BottomLeft, BottomRight) — 1-3 cells each, origin-translated direct index.
+
+## Critical (SEV-2 — blocks merge)
+
+### 5. Add `blit_buffer` unit tests
+Three tests in `draw_plan_renderer.rs` under `#[cfg(test)]`:
+- Fully contained: dst entirely within src
+- Partial overlap: src rect partially outside dst
+- No overlap: disjoint rects must short-circuit (no panic)
+
+### 6. `render_ghost_preview` interior fill — single-pass BCE row-slice iterator
+
+Unconditional `set_bg` with no string check → no mask needed. Use row-slice BCE:
+```rust
+for y in (top + 1) as usize .. bottom as usize {
+    let rel_y = y - buf.area.y as usize;
+    let row_start = rel_y * buf_w;
+    let rel_x_start = (left + 1) as usize - buf.area.x as usize;
+    let rel_x_end = right as usize - buf.area.x as usize;
+    let row_slice = &mut buf.content[row_start + rel_x_start .. row_start + rel_x_end];
+    for cell in row_slice.iter_mut() {
+        cell.set_bg(preview_bg);
+    }
+}
+```
+
+## Verification after fixes
+```bash
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test -p term-wm-console
+```
