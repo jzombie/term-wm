@@ -246,6 +246,149 @@ The `render_handles_masked` pass 2 change carries the most risk because it reads
 
 ## Merge Recommendation
 
-**AMEND — then MERGE**
+**DO NOT MERGE — FAIL**
 
-Before merging, add 3 unit tests for `blit_buffer` (fully contained, partial overlap, no overlap) to validate the intersection clipping math directly rather than only indirectly through `composite_window`.
+---
+
+---
+
+# APPENDIX A: SIMD vs BCE — Conceptual Correction
+
+The previous review directive to use `row_slice.iter_mut()` was about **Bounds Check Elimination (BCE)**, not **SIMD auto-vectorization**.
+
+### SIMD requires:
+- Contiguous POD types (e.g., `u8`, `f32`)
+- Branchless memory access
+- Same operation across multiple lanes simultaneously
+
+### BCE (what we're actually achieving):
+- Slice the row boundaries once outside the inner loop
+- The iterator's internal implementation proves bounds to the compiler
+- LLVM strips boundary check assembly from every iteration
+- Saves CPU cycles by eliminating branch prediction failures and redundant integer comparisons
+
+### What the loop actually does:
+```
+cell.symbol().starts_with(' ')  → heap pointer deref + string compare + conditional branch
+cell.modifier.insert(dim_bit)   → bitflag write
+```
+LLVM will **not** auto-vectorize this. Only `clone_from_slice` (used in `blit_buffer`) gets SIMD-vectorized because it is a raw, branchless memory copy.
+
+### Action item
+Update the plan's "Key Decisions" table: change "SIMD approach" row to accurately describe the goal as BCE, not SIMD.
+
+---
+
+---
+
+# APPENDIX B: Origin Translation Bug — SEV-1
+
+## Root Cause
+Applied origin-relative coordinate translation (`y - area.y`) ONLY in `blit_buffer`. All other functions use absolute screen coordinates to index into `buffer.content`, which crashes when `buffer.area.x > 0` or `buffer.area.y > 0`.
+
+### Affected functions (ALL need origin translation + slice iterator pattern)
+
+| Function | Lines | Bug | Fix |
+|---|---|---|---|
+| `apply_dim_modifier` | 630-648 | Uses absolute `area.y`..`area.y+height` for indexing | Translate to relative coords |
+| `render_drop_shadow` | 832-868 | Uses absolute `clip_x`/`clip_y` for indexing | Subtract `buf.area.x`/`buf.area.y` |
+| `render_ghost_preview` interior fill | 1668-1676 | Uses absolute `top`/`bottom`/`left`/`right` | Subtract `buf.area.x`/`buf.area.y` |
+| `fill_handle_bar` | 1347-1360 | Uses absolute `clip.x`/`clip.y` | Subtract `buffer.area.x`/`buffer.area.y` |
+| `render_handles_masked` pass 2 | ~1225-1275 | Neighbor reads use absolute coords | Translate before indexing |
+| `render_handles_masked` pass 3 | ~1278-1318 | Absolute coords for hover borders | Translate before indexing |
+| `render_cursor_overlay` | 1740-1745 | Uses absolute `hx`/`hy` | Subtract `buf.area.x`/`buf.area.y` |
+| `render_window` | 987-1168 | Uses absolute `outer_left`/`outer_top` | Currently safe (area origin is 0,0), add translation defensively |
+
+### Fix pattern for all functions
+
+Replace manual index arithmetic:
+```rust
+let row_start = y * buf_w;
+buffer.content[row_start + x].set_bg(c);
+```
+
+With row-slice iterator pattern:
+```rust
+let rel_y = (y - buf.area.y) as usize;
+let rel_x = (x - buf.area.x) as usize;
+let row_start = rel_y * buf_w;
+let row_slice = &mut buffer.content[row_start + rel_x .. row_start + rel_x + width];
+for cell in row_slice.iter_mut() {
+    cell.set_bg(c);
+}
+```
+
+### Verification
+```bash
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test -p term-wm-console
+# All 15 tests must pass; then add origin-offset tests
+```
+
+---
+
+---
+
+# APPENDIX C: The Two Paths Forward — BCE vs SoA
+
+## Hardware Reality
+SIMD requires packed POD types (`u8`, `u32`, `f32`) in wide vector registers — no branching, no heap pointer dereferences. Ratatui's `Cell` contains a `String` (heap pointer + length + capacity) + styling bitflags. Evaluating `cell.symbol().starts_with(' ')` cannot be SIMD-vectorized because vector lanes cannot independently branch on pointer dereferences.
+
+## Two Optimization Paths
+
+### Path A: Bounds Check Elimination (Recommended — compatible with current design)
+
+Keep Ratatui's `Buffer`. Fix origin translation + use row-slice iterators to eliminate bounds-check branches.
+
+**What BCE achieves:**
+- Strips boundary-check assembly from every loop iteration
+- Eliminates pipeline-stalling branch predictions on per-cell access
+- All existing tests pass unchanged
+- No data structure changes needed
+
+**What BCE does NOT achieve:**
+- Does not produce SIMD instructions (the conditional string check prevents it)
+- Not a silver bullet — eliminates O(n) bounds checks, not O(n) cell mutation
+
+### Path B: True SIMD via Structure of Arrays (Re-architecture required)
+
+Abandon Ratatui's `Cell` for intermediate state. Allocate raw `Vec<u8>` masks for modifier bitflags. Use SIMD bitwise OR across the flat mask. Convert back to Ratatui in a single linear pass.
+
+**SoA mask approach for drop shadows:**
+```rust
+// Flat bitmask — one byte per cell position
+let mut dim_mask: Vec<u8> = vec![0; width * height];
+
+// SIMD-friendly: conditionally set bits based on shadow rect
+for i in shadow_start..shadow_end {
+    dim_mask[i] |= DIM_BIT;  // LLVM can auto-vectorize this
+}
+
+// One linear pass to apply mask back to Ratatui buffer
+for (cell, &mask) in buffer.content.iter_mut().zip(dim_mask.iter()) {
+    if mask & DIM_BIT != 0 {
+        cell.modifier.insert(Modifier::DIM);
+    }
+    if mask & SHADOW_BIT != 0 {
+        cell.set_bg(shadow_color);
+    }
+}
+```
+
+**Trade-offs:**
+| Aspect | Path A (BCE) | Path B (SoA mask) |
+|---|---|---|
+| Complexity | Minimal fix | New alloc per frame |
+| SIMD | No | Yes (on mask ops) |
+| Memory | No extra | +O(width×height) |
+| Risk | Low | Medium |
+| Tests | All pass | Need new tests |
+
+**Decision:** Path A is the right choice for now. Path B can be layered on later if profiling shows the dim/shadow passes are still hot after BCE. The current bottleneck is `blit_buffer` (already fixed with `clone_from_slice`), not the mutation passes.
+
+## Required Actions
+
+1. Fix origin translation in ALL 8 functions listed in Appendix B
+2. Apply the row-slice iterator pattern (`let row_slice = &mut buffer.content[start..end]; for cell in row_slice.iter_mut() { ... }`)
+3. Use `clone_from_slice` for bulk copies (already done in `blit_buffer`)
+4. Add `blit_buffer` unit tests for fully contained, partial overlap, and no-overlap cases
