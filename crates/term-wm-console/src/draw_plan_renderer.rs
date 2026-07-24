@@ -267,13 +267,17 @@ pub fn render_window_chrome(
     }
 }
 
-/// Convert LayoutRect to Ratatui Rect
+/// Convert LayoutRect to Ratatui Rect with proportional truncation.
+/// Negative coordinates are clamped to 0; width/height are reduced by the
+/// same amount to prevent phantom column projection.
 fn layout_rect_to_clipped_rect(layout: LayoutRect) -> Rect {
+    let x_trunc = if layout.x < 0 { (-layout.x) as u16 } else { 0 };
+    let y_trunc = if layout.y < 0 { (-layout.y) as u16 } else { 0 };
     Rect {
-        x: layout.x as u16,
-        y: layout.y as u16,
-        width: layout.width,
-        height: layout.height,
+        x: layout.x.max(0) as u16,
+        y: layout.y.max(0) as u16,
+        width: layout.width.saturating_sub(x_trunc),
+        height: layout.height.saturating_sub(y_trunc),
     }
 }
 
@@ -876,35 +880,36 @@ pub fn render_drop_shadow(
     let active_mask = &mut mask[..buf.content.len()];
     active_mask.fill(0);
 
-    // Explicit intersection clipping guarantees memory safety
+    // Pure i32 intersection — no u16 truncation, no width anchoring
     let sx = dest.x.saturating_add(SHADOW_OFFSET_X);
     let sy = dest.y.saturating_add(SHADOW_OFFSET_Y);
     let ex = sx.saturating_add(i32::from(dest.width));
     let ey = sy.saturating_add(i32::from(dest.height));
-    let dest_rect = Rect::new(
-        sx.max(0) as u16,
-        sy.max(0) as u16,
-        (ex - sx) as u16,
-        (ey - sy) as u16,
-    );
-    let clip = dest_rect.intersection(buf.area);
-    if clip.width == 0 || clip.height == 0 {
+
+    let buf_x = buf.area.x as i32;
+    let buf_y = buf.area.y as i32;
+    let buf_ex = buf_x + buf.area.width as i32;
+    let buf_ey = buf_y + buf.area.height as i32;
+
+    let clip_x = sx.max(buf_x);
+    let clip_y = sy.max(buf_y);
+    let clip_ex = ex.min(buf_ex);
+    let clip_ey = ey.min(buf_ey);
+
+    if clip_x >= clip_ex || clip_y >= clip_ey {
         return;
     }
 
     let buf_w = buf.area.width as usize;
-    let origin_x = buf.area.x as usize;
-    let origin_y = buf.area.y as usize;
+    let rel_x_start = (clip_x - buf_x) as usize;
+    let copy_width = (clip_ex - clip_x) as usize;
 
-    // Hoist all X-axis invariant arithmetic outside loops
-    let rel_x_start = clip.x as usize - origin_x;
-    let copy_width = clip.width as usize;
-    let y_start = clip.y as usize;
-    let y_end = (clip.y + clip.height) as usize;
+    let y_start = clip_y as usize;
+    let y_end = clip_ey as usize;
 
     // Pass 1: Set mask bits — pre-computed start/end per row
     for y in y_start..y_end {
-        let rel_y = y - origin_y;
+        let rel_y = y - buf.area.y as usize;
         let row_start = rel_y * buf_w;
         let start_idx = row_start + rel_x_start;
         let end_idx = start_idx + copy_width;
@@ -921,7 +926,7 @@ pub fn render_drop_shadow(
     // Pass 2: Row-sliced mask apply
     let shadow_color = lerp_color(theme.shadow_tint, theme.shadow_bg, z_depth).to_ratatui();
     for y in y_start..y_end {
-        let rel_y = y - origin_y;
+        let rel_y = y - buf.area.y as usize;
         let row_start = rel_y * buf_w;
         let start_idx = row_start + rel_x_start;
         let end_idx = start_idx + copy_width;
