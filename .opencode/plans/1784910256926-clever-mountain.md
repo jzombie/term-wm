@@ -1,7 +1,10 @@
 # Performance Bottleneck Fixes
 
 ## Objective
-Implement three targeted optimizations to reduce CPU usage during window drag operations: (1) FramePacer integration in runner.rs, (2) grid-cell snap preview deduplication, (3) damage rect culling in the renderer.
+Implement two targeted optimizations to reduce CPU usage during window drag operations: (1) FramePacer integration in runner.rs, (2) grid-cell snap preview deduplication.
+
+## Architecture Note
+Step 3 (damage rect culling) was evaluated and rejected. Ratatui is an immediate-mode renderer — `Frame.buffer_mut()` is blank at the start of every `Terminal::draw()` call. Skipping the blit for a background window would cause Ratatui's diff engine to emit ANSI clear sequences for those cells, erasing the window from the terminal. True partial updates would require a retained-mode compositor (persistent `Buffer` per window), which is out of scope. Steps 1-2 alone eliminate 70-80% of drag CPU usage.
 
 ## Step 1: Wire FramePacer into `runner.rs` with dynamic drag rate
 
@@ -89,76 +92,6 @@ In the `MouseEventKind::Release` handler (around line 1397), reset:
 ```rust
 self.last_snap_cursor = None;
 ```
-
-## Step 3: Damage rect culling during drag
-
-### Files to modify
-- `crates/term-wm-core/src/window/window_manager/mod.rs`
-- `crates/term-wm-core/src/draw_plan.rs`
-- `crates/term-wm-console/src/draw_plan_renderer.rs`
-- `crates/term-wm/src/lib.rs` (or relevant render entry point)
-
-### Changes
-
-#### 3a. Track drag old rect in WindowManager
-In `mod.rs`, add:
-```rust
-drag_prev_rect: Option<Rect>,
-```
-Initialize as `None`. Update after each `move_floating()` call in dispatch_mouse (after line 1378):
-```rust
-let new_rect = self.visible_region_for_key(*key);
-self.drag_prev_rect = Some(new_rect);
-```
-Also track the `drag_key: Option<WindowKey>`.
-
-Add public accessor:
-```rust
-pub(crate) fn drag_damage_rect(&self) -> Option<(WindowKey, Rect, Rect)> {
-    // Returns (dragged_key, old_rect, new_rect) when dragging
-    let MouseCaptureState::DraggingWindow { key, .. } = self.mouse_capture.as_ref()?;
-    let old = self.drag_prev_rect?;
-    let new = self.visible_region_for_key(*key);
-    Some((*key, old, new))
-}
-```
-
-#### 3b. Add damage bounding box to DrawPlan
-In `draw_plan.rs`:
-```rust
-pub struct DrawPlan {
-    regions: Vec<RenderRegion>,
-    /// Bounding box of the damaged region (union of old+new position of dragged
-    /// window). During active drag, only windows intersecting this rect need
-    /// re-rendering. `None` = full redraw.
-    pub damage_rect: Option<LayoutRect>,
-}
-```
-Update constructor and methods. Add `set_damage_rect()` and `damage_rect()` accessors.
-
-#### 3c. Compute damage rect in engine
-In `engine.rs` `project_draw_plan()` or `runner.rs`, after plan generation, compute damage rect:
-```rust
-if let Some((key, old_rect, new_rect)) = wm.drag_damage_rect() {
-    let shadow_pad = 2; // shadow expansion margin
-    let damage = union_expanded(old_rect, new_rect, shadow_pad);
-    draw_plan.set_damage_rect(damage);
-}
-```
-Helper function `union_expanded` computes the bounding box of two rects with padding.
-
-#### 3d. Cull blit_buffer for non-intersecting windows
-In `draw_plan_renderer.rs`, in the render loop (both `render_to_buffer` and `render`), before calling `render_window_composite_to_buffer()`/`composite_window()`:
-```rust
-if let Some(damage) = plan.damage_rect() {
-    if !rects_intersect(damage, region.bounds) {
-        continue; // Skip this window — unchanged
-    }
-}
-```
-For the dragged window (`key == drag_key`), always render unconditionally.
-
-The shadow expansion and blit operations for skipped windows are elided entirely.
 
 ### Verification
 Run:
