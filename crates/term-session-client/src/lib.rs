@@ -555,9 +555,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
 
             let diff = match &prev_content {
                 Some(prev) => {
-                    let p = prev_parser.get_or_insert_with(|| {
-                        vt100::Parser::new(rows, cols, 0)
-                    });
+                    let p = prev_parser.get_or_insert_with(|| vt100::Parser::new(rows, cols, 0));
                     // Sync dimensions in case of terminal resize
                     p.screen_mut().set_size(rows, cols);
                     // RIS: reset parser attributes and screen in-place
