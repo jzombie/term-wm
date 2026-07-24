@@ -14,7 +14,7 @@ type InputWriter = Box<dyn FnMut(&[u8]) -> io::Result<()> + Send>;
 
 pub struct RemotePane {
     pub id: u64,
-    client: std::sync::Arc<RpcIpcClient>,
+    client: Option<std::sync::Arc<RpcIpcClient>>,
     rt: Handle,
     parser: Arc<Mutex<vt100::Parser>>,
     exited: Cell<bool>,
@@ -34,7 +34,7 @@ impl RemotePane {
     ) -> Self {
         Self {
             id,
-            client,
+            client: Some(client),
             rt,
             parser: Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0))),
             exited: Cell::new(false),
@@ -77,7 +77,7 @@ impl Pane for RemotePane {
     fn resize(&mut self, size: PtySize) -> PtyResult<()> {
         let result: Result<(), RpcServiceError> = self.rt.block_on(async {
             use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
-            ResizePty::call(&*self.client, (self.id, size.cols, size.rows)).await
+            ResizePty::call(self.client.as_deref().unwrap(), (self.id, size.cols, size.rows)).await
         });
         {
             let mut parser = self.parser.lock().unwrap();
@@ -133,7 +133,7 @@ impl Pane for RemotePane {
         self.rt
             .block_on(async {
                 use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
-                CloseSession::call(&*self.client, self.id).await
+                CloseSession::call(self.client.as_deref().unwrap(), self.id).await
             })
             .map_err(Self::rpc_to_pty)?;
         self.exited.set(true);
@@ -148,12 +148,11 @@ impl Pane for RemotePane {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::runtime::Builder as RtBuilder;
 
     #[test]
     #[cfg(unix)]
     fn test_drain_pushes_returns_dirty_flag() {
-        let rt = RtBuilder::new_current_thread()
+        let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
@@ -161,30 +160,17 @@ mod tests {
         let (push_tx, push_rx) = crossbeam_channel::unbounded();
         let input_writer: InputWriter = Box::new(|_| Ok(()));
 
-        // Bind a temporary socket so RpcIpcClient::new can connect.
-        // drain_pushes never uses the client, but RemotePane::new
-        // requires a valid Arc<RpcIpcClient>.
-        let socket_path = std::env::temp_dir()
-            .join(format!("test_remote_pane_{}.sock", std::process::id()));
-        let _ = std::fs::remove_file(&socket_path);
-
-        // Use std UnixListener (synchronous bind + accept)
-        let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
-        // Accept in the background so connect succeeds
-        std::thread::spawn(move || {
-            let _ = listener.accept();
-        });
-        // Brief yield to let the accept thread start
-        std::thread::sleep(std::time::Duration::from_millis(10));
-
-        let client = rt.block_on(RpcIpcClient::new(
-            socket_path.to_str().unwrap(),
-        ))
-        .unwrap();
-
-        let mut pane = RemotePane::new(
-            1, client, rt.handle().clone(), 80, 24, push_rx, input_writer,
-        );
+        // drain_pushes never uses the client field, so None is safe here.
+        let parser = Arc::new(Mutex::new(vt100::Parser::new(80, 24, 0)));
+        let mut pane = RemotePane {
+            id: 1,
+            client: None,
+            rt: rt.handle().clone(),
+            parser,
+            exited: Cell::new(false),
+            push_rx,
+            input_writer,
+        };
 
         // 1. Idle call with no pending messages must return false
         assert!(!pane.drain_pushes());
@@ -195,7 +181,5 @@ mod tests {
 
         // 3. Subsequent call on drained buffer must return false
         assert!(!pane.drain_pushes());
-
-        let _ = std::fs::remove_file(&socket_path);
     }
 }
