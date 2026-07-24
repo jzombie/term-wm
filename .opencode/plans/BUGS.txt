@@ -1,4 +1,5 @@
 - [ ] Maximizing a window from tiled mode doesn't float the others immediately, making it impossible to tab between other windows.  The ALTERNATIVE approach is to leave them tiled and tab could overlay the tiled view if any of them are on top.
+- [ ] If a window is dragged into a quadrant with a void window above it, it should still have a tiling resize handle on top of it.
 - [ ] Command Palette should stay in its original vertical position when typing so it doesn't bounce up and down.
 - [ ] Command Palette should show "[ no search results ]" when there are no search results for a given query.
 - [X] selecting text in help overlay no longer copies it
