@@ -60,7 +60,9 @@ impl FramePacer {
     ///
     /// Takes `now` explicitly so tests can control time without `thread::sleep`.
     pub fn try_expire(&mut self, now: Instant) -> bool {
-        if let Some(deadline) = self.deadline && now >= deadline {
+        if let Some(deadline) = self.deadline
+            && now >= deadline
+        {
             self.deadline = None;
             true
         } else {
