@@ -1,16 +1,23 @@
 use std::time::{Duration, Instant};
 
 /// Minimum interval between renders (~60fps cap).
-const FRAME_INTERVAL: Duration = Duration::from_millis(16);
+const DEFAULT_FRAME_INTERVAL: Duration = Duration::from_millis(16);
+/// Drag-optimised interval (30 FPS) to reduce ANSI diffing and I/O.
+const DRAG_FRAME_INTERVAL: Duration = Duration::from_millis(33);
 
-/// Frame pacing: ensures renders fire at most once per `FRAME_INTERVAL`.
+/// Frame pacing: ensures renders fire at most once per frame interval.
 ///
-/// Call `notify_pending()` when new render work arrives (PTY wakeup, etc.).
-/// The first call arms a deadline `FRAME_INTERVAL` into the future; subsequent
-/// calls before expiry are no-ops.  Use `try_expire()` and `time_until_deadline()`
-/// to decide when to trigger the actual render, then call `reset()`.
+/// Call `notify_pending()` when new render work arrives (input event, PTY
+/// wakeup, etc.).  The first call arms a deadline into the future; subsequent
+/// calls before expiry are no-ops.  Use `try_expire()` and
+/// `time_until_deadline()` to decide when to trigger the actual render, then
+/// call `reset()`.
+///
+/// The interval can be changed at runtime via `set_interval()` — e.g. 33ms
+/// (30 FPS) during active window drag to reduce ANSI diffing and stdout I/O.
 pub struct FramePacer {
     deadline: Option<Instant>,
+    interval: Duration,
 }
 
 impl Default for FramePacer {
@@ -21,14 +28,28 @@ impl Default for FramePacer {
 
 impl FramePacer {
     pub fn new() -> Self {
-        Self { deadline: None }
+        Self {
+            deadline: None,
+            interval: DEFAULT_FRAME_INTERVAL,
+        }
+    }
+
+    /// Override the frame interval (e.g. to 33ms during drag).
+    /// Does not affect an already-armed deadline.
+    pub fn set_interval(&mut self, interval: Duration) {
+        self.interval = interval;
+    }
+
+    /// Returns the drag-optimised frame interval (33ms / 30 FPS).
+    pub const fn drag_interval() -> Duration {
+        DRAG_FRAME_INTERVAL
     }
 
     /// Signal that render work is pending.  Arms the frame deadline on the
     /// first call; subsequent calls before expiry are no-ops.
     pub fn notify_pending(&mut self) {
         if self.deadline.is_none() {
-            self.deadline = Some(Instant::now() + FRAME_INTERVAL);
+            self.deadline = Some(Instant::now() + self.interval);
         }
     }
 

@@ -1,4 +1,5 @@
 use std::io;
+use std::time::Duration;
 
 use crate::events::{Event, KeyKind, MouseEventKind};
 use term_wm_render::RenderTarget;
@@ -15,6 +16,7 @@ use crate::event_loop::{ControlFlow, EventLoop};
 use crate::events::core_event_to_wm;
 use crate::hitbox_registry::HitboxRegistry;
 use crate::io::EventSource;
+use crate::io::FramePacer;
 use crate::layout::{LayoutNode, TilingLayout};
 use crate::task_scheduler::TaskScheduler;
 use crate::window::{WindowKey, WindowManager};
@@ -236,6 +238,7 @@ where
     let system_handle = system_scheduler.handle();
     let mut profile_tracker =
         crate::power_profile::PowerProfileTracker::new(driver.current_profile());
+    let mut frame_pacer = FramePacer::new();
     let mut event_loop = EventLoop::new(driver);
     event_loop
         .driver()
@@ -282,6 +285,9 @@ where
                 app.wm().update_monocle_mode(*width);
             }
 
+            // Pre-compute FramePacer deadline so flush_state_changes
+            // does not borrow frame_pacer (also mutated outside the closure).
+            let fp_deadline = frame_pacer.time_until_deadline();
             let mut flush_state_changes = |app: &mut A, flow: ControlFlow, consume_dirty: bool| {
                 if let Some(enabled) = app.wm().take_mouse_capture_change() {
                     let _ = driver.set_mouse_capture(enabled);
@@ -302,16 +308,26 @@ where
                 // Clamp the driver's sleep duration to the next scheduler
                 // deadline so PowerSaver's 3600s interval doesn't block
                 // past a pending task timeout (e.g. SuperPassthrough).
-                driver.set_max_sleep_duration(system_handle.time_until_next());
+                // Also clamp to the FramePacer deadline so the poll wakes
+                // up when a delayed render is due, even without input.
+                let deadline = match (fp_deadline, system_handle.time_until_next()) {
+                    (Some(fp), Some(sys)) => Some(fp.min(sys)),
+                    (Some(fp), None) => Some(fp),
+                    (None, sys_or_none) => sys_or_none,
+                };
+                driver.set_max_sleep_duration(deadline);
                 if let Some(profile) = profile_tracker.poll(driver.current_profile()) {
                     app.wm().set_power_profile(profile);
                 }
                 Ok(flow)
             };
             let mut did_panic = false;
+            let mut did_render = false;
             if let Some(evt) = event {
                 // Synthesized key event from bottom-panel hint click takes priority
                 let evt = app.wm().take_synthetic_event().unwrap_or(evt);
+
+                frame_pacer.notify_pending();
 
                 // Pre-compute the keybinding action using the configured
                 // KeyBindings from WindowManager (not hardcoded defaults).
@@ -510,27 +526,41 @@ where
                     return flush_state_changes(app, ControlFlow::Quit, false);
                 }
                 update_selection_snapshot(app);
-                app.wm().begin_frame();
-                app.wm().prepare_draw();
-                // Catch render panics (e.g. u16 subtraction overflow with a
-                // tiny viewport, or a component panic) so they don't take
-                // down the event loop.  The panic hook records details in
-                // the debug log.  I/O errors from the draw are propagated.
-                // After a panic, repair the terminal so the next draw starts
-                // from a clean slate (partial escape sequences, wrong cursor
-                // position, etc. are reset).
-                did_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    output.draw(|frame| {
-                        // TODO: Get area from DrawPlan or terminal size, not from frame
-                        draw(frame, app)
-                    })
-                }))
-                .is_err();
-                if did_panic {
-                    output.repair()?;
+
+                frame_pacer.set_interval(if app.wm().is_dragging_window() {
+                    Duration::from_millis(33)  // 30 FPS during drag
+                } else {
+                    Duration::from_millis(16)  // 60 FPS otherwise
+                });
+
+                if frame_pacer.try_expire() {
+                    // Gate BOTH frame init AND render together so the
+                    // HitboxRegistry survives between frames.  Running
+                    // begin_frame() without output.draw() would clear
+                    // hitboxes on every idle tick, making clicks vanish.
+                    app.wm().begin_frame();
+                    app.wm().prepare_draw();
+                    // Catch render panics (e.g. u16 subtraction overflow with a
+                    // tiny viewport, or a component panic) so they don't take
+                    // down the event loop.  The panic hook records details in
+                    // the debug log.  I/O errors from the draw are propagated.
+                    // After a panic, repair the terminal so the next draw starts
+                    // from a clean slate (partial escape sequences, wrong cursor
+                    // position, etc. are reset).
+                    did_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        output.draw(|frame| {
+                            // TODO: Get area from DrawPlan or terminal size, not from frame
+                            draw(frame, app)
+                        })
+                    }))
+                    .is_err();
+                    did_render = true;
+                    if did_panic {
+                        output.repair()?;
+                    }
                 }
             }
-            flush_state_changes(app, ControlFlow::Continue, !did_panic)
+            flush_state_changes(app, ControlFlow::Continue, did_render && !did_panic)
         };
 
         let handler_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(handler));
