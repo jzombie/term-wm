@@ -65,6 +65,9 @@ pub struct Pty {
     child: Option<Box<dyn Child + Send + Sync>>,
     exited: bool,
     exit_status: Option<portable_pty::ExitStatus>,
+    /// Guards against double-fire of the Exited callback from both
+    /// has_exited() and the reader thread (EOF detection race).
+    exited_emitted: Arc<AtomicBool>,
     reader: Option<JoinHandle<()>>,
     /// Status callback invoked by the reader thread on wakeup and exit.
     status_cb: StatusCallback,
@@ -120,6 +123,8 @@ impl Pty {
         let reader_dsr = Arc::clone(&dsr_requested);
         let status_cb: StatusCallback = Arc::new(Mutex::new(None));
         let reader_status_cb = Arc::clone(&status_cb);
+        let exited_emitted = Arc::new(AtomicBool::new(false));
+        let reader_exited_emitted = Arc::clone(&exited_emitted);
 
         let pending_title = Arc::new(Mutex::new(None));
         let foreground_title = Arc::new(Mutex::new(None));
@@ -146,6 +151,7 @@ impl Pty {
                 status_cb: reader_status_cb,
                 scrollback_len,
                 osc52_text: None,
+                exited_emitted: reader_exited_emitted,
             })
         });
         Ok(Self {
@@ -170,6 +176,7 @@ impl Pty {
             exit_status: None,
             reader: Some(reader_handle),
             status_cb,
+            exited_emitted,
             shutdown,
         })
     }
@@ -330,8 +337,11 @@ impl Pty {
                 // reader thread blocked forever. Since this method is polled
                 // every frame, we manually synthesize the exit callback here
                 // when we detect the child process has died.
+                // Use an atomic latch so the callback fires at most once —
+                // the reader thread may also detect EOF and race to fire it.
                 if let Ok(guard) = self.status_cb.lock()
                     && let Some(ref cb) = *guard
+                    && !self.exited_emitted.swap(true, Ordering::AcqRel)
                 {
                     cb(crate::PtyStatus::Exited);
                 }
@@ -466,6 +476,8 @@ struct ParserReadLoopArgs {
     pending_title: Arc<Mutex<Option<String>>>,
     status_cb: StatusCallback,
     scrollback_len: usize,
+    /// Shared latch: taken once by whichever path detects exit first.
+    exited_emitted: Arc<AtomicBool>,
     /// Test-only hook: when `Some`, the extracted OSC 52 text is written here
     /// in addition to the real clipboard, so tests can assert the value.
     osc52_text: Option<Arc<Mutex<Option<String>>>>,
@@ -485,6 +497,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
         status_cb,
         scrollback_len: _scrollback_len,
         osc52_text,
+        exited_emitted,
     } = args;
     let mut prev_tail: [u8; HISTORY_TAIL_LEN] = [0; HISTORY_TAIL_LEN];
     let mut buf = [0u8; PTY_READ_BUF_SIZE];
@@ -499,7 +512,9 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     && let Some(ref cb) = *guard
                 {
                     cb(crate::PtyStatus::Wakeup);
-                    cb(crate::PtyStatus::Exited);
+                    if !exited_emitted.swap(true, Ordering::AcqRel) {
+                        cb(crate::PtyStatus::Exited);
+                    }
                 }
                 break;
             }
@@ -587,6 +602,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
             Err(_) => {
                 if let Ok(guard) = status_cb.lock()
                     && let Some(ref cb) = *guard
+                    && !exited_emitted.swap(true, Ordering::AcqRel)
                 {
                     cb(crate::PtyStatus::Exited);
                 }
@@ -756,6 +772,7 @@ fn get_process_name(_pid: u32) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pty::StatusCallback;
     use std::io;
     use std::io::Cursor;
     use std::io::Write;
@@ -848,6 +865,7 @@ mod tests {
             pending_title: Arc::new(Mutex::new(None)),
             status_cb: Arc::new(Mutex::new(None)),
             scrollback_len: 0,
+            exited_emitted: Arc::new(AtomicBool::new(false)),
             osc52_text: None,
         }
     }
@@ -1525,6 +1543,50 @@ mod tests {
             new_text.lines().count(),
             5,
             "set_size must preserve 5 separate rows"
+        );
+    }
+
+    #[test]
+    fn test_exited_callback_atomic_latch_under_contention() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::thread;
+
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let count_clone = Arc::clone(&call_count);
+
+        let cb: StatusCallback = Arc::new(std::sync::Mutex::new(Some(Box::new(move |status| {
+            if matches!(status, crate::PtyStatus::Exited) {
+                count_clone.fetch_add(1, Ordering::SeqCst);
+            }
+        }))));
+
+        let exited_emitted = Arc::new(AtomicBool::new(false));
+
+        let handles: Vec<_> = (0..10)
+            .map(|_| {
+                let cb = Arc::clone(&cb);
+                let emitted = Arc::clone(&exited_emitted);
+                thread::spawn(move || {
+                    if !emitted.swap(true, Ordering::AcqRel) {
+                        if let Ok(guard) = cb.lock() {
+                            if let Some(ref f) = *guard {
+                                f(crate::PtyStatus::Exited);
+                            }
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            1,
+            "Exited callback must execute exactly once under thread contention"
         );
     }
 }
