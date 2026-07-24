@@ -1568,12 +1568,11 @@ mod tests {
                 let cb = Arc::clone(&cb);
                 let emitted = Arc::clone(&exited_emitted);
                 thread::spawn(move || {
-                    if !emitted.swap(true, Ordering::AcqRel) {
-                        if let Ok(guard) = cb.lock() {
-                            if let Some(ref f) = *guard {
-                                f(crate::PtyStatus::Exited);
-                            }
-                        }
+                    if !emitted.swap(true, Ordering::AcqRel)
+                        && let Ok(guard) = cb.lock()
+                        && let Some(ref f) = *guard
+                    {
+                        f(crate::PtyStatus::Exited);
                     }
                 })
             })
