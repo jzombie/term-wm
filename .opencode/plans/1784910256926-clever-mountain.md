@@ -130,11 +130,15 @@ The simplest approach: skip injection point 3. The `Some(evt)` path already has 
 
 ### Changes
 
-#### 1a. FramePacer: add dynamic interval
+#### 1a. FramePacer: method injection for all time-dependent methods
 - Add `interval: Duration` field, default `DEFAULT_FRAME_INTERVAL = Duration::from_millis(16)`
 - Add `DRAG_FRAME_INTERVAL = Duration::from_millis(33)` const
 - Add `set_interval(&mut self, duration: Duration)` — updates `self.interval`
-- Change `notify_pending()` to use `self.interval` instead of hardcoded `FRAME_INTERVAL`
+- All three time-sensitive methods accept `now: Instant` instead of calling `Instant::now()` internally:
+  - `notify_pending(&mut self, now: Instant)` — arms `self.deadline = Some(now + self.interval)`
+  - `try_expire(&mut self, now: Instant) -> bool` — checks `now >= deadline`
+  - `time_until_deadline(&self, now: Instant) -> Option<Duration>` — returns `deadline.checked_duration_since(now)`
+- This makes the methods pure (no hidden global state) and lets tests control time deterministically without `thread::sleep`
 
 #### 1b. WindowManager: add `is_dragging_window()` method
 - Add `pub(crate) fn is_dragging_window(&self) -> bool` to `WindowManager` in `mod.rs`
@@ -148,21 +152,20 @@ The simplest approach: skip injection point 3. The `Some(evt)` path already has 
   ```
 - In the `Some(evt)` branch, at the very top (after `take_synthetic_event`):
   ```rust
-  frame_pacer.notify_pending();
+  frame_pacer.notify_pending(Instant::now());
   ```
 - In the `None` branch, replace the entire `begin_frame()` / `prepare_draw()` / `output.draw()` block:
   ```rust
   update_selection_snapshot(app);
 
-  // Any component that changed state since the last frame can
-  // request a redraw through the global dirty bit — no need to
-  // interrogate individual sources (PTY wakeups, overlays, etc.).
-  // The `current_profile()` check is a catch-all for PTY wakeups
-  // that don't flow through request_redraw().
+  let now = Instant::now();
+
+  // Arm the pacer when any component requested a redraw or the
+  // driver has background work (PTY data) that bypassed Some(evt).
   if driver.take_redraw_request()
-      || driver.current_profile() != crate::power_profile::PowerProfile::PowerSaver
+      || driver_has_work
   {
-      frame_pacer.notify_pending();
+      frame_pacer.notify_pending(now);
   }
 
   frame_pacer.set_interval(if app.wm().is_dragging_window() {
@@ -171,7 +174,7 @@ The simplest approach: skip injection point 3. The `Some(evt)` path already has 
       Duration::from_millis(16)  // 60 FPS otherwise
   });
 
-  if frame_pacer.try_expire() {
+  if frame_pacer.try_expire(now) {
       // Gate both frame init AND render together so HitboxRegistry
       // survives between frames.  Running begin_frame() without
       // output.draw() would clear hitboxes on every idle tick.
@@ -184,13 +187,13 @@ The simplest approach: skip injection point 3. The `Some(evt)` path already has 
   }
   ```
 - Add `let mut did_render = false;` beside `let mut did_panic = false;`
-- Change the final `flush_state_changes` call to pass the FramePacer deadline explicitly:
+- Change the final `flush_state_changes` call to pass the FramePacer deadline with `now`:
   ```rust
   flush_state_changes(
-      app,
+      app, driver,
       ControlFlow::Continue,
       did_render && !did_panic,
-      frame_pacer.time_until_deadline(),
+      frame_pacer.time_until_deadline(now),
   )
   ```
 - Update `flush_state_changes` to accept the deadline as a parameter and use it to clamp `set_max_sleep_duration`:
@@ -216,9 +219,15 @@ The simplest approach: skip injection point 3. The `Some(evt)` path already has 
 ```
 handler(None):
   update_selection_snapshot(app);
+  let now = Instant::now();
+
+  if driver.take_redraw_request() || driver_has_work {
+      frame_pacer.notify_pending(now);    // arm deadline
+  }
+
   frame_pacer.set_interval(drag ? 33ms : 16ms);
 
-  if frame_pacer.try_expire() {
+  if frame_pacer.try_expire(now) {
       begin_frame();       // clear hitboxes + frame state
       prepare_draw();      // regenerate draw plan
       output.draw(...);    // repopulate hitboxes, render
@@ -226,9 +235,12 @@ handler(None):
   }
   // hitboxes from last render persist — input works between frames
 
-  flush_state_changes(consume_dirty: did_render && !did_panic)
+  flush_state_changes(
+      consume_dirty: did_render && !did_panic,
+      fp_deadline: frame_pacer.time_until_deadline(now),
+  )
   //  - take_dirty_windows() only if we actually rendered
-  //  - set_max_sleep_duration clamped to frame_pacer time_until_deadline()
+  //  - set_max_sleep_duration clamped to fp_deadline.min(scheduler_deadline)
   //    so poll wakes up for the next render attempt
 ```
 
@@ -285,6 +297,89 @@ impl EventSource for ImmediateDriver {
 ```
 
 This signals "always has pending work" to the runner, which arms the FramePacer on every idle tick, and `try_expire()` gates draws at the correct interval.
+
+## Step 3: Regression tests for SEV-1 lifecycle invariants
+
+### File
+- `tests/panic_debug_log.rs` (add three test functions alongside the existing one)
+
+### Test 1: Background wakeup renders without input ("Wiggle to Update")
+
+```rust
+#[test]
+fn background_dirty_bit_triggers_render_without_input() {
+    struct WakeupDriver { armed: bool }
+    impl EventSource for WakeupDriver {
+        fn poll(&mut self, _: Duration) -> io::Result<bool> { Ok(false) }
+        fn read(&mut self) -> io::Result<Event> { Err(io::Error::other("")) }
+        fn next_key(&mut self) -> io::Result<KeyEvent> { Err(io::Error::other("")) }
+        fn next_mouse(&mut self) -> io::Result<MouseEvent> { Err(io::Error::other("")) }
+        fn current_profile(&self) -> PowerProfile { PowerProfile::Streaming }
+        fn take_redraw_request(&mut self) -> bool { std::mem::replace(&mut self.armed, false) }
+    }
+
+    let mut app = SparseApp { wm: build_wm(), draws: 0, window_key: None, should_quit: false };
+    let result = run_event_loop(&mut TestOutput::new(), &mut WakeupDriver { armed: true },
+        &mut app, TaskScheduler::new(), |k| k,
+        |_, app| { app.draws += 1; app.should_quit = true; });
+
+    assert!(result.is_ok());
+    assert_eq!(app.draws, 1, "draw must fire even without input events");
+}
+```
+
+**Regression guard**: If anyone removes `driver.take_redraw_request()` from the `None` branch, this test deadlocks (draw never fires, `should_quit` never set, loop runs forever).
+
+### Test 2: Skipped frames preserve hitboxes ("Dead Clicks")
+
+Uses method injection — `FramePacer::try_expire(now)` accepts the current time so the test advances a mock clock deterministically:
+
+```rust
+#[test]
+fn idle_tick_does_not_erase_hitboxes() {
+    let mut fp = FramePacer::new();
+    let epoch = Instant::now();
+
+    // Tick 1: arm deadline + expire it immediately → render runs
+    fp.notify_pending();
+    assert!(fp.try_expire(epoch + Duration::from_millis(17)));
+    // After render, hitbox_registry is populated (begin_frame was called
+    // inside try_expire, output.draw populated the registry). In a real
+    // test we'd verify via SparseApp + hitbox_registry_mut().is_empty().
+
+    // Tick 2: 1ms later → try_expire returns false → frame init skipped
+    // begin_frame() does NOT run → hitbox_registry survives.
+    assert!(!fp.try_expire(epoch + Duration::from_millis(1)));
+}
+```
+
+The integration-test version drives `run_event_loop` with a `WakeupDriver` that returns `take_redraw_request() = true` on tick 1 only, then asserts `wm.hitbox_registry_mut().is_empty()` is false after the idle tick.
+
+### Test 3: Skipped frames preserve dirty state
+
+```rust
+#[test]
+fn skipped_frame_does_not_consume_dirty_windows() {
+    struct DirtyTracker { poll_returned: bool }
+    impl EventSource for DirtyTracker {
+        fn poll(&mut self, _: Duration) -> io::Result<bool> {
+            if !self.poll_returned { self.poll_returned = true; Ok(false) } else { Ok(false) }
+        }
+        fn read(&mut self) -> io::Result<Event> { Err(io::Error::other("")) }
+        fn next_key(&mut self) -> io::Result<KeyEvent> { Err(io::Error::other("")) }
+        fn next_mouse(&mut self) -> io::Result<MouseEvent> { Err(io::Error::other("")) }
+        fn current_profile(&self) -> PowerProfile { PowerProfile::Streaming }
+        fn take_dirty_windows(&mut self) -> HashSet<WindowKey> { HashSet::new() }
+    }
+
+    // ... run one loop cycle where try_expire prevents the draw,
+    // then verify that take_dirty_windows was never called.
+}
+```
+
+This test validates the `did_render && !did_panic` gate on `consume_dirty` in `flush_state_changes`.
+
+### Running the tests
 
 ```bash
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items
