@@ -169,14 +169,10 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
 
         // Use std UnixListener (synchronous bind + accept)
-        let _listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+        let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
         // Accept in the background so connect succeeds
-        std::thread::spawn({
-            let path = socket_path.clone();
-            move || {
-                let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
-                let _ = listener.accept();
-            }
+        std::thread::spawn(move || {
+            let _ = listener.accept();
         });
         // Brief yield to let the accept thread start
         std::thread::sleep(std::time::Duration::from_millis(10));
