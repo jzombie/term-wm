@@ -497,24 +497,33 @@ for (x, cell) in (clip.x .. clip.x + clip.width).zip(row_slice.iter_mut()) {
 }
 ```
 
-### 3. Rewrite `render_handles_masked` passes 2 and 3 with zipped occlusion + origin-translated neighbor reads
+### 3. Rewrite `render_handles_masked` passes 2 and 3 with zipped occlusion + boundary-guarded neighbor reads
 
-Pass 2 writes junction characters by reading cells above and below. Neighbor reads MUST use origin-translated coordinates — absolute coords panic on non-zero-area buffers:
+Pass 2 writes junction characters by reading cells above and below. Neighbor reads MUST use origin-translated coordinates with explicit boundary guards — saturating arithmetic silently reads wrong cells:
 
 ```rust
 let rel_x = x - buffer.area.x as usize;
 let rel_y = y - buffer.area.y as usize;
-let row_above = (rel_y.saturating_sub(1)) * buf_w + rel_x;
-let row_below = (rel_y + 1) * buf_w + rel_x;
-let symbol_above = buffer.content[row_above].symbol();
-let symbol_below = buffer.content[row_below].symbol();
+let buf_h = buffer.area.height as usize;
+
+let symbol_above = if rel_y > 0 {
+    buffer.content[(rel_y - 1) * buf_w + rel_x].symbol()
+} else {
+    ""
+};
+
+let symbol_below = if rel_y + 1 < buf_h {
+    buffer.content[(rel_y + 1) * buf_w + rel_x].symbol()
+} else {
+    ""
+};
 ```
 
 Pass 3 hover borders: zip occlusion + origin-translated direct index for both horizontal (row-slice) and vertical (per-cell) writes.
 
 ### 4. Rewrite `render_resize_outline` — horizontal BCE + vertical direct index
 
-**Horizontal edges** (Top, Bottom) — row-slice iterators over the edge range, **with occlusion zipping**:
+**Horizontal edges** (Top, Bottom) — row-slice iterators over the edge range, **with occlusion zipping**. Zip lengths are guaranteed to match because the slice length `rel_x_end - rel_x_start` equals `(right - 1) - (rx + 1) + 1 = right - rx - 1`, which is derived from the same `rx`/`right` variables as the coordinate iterator:
 ```rust
 let row_slice = &mut buffer.content[row_start + rel_x_start .. row_start + rel_x_end];
 for (x, cell) in (rx.saturating_add(1) .. right).zip(row_slice.iter_mut()) {
@@ -543,15 +552,16 @@ Three tests in `draw_plan_renderer.rs` under `#[cfg(test)]`:
 - Partial overlap: src rect partially outside dst
 - No overlap: disjoint rects must short-circuit (no panic)
 
-### 6. `render_ghost_preview` interior fill — single-pass BCE row-slice iterator
+### 6. `render_ghost_preview` interior fill — single-pass BCE row-slice iterator (LICM-hoisted)
 
-Unconditional `set_bg` with no string check → no mask needed. Use row-slice BCE:
+Unconditional `set_bg` with no string check → no mask needed. X-axis arithmetic hoisted outside the Y loop:
 ```rust
+let rel_x_start = (left + 1) as usize - buf.area.x as usize;
+let rel_x_end = right as usize - buf.area.x as usize;
+
 for y in (top + 1) as usize .. bottom as usize {
     let rel_y = y - buf.area.y as usize;
     let row_start = rel_y * buf_w;
-    let rel_x_start = (left + 1) as usize - buf.area.x as usize;
-    let rel_x_end = right as usize - buf.area.x as usize;
     let row_slice = &mut buf.content[row_start + rel_x_start .. row_start + rel_x_end];
     for cell in row_slice.iter_mut() {
         cell.set_bg(preview_bg);
