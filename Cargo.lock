@@ -2980,6 +2980,7 @@ name = "term-session-client"
 version = "0.8.20-alpha"
 dependencies = [
  "clap",
+ "crossbeam-channel",
  "crossterm",
  "libc",
  "muxio-core",
