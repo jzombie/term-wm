@@ -192,18 +192,32 @@ struct WakeupDriver {
 }
 
 impl EventSource for WakeupDriver {
-    fn poll(&mut self, _: Duration) -> io::Result<bool> { Ok(false) }
-    fn read(&mut self) -> io::Result<Event> { Err(io::Error::other("")) }
-    fn next_key(&mut self) -> io::Result<KeyEvent> { Err(io::Error::other("")) }
-    fn next_mouse(&mut self) -> io::Result<MouseEvent> { Err(io::Error::other("")) }
-    fn current_profile(&self) -> PowerProfile { PowerProfile::Streaming }
-    fn take_redraw_request(&mut self) -> bool { std::mem::replace(&mut self.armed, false) }
+    fn poll(&mut self, _: Duration) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn read(&mut self) -> io::Result<Event> {
+        Err(io::Error::other(""))
+    }
+    fn next_key(&mut self) -> io::Result<KeyEvent> {
+        Err(io::Error::other(""))
+    }
+    fn next_mouse(&mut self) -> io::Result<MouseEvent> {
+        Err(io::Error::other(""))
+    }
+    fn current_profile(&self) -> PowerProfile {
+        PowerProfile::Streaming
+    }
+    fn take_redraw_request(&mut self) -> bool {
+        std::mem::replace(&mut self.armed, false)
+    }
 }
 
 /// Helper: build a bare WindowManager with one window.
 fn build_bare_wm() -> WindowManager<NoopComponent, NoopWmComponent, NoopOverlay> {
     let mut wm = AppBuilder::<NoopWmComponent>::bare()
-        .app_ctx(Arc::new(term_wm::app_context::AppContext::new("test", "0.0.0")))
+        .app_ctx(Arc::new(term_wm::app_context::AppContext::new(
+            "test", "0.0.0",
+        )))
         .build::<NoopComponent, NoopOverlay>()
         .expect("test build");
     wm.create_window(NoopComponent);
@@ -256,25 +270,35 @@ fn frame_pacer_deterministic_timing() {
 
     // Tick 1: arm and expire (epoch + 17ms past the 16ms interval)
     pacer.notify_pending(epoch);
-    assert!(pacer.try_expire(epoch + Duration::from_millis(17)),
-        "frame at t+17ms should be allowed (16ms interval)");
+    assert!(
+        pacer.try_expire(epoch + Duration::from_millis(17)),
+        "frame at t+17ms should be allowed (16ms interval)"
+    );
 
     // Tick 2: re-arm and check 1ms later — still inside next interval
     pacer.notify_pending(epoch + Duration::from_millis(17));
-    assert!(!pacer.try_expire(epoch + Duration::from_millis(18)),
-        "frame at t+18ms should be rejected (1ms since arm)");
+    assert!(
+        !pacer.try_expire(epoch + Duration::from_millis(18)),
+        "frame at t+18ms should be rejected (1ms since arm)"
+    );
 
     // Tick 3: 33ms after re-arm — interval elapsed, allowed
-    assert!(pacer.try_expire(epoch + Duration::from_millis(51)),
-        "frame at t+51ms should be allowed");
+    assert!(
+        pacer.try_expire(epoch + Duration::from_millis(51)),
+        "frame at t+51ms should be allowed"
+    );
 
     // Tick 4: re-arm with drag interval (33ms)
     pacer.set_interval(Duration::from_millis(33));
     pacer.notify_pending(epoch + Duration::from_millis(51));
-    assert!(!pacer.try_expire(epoch + Duration::from_millis(60)),
-        "drag frame at t+60ms should be rejected (9ms since arm)");
-    assert!(pacer.try_expire(epoch + Duration::from_millis(85)),
-        "drag frame at t+85ms should be allowed (34ms since arm)");
+    assert!(
+        !pacer.try_expire(epoch + Duration::from_millis(60)),
+        "drag frame at t+60ms should be rejected (9ms since arm)"
+    );
+    assert!(
+        pacer.try_expire(epoch + Duration::from_millis(85)),
+        "drag frame at t+85ms should be allowed (34ms since arm)"
+    );
 
     // Deadline should be cleared after expiry
     assert!(pacer.time_until_deadline(Instant::now()).is_none());
