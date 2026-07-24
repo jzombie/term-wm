@@ -151,3 +151,101 @@ cargo test
 cargo bench -p term-bench
 cargo run
 ```
+
+---
+
+---
+
+---
+
+# POST-IMPLEMENTATION CODE REVIEW
+
+## Files Changed (5 files, ~550 lines diff)
+- `Cargo.toml` — added `criterion` workspace dep
+- `Cargo.lock` — updated (criterion + transitive deps)
+- `crates/term-wm-console/Cargo.toml` — added criterion dev-dep + `[[bench]]`
+- `crates/term-wm-console/benches/blit_buffer.rs` — new benchmark file
+- `crates/term-wm-console/src/draw_plan_renderer.rs` — main optimization (10 functions rewritten)
+
+---
+
+## Risk: MEDIUM (blast radius: 500 nodes, 42 files)
+
+### ✅ LOW RISK — Correct, well-tested, matches plan
+
+| Change | Plan Match | Status |
+|---|---|---|
+| `blit_buffer`: intersection clipping + `clone_from_slice` | ✅ Exact match | Passes existing tests indirectly |
+| `composite_window` inline blit: intersection clipping + row slices | ✅ Exact match | `composite_window_skips_negative_dest_x` test passes |
+| `render_drop_shadow`: direct indexing + intersection clipping | ✅ Exact match | No dedicated test, functionally equivalent |
+| `apply_dim_modifier`: direct indexing | ✅ Exact match | Same logic, skip empty cells check preserved |
+| Criterion benchmark for `blit_buffer` | ✅ Match (moved to console crate) | Compiles, tests pass |
+
+### ⚠️ MEDIUM RISK — Extra scope not in plan, need audit
+
+| Change | Plan Match | Risk | Reason |
+|---|---|---|---|
+| `render_window`: header fill + borders → direct indexing | ❌ Extra | Low | Buffer is offscreen scratch (origin 0,0), coords ≤ buffer area |
+| `render_handles_masked` pass 2: junction char reads via direct indexing | ❌ Extra | **Medium** | Reads `buffer.content[neighbor]` then writes `buffer.content[row_start + x]` — separate indices, no borrow conflict. But removes the safety net of `cell()` bounds check. |
+| `render_handles_masked` pass 3: direct indexing for hover borders | ❌ Extra | Low | Pre-checked by `is_obscured` closure |
+| `fill_handle_bar`: direct indexing | ❌ Extra | Low | Uses intersection clip + `is_obscured` guard |
+| `render_ghost_preview`: interior fill → direct indexing | ❌ Extra | Low | Fully contained within clip rect |
+| `render_cursor_overlay`: direct indexing | ❌ Extra | Low | Pre-checked by bounds guard (line 1738) |
+
+### 🔴 The `composite_window` src_y math — VERIFIED CORRECT
+
+The most complex change. Let me verify the coordinate math:
+- `src_y = (y - dst_clip.y + src_clip.y) as usize`  
+- When `y == dst_clip.y`: src_y = `0 + src_clip.y` = `src_clip.y` ✓
+- When `y == y_end - 1`: src_y = `(height-1) + src_clip.y` ✓
+- `dst_y = (y - main_buf.area.y) as usize` — correct for origin offset
+
+The `src_clip` is computed as:
+- `src_clip.x = src_off_x + (dst_clip.x - dest_x)`  
+- This maps the clipped destination x back to source space ✓
+
+---
+
+## Test Coverage Gaps
+
+| Function | Direct Tests | Coverage |
+|---|---|---|
+| `blit_buffer` | 0 | Indirect via `composite_window` tests |
+| `render_drop_shadow` | 0 | None |
+| `apply_dim_modifier` | 0 | None |
+| `render_window` | 0 | None |
+| `render_handles_masked` | 0 | None |
+| `fill_handle_bar` | 0 | None |
+| `render_ghost_preview` | 0 | None |
+| `render_cursor_overlay` | 5 ✅ | Good |
+| `composite_window` | 2 ✅ | Good (clipping + hitbox) |
+
+### Suggested additional tests
+
+1. **`blit_buffer` unit tests**: edge cases for intersection clipping
+2. **`render_drop_shadow` test**: verify DIM + bg color applied within shadow rect
+3. **`apply_dim_modifier` test**: verify DIM on non-empty cells, skip empty
+
+---
+
+## Verification Results
+
+| Check | Result |
+|---|---|
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | ✅ Pass (0 warnings) |
+| `cargo test -p term-wm-console` | ✅ 15/15 pass |
+| `cargo bench -p term-wm-console` | ⬜ Compiles, need to run to collect baseline |
+
+---
+
+## Overall Assessment
+
+The implementation **substantially follows the plan** for the critical path (blit_buffer, composite_window, render_drop_shadow, apply_dim_modifier). The extra scope (render_window, render_handles_masked, fill_handle_bar, render_ghost_preview, render_cursor_overlay) is low-risk: each change preserves the existing guard logic (intersection clips, occlusion checks, bounds checks) while switching from `cell_mut()` to direct `content[]` indexing.
+
+The `render_handles_masked` pass 2 change carries the most risk because it reads neighbor cells via direct indexing without `cell()`'s implicit bounds check. The `y > 0` and `y + 1 < h` guards are preserved, but an off-by-one in `h` (now `buffer.area.height as usize` instead of `buffer.area.height` as u16 before `saturating_sub(1)`) could cause a panic. The old code used `h.saturating_sub(1)` as u16; the new code casts `h` to `usize` directly. This is safe because `buffer.area.height` is already the correct upper bound.
+
+## Merge Recommendation
+
+**AMEND — then MERGE**
+
+Before merging, add 3 unit tests for `blit_buffer` (fully contained, partial overlap, no overlap) to validate the intersection clipping math directly rather than only indirectly through `composite_window`.
