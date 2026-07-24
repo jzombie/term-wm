@@ -28,16 +28,16 @@ Per-partition bounding span (`max_extent - min_extent` of the partition's rects 
 // OLD (global Y span):
 weights: vec![(y - min_y).max(1) as u16, (max_y - y).max(1) as u16],
 
-// NEW (per-partition Y bounding span):
+// NEW (per-partition Y bounding span, clamped to u16::MAX):
 let top_span = {
     let min = top.iter().map(|(_, r)| r.y).min().unwrap_or(min_y);
     let max = top.iter().map(|(_, r)| r.y.saturating_add(r.height as i32)).max().unwrap_or(y);
-    (max.saturating_sub(min)).max(1) as u16
+    max.saturating_sub(min).clamp(1, i32::from(u16::MAX)) as u16
 };
 let bot_span = {
     let min = bottom.iter().map(|(_, r)| r.y).min().unwrap_or(y);
     let max = bottom.iter().map(|(_, r)| r.y.saturating_add(r.height as i32)).max().unwrap_or(max_y);
-    (max.saturating_sub(min)).max(1) as u16
+    max.saturating_sub(min).clamp(1, i32::from(u16::MAX)) as u16
 };
 weights: vec![top_span, bot_span],
 ```
@@ -47,16 +47,16 @@ weights: vec![top_span, bot_span],
 // OLD (global X span):
 weights: vec![(x - min_x).max(1) as u16, (max_x - x).max(1) as u16],
 
-// NEW (per-partition X bounding span):
+// NEW (per-partition X bounding span, clamped to u16::MAX):
 let left_span = {
     let min = left.iter().map(|(_, r)| r.x).min().unwrap_or(min_x);
     let max = left.iter().map(|(_, r)| r.x.saturating_add(r.width as i32)).max().unwrap_or(x);
-    (max.saturating_sub(min)).max(1) as u16
+    max.saturating_sub(min).clamp(1, i32::from(u16::MAX)) as u16
 };
 let right_span = {
     let min = right.iter().map(|(_, r)| r.x).min().unwrap_or(x);
     let max = right.iter().map(|(_, r)| r.x.saturating_add(r.width as i32)).max().unwrap_or(max_x);
-    (max.saturating_sub(min)).max(1) as u16
+    max.saturating_sub(min).clamp(1, i32::from(u16::MAX)) as u16
 };
 weights: vec![left_span, right_span],
 ```
