@@ -184,7 +184,7 @@ mod multi_window_tiling {
             weights: vec![1u16, 1u16, 1u16],
             resizable: false,
         };
-        let regions = root.layout(AREA);
+        let regions = root.layout_rects(AREA);
         assert_eq!(regions.len(), 3);
         let total_w: u16 = regions.iter().map(|(_, r)| r.width).sum();
         assert_eq!(total_w, AREA.width);
@@ -213,7 +213,7 @@ mod multi_window_tiling {
             weights: vec![1u16, 1u16],
             resizable: false,
         };
-        let regions = root.layout(AREA);
+        let regions = root.layout_rects(AREA);
         assert_eq!(regions.len(), 3);
         let total_area: u32 = regions
             .iter()
@@ -226,7 +226,7 @@ mod multi_window_tiling {
     fn insert_leaf_splits_target() {
         let mut root = LayoutNode::leaf(1usize);
         root.insert_leaf(1, 2, InsertPosition::Right);
-        let regions = root.layout(AREA);
+        let regions = root.layout_rects(AREA);
         assert_eq!(regions.len(), 2);
         let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
         let r2 = regions.iter().find(|(id, _)| *id == 2).unwrap().1;
@@ -239,7 +239,7 @@ mod multi_window_tiling {
         root.insert_leaf(1, 2, InsertPosition::Right);
         root.remove_leaf(2);
         root.cleanup_after_removal();
-        let regions = root.layout(AREA);
+        let regions = root.layout_rects(AREA);
         assert_eq!(regions.len(), 1);
         assert_eq!(regions[0].1.width, AREA.width);
         assert_eq!(regions[0].1.height, AREA.height);
@@ -251,7 +251,7 @@ mod multi_window_tiling {
         root.insert_leaf(1, 2, InsertPosition::Right);
         root.remove_leaf(1);
         root.cleanup_after_removal();
-        let regions = root.layout(AREA);
+        let regions = root.layout_rects(AREA);
         assert_eq!(regions.len(), 1, "after removing 1 of 2, one leaf remains");
         root.remove_leaf(2);
         root.cleanup_after_removal();
@@ -266,7 +266,7 @@ mod multi_window_tiling {
         let mut root = LayoutNode::leaf(1usize);
         root.insert_leaf(1, 2, InsertPosition::Right);
         root.normalize_weights();
-        let regions = root.layout(AREA);
+        let regions = root.layout_rects(AREA);
         assert_eq!(regions.len(), 2);
         let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
         let r2 = regions.iter().find(|(id, _)| *id == 2).unwrap().1;
@@ -299,7 +299,7 @@ mod multi_window_tiling {
         // Insert 4 into BottomLeft quadrant
         // Expected: 4 in bottom-left, 1 in bottom-right, others in top strip
         root.insert_leaf(1, 4, InsertPosition::BottomLeft);
-        let regions = root.layout(area);
+        let regions = root.layout_rects(area);
         let r4 = regions.iter().find(|(id, _)| *id == 4).unwrap().1;
         let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
         assert!(
@@ -313,7 +313,7 @@ mod multi_window_tiling {
         root.insert_leaf(1, 2, InsertPosition::Right);
         root.insert_leaf(2, 3, InsertPosition::Right);
         root.insert_leaf(1, 4, InsertPosition::BottomRight);
-        let regions = root.layout(area);
+        let regions = root.layout_rects(area);
         let r4 = regions.iter().find(|(id, _)| *id == 4).unwrap().1;
         let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
         assert!(
@@ -327,7 +327,7 @@ mod multi_window_tiling {
         root.insert_leaf(1, 2, InsertPosition::Right);
         root.insert_leaf(2, 3, InsertPosition::Right);
         root.insert_leaf(1, 4, InsertPosition::TopLeft);
-        let regions = root.layout(area);
+        let regions = root.layout_rects(area);
         let r4 = regions.iter().find(|(id, _)| *id == 4).unwrap().1;
         let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
         assert!(r4.x < r1.x, "TopLeft: insert must be left of first sibling");
@@ -338,7 +338,7 @@ mod multi_window_tiling {
         root.insert_leaf(1, 2, InsertPosition::Right);
         root.insert_leaf(2, 3, InsertPosition::Right);
         root.insert_leaf(1, 4, InsertPosition::TopRight);
-        let regions = root.layout(area);
+        let regions = root.layout_rects(area);
         let r4 = regions.iter().find(|(id, _)| *id == 4).unwrap().1;
         let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
         assert!(
@@ -398,7 +398,7 @@ mod void_node_lifecycle {
         let mut root = LayoutNode::leaf(1usize);
         root.insert_leaf(1, 2, InsertPosition::TopLeft);
         root.cleanup_after_removal();
-        let regions = root.layout(AREA);
+        let regions = root.layout_rects(AREA);
         for (_, r) in &regions {
             assert!(r.width > 0);
             assert!(r.height > 0);
@@ -414,7 +414,7 @@ mod void_node_lifecycle {
             "clear_leaf must return true when id matches"
         );
         assert!(has_void(&root), "Leaf must become Void after clear_leaf");
-        let regions = root.layout(AREA);
+        let regions = root.layout_rects(AREA);
         assert!(regions.is_empty(), "Void produces no regions");
 
         // Non-matching id must be a no-op
@@ -543,12 +543,12 @@ mod spatial_isolation {
         root.insert_leaf(1, 2, InsertPosition::Right);
         root.insert_leaf(2, 3, InsertPosition::Bottom);
 
-        let regions_before = root.layout(AREA);
+        let regions_before = root.layout_rects(AREA);
         let r3_before = *regions_before.iter().find(|(id, _)| *id == 3).unwrap();
 
         root.insert_leaf(2, 4, InsertPosition::Right);
 
-        let regions_after = root.layout(AREA);
+        let regions_after = root.layout_rects(AREA);
         let r3_after = *regions_after.iter().find(|(id, _)| *id == 3).unwrap();
         assert_eq!(
             r3_before.1.x, r3_after.1.x,
@@ -1326,7 +1326,7 @@ mod property_tests {
             tree in tree_strategy(),
             area in area_strategy(),
         ) {
-            let regions = tree.layout(area);
+            let regions = tree.layout_rects(area);
             for (i, (_, r1)) in regions.iter().enumerate() {
                 for (j, (_, r2)) in regions.iter().enumerate() {
                     if i < j {
@@ -1343,7 +1343,7 @@ mod property_tests {
             area in area_strategy(),
         ) {
             let non_resizable = make_non_resizable(&tree);
-            let regions = non_resizable.layout(area);
+            let regions = non_resizable.layout_rects(area);
             let leaf_area: u32 = regions.iter()
                 .map(|(_, r)| r.width as u32 * r.height as u32)
                 .sum();

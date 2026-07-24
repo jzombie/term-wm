@@ -115,13 +115,13 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     pub fn set_regions_from_layout(&mut self, layout: &LayoutNode<WindowKey>, area: Rect) {
         self.regions = RegionMap::default();
-        for (key, rect) in layout.layout(area) {
+        for (key, rect) in layout.layout_rects(area) {
             self.regions.set(key, rect);
         }
     }
 
     pub fn register_tiling_layout(&mut self, layout: &TilingLayout<WindowKey>, area: Rect) {
-        let (regions, handles) = layout.root().layout_with_handles(area);
+        let (regions, handles) = (layout.regions(area), layout.handles(area));
         for (key, rect) in regions {
             self.regions.set(key, rect);
         }
@@ -377,7 +377,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         let mut active_keys: Vec<WindowKey> = Vec::new();
 
         if let Some(layout) = self.managed_layout.as_ref() {
-            let (regions, handles) = layout.root().layout_with_handles(self.managed_area);
+            let regions = layout.regions(self.managed_area);
+            let handles = layout.handles(self.managed_area);
             for (key, rect) in &regions {
                 // Skip stale keys no longer in the SlotMap (e.g. after
                 // finalize_window_removal).  These would otherwise be

@@ -3674,7 +3674,7 @@ mod tests {
             width: 80,
             height: 24,
         };
-        let regions = wm.managed_layout.as_ref().unwrap().root().layout(area);
+        let regions = wm.managed_layout.as_ref().unwrap().root().layout_rects(area);
         assert_eq!(regions.len(), 2, "layout must produce 2 regions");
 
         // Verify no overlapping regions.
@@ -5747,7 +5747,7 @@ mod tests {
 
         // Compute regions from the layout tree and verify spatial ordering.
         let layout = wm.managed_layout.as_ref().unwrap();
-        let regions = layout.root().layout(area);
+        let regions = layout.root().layout_rects(area);
         let r0 = regions
             .iter()
             .find(|(k, _)| *k == keys[0])
