@@ -277,6 +277,10 @@ pub async fn run_server(
                         respond: respond.clone(),
                     });
 
+                    // Wake the polling loop — the session may have pending
+                    // output or exit state that needs processing.
+                    guard.notify.notify_one();
+
                     drop(guard);
 
                     if let Some(data) = snapshot
@@ -330,20 +334,10 @@ pub async fn run_server(
 
             if guard.subscribers.is_empty() {
                 if let Some(session) = guard.session.as_mut() {
-                    // Child may have exited before any subscriber connected.
-                    // Drain pending output and check exit so we can clean up.
-                    let _raw = session.read_output();
-                    if session.check_exited() {
-                        let code = session.exit_code;
-                        let _ = exit_tx.send(code.unwrap_or(0));
-                        break;
-                    }
+                    // No subscribers — drain dirty flag to keep reader budget flowing
                     session.sync_screen();
-                    continue;
                 }
-                // No subscribers and no session — terminal state
-                let _ = exit_tx.send(0);
-                break;
+                continue;
             }
 
             let Some(session) = guard.session.as_mut() else {
