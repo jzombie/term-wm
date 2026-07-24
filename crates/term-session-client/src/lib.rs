@@ -301,7 +301,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
 
     let mut pane = RemotePane::new(
         1u64,
-        client.clone(),
+        Some(client.clone()),
         rt.handle().clone(),
         term_cols,
         term_rows,

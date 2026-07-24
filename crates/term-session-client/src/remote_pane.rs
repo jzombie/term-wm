@@ -25,7 +25,7 @@ pub struct RemotePane {
 impl RemotePane {
     pub fn new(
         id: u64,
-        client: std::sync::Arc<RpcIpcClient>,
+        client: Option<std::sync::Arc<RpcIpcClient>>,
         rt: Handle,
         cols: u16,
         rows: u16,
@@ -34,7 +34,7 @@ impl RemotePane {
     ) -> Self {
         Self {
             id,
-            client: Some(client),
+            client,
             rt,
             parser: Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0))),
             exited: Cell::new(false),
@@ -75,15 +75,18 @@ impl Pane for RemotePane {
     }
 
     fn resize(&mut self, size: PtySize) -> PtyResult<()> {
-        let result: Result<(), RpcServiceError> = self.rt.block_on(async {
-            use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
-            ResizePty::call(self.client.as_deref().unwrap(), (self.id, size.cols, size.rows)).await
-        });
+        if let Some(ref client) = self.client {
+            let result: Result<(), RpcServiceError> = self.rt.block_on(async {
+                use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
+                ResizePty::call(&**client, (self.id, size.cols, size.rows)).await
+            });
+            result.map_err(Self::rpc_to_pty)?;
+        }
         {
             let mut parser = self.parser.lock().unwrap();
             parser.screen_mut().set_size(size.rows, size.cols);
         }
-        result.map_err(Self::rpc_to_pty)
+        Ok(())
     }
 
     fn has_exited(&mut self) -> bool {
@@ -130,12 +133,14 @@ impl Pane for RemotePane {
     }
 
     fn kill_child(&mut self) -> PtyResult<()> {
-        self.rt
-            .block_on(async {
-                use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
-                CloseSession::call(self.client.as_deref().unwrap(), self.id).await
-            })
-            .map_err(Self::rpc_to_pty)?;
+        if let Some(ref client) = self.client {
+            self.rt
+                .block_on(async {
+                    use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
+                    CloseSession::call(&**client, self.id).await
+                })
+                .map_err(Self::rpc_to_pty)?;
+        }
         self.exited.set(true);
         Ok(())
     }
@@ -150,27 +155,23 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg(unix)]
     fn test_drain_pushes_returns_dirty_flag() {
         let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
             .build()
             .unwrap();
 
         let (push_tx, push_rx) = crossbeam_channel::unbounded();
         let input_writer: InputWriter = Box::new(|_| Ok(()));
 
-        // drain_pushes never uses the client field, so None is safe here.
-        let parser = Arc::new(Mutex::new(vt100::Parser::new(80, 24, 0)));
-        let mut pane = RemotePane {
-            id: 1,
-            client: None,
-            rt: rt.handle().clone(),
-            parser,
-            exited: Cell::new(false),
+        let mut pane = RemotePane::new(
+            1,
+            None,
+            rt.handle().clone(),
+            80,
+            24,
             push_rx,
             input_writer,
-        };
+        );
 
         // 1. Idle call with no pending messages must return false
         assert!(!pane.drain_pushes());

@@ -62,6 +62,25 @@ impl ServerState {
         // before the callback was registered.
         self.notify.notify_one();
     }
+
+    /// Terminate and clear the active session, flushing remaining PTY buffers
+    /// and stream completion markers to all active subscribers.
+    fn clear_session(&mut self) {
+        if let Some(mut session) = self.session.take() {
+            let _ = session.pty.kill_child();
+            let raw = session.read_output();
+            if !raw.is_empty() {
+                for sub in &self.subscribers {
+                    sub.respond.respond(raw.clone(), false);
+                }
+            }
+        }
+        for sub in &self.subscribers {
+            sub.respond.respond(Vec::new(), true);
+        }
+        self.subscribers.clear();
+        self.notify.notify_one();
+    }
 }
 
 type SharedState = Arc<Mutex<ServerState>>;
@@ -162,10 +181,7 @@ pub async fn run_server(
                 let _id = CloseSession::decode_request(&payload)
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
                 let mut guard = state.lock().await;
-                if let Some(session) = guard.session.as_mut() {
-                    let _ = session.pty.kill_child();
-                }
-                guard.session = None;
+                guard.clear_session();
                 CloseSession::encode_response(())
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
             }
@@ -315,11 +331,15 @@ pub async fn run_server(
             if guard.subscribers.is_empty() {
                 if let Some(session) = guard.session.as_mut() {
                     session.sync_screen();
+                    continue;
                 }
-                continue;
+                // No subscribers and no session — terminal state
+                let _ = exit_tx.send(0);
+                break;
             }
 
             let Some(session) = guard.session.as_mut() else {
+                let _ = exit_tx.send(0);
                 break;
             };
 
