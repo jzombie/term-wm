@@ -36,6 +36,36 @@ driver.set_max_sleep_duration(match (fp_deadline, deadline) {
 
 This completes the FramePacer lifecycle: input events → `notify_pending()` arms a deadline → `try_expire()` gates the draw → `time_until_deadline()` clamps the poll → poll wakes at the deadline → loop re-checks `try_expire()`.
 
+### SEV-3: PTY background updates bypass the FramePacer ("Wiggle to Update" deadlock)
+
+The `PtyWakeup` flow does NOT generate a crossterm `Event`:
+1. PTY reader thread sends `UnifiedEvent::PtyWakeup(WindowKey)` via crossbeam channel
+2. `UnifiedEventSource::poll()` calls `drain_pending()` which inserts the key into `dirty_windows`
+3. `poll()` returns `Ok(false)` (no crossterm `Event` to read)
+4. `EventLoop::run()` falls through to `handler(None)` — the render branch
+5. But the runner's `FramePacer` was never armed because `notify_pending()` only lives in `Some(evt)`
+6. `try_expire()` returns false -> draw skipped -> dirty state unrendered
+
+**The fix**: In the `None` branch, arm the pacer when the driver has pending work. Check `driver.current_profile()` — when dirty windows exist or input was recently received, the profile is `Streaming` or `Interactive` (not `PowerSaver`). This is a non-consuming check:
+
+```rust
+update_selection_snapshot(app);
+
+// Arm the pacer if the driver has pending work (PTY data, etc.)
+// that didn't arrive as a crossterm Event through Some(evt).
+if driver.current_profile() != crate::power_profile::PowerProfile::PowerSaver {
+    frame_pacer.notify_pending();
+}
+
+frame_pacer.set_interval(if app.wm().is_dragging_window() {
+    Duration::from_millis(33)
+} else {
+    Duration::from_millis(16)
+});
+```
+
+When the driver is in `PowerSaver` (no dirty windows, no recent input, no active work), `notify_pending()` is skipped entirely and `try_expire()` returns false — the loop goes to sleep without rendering. This preserves the CPU savings from throttled idle frames.
+
 ## Step 1: Wire FramePacer into `runner.rs` with dynamic drag rate
 
 ### Files to modify
@@ -68,6 +98,15 @@ This completes the FramePacer lifecycle: input events → `notify_pending()` arm
 - In the `None` branch, replace the entire `begin_frame()` / `prepare_draw()` / `output.draw()` block:
   ```rust
   update_selection_snapshot(app);
+
+  // Arm the pacer when the driver has background work (PTY data, etc.)
+  // that didn't arrive as a crossterm Event through Some(evt).
+  // Streaming/Interactive profiles indicate pending dirty windows or
+  // recent input — skip notify_pending() only when truly idle (PowerSaver)
+  // so idle frames don't keep the pacer armed unnecessarily.
+  if driver.current_profile() != crate::power_profile::PowerProfile::PowerSaver {
+      frame_pacer.notify_pending();
+  }
 
   frame_pacer.set_interval(if app.wm().is_dragging_window() {
       Duration::from_millis(33)  // 30 FPS during drag
