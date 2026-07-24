@@ -6,7 +6,7 @@ pub trait RenderBackend: std::any::Any {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 
     /// Returns a zero-initialized persistent mask slice sized to the current buffer.
-    /// The mask is a flat Vec<u8> that decouples conditional string checks from
+    /// The mask is a flat `Vec<u8>` that decouples conditional string checks from
     /// bitwise buffer mutation — enabling SIMD-friendly two-pass rendering.
     /// Allocates only when the buffer grows; zero allocations in steady state.
     fn acquire_mask(&mut self) -> &mut [u8];
