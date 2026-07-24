@@ -1,123 +1,12 @@
-// TODO: Many aspects of this should likely be refactored out of the core, especially which involve rendering
-
 pub mod floating;
 pub mod tiling;
 
-pub use tiling::*;
+pub use term_wm_layout_engine::Direction;
+pub use tiling::TilingLayout;
+pub use tiling::{InsertPosition, LayoutNode, LayoutPlan, SplitHandle};
 
 use crate::Rect;
 use std::collections::BTreeMap;
-
-/// Layout direction — pure data, no rendering dependency.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum Direction {
-    #[default]
-    Horizontal,
-    Vertical,
-}
-
-/// Layout constraint — pure data, no rendering dependency.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Constraint {
-    Length(u16),
-    Percentage(u16),
-    Ratio(u32, u32),
-    Min(u16),
-    Max(u16),
-}
-
-/// Layout alignment — pure data, no rendering dependency.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Alignment {
-    Left,
-    Center,
-    Right,
-}
-
-/// Layout solver — pure data, no rendering dependency.
-#[derive(Debug, Clone, Default)]
-pub struct Layout {
-    direction: Direction,
-    constraints: Vec<Constraint>,
-}
-
-impl Layout {
-    pub fn direction(mut self, direction: Direction) -> Self {
-        self.direction = direction;
-        self
-    }
-
-    pub fn constraints(mut self, constraints: Vec<Constraint>) -> Self {
-        self.constraints = constraints;
-        self
-    }
-
-    pub fn split(self, area: Rect) -> Vec<Rect> {
-        // Simplified layout solver — returns equal-sized splits
-        let count = self.constraints.len() as u16;
-        if count == 0 {
-            return vec![];
-        }
-        match self.direction {
-            Direction::Horizontal => {
-                let width = area.width / count;
-                (0..count)
-                    .map(|i| Rect {
-                        x: area.x + i32::from(i * width),
-                        y: area.y,
-                        width,
-                        height: area.height,
-                    })
-                    .collect()
-            }
-            Direction::Vertical => {
-                let height = area.height / count;
-                (0..count)
-                    .map(|i| Rect {
-                        x: area.x,
-                        y: area.y + i32::from(i * height),
-                        width: area.width,
-                        height,
-                    })
-                    .collect()
-            }
-        }
-    }
-}
-
-pub const HANDLE_THICKNESS: u16 = 3;
-
-pub fn handle_thickness(direction: Direction, area: Rect) -> u16 {
-    let base = match direction {
-        Direction::Horizontal => 1,
-        Direction::Vertical => (HANDLE_THICKNESS.saturating_add(3)) / 8,
-    };
-    let max = match direction {
-        Direction::Horizontal => area.width,
-        Direction::Vertical => area.height,
-    };
-    base.clamp(1, max.max(1))
-}
-
-pub fn gap_size(direction: Direction, area: Rect, child_count: usize, resizable: bool) -> u16 {
-    if !resizable || child_count < 2 {
-        return 0;
-    }
-    let total = match direction {
-        Direction::Horizontal => area.width,
-        Direction::Vertical => area.height,
-    };
-    if total == 0 {
-        return 0;
-    }
-    let min_content = child_count as u16;
-    if total <= min_content {
-        return 0;
-    }
-    let max_gap = total.saturating_sub(min_content);
-    let per_gap = max_gap / (child_count as u16).saturating_sub(1);
-    handle_thickness(direction, area).min(per_gap)
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RectSpec {
@@ -217,37 +106,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn handle_thickness_basic() {
-        let area = Rect {
-            x: 0,
-            y: 0,
-            width: 10,
-            height: 5,
-        };
-        assert_eq!(handle_thickness(Direction::Horizontal, area), 1);
-        // Vertical returns at least 1 and not exceed area.height
-        let v = handle_thickness(Direction::Vertical, area);
-        assert!(v >= 1 && v <= area.height);
-    }
-
-    #[test]
-    fn gap_size_calculation() {
-        let area = Rect {
-            x: 0,
-            y: 0,
-            width: 10,
-            height: 5,
-        };
-        // with two children, should not exceed handle thickness when room available
-        let g = gap_size(Direction::Horizontal, area, 2, true);
-        assert!(g <= handle_thickness(Direction::Horizontal, area));
-        // not resizable yields 0
-        assert_eq!(gap_size(Direction::Horizontal, area, 2, false), 0);
-        // single child yields 0
-        assert_eq!(gap_size(Direction::Horizontal, area, 1, true), 0);
-    }
-
-    #[test]
     fn rect_spec_resolve_percent_and_absolute() {
         let area = Rect {
             x: 10,
@@ -270,7 +128,6 @@ mod tests {
                 height: 4
             }
         );
-
         let pct = RectSpec::Percent {
             x: 50,
             y: 50,
@@ -278,7 +135,6 @@ mod tests {
             height: 50,
         };
         let r = pct.resolve(area);
-        // 50% of width=200 is 100; x offset 50% -> 100 + area.x
         assert_eq!(r.width, 100);
         assert_eq!(r.height, 50);
     }
@@ -302,9 +158,7 @@ mod tests {
         map.set(2u8, b);
         assert_eq!(map.get(1u8), Some(a));
         assert_eq!(map.ids(), vec![1u8, 2u8]);
-        // hit inside first
         assert_eq!(map.hit_test(2, 2, &[1u8, 2u8]), Some(1u8));
-        // miss both
         assert_eq!(map.hit_test(100, 100, &[1u8, 2u8]), None);
     }
 

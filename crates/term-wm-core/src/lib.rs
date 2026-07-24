@@ -7,6 +7,7 @@ pub mod component_context;
 pub mod components;
 pub mod constants;
 pub mod debug_event_flags;
+pub mod debug_log;
 pub mod draw_plan;
 pub mod engine;
 pub mod event_loop;

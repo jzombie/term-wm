@@ -8,6 +8,8 @@ mod overlays;
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+
+use crate::window::entry;
 use std::time::{Duration, Instant};
 
 use crate::Rect;
@@ -117,6 +119,64 @@ pub(crate) enum SnapPreviewState {
     VoidInsert(usize),
 }
 
+/// Cached snap preview state to avoid recalculating the full
+/// position-based layout on every drag frame.
+/// Invalidates when the cursor exits the cached rect or crosses
+/// a quadrant boundary.
+struct SnapPreviewCache {
+    positions: Vec<(WindowKey, Rect)>,
+    cached_rect: Option<Rect>,
+    cached_quadrant: Option<(bool, bool)>,
+    dragged_key: Option<WindowKey>,
+}
+
+impl SnapPreviewCache {
+    fn needs_recalc(&self, mouse_x: u16, mouse_y: u16, dragged: WindowKey) -> bool {
+        let Some(rect) = self.cached_rect else {
+            return true;
+        };
+        if self.dragged_key != Some(dragged) {
+            return true;
+        }
+        let mx = mouse_x as i32;
+        let my = mouse_y as i32;
+        let right = rect.x.saturating_add(i32::from(rect.width));
+        let bottom = rect.y.saturating_add(i32::from(rect.height));
+        let out_of_bounds = mx < rect.x || mx >= right || my < rect.y || my >= bottom;
+        let cur_q = (
+            mx >= rect.x.saturating_add(i32::from(rect.width) / 2),
+            my >= rect.y.saturating_add(i32::from(rect.height) / 2),
+        );
+        out_of_bounds || self.cached_quadrant != Some(cur_q)
+    }
+
+    fn update(
+        &mut self,
+        mouse_x: u16,
+        mouse_y: u16,
+        rect: Rect,
+        dragged: WindowKey,
+        pos: Vec<(WindowKey, Rect)>,
+    ) {
+        let mx = mouse_x as i32;
+        let my = mouse_y as i32;
+        self.cached_quadrant = Some((
+            mx >= rect.x.saturating_add(i32::from(rect.width) / 2),
+            my >= rect.y.saturating_add(i32::from(rect.height) / 2),
+        ));
+        self.cached_rect = Some(rect);
+        self.dragged_key = Some(dragged);
+        self.positions = pos;
+    }
+
+    fn clear(&mut self) {
+        self.cached_rect = None;
+        self.cached_quadrant = None;
+        self.dragged_key = None;
+        self.positions.clear();
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ScrollState {
     pub offset: usize,
@@ -176,6 +236,32 @@ pub enum DrawTask {
     App(WindowDrawContext),
 }
 
+/// Monocle display mode. Cycling: Auto → On → Off → Auto.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MonocleMode {
+    Auto,
+    On,
+    Off,
+}
+
+impl MonocleMode {
+    pub fn cycle(self) -> Self {
+        match self {
+            MonocleMode::Auto => MonocleMode::On,
+            MonocleMode::On => MonocleMode::Off,
+            MonocleMode::Off => MonocleMode::Auto,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            MonocleMode::Auto => "Auto",
+            MonocleMode::On => "On",
+            MonocleMode::Off => "Off",
+        }
+    }
+}
+
 pub struct WindowManager<
     C: Component<TermWmAction>,
     L: WmComponent = crate::components::NoopWmComponent,
@@ -194,8 +280,10 @@ pub struct WindowManager<
     pub(crate) handles: Vec<SplitHandle>,
     pub(crate) managed_draw_order: Vec<WindowKey>,
     pub(crate) managed_layout: Option<TilingLayout<WindowKey>>,
-    closed_windows: Vec<WindowKey>,
     pub(crate) managed_area: Rect,
+    pub(crate) monocle_mode: MonocleMode,
+    monocle_width_threshold: u16,
+    last_terminal_width: u16,
     pub(crate) hitbox_registry: HitboxRegistry,
     app_ctx: Arc<AppContext>,
     #[allow(dead_code)]
@@ -243,6 +331,7 @@ pub struct WindowManager<
     /// Cache for BSP dry-run projection to avoid deep-cloning the layout
     /// tree on every drag frame. Keyed by (target, position, area).
     snap_projection_cache: Option<(SnapPreviewState, Rect, Option<Rect>)>,
+    snap_preview_cache: SnapPreviewCache,
     drag_last_event: Option<Instant>,
     next_window_seq: usize,
     next_title_seq: usize,
@@ -299,10 +388,30 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         key
     }
 
+    /// Atomic open transaction: spawn, map, place (tile or float), and focus.
+    /// Encapsulates the full window lifecycle so callers don't need to
+    /// manually drive state transitions or spatial placement.
+    pub fn open_window(&mut self, component: C) -> WindowKey {
+        let key = self.spawn(component);
+        self.transition_window(key, WindowState::Mapped);
+        if !self.try_spawn_floating_default(key) {
+            self.tile_window_key(key);
+        }
+        self.focus_window_key(key);
+        key
+    }
+
     /// Returns true if the key references a live window in the SlotMap.
     /// O(1) — no component extraction or vtable resolution.
     pub fn has_window(&self, key: WindowKey) -> bool {
         self.windows.contains_key(key)
+    }
+
+    /// Set the close policy for a window (Destroy or Unmap).
+    pub fn set_close_policy(&mut self, key: WindowKey, policy: entry::ClosePolicy) {
+        if let Some(w) = self.windows.get_mut(key) {
+            w.close_policy = policy;
+        }
     }
 
     /// Access the Reaper for async child-process teardown.
@@ -389,7 +498,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 self.focus_add(key);
             }
             (_, WindowState::Unmapped) => {
-                self.clear_floating_rect(key);
+                // Preserve floating_rect so re-mapping restores previous
+                // geometry and placement mode (ClosePolicy::Unmap windows).
                 self.z_order.retain(|x| *x != key);
                 self.managed_draw_order.retain(|x| *x != key);
                 self.regions.remove(key);
@@ -407,8 +517,29 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 if !self.managed_draw_order.contains(&key) {
                     self.managed_draw_order.push(key);
                 }
-                self.reattach_to_tiling_layout(key);
+
+                // If floating windows are present or there's no tiling layout,
+                // and this window has no floating spec, assign a default
+                // cascading rect so it floats with the rest of the workspace.
+                let has_other_floating = self
+                    .windows
+                    .values()
+                    .any(|w| w.state == WindowState::Mapped && w.is_floating());
+                let floating_mode = self.managed_layout.is_none();
+
+                if !self.is_window_floating(key) && (has_other_floating || floating_mode) {
+                    let index = self.windows.len().saturating_sub(1);
+                    let fallback = self.default_cascading_rect(index);
+                    self.set_floating_rect(
+                        key,
+                        Some(crate::window::FloatRectSpec::Absolute(fallback)),
+                    );
+                } else if !self.is_window_floating(key) {
+                    self.reattach_to_tiling_layout(key);
+                }
+
                 self.focus_add(key);
+                self.bring_to_front_key(key);
             }
             (WindowState::Mapped, WindowState::Shaded) => {
                 // Keep in z-order and draw order so chrome renders,
@@ -440,6 +571,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     fn clear_floating_rect(&mut self, key: WindowKey) {
         if let Some(w) = self.windows.get_mut(key) {
             w.floating_rect = None;
+            w.is_maximized = false;
         }
     }
 
@@ -459,6 +591,32 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     pub fn is_window_floating(&self, key: WindowKey) -> bool {
         self.window(key).is_some_and(|window| window.is_floating())
+    }
+
+    /// Compute a centered, cascading fallback rectangle for unrendered floating
+    /// windows using core workspace constants.
+    pub fn default_cascading_rect(&self, index: usize) -> Rect {
+        let area = self.managed_area;
+        let w = crate::constants::DEFAULT_FLOAT_WIDTH
+            .min(area.width)
+            .max(crate::constants::MIN_FLOAT_WIDTH);
+        let h = crate::constants::DEFAULT_FLOAT_HEIGHT
+            .min(area.height)
+            .max(crate::constants::MIN_FLOAT_HEIGHT);
+        let offset = (index as i32) * crate::constants::CASCADE_OFFSET_STEP;
+        Rect {
+            x: area.x + (area.width.saturating_sub(w) / 2) as i32 + offset,
+            y: area.y + (area.height.saturating_sub(h) / 2) as i32 + offset,
+            width: w,
+            height: h,
+        }
+    }
+
+    /// Return the cached region for a window, or compute a safe cascading fallback.
+    pub fn region_or_fallback(&self, key: WindowKey, index: usize) -> Rect {
+        self.regions
+            .get(key)
+            .unwrap_or_else(|| self.default_cascading_rect(index))
     }
 
     pub fn direct_mode(&self, key: WindowKey) -> bool {
@@ -570,6 +728,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 TermWmAction::MinimizeWindow,
                 TermWmAction::CloseWindow,
                 TermWmAction::ToggleDirectMode,
+                TermWmAction::ToggleMonocle,
+                TermWmAction::ToggleTiling,
             ]
         });
         let mouse_capture_enabled = config.mouse_capture_enabled;
@@ -582,15 +742,19 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             ),
             macro_focus: layer_manager::MacroFocus::FocusRing(slotmap::DefaultKey::default()),
             layer_manager,
-            windows: SlotMap::with_capacity(32),
-            components: SlotMap::<ComponentKey, C>::with_capacity_and_key(32),
+            windows: SlotMap::with_capacity(crate::constants::INITIAL_WINDOW_CAPACITY),
+            components: SlotMap::<ComponentKey, C>::with_capacity_and_key(
+                crate::constants::INITIAL_COMPONENT_CAPACITY,
+            ),
             regions: RegionMap::default(),
             scroll: BTreeMap::new(),
             handles: Vec::new(),
             managed_draw_order: Vec::new(),
             managed_layout: None,
-            closed_windows: Vec::new(),
             managed_area: Rect::default(),
+            monocle_mode: MonocleMode::Auto,
+            monocle_width_threshold: crate::constants::MONOCLE_WIDTH_THRESHOLD,
+            last_terminal_width: 0,
             hitbox_registry: HitboxRegistry::new(),
             app_ctx,
             supported_menu_actions,
@@ -623,6 +787,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             drag_snap: None,
             snap_preview: None,
             snap_projection_cache: None,
+            snap_preview_cache: SnapPreviewCache {
+                positions: Vec::new(),
+                cached_rect: None,
+                cached_quadrant: None,
+                dragged_key: None,
+            },
             drag_last_event: None,
             next_window_seq: 0,
             next_title_seq: 0,
@@ -780,10 +950,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             self.focus.set_order(order);
         }
         self.focus.set_current(key);
-    }
-
-    pub fn take_closed_windows(&mut self) -> Vec<WindowKey> {
-        std::mem::take(&mut self.closed_windows)
     }
 
     pub fn take_synthetic_event(&mut self) -> Option<Event> {
@@ -1245,6 +1411,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                                 let drag_dist = col.abs_diff(*anchor_x) + row.abs_diff(*anchor_y);
                                 if drag_dist > 0 {
                                     self.detach_from_tiling_layout(*key);
+                                    self.execute_float_all(*key);
                                 }
                             }
                             // else: snap was already applied by Moved handler — the
@@ -1460,6 +1627,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                             return EventResult::Ignored;
                         }
                         self.bring_floating_to_front_key(*h_key);
+                        // Unset maximized so further resize/move isn't restricted,
+                        // but keep the current rect so the cursor stays on the handle.
+                        if let Some(w) = self.windows.get_mut(*h_key) {
+                            w.is_maximized = false;
+                            w.borders_enabled = true;
+                        }
                         let rect = self.full_region_for_key(*h_key);
                         let (start_x, start_y, start_width, start_height) =
                             if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
@@ -1942,15 +2115,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         }
     }
 
-    /// Register a component directly on a window in the SlotMap.
-    pub fn set_system_window(&mut self, component: C) -> WindowKey {
-        let key = self.create_window(component);
-        if let Some(w) = self.windows.get_mut(key) {
-            w.is_system_window = true;
-        }
-        key
-    }
-
     /// Render-phase access: borrow component immutably.
     /// Returns &C — no vtable cast. Callers in generic context get static dispatch.
     pub fn component_for_key(&self, key: WindowKey) -> Option<&C> {
@@ -2051,7 +2215,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     pub fn panel_active(&self) -> bool {
-        if self.is_monocle() {
+        if self.is_monocle_cramped() {
             return false;
         }
         self.config.panels_enabled
@@ -2263,10 +2427,16 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             symbol: "X",
         }];
         if !self.is_monocle() {
+            let focused = self.focused_window();
+            let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized);
             btns.push(WmButton {
                 action: TermWmAction::MaximizeWindow,
-                label: "Maximize Window",
-                symbol: "▢",
+                label: if is_maxed {
+                    "Restore Window"
+                } else {
+                    "Maximize Window"
+                },
+                symbol: if is_maxed { "─" } else { "▢" },
             });
             btns.push(WmButton {
                 action: TermWmAction::MinimizeWindow,
@@ -2352,6 +2522,25 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 icon: Some("⏻"),
                 action: crate::actions::TermWmAction::ExitUi,
                 disabled: false,
+            },
+            MenuItem {
+                label: format!("Monocle Mode: {}", self.monocle_mode.label()).into(),
+                icon: Some("▢"),
+                action: crate::actions::TermWmAction::ToggleMonocle,
+                disabled: false,
+            },
+            MenuItem {
+                label: {
+                    let mode = if self.managed_layout.is_some() {
+                        "Float"
+                    } else {
+                        "Tile"
+                    };
+                    format!("Toggle {mode} Mode").into()
+                },
+                icon: Some("⊞"),
+                action: crate::actions::TermWmAction::ToggleTiling,
+                disabled: self.is_monocle(),
             },
         ];
 
@@ -2441,13 +2630,11 @@ fn map_layout_node(node: &LayoutNode<WindowKey>) -> LayoutNode<WindowKey> {
             direction,
             children,
             weights,
-            constraints,
             resizable,
         } => LayoutNode::Split {
             direction: *direction,
             children: children.iter().map(map_layout_node).collect(),
             weights: weights.clone(),
-            constraints: constraints.clone(),
             resizable: *resizable,
         },
         LayoutNode::Void(id) => LayoutNode::Void(*id),
@@ -2482,7 +2669,7 @@ mod tests {
     use crate::components::NoopOverlay;
     use crate::events::{KeyModifiers, MouseButton};
     use crate::hitbox_registry::HitboxId;
-    use crate::layout::{Constraint, Direction};
+    use crate::layout::Direction;
     use crate::window::test_component::{ActionRecorder, SelComponent, TestComponent};
     use std::collections::VecDeque;
     use term_wm_layout_engine::LayoutRect;
@@ -3187,7 +3374,7 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let debug_key = wm.set_system_window(TestComponent::Noop(crate::components::NoopComponent));
+        let debug_key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.set_panel_visible(false);
         wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(debug_key)));
         wm.register_managed_layout(Rect {
@@ -3355,8 +3542,7 @@ mod tests {
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(keys[1]), LayoutNode::Leaf(keys[2])],
-            weights: vec![1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         wm.managed_layout = Some(TilingLayout::new(split));
@@ -3488,7 +3674,12 @@ mod tests {
             width: 80,
             height: 24,
         };
-        let regions = wm.managed_layout.as_ref().unwrap().root().layout(area);
+        let regions = wm
+            .managed_layout
+            .as_ref()
+            .unwrap()
+            .root()
+            .layout_rects(area);
         assert_eq!(regions.len(), 2, "layout must produce 2 regions");
 
         // Verify no overlapping regions.
@@ -4411,7 +4602,7 @@ mod tests {
             std::collections::HashMap::new(),
         );
 
-        let debug_key = wm.set_system_window(TestComponent::Noop(crate::components::NoopComponent));
+        let debug_key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.set_panel_visible(false);
         wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(debug_key)));
         wm.register_managed_layout(Rect {
@@ -4624,8 +4815,8 @@ mod tests {
         assert_eq!(wm.window_state(target), Some(WindowState::Unmapped));
         assert!(!wm.z_order.contains(&target), "removed from z_order");
         assert!(
-            wm.window(target).is_some_and(|w| w.floating_rect.is_none()),
-            "floating rect cleared"
+            wm.window(target).is_some_and(|w| w.floating_rect.is_some()),
+            "floating rect preserved across Unmap"
         );
         // Focus ring auto-fallbacks via set_order removing current → first()
         assert!(
@@ -4656,16 +4847,10 @@ mod tests {
         });
 
         wm.close_window(target);
-        // For a non-system window, close_window destroys the component
-        // and removes it from the SlotMap immediately.
         assert_eq!(
             wm.window_state(target),
             None,
             "window removed from SlotMap by close_window"
-        );
-        assert!(
-            wm.closed_windows.is_empty(),
-            "non-system windows are not queued"
         );
         assert!(!wm.z_order.contains(&target), "not in z_order");
         assert!(
@@ -4675,7 +4860,7 @@ mod tests {
     }
 
     #[test]
-    fn close_window_system_window_keeps_slotmap_entry() {
+    fn close_window_removes_all_windows_from_slotmap() {
         let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
@@ -4683,7 +4868,34 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let key = wm.set_system_window(TestComponent::Noop(crate::components::NoopComponent));
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(key, WindowState::Mapped);
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        wm.close_window(key);
+        assert_eq!(
+            wm.window_state(key),
+            None,
+            "window removed from SlotMap by close_window"
+        );
+    }
+
+    #[test]
+    fn close_window_unmap_policy_preserves_slotmap_entry() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.set_close_policy(key, crate::window::ClosePolicy::Unmap);
         wm.transition_window(key, WindowState::Mapped);
         wm.register_managed_layout(Rect {
             x: 0,
@@ -4694,13 +4906,13 @@ mod tests {
 
         wm.close_window(key);
         assert!(
-            wm.window(key).is_some(),
-            "SlotMap entry preserved for system window"
+            wm.has_window(key),
+            "Unmap policy must preserve the SlotMap entry"
         );
         assert_eq!(
             wm.window_state(key),
             Some(WindowState::Unmapped),
-            "state is Unmapped"
+            "state must be Unmapped after close with Unmap policy"
         );
     }
 
@@ -4960,8 +5172,7 @@ mod tests {
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
-            weights: vec![1.0, 1.0],
-            constraints: vec![Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         wm.set_managed_layout(TilingLayout::new(split));
@@ -5157,7 +5368,6 @@ mod tests {
 
     #[test]
     fn register_layout_handle_hitboxes_registers_entries() {
-        use crate::layout::Constraint;
         let mut wm = WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
@@ -5170,8 +5380,7 @@ mod tests {
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
-            weights: vec![1.0, 1.0],
-            constraints: vec![Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         wm.set_managed_layout(TilingLayout::new(split));
@@ -5470,5 +5679,96 @@ mod tests {
         assert!(!wm.command_menu_visible());
         wm.close_command_menu();
         assert!(!wm.command_menu_visible());
+    }
+
+    #[test]
+    fn tile_window_key_respects_quadrant() {
+        use crate::layout::{Direction, LayoutNode, TilingLayout};
+        use crate::window::{FloatRect, FloatRectSpec};
+
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.set_panel_visible(false);
+        let keys = make_keys(&mut wm, 2);
+
+        // Create a single-window tiled layout (keys[0]).
+        wm.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(keys[0])));
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        wm.register_managed_layout(area);
+
+        // Verify starting state: 1 tiled window, no floating rect on keys[1].
+        assert!(wm.layout_contains(keys[0]));
+        assert!(!wm.layout_contains(keys[1]));
+        assert!(wm.floating_rect(keys[1]).is_none());
+
+        // Set keys[1] as floating with center in the EASTERN half of keys[0]'s tile.
+        // keys[0]'s region spans x=0..80, center at (40, 12).
+        // Place keys[1] center at (60, 12) — clearly in the East quadrant.
+        wm.set_floating_rect(
+            keys[1],
+            Some(FloatRectSpec::Absolute(FloatRect {
+                x: 50,
+                y: 6,
+                width: 20,
+                height: 12,
+            })),
+        );
+        assert!(wm.floating_rect(keys[1]).is_some());
+
+        // Tile keys[1] into the layout.
+        wm.tile_window_key(keys[1]);
+
+        // Both keys should now be in the tiling tree.
+        assert!(wm.layout_contains(keys[0]));
+        assert!(wm.layout_contains(keys[1]));
+
+        // The root of the layout should be a horizontal split (East → Right).
+        let root = wm.managed_layout.as_ref().unwrap().root();
+        match root {
+            LayoutNode::Split {
+                direction,
+                children,
+                ..
+            } => {
+                assert_eq!(
+                    *direction,
+                    Direction::Horizontal,
+                    "should split horizontally for East quadrant"
+                );
+                assert_eq!(children.len(), 2, "should have 2 children after split");
+            }
+            other => panic!("expected a Split at root, got {:?}", other),
+        }
+
+        // Compute regions from the layout tree and verify spatial ordering.
+        let layout = wm.managed_layout.as_ref().unwrap();
+        let regions = layout.root().layout_rects(area);
+        let r0 = regions
+            .iter()
+            .find(|(k, _)| *k == keys[0])
+            .map(|(_, r)| *r)
+            .expect("keys[0] region");
+        let r1 = regions
+            .iter()
+            .find(|(k, _)| *k == keys[1])
+            .map(|(_, r)| *r)
+            .expect("keys[1] region");
+        assert!(
+            r1.x >= r0.x + i32::from(r0.width),
+            "keys[1] should be to the right of keys[0]: r1.x={} r0.x={} r0.w={}",
+            r1.x,
+            r0.x,
+            r0.width,
+        );
     }
 }

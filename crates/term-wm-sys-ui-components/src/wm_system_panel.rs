@@ -8,7 +8,8 @@ use term_wm_core::impl_component_delegate;
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
 use term_wm_ui_components::{
-    ButtonComponent, LabelComponent, ScrollViewComponent, VerticalStackComponent,
+    ButtonComponent, CanvasScrollView, CanvasSizingPolicy, LabelComponent, ScrollViewComponent,
+    VerticalStackComponent,
 };
 
 /// Local enum wrapping all child types used in the system panel stack.
@@ -26,7 +27,7 @@ impl_component_delegate!(PanelChild {
 
 /// A system panel with utility buttons, built from declarative components.
 pub struct WmSystemPanelComponent {
-    scroll_view: ScrollViewComponent<VerticalStackComponent<PanelChild>>,
+    scroll_view: ScrollViewComponent<CanvasScrollView<VerticalStackComponent<PanelChild>>>,
 }
 
 impl WmSystemPanelComponent {
@@ -44,8 +45,20 @@ impl WmSystemPanelComponent {
             "  Send Notification  ",
             TermWmAction::SendNotification("Hello from System Panel!".to_string()),
         )));
+        stack.add(PanelChild::Spacer(SpacerComponent::new(1)));
+        stack.add(PanelChild::Label(
+            LabelComponent::new("Debug utilities:").with_color(Color::DarkGray),
+        ));
+        stack.add(PanelChild::Spacer(SpacerComponent::new(1)));
+        stack.add(PanelChild::Button(ButtonComponent::new(
+            "  Trigger Panic  ",
+            TermWmAction::Callback(|| panic!("Manual panic from system panel")),
+        )));
 
-        let scroll_view = ScrollViewComponent::new(stack);
+        let scroll_view = ScrollViewComponent::new(CanvasScrollView::new(
+            stack,
+            CanvasSizingPolicy::FitViewportWidth,
+        ));
         Self { scroll_view }
     }
 }

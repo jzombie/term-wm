@@ -102,6 +102,15 @@ impl LayoutRect {
         let b_bottom = other.y.saturating_add(i32::from(other.height));
         self.x < b_right && a_right > other.x && self.y < b_bottom && a_bottom > other.y
     }
+
+    /// Subtract the rect origin from screen coordinates to get local deltas.
+    ///
+    /// CATEGORY 3 — Scalar Geometry.
+    /// Pure arithmetic helper for text_renderer.rs and mouse_coord.rs.
+    /// Returns signed deltas that may be negative (positions outside the rect).
+    pub fn screen_to_local_point(&self, col: u16, row: u16) -> (i32, i32) {
+        (i32::from(col) - self.x, i32::from(row) - self.y)
+    }
 }
 
 /// Convenience wrapper around [`LayoutRect::contains`].
@@ -163,6 +172,19 @@ pub enum Quadrant {
     West,
 }
 
+impl Quadrant {
+    /// Map this quadrant to the corresponding tiling insertion position.
+    pub fn to_insert_position(self) -> crate::snap::InsertPosition {
+        use crate::snap::InsertPosition;
+        match self {
+            Quadrant::North => InsertPosition::Top,
+            Quadrant::South => InsertPosition::Bottom,
+            Quadrant::West => InsertPosition::Left,
+            Quadrant::East => InsertPosition::Right,
+        }
+    }
+}
+
 /// The direction children are stacked in a split container.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {
@@ -206,6 +228,19 @@ impl Ratio {
 pub struct SizeConstraints {
     pub min_width: u16,
     pub min_height: u16,
+}
+
+impl SizeConstraints {
+    pub fn fits_split(&self, area: &LayoutRect, orientation: Orientation) -> bool {
+        match orientation {
+            Orientation::Horizontal => {
+                area.width / 2 >= self.min_width && area.height >= self.min_height
+            }
+            Orientation::Vertical => {
+                area.height / 2 >= self.min_height && area.width >= self.min_width
+            }
+        }
+    }
 }
 
 /// Errors returned by tree mutation operations.
@@ -386,5 +421,31 @@ mod tests {
         };
         let resolved = spec.resolve(r(0, 0, 100, 100));
         assert_eq!(resolved, r(50, 50, 50, 50));
+    }
+
+    #[test]
+    fn screen_to_local_point_inside() {
+        let rect = LayoutRect {
+            x: 10,
+            y: 10,
+            width: 80,
+            height: 24,
+        };
+        let (dx, dy) = rect.screen_to_local_point(15, 25);
+        assert_eq!(dx, 5);
+        assert_eq!(dy, 15);
+    }
+
+    #[test]
+    fn screen_to_local_point_negative_delta() {
+        let rect = LayoutRect {
+            x: 10,
+            y: 10,
+            width: 80,
+            height: 24,
+        };
+        let (dx, dy) = rect.screen_to_local_point(2, 2);
+        assert_eq!(dx, -8);
+        assert_eq!(dy, -8);
     }
 }

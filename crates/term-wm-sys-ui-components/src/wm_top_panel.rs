@@ -43,47 +43,20 @@ impl WindowList {
 }
 
 #[derive(Debug)]
-struct NotificationArea {
-    mouse_capture_rect: Option<LayoutRect>,
-    clipboard_rect: Option<LayoutRect>,
-    selection_rect: Option<LayoutRect>,
-}
-
-impl NotificationArea {
-    fn new() -> Self {
-        Self {
-            mouse_capture_rect: None,
-            clipboard_rect: None,
-            selection_rect: None,
-        }
-    }
-
-    fn begin_frame(&mut self) {
-        self.mouse_capture_rect = None;
-        self.clipboard_rect = None;
-        self.selection_rect = None;
-    }
-}
-
-#[derive(Debug)]
 pub struct WmTopPanelComponent {
     visible: bool,
     height: u16,
     area: LayoutRect,
     menu_rect: Option<LayoutRect>,
     list: WindowList,
-    notifications: NotificationArea,
     app_name: String,
     // WmComponent render state (pushed via process_action before render)
     active: bool,
     focus_current: Option<WindowKey>,
     display_order: Vec<WindowKey>,
     status_line: Option<String>,
-    mouse_capture_enabled: bool,
-    clipboard_enabled: bool,
-    window_selection_enabled: bool,
-    selection_active: bool,
-    selection_dragging: bool,
+    tiling_indicator: Option<(&'static str, term_wm_core::actions::TermWmAction)>,
+    tiling_rect: Option<LayoutRect>,
     menu_open: bool,
     window_labels: BTreeMap<WindowKey, String>,
     hitbox_id: HitboxId,
@@ -97,17 +70,13 @@ impl WmTopPanelComponent {
             area: LayoutRect::default(),
             menu_rect: None,
             list: WindowList::new(),
-            notifications: NotificationArea::new(),
             app_name: app_name.to_string(),
             active: false,
             focus_current: None,
             display_order: Vec::new(),
             status_line: None,
-            mouse_capture_enabled: false,
-            clipboard_enabled: false,
-            window_selection_enabled: false,
-            selection_active: false,
-            selection_dragging: false,
+            tiling_indicator: None,
+            tiling_rect: None,
             menu_open: false,
             window_labels: BTreeMap::new(),
             hitbox_id: HitboxId::new(),
@@ -117,7 +86,7 @@ impl WmTopPanelComponent {
     pub fn begin_frame(&mut self) {
         self.list.begin_frame();
         self.menu_rect = None;
-        self.notifications.begin_frame();
+        self.tiling_rect = None;
     }
 
     pub fn visible(&self) -> bool {
@@ -182,11 +151,6 @@ impl WmTopPanelComponent {
         focus_current: WindowKey,
         display_order: &[WindowKey],
         status_line: Option<&str>,
-        mouse_capture_enabled: bool,
-        clipboard_enabled: bool,
-        window_selection_enabled: bool,
-        _selection_active: bool,
-        _selection_dragging: bool,
         menu_open: bool,
         theme: &term_wm_core::theme::Theme,
     ) {
@@ -211,6 +175,7 @@ impl WmTopPanelComponent {
                     st.bg = Some(color_to_ratatui(theme.bottom_panel_bg));
                     st.fg = Some(color_to_ratatui(theme.bottom_panel_fg));
                     cell.set_style(st);
+                    cell.set_symbol(" ");
                 }
             }
         }
@@ -289,125 +254,47 @@ impl WmTopPanelComponent {
                 x = x.saturating_add(i32::from(chunk_width));
             }
         }
+    }
 
-        let selection_chunk = "[ selection ]";
-        let mouse_chunk = "[ mouse ]";
-        let clip_chunk = "[ clipboard ]";
-        let selection_width = selection_chunk.chars().count() as u16;
-        let mouse_width = mouse_chunk.chars().count() as u16;
-        let clip_width = clip_chunk.chars().count() as u16;
-        let total_width = selection_width
-            .saturating_add(mouse_width)
-            .saturating_add(clip_width);
-        let indicator_x = if i32::from(total_width) >= i32::from(bounds.width) {
-            i32::from(bounds.x)
-        } else {
-            max_x.saturating_sub(i32::from(total_width))
+    /// Render the tiling indicator label (right-aligned) and store its rect.
+    fn render_tiling_indicator(
+        &mut self,
+        backend: &mut dyn term_wm_render::RenderBackend,
+        area: LayoutRect,
+        theme: &term_wm_core::theme::Theme,
+    ) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        let Some((label, _)) = &self.tiling_indicator else {
+            return;
         };
-        if total_width > 0 && indicator_x < max_x {
-            let selection_style = if window_selection_enabled {
-                Style::default()
-                    .fg(color_to_ratatui(theme.success))
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(color_to_ratatui(theme.panel_inactive_fg))
-            };
-            let mouse_style = if mouse_capture_enabled {
-                Style::default()
-                    .fg(color_to_ratatui(theme.success))
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(color_to_ratatui(theme.panel_inactive_fg))
-            };
-            let clip_style = if clipboard_enabled {
-                Style::default()
-                    .fg(color_to_ratatui(theme.success))
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(color_to_ratatui(theme.panel_inactive_fg))
-            };
-            let mut cursor = indicator_x;
-            if selection_width > 0 && cursor < max_x {
-                safe_set_string(
-                    buffer,
-                    bounds,
-                    cursor as u16,
-                    y as u16,
-                    selection_chunk,
-                    selection_style,
-                );
-                let width = selection_width.min((max_x.saturating_sub(cursor)) as u16);
-                if width > 0 {
-                    self.notifications.selection_rect = Some(LayoutRect {
-                        x: cursor,
-                        y,
-                        width,
-                        height: 1,
-                    });
-                }
-            }
-            cursor = cursor.saturating_add(i32::from(selection_width));
-            if mouse_width > 0 && cursor < max_x {
-                safe_set_string(
-                    buffer,
-                    bounds,
-                    cursor as u16,
-                    y as u16,
-                    mouse_chunk,
-                    mouse_style,
-                );
-                let width = mouse_width.min((max_x.saturating_sub(cursor)) as u16);
-                if width > 0 {
-                    self.notifications.mouse_capture_rect = Some(LayoutRect {
-                        x: cursor,
-                        y,
-                        width,
-                        height: 1,
-                    });
-                }
-            }
-            cursor = cursor.saturating_add(i32::from(mouse_width));
-            if clip_width > 0 && cursor < max_x {
-                safe_set_string(
-                    buffer,
-                    bounds,
-                    cursor as u16,
-                    y as u16,
-                    clip_chunk,
-                    clip_style,
-                );
-                let width = clip_width.min((max_x.saturating_sub(cursor)) as u16);
-                if width > 0 {
-                    self.notifications.clipboard_rect = Some(LayoutRect {
-                        x: cursor,
-                        y,
-                        width,
-                        height: 1,
-                    });
-                }
-            }
+        let ratatui_backend = term_wm_ui_components::helpers::downcast_ratatui(backend);
+        let buffer = &mut ratatui_backend.buffer;
+        let ratatui_area = term_wm_ui_components::helpers::layout_rect_to_clipped_rect(area);
+        let bounds = ratatui_area.intersection(buffer.area);
+        if bounds.width == 0 || bounds.height == 0 {
+            return;
         }
-    }
-
-    pub fn hit_test_mouse_capture(&self, column: u16, row: u16) -> bool {
-        if let Some(rect) = self.notifications.mouse_capture_rect {
-            return rect_contains(rect, column, row);
+        let y = area.y;
+        let max_x = area.x.saturating_add(i32::from(area.width));
+        let tw = label.chars().count() as u16;
+        let ix = max_x.saturating_sub(i32::from(tw));
+        if ix < area.x {
+            return;
         }
-        false
-    }
-
-    pub fn hit_test_clipboard(&self, column: u16, row: u16) -> bool {
-        if let Some(rect) = self.notifications.clipboard_rect {
-            return rect_contains(rect, column, row);
-        }
-        false
-    }
-
-    pub fn hit_test_selection(&self, column: u16, row: u16) -> bool {
-        if let Some(rect) = self.notifications.selection_rect {
-            return rect_contains(rect, column, row);
-        }
-        false
+        let style = ratatui::style::Style::default()
+            .fg(color_to_ratatui(theme.success))
+            .add_modifier(ratatui::style::Modifier::BOLD);
+        term_wm_ui_components::helpers::safe_set_string(
+            buffer, bounds, ix as u16, y as u16, label, style,
+        );
+        self.tiling_rect = Some(term_wm_layout_engine::LayoutRect {
+            x: ix,
+            y,
+            width: tw,
+            height: 1,
+        });
     }
 
     pub fn hit_test_window(&self, column: u16, row: u16) -> Option<WindowKey> {
@@ -431,10 +318,13 @@ impl Component<TermWmAction> for WmTopPanelComponent {
         ctx: &ComponentContext,
         _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
+        let theme = ctx.config().theme;
         if !self.active {
+            // Still render the tiling indicator even when inactive so the
+            // label is visible and tiling_rect is populated for clicks.
+            self.render_tiling_indicator(backend, area, &theme);
             return;
         }
-        let theme = ctx.config().theme;
         let app_name = ctx.app_name().to_string();
         if app_name != self.app_name {
             self.app_name = app_name;
@@ -443,25 +333,18 @@ impl Component<TermWmAction> for WmTopPanelComponent {
         if let Some(focus) = self.focus_current {
             let display_order = self.display_order.clone();
             let status_line = self.status_line.clone();
-            let mc = self.mouse_capture_enabled;
-            let cb = self.clipboard_enabled;
-            let ws = self.window_selection_enabled;
-            let mo = self.menu_open;
+
             self.render_inner(
                 backend,
                 self.active,
                 focus,
                 &display_order,
                 status_line.as_deref(),
-                mc,
-                cb,
-                ws,
-                self.selection_active,
-                self.selection_dragging,
-                mo,
+                self.menu_open,
                 &theme,
             );
         }
+        self.render_tiling_indicator(backend, area, &theme);
     }
 
     fn handle_events(
@@ -495,17 +378,14 @@ impl Component<TermWmAction> for WmTopPanelComponent {
         if self.menu_icon_contains_point(column, row) {
             return EventResult::Action(TermWmAction::OpenCommandPalette);
         }
-        if self.hit_test_mouse_capture(column, row) {
-            return EventResult::Action(TermWmAction::ToggleMouseCapture);
-        }
-        if self.hit_test_selection(column, row) {
-            return EventResult::Action(TermWmAction::ToggleWindowSelection);
-        }
-        if self.hit_test_clipboard(column, row) {
-            return EventResult::Action(TermWmAction::ToggleClipboardMode);
-        }
         if let Some(key) = self.hit_test_window(column, row) {
             return EventResult::Action(TermWmAction::FocusWindow(key));
+        }
+        if let Some((_, action)) = &self.tiling_indicator
+            && let Some(rect) = self.tiling_rect
+            && rect_contains(rect, column, row)
+        {
+            return EventResult::Action(action.clone());
         }
         EventResult::Ignored
     }
@@ -536,12 +416,8 @@ impl WmComponent for WmTopPanelComponent {
                 self.focus_current = state.focus_current;
                 self.display_order = state.display_order.clone();
                 self.status_line = state.status_line.clone();
-                self.mouse_capture_enabled = state.mouse_capture_enabled;
-                self.clipboard_enabled = state.clipboard_enabled;
-                self.window_selection_enabled = state.window_selection_enabled;
-                self.selection_active = state.selection_active;
-                self.selection_dragging = state.selection_dragging;
                 self.menu_open = state.menu_open;
+                self.tiling_indicator = state.tiling_indicator.clone();
             }
             ComponentAction::SetWindowLabels(labels) => {
                 self.window_labels = labels.clone();
@@ -616,7 +492,6 @@ mod tests {
         assert_eq!(panel_rect.width, 10);
         assert_eq!(managed.width, 10);
 
-        assert!(!p.hit_test_mouse_capture(0, 0));
         assert!(p.hit_test_window(0, 0).is_none());
     }
 
@@ -698,156 +573,11 @@ mod tests {
         };
         let _ = p.split_area(true, area);
         let mut backend = make_backend(80, 24);
-        p.render_inner(
-            &mut backend,
-            true,
-            key,
-            &[key],
-            None,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &NOIR,
-        );
+        p.render_inner(&mut backend, true, key, &[key], None, false, &NOIR);
         assert!(!p.list.window_hits.is_empty());
         let hit_rect = p.list.window_hits[0].rect;
         let hit_key = p.hit_test_window(hit_rect.x as u16 + 1, hit_rect.y as u16);
         assert!(hit_key.is_some());
-    }
-
-    #[test]
-    fn hit_test_mouse_capture_after_render() {
-        let mut p = WmTopPanelComponent::new("test");
-        p.active = true;
-        let key = WindowKey::default();
-        p.focus_current = Some(key);
-        p.display_order = vec![key];
-        p.mouse_capture_enabled = true;
-
-        let area = LayoutRect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 1,
-        };
-        let _ = p.split_area(true, area);
-        let mut backend = make_backend(80, 24);
-        p.render_inner(
-            &mut backend,
-            true,
-            key,
-            &[key],
-            None,
-            true,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &NOIR,
-        );
-        let mc_rect = p.notifications.mouse_capture_rect;
-        assert!(
-            mc_rect.is_some(),
-            "mouse_capture_rect should be set after render"
-        );
-        let rect = mc_rect.unwrap();
-        assert!(p.hit_test_mouse_capture(rect.x as u16 + 1, rect.y as u16));
-    }
-
-    #[test]
-    fn hit_test_clipboard_after_render() {
-        let mut p = WmTopPanelComponent::new("test");
-        p.active = true;
-        let key = WindowKey::default();
-        p.focus_current = Some(key);
-        p.display_order = vec![key];
-        p.clipboard_enabled = true;
-
-        let area = LayoutRect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 1,
-        };
-        let _ = p.split_area(true, area);
-        let mut backend = make_backend(80, 24);
-        p.render_inner(
-            &mut backend,
-            true,
-            key,
-            &[key],
-            None,
-            false,
-            true,
-            false,
-            false,
-            false,
-            false,
-            &NOIR,
-        );
-        let cb_rect = p.notifications.clipboard_rect;
-        assert!(
-            cb_rect.is_some(),
-            "clipboard_rect should be set after render"
-        );
-        let rect = cb_rect.unwrap();
-        assert!(p.hit_test_clipboard(rect.x as u16 + 1, rect.y as u16));
-    }
-
-    #[test]
-    fn hit_test_selection_after_render() {
-        let mut p = WmTopPanelComponent::new("test");
-        p.active = true;
-        let key = WindowKey::default();
-        p.focus_current = Some(key);
-        p.display_order = vec![key];
-        p.window_selection_enabled = true;
-
-        let area = LayoutRect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 1,
-        };
-        let _ = p.split_area(true, area);
-        let mut backend = make_backend(80, 24);
-        p.render_inner(
-            &mut backend,
-            true,
-            key,
-            &[key],
-            None,
-            false,
-            false,
-            true,
-            false,
-            false,
-            false,
-            &NOIR,
-        );
-        let sel_rect = p.notifications.selection_rect;
-        assert!(
-            sel_rect.is_some(),
-            "selection_rect should be set after render"
-        );
-        let rect = sel_rect.unwrap();
-        assert!(p.hit_test_selection(rect.x as u16 + 1, rect.y as u16));
-    }
-
-    #[test]
-    fn hit_test_clipboard_no_rect_returns_false() {
-        let p = WmTopPanelComponent::new("test");
-        assert!(!p.hit_test_clipboard(0, 0));
-    }
-
-    #[test]
-    fn hit_test_selection_no_rect_returns_false() {
-        let p = WmTopPanelComponent::new("test");
-        assert!(!p.hit_test_selection(0, 0));
     }
 
     #[test]
@@ -918,11 +648,6 @@ mod tests {
             &[],
             Some("Status: OK"),
             false,
-            false,
-            false,
-            false,
-            false,
-            false,
             &theme,
         );
         // Should render without panic
@@ -946,20 +671,7 @@ mod tests {
         let _ = p.split_area(true, area);
         let theme = NOIR;
         let mut backend = make_backend(80, 24);
-        p.render_inner(
-            &mut backend,
-            true,
-            key,
-            &[key],
-            None,
-            false,
-            false,
-            false,
-            false,
-            false,
-            true,
-            &theme,
-        );
+        p.render_inner(&mut backend, true, key, &[key], None, true, &theme);
         // Menu rect should be set after render
         assert!(p.menu_icon_rect().is_some());
     }
@@ -985,20 +697,7 @@ mod tests {
         let _ = p.split_area(true, area);
         let theme = NOIR;
         let mut backend = make_backend(20, 1);
-        p.render_inner(
-            &mut backend,
-            true,
-            key,
-            &[key],
-            None,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &theme,
-        );
+        p.render_inner(&mut backend, true, key, &[key], None, false, &theme);
     }
 
     #[test]
@@ -1068,22 +767,13 @@ mod tests {
             focus_current: Some(key),
             display_order: vec![key],
             status_line: Some("ready".to_string()),
-            mouse_capture_enabled: true,
-            clipboard_enabled: true,
-            window_selection_enabled: true,
-            selection_active: true,
-            selection_dragging: true,
             menu_open: true,
+            tiling_indicator: None,
         };
         p.process_action(&ComponentAction::SetTopPanelState(Box::new(state)));
         assert_eq!(p.focus_current, Some(key));
         assert_eq!(p.display_order, vec![key]);
         assert_eq!(p.status_line.as_deref(), Some("ready"));
-        assert!(p.mouse_capture_enabled);
-        assert!(p.clipboard_enabled);
-        assert!(p.window_selection_enabled);
-        assert!(p.selection_active);
-        assert!(p.selection_dragging);
         assert!(p.menu_open);
     }
 
@@ -1125,16 +815,9 @@ mod tests {
                 height: 1,
             },
         });
-        p.notifications.mouse_capture_rect = Some(LayoutRect {
-            x: 0,
-            y: 0,
-            width: 5,
-            height: 1,
-        });
         p.begin_frame();
         assert!(p.menu_rect.is_none());
         assert!(p.list.window_hits.is_empty());
-        assert!(p.notifications.mouse_capture_rect.is_none());
     }
 
     #[test]
@@ -1211,20 +894,7 @@ mod tests {
         let theme = NOIR;
         let mut backend = make_backend(80, 24);
         let key = WindowKey::default();
-        p.render_inner(
-            &mut backend,
-            true,
-            key,
-            &[],
-            None,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &theme,
-        );
+        p.render_inner(&mut backend, true, key, &[], None, false, &theme);
     }
 
     #[test]
@@ -1244,20 +914,7 @@ mod tests {
         let _ = p.split_area(true, area);
         let theme = NOIR;
         let mut backend = make_backend(80, 24);
-        p.render_inner(
-            &mut backend,
-            true,
-            key,
-            &[],
-            None,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            &theme,
-        );
+        p.render_inner(&mut backend, true, key, &[], None, false, &theme);
     }
 
     #[test]
