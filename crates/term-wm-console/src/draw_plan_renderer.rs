@@ -1138,11 +1138,15 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
         } else {
             outer_right
         };
+        // Header bar fill — row-slice BCE
         {
             let buf_w = buffer.area.width as usize;
-            let y_idx = header_y as usize;
-            for x in header_left..=header_right {
-                let cell = &mut buffer.content[y_idx * buf_w + x as usize];
+            let rel_y = header_y as usize - buffer.area.y as usize;
+            let rel_x_start = header_left as usize - buffer.area.x as usize;
+            let rel_x_end = (header_right + 1) as usize - buffer.area.x as usize;
+            let row_slice =
+                &mut buffer.content[rel_y * buf_w + rel_x_start..rel_y * buf_w + rel_x_end];
+            for cell in row_slice.iter_mut() {
                 cell.set_symbol(" ");
                 cell.set_style(header_style);
             }
@@ -1151,16 +1155,20 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
         let header_width = header_right.saturating_sub(header_left).saturating_add(1);
         if title_len <= header_width {
             let start_x = header_left + (header_width - title_len) / 2;
+            let buf_w = buffer.area.width as usize;
+            let rel_y = header_y as usize - buffer.area.y as usize;
             for (idx, ch) in title.chars().enumerate() {
                 let x = start_x + idx as u16;
-                if let Some(cell) = buffer.cell_mut((x, header_y)) {
-                    cell.set_symbol(&ch.to_string());
-                    cell.set_style(header_style);
-                }
+                let rel_x = x as usize - buffer.area.x as usize;
+                let cell = &mut buffer.content[rel_y * buf_w + rel_x];
+                cell.set_symbol(&ch.to_string());
+                cell.set_style(header_style);
             }
         }
         {
             let contrast_fg = theme.menu_selected_fg.to_ratatui();
+            let buf_w = buffer.area.width as usize;
+            let rel_y = header_y as usize - buffer.area.y as usize;
             // Buttons are laid out right-to-left from outer_right
             for (i, btn) in wm_buttons.iter().enumerate() {
                 let bx = if borders_enabled {
@@ -1170,42 +1178,38 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
                 } else {
                     header_right.saturating_sub(HEADER_BUTTON_GAP * i as u16)
                 };
-                if let Some(cell) = buffer.cell_mut((bx, header_y)) {
-                    cell.set_symbol(btn.symbol);
-                    let stoplight_fg = match btn.action {
-                        TermWmAction::CloseWindow => theme.error.to_ratatui(),
-                        TermWmAction::MinimizeWindow => theme.warning.to_ratatui(),
-                        TermWmAction::MaximizeWindow => theme.accent.to_ratatui(),
-                        _ => theme.decorator_header_fg.to_ratatui(),
+                let rel_x = bx as usize - buffer.area.x as usize;
+                let cell = &mut buffer.content[rel_y * buf_w + rel_x];
+                cell.set_symbol(btn.symbol);
+                let stoplight_fg = match btn.action {
+                    TermWmAction::CloseWindow => theme.error.to_ratatui(),
+                    TermWmAction::MinimizeWindow => theme.warning.to_ratatui(),
+                    TermWmAction::MaximizeWindow => theme.accent.to_ratatui(),
+                    _ => theme.decorator_header_fg.to_ratatui(),
+                };
+                let is_hovered = hover_pos == Some((bx, header_y));
+                let style = if is_hovered {
+                    let (hover_bg, hover_fg) = match btn.action {
+                        TermWmAction::CloseWindow => (theme.error.to_ratatui(), contrast_fg),
+                        TermWmAction::MinimizeWindow => (theme.warning.to_ratatui(), contrast_fg),
+                        TermWmAction::MaximizeWindow => (theme.accent.to_ratatui(), contrast_fg),
+                        _ => (theme.accent_alt.to_ratatui(), contrast_fg),
                     };
-                    let is_hovered = hover_pos == Some((bx, header_y));
-                    let style = if is_hovered {
-                        let (hover_bg, hover_fg) = match btn.action {
-                            TermWmAction::CloseWindow => (theme.error.to_ratatui(), contrast_fg),
-                            TermWmAction::MinimizeWindow => {
-                                (theme.warning.to_ratatui(), contrast_fg)
-                            }
-                            TermWmAction::MaximizeWindow => {
-                                (theme.accent.to_ratatui(), contrast_fg)
-                            }
-                            _ => (theme.accent_alt.to_ratatui(), contrast_fg),
-                        };
-                        Style::default()
-                            .bg(hover_bg)
-                            .fg(hover_fg)
-                            .add_modifier(Modifier::BOLD)
-                    } else if matches!(btn.action, TermWmAction::ToggleDirectMode)
-                        && direct_mode
-                        && focused
-                    {
-                        Style::default()
-                            .bg(theme.decorator_header_fg.to_ratatui())
-                            .fg(theme.decorator_header_bg.to_ratatui())
-                    } else {
-                        Style::default().bg(header_bg.to_ratatui()).fg(stoplight_fg)
-                    };
-                    cell.set_style(style);
-                }
+                    Style::default()
+                        .bg(hover_bg)
+                        .fg(hover_fg)
+                        .add_modifier(Modifier::BOLD)
+                } else if matches!(btn.action, TermWmAction::ToggleDirectMode)
+                    && direct_mode
+                    && focused
+                {
+                    Style::default()
+                        .bg(theme.decorator_header_fg.to_ratatui())
+                        .fg(theme.decorator_header_bg.to_ratatui())
+                } else {
+                    Style::default().bg(header_bg.to_ratatui()).fg(stoplight_fg)
+                };
+                cell.set_style(style);
             }
         }
     }
@@ -1219,9 +1223,16 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
         };
         {
             let buf_w = buffer.area.width as usize;
-            let top_idx = outer_top as usize;
-            let bottom_idx = outer_bottom as usize;
-            for x in outer_left..=outer_right {
+            let rel_top = outer_top as usize - buffer.area.y as usize;
+            let rel_bottom = outer_bottom as usize - buffer.area.y as usize;
+            let rel_left = outer_left as usize - buffer.area.x as usize;
+            let rel_right = outer_right as usize - buffer.area.x as usize;
+
+            // Top border — zipped for corner symbols
+            let top_row_start = rel_top * buf_w;
+            for (x, cell) in (outer_left..=outer_right).zip(
+                buffer.content[top_row_start + rel_left..top_row_start + rel_right + 1].iter_mut(),
+            ) {
                 let sym = if x == outer_left {
                     tl
                 } else if x == outer_right {
@@ -1229,11 +1240,16 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
                 } else {
                     "─"
                 };
-                let cell = &mut buffer.content[top_idx * buf_w + x as usize];
                 cell.set_symbol(sym);
                 cell.set_style(border_style);
             }
-            for x in outer_left..=outer_right {
+
+            // Bottom border — zipped for corner symbols
+            let bottom_row_start = rel_bottom * buf_w;
+            for (x, cell) in (outer_left..=outer_right).zip(
+                buffer.content[bottom_row_start + rel_left..bottom_row_start + rel_right + 1]
+                    .iter_mut(),
+            ) {
                 let sym = if x == outer_left {
                     bl
                 } else if x == outer_right {
@@ -1241,21 +1257,19 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
                 } else {
                     "─"
                 };
-                let cell = &mut buffer.content[bottom_idx * buf_w + x as usize];
                 cell.set_symbol(sym);
                 cell.set_style(border_style);
             }
-            for y in (outer_top.saturating_add(TOP_BORDER_HEIGHT) as usize)..bottom_idx {
-                {
-                    let cell = &mut buffer.content[y * buf_w + outer_left as usize];
-                    cell.set_symbol("│");
-                    cell.set_style(border_style);
-                }
-                {
-                    let cell = &mut buffer.content[y * buf_w + outer_right as usize];
-                    cell.set_symbol("│");
-                    cell.set_style(border_style);
-                }
+
+            // Vertical borders — origin-translated direct index (strided, not contiguous)
+            for rel_y in (outer_top.saturating_add(TOP_BORDER_HEIGHT) as usize
+                - buffer.area.y as usize)..rel_bottom
+            {
+                let row_start = rel_y * buf_w;
+                buffer.content[row_start + rel_left].set_symbol("│");
+                buffer.content[row_start + rel_left].set_style(border_style);
+                buffer.content[row_start + rel_right].set_symbol("│");
+                buffer.content[row_start + rel_right].set_style(border_style);
             }
         }
     }
@@ -1311,29 +1325,33 @@ pub fn render_handles_masked(
         if clip.width == 0 || clip.height == 0 {
             continue;
         }
-        let h = buffer.area.height as usize;
         let buf_w = buffer.area.width as usize;
+        let buf_h = buffer.area.height as usize;
+        let origin_y = buffer.area.y as usize;
+        let origin_x = buffer.area.x as usize;
         let y_end = clip.y.saturating_add(clip.height);
         for y in clip.y..y_end {
-            let row_start = y as usize * buf_w;
-            for x in clip.x..clip.x.saturating_add(clip.width) {
+            let rel_y = y as usize - origin_y;
+            let row_start = rel_y * buf_w;
+            let rel_x_start = clip.x as usize - origin_x;
+            let copy_width = clip.width as usize;
+            let x_start = clip.x;
+            let x_end = clip.x + clip.width;
+            // Compute junction chars per cell (reads neighbors — can't borrow buffer.content mutably yet)
+            let mut junction_chars: Vec<&str> = Vec::with_capacity(copy_width);
+            for x in x_start..x_end {
                 if is_obscured(x, y) {
+                    junction_chars.push("");
                     continue;
                 }
-                // Precompute junction char: check neighbors for existing │
-                // (from pass 1 vertical handles) using direct indexing.
-                let (above_bar, below_bar) = {
-                    let xi = x as usize;
-                    let yi = y as usize;
-                    let above = yi > 0 && {
-                        let s = buffer.content[(yi - 1) * buf_w + xi].symbol();
-                        s == "│" || s == "┼" || s == "├" || s == "┤" || s == "┴" || s == "┬"
-                    };
-                    let below = yi + 1 < h && {
-                        let s = buffer.content[(yi + 1) * buf_w + xi].symbol();
-                        s == "│" || s == "┼" || s == "├" || s == "┤" || s == "┴" || s == "┬"
-                    };
-                    (above, below)
+                let rel_x = x as usize - origin_x;
+                let above_bar = rel_y > 0 && {
+                    let s = buffer.content[(rel_y - 1) * buf_w + rel_x].symbol();
+                    s == "│" || s == "┼" || s == "├" || s == "┤" || s == "┴" || s == "┬"
+                };
+                let below_bar = rel_y + 1 < buf_h && {
+                    let s = buffer.content[(rel_y + 1) * buf_w + rel_x].symbol();
+                    s == "│" || s == "┼" || s == "├" || s == "┤" || s == "┴" || s == "┬"
                 };
                 let ch = match (above_bar, below_bar) {
                     (true, true) => "┼",
@@ -1341,7 +1359,15 @@ pub fn render_handles_masked(
                     (false, true) => "┬",
                     (false, false) => "─",
                 };
-                let cell = &mut buffer.content[row_start + x as usize];
+                junction_chars.push(ch);
+            }
+            // Apply via row-slice BCE (no neighbor reads — no borrow conflict)
+            let row_slice =
+                &mut buffer.content[row_start + rel_x_start..row_start + rel_x_start + copy_width];
+            for (cell, &ch) in row_slice.iter_mut().zip(junction_chars.iter()) {
+                if ch.is_empty() {
+                    continue;
+                }
                 cell.reset();
                 cell.set_symbol(ch);
                 cell.set_style(style);
@@ -1363,38 +1389,56 @@ pub fn render_handles_masked(
         let max_x = hr.x.saturating_add(hr.width).saturating_sub(1);
         let max_y = hr.y.saturating_add(hr.height).saturating_sub(1);
         let buf_w = buffer.area.width as usize;
+        let origin_x = buffer.area.x as usize;
+        let origin_y = buffer.area.y as usize;
         {
-            let top_row = hr.y as usize * buf_w;
-            let bottom_row = max_y as usize * buf_w;
-            for x in hr.x..=max_x {
+            let top_rel_y = hr.y as usize - origin_y;
+            let bottom_rel_y = max_y as usize - origin_y;
+            let rel_x_start = hr.x as usize - origin_x;
+            let copy_width = (max_x - hr.x + 1) as usize;
+
+            let top_row_start = top_rel_y * buf_w + rel_x_start;
+            let bottom_row_start = bottom_rel_y * buf_w + rel_x_start;
+            for (x, cell) in (hr.x..=max_x)
+                .zip(buffer.content[top_row_start..top_row_start + copy_width].iter_mut())
+            {
                 if is_obscured(x, hr.y) {
                     continue;
                 }
-                buffer.content[top_row + x as usize].set_symbol("-");
-                buffer.content[top_row + x as usize].set_style(border_style);
+                cell.set_symbol("-");
+                cell.set_style(border_style);
+            }
+            for (x, cell) in (hr.x..=max_x)
+                .zip(buffer.content[bottom_row_start..bottom_row_start + copy_width].iter_mut())
+            {
                 if is_obscured(x, max_y) {
                     continue;
                 }
-                buffer.content[bottom_row + x as usize].set_symbol("-");
-                buffer.content[bottom_row + x as usize].set_style(border_style);
+                cell.set_symbol("-");
+                cell.set_style(border_style);
             }
         }
         for y in hr.y..=max_y {
+            let rel_y = y as usize - origin_y;
+            let left_idx = rel_y * buf_w + hr.x as usize - origin_x;
+            let right_idx = rel_y * buf_w + max_x as usize - origin_x;
             if is_obscured(hr.x, y) {
                 continue;
             }
-            buffer.content[y as usize * buf_w + hr.x as usize].set_symbol("|");
-            buffer.content[y as usize * buf_w + hr.x as usize].set_style(border_style);
+            buffer.content[left_idx].set_symbol("|");
+            buffer.content[left_idx].set_style(border_style);
             if is_obscured(max_x, y) {
                 continue;
             }
-            buffer.content[y as usize * buf_w + max_x as usize].set_symbol("|");
-            buffer.content[y as usize * buf_w + max_x as usize].set_style(border_style);
+            buffer.content[right_idx].set_symbol("|");
+            buffer.content[right_idx].set_style(border_style);
         }
         for (cx, cy) in [(hr.x, hr.y), (max_x, hr.y), (hr.x, max_y), (max_x, max_y)] {
             if !is_obscured(cx, cy) {
-                buffer.content[cy as usize * buf_w + cx as usize].set_symbol("+");
-                buffer.content[cy as usize * buf_w + cx as usize].set_style(border_style);
+                let rel_cx = cx as usize - origin_x;
+                let rel_cy = cy as usize - origin_y;
+                buffer.content[rel_cy * buf_w + rel_cx].set_symbol("+");
+                buffer.content[rel_cy * buf_w + rel_cx].set_style(border_style);
             }
         }
     }
@@ -1429,14 +1473,20 @@ fn fill_handle_bar(
         return;
     }
     let buf_w = buffer.area.width as usize;
+    let origin_x = buffer.area.x as usize;
+    let origin_y = buffer.area.y as usize;
     let y_end = clip.y.saturating_add(clip.height);
     for y in clip.y..y_end {
-        let row_start = y as usize * buf_w;
-        for x in clip.x..(clip.x + clip.width) {
+        let rel_y = y as usize - origin_y;
+        let row_start = rel_y * buf_w;
+        let rel_x_start = clip.x as usize - origin_x;
+        let copy_width = clip.width as usize;
+        let row_slice =
+            &mut buffer.content[row_start + rel_x_start..row_start + rel_x_start + copy_width];
+        for (x, cell) in (clip.x..clip.x + clip.width).zip(row_slice.iter_mut()) {
             if is_obscured(x, y) {
                 continue;
             }
-            let cell = &mut buffer.content[row_start + x as usize];
             cell.reset();
             cell.set_symbol(sym);
             cell.set_style(style);
@@ -1535,16 +1585,23 @@ pub fn render_resize_outline(
         .fg(theme.accent_alt.to_ratatui())
         .add_modifier(Modifier::BOLD);
 
+    let buf_w = buffer.area.width as usize;
+    let origin_x = buffer.area.x as usize;
+    let origin_y = buffer.area.y as usize;
+
     let Some(edge) = target_edge else { return };
     match edge {
         ResizeEdge::Top => {
             if ry >= by && ry < by.saturating_add(bh) && rect.width > 2 {
-                for x in rx.saturating_add(1)..=right.saturating_sub(1) {
-                    if x >= bx
-                        && x < bx.saturating_add(bw)
-                        && !is_obscured(x, ry)
-                        && let Some(cell) = buffer.cell_mut((x, ry))
-                    {
+                let rel_y = ry as usize - origin_y;
+                let row_start = rel_y * buf_w;
+                let x_start = rx.saturating_add(1) as usize - origin_x;
+                let x_end = right.saturating_sub(1) as usize - origin_x + 1;
+                let row_slice = &mut buffer.content[row_start + x_start..row_start + x_end];
+                for (x, cell) in
+                    (rx.saturating_add(1)..=right.saturating_sub(1)).zip(row_slice.iter_mut())
+                {
+                    if x >= bx && x < bx.saturating_add(bw) && !is_obscured(x, ry) {
                         cell.set_symbol("═");
                         cell.set_style(style);
                     }
@@ -1553,12 +1610,15 @@ pub fn render_resize_outline(
         }
         ResizeEdge::Bottom => {
             if bottom >= by && bottom < by.saturating_add(bh) && rect.width > 2 {
-                for x in rx.saturating_add(1)..=right.saturating_sub(1) {
-                    if x >= bx
-                        && x < bx.saturating_add(bw)
-                        && !is_obscured(x, bottom)
-                        && let Some(cell) = buffer.cell_mut((x, bottom))
-                    {
+                let rel_y = bottom as usize - origin_y;
+                let row_start = rel_y * buf_w;
+                let x_start = rx.saturating_add(1) as usize - origin_x;
+                let x_end = right.saturating_sub(1) as usize - origin_x + 1;
+                let row_slice = &mut buffer.content[row_start + x_start..row_start + x_end];
+                for (x, cell) in
+                    (rx.saturating_add(1)..=right.saturating_sub(1)).zip(row_slice.iter_mut())
+                {
+                    if x >= bx && x < bx.saturating_add(bw) && !is_obscured(x, bottom) {
                         cell.set_symbol("═");
                         cell.set_style(style);
                     }
@@ -1568,11 +1628,9 @@ pub fn render_resize_outline(
         ResizeEdge::Left => {
             if rx >= bx && rx < bx.saturating_add(bw) && rect.height > 2 {
                 for y in ry.saturating_add(1)..=bottom.saturating_sub(1) {
-                    if y >= by
-                        && y < by.saturating_add(bh)
-                        && !is_obscured(rx, y)
-                        && let Some(cell) = buffer.cell_mut((rx, y))
-                    {
+                    if y >= by && y < by.saturating_add(bh) && !is_obscured(rx, y) {
+                        let cell = &mut buffer.content
+                            [(y as usize - origin_y) * buf_w + (rx as usize - origin_x)];
                         cell.set_symbol("║");
                         cell.set_style(style);
                     }
@@ -1582,11 +1640,9 @@ pub fn render_resize_outline(
         ResizeEdge::Right => {
             if right >= bx && right < bx.saturating_add(bw) && rect.height > 2 {
                 for y in ry.saturating_add(1)..=bottom.saturating_sub(1) {
-                    if y >= by
-                        && y < by.saturating_add(bh)
-                        && !is_obscured(right, y)
-                        && let Some(cell) = buffer.cell_mut((right, y))
-                    {
+                    if y >= by && y < by.saturating_add(bh) && !is_obscured(right, y) {
+                        let cell = &mut buffer.content
+                            [(y as usize - origin_y) * buf_w + (right as usize - origin_x)];
                         cell.set_symbol("║");
                         cell.set_style(style);
                     }
@@ -1594,73 +1650,61 @@ pub fn render_resize_outline(
             }
         }
         ResizeEdge::TopLeft => {
-            if rx >= bx
-                && ry >= by
-                && !is_obscured(rx, ry)
-                && let Some(cell) = buffer.cell_mut((rx, ry))
-            {
-                cell.set_symbol("╔");
-                cell.set_style(style);
+            if rx >= bx && ry >= by && !is_obscured(rx, ry) {
+                buffer.content[(ry as usize - origin_y) * buf_w + (rx as usize - origin_x)]
+                    .set_symbol("╔");
+                buffer.content[(ry as usize - origin_y) * buf_w + (rx as usize - origin_x)]
+                    .set_style(style);
             }
-            if ry >= by
-                && ry < by.saturating_add(bh)
-                && let Some(cell) = buffer.cell_mut((rx.saturating_add(1), ry))
-            {
+            if ry >= by && ry < by.saturating_add(bh) {
+                let cell = &mut buffer.content
+                    [(ry as usize - origin_y) * buf_w + ((rx as usize + 1) - origin_x)];
                 cell.set_symbol("═");
                 cell.set_style(style);
             }
-            if rx >= bx
-                && rx < bx.saturating_add(bw)
-                && let Some(cell) = buffer.cell_mut((rx, ry.saturating_add(1)))
-            {
+            if rx >= bx && rx < bx.saturating_add(bw) {
+                let cell = &mut buffer.content
+                    [((ry as usize + 1) - origin_y) * buf_w + (rx as usize - origin_x)];
                 cell.set_symbol("║");
                 cell.set_style(style);
             }
         }
         ResizeEdge::TopRight => {
-            if right < bx.saturating_add(bw)
-                && ry >= by
-                && !is_obscured(right, ry)
-                && let Some(cell) = buffer.cell_mut((right, ry))
-            {
-                cell.set_symbol("╗");
-                cell.set_style(style);
+            if right < bx.saturating_add(bw) && ry >= by && !is_obscured(right, ry) {
+                buffer.content[(ry as usize - origin_y) * buf_w + (right as usize - origin_x)]
+                    .set_symbol("╗");
+                buffer.content[(ry as usize - origin_y) * buf_w + (right as usize - origin_x)]
+                    .set_style(style);
             }
-            if ry >= by
-                && ry < by.saturating_add(bh)
-                && let Some(cell) = buffer.cell_mut((right.saturating_sub(1), ry))
-            {
+            if ry >= by && ry < by.saturating_add(bh) {
+                let cell = &mut buffer.content
+                    [(ry as usize - origin_y) * buf_w + ((right as usize - 1) - origin_x)];
                 cell.set_symbol("═");
                 cell.set_style(style);
             }
-            if right >= bx
-                && right < bx.saturating_add(bw)
-                && let Some(cell) = buffer.cell_mut((right, ry.saturating_add(1)))
-            {
+            if right >= bx && right < bx.saturating_add(bw) {
+                let cell = &mut buffer.content
+                    [((ry as usize + 1) - origin_y) * buf_w + (right as usize - origin_x)];
                 cell.set_symbol("║");
                 cell.set_style(style);
             }
         }
         ResizeEdge::BottomLeft => {
-            if rx >= bx
-                && bottom < by.saturating_add(bh)
-                && !is_obscured(rx, bottom)
-                && let Some(cell) = buffer.cell_mut((rx, bottom))
-            {
-                cell.set_symbol("╚");
-                cell.set_style(style);
+            if rx >= bx && bottom < by.saturating_add(bh) && !is_obscured(rx, bottom) {
+                buffer.content[(bottom as usize - origin_y) * buf_w + (rx as usize - origin_x)]
+                    .set_symbol("╚");
+                buffer.content[(bottom as usize - origin_y) * buf_w + (rx as usize - origin_x)]
+                    .set_style(style);
             }
-            if bottom >= by
-                && bottom < by.saturating_add(bh)
-                && let Some(cell) = buffer.cell_mut((rx.saturating_add(1), bottom))
-            {
+            if bottom >= by && bottom < by.saturating_add(bh) {
+                let cell = &mut buffer.content
+                    [(bottom as usize - origin_y) * buf_w + ((rx as usize + 1) - origin_x)];
                 cell.set_symbol("═");
                 cell.set_style(style);
             }
-            if rx >= bx
-                && rx < bx.saturating_add(bw)
-                && let Some(cell) = buffer.cell_mut((rx, bottom.saturating_sub(1)))
-            {
+            if rx >= bx && rx < bx.saturating_add(bw) {
+                let cell = &mut buffer.content
+                    [((bottom as usize - 1) - origin_y) * buf_w + (rx as usize - origin_x)];
                 cell.set_symbol("║");
                 cell.set_style(style);
             }
@@ -1669,22 +1713,21 @@ pub fn render_resize_outline(
             if right < bx.saturating_add(bw)
                 && bottom < by.saturating_add(bh)
                 && !is_obscured(right, bottom)
-                && let Some(cell) = buffer.cell_mut((right, bottom))
             {
-                cell.set_symbol("╝");
-                cell.set_style(style);
+                buffer.content[(bottom as usize - origin_y) * buf_w + (right as usize - origin_x)]
+                    .set_symbol("╝");
+                buffer.content[(bottom as usize - origin_y) * buf_w + (right as usize - origin_x)]
+                    .set_style(style);
             }
-            if bottom >= by
-                && bottom < by.saturating_add(bh)
-                && let Some(cell) = buffer.cell_mut((right.saturating_sub(1), bottom))
-            {
+            if bottom >= by && bottom < by.saturating_add(bh) {
+                let cell = &mut buffer.content
+                    [(bottom as usize - origin_y) * buf_w + ((right as usize - 1) - origin_x)];
                 cell.set_symbol("═");
                 cell.set_style(style);
             }
-            if right >= bx
-                && right < bx.saturating_add(bw)
-                && let Some(cell) = buffer.cell_mut((right, bottom.saturating_sub(1)))
-            {
+            if right >= bx && right < bx.saturating_add(bw) {
+                let cell = &mut buffer.content
+                    [((bottom as usize - 1) - origin_y) * buf_w + (right as usize - origin_x)];
                 cell.set_symbol("║");
                 cell.set_style(style);
             }
@@ -1707,55 +1750,68 @@ pub fn render_ghost_preview(buf: &mut Buffer, preview_rect: LayoutRect, theme: &
     let right = clip.x + clip.width - 1;
     let top = clip.y;
     let bottom = clip.y + clip.height - 1;
+    let buf_w = buf.area.width as usize;
+    let origin_x = buf.area.x as usize;
+    let origin_y = buf.area.y as usize;
 
-    // Corners
-    for &(pos, sym) in &[
+    // Corners — origin-translated direct index
+    for &((cx, cy), sym) in &[
         ((left, top), "┌"),
         ((right, top), "┐"),
         ((left, bottom), "└"),
         ((right, bottom), "┘"),
     ] {
-        if let Some(cell) = buf.cell_mut(pos) {
-            cell.set_symbol(sym);
-            cell.set_fg(fg_color);
-            cell.modifier.insert(Modifier::DIM);
-        }
+        let rel_x = cx as usize - origin_x;
+        let rel_y = cy as usize - origin_y;
+        let cell = &mut buf.content[rel_y * buf_w + rel_x];
+        cell.set_symbol(sym);
+        cell.set_fg(fg_color);
+        cell.modifier.insert(Modifier::DIM);
     }
 
-    // Top/bottom edges (horizontal dashes)
+    // Top/bottom edges (horizontal dashes) — row-slice BCE
     if clip.width > 2 {
-        for x in (left + 1)..right {
-            for &y in &[top, bottom] {
-                if let Some(cell) = buf.cell_mut((x, y)) {
-                    cell.set_symbol("─");
-                    cell.set_fg(fg_color);
-                    cell.modifier.insert(Modifier::DIM);
-                }
+        let rel_x_start = (left + 1) as usize - origin_x;
+        let rel_x_end = right as usize - origin_x;
+        for &y in &[top, bottom] {
+            let rel_y = y as usize - origin_y;
+            let row_start = rel_y * buf_w;
+            let row_slice = &mut buf.content[row_start + rel_x_start..row_start + rel_x_end];
+            for cell in row_slice.iter_mut() {
+                cell.set_symbol("─");
+                cell.set_fg(fg_color);
+                cell.modifier.insert(Modifier::DIM);
             }
         }
     }
 
-    // Left/right edges (vertical dashes)
+    // Left/right edges (vertical dashes) — origin-translated direct index
     if clip.height > 2 {
         for y in (top + 1)..bottom {
+            let rel_y = y as usize - origin_y;
+            let row_start = rel_y * buf_w;
             for &x in &[left, right] {
-                if let Some(cell) = buf.cell_mut((x, y)) {
-                    cell.set_symbol("│");
-                    cell.set_fg(fg_color);
-                    cell.modifier.insert(Modifier::DIM);
-                }
+                let rel_x = x as usize - origin_x;
+                let cell = &mut buf.content[row_start + rel_x];
+                cell.set_symbol("│");
+                cell.set_fg(fg_color);
+                cell.modifier.insert(Modifier::DIM);
             }
         }
     }
 
-    // Interior shade fill — pure background tint, preserves underlying text
+    // Interior shade fill — LICM-hoisted BCE row-slice iterator
     if clip.width > 2 && clip.height > 2 {
         let preview_bg = theme.accent.to_ratatui();
         let buf_w = buf.area.width as usize;
+        let rel_x_start = (left + 1) as usize - buf.area.x as usize;
+        let rel_x_end = right as usize - buf.area.x as usize;
         for y in (top + 1) as usize..bottom as usize {
-            let row_start = y * buf_w;
-            for x in (left + 1) as usize..right as usize {
-                buf.content[row_start + x].set_bg(preview_bg);
+            let rel_y = y - buf.area.y as usize;
+            let row_start = rel_y * buf_w;
+            let row_slice = &mut buf.content[row_start + rel_x_start..row_start + rel_x_end];
+            for cell in row_slice.iter_mut() {
+                cell.set_bg(preview_bg);
             }
         }
     }
@@ -2057,6 +2113,87 @@ mod tests {
             chrome_hb.hit_test(screen(30, 3)).is_none(),
             "click at col 30 should NOT hit the floating window (way past right edge)"
         );
+    }
+
+    // ── blit_buffer tests ────────────────────────────────────────────────
+
+    #[test]
+    fn blit_buffer_fully_contained() {
+        let mut src = Buffer::empty(RatatuiRect::new(0, 0, 80, 24));
+        let mut dst = Buffer::empty(RatatuiRect::new(0, 0, 80, 24));
+        // Fill src with a known pattern
+        for (i, cell) in src.content.iter_mut().enumerate() {
+            let ch = char::from(b'a' + (i % 26) as u8);
+            cell.set_symbol(&ch.to_string());
+        }
+        let area = RatatuiRect::new(10, 5, 30, 10);
+        blit_buffer(&src, &mut dst, area);
+        for y in area.y..area.y + area.height {
+            for x in area.x..area.x + area.width {
+                let src_cell = src.cell((x, y)).unwrap();
+                let dst_cell = dst.cell((x, y)).unwrap();
+                assert_eq!(
+                    src_cell.symbol(),
+                    dst_cell.symbol(),
+                    "cell mismatch at ({}, {})",
+                    x,
+                    y
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn blit_buffer_partial_overlap() {
+        let src = Buffer::empty(RatatuiRect::new(0, 0, 160, 48));
+        let mut dst = Buffer::empty(RatatuiRect::new(0, 0, 80, 24));
+        let before = dst.clone();
+        // Area that partially overlaps dst (extends beyond right and bottom)
+        let area = RatatuiRect::new(40, 12, 80, 24);
+        blit_buffer(&src, &mut dst, area);
+        // Cells within the clipped intersection should be copied
+        let clip = area.intersection(dst.area);
+        for y in clip.y..clip.y + clip.height {
+            for x in clip.x..clip.x + clip.width {
+                let dst_cell = dst.cell((x, y)).unwrap();
+                assert_eq!(
+                    dst_cell.symbol(),
+                    " ",
+                    "clipped cell at ({}, {}) should be empty from src",
+                    x,
+                    y
+                );
+            }
+        }
+        // Cells outside the intersection should be unchanged
+        let mut any_outside_unchanged = false;
+        for y in dst.area.y..dst.area.y + dst.area.height {
+            for x in dst.area.x..dst.area.x + dst.area.width {
+                if x >= clip.x && x < clip.x + clip.width && y >= clip.y && y < clip.y + clip.height
+                {
+                    continue;
+                }
+                let old = before.cell((x, y)).unwrap().symbol();
+                let new = dst.cell((x, y)).unwrap().symbol();
+                assert_eq!(old, new, "cell outside clip at ({}, {}) changed", x, y);
+                any_outside_unchanged = true;
+            }
+        }
+        assert!(
+            any_outside_unchanged,
+            "at least one cell should be outside the clip"
+        );
+    }
+
+    #[test]
+    fn blit_buffer_no_overlap_short_circuit() {
+        let src = Buffer::empty(RatatuiRect::new(0, 0, 80, 24));
+        let mut dst = Buffer::empty(RatatuiRect::new(0, 0, 80, 24));
+        // Area completely disjoint from both buffers
+        let area = RatatuiRect::new(200, 200, 10, 10);
+        let before = dst.clone();
+        blit_buffer(&src, &mut dst, area);
+        assert_eq!(dst, before, "no-overlap blit must not modify dst");
     }
 
     // ── render_cursor_overlay tests ──────────────────────────────────────
