@@ -1,5 +1,5 @@
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::events::{Event, KeyKind, MouseEventKind};
 use term_wm_render::RenderTarget;
@@ -336,11 +336,12 @@ where
             };
             let mut did_panic = false;
             let mut did_render = false;
+            let now = Instant::now();
             if let Some(evt) = event {
                 // Synthesized key event from bottom-panel hint click takes priority
                 let evt = app.wm().take_synthetic_event().unwrap_or(evt);
 
-                frame_pacer.notify_pending();
+                frame_pacer.notify_pending(Instant::now());
 
                 // Pre-compute the keybinding action using the configured
                 // KeyBindings from WindowManager (not hardcoded defaults).
@@ -555,7 +556,7 @@ where
                 // Arm the pacer when any component requested a redraw or the
                 // driver has background work (PTY data) that bypassed Some(evt).
                 if driver.take_redraw_request() || driver_has_work {
-                    frame_pacer.notify_pending();
+                    frame_pacer.notify_pending(now);
                 }
 
                 frame_pacer.set_interval(if app.wm().is_dragging_window() {
@@ -564,7 +565,7 @@ where
                     Duration::from_millis(16) // 60 FPS otherwise
                 });
 
-                if frame_pacer.try_expire() {
+                if frame_pacer.try_expire(now) {
                     // Gate BOTH frame init AND render together so the
                     // HitboxRegistry survives between frames.  Running
                     // begin_frame() without output.draw() would clear
@@ -596,7 +597,7 @@ where
                 driver,
                 ControlFlow::Continue,
                 did_render && !did_panic,
-                frame_pacer.time_until_deadline(),
+                frame_pacer.time_until_deadline(now),
             )
         };
 

@@ -298,25 +298,25 @@ impl EventSource for UnifiedEventSource {
         // deadline is set, so recv_timeout would block for the full
         // PowerSaver interval.
         if !self.dirty_windows.is_empty() {
-            self.frame_pacer.notify_pending();
+            self.frame_pacer.notify_pending(Instant::now());
         }
 
         // Clamp remaining to the frame deadline so we never block
         // longer than 16ms when there are unprocessed dirty windows.
-        if self.frame_pacer.try_expire() {
+        if self.frame_pacer.try_expire(Instant::now()) {
             return Ok(false);
         }
         let mut remaining = timeout;
-        if let Some(t) = self.frame_pacer.time_until_deadline() {
+        if let Some(t) = self.frame_pacer.time_until_deadline(Instant::now()) {
             remaining = remaining.min(t);
         }
 
         while remaining > Duration::ZERO {
             // Check frame deadline before each blocking call.
-            if self.frame_pacer.try_expire() {
+            if self.frame_pacer.try_expire(Instant::now()) {
                 return Ok(false);
             }
-            if let Some(t) = self.frame_pacer.time_until_deadline() {
+            if let Some(t) = self.frame_pacer.time_until_deadline(Instant::now()) {
                 remaining = remaining.min(t);
                 if remaining <= Duration::ZERO {
                     self.frame_pacer.reset();
@@ -333,25 +333,25 @@ impl EventSource for UnifiedEventSource {
                         return Ok(true);
                     }
                     // Event filtered out — update remaining and continue.
-                    if let Some(t) = self.frame_pacer.time_until_deadline() {
+                    if let Some(t) = self.frame_pacer.time_until_deadline(Instant::now()) {
                         remaining = remaining.min(t);
                     }
                     continue;
                 }
                 Ok(UnifiedEvent::PtyWakeup(key)) => {
                     self.dirty_windows.insert(key);
-                    self.frame_pacer.notify_pending();
-                    if self.frame_pacer.try_expire() {
+                    self.frame_pacer.notify_pending(Instant::now());
+                    if self.frame_pacer.try_expire(Instant::now()) {
                         return Ok(false);
                     }
-                    if let Some(t) = self.frame_pacer.time_until_deadline() {
+                    if let Some(t) = self.frame_pacer.time_until_deadline(Instant::now()) {
                         remaining = remaining.min(t);
                     }
                     continue;
                 }
                 Ok(UnifiedEvent::AppExited(key)) => {
                     self.exited_windows.push(key);
-                    self.frame_pacer.notify_pending();
+                    self.frame_pacer.notify_pending(Instant::now());
                     continue;
                 }
                 Ok(UnifiedEvent::Signal) => {
@@ -363,7 +363,7 @@ impl EventSource for UnifiedEventSource {
                 }
                 Err(_) => {
                     // Check if the frame deadline expired during the wait.
-                    if self.frame_pacer.try_expire() {
+                    if self.frame_pacer.try_expire(Instant::now()) {
                         return Ok(false);
                     }
                     break;

@@ -47,18 +47,20 @@ impl FramePacer {
 
     /// Signal that render work is pending.  Arms the frame deadline on the
     /// first call; subsequent calls before expiry are no-ops.
-    pub fn notify_pending(&mut self) {
+    ///
+    /// Takes `now` explicitly so tests can control time without `thread::sleep`.
+    pub fn notify_pending(&mut self, now: Instant) {
         if self.deadline.is_none() {
-            self.deadline = Some(Instant::now() + self.interval);
+            self.deadline = Some(now + self.interval);
         }
     }
 
     /// If the frame deadline has expired, clear it and return `true`.
     /// Otherwise return `false`.
-    pub fn try_expire(&mut self) -> bool {
-        if let Some(deadline) = self.deadline
-            && Instant::now() >= deadline
-        {
+    ///
+    /// Takes `now` explicitly so tests can control time without `thread::sleep`.
+    pub fn try_expire(&mut self, now: Instant) -> bool {
+        if let Some(deadline) = self.deadline && now >= deadline {
             self.deadline = None;
             true
         } else {
@@ -69,9 +71,12 @@ impl FramePacer {
     /// Time remaining until the frame deadline, or `None` if no deadline is
     /// set.  Returns `Some(Duration::ZERO)` if past the deadline without
     /// having called `try_expire()`.
-    pub fn time_until_deadline(&self) -> Option<Duration> {
+    ///
+    /// Takes `now` explicitly so tests can control time without `thread::sleep`.
+    pub fn time_until_deadline(&self, now: Instant) -> Option<Duration> {
         self.deadline
-            .map(|d| d.saturating_duration_since(Instant::now()))
+            .map(|d| d.checked_duration_since(now))
+            .unwrap_or(None)
     }
 
     /// Clear the frame deadline.  Call this when a render fires or when
