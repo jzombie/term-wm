@@ -10,6 +10,7 @@
 | **Libraries** | No new SIMD dependencies; `bytemuck` already transitive |
 | **Benchmarks** | Add Criterion microbenchmarks to `crates/term-bench` |
 | **Buffer mgmt** | Keep `std::mem::replace` swap pattern (`take_scratch`/`put_scratch`) |
+| **Safety** | Explicit intersection clipping replaces implicit bounds checks |
 
 ## Root Bottleneck
 
@@ -17,7 +18,7 @@
 
 ## Changes
 
-### 1. Rewrite `blit_buffer` with correct coordinate translation + `clone_from_slice`
+### 1. Rewrite `blit_buffer` with intersection clipping + `clone_from_slice`
 
 **File:** `crates/term-wm-console/src/draw_plan_renderer.rs:280-291`
 
@@ -36,21 +37,24 @@ fn blit_buffer(src: &Buffer, dst: &mut Buffer, area: Rect) {
 }
 ```
 
-With correct coordinate translation (buffer origins matter!):
+With intersection-clipped row slices:
 ```rust
 fn blit_buffer(src: &Buffer, dst: &mut Buffer, area: Rect) {
+    let clip = area.intersection(src.area).intersection(dst.area);
+    if clip.width == 0 || clip.height == 0 {
+        return;
+    }
+
     let src_w = src.area.width as usize;
     let dst_w = dst.area.width as usize;
-    let copy_w = area.width as usize;
-    let y_end = area.y.saturating_add(area.height);
+    let copy_w = clip.width as usize;
+    let y_end = clip.y.saturating_add(clip.height);
 
-    for y in area.y..y_end {
-        // Translate absolute Y to relative buffer Y
+    for y in clip.y..y_end {
         let src_y = (y - src.area.y) as usize;
         let dst_y = (y - dst.area.y) as usize;
-        // Translate absolute X to relative buffer X
-        let src_x = (area.x - src.area.x) as usize;
-        let dst_x = (area.x - dst.area.x) as usize;
+        let src_x = (clip.x - src.area.x) as usize;
+        let dst_x = (clip.x - dst.area.x) as usize;
 
         let src_start = src_y * src_w + src_x;
         let dst_start = dst_y * dst_w + dst_x;
@@ -61,15 +65,15 @@ fn blit_buffer(src: &Buffer, dst: &mut Buffer, area: Rect) {
 }
 ```
 
-`clone_from_slice` calls `Cell::clone_from` element-wise — reuses destination `String` allocations, zero heap alloc after warmup. LLVM auto-vectorizes the slice copy.
+`Rect::intersection` is available in ratatui 0.30. `clone_from_slice` calls `Cell::clone_from` element-wise — reuses destination `String` allocations, zero heap alloc after warmup. LLVM auto-vectorizes the slice copy.
 
 ### 2. Rewrite `composite_window` inline blit (lines 914-926)
 
-Apply the same coordinate translation + `clone_from_slice` pattern. Current code uses a manual 2D loop with `buffer.cell((x+off_x, y+off_y))` and `main_buf.cell_mut((dst_x, dst_y))`.
+Apply same intersection clipping + row-slice pattern. Compute `main_clip = area.intersection(main_buf.area)` after translating offscreen buffer coordinates to screen space.
 
 ### 3. Optimize `render_drop_shadow` (lines 816-825)
 
-Replace per-cell `buf.cell_mut((x, y))` with direct indexing. Shadow color already computed once before loop — no change to that.
+Replace per-cell `buf.cell_mut((x, y))` with direct indexing. Add intersection clipping against `buf.area`. Shadow color already computed once before loop — no change to that.
 
 ### 4. Optimize other direct buffer writers
 
@@ -82,11 +86,11 @@ Replace per-cell `buf.cell_mut((x, y))` with direct indexing. Shadow color alrea
 | `render_ghost_preview` | 1549-1614 | direct indexing |
 | `render_cursor_overlay` | 1653-1682 | direct indexing |
 
-Each writes to `&mut Buffer` via `cell_mut()` — replace with `&mut dst.content[idx]` using correct origin-relative indexing.
+Each writes to `&mut Buffer` via `cell_mut()` — replace with `&mut dst.content[idx]` using origin-relative indexing with intersection clipping.
 
-### 5. Buffer management — keep swap pattern, simplify internally
+### 5. Buffer management — keep swap pattern
 
-Keep `take_scratch`/`put_scratch` and `std::mem::replace`. The swap pattern is correct for Rust ownership. No `&mut Buffer` return from self.
+Keep `take_scratch`/`put_scratch` and `std::mem::replace`. No `&mut Buffer` return from self.
 
 ### 6. Add microbenchmarks to `term-bench`
 
@@ -102,7 +106,7 @@ harness = false
 
 **Workspace `Cargo.toml`** — add:
 ```toml
-criterion = { version = "0.5", default-features = false }
+criterion = { version = "0.8.2", default-features = false }
 ```
 
 **`crates/term-bench/benches/blit_buffer.rs`** (new):
@@ -113,7 +117,7 @@ use ratatui::layout::Rect;
 
 fn bench_blit_buffer(c: &mut Criterion) {
     let sizes = [
-        ("80x24", Rect::new(0, 0, 80, 24)),
+        ("80x24 fully contained", Rect::new(0, 0, 80, 24)),
         ("120x40", Rect::new(0, 0, 120, 40)),
         ("200x60", Rect::new(0, 0, 200, 60)),
     ];
@@ -125,6 +129,13 @@ fn bench_blit_buffer(c: &mut Criterion) {
             b.iter(|| blit_buffer(black_box(&src), black_box(&mut dst), black_box(area)))
         });
     }
+    // Also test clipped/partial blits
+    group.bench_function("80x24 clipped offset", |b| {
+        let src = Buffer::empty(Rect::new(0, 0, 160, 48));
+        let mut dst = Buffer::empty(Rect::new(0, 0, 80, 24));
+        let area = Rect::new(40, 12, 80, 24);  // partially overlaps dst
+        b.iter(|| blit_buffer(black_box(&src), black_box(&mut dst), black_box(area)))
+    });
     group.finish();
 }
 
@@ -135,15 +146,8 @@ criterion_main!(benches);
 ## Verification
 
 ```bash
-# Build check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-
-# Run tests
 cargo test
-
-# Run benchmarks
 cargo bench -p term-bench
-
-# Visual check
 cargo run
 ```
