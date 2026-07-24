@@ -210,7 +210,7 @@ mod tests {
         };
         let ratatui_area = term_wm_ui_components::helpers::layout_rect_to_clipped_rect(area);
         let buf = ratatui::buffer::Buffer::empty(ratatui_area);
-        let mut backend = term_wm_console::RatatuiBackend::new(buf, ratatui_area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, ratatui_area);
         {
             Component::render(
                 &mut comp,

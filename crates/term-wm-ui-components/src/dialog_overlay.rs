@@ -429,7 +429,7 @@ mod tests {
             width: 80,
             height: 24,
         });
-        let mut backend = term_wm_console::RatatuiBackend::new(
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
             buffer,
             ratatui::prelude::Rect {
                 x: 0,
@@ -461,7 +461,7 @@ mod tests {
             width: 80,
             height: 24,
         });
-        let mut backend = term_wm_console::RatatuiBackend::new(
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
             buffer,
             ratatui::prelude::Rect {
                 x: 0,
@@ -490,7 +490,7 @@ mod tests {
             width: 80,
             height: 24,
         });
-        let mut backend = term_wm_console::RatatuiBackend::new(
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
             buffer,
             ratatui::prelude::Rect {
                 x: 0,
@@ -521,7 +521,7 @@ mod tests {
             width: 80,
             height: 24,
         });
-        let mut backend = term_wm_console::RatatuiBackend::new(
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
             buffer,
             ratatui::prelude::Rect {
                 x: 0,
@@ -554,7 +554,7 @@ mod tests {
             width: 80,
             height: 24,
         });
-        let mut backend = term_wm_console::RatatuiBackend::new(
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
             buffer,
             ratatui::prelude::Rect {
                 x: 0,
@@ -582,7 +582,7 @@ mod tests {
             width: 80,
             height: 24,
         });
-        let mut backend = term_wm_console::RatatuiBackend::new(
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
             buffer,
             ratatui::prelude::Rect {
                 x: 0,
@@ -609,7 +609,7 @@ mod tests {
             width: 2,
             height: 1,
         });
-        let mut backend = term_wm_console::RatatuiBackend::new(
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
             buffer,
             ratatui::prelude::Rect {
                 x: 0,

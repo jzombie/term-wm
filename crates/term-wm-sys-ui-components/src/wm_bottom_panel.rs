@@ -396,7 +396,7 @@ mod tests {
         p.area = area;
         let ratatui_area = layout_rect_to_clipped_rect(area);
         let buf = Buffer::empty(ratatui_area);
-        let mut backend = term_wm_console::RatatuiBackend::new(buf, ratatui_area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, ratatui_area);
 
         p.render_bottom_impl(&mut backend, true, &term_wm_core::theme::NOIR);
 
@@ -426,7 +426,7 @@ mod tests {
         p.area = area;
         let ratatui_area = layout_rect_to_clipped_rect(area);
         let buf = Buffer::empty(ratatui_area);
-        let mut backend = term_wm_console::RatatuiBackend::new(buf, ratatui_area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, ratatui_area);
 
         p.render_bottom_impl(&mut backend, true, &term_wm_core::theme::NOIR);
 
@@ -476,7 +476,7 @@ mod tests {
         p.area = area;
         let ratatui_area = layout_rect_to_clipped_rect(area);
         let buf = Buffer::empty(ratatui_area);
-        let mut backend = term_wm_console::RatatuiBackend::new(buf, ratatui_area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, ratatui_area);
 
         p.render_bottom_impl(&mut backend, true, &term_wm_core::theme::NOIR);
 

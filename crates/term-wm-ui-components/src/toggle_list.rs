@@ -351,7 +351,8 @@ mod tests {
     fn render_empty_list() {
         let mut t = ToggleListComponent::new("empty");
         let buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 40, 10));
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, Rect::new(0, 0, 40, 10));
+        let mut backend =
+            term_wm_console::RatatuiBackend::new_simple(buffer, Rect::new(0, 0, 40, 10));
         let ctx = ComponentContext::new(true);
         let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
         t.render(

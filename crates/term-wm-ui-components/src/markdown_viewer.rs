@@ -494,7 +494,7 @@ mod markdown_tests {
         };
         let scratch = Buffer::empty(area);
         {
-            let mut backend = term_wm_console::RatatuiBackend::new(scratch, area);
+            let mut backend = term_wm_console::RatatuiBackend::new_simple(scratch, area);
             scroll.render(
                 &mut backend,
                 LayoutRect {
@@ -511,7 +511,7 @@ mod markdown_tests {
         let mut buffer = Buffer::empty(area);
         {
             scroll.content.borrow_mut().go_end();
-            let mut backend = term_wm_console::RatatuiBackend::new(buffer, area);
+            let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
             scroll.render(
                 &mut backend,
                 LayoutRect {
@@ -574,7 +574,7 @@ mod markdown_tests {
 
         let mut with_scroll = Buffer::empty(area);
         {
-            let mut backend = term_wm_console::RatatuiBackend::new(with_scroll, area);
+            let mut backend = term_wm_console::RatatuiBackend::new_simple(with_scroll, area);
             scroll.render(
                 &mut backend,
                 layout_area,
@@ -674,7 +674,7 @@ mod markdown_tests {
 
         let buffer = ratatui::buffer::Buffer::empty(area);
         {
-            let mut backend = term_wm_console::RatatuiBackend::new(buffer, area);
+            let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
             scroll.render(
                 &mut backend,
                 LayoutRect {
@@ -745,7 +745,7 @@ mod markdown_tests {
 
         let mut buffer = Buffer::empty(area);
         {
-            let mut backend = term_wm_console::RatatuiBackend::new(buffer, area);
+            let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
             scroll.render(
                 &mut backend,
                 LayoutRect {

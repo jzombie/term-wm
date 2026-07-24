@@ -127,7 +127,8 @@ mod tests {
     fn center_render_delegates_to_child() {
         let mut center = CenterComponent::new(DummyComponent, 10, 5);
         let buffer = Buffer::empty(Rect::new(0, 0, 80, 24));
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, Rect::new(0, 0, 80, 24));
+        let mut backend =
+            term_wm_console::RatatuiBackend::new_simple(buffer, Rect::new(0, 0, 80, 24));
         let ctx = ComponentContext::new(true);
         let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
         center.render(

@@ -134,7 +134,7 @@ mod tests {
 
     fn make_backend() -> term_wm_console::RatatuiBackend {
         let buffer = Buffer::empty(Rect::new(0, 0, 80, 24));
-        term_wm_console::RatatuiBackend::new(buffer, Rect::new(0, 0, 80, 24))
+        term_wm_console::RatatuiBackend::new_simple(buffer, Rect::new(0, 0, 80, 24))
     }
 
     #[test]
