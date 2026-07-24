@@ -86,6 +86,10 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
         Self::Leaf(id)
     }
 
+    pub fn void() -> Self {
+        Self::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
+    }
+
     pub fn split(direction: Direction, children: Vec<LayoutNode<Id>>) -> Self {
         Self::Split {
             direction,
@@ -916,6 +920,292 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
             children: vec![Self::from_rects(left_slice), Self::from_rects(right_slice)],
             weights: vec![weight_a, weight_b],
             resizable: true,
+        }
+    }
+
+    pub fn split_root(&mut self, insert: Id, position: InsertPosition) {
+        let existing_void_id = match self {
+            LayoutNode::Void(id) => Some(*id),
+            _ => None,
+        };
+        if let Some(existing_void_id) = existing_void_id {
+            *self = match position {
+                InsertPosition::Left | InsertPosition::TopLeft | InsertPosition::BottomLeft => {
+                    LayoutNode::Split {
+                        direction: Direction::Horizontal,
+                        children: vec![
+                            LayoutNode::leaf(insert),
+                            LayoutNode::Void(existing_void_id),
+                        ],
+                        weights: vec![1u16, 1u16],
+                        resizable: true,
+                    }
+                }
+                InsertPosition::Right | InsertPosition::TopRight | InsertPosition::BottomRight => {
+                    LayoutNode::Split {
+                        direction: Direction::Horizontal,
+                        children: vec![
+                            LayoutNode::Void(existing_void_id),
+                            LayoutNode::leaf(insert),
+                        ],
+                        weights: vec![1u16, 1u16],
+                        resizable: true,
+                    }
+                }
+                InsertPosition::Top => LayoutNode::Split {
+                    direction: Direction::Vertical,
+                    children: vec![LayoutNode::leaf(insert), LayoutNode::Void(existing_void_id)],
+                    weights: vec![1u16, 1u16],
+                    resizable: true,
+                },
+                InsertPosition::Bottom => LayoutNode::Split {
+                    direction: Direction::Vertical,
+                    children: vec![LayoutNode::Void(existing_void_id), LayoutNode::leaf(insert)],
+                    weights: vec![1u16, 1u16],
+                    resizable: true,
+                },
+            };
+            return;
+        }
+        match position {
+            InsertPosition::Left => {
+                *self = LayoutNode::Split {
+                    direction: Direction::Horizontal,
+                    children: vec![LayoutNode::leaf(insert), self.clone()],
+                    weights: vec![1u16, 1u16],
+                    resizable: true,
+                };
+            }
+            InsertPosition::Right => {
+                *self = LayoutNode::Split {
+                    direction: Direction::Horizontal,
+                    children: vec![self.clone(), LayoutNode::leaf(insert)],
+                    weights: vec![1u16, 1u16],
+                    resizable: true,
+                };
+            }
+            InsertPosition::Top => {
+                *self = LayoutNode::Split {
+                    direction: Direction::Vertical,
+                    children: vec![LayoutNode::leaf(insert), self.clone()],
+                    weights: vec![1u16, 1u16],
+                    resizable: true,
+                };
+            }
+            InsertPosition::Bottom => {
+                *self = LayoutNode::Split {
+                    direction: Direction::Vertical,
+                    children: vec![self.clone(), LayoutNode::leaf(insert)],
+                    weights: vec![1u16, 1u16],
+                    resizable: true,
+                };
+            }
+            InsertPosition::TopLeft => {
+                let mut ids = self.collect_leaves();
+                ids.retain(|id| *id != insert);
+                if ids.is_empty() {
+                    *self = LayoutNode::leaf(insert);
+                    return;
+                }
+                let first = ids.remove(0);
+                if ids.is_empty() {
+                    let void_id = VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+                    *self = LayoutNode::Split {
+                        direction: Direction::Horizontal,
+                        children: vec![
+                            LayoutNode::Split {
+                                direction: Direction::Vertical,
+                                children: vec![LayoutNode::leaf(insert), LayoutNode::Void(void_id)],
+                                weights: vec![1u16, 1u16],
+                                resizable: true,
+                            },
+                            LayoutNode::leaf(first),
+                        ],
+                        weights: vec![1u16, 1u16],
+                        resizable: true,
+                    };
+                    return;
+                }
+                let bottom = LayoutNode::build_flat(Direction::Horizontal, ids);
+                *self = LayoutNode::Split {
+                    direction: Direction::Vertical,
+                    children: vec![
+                        LayoutNode::Split {
+                            direction: Direction::Horizontal,
+                            children: vec![LayoutNode::leaf(insert), LayoutNode::leaf(first)],
+                            weights: vec![1u16, 1u16],
+                            resizable: true,
+                        },
+                        bottom,
+                    ],
+                    weights: vec![1u16, 1u16],
+                    resizable: true,
+                };
+            }
+            InsertPosition::TopRight => {
+                let mut ids = self.collect_leaves();
+                ids.retain(|id| *id != insert);
+                if ids.is_empty() {
+                    *self = LayoutNode::leaf(insert);
+                    return;
+                }
+                let first = ids.remove(0);
+                if ids.is_empty() {
+                    let void_id = VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+                    *self = LayoutNode::Split {
+                        direction: Direction::Horizontal,
+                        children: vec![
+                            LayoutNode::leaf(first),
+                            LayoutNode::Split {
+                                direction: Direction::Vertical,
+                                children: vec![LayoutNode::leaf(insert), LayoutNode::Void(void_id)],
+                                weights: vec![1u16, 1u16],
+                                resizable: true,
+                            },
+                        ],
+                        weights: vec![1u16, 1u16],
+                        resizable: true,
+                    };
+                    return;
+                }
+                let bottom = LayoutNode::build_flat(Direction::Horizontal, ids);
+                *self = LayoutNode::Split {
+                    direction: Direction::Vertical,
+                    children: vec![
+                        LayoutNode::Split {
+                            direction: Direction::Horizontal,
+                            children: vec![LayoutNode::leaf(first), LayoutNode::leaf(insert)],
+                            weights: vec![1u16, 1u16],
+                            resizable: true,
+                        },
+                        bottom,
+                    ],
+                    weights: vec![1u16, 1u16],
+                    resizable: true,
+                };
+            }
+            InsertPosition::BottomLeft => {
+                let mut ids = self.collect_leaves();
+                ids.retain(|id| *id != insert);
+                if ids.is_empty() {
+                    *self = LayoutNode::leaf(insert);
+                    return;
+                }
+                let first = ids.remove(0);
+                if ids.is_empty() {
+                    let void_id = VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+                    *self = LayoutNode::Split {
+                        direction: Direction::Horizontal,
+                        children: vec![
+                            LayoutNode::Split {
+                                direction: Direction::Vertical,
+                                children: vec![LayoutNode::Void(void_id), LayoutNode::leaf(insert)],
+                                weights: vec![1u16, 1u16],
+                                resizable: true,
+                            },
+                            LayoutNode::leaf(first),
+                        ],
+                        weights: vec![1u16, 1u16],
+                        resizable: true,
+                    };
+                    return;
+                }
+                let top = LayoutNode::build_flat(Direction::Horizontal, ids);
+                *self = LayoutNode::Split {
+                    direction: Direction::Vertical,
+                    children: vec![
+                        top,
+                        LayoutNode::Split {
+                            direction: Direction::Horizontal,
+                            children: vec![LayoutNode::leaf(insert), LayoutNode::leaf(first)],
+                            weights: vec![1u16, 1u16],
+                            resizable: true,
+                        },
+                    ],
+                    weights: vec![1u16, 1u16],
+                    resizable: true,
+                };
+            }
+            InsertPosition::BottomRight => {
+                let mut ids = self.collect_leaves();
+                ids.retain(|id| *id != insert);
+                if ids.is_empty() {
+                    *self = LayoutNode::leaf(insert);
+                    return;
+                }
+                let first = ids.remove(0);
+                if ids.is_empty() {
+                    let void_id = VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+                    *self = LayoutNode::Split {
+                        direction: Direction::Horizontal,
+                        children: vec![
+                            LayoutNode::leaf(first),
+                            LayoutNode::Split {
+                                direction: Direction::Vertical,
+                                children: vec![LayoutNode::Void(void_id), LayoutNode::leaf(insert)],
+                                weights: vec![1u16, 1u16],
+                                resizable: true,
+                            },
+                        ],
+                        weights: vec![1u16, 1u16],
+                        resizable: true,
+                    };
+                    return;
+                }
+                let top = LayoutNode::build_flat(Direction::Horizontal, ids);
+                *self = LayoutNode::Split {
+                    direction: Direction::Vertical,
+                    children: vec![
+                        top,
+                        LayoutNode::Split {
+                            direction: Direction::Horizontal,
+                            children: vec![LayoutNode::leaf(first), LayoutNode::leaf(insert)],
+                            weights: vec![1u16, 1u16],
+                            resizable: true,
+                        },
+                    ],
+                    weights: vec![1u16, 1u16],
+                    resizable: true,
+                };
+            }
+        };
+    }
+
+    pub fn project_insert(
+        &self,
+        target: Option<Id>,
+        insert: Id,
+        position: InsertPosition,
+        area: LayoutRect,
+    ) -> Option<LayoutRect> {
+        let mut root = self.clone();
+        let removed = root.remove_leaf(insert);
+        if !removed && matches!(&root, LayoutNode::Leaf(id) if *id == insert) {
+            root = LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed));
+        }
+        let success = match target {
+            Some(t) => root.insert_leaf(t, insert, position),
+            None => false,
+        };
+        if !success {
+            root.split_root(insert, position);
+        }
+        root.layout_rects(area)
+            .into_iter()
+            .find(|(id, _)| *id == insert)
+            .map(|(_, r)| r)
+    }
+
+    pub fn project_insert_void(&self, insert: Id, void_id: usize, area: LayoutRect) -> Option<LayoutRect> {
+        let mut root = self.clone();
+        root.remove_leaf(insert);
+        if root.replace_void_by_id(void_id, LayoutNode::leaf(insert)) {
+            root.layout_rects(area)
+                .into_iter()
+                .find(|(id, _)| *id == insert)
+                .map(|(_, r)| r)
+        } else {
+            None
         }
     }
 }
