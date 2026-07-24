@@ -308,7 +308,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn monocle_mode_toggles_on_narrow_terminal() {
         let root = LayoutNode::Split {
@@ -322,7 +321,6 @@ mod tests {
         layout.update_monocle_state(60);
         assert!(layout.is_monocle());
     }
-
 
     #[test]
     fn monocle_mode_deactivates_on_wide_terminal() {
@@ -339,7 +337,6 @@ mod tests {
         assert!(!layout.is_monocle());
     }
 
-
     #[test]
     fn tiling_layout_split_root_void_to_left() {
         let mut layout = TilingLayout::<usize>::new_void();
@@ -347,7 +344,6 @@ mod tests {
         let leaves = layout.root().collect_leaves();
         assert_eq!(leaves, vec![1]);
     }
-
 
     #[test]
     fn tiling_layout_split_root_void_to_right() {
@@ -357,7 +353,6 @@ mod tests {
         assert_eq!(leaves, vec![1]);
     }
 
-
     #[test]
     fn tiling_layout_split_root_void_to_top() {
         let mut layout = TilingLayout::<usize>::new_void();
@@ -366,7 +361,6 @@ mod tests {
         assert_eq!(leaves, vec![1]);
     }
 
-
     #[test]
     fn tiling_layout_split_root_void_to_bottom() {
         let mut layout = TilingLayout::<usize>::new_void();
@@ -374,7 +368,6 @@ mod tests {
         let leaves = layout.root().collect_leaves();
         assert_eq!(leaves, vec![1]);
     }
-
 
     #[test]
     fn tiling_layout_split_root_existing_to_right() {
@@ -385,7 +378,6 @@ mod tests {
         assert_eq!(leaves, vec![1, 2]);
     }
 
-
     #[test]
     fn tiling_layout_split_root_existing_to_left() {
         let root = LayoutNode::leaf(1);
@@ -394,7 +386,6 @@ mod tests {
         let leaves = layout.root().collect_leaves();
         assert_eq!(leaves, vec![2, 1]);
     }
-
 
     #[test]
     fn tiling_layout_split_root_existing_to_top() {
@@ -405,7 +396,6 @@ mod tests {
         assert_eq!(leaves, vec![2, 1]);
     }
 
-
     #[test]
     fn tiling_layout_split_root_existing_to_bottom() {
         let root = LayoutNode::leaf(1);
@@ -414,7 +404,6 @@ mod tests {
         let leaves = layout.root().collect_leaves();
         assert_eq!(leaves, vec![1, 2]);
     }
-
 
     #[test]
     fn tiling_layout_regions_returns_all_leaves() {
@@ -435,7 +424,6 @@ mod tests {
         assert_eq!(regions.len(), 2);
     }
 
-
     #[test]
     fn tiling_layout_replace_void() {
         let root = LayoutNode::Split {
@@ -450,7 +438,6 @@ mod tests {
         assert_eq!(leaves, vec![1, 2]);
     }
 
-
     #[test]
     fn tiling_layout_swap_nodes() {
         let root = LayoutNode::Split {
@@ -464,7 +451,6 @@ mod tests {
         let leaves = layout.root().collect_leaves();
         assert_eq!(leaves, vec![2, 1]);
     }
-
 
     #[test]
     fn tiling_layout_handles_returns_split_handles() {
@@ -485,7 +471,6 @@ mod tests {
         assert_eq!(handles.len(), 1);
     }
 
-
     #[test]
     fn tiling_layout_project_insert() {
         let root = LayoutNode::Split {
@@ -505,7 +490,6 @@ mod tests {
         assert!(rect.is_some());
     }
 
-
     #[test]
     fn tiling_layout_project_insert_void() {
         let root = LayoutNode::Split {
@@ -524,7 +508,6 @@ mod tests {
         let rect = layout.project_insert_void(2, 42, area);
         assert!(rect.is_some());
     }
-
 
     #[test]
     fn layout_plan_regions_includes_floating() {
@@ -552,7 +535,6 @@ mod tests {
         assert!(regions.get(2).is_some());
     }
 
-
     #[test]
     fn monocle_width_threshold_getter_setter() {
         let root = LayoutNode::leaf(1);
@@ -564,7 +546,6 @@ mod tests {
         layout.set_monocle_width_threshold(60);
         assert_eq!(layout.monocle_width_threshold(), 60);
     }
-
 
     #[test]
     fn apply_drag_invalid_path_returns_false() {
@@ -578,7 +559,6 @@ mod tests {
         };
         assert!(!node.apply_drag(area, &[0], 0, Direction::Horizontal, 5, 4));
     }
-
 
     #[test]
     fn handle_event_non_mouse_returns_false() {

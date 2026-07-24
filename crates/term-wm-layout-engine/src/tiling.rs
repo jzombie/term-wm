@@ -1508,7 +1508,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn split_rects_nary_even() {
         let area = LayoutRect {
@@ -1518,17 +1517,11 @@ mod tests {
             height: 1,
         };
         let weights = [1u16, 1u16];
-        let rects = crate::split_rects_weighted(
-            area,
-            crate::Orientation::Horizontal,
-            &weights,
-            2,
-        );
+        let rects = crate::split_rects_weighted(area, crate::Orientation::Horizontal, &weights, 2);
         assert_eq!(rects.len(), 2);
         assert_eq!(rects[0].width, 5);
         assert_eq!(rects[1].width, 6);
     }
-
 
     #[test]
     fn insert_and_remove_leaf_and_split_area_for_path() {
@@ -1552,7 +1545,6 @@ mod tests {
         assert!(node.remove_leaf(2));
         assert_eq!(node.unwrap_leaf(), Some(1));
     }
-
 
     #[test]
     fn hit_test_handle_finds_gap() {
@@ -1582,7 +1574,6 @@ mod tests {
         assert_eq!(found.unwrap().direction, Direction::Horizontal);
     }
 
-
     #[test]
     fn normalize_weights_resets_to_equal() {
         let mut node = LayoutNode::Split {
@@ -1599,20 +1590,17 @@ mod tests {
         }
     }
 
-
     #[test]
     fn build_flat_empty_returns_void() {
         let node = LayoutNode::build_flat(Direction::Horizontal, Vec::<usize>::new());
         assert!(node.unwrap_leaf().is_none());
     }
 
-
     #[test]
     fn build_flat_single_returns_leaf() {
         let node = LayoutNode::build_flat(Direction::Horizontal, vec![42]);
         assert_eq!(node.unwrap_leaf(), Some(42));
     }
-
 
     #[test]
     fn build_flat_multiple_returns_split() {
@@ -1631,7 +1619,6 @@ mod tests {
             panic!("expected split");
         }
     }
-
 
     #[test]
     fn void_regions_returns_voids() {
@@ -1652,7 +1639,6 @@ mod tests {
         assert_eq!(voids[0].0, 99);
     }
 
-
     #[test]
     fn swap_leaves_exchanges_positions() {
         let mut node = LayoutNode::Split {
@@ -1670,20 +1656,17 @@ mod tests {
         assert_eq!(leaves, vec![3, 2, 1]);
     }
 
-
     #[test]
     fn swap_leaves_same_id_returns_false() {
         let mut node = LayoutNode::leaf(1);
         assert!(!node.swap_leaves(&1, &1));
     }
 
-
     #[test]
     fn swap_leaves_nonexistent_returns_false() {
         let mut node = LayoutNode::leaf(1);
         assert!(!node.swap_leaves(&1, &2));
     }
-
 
     #[test]
     fn cleanup_after_removes_void_children() {
@@ -1697,7 +1680,6 @@ mod tests {
         assert_eq!(node.unwrap_leaf(), Some(1));
     }
 
-
     #[test]
     fn cleanup_all_voids_becomes_void() {
         let mut node: LayoutNode<usize> = LayoutNode::Split {
@@ -1709,7 +1691,6 @@ mod tests {
         node.cleanup_after_removal();
         assert!(matches!(node, LayoutNode::Void(_)));
     }
-
 
     #[test]
     fn cleanup_empty_split_becomes_void() {
@@ -1723,7 +1704,6 @@ mod tests {
         assert!(matches!(node, LayoutNode::Void(_)));
     }
 
-
     #[test]
     fn clear_leaf_replaces_with_void() {
         let mut node = LayoutNode::leaf(42);
@@ -1731,13 +1711,11 @@ mod tests {
         assert!(matches!(node, LayoutNode::Void(_)));
     }
 
-
     #[test]
     fn clear_leaf_wrong_id_returns_false() {
         let mut node = LayoutNode::leaf(42);
         assert!(!node.clear_leaf(99));
     }
-
 
     #[test]
     fn subtree_any_finds_matching_leaf() {
@@ -1751,13 +1729,11 @@ mod tests {
         assert!(!node.subtree_any(|id| id == 99));
     }
 
-
     #[test]
     fn node_at_path_returns_none_for_invalid_path() {
         let node = LayoutNode::leaf(1);
         assert!(node.node_at_path(&[0]).is_none());
     }
-
 
     #[test]
     fn collect_leaves_from_nested() {
@@ -1778,7 +1754,6 @@ mod tests {
         assert_eq!(node.collect_leaves(), vec![1, 2, 3]);
     }
 
-
     #[test]
     fn insert_leaf_left_on_single() {
         let mut node = LayoutNode::leaf(1);
@@ -1786,7 +1761,6 @@ mod tests {
         let leaves = node.collect_leaves();
         assert_eq!(leaves, vec![2, 1]);
     }
-
 
     #[test]
     fn insert_leaf_top_on_single() {
@@ -1796,7 +1770,6 @@ mod tests {
         assert_eq!(leaves, vec![2, 1]);
     }
 
-
     #[test]
     fn insert_leaf_bottom_on_single() {
         let mut node = LayoutNode::leaf(1);
@@ -1805,13 +1778,11 @@ mod tests {
         assert_eq!(leaves, vec![1, 2]);
     }
 
-
     #[test]
     fn insert_leaf_nonexistent_target_returns_false() {
         let mut node = LayoutNode::leaf(1);
         assert!(!node.insert_leaf(99, 2, InsertPosition::Right));
     }
-
 
     #[test]
     fn insert_leaf_in_nested_split() {
@@ -1825,5 +1796,4 @@ mod tests {
         let leaves = node.collect_leaves();
         assert_eq!(leaves, vec![1, 2, 3]);
     }
-
 }
