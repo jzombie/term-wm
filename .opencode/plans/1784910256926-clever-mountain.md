@@ -7,19 +7,19 @@
 | **Data layout** | Keep Ratatui's native `Buffer` / `Vec<Cell>` — no SoA conversion |
 | **SIMD approach** | No explicit SIMD; rely on LLVM auto-vectorization of slice ops |
 | **Toolchain** | Stable Rust only (no nightly, no `std::simd`) |
-| **Libraries** | No new SIMD dependencies; `bytemuck` is already a transitive dep |
+| **Libraries** | No new SIMD dependencies; `bytemuck` already transitive |
 | **Benchmarks** | Add Criterion microbenchmarks to `crates/term-bench` |
-| **Buffer mgmt** | Simplify scratch/direct buffer swap pattern |
+| **Buffer mgmt** | Keep `std::mem::replace` swap pattern (`take_scratch`/`put_scratch`) |
 
 ## Root Bottleneck
 
-`blit_buffer` in `draw_plan_renderer.rs:280-291` calls `src.cell((x,y))` and `dst.cell_mut((x,y))` per cell — **2 × W × H bounds checks + index calculations** per blit pass. Ratatui's `Buffer` stores data as a contiguous `Vec<Cell>` (width × height), so direct slice indexing eliminates all per-cell overhead.
+`blit_buffer` calls `src.cell((x,y))` and `dst.cell_mut((x,y))` per cell — **2 × W × H bounds checks + index calculations** per blit pass. Ratatui's `Buffer` stores data as contiguous `Vec<Cell>` — direct slice indexing eliminates all per-cell bounds check overhead.
 
 ## Changes
 
-### 1. Rewrite `blit_buffer` with row-slice operations
+### 1. Rewrite `blit_buffer` with correct coordinate translation + `clone_from_slice`
 
-**File:** `crates/term-wm-console/src/draw_plan_renderer.rs`
+**File:** `crates/term-wm-console/src/draw_plan_renderer.rs:280-291`
 
 Replace:
 ```rust
@@ -36,41 +36,42 @@ fn blit_buffer(src: &Buffer, dst: &mut Buffer, area: Rect) {
 }
 ```
 
-With:
+With correct coordinate translation (buffer origins matter!):
 ```rust
 fn blit_buffer(src: &Buffer, dst: &mut Buffer, area: Rect) {
-    let src_width = src.area.width as usize;
-    let dst_width = dst.area.width as usize;
-    let w = area.width as usize;
-    for y in area.y..area.y.saturating_add(area.height) {
-        let src_start = y as usize * src_width + area.x as usize;
-        let dst_start = y as usize * dst_width + area.x as usize;
-        let src_slice = &src.content[src_start..src_start + w];
-        let dst_slice = &mut dst.content[dst_start..dst_start + w];
-        for (d, s) in dst_slice.iter_mut().zip(src_slice.iter()) {
-            d.clone_from(s);
-        }
+    let src_w = src.area.width as usize;
+    let dst_w = dst.area.width as usize;
+    let copy_w = area.width as usize;
+    let y_end = area.y.saturating_add(area.height);
+
+    for y in area.y..y_end {
+        // Translate absolute Y to relative buffer Y
+        let src_y = (y - src.area.y) as usize;
+        let dst_y = (y - dst.area.y) as usize;
+        // Translate absolute X to relative buffer X
+        let src_x = (area.x - src.area.x) as usize;
+        let dst_x = (area.x - dst.area.x) as usize;
+
+        let src_start = src_y * src_w + src_x;
+        let dst_start = dst_y * dst_w + dst_x;
+
+        dst.content[dst_start..dst_start + copy_w]
+            .clone_from_slice(&src.content[src_start..src_start + copy_w]);
     }
 }
 ```
 
-`Cell::clone_from` reuses the destination's allocated `String` buffer — no heap alloc after warmup.
+`clone_from_slice` calls `Cell::clone_from` element-wise — reuses destination `String` allocations, zero heap alloc after warmup. LLVM auto-vectorizes the slice copy.
 
-### 2. Rewrite `composite_window` inline blit with row slices
+### 2. Rewrite `composite_window` inline blit (lines 914-926)
 
-**File:** `draw_plan_renderer.rs:914-926`
+Apply the same coordinate translation + `clone_from_slice` pattern. Current code uses a manual 2D loop with `buffer.cell((x+off_x, y+off_y))` and `main_buf.cell_mut((dst_x, dst_y))`.
 
-Same pattern: replace per-cell `cell((x+off_x, y+off_y))` / `cell_mut((dst_x, dst_y))` with direct indexing into `buffer.content` and `main_buf.content`.
+### 3. Optimize `render_drop_shadow` (lines 816-825)
 
-Add clipping logic for partial row copies (when windows are partially offscreen).
+Replace per-cell `buf.cell_mut((x, y))` with direct indexing. Shadow color already computed once before loop — no change to that.
 
-### 3. Optimize `render_drop_shadow` with row slices
-
-**File:** `draw_plan_renderer.rs:816-825`
-
-Replace per-cell `buf.cell_mut((x, y))` with direct indexing. The shadow color is already computed once before the loop — no change to that logic.
-
-### 4. Optimize other direct buffer writers the same way
+### 4. Optimize other direct buffer writers
 
 | Function | Lines | Pattern |
 |---|---|---|
@@ -81,43 +82,30 @@ Replace per-cell `buf.cell_mut((x, y))` with direct indexing. The shadow color i
 | `render_ghost_preview` | 1549-1614 | direct indexing |
 | `render_cursor_overlay` | 1653-1682 | direct indexing |
 
-Each writes to `&mut Buffer` via `cell_mut()` — replace with `&mut dst.content[idx]`.
+Each writes to `&mut Buffer` via `cell_mut()` — replace with `&mut dst.content[idx]` using correct origin-relative indexing.
 
-### 5. Simplify buffer management
+### 5. Buffer management — keep swap pattern, simplify internally
 
-**File:** `draw_plan_renderer.rs`
-
-Replace the swap-based pattern:
-```rust
-let mut buffer = std::mem::replace(&mut self.scratch_buffer, Buffer::empty(Rect::ZERO));
-buffer.resize(area);
-// ... use buffer ...
-self.scratch_buffer = buffer;
-```
-
-With a simpler pre-sized approach (one allocation, reuse via `reset()`):
-```rust
-fn prepare_scratch(&mut self, area: Rect) -> &mut Buffer {
-    if self.scratch_buffer.area != area {
-        self.scratch_buffer.resize(area);
-    }
-    self.scratch_buffer.reset();
-    &mut self.scratch_buffer
-}
-```
+Keep `take_scratch`/`put_scratch` and `std::mem::replace`. The swap pattern is correct for Rust ownership. No `&mut Buffer` return from self.
 
 ### 6. Add microbenchmarks to `term-bench`
 
-**File:** `crates/term-bench/Cargo.toml` — add `criterion` dev-dep + `[[bench]]` target.
+**`crates/term-bench/Cargo.toml`** — add:
+```toml
+[dev-dependencies]
+criterion = { workspace = true }
 
-**File:** `crates/term-bench/benches/blit_buffer.rs` (new)
+[[bench]]
+name = "blit_buffer"
+harness = false
+```
 
-Benchmark `blit_buffer` at multiple window sizes:
-- 80×24, 120×40, 200×60
-- Multiple overlap ratios
+**Workspace `Cargo.toml`** — add:
+```toml
+criterion = { version = "0.5", default-features = false }
+```
 
-Use `Buffer::empty(area)` and populate with test data.
-
+**`crates/term-bench/benches/blit_buffer.rs`** (new):
 ```rust
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use ratatui::buffer::Buffer;
@@ -139,16 +127,10 @@ fn bench_blit_buffer(c: &mut Criterion) {
     }
     group.finish();
 }
+
+criterion_group!(benches, bench_blit_buffer);
+criterion_main!(benches);
 ```
-
-Note: `criterion` is not in the workspace yet — add to workspace `Cargo.toml`:
-```toml
-criterion = { version = "0.5", default-features = false }
-```
-
-### 7. `bytemuck` for future use
-
-Already a transitive dep (v1.25.0). Could be used for `cast_slice` on `Vec<Cell>` → `&[u8]` for memcpy-like bulk operations if needed, but not required for the initial optimization.
 
 ## Verification
 
@@ -162,6 +144,6 @@ cargo test
 # Run benchmarks
 cargo bench -p term-bench
 
-# Visual check (render output must be identical)
-cargo run --example minimal
+# Visual check
+cargo run
 ```
