@@ -92,11 +92,13 @@ impl EventSource for ImmediateDriver {
     }
 
     fn current_profile(&self) -> PowerProfile {
-        // Return Streaming so the runner's FramePacer arms on idle ticks.
-        // The default PowerSaver would prevent the pacer from ever arming
-        // (poll always returns false, never enters Some(evt)), causing
-        // try_expire() to always return false and the draw closure to
-        // never execute.
+        // Override the default PowerSaver so the FramePacer arms on idle
+        // ticks.  This mock driver returns poll=false (no input events) and
+        // never sets the global dirty bit, so all three pacer-arm checks
+        // (Some(evt), take_redraw_request, current_profile != PowerSaver)
+        // would otherwise return false/None.  The pacer stays disarmed,
+        // try_expire() always returns false, the draw closure never runs,
+        // and the test's intentional panic! payload is never reached.
         PowerProfile::Streaming
     }
 }
