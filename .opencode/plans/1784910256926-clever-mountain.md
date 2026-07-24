@@ -267,6 +267,25 @@ self.last_snap_cursor = None;
 ```
 
 ### Verification
+
+**Test fix: `ImmediateDriver` in `tests/panic_debug_log.rs`**
+
+The test driver always returns `poll=false` (never enters `Some(evt)`), and uses the default `current_profile()` → `PowerSaver`. With the FramePacer, `driver_has_work` is false, the pacer never arms, and the draw never fires — the test deadlocks.
+
+Fix: override `current_profile()` to return `Streaming` so the runner arms the pacer on idle ticks:
+
+```rust
+impl EventSource for ImmediateDriver {
+    // ... existing poll, read, next_key, next_mouse ...
+
+    fn current_profile(&self) -> term_wm_core::power_profile::PowerProfile {
+        term_wm_core::power_profile::PowerProfile::Streaming
+    }
+}
+```
+
+This signals "always has pending work" to the runner, which arms the FramePacer on every idle tick, and `try_expire()` gates draws at the correct interval.
+
 ```bash
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items
 cargo clippy --workspace --all-targets --all-features -- -D warnings
