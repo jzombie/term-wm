@@ -513,31 +513,38 @@ impl TerminalComponent {
         let sb_before_drag = {
             let clipped = layout_rect_to_clipped_rect(area);
             let mut pane = self.pane.borrow_mut();
-            if !pane.alternate_screen()
-                && let Some(handle) = ctx.scroll_handle()
-            {
-                let used = pane.max_scrollback();
-                handle.set_content_size(clipped.width as usize, used + clipped.height as usize);
 
-                let current_sb = pane.scrollback();
-                let view_offset = ctx.viewport().offset_y;
-                if current_sb == 0 {
-                    if view_offset < self.last_max_scrollback.get().saturating_sub(1) {
-                        let target_sb = used.saturating_sub(view_offset);
-                        pane.set_scrollback(target_sb);
-                    } else {
-                        handle.scroll_vertical_to(usize::MAX);
-                    }
-                } else if current_sb != self.last_scrollback.get() {
-                    let new_offset = used.saturating_sub(current_sb);
-                    handle.scroll_vertical_to(new_offset);
+            if let Some(handle) = ctx.scroll_handle() {
+                if pane.alternate_screen() || ctx.direct_mode() {
+                    handle.set_content_size(clipped.width as usize, clipped.height as usize);
+                    pane.set_scrollback(0);
                 } else {
-                    let target_sb = used.saturating_sub(view_offset);
-                    if target_sb != current_sb {
-                        pane.set_scrollback(target_sb);
+                    let used = pane.max_scrollback();
+                    handle.set_content_size(
+                        clipped.width as usize,
+                        used + clipped.height as usize,
+                    );
+
+                    let current_sb = pane.scrollback();
+                    let view_offset = ctx.viewport().offset_y;
+                    if current_sb == 0 {
+                        if view_offset < self.last_max_scrollback.get().saturating_sub(1) {
+                            let target_sb = used.saturating_sub(view_offset);
+                            pane.set_scrollback(target_sb);
+                        } else {
+                            handle.scroll_vertical_to(usize::MAX);
+                        }
+                    } else if current_sb != self.last_max_scrollback.get() {
+                        let new_offset = used.saturating_sub(current_sb);
+                        handle.scroll_vertical_to(new_offset);
+                    } else {
+                        let target_sb = used.saturating_sub(view_offset);
+                        if target_sb != current_sb {
+                            pane.set_scrollback(target_sb);
+                        }
                     }
+                    self.last_max_scrollback.set(used);
                 }
-                self.last_max_scrollback.set(used);
             }
             pane.scrollback()
         };
