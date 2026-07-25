@@ -15,12 +15,12 @@ development = ["term-bench", "term-session-client"]
 members = [
     "crates/term-bench",
     "crates/term-session-client",
-    "crates/term-wm-crossterm-adapter",
     "crates/term-session-mock",
     "crates/term-session-muxio-service-definitions",
     "crates/term-session-server",
     "crates/term-wm-console",
     "crates/term-wm-core",
+    "crates/term-wm-crossterm-adapter",
     "crates/term-wm-layout-engine",
     "crates/term-wm-pty-engine",
     "crates/term-wm-render",
@@ -78,13 +78,13 @@ term-session-server = { path = "crates/term-session-server", version = "0.8.20-a
 term-wm = { path = ".", version = "0.8.20-alpha" }
 term-wm-console = { path = "crates/term-wm-console", version = "0.8.20-alpha" }
 term-wm-core = { path = "crates/term-wm-core", version = "0.8.20-alpha" }
+term-wm-crossterm-adapter = { path = "crates/term-wm-crossterm-adapter", version = "0.8.20-alpha" }
 term-wm-layout-engine = { path = "crates/term-wm-layout-engine", version = "0.8.20-alpha" }
 term-wm-pty-engine = { path = "crates/term-wm-pty-engine", version = "0.8.20-alpha" }
 term-wm-render = { path = "crates/term-wm-render", version = "0.8.20-alpha" }
 term-wm-sys-ui-components = { path = "crates/term-wm-sys-ui-components", version = "0.8.20-alpha" }
 term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.8.20-alpha" }
 term-wm-ui-facade = { path = "crates/term-wm-ui-facade", version = "0.8.20-alpha" }
-term-wm-crossterm-adapter = { path = "crates/term-wm-crossterm-adapter", version = "0.8.20-alpha" }
 textwrap = "0.16.2"
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["full"] }
@@ -111,12 +111,12 @@ portable-pty = { workspace = true }
 ratatui = { workspace = true }
 term-wm-console = { workspace = true }
 term-wm-core = { workspace = true }
+term-wm-crossterm-adapter = { workspace = true }
 term-wm-layout-engine = { workspace = true }
 term-wm-pty-engine = { workspace = true }
 term-wm-render = { workspace = true }
 term-wm-sys-ui-components = { workspace = true, optional = true }
 term-wm-ui-components = { workspace = true }
-term-wm-crossterm-adapter = { workspace = true }
 term-wm-ui-facade = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
