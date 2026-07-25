@@ -628,12 +628,18 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     pub fn set_direct_mode(&mut self, key: WindowKey, value: bool) {
+        let title = self.window_title(key);
         if let Some(w) = self.windows.get_mut(key) {
             w.direct_mode = value;
             if value && let Some(c) = self.components.get_mut(w.component_key) {
                 c.clear_selection();
             }
         }
+        let status = if value { "enabled" } else { "disabled" };
+        self.push_notification(
+            format!("Direct mode {status} for {title}"),
+            Duration::from_secs(3),
+        );
     }
 
     pub fn toggle_direct_mode(&mut self, key: WindowKey) {
