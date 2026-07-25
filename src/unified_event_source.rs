@@ -466,6 +466,8 @@ impl Drop for UnifiedEventSource {
 
 #[cfg(test)]
 mod tests {
+    use serial_test::serial;
+
     use super::*;
     use crate::events::{KeyCode, KeyKind, KeyModifiers};
 
