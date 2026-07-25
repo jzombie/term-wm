@@ -23,13 +23,7 @@ impl KeyboardNormalizer {
             Event::Key(key) => {
                 // Shift+Tab passes through — FocusPrev keybinding matches Tab+Shift.
                 // BackTab normalization is handled in term-wm-crossterm-adapter.
-                if cfg!(windows) {
-                    match key.kind {
-                        KeyKind::Release => return None,
-                        KeyKind::Repeat => return None,
-                        KeyKind::Press => {}
-                    }
-                } else if key.kind == KeyKind::Release {
+                if key.kind == KeyKind::Release {
                     return None;
                 }
                 Some(Event::Key(key))
@@ -66,14 +60,13 @@ mod tests {
     }
 
     #[test]
-    fn release_key_is_ignored_on_unix() {
+    fn release_key_is_ignored() {
         let mut norm = KeyboardNormalizer::new();
         let evt = Event::Key(crate::events::KeyEvent {
             code: KeyCode::Char('a'),
             modifiers: KeyModifiers::NONE,
             kind: KeyKind::Release,
         });
-        // On non-windows this should return None
         let out = norm.normalize(evt);
         assert!(out.is_none());
     }
@@ -108,24 +101,14 @@ mod tests {
     }
 
     #[test]
-    fn repeat_key_passes_through_on_unix() {
+    fn repeat_key_passes_through() {
         let mut norm = KeyboardNormalizer::new();
         let evt = Event::Key(crate::events::KeyEvent {
             code: KeyCode::Char('a'),
             modifiers: KeyModifiers::NONE,
             kind: KeyKind::Repeat,
         });
-        // On non-Windows, Repeat passes through (only Release is filtered)
-        #[cfg(not(target_os = "windows"))]
-        {
-            let out = norm.normalize(evt);
-            assert!(out.is_some(), "Repeat must pass through on Unix");
-        }
-        // On Windows, Repeat is filtered
-        #[cfg(target_os = "windows")]
-        {
-            let out = norm.normalize(evt);
-            assert!(out.is_none(), "Repeat must be filtered on Windows");
-        }
+        let out = norm.normalize(evt);
+        assert!(out.is_some(), "Repeat must pass through on all platforms");
     }
 }
