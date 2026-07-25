@@ -115,3 +115,54 @@ pub fn try_translate_event(evt: crossterm::event::Event) -> Option<Event> {
         crossterm::event::Event::Paste(text) => Some(Event::Paste(text)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_key(code: crossterm::event::KeyCode, mods: crossterm::event::KeyModifiers) -> crossterm::event::KeyEvent {
+        crossterm::event::KeyEvent {
+            code,
+            modifiers: mods,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        }
+    }
+
+    #[test]
+    fn test_try_translate_drops_unknown() {
+        let key = make_key(
+            crossterm::event::KeyCode::CapsLock,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        assert!(try_translate_key_event(key).is_none());
+    }
+
+    #[test]
+    fn test_try_translate_mutates_backtab() {
+        let key = make_key(
+            crossterm::event::KeyCode::BackTab,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        let result = try_translate_key_event(key).unwrap();
+        assert_eq!(result.code, KeyCode::Tab);
+        assert!(result.modifiers.shift);
+        assert!(!result.modifiers.control);
+        assert!(!result.modifiers.alt);
+    }
+
+    #[test]
+    fn test_infallible_translate_fallback_preserves_modifiers() {
+        let mods = crossterm::event::KeyModifiers::CONTROL
+            .union(crossterm::event::KeyModifiers::ALT);
+        let key = make_key(
+            crossterm::event::KeyCode::CapsLock,
+            mods,
+        );
+        let result = translate_key_event(key);
+        assert_eq!(result.code, KeyCode::Esc);
+        assert!(result.modifiers.control);
+        assert!(result.modifiers.alt);
+        assert!(!result.modifiers.shift);
+    }
+}
