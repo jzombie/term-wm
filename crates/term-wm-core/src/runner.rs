@@ -1053,7 +1053,10 @@ mod tests {
         });
 
         let consumed = handle_focused_app_event(&evt, &mut app);
-        assert!(consumed, "Repeat event must route through handle_focused_app_event in direct mode");
+        assert!(
+            consumed,
+            "Repeat event must route through handle_focused_app_event in direct mode"
+        );
     }
 
     #[test]

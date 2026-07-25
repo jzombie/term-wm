@@ -329,9 +329,9 @@ mod tests {
         };
 
         for core_key in core_targets.iter() {
-            let reachable = ALL_CROSSTERM_KEYS.iter().any(|ck| {
-                translate_key_code(*ck) == Some(*core_key)
-            });
+            let reachable = ALL_CROSSTERM_KEYS
+                .iter()
+                .any(|ck| translate_key_code(*ck) == Some(*core_key));
             assert!(
                 reachable,
                 "Core KeyCode::{:?} is unreachable from any crossterm input",
@@ -354,7 +354,10 @@ mod tests {
             ("enter", make_event(crossterm::event::KeyCode::Enter)),
             ("tab", make_event(crossterm::event::KeyCode::Tab)),
             ("backtab", make_event(crossterm::event::KeyCode::BackTab)),
-            ("backspace", make_event(crossterm::event::KeyCode::Backspace)),
+            (
+                "backspace",
+                make_event(crossterm::event::KeyCode::Backspace),
+            ),
             ("esc", make_event(crossterm::event::KeyCode::Esc)),
             ("left", make_event(crossterm::event::KeyCode::Left)),
             ("right", make_event(crossterm::event::KeyCode::Right)),
