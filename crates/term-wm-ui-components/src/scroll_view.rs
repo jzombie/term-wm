@@ -1394,4 +1394,23 @@ mod tests {
             "should stay at old bottom when sticky_bottom is false"
         );
     }
+
+    #[test]
+    fn delegates_alternate_screen_transition_to_child() {
+        let child = term_wm_core::window::test_component::ActionRecorder::default();
+        let mut sv = ScrollViewComponent::new(child);
+        // ActionRecorder returns None by default
+        let result = Component::<TermWmAction>::take_alternate_screen_transition(&mut sv);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn delegates_alternate_screen_transition_returns_none() {
+        let child = term_wm_core::window::test_component::ActionRecorder::default();
+        let mut sv = ScrollViewComponent::new(child);
+        let r1 = Component::<TermWmAction>::take_alternate_screen_transition(&mut sv);
+        assert_eq!(r1, None);
+        let r2 = Component::<TermWmAction>::take_alternate_screen_transition(&mut sv);
+        assert_eq!(r2, None);
+    }
 }

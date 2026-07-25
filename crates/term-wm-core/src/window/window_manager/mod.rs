@@ -6786,4 +6786,117 @@ mod tests {
             r0.width,
         );
     }
+
+    #[test]
+    fn set_direct_mode_marks_layout_dirty_on_change() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        assert!(!wm.layout_dirty(), "initially not dirty");
+        wm.set_direct_mode(keys[0], true);
+        assert!(wm.layout_dirty(), "marked dirty on enable");
+        wm.clear_layout_dirty();
+        wm.set_direct_mode(keys[0], false);
+        assert!(wm.layout_dirty(), "marked dirty on disable");
+    }
+
+    #[test]
+    fn set_direct_mode_skips_notification_when_unchanged() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.set_direct_mode(keys[0], true);
+        assert!(!wm.notifications().is_empty(), "notification pushed");
+        let count_before = wm.notifications().len();
+        wm.set_direct_mode(keys[0], true);
+        assert_eq!(wm.notifications().len(), count_before, "no duplicate notification");
+    }
+
+    #[test]
+    fn set_direct_mode_pushes_enabled_notification() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.set_direct_mode(keys[0], true);
+        assert!(!wm.notifications().is_empty());
+    }
+
+    #[test]
+    fn set_direct_mode_pushes_disabled_notification() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.set_direct_mode(keys[0], true);
+        wm.clear_layout_dirty();
+        while !wm.notifications().is_empty() {
+            // drain notification queue
+        }
+        wm.set_direct_mode(keys[0], false);
+        assert!(!wm.notifications().is_empty());
+    }
+
+    #[test]
+    fn set_direct_mode_invalid_key_is_noop() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let bogus = WindowKey::default();
+        assert!(!wm.layout_dirty(), "initially not dirty");
+        wm.set_direct_mode(bogus, true);
+        assert!(!wm.layout_dirty(), "no-op: layout not dirty");
+        assert!(wm.notifications().is_empty(), "no-op: no notification");
+    }
+
+    #[test]
+    fn take_alternate_screen_transition_no_component() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let bogus = WindowKey::default();
+        let result = wm.take_alternate_screen_transition(bogus);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn take_alternate_screen_transition_delegates() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        // ActionRecorder returns None by default
+        let result = wm.take_alternate_screen_transition(keys[0]);
+        assert_eq!(result, None);
+    }
 }

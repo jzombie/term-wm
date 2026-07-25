@@ -508,6 +508,11 @@ impl TerminalComponent {
     }
 
     #[cfg(test)]
+    pub fn last_mode_suppressed_scroll(&self) -> bool {
+        self.last_mode_suppressed_scroll.get()
+    }
+
+    #[cfg(test)]
     pub fn pane_mut(&mut self) -> &mut Box<dyn Pane> {
         self.pane.get_mut()
     }
@@ -2663,5 +2668,95 @@ mod tests {
             Some(176),
             "ClipboardPaste must scroll viewport to bottom"
         );
+    }
+
+    #[test]
+    fn transition_returns_some_true_on_enter() {
+        let mut pane = TestPane::new(200);
+        pane.alt_screen = true;
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        let result = Component::<TermWmAction>::take_alternate_screen_transition(&mut term);
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn transition_returns_some_false_on_exit() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        term.reported_alt_screen.set(true);
+        // Alt screen is false by default on TestPane
+        let result = Component::<TermWmAction>::take_alternate_screen_transition(&mut term);
+        assert_eq!(result, Some(false));
+    }
+
+    #[test]
+    fn transition_returns_none_when_unchanged() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        // reported_alt_screen is false, TestPane alt_screen is false
+        let r1 = Component::<TermWmAction>::take_alternate_screen_transition(&mut term);
+        assert_eq!(r1, None);
+        let r2 = Component::<TermWmAction>::take_alternate_screen_transition(&mut term);
+        assert_eq!(r2, None);
+    }
+
+    #[test]
+    fn render_screen_entering_direct_mode_suppresses_scroll() {
+        let (handle, shared) = make_handle();
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        let ctx = make_ctx(0, handle).with_direct_mode(true);
+        let area = Rect::new(0, 0, 80, 24);
+        let buffer = Buffer::empty(area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
+        term.render(
+            &mut backend,
+            LayoutRect { x: 0, y: 0, width: 80, height: 24 },
+            &ctx,
+            &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+        );
+        assert_eq!(shared.borrow().content_height, 24, "content = viewport");
+        assert_eq!(term.pane_mut().scrollback(), 0, "scrollback cleared");
+        assert!(term.last_mode_suppressed_scroll(), "suppress flag set");
+    }
+
+    #[test]
+    fn render_screen_entering_alt_screen_suppresses_scroll() {
+        let (handle, shared) = make_handle();
+        let mut pane = TestPane::new(200);
+        pane.alt_screen = true;
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        let ctx = make_ctx(0, handle);
+        let area = Rect::new(0, 0, 80, 24);
+        let buffer = Buffer::empty(area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
+        term.render(
+            &mut backend,
+            LayoutRect { x: 0, y: 0, width: 80, height: 24 },
+            &ctx,
+            &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+        );
+        assert_eq!(shared.borrow().content_height, 24, "content = viewport");
+        assert_eq!(term.pane_mut().scrollback(), 0, "scrollback cleared");
+        assert!(term.last_mode_suppressed_scroll(), "suppress flag set");
+    }
+
+    #[test]
+    fn render_screen_exit_suppressed_mode_anchors_to_bottom() {
+        let (handle, shared) = make_handle();
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        term.last_mode_suppressed_scroll.set(true);
+        term.set_last_max_scrollback(200);
+        // Normal mode, no alt screen, no direct mode
+        let ctx = make_ctx(0, handle);
+        let area = Rect::new(0, 0, 80, 24);
+        let buffer = Buffer::empty(area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
+        term.render(
+            &mut backend,
+            LayoutRect { x: 0, y: 0, width: 80, height: 24 },
+            &ctx,
+            &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+        );
+        assert_eq!(shared.borrow().pending_offset_y, Some(200), "scroll to bottom");
+        assert_eq!(term.pane_mut().scrollback(), 0, "scrollback at bottom");
+        assert!(!term.last_mode_suppressed_scroll(), "suppress flag cleared");
     }
 }
