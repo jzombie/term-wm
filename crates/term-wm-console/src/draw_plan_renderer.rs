@@ -49,6 +49,7 @@ struct ChromeHitboxParams {
     wm_buttons: Vec<term_wm_core::window::WmButton>,
     borders_enabled: bool,
     header_enabled: bool,
+    floating: bool,
 }
 
 /// Register chrome hitboxes for a window (resize, drag, close, maximize buttons).
@@ -67,6 +68,7 @@ fn register_window_chrome_hitboxes(registry: &mut HitboxRegistry, params: &Chrom
         wm_buttons,
         borders_enabled,
         header_enabled,
+        floating,
     } = params;
     let (width, height) = *frame_size;
     let (ox, oy) = *screen_origin;
@@ -153,6 +155,11 @@ fn register_window_chrome_hitboxes(registry: &mut HitboxRegistry, params: &Chrom
                     .saturating_sub(HEADER_BUTTON_GAP * i as u16)
             } else {
                 btn_right.saturating_sub(HEADER_BUTTON_GAP * i as u16)
+            };
+            let bx = if *floating {
+                bx.saturating_add(1)
+            } else {
+                bx.saturating_sub(1)
             };
             let target = match btn.action {
                 TermWmAction::CloseWindow => ChromeTarget::CloseButton(*key),
@@ -248,6 +255,7 @@ pub fn render_window_chrome(
             wm_buttons: ctx.wm_buttons.clone(),
             borders_enabled: ctx.borders_enabled,
             header_enabled: ctx.header_enabled,
+            floating: ctx.floating,
         },
     );
 
@@ -1182,6 +1190,11 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
                         .saturating_sub(HEADER_BUTTON_GAP * i as u16)
                 } else {
                     header_right.saturating_sub(HEADER_BUTTON_GAP * i as u16)
+                };
+                let bx = if floating {
+                    bx.saturating_add(1)
+                } else {
+                    bx.saturating_sub(1)
                 };
                 let rel_x = bx as usize - buffer.area.x as usize;
                 let cell = &mut buffer.content[rel_y * buf_w + rel_x];
