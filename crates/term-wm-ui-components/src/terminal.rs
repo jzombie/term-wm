@@ -544,10 +544,7 @@ impl TerminalComponent {
                     self.last_mode_suppressed_scroll.set(true);
                 } else {
                     let used = pane.max_scrollback();
-                    handle.set_content_size(
-                        clipped.width as usize,
-                        used + clipped.height as usize,
-                    );
+                    handle.set_content_size(clipped.width as usize, used + clipped.height as usize);
 
                     if self.last_mode_suppressed_scroll.get() {
                         self.last_mode_suppressed_scroll.set(false);
@@ -2708,7 +2705,12 @@ mod tests {
         let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
         term.render(
             &mut backend,
-            LayoutRect { x: 0, y: 0, width: 80, height: 24 },
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
             &ctx,
             &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
         );
@@ -2729,7 +2731,12 @@ mod tests {
         let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
         term.render(
             &mut backend,
-            LayoutRect { x: 0, y: 0, width: 80, height: 24 },
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
             &ctx,
             &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
         );
@@ -2751,11 +2758,20 @@ mod tests {
         let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
         term.render(
             &mut backend,
-            LayoutRect { x: 0, y: 0, width: 80, height: 24 },
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
             &ctx,
             &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
         );
-        assert_eq!(shared.borrow().pending_offset_y, Some(200), "scroll to bottom");
+        assert_eq!(
+            shared.borrow().pending_offset_y,
+            Some(200),
+            "scroll to bottom"
+        );
         assert_eq!(term.pane_mut().scrollback(), 0, "scrollback at bottom");
         assert!(!term.last_mode_suppressed_scroll(), "suppress flag cleared");
     }

@@ -633,9 +633,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             && w.direct_mode != value
         {
             w.direct_mode = value;
-            if value
-                && let Some(c) = self.components.get_mut(w.component_key)
-            {
+            if value && let Some(c) = self.components.get_mut(w.component_key) {
                 c.clear_selection();
             }
             self.mark_layout_dirty();
@@ -6818,10 +6816,17 @@ mod tests {
         let keys = make_keys(&mut wm, 1);
         wm.clear_layout_dirty();
         wm.set_direct_mode(keys[0], true);
-        assert!(!wm.notifications().is_empty(), "notification pushed on enable");
+        assert!(
+            !wm.notifications().is_empty(),
+            "notification pushed on enable"
+        );
         let count_before = wm.notifications().len();
         wm.set_direct_mode(keys[0], true);
-        assert_eq!(wm.notifications().len(), count_before, "no duplicate notification when unchanged");
+        assert_eq!(
+            wm.notifications().len(),
+            count_before,
+            "no duplicate notification when unchanged"
+        );
     }
 
     #[test]
@@ -6854,7 +6859,10 @@ mod tests {
         // Clear notification queue: create a new one
         wm.notification_queue = Default::default();
         wm.set_direct_mode(keys[0], false);
-        assert!(!wm.notifications().is_empty(), "notification pushed on disable");
+        assert!(
+            !wm.notifications().is_empty(),
+            "notification pushed on disable"
+        );
     }
 
     #[test]
