@@ -737,10 +737,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 TermWmAction::ToggleSystemPanel,
                 TermWmAction::Help,
                 TermWmAction::ExitUi,
-                TermWmAction::MaximizeWindow,
-                TermWmAction::MinimizeWindow,
-                TermWmAction::CloseWindow,
-                TermWmAction::ToggleDirectMode,
                 TermWmAction::ToggleMonocle,
                 TermWmAction::ToggleTiling,
             ]
@@ -2461,20 +2457,19 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// the focused window fills the screen). All window-specific buttons are
     /// excluded when there is no focused window.
     pub fn window_management_buttons(&self) -> Vec<WmButton> {
-        let has_focused = self.window(self.focused_window()).is_some();
-        if !has_focused {
+        let focused = self.focused_window();
+        if !self.windows.contains_key(focused) {
             return Vec::new();
         }
+        let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized);
         let mut btns = vec![WmButton {
-            action: TermWmAction::CloseWindow,
+            action: TermWmAction::CloseWindow(focused),
             label: "Close Window",
             symbol: "X",
         }];
         if !self.is_monocle() {
-            let focused = self.focused_window();
-            let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized);
             btns.push(WmButton {
-                action: TermWmAction::MaximizeWindow,
+                action: TermWmAction::MaximizeWindow(focused),
                 label: if is_maxed {
                     "Restore Window"
                 } else {
@@ -2483,7 +2478,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 symbol: if is_maxed { "─" } else { "▢" },
             });
             btns.push(WmButton {
-                action: TermWmAction::MinimizeWindow,
+                action: TermWmAction::MinimizeWindow(focused),
                 label: "Minimize Window",
                 symbol: "_",
             });
@@ -2581,20 +2576,22 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 action: crate::actions::TermWmAction::ToggleTiling,
                 disabled: self.is_monocle(),
             },
-            MenuItem {
-                label: if self.direct_mode(self.focused_window()) {
-                    "Direct Mode: On".into()
-                } else {
-                    "Direct Mode: Off".into()
-                },
-                icon: Some("D"),
-                action: crate::actions::TermWmAction::ToggleDirectMode,
-                disabled: false,
-            },
         ];
 
-        let has_focused_window = self.window_count() > 0;
-        if has_focused_window {
+        let focused = self.focused_window();
+        let has_active = self.windows.contains_key(focused);
+
+        items.push(MenuItem {
+            label: {
+                let on = has_active && self.direct_mode(focused);
+                format!("Toggle Direct Mode: {}", if on { "On" } else { "Off" }).into()
+            },
+            icon: Some("D"),
+            action: crate::actions::TermWmAction::ToggleDirectMode(focused),
+            disabled: !has_active,
+        });
+
+        if has_active {
             // Window management buttons from centralized list
             for btn in self.window_management_buttons() {
                 items.push(MenuItem {
@@ -2605,7 +2602,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 });
             }
             // Switch-to navigation for all windows
-            let focused = *self.focus.current();
             for (key, title) in self.window_titles() {
                 items.push(MenuItem {
                     label: format!("Switch to: {}", title).into(),
@@ -2615,6 +2611,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 });
             }
         }
+
         items
     }
 }

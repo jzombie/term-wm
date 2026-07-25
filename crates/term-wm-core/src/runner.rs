@@ -438,23 +438,19 @@ where
                             TermWmAction::Quit | TermWmAction::ExitUi => {
                                 app.open_exit_confirm();
                             }
-                            TermWmAction::CloseWindow => {
-                                let id = app.wm().focused_window();
+                            TermWmAction::CloseWindow(id) => {
                                 app.wm().close_window(id);
                             }
                             TermWmAction::NewWindow => {
                                 app.wm_new_window()?;
                             }
-                            TermWmAction::MinimizeWindow => {
-                                let id = app.wm().focused_window();
+                            TermWmAction::MinimizeWindow(id) => {
                                 app.wm().minimize_window(id);
                             }
-                            TermWmAction::MaximizeWindow => {
-                                let id = app.wm().focused_window();
+                            TermWmAction::MaximizeWindow(id) => {
                                 app.wm().toggle_maximize(id);
                             }
-                            TermWmAction::ToggleDirectMode => {
-                                let id = app.wm().focused_window();
+                            TermWmAction::ToggleDirectMode(id) => {
                                 app.wm().toggle_direct_mode(id);
                             }
                             TermWmAction::ToggleMonocle => {

@@ -381,7 +381,7 @@ mod tests {
             MenuItem {
                 icon: None,
                 label: "Close".into(),
-                action: TermWmAction::CloseWindow,
+                action: TermWmAction::CloseWindow(Default::default()),
                 disabled: false,
             },
         ]);
@@ -434,7 +434,7 @@ mod tests {
             MenuItem {
                 icon: None,
                 label: "Disabled".into(),
-                action: TermWmAction::CloseWindow,
+                action: TermWmAction::CloseWindow(Default::default()),
                 disabled: true,
             },
         ]);

@@ -457,7 +457,7 @@ mod tests {
                 stable_id: "core:close_window".to_string(),
                 display_name: "Close Window".to_string(),
                 description: String::new(),
-                action: TermWmAction::CloseWindow,
+                action: TermWmAction::CloseWindow(WindowKey::default()),
                 icon: Some("x"),
                 disabled: false,
             },

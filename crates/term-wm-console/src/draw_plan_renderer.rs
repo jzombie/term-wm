@@ -163,9 +163,9 @@ fn register_window_chrome_hitboxes(registry: &mut HitboxRegistry, params: &Chrom
                 bx.saturating_sub(CHROME_BUTTON_FLOAT_OFFSET)
             };
             let target = match btn.action {
-                TermWmAction::CloseWindow => ChromeTarget::CloseButton(*key),
-                TermWmAction::MaximizeWindow => ChromeTarget::MaximizeButton(*key),
-                TermWmAction::MinimizeWindow => ChromeTarget::MinimizeButton(*key),
+                TermWmAction::CloseWindow(..) => ChromeTarget::CloseButton(*key),
+                TermWmAction::MaximizeWindow(..) => ChromeTarget::MaximizeButton(*key),
+                TermWmAction::MinimizeWindow(..) => ChromeTarget::MinimizeButton(*key),
                 _ => continue,
             };
             registry.register(
@@ -1199,17 +1199,21 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
                 let cell = &mut buffer.content[rel_y * buf_w + rel_x];
                 cell.set_symbol(btn.symbol);
                 let stoplight_fg = match btn.action {
-                    TermWmAction::CloseWindow => theme.error.to_ratatui(),
-                    TermWmAction::MinimizeWindow => theme.warning.to_ratatui(),
-                    TermWmAction::MaximizeWindow => theme.accent.to_ratatui(),
+                    TermWmAction::CloseWindow(..) => theme.error.to_ratatui(),
+                    TermWmAction::MinimizeWindow(..) => theme.warning.to_ratatui(),
+                    TermWmAction::MaximizeWindow(..) => theme.accent.to_ratatui(),
                     _ => theme.decorator_header_fg.to_ratatui(),
                 };
                 let is_hovered = hover_pos == Some((bx, header_y));
                 let style = if is_hovered {
                     let (hover_bg, hover_fg) = match btn.action {
-                        TermWmAction::CloseWindow => (theme.error.to_ratatui(), contrast_fg),
-                        TermWmAction::MinimizeWindow => (theme.warning.to_ratatui(), contrast_fg),
-                        TermWmAction::MaximizeWindow => (theme.accent.to_ratatui(), contrast_fg),
+                        TermWmAction::CloseWindow(..) => (theme.error.to_ratatui(), contrast_fg),
+                        TermWmAction::MinimizeWindow(..) => {
+                            (theme.warning.to_ratatui(), contrast_fg)
+                        }
+                        TermWmAction::MaximizeWindow(..) => {
+                            (theme.accent.to_ratatui(), contrast_fg)
+                        }
                         _ => (theme.accent_alt.to_ratatui(), contrast_fg),
                     };
                     Style::default()
@@ -1913,17 +1917,17 @@ mod tests {
     fn test_wm_buttons() -> Vec<WmButton> {
         vec![
             WmButton {
-                action: TermWmAction::CloseWindow,
+                action: TermWmAction::CloseWindow(Default::default()),
                 label: "Close Window",
                 symbol: "X",
             },
             WmButton {
-                action: TermWmAction::MaximizeWindow,
+                action: TermWmAction::MaximizeWindow(Default::default()),
                 label: "Maximize Window",
                 symbol: "▢",
             },
             WmButton {
-                action: TermWmAction::MinimizeWindow,
+                action: TermWmAction::MinimizeWindow(Default::default()),
                 label: "Minimize Window",
                 symbol: "_",
             },
