@@ -43,14 +43,18 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     pub fn focus_app_window(&mut self, key: WindowKey) {
-        self.focus.set_current(key);
-        self.bring_to_front_key(key);
-        self.mark_layout_dirty();
+        self.focus_window_key(key);
     }
 
     pub fn focus_window_key(&mut self, key: WindowKey) {
-        // Focus shifts must not mutate geometry — maximized floating windows
-        // retain their size regardless of Z-order changes.
+        // If the currently focused window is maximized and we are switching to
+        // a different window, unmaximize it so the target window is not hidden
+        // behind the full-area floating overlay.
+        let prev_focus = *self.focus.current();
+        if prev_focus != key && self.window(prev_focus).is_some_and(|w| w.is_maximized) {
+            self.toggle_maximize(prev_focus);
+        }
+
         self.focus.set_current(key);
         self.bring_to_front_key(key);
         self.mark_layout_dirty();
@@ -174,8 +178,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                                 &self.managed_draw_order,
                             );
                             if let Some(key) = hit {
-                                self.focus.set_current(key);
-                                self.bring_floating_to_front_key(key);
+                                self.focus_window_key(key);
                                 return true;
                             }
                             return false;
@@ -183,10 +186,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                         let hit =
                             self.hit_test_region(mouse.column, mouse.row, &self.managed_draw_order);
                         if let Some(hit) = hit {
-                            self.focus.set_current(hit);
-                            if self.config.wm_command_menu_enabled {
-                                self.bring_floating_to_front_key(hit);
-                            }
+                            self.focus_window_key(hit);
                             true
                         } else {
                             false

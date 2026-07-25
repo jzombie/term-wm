@@ -3028,6 +3028,112 @@ mod tests {
     }
 
     #[test]
+    fn maximize_tiled_then_focus_other_unmaximizes_and_retiles() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+        for &k in &keys {
+            wm.transition_window(k, crate::window::entry::WindowState::Mapped);
+        }
+        // Two-window horizontal tiling layout.
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.managed_layout = Some(TilingLayout::new(split));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        // Focus keys[0] explicitly — last-created window is default focus
+        wm.focus_window_key(keys[0]);
+        assert!(!wm.is_window_floating(keys[0]), "starts tiled");
+        assert_eq!(wm.focused_window(), keys[0]);
+
+        // Maximize the tiled window
+        wm.toggle_maximize(keys[0]);
+        assert!(wm.windows.get(keys[0]).unwrap().is_maximized, "is_maximized set");
+
+        // Focus the other tiled window → triggers auto-unmaximize
+        wm.focus_window_key(keys[1]);
+        assert_eq!(wm.focused_window(), keys[1]);
+
+        // Original window should be unmaximized and back in the tiling layout
+        let w0 = wm.windows.get(keys[0]).unwrap();
+        assert!(!w0.is_maximized, "should no longer be maximized");
+        assert!(!w0.is_floating(), "should be tiled (not floating)");
+        assert!(
+            wm.managed_layout
+                .as_ref()
+                .is_some_and(|l| l.root().subtree_any(|k| k == keys[0])),
+            "should be in tiling layout"
+        );
+    }
+
+    #[test]
+    fn maximize_floating_then_focus_other_unmaximizes_and_refloats() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        use crate::window::{FloatRect, FloatRectSpec};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+        for &k in &keys {
+            wm.transition_window(k, crate::window::entry::WindowState::Mapped);
+        }
+        // Single-leaf tiling layout so register_managed_layout works
+        wm.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(keys[1])));
+        // Make keys[0] floating at a known position
+        let float_rect = FloatRectSpec::Absolute(FloatRect {
+            x: 10,
+            y: 5,
+            width: 30,
+            height: 15,
+        });
+        wm.set_floating_rect(keys[0], Some(float_rect));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        // Focus keys[0] (floating)
+        wm.focus_window_key(keys[0]);
+        assert!(wm.is_window_floating(keys[0]), "starts floating");
+
+        // Maximize the floating window
+        wm.toggle_maximize(keys[0]);
+        assert!(wm.windows.get(keys[0]).unwrap().is_maximized, "is_maximized set");
+
+        // Focus the tiled window → triggers auto-unmaximize
+        wm.focus_window_key(keys[1]);
+        assert_eq!(wm.focused_window(), keys[1]);
+
+        // Original window should be unmaximized and still floating at its
+        // pre-maximize position
+        let w0 = wm.windows.get(keys[0]).unwrap();
+        assert!(!w0.is_maximized, "should no longer be maximized");
+        assert!(w0.is_floating(), "should remain floating (not tiled)");
+        // Its floating rect should be the original pre-maximize rect
+        let restored = wm.floating_rect(keys[0]);
+        assert_eq!(restored, Some(float_rect), "floating rect restored");
+    }
+
+    #[test]
     fn minimize_and_restore_preserves_floating_rect() {
         use crate::window::{FloatRect, FloatRectSpec};
         let mut wm = WindowManager::<TestComponent>::with_config(
