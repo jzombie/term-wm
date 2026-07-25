@@ -1,12 +1,15 @@
-// NOTE: This file provides `KeyboardNormalizer`, a lightweight helper for
-// normalizing raw keyboard `Event`s (e.g., filtering key-release events).
-// The BackTab → Tab+shift conversion is handled centrally in
-// `term-wm-crossterm-adapter` so that all input sources apply the same
-// normalization. Shift+Tab passes through here unchanged — the FocusPrev
-// keybinding matches Tab+Shift directly.
-// The actual input driver behavior (queueing, `next_key`, and
-// combined keyboard/mouse handling) is implemented in
-// `src/io/console_event_source.rs` under the consolidated `EventSource` trait.
+// NOTE: `KeyboardNormalizer` enforces domain-specific event invariants (e.g., stripping
+// `KeyKind::Release` events).
+//
+// ARCHITECTURAL BOUNDARY: This logic resides in the core domain rather than the infrastructure
+// adapter (`term-wm-crossterm-adapter`) by design. The adapter is an Anti-Corruption Layer
+// strictly responsible for 1-to-1 mapping of foreign I/O types (`crossterm::event`) into
+// pure domain types (`term_wm_core::events::Event`).
+//
+// This normalizer applies business logic to those resulting domain types. Decoupling this
+// from the I/O layer guarantees consistent terminal state transitions regardless of the
+// event source (e.g., local crossterm polling, remote muxio IPC clients, or headless test mocks).
+
 #[allow(unused_imports)]
 use crate::events::{Event, KeyCode, KeyKind};
 
