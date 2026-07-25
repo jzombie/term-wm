@@ -1,6 +1,7 @@
 use super::WindowManager;
 use crate::actions::TermWmAction;
 use crate::components::{Component, Overlay, WmComponent};
+use crate::layout::LayoutNode;
 use crate::window::WindowKey;
 use crate::window::entry::{ClosePolicy, WindowState};
 
@@ -15,55 +16,57 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     pub fn toggle_maximize(&mut self, key: WindowKey) {
         use crate::window::FloatRectSpec;
+
+        let is_maxed = self.window(key).is_some_and(|w| w.is_maximized);
+
+        if is_maxed {
+            // UNMAXIMIZE PATH
+            let prev_float = self.take_prev_floating_rect(key);
+            if let Some(prev_spec) = prev_float {
+                // Was floating: restore pre-maximize floating rect
+                self.set_floating_rect(key, Some(prev_spec));
+            } else {
+                // Was tiled: restore Void → Leaf in layout tree
+                self.clear_floating_rect(key);
+                let void_id = self.window(key).and_then(|w| w.void_id);
+                if let Some(vid) = void_id
+                    && let Some(ref mut layout) = self.managed_layout
+                {
+                    layout.replace_void_by_id(vid, LayoutNode::leaf(key));
+                }
+            }
+
+            if let Some(w) = self.windows.get_mut(key) {
+                w.is_maximized = false;
+                w.borders_enabled = true;
+                w.void_id = None;
+            }
+            self.bring_floating_to_front_key(key);
+            return;
+        }
+
+        // MAXIMIZE PATH
         let full = FloatRectSpec::Absolute(crate::window::FloatRect {
             x: self.managed_area.x,
             y: self.managed_area.y,
             width: self.managed_area.width,
             height: self.managed_area.height,
         });
+
         if let Some(current) = self.floating_rect(key) {
-            if current == full {
-                // Unmaximize: restore previous geometry
-                if let Some(prev) = self.take_prev_floating_rect(key) {
-                    self.set_floating_rect(key, Some(prev));
-                }
-                if let Some(w) = self.windows.get_mut(key) {
-                    w.is_maximized = false;
-                    w.borders_enabled = true;
-                }
-            } else {
-                // Maximize: save current and expand
-                self.set_prev_floating_rect(key, Some(current));
-                self.set_floating_rect(key, Some(full));
-                if let Some(w) = self.windows.get_mut(key) {
-                    w.is_maximized = true;
-                    w.borders_enabled = false;
-                }
-            }
-            self.bring_floating_to_front_key(key);
-            return;
-        }
-        // Tiled window → detach and maximize
-        let prev_rect = if let Some(rect) = self.regions.get(key) {
-            FloatRectSpec::Absolute(crate::window::FloatRect {
-                x: rect.x,
-                y: rect.y,
-                width: rect.width,
-                height: rect.height,
-            })
+            // Was floating: save current floating rect to prev_floating_rect
+            self.set_prev_floating_rect(key, Some(current));
         } else {
-            FloatRectSpec::Percent {
-                x: 0,
-                y: 0,
-                width: 100,
-                height: 100,
+            // Was tiled: replace Leaf with Void in-place, preserving tree
+            if let Some(ref mut layout) = self.managed_layout
+                && let Some(void_id) = layout.replace_leaf_with_void(key)
+                && let Some(w) = self.windows.get_mut(key)
+            {
+                w.void_id = Some(void_id);
             }
-        };
+            self.set_prev_floating_rect(key, None);
+        }
 
-        // Purge from tiling tree before expanding to floating full-screen
-        self.detach_from_tiling_layout(key);
-
-        self.set_prev_floating_rect(key, Some(prev_rect));
         self.set_floating_rect(key, Some(full));
         if let Some(w) = self.windows.get_mut(key) {
             w.is_maximized = true;

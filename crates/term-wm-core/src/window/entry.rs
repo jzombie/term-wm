@@ -41,6 +41,10 @@ pub struct Window {
     /// Decoupled maximization state flag.  Set when the window is maximized,
     /// cleared when restored.  Must NOT be derived from geometry comparison.
     pub is_maximized: bool,
+    /// Non-None when this window has a Void placeholder in the tiling layout
+    /// tree (maximized while tiled). The void preserves the tree position and
+    /// split weights so the window can be restored to its exact original spot.
+    pub void_id: Option<usize>,
     /// Render window borders (left, right, bottom, corners).
     pub borders_enabled: bool,
     /// Render window header (title bar, buttons).
@@ -68,6 +72,7 @@ impl Window {
             creation_order,
             direct_mode: false,
             is_maximized: false,
+            void_id: None,
             borders_enabled: true,
             header_enabled: true,
             component_key,

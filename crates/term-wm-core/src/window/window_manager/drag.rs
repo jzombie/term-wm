@@ -398,6 +398,11 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Succeeds when:
     /// - No active tiling layout AND all existing windows are floating (or workspace empty)
     pub fn try_spawn_floating_default(&mut self, key: WindowKey) -> bool {
+        // If a tiling layout exists, the workspace is in Tiling Mode.
+        // New windows must go through the tiling insertion path.
+        if self.managed_layout.is_some() {
+            return false;
+        }
         let existing: Vec<_> = self
             .mapped_windows()
             .into_iter()
@@ -406,7 +411,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         if existing.is_empty() || !existing.iter().all(|k| self.is_window_floating(*k)) {
             return false;
         }
-        self.managed_layout = None;
         let rect = self.default_cascading_rect(existing.len());
         self.set_floating_rect(
             key,
@@ -419,7 +423,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 },
             )),
         );
-        self.focus_window_key(key);
         self.bifurcate_draw_order();
         true
     }
