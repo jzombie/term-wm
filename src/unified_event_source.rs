@@ -469,6 +469,17 @@ mod tests {
     use super::*;
     use crate::events::{KeyCode, KeyKind, KeyModifiers};
 
+    #[test]
+    fn test_translate_crossterm_event_drops_unsupported_keys() {
+        let caps_lock = crossterm::event::Event::Key(crossterm::event::KeyEvent {
+            code: crossterm::event::KeyCode::CapsLock,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        });
+        assert!(translate_crossterm_event(caps_lock).is_none());
+    }
+
     /// Input events drained by `drain_pending` must be preserved in
     /// `input_buffer` so `poll()/read()` can process every event.
     #[test]
