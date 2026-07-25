@@ -3152,7 +3152,9 @@ mod tests {
             std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 2);
-        for &k in &keys { wm.transition_window(k, WindowState::Mapped); }
+        for &k in &keys {
+            wm.transition_window(k, WindowState::Mapped);
+        }
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
@@ -3160,7 +3162,12 @@ mod tests {
             resizable: true,
         };
         wm.managed_layout = Some(TilingLayout::new(split));
-        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
         wm.focus_window_key(keys[0]);
 
         // Record original region for position check
@@ -3179,7 +3186,9 @@ mod tests {
         assert!(!w0.is_floating(), "not floating");
         // Should be back in tree at original position
         assert!(
-            wm.managed_layout.as_ref().is_some_and(|l| l.root().subtree_any(|k| k == keys[0])),
+            wm.managed_layout
+                .as_ref()
+                .is_some_and(|l| l.root().subtree_any(|k| k == keys[0])),
             "back in tree"
         );
         let restored = wm.region(keys[0]);
@@ -3199,15 +3208,25 @@ mod tests {
         let keys = make_keys(&mut wm, 1);
         wm.transition_window(keys[0], WindowState::Mapped);
         wm.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(keys[0])));
-        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
         wm.focus_window_key(keys[0]);
 
         wm.toggle_maximize(keys[0]);
         let w0 = wm.windows.get(keys[0]).unwrap();
-        assert!(w0.void_id.is_some(), "void_id set after maximizing tiled window");
+        assert!(
+            w0.void_id.is_some(),
+            "void_id set after maximizing tiled window"
+        );
         // Tree should contain a Void, not a Leaf(keys[0])
         assert!(
-            !wm.managed_layout.as_ref().is_some_and(|l| l.root().subtree_any(|k| k == keys[0])),
+            !wm.managed_layout
+                .as_ref()
+                .is_some_and(|l| l.root().subtree_any(|k| k == keys[0])),
             "leaf replaced by void in tree"
         );
     }
@@ -3226,9 +3245,19 @@ mod tests {
         );
         let keys = make_keys(&mut wm, 1);
         wm.transition_window(keys[0], WindowState::Mapped);
-        let float_rect = FloatRectSpec::Absolute(FloatRect { x: 10, y: 5, width: 30, height: 15 });
+        let float_rect = FloatRectSpec::Absolute(FloatRect {
+            x: 10,
+            y: 5,
+            width: 30,
+            height: 15,
+        });
         wm.set_floating_rect(keys[0], Some(float_rect));
-        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
         wm.focus_window_key(keys[0]);
 
         // Maximize floating window
@@ -3259,7 +3288,9 @@ mod tests {
             std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 2);
-        for &k in &keys { wm.transition_window(k, WindowState::Mapped); }
+        for &k in &keys {
+            wm.transition_window(k, WindowState::Mapped);
+        }
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
@@ -3267,7 +3298,12 @@ mod tests {
             resizable: true,
         };
         wm.managed_layout = Some(TilingLayout::new(split));
-        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
         wm.focus_window_key(keys[0]);
 
         // Maximize keys[0], then advance focus to keys[1]
@@ -3292,7 +3328,9 @@ mod tests {
             std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 2);
-        for &k in &keys { wm.transition_window(k, WindowState::Mapped); }
+        for &k in &keys {
+            wm.transition_window(k, WindowState::Mapped);
+        }
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
@@ -3300,7 +3338,12 @@ mod tests {
             resizable: true,
         };
         wm.managed_layout = Some(TilingLayout::new(split));
-        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
         wm.focus_window_key(keys[0]);
 
         // Maximize keys[0], then simulate mouse click on keys[1]'s region
@@ -3308,7 +3351,11 @@ mod tests {
         let r1 = wm.region(keys[1]);
         wm.handle_mouse_focus_click(r1.x as u16, r1.y as u16);
 
-        assert_eq!(wm.focused_window(), keys[1], "focus moved to clicked window");
+        assert_eq!(
+            wm.focused_window(),
+            keys[1],
+            "focus moved to clicked window"
+        );
         assert!(
             !wm.windows.get(keys[0]).unwrap().is_maximized,
             "keys[0] unmaximized by mouse click"
@@ -3330,19 +3377,30 @@ mod tests {
         let keys = make_keys(&mut wm, 1);
         wm.transition_window(keys[0], WindowState::Mapped);
         wm.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(keys[0])));
-        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
         wm.focus_window_key(keys[0]);
 
         wm.toggle_maximize(keys[0]);
         assert!(wm.windows.get(keys[0]).unwrap().is_maximized);
         // Tree should be Void (single leaf replaced)
-        assert!(matches!(wm.managed_layout.as_ref().unwrap().root(), LayoutNode::Void(_)));
+        assert!(matches!(
+            wm.managed_layout.as_ref().unwrap().root(),
+            LayoutNode::Void(_)
+        ));
 
         wm.toggle_maximize(keys[0]);
         let w0 = wm.windows.get(keys[0]).unwrap();
         assert!(!w0.is_maximized, "unmaximized");
         // Back to a leaf at root
-        assert_eq!(wm.managed_layout.as_ref().unwrap().root().unwrap_leaf(), Some(keys[0]));
+        assert_eq!(
+            wm.managed_layout.as_ref().unwrap().root().unwrap_leaf(),
+            Some(keys[0])
+        );
     }
 
     #[test]
@@ -3356,7 +3414,9 @@ mod tests {
             std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 3);
-        for &k in &keys { wm.transition_window(k, WindowState::Mapped); }
+        for &k in &keys {
+            wm.transition_window(k, WindowState::Mapped);
+        }
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![
@@ -3368,7 +3428,12 @@ mod tests {
             resizable: true,
         };
         wm.managed_layout = Some(TilingLayout::new(split));
-        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
         wm.focus_window_key(keys[1]);
 
         // Maximize middle window
@@ -3376,7 +3441,11 @@ mod tests {
         assert!(wm.windows.get(keys[1]).unwrap().is_maximized);
         // Other windows still in tree
         let leaves: Vec<_> = wm.managed_layout.as_ref().unwrap().root().collect_leaves();
-        assert_eq!(leaves, vec![keys[0], keys[2]], "other windows still in tree");
+        assert_eq!(
+            leaves,
+            vec![keys[0], keys[2]],
+            "other windows still in tree"
+        );
         // 3 children still (void preserves position)
         if let LayoutNode::Split { children, .. } = wm.managed_layout.as_ref().unwrap().root() {
             assert_eq!(children.len(), 3, "void placeholder preserves split slot");
@@ -3396,7 +3465,9 @@ mod tests {
             std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 2);
-        for &k in &keys { wm.transition_window(k, WindowState::Mapped); }
+        for &k in &keys {
+            wm.transition_window(k, WindowState::Mapped);
+        }
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
@@ -3404,7 +3475,12 @@ mod tests {
             resizable: true,
         };
         wm.managed_layout = Some(TilingLayout::new(split));
-        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
         wm.focus_window_key(keys[0]);
 
         wm.toggle_maximize(keys[0]);
@@ -3416,7 +3492,10 @@ mod tests {
         assert_eq!(wm.window_state(keys[0]), Some(WindowState::Mapped));
 
         // Still maximized after restore
-        assert!(wm.windows.get(keys[0]).unwrap().is_maximized, "still maximized");
+        assert!(
+            wm.windows.get(keys[0]).unwrap().is_maximized,
+            "still maximized"
+        );
     }
 
     // ── No-op safety ──────────────────────────────────────────────────
@@ -3434,13 +3513,21 @@ mod tests {
         let keys = make_keys(&mut wm, 1);
         wm.transition_window(keys[0], WindowState::Mapped);
         wm.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(keys[0])));
-        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
         wm.focus_window_key(keys[0]);
 
         wm.toggle_maximize(keys[0]); // maximize
         wm.toggle_maximize(keys[0]); // unmaximize
         wm.toggle_maximize(keys[0]); // maximize again
-        assert!(wm.windows.get(keys[0]).unwrap().is_maximized, "can re-maximize");
+        assert!(
+            wm.windows.get(keys[0]).unwrap().is_maximized,
+            "can re-maximize"
+        );
     }
 
     #[test]
@@ -3456,7 +3543,12 @@ mod tests {
         let keys = make_keys(&mut wm, 1);
         wm.transition_window(keys[0], WindowState::Mapped);
         wm.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(keys[0])));
-        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
         wm.focus_window_key(keys[0]);
 
         wm.toggle_maximize(keys[0]);
@@ -3482,7 +3574,9 @@ mod tests {
             std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 2);
-        for &k in &keys { wm.transition_window(k, WindowState::Mapped); }
+        for &k in &keys {
+            wm.transition_window(k, WindowState::Mapped);
+        }
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
@@ -3490,7 +3584,12 @@ mod tests {
             resizable: true,
         };
         wm.managed_layout = Some(TilingLayout::new(split));
-        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
 
         wm.toggle_maximize(keys[0]);
 
@@ -3515,9 +3614,19 @@ mod tests {
         );
         let keys = make_keys(&mut wm, 1);
         wm.transition_window(keys[0], WindowState::Mapped);
-        let float_rect = FloatRectSpec::Absolute(FloatRect { x: 10, y: 5, width: 30, height: 15 });
+        let float_rect = FloatRectSpec::Absolute(FloatRect {
+            x: 10,
+            y: 5,
+            width: 30,
+            height: 15,
+        });
         wm.set_floating_rect(keys[0], Some(float_rect));
-        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
 
         // Maximize floating, then close
         wm.toggle_maximize(keys[0]);
@@ -3536,7 +3645,9 @@ mod tests {
             std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 2);
-        for &k in &keys { wm.transition_window(k, WindowState::Mapped); }
+        for &k in &keys {
+            wm.transition_window(k, WindowState::Mapped);
+        }
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
@@ -3544,7 +3655,12 @@ mod tests {
             resizable: true,
         };
         wm.managed_layout = Some(TilingLayout::new(split));
-        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
 
         wm.toggle_maximize(keys[0]);
 
@@ -3554,7 +3670,10 @@ mod tests {
         // Void should be removed from tree
         let leaves: Vec<_> = wm.managed_layout.as_ref().unwrap().root().collect_leaves();
         assert_eq!(leaves, vec![keys[1]], "only remaining window in tree");
-        assert!(wm.windows.get(keys[0]).unwrap().void_id.is_none(), "void_id cleared");
+        assert!(
+            wm.windows.get(keys[0]).unwrap().void_id.is_none(),
+            "void_id cleared"
+        );
     }
 
     #[test]

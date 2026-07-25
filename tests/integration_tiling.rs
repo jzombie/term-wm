@@ -1797,7 +1797,10 @@ mod floating_tiled_separation {
 
         // Should be maximized (floating with full-area rect via the void path)
         let panes = wm.floating_panes();
-        let (_, spec) = panes.iter().find(|(k, _)| *k == keys[0]).expect("window in floating");
+        let (_, spec) = panes
+            .iter()
+            .find(|(k, _)| *k == keys[0])
+            .expect("window in floating");
         if let term_wm::window::FloatRectSpec::Absolute(rect) = spec {
             assert_eq!(rect.width, AREA.width, "maximized width");
             assert_eq!(rect.height, AREA.height, "maximized height");

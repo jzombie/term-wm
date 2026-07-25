@@ -1870,7 +1870,11 @@ mod tests {
     fn replace_leaf_with_void_nested_split() {
         let mut node = LayoutNode::Split {
             direction: Direction::Horizontal,
-            children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2), LayoutNode::leaf(3)],
+            children: vec![
+                LayoutNode::leaf(1),
+                LayoutNode::leaf(2),
+                LayoutNode::leaf(3),
+            ],
             weights: vec![1u16, 1u16, 1u16],
             resizable: true,
         };
@@ -1880,7 +1884,10 @@ mod tests {
         let leaves = node.collect_leaves();
         assert_eq!(leaves, vec![1, 3], "leaf 2 removed from tree");
         // Weights should be preserved (3 weights still, the void is a child)
-        if let LayoutNode::Split { children, weights, .. } = &node {
+        if let LayoutNode::Split {
+            children, weights, ..
+        } = &node
+        {
             assert_eq!(children.len(), 3, "void placeholder preserved");
             assert_eq!(weights.len(), 3, "weights preserved");
         } else {
@@ -1910,7 +1917,11 @@ mod tests {
     fn remove_void_by_id_nested() {
         let mut node = LayoutNode::Split {
             direction: Direction::Horizontal,
-            children: vec![LayoutNode::leaf(1), LayoutNode::Void(99), LayoutNode::leaf(3)],
+            children: vec![
+                LayoutNode::leaf(1),
+                LayoutNode::Void(99),
+                LayoutNode::leaf(3),
+            ],
             weights: vec![1u16, 1u16, 1u16],
             resizable: true,
         };
@@ -1945,7 +1956,11 @@ mod tests {
         };
         assert!(node.remove_void_by_id(99), "deeply nested void removed");
         let leaves = node.collect_leaves();
-        assert_eq!(leaves, vec![1, 2], "remaining leaves preserved after deep removal");
+        assert_eq!(
+            leaves,
+            vec![1, 2],
+            "remaining leaves preserved after deep removal"
+        );
     }
 
     // ── Void placeholder preserves layout ─────────────────────────────
@@ -1971,7 +1986,11 @@ mod tests {
     fn void_placeholder_preserves_weights() {
         let mut node = LayoutNode::Split {
             direction: Direction::Horizontal,
-            children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2), LayoutNode::leaf(3)],
+            children: vec![
+                LayoutNode::leaf(1),
+                LayoutNode::leaf(2),
+                LayoutNode::leaf(3),
+            ],
             weights: vec![2u16, 3u16, 5u16],
             resizable: true,
         };
