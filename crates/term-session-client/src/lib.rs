@@ -10,7 +10,6 @@ use std::time::Duration;
 
 use crossterm::QueueableCommand;
 use crossterm::cursor::{Hide, Show};
-use crossterm::event as crossterm_event;
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -21,10 +20,10 @@ use portable_pty::PtySize;
 use term_session_muxio_service_definitions::{
     STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
 };
-use term_wm_core::events::{Event, KeyKind, MouseEventKind};
+use term_wm_core::events::{Event, KeyKind};
 use term_wm_pty_engine::Pane;
 use term_wm_pty_engine::clipboard::{Clipboard, Osc52Extractor};
-use term_wm_pty_engine::input_encoding::{key_to_bytes, mouse_event_to_bytes};
+use term_wm_pty_engine::input_encoding::mouse_event_to_bytes;
 use term_wm_pty_engine::signal::install_sigint_handler;
 use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
@@ -137,105 +136,7 @@ impl<W: Write> Drop for TerminalGuard<W> {
 
 /// Convert a crossterm event into a core Event for use in the event-driven loop.
 fn convert_crossterm_event(evt: crossterm::event::Event) -> Option<Event> {
-    use term_wm_core::events::KeyCode;
-    match evt {
-        crossterm_event::Event::Key(key) => Some(Event::Key(term_wm_core::events::KeyEvent {
-            code: match key.code {
-                crossterm_event::KeyCode::Char(c) => KeyCode::Char(c),
-                crossterm_event::KeyCode::Enter => KeyCode::Enter,
-                crossterm_event::KeyCode::Tab => KeyCode::Tab,
-                crossterm_event::KeyCode::Backspace => KeyCode::Backspace,
-                crossterm_event::KeyCode::Esc => KeyCode::Esc,
-                crossterm_event::KeyCode::Left => KeyCode::Left,
-                crossterm_event::KeyCode::Right => KeyCode::Right,
-                crossterm_event::KeyCode::Up => KeyCode::Up,
-                crossterm_event::KeyCode::Down => KeyCode::Down,
-                crossterm_event::KeyCode::Home => KeyCode::Home,
-                crossterm_event::KeyCode::End => KeyCode::End,
-                crossterm_event::KeyCode::PageUp => KeyCode::PageUp,
-                crossterm_event::KeyCode::PageDown => KeyCode::PageDown,
-                crossterm_event::KeyCode::Delete => KeyCode::Delete,
-                crossterm_event::KeyCode::Insert => KeyCode::Insert,
-                crossterm_event::KeyCode::F(n) => KeyCode::F(n),
-                _ => return None,
-            },
-            modifiers: term_wm_core::events::KeyModifiers {
-                shift: key.modifiers.contains(crossterm_event::KeyModifiers::SHIFT),
-                control: key
-                    .modifiers
-                    .contains(crossterm_event::KeyModifiers::CONTROL),
-                alt: key.modifiers.contains(crossterm_event::KeyModifiers::ALT),
-            },
-            kind: match key.kind {
-                crossterm_event::KeyEventKind::Press => KeyKind::Press,
-                crossterm_event::KeyEventKind::Repeat => KeyKind::Repeat,
-                crossterm_event::KeyEventKind::Release => KeyKind::Release,
-            },
-        })),
-        crossterm_event::Event::Mouse(mouse) => {
-            Some(Event::Mouse(term_wm_core::events::MouseEvent {
-                kind: match mouse.kind {
-                    crossterm_event::MouseEventKind::Down(btn) => {
-                        MouseEventKind::Press(match btn {
-                            crossterm_event::MouseButton::Left => {
-                                term_wm_core::events::MouseButton::Left
-                            }
-                            crossterm_event::MouseButton::Right => {
-                                term_wm_core::events::MouseButton::Right
-                            }
-                            crossterm_event::MouseButton::Middle => {
-                                term_wm_core::events::MouseButton::Middle
-                            }
-                        })
-                    }
-                    crossterm_event::MouseEventKind::Up(btn) => {
-                        MouseEventKind::Release(match btn {
-                            crossterm_event::MouseButton::Left => {
-                                term_wm_core::events::MouseButton::Left
-                            }
-                            crossterm_event::MouseButton::Right => {
-                                term_wm_core::events::MouseButton::Right
-                            }
-                            crossterm_event::MouseButton::Middle => {
-                                term_wm_core::events::MouseButton::Middle
-                            }
-                        })
-                    }
-                    crossterm_event::MouseEventKind::Drag(btn) => MouseEventKind::Drag(match btn {
-                        crossterm_event::MouseButton::Left => {
-                            term_wm_core::events::MouseButton::Left
-                        }
-                        crossterm_event::MouseButton::Right => {
-                            term_wm_core::events::MouseButton::Right
-                        }
-                        crossterm_event::MouseButton::Middle => {
-                            term_wm_core::events::MouseButton::Middle
-                        }
-                    }),
-                    crossterm_event::MouseEventKind::Moved => MouseEventKind::Moved,
-                    crossterm_event::MouseEventKind::ScrollUp => MouseEventKind::ScrollUp,
-                    crossterm_event::MouseEventKind::ScrollDown => MouseEventKind::ScrollDown,
-                    crossterm_event::MouseEventKind::ScrollLeft => MouseEventKind::ScrollLeft,
-                    crossterm_event::MouseEventKind::ScrollRight => MouseEventKind::ScrollRight,
-                },
-                modifiers: term_wm_core::events::KeyModifiers {
-                    shift: mouse
-                        .modifiers
-                        .contains(crossterm_event::KeyModifiers::SHIFT),
-                    control: mouse
-                        .modifiers
-                        .contains(crossterm_event::KeyModifiers::CONTROL),
-                    alt: mouse.modifiers.contains(crossterm_event::KeyModifiers::ALT),
-                },
-                column: mouse.column,
-                row: mouse.row,
-            }))
-        }
-        crossterm_event::Event::Resize(w, h) => Some(Event::Resize(w, h)),
-        crossterm_event::Event::FocusGained => Some(Event::FocusGained),
-        crossterm_event::Event::FocusLost => Some(Event::FocusLost),
-        crossterm_event::Event::Paste(text) => Some(Event::Paste(text)),
-    }
+    term_wm_crossterm_adapter::try_translate_event(evt)
 }
 
 /// Connect to a term-session-server and run the TUI viewer.
@@ -454,65 +355,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                 Event::Key(ref key)
                     if key.kind == KeyKind::Press || key.kind == KeyKind::Repeat =>
                 {
-                    let pty_key = term_wm_pty_engine::input_encoding::KeyEvent {
-                        code: match key.code {
-                            term_wm_core::events::KeyCode::Char(c) => {
-                                term_wm_pty_engine::input_encoding::KeyCode::Char(c)
-                            }
-                            term_wm_core::events::KeyCode::Enter => {
-                                term_wm_pty_engine::input_encoding::KeyCode::Enter
-                            }
-                            term_wm_core::events::KeyCode::Tab => {
-                                term_wm_pty_engine::input_encoding::KeyCode::Tab
-                            }
-                            term_wm_core::events::KeyCode::Backspace => {
-                                term_wm_pty_engine::input_encoding::KeyCode::Backspace
-                            }
-                            term_wm_core::events::KeyCode::Esc => {
-                                term_wm_pty_engine::input_encoding::KeyCode::Esc
-                            }
-                            term_wm_core::events::KeyCode::Left => {
-                                term_wm_pty_engine::input_encoding::KeyCode::Left
-                            }
-                            term_wm_core::events::KeyCode::Right => {
-                                term_wm_pty_engine::input_encoding::KeyCode::Right
-                            }
-                            term_wm_core::events::KeyCode::Up => {
-                                term_wm_pty_engine::input_encoding::KeyCode::Up
-                            }
-                            term_wm_core::events::KeyCode::Down => {
-                                term_wm_pty_engine::input_encoding::KeyCode::Down
-                            }
-                            term_wm_core::events::KeyCode::Home => {
-                                term_wm_pty_engine::input_encoding::KeyCode::Home
-                            }
-                            term_wm_core::events::KeyCode::End => {
-                                term_wm_pty_engine::input_encoding::KeyCode::End
-                            }
-                            term_wm_core::events::KeyCode::PageUp => {
-                                term_wm_pty_engine::input_encoding::KeyCode::PageUp
-                            }
-                            term_wm_core::events::KeyCode::PageDown => {
-                                term_wm_pty_engine::input_encoding::KeyCode::PageDown
-                            }
-                            term_wm_core::events::KeyCode::Delete => {
-                                term_wm_pty_engine::input_encoding::KeyCode::Delete
-                            }
-                            term_wm_core::events::KeyCode::Insert => {
-                                term_wm_pty_engine::input_encoding::KeyCode::Insert
-                            }
-                            term_wm_core::events::KeyCode::F(n) => {
-                                term_wm_pty_engine::input_encoding::KeyCode::F(n)
-                            }
-                            _ => continue,
-                        },
-                        modifiers: term_wm_pty_engine::input_encoding::KeyModifiers {
-                            shift: key.modifiers.shift,
-                            control: key.modifiers.control,
-                            alt: key.modifiers.alt,
-                        },
-                    };
-                    let bytes = key_to_bytes(&pty_key);
+                    let bytes = key.to_pty_bytes();
                     if !bytes.is_empty() {
                         let _ = pane.write_bytes(&bytes);
                     }
