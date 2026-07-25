@@ -21,7 +21,7 @@ use term_wm_core::utils::selectable_text::{
 };
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
-use term_wm_pty_engine::input_encoding::{key_to_bytes, mouse_event_allowed, mouse_event_to_bytes};
+use term_wm_pty_engine::input_encoding::{mouse_event_allowed, mouse_event_to_bytes};
 use term_wm_pty_engine::{Pane, PtyStatus};
 
 // This controls the scrollback buffer size in the vt100 parser.
@@ -125,37 +125,7 @@ impl Component<TermWmAction> for TerminalComponent {
                     };
                     return EventResult::Action(TermWmAction::Scroll(delta));
                 }
-                // TODO: Refactor?
-                // Convert core-owned KeyEvent to pty-engine KeyEvent for key_to_bytes
-                let pty_key = term_wm_pty_engine::input_encoding::KeyEvent {
-                    code: match key.code {
-                        KeyCode::Char(c) => term_wm_pty_engine::input_encoding::KeyCode::Char(c),
-                        KeyCode::Enter => term_wm_pty_engine::input_encoding::KeyCode::Enter,
-                        KeyCode::Tab => term_wm_pty_engine::input_encoding::KeyCode::Tab,
-                        KeyCode::Backspace => {
-                            term_wm_pty_engine::input_encoding::KeyCode::Backspace
-                        }
-                        KeyCode::Esc => term_wm_pty_engine::input_encoding::KeyCode::Esc,
-                        KeyCode::Left => term_wm_pty_engine::input_encoding::KeyCode::Left,
-                        KeyCode::Right => term_wm_pty_engine::input_encoding::KeyCode::Right,
-                        KeyCode::Up => term_wm_pty_engine::input_encoding::KeyCode::Up,
-                        KeyCode::Down => term_wm_pty_engine::input_encoding::KeyCode::Down,
-                        KeyCode::Home => term_wm_pty_engine::input_encoding::KeyCode::Home,
-                        KeyCode::End => term_wm_pty_engine::input_encoding::KeyCode::End,
-                        KeyCode::PageUp => term_wm_pty_engine::input_encoding::KeyCode::PageUp,
-                        KeyCode::PageDown => term_wm_pty_engine::input_encoding::KeyCode::PageDown,
-                        KeyCode::Delete => term_wm_pty_engine::input_encoding::KeyCode::Delete,
-                        KeyCode::Insert => term_wm_pty_engine::input_encoding::KeyCode::Insert,
-                        KeyCode::F(n) => term_wm_pty_engine::input_encoding::KeyCode::F(n),
-                        _ => return EventResult::Ignored, // Media keys not supported
-                    },
-                    modifiers: term_wm_pty_engine::input_encoding::KeyModifiers {
-                        shift: key.modifiers.shift,
-                        control: key.modifiers.control,
-                        alt: key.modifiers.alt,
-                    },
-                };
-                let bytes = key_to_bytes(&pty_key);
+                let bytes = key.to_pty_bytes();
                 if bytes.is_empty() {
                     return EventResult::Ignored;
                 }

@@ -22,6 +22,43 @@ impl KeyEvent {
             kind,
         }
     }
+
+    /// Serialize this key event to the byte sequence to send to a PTY.
+    /// Shift+Tab produces `\x1b[Z` (CSI backtab) per ANSI terminal standard.
+    pub fn to_pty_bytes(&self) -> Vec<u8> {
+        use term_wm_pty_engine::input_encoding::{self, key_to_bytes, KeyCode as PtyKeyCode, KeyModifiers as PtyKeyModifiers};
+        let pty_key = input_encoding::KeyEvent {
+            code: match self.code {
+                KeyCode::Char(c) => PtyKeyCode::Char(c),
+                KeyCode::Enter => PtyKeyCode::Enter,
+                KeyCode::Tab => PtyKeyCode::Tab,
+                KeyCode::Backspace => PtyKeyCode::Backspace,
+                KeyCode::Esc => PtyKeyCode::Esc,
+                KeyCode::Left => PtyKeyCode::Left,
+                KeyCode::Right => PtyKeyCode::Right,
+                KeyCode::Up => PtyKeyCode::Up,
+                KeyCode::Down => PtyKeyCode::Down,
+                KeyCode::Home => PtyKeyCode::Home,
+                KeyCode::End => PtyKeyCode::End,
+                KeyCode::PageUp => PtyKeyCode::PageUp,
+                KeyCode::PageDown => PtyKeyCode::PageDown,
+                KeyCode::Delete => PtyKeyCode::Delete,
+                KeyCode::Insert => PtyKeyCode::Insert,
+                KeyCode::F(n) => PtyKeyCode::F(n),
+                _ => return Vec::new(),
+            },
+            modifiers: PtyKeyModifiers {
+                shift: self.modifiers.shift,
+                control: self.modifiers.control,
+                alt: self.modifiers.alt,
+            },
+        };
+        if pty_key.code == PtyKeyCode::Tab && pty_key.modifiers.shift {
+            b"\x1b[Z".to_vec()
+        } else {
+            key_to_bytes(&pty_key)
+        }
+    }
 }
 
 /// Core-owned key code (independent of crossterm)
