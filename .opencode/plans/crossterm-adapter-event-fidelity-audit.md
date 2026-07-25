@@ -32,13 +32,13 @@ Verify that `crates/term-wm-crossterm-adapter/` passes all keyboard and mouse ev
 
 ### 1. Add media key support to `translate_key_code` (`crates/term-wm-crossterm-adapter/src/lib.rs`)
 
-Add explicit match arms for crossterm Media keys before the wildcard:
+Add explicit match arms for crossterm Media keys before the wildcard, using the correct type `MediaKeyCode` and consolidating discrete `Play`/`Pause` into the core `MediaPlayPause` variant:
 
 ```rust
-crossterm::event::KeyCode::Media(crossterm::event::MediaKey::PlayPause) => Some(KeyCode::MediaPlayPause),
-crossterm::event::KeyCode::Media(crossterm::event::MediaKey::Stop) => Some(KeyCode::MediaStop),
-crossterm::event::KeyCode::Media(crossterm::event::MediaKey::TrackNext) => Some(KeyCode::MediaTrackNext),
-crossterm::event::KeyCode::Media(crossterm::event::MediaKey::TrackPrevious) => Some(KeyCode::MediaTrackPrevious),
+crossterm::event::KeyCode::Media(crossterm::event::MediaKeyCode::PlayPause | crossterm::event::MediaKeyCode::Play | crossterm::event::MediaKeyCode::Pause) => Some(KeyCode::MediaPlayPause),
+crossterm::event::KeyCode::Media(crossterm::event::MediaKeyCode::Stop) => Some(KeyCode::MediaStop),
+crossterm::event::KeyCode::Media(crossterm::event::MediaKeyCode::TrackNext) => Some(KeyCode::MediaTrackNext),
+crossterm::event::KeyCode::Media(crossterm::event::MediaKeyCode::TrackPrevious) => Some(KeyCode::MediaTrackPrevious),
 ```
 
 ### 2. Add tests for media key translation
