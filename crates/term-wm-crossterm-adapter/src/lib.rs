@@ -120,7 +120,10 @@ pub fn try_translate_event(evt: crossterm::event::Event) -> Option<Event> {
 mod tests {
     use super::*;
 
-    fn make_key(code: crossterm::event::KeyCode, mods: crossterm::event::KeyModifiers) -> crossterm::event::KeyEvent {
+    fn make_key(
+        code: crossterm::event::KeyCode,
+        mods: crossterm::event::KeyModifiers,
+    ) -> crossterm::event::KeyEvent {
         crossterm::event::KeyEvent {
             code,
             modifiers: mods,
@@ -153,12 +156,9 @@ mod tests {
 
     #[test]
     fn test_infallible_translate_fallback_preserves_modifiers() {
-        let mods = crossterm::event::KeyModifiers::CONTROL
-            .union(crossterm::event::KeyModifiers::ALT);
-        let key = make_key(
-            crossterm::event::KeyCode::CapsLock,
-            mods,
-        );
+        let mods =
+            crossterm::event::KeyModifiers::CONTROL.union(crossterm::event::KeyModifiers::ALT);
+        let key = make_key(crossterm::event::KeyCode::CapsLock, mods);
         let result = translate_key_event(key);
         assert_eq!(result.code, KeyCode::Esc);
         assert!(result.modifiers.control);
