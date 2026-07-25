@@ -24,6 +24,20 @@ pub fn translate_key_code(code: crossterm::event::KeyCode) -> Option<KeyCode> {
         crossterm::event::KeyCode::Delete => Some(KeyCode::Delete),
         crossterm::event::KeyCode::Insert => Some(KeyCode::Insert),
         crossterm::event::KeyCode::F(n) => Some(KeyCode::F(n)),
+        crossterm::event::KeyCode::Media(
+            crossterm::event::MediaKeyCode::PlayPause
+            | crossterm::event::MediaKeyCode::Play
+            | crossterm::event::MediaKeyCode::Pause,
+        ) => Some(KeyCode::MediaPlayPause),
+        crossterm::event::KeyCode::Media(crossterm::event::MediaKeyCode::Stop) => {
+            Some(KeyCode::MediaStop)
+        }
+        crossterm::event::KeyCode::Media(crossterm::event::MediaKeyCode::TrackNext) => {
+            Some(KeyCode::MediaTrackNext)
+        }
+        crossterm::event::KeyCode::Media(crossterm::event::MediaKeyCode::TrackPrevious) => {
+            Some(KeyCode::MediaTrackPrevious)
+        }
         _ => None,
     }
 }
@@ -152,6 +166,69 @@ mod tests {
         assert!(result.modifiers.shift);
         assert!(!result.modifiers.control);
         assert!(!result.modifiers.alt);
+    }
+
+    #[test]
+    fn test_translate_media_playpause() {
+        for crossterm_code in [
+            crossterm::event::MediaKeyCode::PlayPause,
+            crossterm::event::MediaKeyCode::Play,
+            crossterm::event::MediaKeyCode::Pause,
+        ] {
+            let key = make_key(
+                crossterm::event::KeyCode::Media(crossterm_code),
+                crossterm::event::KeyModifiers::NONE,
+            );
+            let result = try_translate_key_event(key).unwrap();
+            assert_eq!(result.code, KeyCode::MediaPlayPause);
+        }
+    }
+
+    #[test]
+    fn test_translate_media_stop() {
+        let key = make_key(
+            crossterm::event::KeyCode::Media(crossterm::event::MediaKeyCode::Stop),
+            crossterm::event::KeyModifiers::NONE,
+        );
+        let result = try_translate_key_event(key).unwrap();
+        assert_eq!(result.code, KeyCode::MediaStop);
+    }
+
+    #[test]
+    fn test_translate_media_track_next() {
+        let key = make_key(
+            crossterm::event::KeyCode::Media(crossterm::event::MediaKeyCode::TrackNext),
+            crossterm::event::KeyModifiers::NONE,
+        );
+        let result = try_translate_key_event(key).unwrap();
+        assert_eq!(result.code, KeyCode::MediaTrackNext);
+    }
+
+    #[test]
+    fn test_translate_media_track_previous() {
+        let key = make_key(
+            crossterm::event::KeyCode::Media(crossterm::event::MediaKeyCode::TrackPrevious),
+            crossterm::event::KeyModifiers::NONE,
+        );
+        let result = try_translate_key_event(key).unwrap();
+        assert_eq!(result.code, KeyCode::MediaTrackPrevious);
+    }
+
+    #[test]
+    fn test_translate_media_through_try_translate_event() {
+        for crossterm_code in [
+            crossterm::event::MediaKeyCode::PlayPause,
+            crossterm::event::MediaKeyCode::Stop,
+            crossterm::event::MediaKeyCode::TrackNext,
+            crossterm::event::MediaKeyCode::TrackPrevious,
+        ] {
+            let evt = crossterm::event::Event::Key(make_key(
+                crossterm::event::KeyCode::Media(crossterm_code),
+                crossterm::event::KeyModifiers::NONE,
+            ));
+            let result = try_translate_event(evt);
+            assert!(result.is_some(), "media event should not be dropped");
+        }
     }
 
     #[test]
