@@ -11,35 +11,28 @@ Welcome to `%PACKAGE%`! This page is a quick reference for navigating the UI.
 
 _See also: [No-Keybinding-Conflict Philosophy](#no-keybinding-conflict-philosophy)_
 
-* **%SUPER%**: Exit the active window context and open the menu (the "WM layer").
+* **%SUPER%**: Exit the active window context and open the `Command Palette`.
 
-While the menu is open:
+While the Command Palette is open:
 
 * **%FOCUS_NEXT% / %FOCUS_PREV%**: Cycle focus between windows.
-* **%MENU_NAV%** or **%MENU_ALT%**: Move up/down in lists and menus.
+* **%MENU_NAV%**: Move up/down in lists and menus.
 * **%MENU_SELECT%**: Activate the selected menu item.
-* **%HELP_MENU%**: Open the full help overlay (Panel menu: Top-left -> Help).
+* **%HELP_MENU%** [this screen]: Press %SUPER% and search for "Help".
 
 ## No-Keybinding-Conflict Philosophy
 
-A core goal of `%PACKAGE%` is conflict-free keybindings so you can run terminal
-apps (e.g., `screen`, `tmux`, editors, etc.) without the window manager (WM) stealing their keys.
+A core goal of `%PACKAGE%` is conflict-free keybindings so you can run terminal apps (e.g., `screen`, `tmux`, editors, etc.) without the window manager (WM) stealing their keys.
 
 By default, the WM only watches **%SUPER%**. When you press it, you enter the
 WM layer and can use WM commands (like **%FOCUS_NEXT%** / **%FOCUS_PREV%**).
 
-To send **%SUPER%** to the currently focused application, press **%SUPER%**
-twice quickly. (The second press is forwarded to the active window.)
-
-Per-window **direct mode** (toggled via the `[D]` header button) disables all WM
-key interception, including **%SUPER%**, so keyboard-driven apps receive every
-keystroke unfiltered. In direct mode, a single **%SUPER%** is deferred (a countdown
-appears in the panel); a second **%SUPER%** within the timeout opens the WM overlay.
+Per-window `direct mode` (toggled via the `[D]` header button) disables all WM key interception, except for **%SUPER%**, so keyboard-driven apps receive every keystroke unfiltered.
 
 ## Mouse Capture
 
 Mouse capture is enabled by default when supported. To disable it, open the
-menu and toggle `Mouse Capture`.
+Command Palette and toggle `Mouse Capture`.
 
 Mouse capture lets `%PACKAGE%` receive mouse input for WM actions like:
 
@@ -53,7 +46,7 @@ Most of these actions are also purely keyboard driven, by initially pressing the
 Notes:
 
 * Mouse interactions work only while `Mouse Capture` is enabled.
-* Use the panel menu (top-left) for common WM actions.
+* Open the Command Palette (%SUPER%) for common WM actions.
 
 ----
 
