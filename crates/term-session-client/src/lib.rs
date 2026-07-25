@@ -309,7 +309,9 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
 
                         // Non-blocking push; if saturated, sleep 1ms to allow
                         // the main loop to drain the channel without CPU spinning.
-                        while let Err(crossbeam_channel::TrySendError::Full(pending)) = push_tx.try_send(data) {
+                        while let Err(crossbeam_channel::TrySendError::Full(pending)) =
+                            push_tx.try_send(data)
+                        {
                             data = pending;
                             tokio::time::sleep(Duration::from_millis(1)).await;
                         }
