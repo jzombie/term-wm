@@ -3681,6 +3681,157 @@ mod tests {
         );
     }
 
+    #[test]
+    fn try_spawn_floating_default_behavior_matrix() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 3);
+
+        // Case 1: Tiling layout present → must return false
+        wm.transition_window(keys[0], WindowState::Mapped);
+        wm.set_managed_layout(crate::layout::TilingLayout::new(
+            crate::layout::LayoutNode::leaf(keys[0]),
+        ));
+        assert!(
+            !wm.try_spawn_floating_default(keys[0]),
+            "must return false when tiling layout exists"
+        );
+
+        // Case 2: No layout, all windows floating → returns true
+        wm.transition_window(keys[0], WindowState::Mapped);
+        wm.set_managed_layout_none();
+        wm.set_floating_rect(
+            keys[0],
+            Some(crate::window::FloatRectSpec::Absolute(
+                crate::window::FloatRect {
+                    x: 10,
+                    y: 5,
+                    width: 30,
+                    height: 15,
+                },
+            )),
+        );
+        assert!(
+            wm.try_spawn_floating_default(keys[1]),
+            "must return true when all mapped windows are floating"
+        );
+        assert!(wm.is_window_floating(keys[1]));
+
+        // Case 3: Non-floating mapped window present → returns false
+        wm.transition_window(keys[2], WindowState::Mapped);
+        wm.clear_floating_rect(keys[0]);
+        assert!(
+            !wm.try_spawn_floating_default(keys[2]),
+            "must return false when non-floating mapped window exists"
+        );
+    }
+
+    #[test]
+    fn focus_add_preserves_existing_valid_focus() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+
+        // Initial state: placeholder key in focus.current() — invalid
+        assert!(!wm.windows.contains_key(*wm.focus.current()));
+
+        // First focus_add sets current (old key was invalid)
+        wm.focus_add(keys[0]);
+        assert_eq!(*wm.focus.current(), keys[0]);
+
+        // Second focus_add must append to order but PRESERVE focus
+        wm.focus_add(keys[1]);
+        assert_eq!(*wm.focus.current(), keys[0]);
+        assert!(wm.focus.order().contains(&keys[1]));
+    }
+
+    #[test]
+    fn advance_focus_cycles_order_forward_and_backward() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 3);
+        // Directly set focus ring to bypass focus_window_key side effects
+        wm.focus.set_order(keys.clone());
+        wm.focus.set_current(keys[0]);
+
+        wm.advance_focus(true);
+        assert_eq!(wm.focused_window(), keys[1], "forward 0→1");
+
+        wm.advance_focus(true);
+        assert_eq!(wm.focused_window(), keys[2], "forward 1→2");
+
+        wm.advance_focus(true);
+        assert_eq!(wm.focused_window(), keys[0], "wraps 2→0");
+
+        wm.advance_focus(false);
+        assert_eq!(wm.focused_window(), keys[2], "backward 0→2");
+    }
+
+    #[test]
+    fn take_synthetic_event_clears_on_take() {
+        use crate::events::{Event, KeyCode, KeyEvent, KeyKind, KeyModifiers};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+
+        assert!(wm.take_synthetic_event().is_none());
+
+        wm.synthetic_event = Some(Event::Key(KeyEvent::new(
+            KeyCode::Char('a'),
+            KeyModifiers::NONE,
+            KeyKind::Press,
+        )));
+
+        assert!(
+            wm.take_synthetic_event().is_some(),
+            "first take returns Some"
+        );
+        assert!(
+            wm.take_synthetic_event().is_none(),
+            "second take returns None"
+        );
+    }
+
+    #[test]
+    fn select_fallback_focus_handles_empty_and_populated_ring() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+
+        // Empty order → no panic
+        wm.focus.set_order(Vec::new());
+        wm.select_fallback_focus();
+
+        // Populated order → selects first item
+        let keys = make_keys(&mut wm, 2);
+        wm.focus.set_order(vec![keys[1], keys[0]]);
+        wm.select_fallback_focus();
+        assert_eq!(*wm.focus.current(), keys[1]);
+    }
+
     // ── Open window while maximized ───────────────────────────────────
 
     #[test]
