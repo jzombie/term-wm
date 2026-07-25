@@ -86,15 +86,16 @@ impl Component<TermWmAction> for WmFabComponent {
             return;
         }
 
-        let cols = [
-            ("[", Style::default().fg(Color::White).bg(Color::DarkGray).add_modifier(Modifier::BOLD)),
-            ("≡", Style::default().fg(Color::White).bg(Color::DarkGray).add_modifier(Modifier::BOLD)),
-            ("]", Style::default().fg(Color::White).bg(Color::DarkGray).add_modifier(Modifier::BOLD)),
-        ];
-        for (i, (symbol, style)) in cols.iter().enumerate() {
+        let style = Style::default()
+            .fg(Color::White)
+            .bg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD);
+        for (i, sym) in ["[", "≡", "]"].into_iter().enumerate() {
             let xx = bounds.x.saturating_add(i as u16);
-            if xx < bounds.x.saturating_add(bounds.width) && let Some(cell) = buffer.cell_mut((xx, bounds.y)) {
-                cell.set_symbol(symbol).set_style(*style);
+            if xx < bounds.x.saturating_add(bounds.width)
+                && let Some(cell) = buffer.cell_mut((xx, bounds.y))
+            {
+                cell.set_symbol(sym).set_style(style);
             }
         }
     }
