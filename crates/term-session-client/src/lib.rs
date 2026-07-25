@@ -144,6 +144,8 @@ fn convert_crossterm_event(evt: crossterm::event::Event) -> Option<Event> {
                 crossterm_event::KeyCode::Char(c) => KeyCode::Char(c),
                 crossterm_event::KeyCode::Enter => KeyCode::Enter,
                 crossterm_event::KeyCode::Tab => KeyCode::Tab,
+                // macOS sends BackTab for Shift+Tab
+                crossterm_event::KeyCode::BackTab => KeyCode::Tab,
                 crossterm_event::KeyCode::Backspace => KeyCode::Backspace,
                 crossterm_event::KeyCode::Esc => KeyCode::Esc,
                 crossterm_event::KeyCode::Left => KeyCode::Left,
@@ -160,7 +162,8 @@ fn convert_crossterm_event(evt: crossterm::event::Event) -> Option<Event> {
                 _ => return None,
             },
             modifiers: term_wm_core::events::KeyModifiers {
-                shift: key.modifiers.contains(crossterm_event::KeyModifiers::SHIFT),
+                shift: key.modifiers.contains(crossterm_event::KeyModifiers::SHIFT)
+                    || key.code == crossterm_event::KeyCode::BackTab,
                 control: key
                     .modifiers
                     .contains(crossterm_event::KeyModifiers::CONTROL),
@@ -512,7 +515,13 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                             alt: key.modifiers.alt,
                         },
                     };
-                    let bytes = key_to_bytes(&pty_key);
+                    let bytes = if pty_key.code == term_wm_pty_engine::input_encoding::KeyCode::Tab
+                        && pty_key.modifiers.shift
+                    {
+                        b"\x1b[Z".to_vec()
+                    } else {
+                        key_to_bytes(&pty_key)
+                    };
                     if !bytes.is_empty() {
                         let _ = pane.write_bytes(&bytes);
                     }
