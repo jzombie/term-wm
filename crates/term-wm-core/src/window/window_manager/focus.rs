@@ -136,8 +136,16 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         if self.focus.order().is_empty() {
             return;
         }
+        // Capture the pre-advance focus so we can unmaximize it if the
+        // focus actually changes to a different window below.
+        let prev_focus = *self.focus.current();
         self.focus.advance(forward);
         let focused = *self.focus.current();
+        if prev_focus != focused
+            && self.window(prev_focus).is_some_and(|w| w.is_maximized)
+        {
+            self.toggle_maximize(prev_focus);
+        }
         self.focus_window_key(focused);
         self.set_tab_outline_mode(crate::constants::TAB_OUTLINE_DURATION);
     }

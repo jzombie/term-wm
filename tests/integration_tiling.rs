@@ -1776,6 +1776,60 @@ mod floating_tiled_separation {
 
         assert_bifurcation_invariant(&wm);
     }
+
+    // ── Maximize while tiled — integration tests ──────────────────────
+
+    #[test]
+    fn maximize_tiled_via_double_click_then_unmaximize_via_toggle() {
+        let (mut wm, mut engine, mut renderer, keys) = setup();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        // Double-click header to maximize
+        let header = header_rect(&mut wm, keys[0]);
+        let col = header.x as u16;
+        let row = header.y as u16;
+        let down = make_mouse(MouseEventKind::Press(MouseButton::Left), col, row);
+        wm.dispatch_mouse(&down);
+        let up = make_mouse(MouseEventKind::Release(MouseButton::Left), col, row);
+        wm.dispatch_mouse(&up);
+        let down2 = make_mouse(MouseEventKind::Press(MouseButton::Left), col, row);
+        wm.dispatch_mouse(&down2);
+
+        // Should be maximized (floating with full-area rect via the void path)
+        let panes = wm.floating_panes();
+        let (_, spec) = panes.iter().find(|(k, _)| *k == keys[0]).expect("window in floating");
+        if let term_wm::window::FloatRectSpec::Absolute(rect) = spec {
+            assert_eq!(rect.width, AREA.width, "maximized width");
+            assert_eq!(rect.height, AREA.height, "maximized height");
+        } else {
+            panic!("expected absolute float rect");
+        }
+        assert_bifurcation_invariant(&wm);
+
+        // Toggle back to unmaximize
+        wm.toggle_maximize(keys[0]);
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+        assert!(!wm.is_window_floating(keys[0]), "restored to tiled");
+        assert_bifurcation_invariant(&wm);
+    }
+
+    #[test]
+    fn maximize_tiled_region_unchanged_after_unmaximize() {
+        let (mut wm, mut engine, mut renderer, keys) = setup();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        let orig_region = wm.region(keys[0]);
+
+        wm.toggle_maximize(keys[0]);
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        wm.toggle_maximize(keys[0]);
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        let restored = wm.region(keys[0]);
+        assert_eq!(restored, orig_region, "region restored after unmaximize");
+        assert_bifurcation_invariant(&wm);
+    }
 }
 
 // ─── Module 8: Render Pipeline Verification ──────────────────────────

@@ -1845,4 +1845,141 @@ mod tests {
         let leaves = node.collect_leaves();
         assert_eq!(leaves, vec![1, 2, 3]);
     }
+
+    const TEST_AREA: crate::rect::LayoutRect = crate::rect::LayoutRect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+
+    // ── replace_leaf_with_void ────────────────────────────────────────
+
+    #[test]
+    fn replace_leaf_with_void_single_leaf() {
+        let mut node = LayoutNode::leaf(42);
+        let vid = node.replace_leaf_with_void(42);
+        assert!(vid.is_some(), "should return a void_id");
+        assert!(matches!(node, LayoutNode::Void(_)), "leaf became void");
+        // layout_rects should yield nothing
+        let rects = node.layout_rects(TEST_AREA);
+        assert!(rects.is_empty(), "void produces no regions");
+    }
+
+    #[test]
+    fn replace_leaf_with_void_nested_split() {
+        let mut node = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2), LayoutNode::leaf(3)],
+            weights: vec![1u16, 1u16, 1u16],
+            resizable: true,
+        };
+        let vid = node.replace_leaf_with_void(2);
+        assert!(vid.is_some(), "should return a void_id");
+        // Structure: Split [Leaf(1), Void(vid), Leaf(3)]
+        let leaves = node.collect_leaves();
+        assert_eq!(leaves, vec![1, 3], "leaf 2 removed from tree");
+        // Weights should be preserved (3 weights still, the void is a child)
+        if let LayoutNode::Split { children, weights, .. } = &node {
+            assert_eq!(children.len(), 3, "void placeholder preserved");
+            assert_eq!(weights.len(), 3, "weights preserved");
+        } else {
+            panic!("expected Split");
+        }
+    }
+
+    #[test]
+    fn replace_leaf_with_void_nonexistent() {
+        let mut node = LayoutNode::leaf(42);
+        let vid = node.replace_leaf_with_void(99);
+        assert!(vid.is_none(), "nonexistent id returns None");
+        assert_eq!(node.unwrap_leaf(), Some(42), "tree unchanged");
+    }
+
+    // ── remove_void_by_id ─────────────────────────────────────────────
+
+    #[test]
+    fn remove_void_by_id_existing_root() {
+        let mut node: LayoutNode<usize> = LayoutNode::Void(99);
+        assert!(node.remove_void_by_id(99));
+        // Becomes a new void (fresh id), but it was removed
+        assert!(matches!(node, LayoutNode::Void(_)));
+    }
+
+    #[test]
+    fn remove_void_by_id_nested() {
+        let mut node = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::Void(99), LayoutNode::leaf(3)],
+            weights: vec![1u16, 1u16, 1u16],
+            resizable: true,
+        };
+        assert!(node.remove_void_by_id(99), "void removed");
+        // After removal the split should have 2 children
+        let leaves = node.collect_leaves();
+        assert_eq!(leaves, vec![1, 3], "remaining leaves preserved");
+    }
+
+    #[test]
+    fn remove_void_by_id_nonexistent() {
+        let mut node = LayoutNode::leaf(42);
+        assert!(!node.remove_void_by_id(99), "nonexistent returns false");
+    }
+
+    #[test]
+    fn remove_void_by_id_deeply_nested() {
+        // Split [Leaf(1), Split [Void(99), Leaf(2)]]
+        let mut node = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![
+                LayoutNode::leaf(1),
+                LayoutNode::Split {
+                    direction: Direction::Vertical,
+                    children: vec![LayoutNode::Void(99), LayoutNode::leaf(2)],
+                    weights: vec![1u16, 1u16],
+                    resizable: true,
+                },
+            ],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        assert!(node.remove_void_by_id(99), "deeply nested void removed");
+        let leaves = node.collect_leaves();
+        assert_eq!(leaves, vec![1, 2], "remaining leaves preserved after deep removal");
+    }
+
+    // ── Void placeholder preserves layout ─────────────────────────────
+
+    #[test]
+    fn void_produces_no_regions_in_split() {
+        let mut node = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2)],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        // Replace leaf 2 with void
+        node.replace_leaf_with_void(2);
+        let rects = node.layout_rects(TEST_AREA);
+        // Only leaf 1 produces a region; leaf 2's slot is preserved but empty
+        assert_eq!(rects.len(), 1, "only one region");
+        assert_eq!(rects[0].0, 1, "remaining leaf id");
+        assert!(rects[0].1.width > 0, "leaf region has positive width");
+    }
+
+    #[test]
+    fn void_placeholder_preserves_weights() {
+        let mut node = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::leaf(2), LayoutNode::leaf(3)],
+            weights: vec![2u16, 3u16, 5u16],
+            resizable: true,
+        };
+        let _ = node.replace_leaf_with_void(2);
+        if let LayoutNode::Split { weights, .. } = &node {
+            assert_eq!(weights.as_slice(), &[2u16, 3u16, 5u16], "weights unchanged");
+        } else {
+            panic!("expected Split");
+        }
+    }
 }

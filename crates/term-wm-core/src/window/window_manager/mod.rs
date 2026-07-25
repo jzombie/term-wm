@@ -3139,6 +3139,424 @@ mod tests {
         assert_eq!(restored, Some(float_rect), "floating rect restored");
     }
 
+    // ── Tiled maximize/unmaximize toggle ──────────────────────────────
+
+    #[test]
+    fn tiled_maximize_toggle_unmaximize() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+        for &k in &keys { wm.transition_window(k, WindowState::Mapped); }
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.managed_layout = Some(TilingLayout::new(split));
+        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.focus_window_key(keys[0]);
+
+        // Record original region for position check
+        let orig_region = wm.region(keys[0]);
+
+        // Maximize
+        wm.toggle_maximize(keys[0]);
+        assert!(wm.windows.get(keys[0]).unwrap().is_maximized);
+        assert!(wm.windows.get(keys[0]).unwrap().void_id.is_some());
+
+        // Toggle back (unmaximize directly)
+        wm.toggle_maximize(keys[0]);
+        let w0 = wm.windows.get(keys[0]).unwrap();
+        assert!(!w0.is_maximized, "unmaximized");
+        assert!(w0.void_id.is_none(), "void_id cleared");
+        assert!(!w0.is_floating(), "not floating");
+        // Should be back in tree at original position
+        assert!(
+            wm.managed_layout.as_ref().is_some_and(|l| l.root().subtree_any(|k| k == keys[0])),
+            "back in tree"
+        );
+        let restored = wm.region(keys[0]);
+        assert_eq!(restored, orig_region, "same region as before maximize");
+    }
+
+    #[test]
+    fn tiled_maximize_void_id_set() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.transition_window(keys[0], WindowState::Mapped);
+        wm.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(keys[0])));
+        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.focus_window_key(keys[0]);
+
+        wm.toggle_maximize(keys[0]);
+        let w0 = wm.windows.get(keys[0]).unwrap();
+        assert!(w0.void_id.is_some(), "void_id set after maximizing tiled window");
+        // Tree should contain a Void, not a Leaf(keys[0])
+        assert!(
+            !wm.managed_layout.as_ref().is_some_and(|l| l.root().subtree_any(|k| k == keys[0])),
+            "leaf replaced by void in tree"
+        );
+    }
+
+    // ── Floating maximize/unmaximize toggle ───────────────────────────
+
+    #[test]
+    fn floating_maximize_toggle_unmaximize() {
+        use crate::window::{FloatRect, FloatRectSpec};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.transition_window(keys[0], WindowState::Mapped);
+        let float_rect = FloatRectSpec::Absolute(FloatRect { x: 10, y: 5, width: 30, height: 15 });
+        wm.set_floating_rect(keys[0], Some(float_rect));
+        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.focus_window_key(keys[0]);
+
+        // Maximize floating window
+        wm.toggle_maximize(keys[0]);
+        let w0 = wm.windows.get(keys[0]).unwrap();
+        assert!(w0.is_maximized);
+        // Window still has floating_rect (now = full), so is_floating is true
+
+        // Toggle back
+        wm.toggle_maximize(keys[0]);
+        let w0 = wm.windows.get(keys[0]).unwrap();
+        assert!(!w0.is_maximized, "unmaximized");
+        assert!(w0.is_floating(), "still floating");
+        let restored = wm.floating_rect(keys[0]);
+        assert_eq!(restored, Some(float_rect), "original rect restored");
+    }
+
+    // ── Focus cycling triggers auto-unmaximize ────────────────────────
+
+    #[test]
+    fn tiled_maximize_then_advance_focus_unmaximizes() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+        for &k in &keys { wm.transition_window(k, WindowState::Mapped); }
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.managed_layout = Some(TilingLayout::new(split));
+        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.focus_window_key(keys[0]);
+
+        // Maximize keys[0], then advance focus to keys[1]
+        wm.toggle_maximize(keys[0]);
+        wm.advance_focus(true);
+
+        assert_eq!(wm.focused_window(), keys[1], "focus moved to keys[1]");
+        assert!(
+            !wm.windows.get(keys[0]).unwrap().is_maximized,
+            "keys[0] unmaximized by focus shift"
+        );
+    }
+
+    #[test]
+    fn tiled_maximize_then_mouse_click_focus_unmaximizes() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+        for &k in &keys { wm.transition_window(k, WindowState::Mapped); }
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.managed_layout = Some(TilingLayout::new(split));
+        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.focus_window_key(keys[0]);
+
+        // Maximize keys[0], then simulate mouse click on keys[1]'s region
+        wm.toggle_maximize(keys[0]);
+        let r1 = wm.region(keys[1]);
+        wm.handle_mouse_focus_click(r1.x as u16, r1.y as u16);
+
+        assert_eq!(wm.focused_window(), keys[1], "focus moved to clicked window");
+        assert!(
+            !wm.windows.get(keys[0]).unwrap().is_maximized,
+            "keys[0] unmaximized by mouse click"
+        );
+    }
+
+    // ── Edge cases: single window, three windows, minimize ────────────
+
+    #[test]
+    fn tiled_maximize_single_window() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.transition_window(keys[0], WindowState::Mapped);
+        wm.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(keys[0])));
+        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.focus_window_key(keys[0]);
+
+        wm.toggle_maximize(keys[0]);
+        assert!(wm.windows.get(keys[0]).unwrap().is_maximized);
+        // Tree should be Void (single leaf replaced)
+        assert!(matches!(wm.managed_layout.as_ref().unwrap().root(), LayoutNode::Void(_)));
+
+        wm.toggle_maximize(keys[0]);
+        let w0 = wm.windows.get(keys[0]).unwrap();
+        assert!(!w0.is_maximized, "unmaximized");
+        // Back to a leaf at root
+        assert_eq!(wm.managed_layout.as_ref().unwrap().root().unwrap_leaf(), Some(keys[0]));
+    }
+
+    #[test]
+    fn tiled_maximize_three_windows() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 3);
+        for &k in &keys { wm.transition_window(k, WindowState::Mapped); }
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![
+                LayoutNode::Leaf(keys[0]),
+                LayoutNode::Leaf(keys[1]),
+                LayoutNode::Leaf(keys[2]),
+            ],
+            weights: vec![1u16, 1u16, 1u16],
+            resizable: true,
+        };
+        wm.managed_layout = Some(TilingLayout::new(split));
+        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.focus_window_key(keys[1]);
+
+        // Maximize middle window
+        wm.toggle_maximize(keys[1]);
+        assert!(wm.windows.get(keys[1]).unwrap().is_maximized);
+        // Other windows still in tree
+        let leaves: Vec<_> = wm.managed_layout.as_ref().unwrap().root().collect_leaves();
+        assert_eq!(leaves, vec![keys[0], keys[2]], "other windows still in tree");
+        // 3 children still (void preserves position)
+        if let LayoutNode::Split { children, .. } = wm.managed_layout.as_ref().unwrap().root() {
+            assert_eq!(children.len(), 3, "void placeholder preserves split slot");
+        } else {
+            panic!("expected split");
+        }
+    }
+
+    #[test]
+    fn tiled_maximize_then_minimize_and_restore() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+        for &k in &keys { wm.transition_window(k, WindowState::Mapped); }
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.managed_layout = Some(TilingLayout::new(split));
+        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.focus_window_key(keys[0]);
+
+        wm.toggle_maximize(keys[0]);
+
+        // Minimize (Iconic) then restore (Mapped)
+        wm.minimize_window(keys[0]);
+        assert_eq!(wm.window_state(keys[0]), Some(WindowState::Iconic));
+        wm.restore_minimized(keys[0]);
+        assert_eq!(wm.window_state(keys[0]), Some(WindowState::Mapped));
+
+        // Still maximized after restore
+        assert!(wm.windows.get(keys[0]).unwrap().is_maximized, "still maximized");
+    }
+
+    // ── No-op safety ──────────────────────────────────────────────────
+
+    #[test]
+    fn toggle_maximize_already_maximized() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.transition_window(keys[0], WindowState::Mapped);
+        wm.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(keys[0])));
+        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.focus_window_key(keys[0]);
+
+        wm.toggle_maximize(keys[0]); // maximize
+        wm.toggle_maximize(keys[0]); // unmaximize
+        wm.toggle_maximize(keys[0]); // maximize again
+        assert!(wm.windows.get(keys[0]).unwrap().is_maximized, "can re-maximize");
+    }
+
+    #[test]
+    fn focus_same_window_when_maximized() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.transition_window(keys[0], WindowState::Mapped);
+        wm.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(keys[0])));
+        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        wm.focus_window_key(keys[0]);
+
+        wm.toggle_maximize(keys[0]);
+        // Calling focus_window_key with the same (already focused) window
+        // should NOT unmaximize it
+        wm.focus_window_key(keys[0]);
+        assert!(
+            wm.windows.get(keys[0]).unwrap().is_maximized,
+            "focus same window should not unmaximize"
+        );
+    }
+
+    // ── Teardown / Lifecycle ──────────────────────────────────────────
+
+    #[test]
+    fn close_maximized_tiled_removes_void() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+        for &k in &keys { wm.transition_window(k, WindowState::Mapped); }
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.managed_layout = Some(TilingLayout::new(split));
+        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+
+        wm.toggle_maximize(keys[0]);
+
+        // Close the maximized window
+        wm.close_window(keys[0]);
+
+        // The other window should have its leaf still in the tree (no orphan void)
+        let leaves: Vec<_> = wm.managed_layout.as_ref().unwrap().root().collect_leaves();
+        assert_eq!(leaves, vec![keys[1]], "only remaining window in tree");
+        assert!(!wm.windows.contains_key(keys[0]), "window removed");
+    }
+
+    #[test]
+    fn close_maximized_floating_restores_normally() {
+        use crate::window::{FloatRect, FloatRectSpec};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.transition_window(keys[0], WindowState::Mapped);
+        let float_rect = FloatRectSpec::Absolute(FloatRect { x: 10, y: 5, width: 30, height: 15 });
+        wm.set_floating_rect(keys[0], Some(float_rect));
+        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+
+        // Maximize floating, then close
+        wm.toggle_maximize(keys[0]);
+        wm.close_window(keys[0]);
+        assert!(!wm.windows.contains_key(keys[0]), "window removed");
+    }
+
+    #[test]
+    fn unmap_maximized_tiled_removes_void() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+        for &k in &keys { wm.transition_window(k, WindowState::Mapped); }
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.managed_layout = Some(TilingLayout::new(split));
+        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+
+        wm.toggle_maximize(keys[0]);
+
+        // Unmap (transition_window instead of close)
+        wm.transition_window(keys[0], WindowState::Unmapped);
+
+        // Void should be removed from tree
+        let leaves: Vec<_> = wm.managed_layout.as_ref().unwrap().root().collect_leaves();
+        assert_eq!(leaves, vec![keys[1]], "only remaining window in tree");
+        assert!(wm.windows.get(keys[0]).unwrap().void_id.is_none(), "void_id cleared");
+    }
+
     #[test]
     fn minimize_and_restore_preserves_floating_rect() {
         use crate::window::{FloatRect, FloatRectSpec};
