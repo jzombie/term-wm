@@ -11,9 +11,9 @@ use term_wm_crossterm_adapter;
 /// Translate a crossterm event to a core-owned event.
 fn translate_crossterm_event(evt: crossterm::event::Event) -> Option<Event> {
     match evt {
-        crossterm::event::Event::Key(key) => Some(Event::Key(
-            term_wm_crossterm_adapter::translate_key_event(key),
-        )),
+        crossterm::event::Event::Key(key) => {
+            term_wm_crossterm_adapter::try_translate_key_event(key).map(Event::Key)
+        }
         crossterm::event::Event::Mouse(mouse) => Some(Event::Mouse(
             term_wm_crossterm_adapter::translate_mouse_event(mouse),
         )),

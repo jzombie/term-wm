@@ -192,9 +192,9 @@ impl UnifiedEventSource {
 /// Translate a crossterm event to a core-owned event.
 fn translate_crossterm_event(evt: crossterm::event::Event) -> Option<Event> {
     match evt {
-        crossterm::event::Event::Key(key) => Some(Event::Key(
-            term_wm_crossterm_adapter::translate_key_event(key),
-        )),
+        crossterm::event::Event::Key(key) => {
+            term_wm_crossterm_adapter::try_translate_key_event(key).map(Event::Key)
+        }
         crossterm::event::Event::Mouse(mouse) => Some(Event::Mouse(
             term_wm_crossterm_adapter::translate_mouse_event(mouse),
         )),
@@ -469,6 +469,17 @@ mod tests {
     use super::*;
     use crate::events::{KeyCode, KeyKind, KeyModifiers};
 
+    #[test]
+    fn test_translate_crossterm_event_drops_unsupported_keys() {
+        let caps_lock = crossterm::event::Event::Key(crossterm::event::KeyEvent {
+            code: crossterm::event::KeyCode::CapsLock,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        });
+        assert!(translate_crossterm_event(caps_lock).is_none());
+    }
+
     /// Input events drained by `drain_pending` must be preserved in
     /// `input_buffer` so `poll()/read()` can process every event.
     #[test]
@@ -606,12 +617,10 @@ mod tests {
 
         source.drain_pending();
 
-        // Count surviving events — Release is always filtered, Repeat only on Windows
-        let expected = if cfg!(windows) { 2 } else { 3 };
         assert_eq!(
             source.input_buffer.len(),
-            expected,
-            "Release must be filtered; on non-Windows Repeat survives"
+            3,
+            "Only Release events should be filtered by normalization"
         );
 
         // Verify Release event (index 1) is absent
