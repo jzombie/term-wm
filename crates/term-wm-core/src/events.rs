@@ -26,7 +26,9 @@ impl KeyEvent {
     /// Serialize this key event to the byte sequence to send to a PTY.
     /// Shift+Tab produces `\x1b[Z` (CSI backtab) per ANSI terminal standard.
     pub fn to_pty_bytes(&self) -> Vec<u8> {
-        use term_wm_pty_engine::input_encoding::{self, key_to_bytes, KeyCode as PtyKeyCode, KeyModifiers as PtyKeyModifiers};
+        use term_wm_pty_engine::input_encoding::{
+            self, KeyCode as PtyKeyCode, KeyModifiers as PtyKeyModifiers, key_to_bytes,
+        };
         let pty_key = input_encoding::KeyEvent {
             code: match self.code {
                 KeyCode::Char(c) => PtyKeyCode::Char(c),
