@@ -1357,19 +1357,26 @@ mod power_calibration_tests {
         assert!(second.is_empty(), "dirty keys must drain between cycles");
     }
 
-    
     /// Minimal backend that satisfies the RenderBackend trait.
     struct MockBackend;
     impl term_wm_render::RenderBackend for MockBackend {
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
-        fn acquire_mask(&mut self) -> &mut [u8] { &mut [] }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+        fn acquire_mask(&mut self) -> &mut [u8] {
+            &mut []
+        }
     }
 
     /// Minimal output that runs the draw closure without a real terminal.
     struct NoopOutput;
     impl RenderTarget for NoopOutput {
-        fn enter(&mut self) -> io::Result<()> { Ok(()) }
-        fn exit(&mut self) -> io::Result<()> { Ok(()) }
+        fn enter(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+        fn exit(&mut self) -> io::Result<()> {
+            Ok(())
+        }
         fn draw<F>(&mut self, f: F) -> io::Result<()>
         where
             F: FnOnce(&mut dyn term_wm_render::RenderBackend),
@@ -1428,7 +1435,9 @@ mod power_calibration_tests {
         );
 
         assert!(result.is_ok(), "run_event_loop should return Ok");
-        assert_eq!(app.draws, 1,
-            "draw must fire from pre-loop initial render (FramePacer never armed)");
+        assert_eq!(
+            app.draws, 1,
+            "draw must fire from pre-loop initial render (FramePacer never armed)"
+        );
     }
 }
