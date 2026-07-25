@@ -38,9 +38,10 @@ pub fn translate_key_code(code: crossterm::event::KeyCode) -> Option<KeyCode> {
         crossterm::event::KeyCode::Media(crossterm::event::MediaKeyCode::TrackPrevious) => {
             Some(KeyCode::MediaTrackPrevious)
         }
-        // Explicitly dropped crossterm variants — no core equivalents.
-        // If crossterm adds a new variant, the compiler will error here
-        // and an engineer must explicitly route or list it.
+        // Explicitly drop OS/hardware state keys, lock keys, and standalone modifiers.
+        // These are listed exhaustively (no wildcard) to give compile-time E0004 safety
+        // on crossterm updates, while returning `None` because they have no standard
+        // VT100/xterm escape sequence representation in a terminal context.
         crossterm::event::KeyCode::ScrollLock
         | crossterm::event::KeyCode::NumLock
         | crossterm::event::KeyCode::PrintScreen

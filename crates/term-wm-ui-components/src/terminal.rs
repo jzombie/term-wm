@@ -111,6 +111,10 @@ impl Component<TermWmAction> for TerminalComponent {
     ) -> EventResult<TermWmAction> {
         match event {
             Event::Key(key) => {
+                // Standard ANSI/VT100 PTY streams are strictly unidirectional byte
+                // triggers on key-down. Key releases are dropped because standard
+                // terminal emulators do not emit release sequences, and passing them
+                // through would send duplicate bytes or corrupt child process state.
                 if key.kind == KeyKind::Release {
                     return EventResult::Ignored;
                 }
