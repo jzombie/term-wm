@@ -508,7 +508,7 @@ where
                     let focus_id = app.wm().focused_window();
                     if app.wm().direct_mode(focus_id)
                         && !app.wm().command_menu_visible()
-                        && key.kind == KeyKind::Press
+                        && matches!(key.kind, KeyKind::Press | KeyKind::Repeat)
                     {
                         // Direct mode — forward to terminal immediately.
                         let _ = handle_focused_app_event(&evt, app);
@@ -1003,6 +1003,57 @@ mod tests {
             }
             _ => panic!("component must be KeyRecorder"),
         }
+    }
+
+    #[test]
+    fn handle_focused_app_event_routes_repeat_in_direct_mode() {
+        use crate::window::WindowManager;
+
+        struct FakeApp {
+            wm: WindowManager<TestComponent>,
+        }
+        impl WindowManagerHost<TestComponent> for FakeApp {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
+                &mut self.wm
+            }
+        }
+
+        let mut app = FakeApp {
+            wm: WindowManager::<TestComponent>::with_config(
+                crate::wm_config::WmConfig::standalone(),
+                std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+                None,
+                crate::window::LayerManager::new(),
+                std::collections::HashMap::new(),
+            ),
+        };
+        let key = app.wm.create_window(TestComponent::KeyRecorder(
+            crate::window::test_component::KeyRecorder { received_key: None },
+        ));
+        app.wm
+            .transition_window(key, crate::window::WindowState::Mapped);
+        app.wm.regions.set(
+            key,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        app.wm.focus_app_window(key);
+
+        let focus_id = app.wm.focused_window();
+        app.wm.set_direct_mode(focus_id, true);
+
+        let evt = Event::Key(KeyEvent {
+            code: KeyCode::Char('x'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyKind::Repeat,
+        });
+
+        let consumed = handle_focused_app_event(&evt, &mut app);
+        assert!(consumed, "Repeat event must route through handle_focused_app_event in direct mode");
     }
 
     #[test]
