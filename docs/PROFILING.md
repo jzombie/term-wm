@@ -24,7 +24,7 @@ samply record --save-only -o samply.json ./target/release/term-wm -n 2 "cat /dev
 
 ## Cross-Platform Idle Wakeup & Context Switch Metrics
 
-No mainstream OS exposes a simple "Idle Wakeups" column in its default task manager. To measure how frequently a process interrupts CPU low-power sleep states, you have to look at **CPU Wakeups**, **Context Switches**, or **Timer Expirations** using dedicated profiling tools.
+macOS Activity Monitor is the only mainstream task manager that exposes an **Idle Wake Ups** column by default. On Linux and Windows you have to look at **CPU Wakeups**, **Context Switches**, or **Timer Expirations** using dedicated profiling tools.
 
 ### 1. macOS
 
