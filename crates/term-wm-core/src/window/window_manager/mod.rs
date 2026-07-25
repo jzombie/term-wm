@@ -2511,6 +2511,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 disabled: false,
             },
             MenuItem {
+                label: "New Window".into(),
+                icon: Some("+"),
+                action: crate::actions::TermWmAction::NewWindow,
+                disabled: false,
+            },
+            MenuItem {
                 label: mouse_label.into(),
                 icon: Some("◆"),
                 action: crate::actions::TermWmAction::ToggleMouseCapture,
@@ -2526,12 +2532,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 label: selection_label.into(),
                 icon: Some("●"),
                 action: crate::actions::TermWmAction::ToggleWindowSelection,
-                disabled: false,
-            },
-            MenuItem {
-                label: "New Window".into(),
-                icon: Some("+"),
-                action: crate::actions::TermWmAction::NewWindow,
                 disabled: false,
             },
             MenuItem {
