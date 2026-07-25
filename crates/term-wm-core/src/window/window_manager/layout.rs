@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use crate::Rect;
 use crate::actions::TermWmAction;
 use crate::components::{Component, Overlay, WmComponent};
@@ -143,12 +145,21 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Update borders and store terminal width for monocle auto-detection.
     /// Called every render frame.
     pub fn update_monocle_mode(&mut self, terminal_width: u16) {
+        let old_monocle = self.is_monocle();
         self.last_terminal_width = terminal_width;
         if let Some(ref mut layout) = self.managed_layout {
             layout.update_monocle_state(terminal_width);
         }
 
         let monocle = self.is_monocle();
+        if self.monocle_mode == super::MonocleMode::Auto && old_monocle != monocle {
+            let status = if monocle { "enabled" } else { "disabled" };
+            self.push_notification(
+                format!("Monocle mode (auto): {status}"),
+                Duration::from_secs(3),
+            );
+        }
+
         for (_, window) in self.windows.iter_mut() {
             if monocle {
                 window.borders_enabled = false;
@@ -192,6 +203,10 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Cycle monocle mode: Auto → On → Off → Auto.
     pub fn toggle_monocle(&mut self) {
         self.monocle_mode = self.monocle_mode.cycle();
+        self.push_notification(
+            format!("Monocle mode: {}", self.monocle_mode.label()),
+            Duration::from_secs(3),
+        );
     }
 
     /// Whether the given window should render borders.
