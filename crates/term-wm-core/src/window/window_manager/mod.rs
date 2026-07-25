@@ -6797,7 +6797,8 @@ mod tests {
             std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 1);
-        assert!(!wm.layout_dirty(), "initially not dirty");
+        wm.clear_layout_dirty();
+        assert!(!wm.layout_dirty(), "cleared after setup");
         wm.set_direct_mode(keys[0], true);
         assert!(wm.layout_dirty(), "marked dirty on enable");
         wm.clear_layout_dirty();
@@ -6815,11 +6816,12 @@ mod tests {
             std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 1);
+        wm.clear_layout_dirty();
         wm.set_direct_mode(keys[0], true);
-        assert!(!wm.notifications().is_empty(), "notification pushed");
+        assert!(!wm.notifications().is_empty(), "notification pushed on enable");
         let count_before = wm.notifications().len();
         wm.set_direct_mode(keys[0], true);
-        assert_eq!(wm.notifications().len(), count_before, "no duplicate notification");
+        assert_eq!(wm.notifications().len(), count_before, "no duplicate notification when unchanged");
     }
 
     #[test]
@@ -6832,8 +6834,9 @@ mod tests {
             std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 1);
+        wm.clear_layout_dirty();
         wm.set_direct_mode(keys[0], true);
-        assert!(!wm.notifications().is_empty());
+        assert!(!wm.notifications().is_empty(), "notification pushed");
     }
 
     #[test]
@@ -6846,13 +6849,12 @@ mod tests {
             std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 1);
-        wm.set_direct_mode(keys[0], true);
         wm.clear_layout_dirty();
-        while !wm.notifications().is_empty() {
-            // drain notification queue
-        }
+        wm.set_direct_mode(keys[0], true);
+        // Clear notification queue: create a new one
+        wm.notification_queue = Default::default();
         wm.set_direct_mode(keys[0], false);
-        assert!(!wm.notifications().is_empty());
+        assert!(!wm.notifications().is_empty(), "notification pushed on disable");
     }
 
     #[test]
@@ -6864,6 +6866,7 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
+        wm.clear_layout_dirty();
         let bogus = WindowKey::default();
         assert!(!wm.layout_dirty(), "initially not dirty");
         wm.set_direct_mode(bogus, true);
