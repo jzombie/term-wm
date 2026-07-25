@@ -2582,7 +2582,11 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 disabled: self.is_monocle(),
             },
             MenuItem {
-                label: "Toggle Direct Mode".into(),
+                label: if self.direct_mode(self.focused_window()) {
+                    "Direct Mode: On".into()
+                } else {
+                    "Direct Mode: Off".into()
+                },
                 icon: Some("D"),
                 action: crate::actions::TermWmAction::ToggleDirectMode,
                 disabled: false,
