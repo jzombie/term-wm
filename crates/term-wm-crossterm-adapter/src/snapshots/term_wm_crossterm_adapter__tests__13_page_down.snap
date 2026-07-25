@@ -1,0 +1,17 @@
+---
+source: crates/term-wm-crossterm-adapter/src/lib.rs
+expression: result
+---
+Some(
+    Key(
+        KeyEvent {
+            code: PageDown,
+            modifiers: KeyModifiers {
+                shift: false,
+                control: false,
+                alt: false,
+            },
+            kind: Press,
+        },
+    ),
+)
