@@ -11,7 +11,7 @@ difference between the two modes is how their resize and drag handles appear.
 Every window gets a 1-cell-thick border drawn around it with:
 
   ┌───────────────────────────────┐
-  │terminal window title  D _ ▢ ✖ │   <- header row (1 cell tall)
+  │terminal window title  _ ▢ ✖ │   <- header row (1 cell tall)
   ├───────────────────────────────┤   <- separator
   │                               │
   │         content area          │
@@ -19,7 +19,7 @@ Every window gets a 1-cell-thick border drawn around it with:
   └───────────────────────────────┘
 
   - Top edge:      ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐   (1 cell tall)
-  - Header row:    │          title        D _ ▢ ✖ │   (1 cell tall)
+  - Header row:     │          title        _ ▢ ✖ │   (1 cell tall)
   - Separator:     ├ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┤   (1 cell tall)
   - Side edges:    │                               │   (1 cell wide)
   - Bottom edge:   └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘   (1 cell tall)
@@ -54,13 +54,12 @@ Content area = window_rect - (2 columns, 4 rows)
 1b. Title Buttons (right-aligned on the header row)
 ---------------------------------------------------
 
-  LEFT TO RIGHT on the header:  D   _   ▢   ✖
-                                 |   |   |   +-- Close
-                                 |   |   +------ Maximize
-                                 |   +---------- Minimize
-                                 +-------------- Toggle direct mode
+  LEFT TO RIGHT on the header:  _   ▢   ✖
+                                 |   |   +-- Close
+                                 |   +------ Maximize
+                                 +---------- Minimize
 
-  RIGHT TO LEFT (from the border):  ✖  ▢  _  D
+  RIGHT TO LEFT (from the border):  ✖  ▢  _
 
   4 cells on the header row, inset 1 column from the right border, with
   1 empty column between each button.
@@ -69,14 +68,12 @@ Content area = window_rect - (2 columns, 4 rows)
     Close (✖):    fg = error_bg   (red,   RGB 255, 61, 61)
     Maximize (▢): fg = accent     (green, RGB   0,230,118)
     Minimize (_): fg = warning_bg (amber, RGB 255,193,  7)
-    Direct  (D):  fg = header_style (same as title); when active inverts fg/bg
 
   HOVER STATE:
     All buttons gain BOLD modifier.
     Close (✖):    bg = error_bg   (red),   fg = menu_selected_fg (dark)
     Maximize (▢): bg = accent     (green), fg = menu_selected_fg (dark)
     Minimize (_): bg = warning_bg (amber), fg = menu_selected_fg (dark)
-    Direct  (D):  bg = accent_alt (amber), fg = menu_selected_fg (dark)
 
   The "D" cell also inverts fg <-> bg when direct mode is active (focused window).
 
@@ -93,9 +90,9 @@ Content area = window_rect - (2 columns, 4 rows)
     rect.x + 1            rect.x + rect.width - 1
          |                       |
          v                       v
-   ┌─────┬────────────────────┬────────┐
-   │     │  <- drag handle ->  D _ ▢ ✖ │
-   ├─────┴────────────────────┴────────┤
+    ┌─────┬────────────────────┬────────┐
+    │     │  <- drag handle ->  _ ▢ ✖ │
+    ├─────┴────────────────────┴────────┤
    │                                   │
    │                                   │
 
@@ -246,7 +243,7 @@ Content area = window_rect - (2 columns, 4 rows)
   + - |     Split handle hover frame
   ═ ║      Resize outline edge      (double-line)
   ╔ ╗ ╚ ╝  Resize outline corners   (double-line)
-  D _ ▢ ✖  Title buttons
+  _ ▢ ✖  Title buttons
   (space)   Header fill
 
 ===============================================================================

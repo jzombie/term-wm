@@ -167,7 +167,6 @@ fn register_window_chrome_hitboxes(registry: &mut HitboxRegistry, params: &Chrom
                 TermWmAction::CloseWindow => ChromeTarget::CloseButton(*key),
                 TermWmAction::MaximizeWindow => ChromeTarget::MaximizeButton(*key),
                 TermWmAction::MinimizeWindow => ChromeTarget::MinimizeButton(*key),
-                TermWmAction::ToggleDirectMode => ChromeTarget::ToggleDirectMode(*key),
                 _ => continue,
             };
             registry.register(
@@ -1092,7 +1091,7 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
         title,
         focused,
         floating,
-        direct_mode,
+        direct_mode: _,
         hover_pos,
         theme,
         wm_buttons,
@@ -1219,13 +1218,6 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
                         .bg(hover_bg)
                         .fg(hover_fg)
                         .add_modifier(Modifier::BOLD)
-                } else if matches!(btn.action, TermWmAction::ToggleDirectMode)
-                    && direct_mode
-                    && focused
-                {
-                    Style::default()
-                        .bg(theme.decorator_header_fg.to_ratatui())
-                        .fg(theme.decorator_header_bg.to_ratatui())
                 } else {
                     Style::default().bg(header_bg.to_ratatui()).fg(stoplight_fg)
                 };
@@ -1936,11 +1928,6 @@ mod tests {
                 action: TermWmAction::MinimizeWindow,
                 label: "Minimize Window",
                 symbol: "_",
-            },
-            WmButton {
-                action: TermWmAction::ToggleDirectMode,
-                label: "Toggle Direct Mode",
-                symbol: "D",
             },
         ]
     }

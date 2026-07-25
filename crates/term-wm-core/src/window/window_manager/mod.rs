@@ -2488,11 +2488,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 symbol: "_",
             });
         }
-        btns.push(WmButton {
-            action: TermWmAction::ToggleDirectMode,
-            label: "Toggle Direct Mode",
-            symbol: "D",
-        });
         btns
     }
 
@@ -2585,6 +2580,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 icon: Some("⊞"),
                 action: crate::actions::TermWmAction::ToggleTiling,
                 disabled: self.is_monocle(),
+            },
+            MenuItem {
+                label: "Toggle Direct Mode".into(),
+                icon: Some("D"),
+                action: crate::actions::TermWmAction::ToggleDirectMode,
+                disabled: false,
             },
         ];
 
