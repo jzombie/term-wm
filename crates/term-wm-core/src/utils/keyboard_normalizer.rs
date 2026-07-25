@@ -1,9 +1,13 @@
 // NOTE: This file provides `KeyboardNormalizer`, a lightweight helper for
-// normalizing raw keyboard `Event`s (e.g., converting Shift+Tab to BackTab
-// and filtering key-release events). It is _not_ a standalone keyboard
-// driver. The actual input driver behavior (queueing, `next_key`, and
+// normalizing raw keyboard `Event`s (e.g., filtering key-release events).
+// The BackTab → Tab+shift conversion is handled centrally in
+// `term-wm-crossterm-adapter` so that all input sources apply the same
+// normalization. Shift+Tab passes through here unchanged — the FocusPrev
+// keybinding matches Tab+Shift directly.
+// The actual input driver behavior (queueing, `next_key`, and
 // combined keyboard/mouse handling) is implemented in
 // `src/io/console_event_source.rs` under the consolidated `EventSource` trait.
+#[allow(unused_imports)]
 use crate::events::{Event, KeyCode, KeyKind};
 
 #[derive(Default)]
@@ -17,10 +21,8 @@ impl KeyboardNormalizer {
     pub fn normalize(&mut self, evt: Event) -> Option<Event> {
         match evt {
             Event::Key(key) => {
-                // Convert Shift+Tab to BackTab
-                if key.code == KeyCode::Tab && key.modifiers.shift {
-                    // Pass through as-is — FocusPrev keybinding matches Tab+Shift.
-                }
+                // Shift+Tab passes through — FocusPrev keybinding matches Tab+Shift.
+                // BackTab normalization is handled in term-wm-crossterm-adapter.
                 if cfg!(windows) {
                     match key.kind {
                         KeyKind::Release => return None,

@@ -3017,6 +3017,7 @@ dependencies = [
  "portable-pty",
  "term-session-muxio-service-definitions",
  "term-wm-core",
+ "term-wm-crossterm-adapter",
  "term-wm-pty-engine",
  "tokio",
  "tracing",
@@ -3078,6 +3079,7 @@ dependencies = [
  "term-session-server",
  "term-wm-console",
  "term-wm-core",
+ "term-wm-crossterm-adapter",
  "term-wm-layout-engine",
  "term-wm-pty-engine",
  "term-wm-render",
@@ -3099,6 +3101,7 @@ dependencies = [
  "libc",
  "ratatui",
  "term-wm-core",
+ "term-wm-crossterm-adapter",
  "term-wm-layout-engine",
  "term-wm-pty-engine",
  "term-wm-render",
@@ -3123,6 +3126,14 @@ dependencies = [
  "term-wm-render",
  "textwrap",
  "tracing",
+]
+
+[[package]]
+name = "term-wm-crossterm-adapter"
+version = "0.8.20-alpha"
+dependencies = [
+ "crossterm",
+ "term-wm-core",
 ]
 
 [[package]]

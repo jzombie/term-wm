@@ -118,6 +118,7 @@ async fn session_mouse_bytes_forwarded() {
 }
 
 #[tokio::test]
+#[serial]
 async fn session_osc52_in_output() {
     let mock = get_mock_bin();
     let (client, _dir) = spawn_session(vec![mock, "osc52".into()], TEST_COLS, TEST_ROWS).await;

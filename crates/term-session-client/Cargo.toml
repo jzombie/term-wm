@@ -22,6 +22,7 @@ muxio-tokio-rpc-ipc-client = { workspace = true }
 portable-pty = { workspace = true }
 term-session-muxio-service-definitions = { workspace = true }
 term-wm-core = { workspace = true }
+term-wm-crossterm-adapter = { workspace = true }
 term-wm-pty-engine = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
