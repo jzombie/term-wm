@@ -24,13 +24,37 @@ Verify that `crates/term-wm-crossterm-adapter/` passes all keyboard and mouse ev
 
 3. **🟡 `KeyEventState` dropped** — Crossterm 0.29 `KeyEvent` has a `state: KeyEventState` field (CapsLock/NumLock flags). The core `KeyEvent` has no equivalent. **Design limitation, not a bug in the adapter.**
 
-4. **🟢 `KeyboardNormalizer` drops `KeyKind::Release` on all platforms, `KeyKind::Repeat` on Windows** — This happens downstream of the adapter in `unified_event_source.rs`, `console_event_source.rs`. Intentional behavior.
+4. **🔴 `KeyboardNormalizer` drops `KeyKind::Repeat` on Windows** — A localized workaround for Windows ConPTY Esc bouncing was improperly generalized during a refactor. The old `esc_down` state tracked Esc repeats specifically; when that was removed (Esc dedup moved to WM's `super_passthrough_window`), the blanket `KeyKind::Repeat => return None` was left in place. This drops **all** repeat keys on Windows, breaking scrolling, cursor movement, and continuous typing within child PTYs. **Fix: remove the Windows-specific Repeat suppression and consolidate OS branches.**
 
 5. **🟢 `term-session-client` filters to only Press/Repeat key events** — Downstream consumer filtering, intentional (only sends to PTY).
 
 ## Proposed Changes
 
-### 1. Add media key support to `translate_key_code` (`crates/term-wm-crossterm-adapter/src/lib.rs`)
+### 1. Fix Windows Repeat suppression (`crates/term-wm-core/src/utils/keyboard_normalizer.rs`)
+
+Remove the `KeyKind::Repeat => return None` branch and consolidate the `cfg!(windows)` conditional into a single check that only drops `KeyKind::Release` on all platforms:
+
+```rust
+pub fn normalize(&mut self, evt: Event) -> Option<Event> {
+    match evt {
+        Event::Key(key) => {
+            // Shift+Tab passes through — FocusPrev keybinding matches Tab+Shift.
+            // BackTab normalization is handled in term-wm-crossterm-adapter.
+            if key.kind == KeyKind::Release {
+                return None;
+            }
+            Some(Event::Key(key))
+        }
+        other => Some(other),
+    }
+}
+```
+
+### 2. Update tests (`crates/term-wm-core/src/utils/keyboard_normalizer.rs`)
+
+Rename `repeat_key_passes_through_on_unix` to `repeat_key_passes_through`. Remove the `#[cfg(target_os = "windows")]` conditional assertions — enforce that `KeyKind::Repeat` passes through unconditionally on all platforms.
+
+### 3. Add media key support to `translate_key_code` (`crates/term-wm-crossterm-adapter/src/lib.rs`)
 
 Add explicit match arms for crossterm Media keys before the wildcard, using the correct type `MediaKeyCode` and consolidating discrete `Play`/`Pause` into the core `MediaPlayPause` variant:
 
@@ -41,24 +65,24 @@ crossterm::event::KeyCode::Media(crossterm::event::MediaKeyCode::TrackNext) => S
 crossterm::event::KeyCode::Media(crossterm::event::MediaKeyCode::TrackPrevious) => Some(KeyCode::MediaTrackPrevious),
 ```
 
-### 2. Add tests for media key translation
+### 4. Add tests for media key translation
 
 Add tests covering:
 - Each media key variant maps correctly
 - `try_translate_key_event` returns `Some` for media keys
 - `try_translate_event` with media key events returns the correct `Event::Key`
 
-### 3. Run verification
+### 5. Run verification
 
 ```bash
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test -p term-wm-crossterm-adapter
+cargo test
 ```
 
 ## Files to Modify
-- `/Volumes/2TB Storage Vault/term-wm/crates/term-wm-crossterm-adapter/src/lib.rs`
+- `crates/term-wm-core/src/utils/keyboard_normalizer.rs`
+- `crates/term-wm-crossterm-adapter/src/lib.rs`
 
 ## Verification
-- `cargo test -p term-wm-crossterm-adapter` — existing tests must pass
 - `cargo test` — full suite to confirm no regressions
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
