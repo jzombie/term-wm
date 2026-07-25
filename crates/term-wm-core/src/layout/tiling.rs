@@ -96,6 +96,14 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
         self.root.replace_void_by_id(void_id, new_leaf)
     }
 
+    pub fn replace_leaf_with_void(&mut self, key: Id) -> Option<usize> {
+        self.root.replace_leaf_with_void(key)
+    }
+
+    pub fn remove_void_by_id(&mut self, void_id: usize) -> bool {
+        self.root.remove_void_by_id(void_id)
+    }
+
     pub fn swap_nodes(&mut self, source: &Id, target: &Id) -> bool {
         self.root.swap_leaves(source, target)
     }

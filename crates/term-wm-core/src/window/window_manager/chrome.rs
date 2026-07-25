@@ -1,6 +1,7 @@
 use super::WindowManager;
 use crate::actions::TermWmAction;
 use crate::components::{Component, Overlay, WmComponent};
+use crate::layout::LayoutNode;
 use crate::window::WindowKey;
 use crate::window::entry::{ClosePolicy, WindowState};
 
@@ -19,22 +20,26 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         let is_maxed = self.window(key).is_some_and(|w| w.is_maximized);
 
         if is_maxed {
-            // UNMAXIMIZE PATH — infer tiled vs floating from prev_floating_rect
+            // UNMAXIMIZE PATH
             let prev_float = self.take_prev_floating_rect(key);
             if let Some(prev_spec) = prev_float {
-                // Was originally floating: restore pre-maximize floating rect
+                // Was floating: restore pre-maximize floating rect
                 self.set_floating_rect(key, Some(prev_spec));
             } else {
-                // Was originally tiled: clear floating rect first so
-                // reattach_to_tiling_layout doesn't see the full-screen rect,
-                // then reinsert into the tiling tree.
+                // Was tiled: restore Void → Leaf in layout tree
                 self.clear_floating_rect(key);
-                self.reattach_to_tiling_layout(key);
+                let void_id = self.window(key).and_then(|w| w.void_id);
+                if let Some(vid) = void_id
+                    && let Some(ref mut layout) = self.managed_layout
+                {
+                    layout.replace_void_by_id(vid, LayoutNode::leaf(key));
+                }
             }
 
             if let Some(w) = self.windows.get_mut(key) {
                 w.is_maximized = false;
                 w.borders_enabled = true;
+                w.void_id = None;
             }
             self.bring_floating_to_front_key(key);
             return;
@@ -52,8 +57,13 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             // Was floating: save current floating rect to prev_floating_rect
             self.set_prev_floating_rect(key, Some(current));
         } else {
-            // Was tiled: detach from tiling layout; prev_floating_rect stays None
-            self.detach_from_tiling_layout(key);
+            // Was tiled: replace Leaf with Void in-place, preserving tree
+            if let Some(ref mut layout) = self.managed_layout
+                && let Some(void_id) = layout.replace_leaf_with_void(key)
+                && let Some(w) = self.windows.get_mut(key)
+            {
+                w.void_id = Some(void_id);
+            }
             self.set_prev_floating_rect(key, None);
         }
 

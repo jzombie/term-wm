@@ -388,6 +388,23 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
         }
     }
 
+    /// Replace a leaf identified by `id` with a Void placeholder, preserving
+    /// the tree structure and split weights. Returns the fresh void_id, or
+    /// None if the leaf was not found.
+    pub fn replace_leaf_with_void(&mut self, id: Id) -> Option<usize> {
+        let mut path = Vec::new();
+        if !self.find_leaf_path(&id, &mut path, &mut Vec::new()) {
+            return None;
+        }
+        let void_id = VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+        if let Some(node) = self.node_at_path_mut(&path) {
+            *node = LayoutNode::Void(void_id);
+            Some(void_id)
+        } else {
+            None
+        }
+    }
+
     pub fn insert_leaf(&mut self, target: Id, insert: Id, position: InsertPosition) -> bool {
         match self {
             LayoutNode::Leaf(current) => {
@@ -614,6 +631,36 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                     if child.replace_void_by_id(void_id, new_leaf.clone()) {
                         return true;
                     }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// Remove a Void node by its ID from the tree. Returns true if the void
+    /// was found and removed, false otherwise. Cleans up empty parent splits.
+    pub fn remove_void_by_id(&mut self, void_id: usize) -> bool {
+        match self {
+            LayoutNode::Void(id) if *id == void_id => {
+                *self = LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed));
+                true
+            }
+            LayoutNode::Split { children, weights, .. } => {
+                let mut i = 0;
+                while i < children.len() {
+                    if children[i].remove_void_by_id(void_id) {
+                        // If the child was replaced with a Void (the one we
+                        // just replaced above), remove it from the split.
+                        if matches!(children[i], LayoutNode::Void(_)) {
+                            children.remove(i);
+                            if i < weights.len() {
+                                weights.remove(i);
+                            }
+                        }
+                        return true;
+                    }
+                    i += 1;
                 }
                 false
             }
