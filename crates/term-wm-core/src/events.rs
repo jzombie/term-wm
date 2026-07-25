@@ -429,4 +429,36 @@ mod tests {
         let result = m.to_local_offset(make_screen(), 10, 5, 80, 24);
         assert_eq!(result.map(|r| (r.column, r.row)), Some((15, 8)));
     }
+
+    // ── KeyEvent::to_pty_bytes ─────────────────────────────────────────
+
+    fn key(code: KeyCode, shift: bool) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers {
+                shift,
+                control: false,
+                alt: false,
+            },
+            kind: KeyKind::Press,
+        }
+    }
+
+    #[test]
+    fn test_to_pty_bytes_csi_backtab() {
+        let ev = key(KeyCode::Tab, true);
+        assert_eq!(ev.to_pty_bytes(), b"\x1b[Z");
+    }
+
+    #[test]
+    fn test_to_pty_bytes_standard_delegation() {
+        let ev = key(KeyCode::Char('a'), false);
+        assert_eq!(ev.to_pty_bytes(), b"a");
+    }
+
+    #[test]
+    fn test_to_pty_bytes_unmappable_returns_empty() {
+        let ev = key(KeyCode::MediaPlayPause, false);
+        assert!(ev.to_pty_bytes().is_empty());
+    }
 }
