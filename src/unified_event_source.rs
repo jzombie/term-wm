@@ -617,12 +617,10 @@ mod tests {
 
         source.drain_pending();
 
-        // Count surviving events — Release is always filtered, Repeat only on Windows
-        let expected = if cfg!(windows) { 2 } else { 3 };
         assert_eq!(
             source.input_buffer.len(),
-            expected,
-            "Release must be filtered; on non-Windows Repeat survives"
+            3,
+            "Only Release events should be filtered by normalization"
         );
 
         // Verify Release event (index 1) is absent
