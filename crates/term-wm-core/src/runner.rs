@@ -438,20 +438,20 @@ where
                             TermWmAction::Quit | TermWmAction::ExitUi => {
                                 app.open_exit_confirm();
                             }
-                            TermWmAction::CloseWindow(id) => {
-                                app.wm().close_window(id);
+                            TermWmAction::CloseWindow(key) => {
+                                app.wm().close_window(key);
                             }
                             TermWmAction::NewWindow => {
                                 app.wm_new_window()?;
                             }
-                            TermWmAction::MinimizeWindow(id) => {
-                                app.wm().minimize_window(id);
+                            TermWmAction::MinimizeWindow(key) => {
+                                app.wm().minimize_window(key);
                             }
-                            TermWmAction::MaximizeWindow(id) => {
-                                app.wm().toggle_maximize(id);
+                            TermWmAction::MaximizeWindow(key) => {
+                                app.wm().toggle_maximize(key);
                             }
-                            TermWmAction::ToggleDirectMode(id) => {
-                                app.wm().toggle_direct_mode(id);
+                            TermWmAction::ToggleDirectMode(key) => {
+                                app.wm().toggle_direct_mode(key);
                             }
                             TermWmAction::ToggleMonocle => {
                                 app.wm().toggle_monocle();
