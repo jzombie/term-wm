@@ -24,16 +24,31 @@ samply record --save-only -o samply.json ./target/release/term-wm -n 2 "cat /dev
 
 ## Cross-Platform Idle Wakeup & Context Switch Metrics
 
-To measure how frequently a process interrupts CPU low-power sleep states on Linux or Windows, you have to look at **CPU Wakeups**, **Context Switches**, or **Timer Expirations** using dedicated profiling tools.
+No mainstream OS exposes a simple "Idle Wakeups" column in its default task manager. To measure how frequently a process interrupts CPU low-power sleep states, you have to look at **CPU Wakeups**, **Context Switches**, or **Timer Expirations** using dedicated profiling tools.
 
-### 1. Linux
+### 1. macOS
 
-Linux has the closest direct equivalent to macOS's "Idle Wake Ups" metric, specifically through power-management tools.
+Activity Monitor's **Idle Wake Ups** column is the most direct GUI metric available on any platform. For deeper analysis, use the command-line tool `powermetrics`.
 
 #### Key Tools & Metrics
 
-* **`powertop` (Direct Equivalent):**
-This is the exact tool to use if you want to find battery-draining apps. `powertop` shows a **`Wakeups/sec`** column per process and timer, measuring how many times per second a thread forces a CPU core out of an idle C-state.
+* **Activity Monitor (GUI):**
+Add the **Idle Wake Ups** column via View → Columns. This shows per-process wakeups/sec — how many times a second a thread rouses the CPU from an idle state.
+
+* **`powermetrics` (CLI):**
+Provides per-process wakeup and interrupt statistics at a configurable sampling interval.
+```bash
+sudo powermetrics --samplers tasks -i 1000
+```
+
+### 2. Linux
+
+Linux offers power-management tools with a direct equivalent to macOS's idle wakeups metric.
+
+#### Key Tools & Metrics
+
+* **`powertop`:**
+The closest cross-platform equivalent to macOS's idle wakeup tracking. Shows a **`Wakeups/sec`** column per process and timer, measuring how many times per second a thread forces a CPU core out of an idle C-state.
 ```bash
 sudo powertop
 ```
@@ -51,7 +66,7 @@ Provides a quick, real-time snapshot of system-wide interrupts (`in`) and contex
 vmstat 1
 ```
 
-### 2. Windows
+### 3. Windows
 
 Windows Task Manager does not show CPU wakeups. Instead, Windows measures **Context Switches per Second** and **Timer Resolution requests**.
 
@@ -64,8 +79,7 @@ Windows' built-in system profiler allows you to track context switches per threa
 3. This tracks how many times per second Windows switches execution to that thread.
 
 * **Windows Performance Analyzer (WPA / WPT):**
-This is Microsoft's official deep-dive profiling suite (part of the Windows Assessment and Deployment Kit).
-* The **CPU Usage (Precise)** graph logs exact thread transitions, timer expirations, and CPU C-state wakeups per process down to the microsecond.
+Microsoft's official deep-dive profiling suite (part of the Windows Assessment and Deployment Kit). The **CPU Usage (Precise)** graph logs exact thread transitions, timer expirations, and CPU C-state wakeups per process down to the microsecond.
 
 * **`powercfg` (Timer Resolution Analysis):**
 A common cause of high CPU wakeups on Windows is apps requesting high-frequency system timers (e.g., requesting a 1ms timer tick instead of the default 15.6ms).
