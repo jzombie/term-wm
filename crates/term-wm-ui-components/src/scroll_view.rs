@@ -601,6 +601,10 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
         self.content.borrow_mut().take_pending_title()
     }
 
+    fn take_alternate_screen_transition(&mut self) -> Option<bool> {
+        self.content.borrow_mut().take_alternate_screen_transition()
+    }
+
     fn clear_selection(&mut self) {
         self.content.borrow_mut().clear_selection();
     }
