@@ -1,5 +1,5 @@
 use portable_pty::{CommandBuilder, PtySize};
-use term_wm_pty_engine::{Pty, PtyResult};
+use term_wm_pty_engine::{Pty, PtyResult, PtyStatus};
 
 pub struct Session {
     pub id: u64,
@@ -91,5 +91,9 @@ impl Session {
 
     pub fn generate_snapshot(&mut self) -> Vec<u8> {
         self.pty.generate_snapshot()
+    }
+
+    pub fn set_status_callback(&mut self, cb: Option<Box<dyn Fn(PtyStatus) + Send + Sync>>) {
+        self.pty.set_status_callback(cb);
     }
 }

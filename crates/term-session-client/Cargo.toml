@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
+crossbeam-channel = { workspace = true }
 crossterm = { workspace = true, features = ["bracketed-paste"] }
 libc = { workspace = true }
 muxio-core = { workspace = true }
