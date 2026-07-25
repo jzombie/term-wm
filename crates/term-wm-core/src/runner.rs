@@ -243,6 +243,32 @@ where
     event_loop
         .driver()
         .set_mouse_capture(app.wm().mouse_capture_enabled())?;
+
+    // ── Initial pre-loop render ──────────────────────────────────────
+    //
+    // Render the initial frame unconditionally before entering the event
+    // loop.  The FramePacer cannot produce the first frame: on the very
+    // first handler(None) call, notify_pending() sets a deadline 16ms
+    // in the future, and try_expire() checks the same instant — so the
+    // deadline is always too far ahead.  Without this pre-loop render,
+    // input-driven sources (ConsoleEventSource, test mocks) would park
+    // in PowerSaver and never draw until a hardware interrupt arrives.
+    //
+    // The catch_unwind boundary is required because some components or
+    // tests intentionally panic on frame zero (e.g. render_panic test).
+    // Without it, an uncaught panic would abort the process or skip the
+    // event loop entirely.  On panic, repair() restores the terminal so
+    // the loop can continue with a clean slate on the next frame.
+    app.wm().begin_frame();
+    app.wm().prepare_draw();
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        output.draw(|frame| draw(frame, app))
+    }))
+    .is_err()
+    {
+        output.repair()?;
+    }
+
     event_loop.run(|driver, event| {
         let handler = || -> io::Result<ControlFlow> {
             // Process expired system tasks (super-passthrough, drag-snap)
@@ -336,7 +362,6 @@ where
             };
             let mut did_panic = false;
             let mut did_render = false;
-            let now = Instant::now();
             if let Some(evt) = event {
                 // Synthesized key event from bottom-panel hint click takes priority
                 let evt = app.wm().take_synthetic_event().unwrap_or(evt);
@@ -553,10 +578,21 @@ where
                 }
                 update_selection_snapshot(app);
 
+                // ── FramePacer arm ────────────────────────────────────
+                //
+                // Each call to notify_pending / try_expire / time_until_
+                // deadline passes a fresh Instant::now().  DO NOT capture
+                // `let now = Instant::now()` at the top of the handler and
+                // reuse it — notify_pending(now) sets deadline = now+16ms,
+                // and try_expire(now) checks the same `now` against it.
+                // The deadline would always be 16ms in the future and
+                // try_expire would never return true, spinning the loop
+                // at max speed until ~16ms of wall time passes.
+                //
                 // Arm the pacer when any component requested a redraw or the
                 // driver has background work (PTY data) that bypassed Some(evt).
                 if driver.take_redraw_request() || driver_has_work {
-                    frame_pacer.notify_pending(now);
+                    frame_pacer.notify_pending(Instant::now());
                 }
 
                 frame_pacer.set_interval(if app.wm().is_dragging_window() {
@@ -565,11 +601,23 @@ where
                     Duration::from_millis(16) // 60 FPS otherwise
                 });
 
-                if frame_pacer.try_expire(now) {
-                    // Gate BOTH frame init AND render together so the
-                    // HitboxRegistry survives between frames.  Running
-                    // begin_frame() without output.draw() would clear
-                    // hitboxes on every idle tick, making clicks vanish.
+                if frame_pacer.try_expire(Instant::now()) {
+                    // ── Frame render gate ─────────────────────────────
+                    //
+                    // begin_frame() clears the HitboxRegistry.  prepare_
+                    // draw() prepares layout state.  output.draw() re-
+                    // populates the HitboxRegistry during the component
+                    // traversal.  All three must execute together —
+                    // running begin_frame() without output.draw() would
+                    // empty the registry on every idle tick, making every
+                    // click and drag fall through to the background.
+                    //
+                    // The did_render flag gates take_dirty_windows() in
+                    // flush_state_changes.  If try_expire() returns false
+                    // and we skip the draw, dirty windows must NOT be
+                    // consumed — otherwise the EventSource drops to
+                    // PowerSaver (3600s poll) and sleeps through the
+                    // next FramePacer deadline.
                     app.wm().begin_frame();
                     app.wm().prepare_draw();
                     // Catch render panics (e.g. u16 subtraction overflow with a
@@ -597,7 +645,7 @@ where
                 driver,
                 ControlFlow::Continue,
                 did_render && !did_panic,
-                frame_pacer.time_until_deadline(now),
+                frame_pacer.time_until_deadline(Instant::now()),
             )
         };
 
@@ -1345,5 +1393,89 @@ mod power_calibration_tests {
 
         let second = EventSource::take_dirty_windows(&mut driver);
         assert!(second.is_empty(), "dirty keys must drain between cycles");
+    }
+
+    /// Minimal backend that satisfies the RenderBackend trait.
+    struct MockBackend;
+    impl term_wm_render::RenderBackend for MockBackend {
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+        fn acquire_mask(&mut self) -> &mut [u8] {
+            &mut []
+        }
+    }
+
+    /// Minimal output that runs the draw closure without a real terminal.
+    struct NoopOutput;
+    impl RenderTarget for NoopOutput {
+        fn enter(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+        fn exit(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+        fn draw<F>(&mut self, f: F) -> io::Result<()>
+        where
+            F: FnOnce(&mut dyn term_wm_render::RenderBackend),
+        {
+            f(&mut MockBackend);
+            Ok(())
+        }
+    }
+
+    /// App that quits after exactly one draw.
+    struct QuitOnFirstDraw<C: Component<TermWmAction>> {
+        wm: WindowManager<C, crate::components::NoopWmComponent, crate::components::NoopOverlay>,
+        draws: usize,
+    }
+    impl<C: Component<TermWmAction>>
+        WindowManagerHost<C, crate::components::NoopWmComponent, crate::components::NoopOverlay>
+        for QuitOnFirstDraw<C>
+    {
+        fn wm(
+            &mut self,
+        ) -> &mut WindowManager<C, crate::components::NoopWmComponent, crate::components::NoopOverlay>
+        {
+            &mut self.wm
+        }
+        fn quit_requested(&self) -> bool {
+            self.draws >= 1
+        }
+    }
+
+    #[test]
+    fn initial_render_fires_before_event_loop() {
+        let mut wm = crate::window::WindowManager::<crate::components::NoopComponent>::with_config(
+            crate::wm_config::WmConfig::default(),
+            std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.create_window(crate::components::NoopComponent);
+        let mut app = QuitOnFirstDraw { wm, draws: 0 };
+        let mut output = NoopOutput;
+        let mut driver = SpyEventSource {
+            captured_max_sleep: None,
+            mock_dirty_windows: std::collections::HashSet::new(),
+        };
+
+        let result = run_event_loop(
+            &mut output,
+            &mut driver,
+            &mut app,
+            crate::task_scheduler::TaskScheduler::<crate::actions::SystemTask>::new(),
+            |k| k,
+            |_backend, app| {
+                app.draws += 1;
+            },
+        );
+
+        assert!(result.is_ok(), "run_event_loop should return Ok");
+        assert_eq!(
+            app.draws, 1,
+            "draw must fire from pre-loop initial render (FramePacer never armed)"
+        );
     }
 }

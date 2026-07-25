@@ -75,7 +75,23 @@ impl RenderTarget for TestOutput {
 struct ImmediateDriver;
 
 impl EventSource for ImmediateDriver {
-    fn poll(&mut self, _timeout: Duration) -> io::Result<bool> {
+    // ── Mock poll with real-time blocking ───────────────────────────
+    //
+    // Block for the requested timeout so the FramePacer deadline has
+    // time to expire between handler iterations.  Without this sleep,
+    // poll() returns Ok(false) instantly and the event loop spins at
+    // max speed — the 16ms between notify_pending() and try_expire()
+    // never passes in wall time, try_expire() always returns false,
+    // the render never fires, and the test deadlocks.
+    //
+    // This mirrors what crossterm::event::poll(timeout) does at the
+    // OS level: block until either an event arrives or the timeout
+    // expires.  Zero-length timeouts (used in the inner drain loop)
+    // return immediately.
+    fn poll(&mut self, timeout: Duration) -> io::Result<bool> {
+        if !timeout.is_zero() {
+            std::thread::sleep(timeout);
+        }
         Ok(false)
     }
 
@@ -192,7 +208,14 @@ struct WakeupDriver {
 }
 
 impl EventSource for WakeupDriver {
-    fn poll(&mut self, _: Duration) -> io::Result<bool> {
+    // ── Mock poll with real-time blocking ───────────────────────────
+    // Same rationale as ImmediateDriver::poll: without blocking for the
+    // timeout the loop spins, the FramePacer deadline never expires in
+    // wall time, and try_expire() deadlocks.
+    fn poll(&mut self, timeout: Duration) -> io::Result<bool> {
+        if !timeout.is_zero() {
+            std::thread::sleep(timeout);
+        }
         Ok(false)
     }
     fn read(&mut self) -> io::Result<Event> {
