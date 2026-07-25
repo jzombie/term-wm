@@ -88,16 +88,6 @@ pub fn try_translate_key_event(key: crossterm::event::KeyEvent) -> Option<KeyEve
     })
 }
 
-/// Infallible: wraps `try_translate_key_event`, maps unknown keys to `KeyCode::Esc`.
-pub fn translate_key_event(key: crossterm::event::KeyEvent) -> KeyEvent {
-    let modifiers = translate_key_modifiers(key.modifiers);
-    try_translate_key_event(key).unwrap_or(KeyEvent {
-        code: KeyCode::Esc,
-        modifiers,
-        kind: KeyKind::Press,
-    })
-}
-
 // ── Mouse event translation ────────────────────────────────────────────────
 
 pub fn translate_mouse_event(mouse: crossterm::event::MouseEvent) -> MouseEvent {
@@ -247,18 +237,6 @@ mod tests {
             let result = try_translate_event(evt);
             assert!(result.is_some(), "media event should not be dropped");
         }
-    }
-
-    #[test]
-    fn test_infallible_translate_fallback_preserves_modifiers() {
-        let mods =
-            crossterm::event::KeyModifiers::CONTROL.union(crossterm::event::KeyModifiers::ALT);
-        let key = make_key(crossterm::event::KeyCode::CapsLock, mods);
-        let result = translate_key_event(key);
-        assert_eq!(result.code, KeyCode::Esc);
-        assert!(result.modifiers.control);
-        assert!(result.modifiers.alt);
-        assert!(!result.modifiers.shift);
     }
 
     // ── Compile-time surjectivity ────────────────────────────────────────
