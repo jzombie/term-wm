@@ -3062,7 +3062,10 @@ mod tests {
 
         // Maximize the tiled window
         wm.toggle_maximize(keys[0]);
-        assert!(wm.windows.get(keys[0]).unwrap().is_maximized, "is_maximized set");
+        assert!(
+            wm.windows.get(keys[0]).unwrap().is_maximized,
+            "is_maximized set"
+        );
 
         // Focus the other tiled window → triggers auto-unmaximize
         wm.focus_window_key(keys[1]);
@@ -3117,7 +3120,10 @@ mod tests {
 
         // Maximize the floating window
         wm.toggle_maximize(keys[0]);
-        assert!(wm.windows.get(keys[0]).unwrap().is_maximized, "is_maximized set");
+        assert!(
+            wm.windows.get(keys[0]).unwrap().is_maximized,
+            "is_maximized set"
+        );
 
         // Focus the tiled window → triggers auto-unmaximize
         wm.focus_window_key(keys[1]);

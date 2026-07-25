@@ -646,7 +646,9 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
                 *self = LayoutNode::Void(VOID_ID_COUNTER.fetch_add(1, Ordering::Relaxed));
                 true
             }
-            LayoutNode::Split { children, weights, .. } => {
+            LayoutNode::Split {
+                children, weights, ..
+            } => {
                 let mut i = 0;
                 while i < children.len() {
                     if children[i].remove_void_by_id(void_id) {
