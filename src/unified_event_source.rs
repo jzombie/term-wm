@@ -466,10 +466,9 @@ impl Drop for UnifiedEventSource {
 
 #[cfg(test)]
 mod tests {
-    use serial_test::serial;
-
     use super::*;
     use crate::events::{KeyCode, KeyKind, KeyModifiers};
+    use serial_test::serial;
 
     #[test]
     fn test_translate_crossterm_event_drops_unsupported_keys() {
