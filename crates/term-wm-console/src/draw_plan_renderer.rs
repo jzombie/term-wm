@@ -38,6 +38,8 @@ use term_wm_core::chrome::{
 // ── Chrome layout constants (console-specific) ──────────────
 const HEADER_BUTTON_GAP: u16 = 2;
 const EDGE_INDEX_ADJUST: u16 = 1;
+/// Shift window-control buttons 1 cell left (tiled) or right (floating) for visual alignment.
+const CHROME_BUTTON_FLOAT_OFFSET: u16 = 1;
 
 /// Register chrome hitboxes for a window (resize, drag, close, maximize buttons).
 /// Parameters for chrome hitbox registration.
@@ -49,6 +51,7 @@ struct ChromeHitboxParams {
     wm_buttons: Vec<term_wm_core::window::WmButton>,
     borders_enabled: bool,
     header_enabled: bool,
+    floating: bool,
 }
 
 /// Register chrome hitboxes for a window (resize, drag, close, maximize buttons).
@@ -67,6 +70,7 @@ fn register_window_chrome_hitboxes(registry: &mut HitboxRegistry, params: &Chrom
         wm_buttons,
         borders_enabled,
         header_enabled,
+        floating,
     } = params;
     let (width, height) = *frame_size;
     let (ox, oy) = *screen_origin;
@@ -153,6 +157,11 @@ fn register_window_chrome_hitboxes(registry: &mut HitboxRegistry, params: &Chrom
                     .saturating_sub(HEADER_BUTTON_GAP * i as u16)
             } else {
                 btn_right.saturating_sub(HEADER_BUTTON_GAP * i as u16)
+            };
+            let bx = if *floating {
+                bx.saturating_add(CHROME_BUTTON_FLOAT_OFFSET)
+            } else {
+                bx.saturating_sub(CHROME_BUTTON_FLOAT_OFFSET)
             };
             let target = match btn.action {
                 TermWmAction::CloseWindow => ChromeTarget::CloseButton(*key),
@@ -248,6 +257,7 @@ pub fn render_window_chrome(
             wm_buttons: ctx.wm_buttons.clone(),
             borders_enabled: ctx.borders_enabled,
             header_enabled: ctx.header_enabled,
+            floating: ctx.floating,
         },
     );
 
@@ -1182,6 +1192,11 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
                         .saturating_sub(HEADER_BUTTON_GAP * i as u16)
                 } else {
                     header_right.saturating_sub(HEADER_BUTTON_GAP * i as u16)
+                };
+                let bx = if floating {
+                    bx.saturating_add(CHROME_BUTTON_FLOAT_OFFSET)
+                } else {
+                    bx.saturating_sub(CHROME_BUTTON_FLOAT_OFFSET)
                 };
                 let rel_x = bx as usize - buffer.area.x as usize;
                 let cell = &mut buffer.content[rel_y * buf_w + rel_x];
