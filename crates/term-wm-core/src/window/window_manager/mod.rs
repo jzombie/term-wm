@@ -2683,7 +2683,7 @@ fn map_layout_node(node: &LayoutNode<WindowKey>) -> LayoutNode<WindowKey> {
             weights: weights.clone(),
             resizable: *resizable,
         },
-        LayoutNode::Void(id) => LayoutNode::Void(*id),
+        LayoutNode::Void(key) => LayoutNode::Void(*key),
     }
 }
 

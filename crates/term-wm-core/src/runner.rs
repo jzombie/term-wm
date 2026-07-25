@@ -784,7 +784,7 @@ pub fn auto_layout_for_windows(windows: &[WindowKey]) -> Option<TilingLayout<Win
     let first = *windows_iter.next().unwrap();
     let mut root: BspNode<WindowKey> = BspNode::leaf(first);
 
-    for (depth, &id) in windows_iter.enumerate() {
+    for (depth, &key) in windows_iter.enumerate() {
         let orientation = heuristic.choose(default_area, depth);
         let position = match orientation {
             term_wm_layout_engine::Orientation::Horizontal => {
@@ -799,7 +799,7 @@ pub fn auto_layout_for_windows(windows: &[WindowKey]) -> Option<TilingLayout<Win
         if let Some(&last) = all_ids.last() {
             let _ = root.insert_leaf(
                 last,
-                id,
+                key,
                 position,
                 default_area,
                 &term_wm_layout_engine::SizeConstraints {
