@@ -1,88 +1,132 @@
-# Plan: Audit Crossterm Adapter Event Fidelity
+# Plan: Crossterm Adapter Event Fidelity & Interface Hardening
 
 ## Goals
-Verify that `crates/term-wm-crossterm-adapter/` passes all keyboard and mouse events through without dropping or modifying them adversely.
+Guarantee that `crates/term-wm-crossterm-adapter/` passes all keyboard and mouse events through without silent drops or adverse modification, using **compile-time enforcement** rather than ad-hoc tests.
 
-## Findings
+## Corrective Actions Completed
 
-### Adapter (`crates/term-wm-crossterm-adapter/src/lib.rs`)
-
-| Aspect | Status | Details |
+| Change | Commit | Status |
 |---|---|---|
-| All crossterm `Event` variants routed | ✅ | Key, Mouse, Resize, FocusGained, FocusLost, Paste — all handled |
-| All mouse event kinds mapped | ✅ | Down→Press, Up→Release, Drag, Moved, ScrollUp/Down/Left/Right |
-| All mouse buttons mapped | ✅ | Left, Right, Middle |
-| `KeyEventKind` faithfully forwarded | ✅ | Press→Press, Repeat→Repeat, Release→Release |
-| `KeyModifiers` faithfully forwarded | ✅ | shift/control/alt flags mirrored |
-| BackTab normalization | ⚠️ Intentional | BackTab→Tab+shift (crossterm `BackTab` becomes core `Tab` + `shift: true`) |
+| Media key mapping (PlayPause/Play/Pause → `MediaPlayPause`, Stop, TrackNext, TrackPrevious) | `0c256a7` | ✅ |
+| Remove Windows-specific `KeyKind::Repeat` suppression in `KeyboardNormalizer` | `72e1bba` | ✅ |
+| Rename tests, consolidate OS branches in normalizer | `72e1bba`, `4ddce3c` | ✅ |
 
-### Issues Found
+## Remaining Work — Architectural Hardening
 
-1. **🔴 Media keys dropped despite core support** — `translate_key_code` wildcard `_ => None` catches `crossterm::event::KeyCode::Media(MediaKey::{PlayPause, Stop, TrackNext, TrackPrevious})`. The core `KeyCode` has matching variants (`MediaPlayPause`, `MediaStop`, `MediaTrackNext`, `MediaTrackPrevious`). These events are silently dropped (or mapped to `Esc` via the infallible path). **Fix: add explicit matches for crossterm Media keys.**
+### 1. 🔴 Eliminate Wildcard in `translate_key_code` (`crates/term-wm-crossterm-adapter/src/lib.rs`)
 
-2. **🟡 Unknown keys → `Esc` in infallible path** — `translate_key_event` maps unrecognized keys (CapsLock, NumLock, etc.) to `KeyCode::Esc` with preserved modifiers. This means pressing CapsLock registers as an Esc press with those modifiers. `try_translate_event` correctly returns `None` for these. The infallible path is used by `unified_event_source.rs` and `console_event_source.rs`; `term-session-client` uses the fallible path. **Potential issue but low impact — escape handling in the WM is well-defined.**
+Replace `_ => None` with an **exhaustive list** of explicitly dropped crossterm variants. This turns silent runtime drops into **compile-time errors** when crossterm adds new `KeyCode` variants.
 
-3. **🟡 `KeyEventState` dropped** — Crossterm 0.29 `KeyEvent` has a `state: KeyEventState` field (CapsLock/NumLock flags). The core `KeyEvent` has no equivalent. **Design limitation, not a bug in the adapter.**
+**Before:**
+```rust
+_ => None,
+```
 
-4. **🔴 `KeyboardNormalizer` drops `KeyKind::Repeat` on Windows** — A localized workaround for Windows ConPTY Esc bouncing was improperly generalized during a refactor. The old `esc_down` state tracked Esc repeats specifically; when that was removed (Esc dedup moved to WM's `super_passthrough_window`), the blanket `KeyKind::Repeat => return None` was left in place. This drops **all** repeat keys on Windows, breaking scrolling, cursor movement, and continuous typing within child PTYs. **Fix: remove the Windows-specific Repeat suppression and consolidate OS branches.**
+**After:**
+```rust
+crossterm::event::KeyCode::ScrollLock
+| crossterm::event::KeyCode::NumLock
+| crossterm::event::KeyCode::PrintScreen
+| crossterm::event::KeyCode::Pause
+| crossterm::event::KeyCode::Menu
+| crossterm::event::KeyCode::KeypadBegin
+| crossterm::event::KeyCode::CapsLock
+| crossterm::event::KeyCode::Null
+| crossterm::event::KeyCode::Modifier(_) => None,
+```
 
-5. **🟢 `term-session-client` filters to only Press/Repeat key events** — Downstream consumer filtering, intentional (only sends to PTY).
+**Effect:** A crossterm bump adding `KeyCode::NewFeature` → compiler error at the match site → engineer must explicitly decide: map it or list it as intentionally dropped.
 
-## Proposed Changes
+### 2. 🔴 Domain Reachability (Surjectivity) Test — Compile-Time Enforced (`crates/term-wm-crossterm-adapter/src/lib.rs`)
 
-### 1. Fix Windows Repeat suppression (`crates/term-wm-core/src/utils/keyboard_normalizer.rs`)
+Do NOT inject `strum` or any foreign dep into the core domain. Instead, use a declarative macro within the adapter's test module that exploits Rust's native `match` exhaustiveness to mathematically bind the target array to the enum's variant list.
 
-Remove the `KeyKind::Repeat => return None` branch and consolidate the `cfg!(windows)` conditional into a single check that only drops `KeyKind::Release` on all platforms:
+The macro generates an array of `KeyCode` instances while simultaneously emitting a dummy `match` statement. If a new variant is added to `KeyCode`, the `match` triggers `E0004` (pattern not covered), making it impossible to compile the test suite without updating the array.
 
 ```rust
-pub fn normalize(&mut self, evt: Event) -> Option<Event> {
-    match evt {
-        Event::Key(key) => {
-            // Shift+Tab passes through — FocusPrev keybinding matches Tab+Shift.
-            // BackTab normalization is handled in term-wm-crossterm-adapter.
-            if key.kind == KeyKind::Release {
-                return None;
+/// Macro: compile-time exhaustive KeyCode array.
+/// Adding a variant to `KeyCode` without updating this macro → compile error.
+macro_rules! exhaustive_core_keys {
+    ($($variant:pat => $instance:expr),+ $(,)?) => {{
+        #[allow(dead_code)]
+        fn enforce_exhaustiveness(k: KeyCode) {
+            match k {
+                $($variant => {}),+
             }
-            Some(Event::Key(key))
         }
-        other => Some(other),
+        [$($instance),+]
+    }};
+}
+
+#[test]
+fn test_all_core_keycodes_reachable() {
+    let core_targets = exhaustive_core_keys! {
+        KeyCode::Char(_) => KeyCode::Char('a'),
+        KeyCode::Enter => KeyCode::Enter,
+        KeyCode::Tab => KeyCode::Tab,
+        KeyCode::Backspace => KeyCode::Backspace,
+        KeyCode::Esc => KeyCode::Esc,
+        KeyCode::Left => KeyCode::Left,
+        KeyCode::Right => KeyCode::Right,
+        KeyCode::Up => KeyCode::Up,
+        KeyCode::Down => KeyCode::Down,
+        KeyCode::Home => KeyCode::Home,
+        KeyCode::End => KeyCode::End,
+        KeyCode::PageUp => KeyCode::PageUp,
+        KeyCode::PageDown => KeyCode::PageDown,
+        KeyCode::Delete => KeyCode::Delete,
+        KeyCode::Insert => KeyCode::Insert,
+        KeyCode::F(_) => KeyCode::F(1),
+        KeyCode::MediaPlayPause => KeyCode::MediaPlayPause,
+        KeyCode::MediaStop => KeyCode::MediaStop,
+        KeyCode::MediaTrackNext => KeyCode::MediaTrackNext,
+        KeyCode::MediaTrackPrevious => KeyCode::MediaTrackPrevious,
+    };
+
+    for core_key in core_targets.iter() {
+        let reachable = ALL_CROSSTERM_KEYS.iter().any(|ck| {
+            translate_key_code(*ck) == Some(*core_key)
+        });
+        assert!(reachable,
+            "Core KeyCode::{:?} is unreachable from any crossterm input", core_key);
     }
 }
 ```
 
-### 2. Update tests (`crates/term-wm-core/src/utils/keyboard_normalizer.rs`)
+**Why not strum:** `KeyCode::Char(char)` is a data-carrying variant — `EnumIter`/`strum` can't enumerate infinite values. The macro approach sidesteps this entirely: `Char(_)` in a pattern covers all values, while the instance `Char('a')` provides a concrete test input.
 
-Rename `repeat_key_passes_through_on_unix` to `repeat_key_passes_through`. Remove the `#[cfg(target_os = "windows")]` conditional assertions — enforce that `KeyKind::Repeat` passes through unconditionally on all platforms.
+**Effect:** Adding `KeyCode::MediaRecord` to the domain → the `match` inside `exhaustive_core_keys!` fails to compile → developer must add it to the macro ➡ the array → reachability test runner then validates a crossterm input maps to it.
 
-### 3. Add media key support to `translate_key_code` (`crates/term-wm-crossterm-adapter/src/lib.rs`)
+### 3. 🟡 Snapshot Testing for Behavioral Lockdown
 
-Add explicit match arms for crossterm Media keys before the wildcard, using the correct type `MediaKeyCode` and consolidating discrete `Play`/`Pause` into the core `MediaPlayPause` variant:
+Use `insta` to freeze the entire translation boundary, catching regressions in modifier propagation, event dropping, and coordinate translation.
 
+**Steps:**
+- Add `insta` to dev-dependencies of `crates/term-wm-crossterm-adapter/Cargo.toml`
+- Build a static input matrix covering:
+  - Each standard key code (Enter, Tab, Esc, F1..F12, arrows, etc.)
+  - BackTab (verifies modifier injection)
+  - Each media key variant
+  - Each mouse button × event kind combination
+  - Edge cases: null modifiers, combined modifiers (Ctrl+Alt+Shift), scroll events
+- Assert `try_translate_event` output matches stored snapshot:
 ```rust
-crossterm::event::KeyCode::Media(crossterm::event::MediaKeyCode::PlayPause | crossterm::event::MediaKeyCode::Play | crossterm::event::MediaKeyCode::Pause) => Some(KeyCode::MediaPlayPause),
-crossterm::event::KeyCode::Media(crossterm::event::MediaKeyCode::Stop) => Some(KeyCode::MediaStop),
-crossterm::event::KeyCode::Media(crossterm::event::MediaKeyCode::TrackNext) => Some(KeyCode::MediaTrackNext),
-crossterm::event::KeyCode::Media(crossterm::event::MediaKeyCode::TrackPrevious) => Some(KeyCode::MediaTrackPrevious),
-```
-
-### 4. Add tests for media key translation
-
-Add tests covering:
-- Each media key variant maps correctly
-- `try_translate_key_event` returns `Some` for media keys
-- `try_translate_event` with media key events returns the correct `Event::Key`
-
-### 5. Run verification
-
-```bash
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test
+#[test]
+fn snapshot_translation_boundary() {
+    for (i, (label, crossterm_event)) in EVENT_MATRIX.iter().enumerate() {
+        let result = try_translate_event(*crossterm_event);
+        insta::assert_debug_snapshot!(format!("event_{:03}_{}", i, label), &result);
+    }
+}
 ```
 
 ## Files to Modify
-- `crates/term-wm-core/src/utils/keyboard_normalizer.rs`
 - `crates/term-wm-crossterm-adapter/src/lib.rs`
+- `crates/term-wm-crossterm-adapter/Cargo.toml`
 
 ## Verification
-- `cargo test` — full suite to confirm no regressions
-- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+```bash
+cargo test  # 79+ tests including new surjectivity + snapshot tests
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+# Snapshot review: `cargo insta review` to accept new snapshots
+```
