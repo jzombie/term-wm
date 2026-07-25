@@ -13,4 +13,4 @@ crossterm = { workspace = true }
 term-wm-core = { workspace = true }
 
 [dev-dependencies]
-insta = { version = "1" }
+insta = { workspace = true }
