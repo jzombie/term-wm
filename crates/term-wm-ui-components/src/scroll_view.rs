@@ -486,40 +486,42 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
                 continue;
             }
 
-            // Clipped Rect for scrollbar rendering (ratatui Scrollbar needs unsigned Rect)
-            let area_rect = layout_rect_to_clipped_rect(area);
-            if needs_vertical {
-                let sb_area = Rect {
-                    x: area_rect.x + area_rect.width.saturating_sub(1),
-                    y: area_rect.y,
-                    width: 1,
-                    height: inner_area.height,
-                };
-                render_scrollbar_oriented(
-                    &mut backend.buffer,
-                    sb_area,
-                    content_h,
-                    inner_area.height as usize,
-                    off_y,
-                    ScrollbarOrientation::VerticalRight,
-                );
-            }
+            if !ctx.direct_mode() {
+                // Clipped Rect for scrollbar rendering (ratatui Scrollbar needs unsigned Rect)
+                let area_rect = layout_rect_to_clipped_rect(area);
+                if needs_vertical {
+                    let sb_area = Rect {
+                        x: area_rect.x + area_rect.width.saturating_sub(1),
+                        y: area_rect.y,
+                        width: 1,
+                        height: inner_area.height,
+                    };
+                    render_scrollbar_oriented(
+                        &mut backend.buffer,
+                        sb_area,
+                        content_h,
+                        inner_area.height as usize,
+                        off_y,
+                        ScrollbarOrientation::VerticalRight,
+                    );
+                }
 
-            if needs_horizontal {
-                let sb_area = Rect {
-                    x: area_rect.x,
-                    y: area_rect.y + area_rect.height.saturating_sub(1),
-                    width: inner_area.width,
-                    height: 1,
-                };
-                render_scrollbar_oriented(
-                    &mut backend.buffer,
-                    sb_area,
-                    content_w,
-                    inner_area.width as usize,
-                    off_x,
-                    ScrollbarOrientation::HorizontalBottom,
-                );
+                if needs_horizontal {
+                    let sb_area = Rect {
+                        x: area_rect.x,
+                        y: area_rect.y + area_rect.height.saturating_sub(1),
+                        width: inner_area.width,
+                        height: 1,
+                    };
+                    render_scrollbar_oriented(
+                        &mut backend.buffer,
+                        sb_area,
+                        content_w,
+                        inner_area.width as usize,
+                        off_x,
+                        ScrollbarOrientation::HorizontalBottom,
+                    );
+                }
             }
 
             break;
