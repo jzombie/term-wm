@@ -75,7 +75,10 @@ impl RenderTarget for TestOutput {
 struct ImmediateDriver;
 
 impl EventSource for ImmediateDriver {
-    fn poll(&mut self, _timeout: Duration) -> io::Result<bool> {
+    fn poll(&mut self, timeout: Duration) -> io::Result<bool> {
+        if !timeout.is_zero() {
+            std::thread::sleep(timeout);
+        }
         Ok(false)
     }
 
@@ -192,7 +195,10 @@ struct WakeupDriver {
 }
 
 impl EventSource for WakeupDriver {
-    fn poll(&mut self, _: Duration) -> io::Result<bool> {
+    fn poll(&mut self, timeout: Duration) -> io::Result<bool> {
+        if !timeout.is_zero() {
+            std::thread::sleep(timeout);
+        }
         Ok(false)
     }
     fn read(&mut self) -> io::Result<Event> {

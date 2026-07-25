@@ -248,10 +248,15 @@ where
     // (begin_frame + prepare_draw + draw) before entering the event
     // loop.  The FramePacer cannot produce the first frame because
     // its deadline is always 16ms in the future on the first tick.
-    // Note: Not every app will need this, so don't remove it arbitrarily.
     app.wm().begin_frame();
     app.wm().prepare_draw();
-    output.draw(|frame| draw(frame, app))?;
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        output.draw(|frame| draw(frame, app))
+    }))
+    .is_err()
+    {
+        output.repair()?;
+    }
 
     event_loop.run(|driver, event| {
         let handler = || -> io::Result<ControlFlow> {
@@ -346,7 +351,6 @@ where
             };
             let mut did_panic = false;
             let mut did_render = false;
-            let now = Instant::now();
             if let Some(evt) = event {
                 // Synthesized key event from bottom-panel hint click takes priority
                 let evt = app.wm().take_synthetic_event().unwrap_or(evt);
@@ -566,7 +570,7 @@ where
                 // Arm the pacer when any component requested a redraw or the
                 // driver has background work (PTY data) that bypassed Some(evt).
                 if driver.take_redraw_request() || driver_has_work {
-                    frame_pacer.notify_pending(now);
+                    frame_pacer.notify_pending(Instant::now());
                 }
 
                 frame_pacer.set_interval(if app.wm().is_dragging_window() {
@@ -575,7 +579,7 @@ where
                     Duration::from_millis(16) // 60 FPS otherwise
                 });
 
-                if frame_pacer.try_expire(now) {
+                if frame_pacer.try_expire(Instant::now()) {
                     // Gate BOTH frame init AND render together so the
                     // HitboxRegistry survives between frames.  Running
                     // begin_frame() without output.draw() would clear
@@ -607,7 +611,7 @@ where
                 driver,
                 ControlFlow::Continue,
                 did_render && !did_panic,
-                frame_pacer.time_until_deadline(now),
+                frame_pacer.time_until_deadline(Instant::now()),
             )
         };
 
