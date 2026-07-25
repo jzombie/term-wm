@@ -1,5 +1,6 @@
 use muxio_tokio_mpsc_adapter::ChannelCallerExt;
 use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
+use serial_test::serial;
 use std::time::Duration;
 use term_session_muxio_service_definitions::{
     CloseSession, ListSessions, ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
@@ -136,7 +137,9 @@ async fn session_osc52_in_output() {
     );
 }
 
+// Note: [serial] was added due to some Windows flakiness
 #[tokio::test]
+#[serial]
 async fn session_osc52_via_osc52extractor() {
     let mock = get_mock_bin();
     let (client, _dir) = spawn_session(vec![mock, "osc52".into()], TEST_COLS, TEST_ROWS).await;
@@ -231,7 +234,9 @@ async fn session_close_session() {
     assert!(sessions.is_empty(), "Session should be removed after close");
 }
 
+// Note: [serial] was added due to some Windows flakiness
 #[tokio::test]
+#[serial]
 async fn session_child_exit() {
     let mock = get_mock_bin();
     let (client, _dir) =
