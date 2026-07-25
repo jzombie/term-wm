@@ -243,6 +243,16 @@ where
     event_loop
         .driver()
         .set_mouse_capture(app.wm().mouse_capture_enabled())?;
+
+    // Render the initial frame with the full frame lifecycle
+    // (begin_frame + prepare_draw + draw) before entering the event
+    // loop.  The FramePacer cannot produce the first frame because
+    // its deadline is always 16ms in the future on the first tick.
+    // Note: Not every app will need this, so don't remove it arbitrarily.
+    app.wm().begin_frame();
+    app.wm().prepare_draw();
+    output.draw(|frame| draw(frame, app))?;
+
     event_loop.run(|driver, event| {
         let handler = || -> io::Result<ControlFlow> {
             // Process expired system tasks (super-passthrough, drag-snap)
