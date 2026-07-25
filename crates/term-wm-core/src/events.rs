@@ -47,7 +47,12 @@ impl KeyEvent {
                 KeyCode::Delete => PtyKeyCode::Delete,
                 KeyCode::Insert => PtyKeyCode::Insert,
                 KeyCode::F(n) => PtyKeyCode::F(n),
-                _ => return Vec::new(),
+                // Media keys have no standard VT100/xterm escape sequence.
+                // Explicitly handled to prevent hitting an unmapped wildcard.
+                KeyCode::MediaPlayPause
+                | KeyCode::MediaStop
+                | KeyCode::MediaTrackNext
+                | KeyCode::MediaTrackPrevious => return Vec::new(),
             },
             modifiers: PtyKeyModifiers {
                 shift: self.modifiers.shift,
@@ -454,6 +459,23 @@ mod tests {
     fn test_to_pty_bytes_standard_delegation() {
         let ev = key(KeyCode::Char('a'), false);
         assert_eq!(ev.to_pty_bytes(), b"a");
+    }
+
+    #[test]
+    fn test_to_pty_bytes_media_keys_return_empty() {
+        for code in &[
+            KeyCode::MediaPlayPause,
+            KeyCode::MediaStop,
+            KeyCode::MediaTrackNext,
+            KeyCode::MediaTrackPrevious,
+        ] {
+            let ev = key(*code, false);
+            assert!(
+                ev.to_pty_bytes().is_empty(),
+                "Media key {:?} must produce empty bytes",
+                code
+            );
+        }
     }
 
     #[test]
