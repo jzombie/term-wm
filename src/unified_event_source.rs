@@ -468,7 +468,6 @@ impl Drop for UnifiedEventSource {
 mod tests {
     use super::*;
     use crate::events::{KeyCode, KeyKind, KeyModifiers};
-    use serial_test::serial;
 
     #[test]
     fn test_translate_crossterm_event_drops_unsupported_keys() {
@@ -575,7 +574,6 @@ mod tests {
     /// `drain_pending` must filter out Release events through the
     /// normalizer, keeping Press and Repeat events in the buffer.
     #[test]
-    #[serial]
     fn drain_pending_filters_release_events() {
         let (tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
         let mut source = UnifiedEventSource {
