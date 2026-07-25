@@ -1,5 +1,6 @@
 [package]
 name = "term-wm-crossterm-adapter"
+description = "Crossterm-to-core event translation adapter for term-wm."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
