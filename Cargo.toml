@@ -67,6 +67,7 @@ proptest = "1.11.0"
 pulldown-cmark = "0.13.0"
 ratatui = "0.30.0"
 resvg = "0.47.0"
+serial_test = "3.5.0"
 shell-words = "1.1.1"
 strum = { version = "0.28", features = ["derive"] }
 tempfile = "3.24.0"
@@ -97,7 +98,6 @@ required-features = ["sys-ui"]
 [features]
 default = ["sys-ui"]
 sys-ui = ["dep:term-wm-sys-ui-components"]
-
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
@@ -127,6 +127,7 @@ muxio-rpc-service = { workspace = true }
 muxio-tokio-mpsc-adapter = { workspace = true }
 muxio-tokio-rpc-ipc-client = { workspace = true }
 proptest = { workspace = true }
+serial_test = { workspace = true }
 tempfile = { workspace = true }
 term-session-client = { path = "crates/term-session-client" }
 term-session-muxio-service-definitions = { path = "crates/term-session-muxio-service-definitions" }
