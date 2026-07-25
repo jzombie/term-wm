@@ -1356,4 +1356,79 @@ mod power_calibration_tests {
         let second = EventSource::take_dirty_windows(&mut driver);
         assert!(second.is_empty(), "dirty keys must drain between cycles");
     }
+
+    
+    /// Minimal backend that satisfies the RenderBackend trait.
+    struct MockBackend;
+    impl term_wm_render::RenderBackend for MockBackend {
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+        fn acquire_mask(&mut self) -> &mut [u8] { &mut [] }
+    }
+
+    /// Minimal output that runs the draw closure without a real terminal.
+    struct NoopOutput;
+    impl RenderTarget for NoopOutput {
+        fn enter(&mut self) -> io::Result<()> { Ok(()) }
+        fn exit(&mut self) -> io::Result<()> { Ok(()) }
+        fn draw<F>(&mut self, f: F) -> io::Result<()>
+        where
+            F: FnOnce(&mut dyn term_wm_render::RenderBackend),
+        {
+            f(&mut MockBackend);
+            Ok(())
+        }
+    }
+
+    /// App that quits after exactly one draw.
+    struct QuitOnFirstDraw<C: Component<TermWmAction>> {
+        wm: WindowManager<C, crate::components::NoopWmComponent, crate::components::NoopOverlay>,
+        draws: usize,
+    }
+    impl<C: Component<TermWmAction>>
+        WindowManagerHost<C, crate::components::NoopWmComponent, crate::components::NoopOverlay>
+        for QuitOnFirstDraw<C>
+    {
+        fn wm(
+            &mut self,
+        ) -> &mut WindowManager<C, crate::components::NoopWmComponent, crate::components::NoopOverlay>
+        {
+            &mut self.wm
+        }
+        fn quit_requested(&self) -> bool {
+            self.draws >= 1
+        }
+    }
+
+    #[test]
+    fn initial_render_fires_before_event_loop() {
+        let mut wm = crate::window::WindowManager::<crate::components::NoopComponent>::with_config(
+            crate::wm_config::WmConfig::default(),
+            std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.create_window(crate::components::NoopComponent);
+        let mut app = QuitOnFirstDraw { wm, draws: 0 };
+        let mut output = NoopOutput;
+        let mut driver = SpyEventSource {
+            captured_max_sleep: None,
+            mock_dirty_windows: std::collections::HashSet::new(),
+        };
+
+        let result = run_event_loop(
+            &mut output,
+            &mut driver,
+            &mut app,
+            crate::task_scheduler::TaskScheduler::<crate::actions::SystemTask>::new(),
+            |k| k,
+            |_backend, app| {
+                app.draws += 1;
+            },
+        );
+
+        assert!(result.is_ok(), "run_event_loop should return Ok");
+        assert_eq!(app.draws, 1,
+            "draw must fire from pre-loop initial render (FramePacer never armed)");
+    }
 }
