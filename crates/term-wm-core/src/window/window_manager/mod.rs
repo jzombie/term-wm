@@ -629,17 +629,22 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     pub fn set_direct_mode(&mut self, key: WindowKey, value: bool) {
         let title = self.window_title(key);
-        if let Some(w) = self.windows.get_mut(key) {
+        if let Some(w) = self.windows.get_mut(key)
+            && w.direct_mode != value
+        {
             w.direct_mode = value;
-            if value && let Some(c) = self.components.get_mut(w.component_key) {
+            if value
+                && let Some(c) = self.components.get_mut(w.component_key)
+            {
                 c.clear_selection();
             }
+            self.mark_layout_dirty();
+            let status = if value { "enabled" } else { "disabled" };
+            self.push_notification(
+                format!("Direct mode {} for {}", status, title),
+                Duration::from_secs(3),
+            );
         }
-        let status = if value { "enabled" } else { "disabled" };
-        self.push_notification(
-            format!("Direct mode {status} for {title}"),
-            Duration::from_secs(3),
-        );
     }
 
     pub fn toggle_direct_mode(&mut self, key: WindowKey) {
@@ -2187,6 +2192,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     pub fn window_pane_title(&mut self, key: WindowKey) -> Option<String> {
         self.component_for_key_mut(key)
             .and_then(|c| c.take_pending_title())
+    }
+
+    /// Returns `Some(bool)` when the pane's alternate screen state transitions.
+    pub fn take_alternate_screen_transition(&mut self, key: WindowKey) -> Option<bool> {
+        self.component_for_key_mut(key)
+            .and_then(|c| c.take_alternate_screen_transition())
     }
 
     pub fn overlay_for_key_mut(&mut self, key: OverlayKey) -> Option<&mut O> {

@@ -55,6 +55,9 @@ pub fn render_app<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmA
         if let Some(title) = wm.window_pane_title(key) {
             wm.set_window_title(key, title);
         }
+        if let Some(is_alt) = wm.take_alternate_screen_transition(key) {
+            wm.set_direct_mode(key, is_alt);
+        }
     }
 
     wm.register_managed_layout(area);
