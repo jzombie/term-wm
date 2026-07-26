@@ -28,23 +28,56 @@ use term_wm_ui_components::scroll_view::{ScrollKeyMode, ScrollViewComponent};
 use term_wm_ui_facade::core_component::CoreWmComponent;
 use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 
-use crate::components::AppRootComponent;
+use crate::components::{AppRootComponent, NoopComponent};
 use crate::unified_event_source::UnifiedEvent;
 
 /// A self-contained window manager app that eliminates dual-trait boilerplate.
 ///
-/// # Example
+/// Generic parameter `C` allows injecting custom root-level components
+/// (beyond the built-in `CoreWmComponent` variants like `Terminal`,
+/// `DebugLog`, `SystemPanel`) without modifying term-wm source.
+///
+/// # Choosing a constructor
+///
+/// | You want…                                          | Use                              |
+/// |----------------------------------------------------|----------------------------------|
+/// | Only built-in components, no annotation needed     | `TermWmApp::new(ctx)`            |
+/// | Built-in + your own component type (e.g., `MyComp`)| `TermWmApp::<MyComp>::new_custom(ctx)` |
+///
+/// The `new()` / `bare()` / `embedded()` convenience methods exist only
+/// on `TermWmApp<NoopComponent>` so Rust can infer `C` without turbofish.
+/// When `C` is your own type you must call `new_custom()` / `bare_custom()`
+/// / `embedded_custom()` instead — they are defined on the generic block
+/// and work for any `C: Component<TermWmAction>`.
+///
+/// # Example (built-in only)
 /// ```ignore
 /// use term_wm::prelude::*;
 ///
 /// fn main() -> io::Result<()> {
 ///     let mut app = TermWmApp::new(AppContext::new("myapp", "1.0"));
-///     let key = app.open_window(MyComponent::new());
+///     let key = app.open_window(AppRootComponent::Core(core_component));
 ///     app.run()
 /// }
 /// ```
-pub struct TermWmApp {
-    wm: WindowManager<AppRootComponent, LayerComponent, OverlayComponent>,
+///
+/// # Example (with a custom component)
+/// ```ignore
+/// use term_wm::prelude::*;
+/// use term_wm::SvgImageComponent;
+/// use term_wm::components::AppRootComponent;
+///
+/// fn main() -> io::Result<()> {
+///     let mut app = TermWmApp::<SvgImageComponent>::new_custom(AppContext::new("myapp", "1.0"));
+///     app.open_window(AppRootComponent::Custom(my_svg));
+///     app.run()
+/// }
+/// ```
+pub struct TermWmApp<C = NoopComponent>
+where
+    C: Component<TermWmAction>,
+{
+    wm: WindowManager<AppRootComponent<C>, LayerComponent, OverlayComponent>,
     debug_key: Option<WindowKey>,
     system_panel_key: Option<WindowKey>,
     should_quit: bool,
@@ -56,10 +89,14 @@ pub struct TermWmApp {
     pty_wakeup_tx: Sender<UnifiedEvent>,
 }
 
-impl TermWmApp {
+impl<C: Component<TermWmAction>> TermWmApp<C> {
     /// Create a new standalone app with all system chrome (panels, menu).
+    ///
+    /// This is the generic constructor — works for any `C: Component<TermWmAction>`.
+    /// When `C = NoopComponent` you can use `TermWmApp::new(ctx)` instead
+    /// (it forwards here) to avoid a type annotation.
     #[cfg(feature = "sys-ui")]
-    pub fn new(app_ctx: AppContext) -> Self {
+    pub fn new_custom(app_ctx: AppContext) -> Self {
         let app_name = app_ctx.app_name.clone();
         let app_version = app_ctx.app_version.clone();
         let hostname = app_ctx.hostname.clone();
@@ -98,13 +135,10 @@ impl TermWmApp {
     }
 
     /// Create a bare standalone app without system chrome.
-    #[cfg(not(feature = "sys-ui"))]
-    pub fn new(app_ctx: AppContext) -> Self {
-        Self::bare(app_ctx)
-    }
-
-    /// Create a bare standalone app without system chrome.
-    pub fn bare(app_ctx: AppContext) -> Self {
+    ///
+    /// Generic constructor — use `TermWmApp::bare(ctx)` instead when
+    /// `C = NoopComponent` to avoid a type annotation.
+    pub fn bare_custom(app_ctx: AppContext) -> Self {
         let wm = AppBuilder::<LayerComponent>::bare()
             .app_ctx(Arc::new(app_ctx))
             .build()
@@ -115,7 +149,10 @@ impl TermWmApp {
 
     /// Create an embedded app without command menu, suitable for
     /// embedding in an existing Ratatui application.
-    pub fn embedded(app_ctx: AppContext) -> Self {
+    ///
+    /// Generic constructor — use `TermWmApp::embedded(ctx)` instead when
+    /// `C = NoopComponent` to avoid a type annotation.
+    pub fn embedded_custom(app_ctx: AppContext) -> Self {
         let wm = AppBuilder::<LayerComponent>::bare()
             .config(WmConfig::minimal())
             .app_ctx(Arc::new(app_ctx))
@@ -127,7 +164,7 @@ impl TermWmApp {
 
     /// Create from an already-constructed WindowManager and PTY event sender.
     pub fn from_wm(
-        wm: WindowManager<AppRootComponent, LayerComponent, OverlayComponent>,
+        wm: WindowManager<AppRootComponent<C>, LayerComponent, OverlayComponent>,
         pty_wakeup_tx: Sender<UnifiedEvent>,
     ) -> Self {
         Self {
@@ -167,18 +204,14 @@ impl TermWmApp {
         sv.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
         let key = self
             .wm
-            .open_window(crate::components::AppRootComponent::Core(
-                CoreWmComponent::Terminal(sv),
-            ));
+            .open_window(AppRootComponent::Core(CoreWmComponent::Terminal(sv)));
         self.wm.set_window_tracker(key, tracker);
 
         // Attach status callback AFTER open_window so the closure captures
         // the known WindowKey directly — no OnceLock, no race condition.
         let tx = self.pty_wakeup_tx.clone();
         match self.wm.component_for_key_mut(key) {
-            Some(crate::components::AppRootComponent::Core(CoreWmComponent::Terminal(
-                scroll_view,
-            ))) => {
+            Some(AppRootComponent::Core(CoreWmComponent::Terminal(scroll_view))) => {
                 tracing::info!("[STAGE 2] Setting status callback for key {:?}", key);
                 scroll_view
                     .content
@@ -288,12 +321,14 @@ impl TermWmApp {
 
     /// Open a component as a visible window. Returns the `WindowKey` for
     /// later access.
-    pub fn open_window(&mut self, component: AppRootComponent) -> WindowKey {
+    pub fn open_window(&mut self, component: AppRootComponent<C>) -> WindowKey {
         self.wm.open_window(component)
     }
 
     /// Borrow the WindowManager for configuration or direct access.
-    pub fn wm(&mut self) -> &mut WindowManager<AppRootComponent, LayerComponent, OverlayComponent> {
+    pub fn wm(
+        &mut self,
+    ) -> &mut WindowManager<AppRootComponent<C>, LayerComponent, OverlayComponent> {
         &mut self.wm
     }
 
@@ -351,8 +386,37 @@ impl TermWmApp {
     }
 }
 
-impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for TermWmApp {
-    fn wm(&mut self) -> &mut WindowManager<AppRootComponent, LayerComponent, OverlayComponent> {
+/// Facade constructors for `C = NoopComponent` — enables type inference
+/// for `TermWmApp::new(ctx)` without annotations.
+impl TermWmApp<NoopComponent> {
+    /// Create a new standalone app with all system chrome (panels, menu).
+    #[cfg(feature = "sys-ui")]
+    pub fn new(app_ctx: AppContext) -> Self {
+        Self::new_custom(app_ctx)
+    }
+
+    /// Create a bare standalone app without system chrome.
+    #[cfg(not(feature = "sys-ui"))]
+    pub fn new(app_ctx: AppContext) -> Self {
+        Self::bare(app_ctx)
+    }
+
+    /// Create a bare standalone app without system chrome.
+    pub fn bare(app_ctx: AppContext) -> Self {
+        Self::bare_custom(app_ctx)
+    }
+
+    /// Create an embedded app without command menu, suitable for
+    /// embedding in an existing Ratatui application.
+    pub fn embedded(app_ctx: AppContext) -> Self {
+        Self::embedded_custom(app_ctx)
+    }
+}
+
+impl<C: Component<TermWmAction>>
+    WindowManagerHost<AppRootComponent<C>, LayerComponent, OverlayComponent> for TermWmApp<C>
+{
+    fn wm(&mut self) -> &mut WindowManager<AppRootComponent<C>, LayerComponent, OverlayComponent> {
         &mut self.wm
     }
 
