@@ -292,7 +292,7 @@ impl EventSource for UnifiedEventSource {
                     self.dirty_windows.insert(key);
                     self.direct_input_changed.push((key, enabled));
                     self.frame_pacer.notify_pending(Instant::now());
-                    continue;
+                    return Ok(false);
                 }
                 Ok(UnifiedEvent::Signal) => {
                     self.signal_received = true;

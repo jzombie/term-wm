@@ -125,6 +125,10 @@ impl<T: EventSource + ?Sized> EventSource for &mut T {
         (**self).take_dirty_windows()
     }
 
+    fn take_direct_input_changed(&mut self) -> Vec<(crate::window::WindowKey, bool)> {
+        (**self).take_direct_input_changed()
+    }
+
     fn request_redraw(&mut self) {
         (**self).request_redraw()
     }
