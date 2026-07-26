@@ -144,6 +144,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     /// Update borders and store terminal width for monocle auto-detection.
     /// Called every render frame.
+    /// Update borders and store terminal width for monocle auto-detection.
+    /// Called every render frame.
     pub fn update_monocle_mode(&mut self, terminal_width: u16) {
         let old_monocle = self.is_monocle();
         self.last_terminal_width = terminal_width;
@@ -158,16 +160,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 format!("Monocle mode (auto): {status}"),
                 Duration::from_secs(3),
             );
-        }
-
-        for (_, window) in self.windows.iter_mut() {
-            if monocle {
-                window.borders_enabled = false;
-            } else if self.managed_layout.is_some() {
-                window.borders_enabled = window.floating_rect.is_some();
-            } else {
-                window.borders_enabled = true;
-            }
         }
     }
 
@@ -211,12 +203,16 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     /// Whether the given window should render borders.
     pub fn window_borders_enabled(&self, key: WindowKey) -> bool {
-        self.window(key).map(|w| w.borders_enabled).unwrap_or(false)
+        self.window(key)
+            .map(|w| w.borders_enabled())
+            .unwrap_or(false)
     }
 
     /// Whether the given window should render its header.
     pub fn window_header_enabled(&self, key: WindowKey) -> bool {
-        self.window(key).map(|w| w.header_enabled).unwrap_or(false)
+        self.window(key)
+            .map(|w| w.header_enabled())
+            .unwrap_or(false)
     }
 
     /// Handle mouse-click focus switching.

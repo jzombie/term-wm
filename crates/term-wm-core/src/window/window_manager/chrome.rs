@@ -17,7 +17,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     pub fn toggle_maximize(&mut self, key: WindowKey) {
         use crate::window::FloatRectSpec;
 
-        let is_maxed = self.window(key).is_some_and(|w| w.is_maximized);
+        let is_maxed = self.window(key).is_some_and(|w| w.is_maximized());
 
         if is_maxed {
             // UNMAXIMIZE PATH
@@ -37,8 +37,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             }
 
             if let Some(w) = self.windows.get_mut(key) {
-                w.is_maximized = false;
-                w.borders_enabled = true;
+                w.set_maximized(false);
                 w.void_id = None;
             }
             self.bring_floating_to_front_key(key);
@@ -69,8 +68,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
         self.set_floating_rect(key, Some(full));
         if let Some(w) = self.windows.get_mut(key) {
-            w.is_maximized = true;
-            w.borders_enabled = false;
+            w.set_maximized(true);
         }
         self.bring_floating_to_front_key(key);
     }

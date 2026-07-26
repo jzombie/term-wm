@@ -575,7 +575,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     fn clear_floating_rect(&mut self, key: WindowKey) {
         if let Some(w) = self.windows.get_mut(key) {
             w.floating_rect = None;
-            w.is_maximized = false;
+            w.set_maximized(false);
         }
     }
 
@@ -1288,7 +1288,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                             let dx = col.abs_diff(*anchor_x);
                             let dy = row.abs_diff(*anchor_y);
                             let is_maximized =
-                                self.windows.get(*key).is_some_and(|w| w.is_maximized);
+                                self.windows.get(*key).is_some_and(|w| w.is_maximized());
 
                             if dx + dy <= 2 {
                                 // Deadzone guard: ignore micro-nudges
@@ -1654,8 +1654,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                         // Unset maximized so further resize/move isn't restricted,
                         // but keep the current rect so the cursor stays on the handle.
                         if let Some(w) = self.windows.get_mut(*h_key) {
-                            w.is_maximized = false;
-                            w.borders_enabled = true;
+                            w.set_maximized(false);
                         }
                         let rect = self.full_region_for_key(*h_key);
                         let (start_x, start_y, start_width, start_height) =
@@ -2461,7 +2460,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         if !self.windows.contains_key(focused) {
             return Vec::new();
         }
-        let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized);
+        let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized());
         let mut btns = vec![WmButton {
             action: TermWmAction::CloseWindow(focused),
             label: "Close Window",
