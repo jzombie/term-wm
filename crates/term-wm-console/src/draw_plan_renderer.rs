@@ -48,7 +48,6 @@ struct ChromeHitboxParams {
     wm_buttons: Vec<term_wm_core::window::WmButton>,
     borders_enabled: bool,
     header_enabled: bool,
-    floating: bool,
 }
 
 /// Register chrome hitboxes for a window (resize, drag, close, maximize buttons).
@@ -67,7 +66,7 @@ fn register_window_chrome_hitboxes(registry: &mut HitboxRegistry, params: &Chrom
         wm_buttons,
         borders_enabled,
         header_enabled,
-        floating,
+        ..
     } = params;
     let (width, height) = *frame_size;
     let (ox, oy) = *screen_origin;
@@ -236,7 +235,6 @@ pub fn render_window_chrome(
             wm_buttons: ctx.wm_buttons.clone(),
             borders_enabled: ctx.borders_enabled,
             header_enabled: ctx.header_enabled,
-            floating: ctx.floating,
         },
     );
 
