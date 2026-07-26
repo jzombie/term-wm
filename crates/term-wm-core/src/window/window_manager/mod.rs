@@ -3078,7 +3078,7 @@ mod tests {
         // Maximize the tiled window
         wm.toggle_maximize(keys[0]);
         assert!(
-            wm.windows.get(keys[0]).unwrap().is_maximized,
+            wm.windows.get(keys[0]).unwrap().is_maximized(),
             "is_maximized set"
         );
 
@@ -3088,7 +3088,7 @@ mod tests {
 
         // Original window should be unmaximized and back in the tiling layout
         let w0 = wm.windows.get(keys[0]).unwrap();
-        assert!(!w0.is_maximized, "should no longer be maximized");
+        assert!(!w0.is_maximized(), "should no longer be maximized");
         assert!(!w0.is_floating(), "should be tiled (not floating)");
         assert!(
             wm.managed_layout
@@ -3136,7 +3136,7 @@ mod tests {
         // Maximize the floating window
         wm.toggle_maximize(keys[0]);
         assert!(
-            wm.windows.get(keys[0]).unwrap().is_maximized,
+            wm.windows.get(keys[0]).unwrap().is_maximized(),
             "is_maximized set"
         );
 
@@ -3147,7 +3147,7 @@ mod tests {
         // Original window should be unmaximized and still floating at its
         // pre-maximize position
         let w0 = wm.windows.get(keys[0]).unwrap();
-        assert!(!w0.is_maximized, "should no longer be maximized");
+        assert!(!w0.is_maximized(), "should no longer be maximized");
         assert!(w0.is_floating(), "should remain floating (not tiled)");
         // Its floating rect should be the original pre-maximize rect
         let restored = wm.floating_rect(keys[0]);
@@ -3190,13 +3190,13 @@ mod tests {
 
         // Maximize
         wm.toggle_maximize(keys[0]);
-        assert!(wm.windows.get(keys[0]).unwrap().is_maximized);
+        assert!(wm.windows.get(keys[0]).unwrap().is_maximized());
         assert!(wm.windows.get(keys[0]).unwrap().void_id.is_some());
 
         // Toggle back (unmaximize directly)
         wm.toggle_maximize(keys[0]);
         let w0 = wm.windows.get(keys[0]).unwrap();
-        assert!(!w0.is_maximized, "unmaximized");
+        assert!(!w0.is_maximized(), "unmaximized");
         assert!(w0.void_id.is_none(), "void_id cleared");
         assert!(!w0.is_floating(), "not floating");
         // Should be back in tree at original position
@@ -3278,13 +3278,13 @@ mod tests {
         // Maximize floating window
         wm.toggle_maximize(keys[0]);
         let w0 = wm.windows.get(keys[0]).unwrap();
-        assert!(w0.is_maximized);
+        assert!(w0.is_maximized());
         // Window still has floating_rect (now = full), so is_floating is true
 
         // Toggle back
         wm.toggle_maximize(keys[0]);
         let w0 = wm.windows.get(keys[0]).unwrap();
-        assert!(!w0.is_maximized, "unmaximized");
+        assert!(!w0.is_maximized(), "unmaximized");
         assert!(w0.is_floating(), "still floating");
         let restored = wm.floating_rect(keys[0]);
         assert_eq!(restored, Some(float_rect), "original rect restored");
@@ -3327,7 +3327,7 @@ mod tests {
 
         assert_eq!(wm.focused_window(), keys[1], "focus moved to keys[1]");
         assert!(
-            !wm.windows.get(keys[0]).unwrap().is_maximized,
+            !wm.windows.get(keys[0]).unwrap().is_maximized(),
             "keys[0] unmaximized by focus shift"
         );
     }
@@ -3372,7 +3372,7 @@ mod tests {
             "focus moved to clicked window"
         );
         assert!(
-            !wm.windows.get(keys[0]).unwrap().is_maximized,
+            !wm.windows.get(keys[0]).unwrap().is_maximized(),
             "keys[0] unmaximized by mouse click"
         );
     }
@@ -3401,7 +3401,7 @@ mod tests {
         wm.focus_window_key(keys[0]);
 
         wm.toggle_maximize(keys[0]);
-        assert!(wm.windows.get(keys[0]).unwrap().is_maximized);
+        assert!(wm.windows.get(keys[0]).unwrap().is_maximized());
         // Tree should be Void (single leaf replaced)
         assert!(matches!(
             wm.managed_layout.as_ref().unwrap().root(),
@@ -3410,7 +3410,7 @@ mod tests {
 
         wm.toggle_maximize(keys[0]);
         let w0 = wm.windows.get(keys[0]).unwrap();
-        assert!(!w0.is_maximized, "unmaximized");
+        assert!(!w0.is_maximized(), "unmaximized");
         // Back to a leaf at root
         assert_eq!(
             wm.managed_layout.as_ref().unwrap().root().unwrap_leaf(),
@@ -3453,7 +3453,7 @@ mod tests {
 
         // Maximize middle window
         wm.toggle_maximize(keys[1]);
-        assert!(wm.windows.get(keys[1]).unwrap().is_maximized);
+        assert!(wm.windows.get(keys[1]).unwrap().is_maximized());
         // Other windows still in tree
         let leaves: Vec<_> = wm.managed_layout.as_ref().unwrap().root().collect_leaves();
         assert_eq!(
@@ -3508,7 +3508,7 @@ mod tests {
 
         // Still maximized after restore
         assert!(
-            wm.windows.get(keys[0]).unwrap().is_maximized,
+            wm.windows.get(keys[0]).unwrap().is_maximized(),
             "still maximized"
         );
     }
@@ -3540,7 +3540,7 @@ mod tests {
         wm.toggle_maximize(keys[0]); // unmaximize
         wm.toggle_maximize(keys[0]); // maximize again
         assert!(
-            wm.windows.get(keys[0]).unwrap().is_maximized,
+            wm.windows.get(keys[0]).unwrap().is_maximized(),
             "can re-maximize"
         );
     }
@@ -3571,7 +3571,7 @@ mod tests {
         // should NOT unmaximize it
         wm.focus_window_key(keys[0]);
         assert!(
-            wm.windows.get(keys[0]).unwrap().is_maximized,
+            wm.windows.get(keys[0]).unwrap().is_maximized(),
             "focus same window should not unmaximize"
         );
     }
@@ -3875,7 +3875,7 @@ mod tests {
 
         // Maximize keys[0] (was tiled)
         wm.toggle_maximize(keys[0]);
-        assert!(wm.windows.get(keys[0]).unwrap().is_maximized);
+        assert!(wm.windows.get(keys[0]).unwrap().is_maximized());
 
         // Simulate what open_window does manuallly to see where it breaks
         let b = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
@@ -3902,7 +3902,7 @@ mod tests {
         wm.tile_window_key(b);
         assert_eq!(wm.focused_window(), b, "focus moved to new window");
         assert!(
-            !wm.windows.get(keys[0]).unwrap().is_maximized,
+            !wm.windows.get(keys[0]).unwrap().is_maximized(),
             "keys[0] unmaximized by focus shift"
         );
         assert!(
@@ -3945,7 +3945,7 @@ mod tests {
 
         // Maximize keys[0] (was floating)
         wm.toggle_maximize(keys[0]);
-        assert!(wm.windows.get(keys[0]).unwrap().is_maximized);
+        assert!(wm.windows.get(keys[0]).unwrap().is_maximized());
         assert_eq!(
             wm.focused_window(),
             keys[0],
@@ -3975,7 +3975,7 @@ mod tests {
 
         wm.tile_window_key(b);
         assert!(
-            !wm.windows.get(keys[0]).unwrap().is_maximized,
+            !wm.windows.get(keys[0]).unwrap().is_maximized(),
             "keys[0] unmaximized by focus shift"
         );
         // B gets tiled (managed_layout exists with keys[1])
@@ -6522,7 +6522,7 @@ mod tests {
         let wm_click = crate::events::core_event_to_wm(&click).unwrap();
         assert!(wm.dispatch_mouse(&wm_click).is_consumed());
         assert!(wm.is_window_floating(win_key));
-        assert!(wm.windows.get(win_key).unwrap().is_maximized);
+        assert!(wm.windows.get(win_key).unwrap().is_maximized());
     }
 
     #[test]
