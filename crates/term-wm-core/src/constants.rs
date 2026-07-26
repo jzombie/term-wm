@@ -103,3 +103,6 @@ pub const CHROME_ROWS_TOTAL: u16 = CHROME_TOP_ROW + CHROME_HEADER_ROW + CHROME_B
 
 /// Width of a single split handle gap (between adjacent tiled windows).
 pub const SPLIT_HANDLE_WIDTH: u16 = 1;
+
+/// Horizontal inset from the right border to the first title button.
+pub const CHROME_BUTTON_INSET_RIGHT: u16 = 1;

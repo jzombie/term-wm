@@ -33,8 +33,10 @@ pub struct ChromeCtx<'a> {
 use term_wm_core::chrome::{
     LEFT_BORDER_WIDTH, RIGHT_BORDER_WIDTH, TOP_BORDER_HEIGHT, content_rect,
 };
+use term_wm_core::constants::CHROME_BUTTON_INSET_RIGHT;
 
 // ── Chrome layout constants (console-specific) ──────────────
+/// Spacing between adjacent title buttons (button cell + 1 gap column).
 const HEADER_BUTTON_GAP: u16 = 2;
 const EDGE_INDEX_ADJUST: u16 = 1;
 /// Shift window-control buttons 1 cell left (tiled) or right (floating) for visual alignment.
@@ -152,10 +154,12 @@ fn register_window_chrome_hitboxes(registry: &mut HitboxRegistry, params: &Chrom
         for (i, btn) in wm_buttons.iter().enumerate() {
             let bx = if *borders_enabled {
                 btn_right
-                    .saturating_sub(HEADER_BUTTON_GAP)
+                    .saturating_sub(CHROME_BUTTON_INSET_RIGHT)
                     .saturating_sub(HEADER_BUTTON_GAP * i as u16)
             } else {
-                btn_right.saturating_sub(HEADER_BUTTON_GAP * i as u16)
+                btn_right
+                    .saturating_sub(CHROME_BUTTON_INSET_RIGHT)
+                    .saturating_sub(HEADER_BUTTON_GAP * i as u16)
             };
             let bx = if *floating {
                 bx.saturating_add(CHROME_BUTTON_FLOAT_OFFSET)
@@ -1185,10 +1189,12 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
             for (i, btn) in wm_buttons.iter().enumerate() {
                 let bx = if borders_enabled {
                     header_right
-                        .saturating_sub(HEADER_BUTTON_GAP)
+                        .saturating_sub(CHROME_BUTTON_INSET_RIGHT)
                         .saturating_sub(HEADER_BUTTON_GAP * i as u16)
                 } else {
-                    header_right.saturating_sub(HEADER_BUTTON_GAP * i as u16)
+                    header_right
+                        .saturating_sub(CHROME_BUTTON_INSET_RIGHT)
+                        .saturating_sub(HEADER_BUTTON_GAP * i as u16)
                 };
                 let bx = if floating {
                     bx.saturating_add(CHROME_BUTTON_FLOAT_OFFSET)
