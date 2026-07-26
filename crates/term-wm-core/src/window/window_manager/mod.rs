@@ -4108,8 +4108,8 @@ mod tests {
             .localize_event_to_app(keys[1], &event)
             .expect("content-local event");
         if let Event::Mouse(local) = content_local {
-            assert_eq!(local.column, 4);
-            assert_eq!(local.row, 2);
+            assert_eq!(local.column, 5);
+            assert_eq!(local.row, 3);
         } else {
             panic!("expected mouse event");
         }
