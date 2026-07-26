@@ -1,5 +1,5 @@
 use std::io;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use clap::Parser;
 use crossbeam_channel::Sender;
@@ -12,13 +12,9 @@ use term_wm::runner::WindowManagerHost;
 use term_wm::term_wm_app::TermWmApp;
 use term_wm::unified_event_source::{UnifiedEvent, UnifiedEventSource};
 use term_wm::wm_config::WmConfig;
-use term_wm::{
-    PtyStatus, ScrollKeyMode, ScrollViewComponent, TerminalComponent, default_shell_command,
-};
+use term_wm::{default_shell_command};
 use term_wm_console::console_render_target::ConsoleRenderTarget;
 use term_wm_core::components::Component;
-use term_wm_pty_engine::{DirectInputTracker, Pty};
-use term_wm_ui_facade::core_component::CoreWmComponent;
 use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 
 // TODO: Make this user-configurable
@@ -74,6 +70,7 @@ fn main() -> io::Result<()> {
 /// management, debug window, and system overlays.
 struct App {
     inner: TermWmApp,
+    #[expect(dead_code)]
     pty_wakeup_tx: Sender<UnifiedEvent>,
 }
 
@@ -122,7 +119,7 @@ impl App {
                 .expect("standalone build")
         };
 
-        let inner = TermWmApp::from_wm(wm);
+        let inner = TermWmApp::from_wm(wm, pty_wakeup_tx.clone());
         let mut app = Self {
             inner,
             pty_wakeup_tx,
@@ -167,69 +164,14 @@ impl App {
         term_wm::runner::run_with_defaults(output, driver, self)
     }
 
-    // TODO: Extract to a reusable place
     fn spawn_terminal_with_command(
         &mut self,
         cmd: portable_pty::CommandBuilder,
         command_to_send: Option<String>,
     ) -> io::Result<()> {
-        let size = TerminalComponent::default_pty_size();
-        let pty =
-            Pty::spawn_with_scrollback(cmd, size, PTY_SCROLLBACK_LEN).map_err(io::Error::other)?;
-        let tracker: Arc<dyn DirectInputTracker> = pty.direct_input_tracker();
-        let mut pane = TerminalComponent::from_pane(Box::new(pty));
-        pane.set_link_handler_fn(|url| {
-            let _ = webbrowser::open(url);
-            true
-        });
-
-        let key_holder = Arc::new(OnceLock::new());
-        let kh = key_holder.clone();
-        let tx = self.pty_wakeup_tx.clone();
-        pane.set_status_callback(Some(Box::new(move |status| match status {
-            PtyStatus::Wakeup => {
-                if let Some(&key) = kh.get() {
-                    let _ = tx.send(UnifiedEvent::PtyWakeup(key));
-                }
-            }
-            PtyStatus::Exited => {
-                if let Some(&key) = kh.get() {
-                    let _ = tx.send(UnifiedEvent::AppExited(key));
-                }
-            }
-            PtyStatus::DirectInputChanged(enabled) => {
-                if let Some(&key) = kh.get() {
-                    let _ = tx.send(UnifiedEvent::DirectInputChanged(key, enabled));
-                }
-            }
-        })));
-        let mut sv = ScrollViewComponent::new(pane);
-        sv.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
-        let key = self
-            .inner
-            .wm()
-            .open_window(AppRootComponent::Core(CoreWmComponent::Terminal(sv)));
-        self.inner.wm().set_window_tracker(key, tracker);
-        let _ = key_holder.set(key);
-
-        let clipboard_enabled = self.inner.wm().clipboard_enabled();
-        if let Some(comp) = self.inner.wm().component_for_key_mut(key) {
-            comp.set_selection_enabled(clipboard_enabled);
-        }
-
-        // Inject boot-time command via the `paste` trait method.
-        if let Some(line) = command_to_send {
-            let mut line = line;
-            line.push_str(line_ending::LineEnding::from_current_platform().as_str());
-            if let Some(comp) = self.inner.wm().component_for_key_mut(key) {
-                let _ = comp.paste(&line);
-            }
-        }
-
-        let count = self.inner.wm().window_count();
+        let count = self.inner.wm().window_count() + 1;
         self.inner
-            .wm()
-            .set_window_title(key, format!("Shell {}", count));
+            .spawn_terminal_window(cmd, PTY_SCROLLBACK_LEN, command_to_send, format!("Shell {}", count))?;
         Ok(())
     }
 }
@@ -267,52 +209,9 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
     }
 
     fn wm_new_window(&mut self) -> io::Result<()> {
-        let size = TerminalComponent::default_pty_size();
-        let cmd = default_shell_command();
-        let pty =
-            Pty::spawn_with_scrollback(cmd, size, PTY_SCROLLBACK_LEN).map_err(io::Error::other)?;
-        let tracker: Arc<dyn DirectInputTracker> = pty.direct_input_tracker();
-        let mut pane = TerminalComponent::from_pane(Box::new(pty));
-        pane.set_link_handler_fn(|url| {
-            let _ = webbrowser::open(url);
-            true
-        });
-        let key_holder = Arc::new(OnceLock::new());
-        let kh = key_holder.clone();
-        let tx = self.pty_wakeup_tx.clone();
-        pane.set_status_callback(Some(Box::new(move |status| match status {
-            PtyStatus::Wakeup => {
-                if let Some(&key) = kh.get() {
-                    let _ = tx.send(UnifiedEvent::PtyWakeup(key));
-                }
-            }
-            PtyStatus::Exited => {
-                if let Some(&key) = kh.get() {
-                    let _ = tx.send(UnifiedEvent::AppExited(key));
-                }
-            }
-            PtyStatus::DirectInputChanged(enabled) => {
-                if let Some(&key) = kh.get() {
-                    let _ = tx.send(UnifiedEvent::DirectInputChanged(key, enabled));
-                }
-            }
-        })));
-        let mut sv = ScrollViewComponent::new(pane);
-        sv.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
-        let key = self
-            .inner
-            .wm()
-            .open_window(AppRootComponent::Core(CoreWmComponent::Terminal(sv)));
-        self.inner.wm().set_window_tracker(key, tracker);
-        let _ = key_holder.set(key);
-        let clipboard_enabled = self.inner.wm().clipboard_enabled();
-        if let Some(comp) = self.inner.wm().component_for_key_mut(key) {
-            comp.set_selection_enabled(clipboard_enabled);
-        }
-        let count = self.inner.wm().window_count();
+        let count = self.inner.wm().window_count() + 1;
         self.inner
-            .wm()
-            .set_window_title(key, format!("Shell {}", count));
+            .spawn_terminal_window(default_shell_command(), PTY_SCROLLBACK_LEN, None, format!("Shell {}", count))?;
         Ok(())
     }
 

@@ -58,8 +58,7 @@ pub struct UnifiedEventSource {
     dirty_windows: HashSet<WindowKey>,
     /// Accumulated window exit notifications since the last drain.
     exited_windows: Vec<WindowKey>,
-                direct_input_changed: Vec::new(),
-            /// Accumulated direct-input routing transitions since the last drain.
+    /// Accumulated direct-input routing transitions since the last drain.
     direct_input_changed: Vec<(WindowKey, bool)>,
     /// Cached input event (poll returned true, waiting for read).
     pending_event: Option<Event>,
@@ -137,8 +136,7 @@ impl UnifiedEventSource {
             shutdown,
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
-                       direct_input_changed: Vec::new(),
-             direct_input_changed: Vec::new(),
+            direct_input_changed: Vec::new(),
             pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
@@ -880,8 +878,7 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: vec![key],
-                       direct_input_changed: Vec::new(),
-             direct_input_changed: Vec::new(),
+            direct_input_changed: Vec::new(),
             pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
