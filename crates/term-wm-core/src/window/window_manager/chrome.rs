@@ -89,7 +89,10 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     ///   stay alive so the window can be re-shown via `transition_window`.
     pub fn close_window(&mut self, key: WindowKey) {
         tracing::debug!(window_key = ?key, "closing window");
-        let policy = self.window(key).map(|w| w.close_policy()).unwrap_or_default();
+        let policy = self
+            .window(key)
+            .map(|w| w.close_policy())
+            .unwrap_or_default();
         self.transition_window(key, WindowState::Unmapped);
 
         if policy == ClosePolicy::Destroy {
