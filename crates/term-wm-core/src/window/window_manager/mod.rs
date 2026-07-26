@@ -640,15 +640,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         }
     }
 
-    pub fn last_direct_mode(&self, key: WindowKey) -> bool {
-        self.windows.get(key).map(|w| w.last_direct_mode()).unwrap_or(false)
-    }
 
-    pub fn set_last_direct_mode(&mut self, key: WindowKey, v: bool) {
-        if let Some(w) = self.windows.get_mut(key) {
-            w.set_last_direct_mode(v);
-        }
-    }
 
     pub fn window_title(&self, key: WindowKey) -> String {
         let base = self
