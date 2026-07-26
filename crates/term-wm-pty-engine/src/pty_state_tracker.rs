@@ -41,6 +41,7 @@ impl MouseTrackingMode {
 #[derive(Debug)]
 pub struct PtyStateTracker {
     is_alt_screen_active: AtomicBool,
+    is_application_cursor_keys_active: AtomicBool,
     mouse_tracking_mode: AtomicU8,
     is_sgr_mouse_active: AtomicBool,
     is_alt_scroll_mode_active: AtomicBool,
@@ -52,6 +53,7 @@ impl PtyStateTracker {
     pub fn new(terminal_height: u16) -> Self {
         Self {
             is_alt_screen_active: AtomicBool::new(false),
+            is_application_cursor_keys_active: AtomicBool::new(false),
             mouse_tracking_mode: AtomicU8::new(0),
             is_sgr_mouse_active: AtomicBool::new(false),
             is_alt_scroll_mode_active: AtomicBool::new(false),
@@ -70,6 +72,10 @@ impl PtyStateTracker {
 
     pub fn is_alt_screen_active(&self) -> bool {
         self.is_alt_screen_active.load(Ordering::Acquire)
+    }
+
+    pub fn is_application_cursor_keys_active(&self) -> bool {
+        self.is_application_cursor_keys_active.load(Ordering::Acquire)
     }
 
     pub fn mouse_tracking_mode(&self) -> MouseTrackingMode {
@@ -97,6 +103,11 @@ impl PtyStateTracker {
 
     pub(crate) fn set_alt_screen(&self, active: bool) {
         self.is_alt_screen_active.store(active, Ordering::Release);
+    }
+
+    pub(crate) fn set_application_cursor_keys(&self, active: bool) {
+        self.is_application_cursor_keys_active
+            .store(active, Ordering::Release);
     }
 
     pub(crate) fn set_sgr_mouse(&self, active: bool) {
@@ -131,6 +142,8 @@ impl PtyStateTracker {
     /// Reset all state to defaults (RIS / DECSTR recovery).
     pub(crate) fn reset_all(&self) {
         self.is_alt_screen_active.store(false, Ordering::Release);
+        self.is_application_cursor_keys_active
+            .store(false, Ordering::Release);
         self.mouse_tracking_mode.store(0, Ordering::Release);
         self.is_sgr_mouse_active.store(false, Ordering::Release);
         self.is_alt_scroll_mode_active
@@ -187,6 +200,7 @@ impl Perform for PtyPerformAdapter {
                 for param_group in params.iter() {
                     for &param in param_group {
                         match param {
+                            1 => self.tracker.set_application_cursor_keys(is_set),
                             47 | 1047 | 1049 => self.tracker.set_alt_screen(is_set),
                             1000 => self.tracker.update_mouse_tracking(1, is_set),
                             1002 => self.tracker.update_mouse_tracking(2, is_set),
@@ -468,5 +482,39 @@ mod tests {
         let tracker = std::sync::Arc::new(make_tracker(24));
         feed(&tracker, b"\x1b[2;23r");
         assert!(tracker.requires_app_routing());
+    }
+
+    #[test]
+    fn test_application_cursor_keys_enabled() {
+        let tracker = std::sync::Arc::new(make_tracker(24));
+        feed(&tracker, b"\x1b[?1h");
+        assert!(tracker.is_application_cursor_keys_active());
+    }
+
+    #[test]
+    fn test_application_cursor_keys_disabled() {
+        let tracker = std::sync::Arc::new(make_tracker(24));
+        feed(&tracker, b"\x1b[?1h");
+        assert!(tracker.is_application_cursor_keys_active());
+        feed(&tracker, b"\x1b[?1l");
+        assert!(!tracker.is_application_cursor_keys_active());
+    }
+
+    #[test]
+    fn test_application_cursor_keys_reset_by_ris() {
+        let tracker = std::sync::Arc::new(make_tracker(24));
+        feed(&tracker, b"\x1b[?1h\x1b[?1049h");
+        assert!(tracker.is_application_cursor_keys_active());
+        feed(&tracker, b"\x1bc");
+        assert!(!tracker.is_application_cursor_keys_active());
+    }
+
+    #[test]
+    fn test_application_cursor_keys_reset_by_decstr() {
+        let tracker = std::sync::Arc::new(make_tracker(24));
+        feed(&tracker, b"\x1b[?1h");
+        assert!(tracker.is_application_cursor_keys_active());
+        feed(&tracker, b"\x1b[!p");
+        assert!(!tracker.is_application_cursor_keys_active());
     }
 }

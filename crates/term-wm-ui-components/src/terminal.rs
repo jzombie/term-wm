@@ -131,7 +131,8 @@ impl Component<TermWmAction> for TerminalComponent {
                     };
                     return EventResult::Action(TermWmAction::Scroll(delta));
                 }
-                let bytes = key.to_pty_bytes();
+                let app_cursor = self.pane.borrow().is_application_cursor_keys_active();
+                let bytes = key.to_pty_bytes(app_cursor);
                 if bytes.is_empty() {
                     return EventResult::Ignored;
                 }

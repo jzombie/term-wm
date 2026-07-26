@@ -54,6 +54,12 @@ pub trait Pane {
     fn requires_app_routing(&self) -> bool {
         false
     }
+
+    /// Returns true when DECCKM (DECSET 1 / Application Cursor Keys) is active.
+    /// When true, unmodified arrow keys must use SS3 (`\eOA`) instead of CSI (`\e[A`).
+    fn is_application_cursor_keys_active(&self) -> bool {
+        false
+    }
 }
 
 impl Pane for crate::Pty {
@@ -131,6 +137,10 @@ impl Pane for crate::Pty {
 
     fn requires_app_routing(&self) -> bool {
         self.tracker.requires_app_routing()
+    }
+
+    fn is_application_cursor_keys_active(&self) -> bool {
+        self.tracker.is_application_cursor_keys_active()
     }
 
     fn shared_parser(&mut self) -> Arc<Mutex<vt100::Parser>> {

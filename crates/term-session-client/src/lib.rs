@@ -355,7 +355,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                 Event::Key(ref key)
                     if key.kind == KeyKind::Press || key.kind == KeyKind::Repeat =>
                 {
-                    let bytes = key.to_pty_bytes();
+                    let bytes = key.to_pty_bytes(false);
                     if !bytes.is_empty() {
                         let _ = pane.write_bytes(&bytes);
                     }
