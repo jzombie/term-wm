@@ -2289,4 +2289,30 @@ mod tests {
         );
         assert_eq!(buf.cell((0, 0)).unwrap().symbol(), "·");
     }
+
+    // ── Window chrome snapshot tests ────────────────────────────────────
+
+    #[test]
+    fn chrome_header_buttons_snapshot() {
+        let area = RatatuiRect::new(0, 0, 30, 8);
+        let mut buffer = Buffer::empty(area);
+        let ctx = ChromeCtx {
+            title: "term-wm",
+            focused: true,
+            floating: false,
+            hover_pos: None,
+            theme: NOIR,
+            wm_buttons: test_wm_buttons(),
+            borders_enabled: true,
+            header_enabled: true,
+        };
+        let rect = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 8,
+        };
+        render_window(&mut buffer, rect, ctx);
+        insta::assert_debug_snapshot!("chrome_header_buttons", buffer);
+    }
 }

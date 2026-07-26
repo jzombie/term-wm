@@ -81,3 +81,25 @@ pub const INITIAL_WINDOW_CAPACITY: usize = 32;
 
 /// Initial allocation capacity for the component slot map.
 pub const INITIAL_COMPONENT_CAPACITY: usize = 32;
+
+// ── Chrome geometry (single source of truth for WINDOW-BORDERS.txt) ─────
+
+/// Width of the left border in terminal columns.
+pub const CHROME_LEFT_COL: u16 = 1;
+/// Width of the right border in terminal columns.
+pub const CHROME_RIGHT_COL: u16 = 1;
+/// Height of the top border in terminal rows.
+pub const CHROME_TOP_ROW: u16 = 1;
+/// Height of the header row in terminal rows.
+pub const CHROME_HEADER_ROW: u16 = 1;
+/// Height of the bottom border in terminal rows.
+pub const CHROME_BOTTOM_ROW: u16 = 1;
+
+/// Total chrome columns consumed per window (left + right borders).
+pub const CHROME_COLS_TOTAL: u16 = CHROME_LEFT_COL + CHROME_RIGHT_COL;
+/// Total chrome rows consumed per window when borders + header are enabled
+/// (top border + header + bottom border).
+pub const CHROME_ROWS_TOTAL: u16 = CHROME_TOP_ROW + CHROME_HEADER_ROW + CHROME_BOTTOM_ROW;
+
+/// Width of a single split handle gap (between adjacent tiled windows).
+pub const SPLIT_HANDLE_WIDTH: u16 = 1;

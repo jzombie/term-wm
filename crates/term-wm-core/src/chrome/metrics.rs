@@ -68,9 +68,23 @@ pub fn content_rect(full: Rect, borders_enabled: bool, header_enabled: bool) -> 
     }
 }
 
+/// Verify that the chrome geometry constants match the specification in
+/// `docs/WINDOW-BORDERS.txt`.
+///
+/// For a standard 80×24 terminal with two side-by-side tiled windows
+/// separated by a 1-column split handle:
+///
+/// | Window     | Frame   | Content     | Chrome  |
+/// |------------|---------|-------------|---------|
+/// | A          | 39×24   | 37×21 = 777 | 159     |
+/// | B          | 40×24   | 38×21 = 798 | 162     |
+/// | Split      | 1×24    | —           | 24      |
+/// | **Total**  | 80×24   | 1,575       | 345     |
+/// | **Grand**  |         | 1,920       |         |
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::*;
 
     #[test]
     fn no_borders_no_header_returns_full() {
@@ -187,5 +201,63 @@ mod tests {
         let inner = content_rect(full, true, false);
         assert_eq!(inner.width, 1);
         assert_eq!(inner.height, 0);
+    }
+
+    #[test]
+    fn chrome_geometry_matches_specification() {
+        // 80x24 terminal, 2 side-by-side tiled windows, 1-col split handle.
+        let total_cols = 80u16;
+        let total_rows = 24u16;
+        let handle_cols = SPLIT_HANDLE_WIDTH;
+
+        let usable_cols = total_cols.saturating_sub(handle_cols);
+        let win_a_w = usable_cols / 2;
+        let win_b_w = usable_cols.saturating_sub(win_a_w);
+
+        assert_eq!(win_a_w, 39);
+        assert_eq!(win_b_w, 40);
+
+        for (w, expected_content_w, expected_chrome) in
+            [(win_a_w, 37, 159u16), (win_b_w, 38, 162u16)]
+        {
+            let full = Rect {
+                x: 0,
+                y: 0,
+                width: w,
+                height: total_rows,
+            };
+            let inner = content_rect(full, true, true);
+
+            assert_eq!(
+                inner.width,
+                expected_content_w,
+                "content width for {w}x{total_rows} window"
+            );
+            assert_eq!(inner.height, total_rows.saturating_sub(CHROME_ROWS_TOTAL));
+
+            let content_cells = u32::from(inner.width) * u32::from(inner.height);
+            let chrome_cells =
+                u32::from(w) * u32::from(total_rows) - content_cells;
+            assert_eq!(
+                chrome_cells,
+                u32::from(expected_chrome),
+                "chrome cells for {w}x{total_rows} window"
+            );
+        }
+
+        // Verify grand total
+        let win_a_content = 777u32;
+        let win_b_content = 798u32;
+        let win_a_chrome = 159u32;
+        let win_b_chrome = 162u32;
+        let split_cells = u32::from(handle_cols) * u32::from(total_rows);
+        let grand_total = win_a_content + win_b_content
+            + win_a_chrome + win_b_chrome
+            + split_cells;
+        assert_eq!(
+            grand_total,
+            u32::from(total_cols) * u32::from(total_rows),
+            "every cell accounted for in 80x24 layout"
+        );
     }
 }

@@ -1,0 +1,39 @@
+---
+source: crates/term-wm-console/src/draw_plan_renderer.rs
+assertion_line: 2316
+expression: buffer
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 30, height: 8 },
+    content: [
+        "┌────────────────────────────┐",
+        "│          term-wm   _ ▢ X   │",
+        "│                            │",
+        "│                            │",
+        "│                            │",
+        "│                            │",
+        "│                            │",
+        "└────────────────────────────┘",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Rgb(110, 118, 140), bg: Reset, underline: Reset, modifier: NONE,
+        x: 1, y: 1, fg: Rgb(225, 225, 235), bg: Rgb(38, 42, 58), underline: Reset, modifier: BOLD,
+        x: 21, y: 1, fg: Rgb(255, 193, 7), bg: Rgb(38, 42, 58), underline: Reset, modifier: BOLD,
+        x: 22, y: 1, fg: Rgb(225, 225, 235), bg: Rgb(38, 42, 58), underline: Reset, modifier: BOLD,
+        x: 23, y: 1, fg: Rgb(0, 230, 118), bg: Rgb(38, 42, 58), underline: Reset, modifier: BOLD,
+        x: 24, y: 1, fg: Rgb(225, 225, 235), bg: Rgb(38, 42, 58), underline: Reset, modifier: BOLD,
+        x: 25, y: 1, fg: Rgb(255, 61, 61), bg: Rgb(38, 42, 58), underline: Reset, modifier: BOLD,
+        x: 26, y: 1, fg: Rgb(225, 225, 235), bg: Rgb(38, 42, 58), underline: Reset, modifier: BOLD,
+        x: 29, y: 1, fg: Rgb(110, 118, 140), bg: Reset, underline: Reset, modifier: NONE,
+        x: 1, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 29, y: 2, fg: Rgb(110, 118, 140), bg: Reset, underline: Reset, modifier: NONE,
+        x: 1, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 29, y: 3, fg: Rgb(110, 118, 140), bg: Reset, underline: Reset, modifier: NONE,
+        x: 1, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 29, y: 4, fg: Rgb(110, 118, 140), bg: Reset, underline: Reset, modifier: NONE,
+        x: 1, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 29, y: 5, fg: Rgb(110, 118, 140), bg: Reset, underline: Reset, modifier: NONE,
+        x: 1, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 29, y: 6, fg: Rgb(110, 118, 140), bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
