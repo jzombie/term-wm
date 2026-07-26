@@ -27,13 +27,6 @@ pub enum WindowState {
     Shaded,
 }
 
-/// Visual/layout rules for a specific window state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WindowStateRules {
-    pub show_borders: bool,
-    pub show_header: bool,
-}
-
 /// Presentation rules for window chrome (borders, headers) in a specific layout mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChromeRules {
@@ -54,7 +47,7 @@ impl Default for ModeChromeConfig {
     fn default() -> Self {
         Self {
             normal: ChromeRules {
-                show_borders: true,
+                show_borders: false,
                 show_header: true,
             },
             maximized: ChromeRules {
@@ -69,6 +62,26 @@ impl Default for ModeChromeConfig {
                 show_borders: false,
                 show_header: true,
             },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowMode {
+    Monocle,
+    Maximized,
+    Floating,
+    Normal,
+}
+
+impl ModeChromeConfig {
+    /// Returns the chrome rules corresponding to the active mode.
+    pub fn rules_for(&self, mode: WindowMode) -> &ChromeRules {
+        match mode {
+            WindowMode::Monocle => &self.monocle,
+            WindowMode::Maximized => &self.maximized,
+            WindowMode::Floating => &self.floating,
+            WindowMode::Normal => &self.normal,
         }
     }
 }

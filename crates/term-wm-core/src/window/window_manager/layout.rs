@@ -8,6 +8,8 @@ use crate::events::Event;
 use super::WindowManager;
 use crate::keybindings::ActionLayer;
 use crate::layout::{InsertPosition, LayoutNode, LayoutPlan, RegionMap, SplitHandle, TilingLayout};
+use crate::window::entry::WindowMode;
+use crate::window::window_manager::Window;
 use crate::window::{FloatRectSpec, WindowKey, WindowState};
 
 impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> WindowManager<C, L, O> {
@@ -201,42 +203,35 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         );
     }
 
-    /// Whether the given window should render borders for the current frame.
-    pub fn window_borders_enabled(&self, key: WindowKey) -> bool {
-        let Some(w) = self.window(key) else {
-            return false;
-        };
-
-        let config = w.chrome_config();
-
+    /// Evaluates the dominant layout mode for a given window.
+    pub fn window_mode(&self, w: &Window) -> WindowMode {
         if self.is_monocle() {
-            config.monocle.show_borders
+            WindowMode::Monocle
         } else if w.is_maximized() {
-            config.maximized.show_borders
+            WindowMode::Maximized
         } else if w.is_floating() {
-            config.floating.show_borders
+            WindowMode::Floating
         } else {
-            config.normal.show_borders
+            WindowMode::Normal
         }
     }
 
-    /// Whether the given window should render its header for the current frame.
+    /// Single read boundary for border rendering.
+    pub fn window_borders_enabled(&self, key: WindowKey) -> bool {
+        self.window(key)
+            .map(|w| {
+                w.chrome_config()
+                    .rules_for(self.window_mode(w))
+                    .show_borders
+            })
+            .unwrap_or(false)
+    }
+
+    /// Single read boundary for header rendering.
     pub fn window_header_enabled(&self, key: WindowKey) -> bool {
-        let Some(w) = self.window(key) else {
-            return false;
-        };
-
-        let config = w.chrome_config();
-
-        if self.is_monocle() {
-            config.monocle.show_header
-        } else if w.is_maximized() {
-            config.maximized.show_header
-        } else if w.is_floating() {
-            config.floating.show_header
-        } else {
-            config.normal.show_header
-        }
+        self.window(key)
+            .map(|w| w.chrome_config().rules_for(self.window_mode(w)).show_header)
+            .unwrap_or(false)
     }
 
     /// Handle mouse-click focus switching.
