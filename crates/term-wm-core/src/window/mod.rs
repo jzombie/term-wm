@@ -43,6 +43,12 @@ pub enum FloatRectSpec {
     },
 }
 
+impl Default for FloatRectSpec {
+    fn default() -> Self {
+        FloatRectSpec::Absolute(LayoutRect::default())
+    }
+}
+
 impl FloatRectSpec {
     pub fn resolve(&self, bounds: Rect) -> Rect {
         let fr = self.resolve_signed(bounds);
