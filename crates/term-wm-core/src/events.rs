@@ -25,7 +25,9 @@ impl KeyEvent {
 
     /// Serialize this key event to the byte sequence to send to a PTY.
     /// Shift+Tab produces `\x1b[Z` (CSI backtab) per ANSI terminal standard.
-    pub fn to_pty_bytes(&self) -> Vec<u8> {
+    /// When `application_cursor_keys` is true (DECCKM / DECSET 1 active),
+    /// unmodified arrow keys emit SS3 sequences (`\eOA`) instead of CSI (`\e[A`).
+    pub fn to_pty_bytes(&self, application_cursor_keys: bool) -> Vec<u8> {
         use term_wm_pty_engine::input_encoding::{
             self, KeyCode as PtyKeyCode, KeyModifiers as PtyKeyModifiers, key_to_bytes,
         };
@@ -63,7 +65,7 @@ impl KeyEvent {
         if pty_key.code == PtyKeyCode::Tab && pty_key.modifiers.shift {
             b"\x1b[Z".to_vec()
         } else {
-            key_to_bytes(&pty_key)
+            key_to_bytes(&pty_key, application_cursor_keys)
         }
     }
 }
@@ -452,13 +454,13 @@ mod tests {
     #[test]
     fn test_to_pty_bytes_csi_backtab() {
         let ev = key(KeyCode::Tab, true);
-        assert_eq!(ev.to_pty_bytes(), b"\x1b[Z");
+        assert_eq!(ev.to_pty_bytes(false), b"\x1b[Z");
     }
 
     #[test]
     fn test_to_pty_bytes_standard_delegation() {
         let ev = key(KeyCode::Char('a'), false);
-        assert_eq!(ev.to_pty_bytes(), b"a");
+        assert_eq!(ev.to_pty_bytes(false), b"a");
     }
 
     #[test]
@@ -471,7 +473,7 @@ mod tests {
         ] {
             let ev = key(*code, false);
             assert!(
-                ev.to_pty_bytes().is_empty(),
+                ev.to_pty_bytes(false).is_empty(),
                 "Media key {:?} must produce empty bytes",
                 code
             );
@@ -481,6 +483,6 @@ mod tests {
     #[test]
     fn test_to_pty_bytes_unmappable_returns_empty() {
         let ev = key(KeyCode::MediaPlayPause, false);
-        assert!(ev.to_pty_bytes().is_empty());
+        assert!(ev.to_pty_bytes(false).is_empty());
     }
 }

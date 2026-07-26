@@ -1,11 +1,14 @@
 use std::io;
 use std::sync::Arc;
 
+use crossbeam_channel::{Sender, bounded};
+
 use term_wm_console::console_event_source::ConsoleEventSource;
 use term_wm_console::console_render_target::ConsoleRenderTarget;
 use term_wm_console::draw_plan_renderer::DrawPlanRenderer;
 use term_wm_core::actions::TermWmAction;
 use term_wm_core::app_context::AppContext;
+use term_wm_core::components::Component;
 use term_wm_core::config::AppBuilder;
 use term_wm_core::debug_log::set_global_debug_log;
 use term_wm_core::engine::CoreEngine;
@@ -14,15 +17,19 @@ use term_wm_core::runner::{WindowManagerHost, run_with_defaults};
 use term_wm_core::window::{ClosePolicy, WindowKey, WindowManager, WindowState};
 use term_wm_core::wm_config::WmConfig;
 
+use term_wm_pty_engine::{DirectInputTracker, Pty, PtyStatus};
 use term_wm_sys_ui_components::WmSystemPanelComponent;
 use term_wm_sys_ui_components::wm_command_palette::WmCommandPaletteComponent;
 use term_wm_sys_ui_components::wm_debug_log::{WmDebugLogComponent, install_panic_hook};
 use term_wm_sys_ui_components::wm_help_overlay::WmHelpOverlayComponent;
+use term_wm_ui_components::TerminalComponent;
 use term_wm_ui_components::confirm_overlay::ConfirmOverlayComponent;
+use term_wm_ui_components::scroll_view::{ScrollKeyMode, ScrollViewComponent};
 use term_wm_ui_facade::core_component::CoreWmComponent;
 use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 
 use crate::components::AppRootComponent;
+use crate::unified_event_source::UnifiedEvent;
 
 /// A self-contained window manager app that eliminates dual-trait boilerplate.
 ///
@@ -45,6 +52,8 @@ pub struct TermWmApp {
     engine: CoreEngine,
     /// Draw plan renderer for rendering components.
     draw_renderer: DrawPlanRenderer,
+    /// Sender for PTY events (wakeup, exit, direct-input transitions).
+    pty_wakeup_tx: Sender<UnifiedEvent>,
 }
 
 impl TermWmApp {
@@ -84,7 +93,8 @@ impl TermWmApp {
         wm.set_notification_component(LayerComponent::NotificationArea(
             WmNotificationAreaComponent::new(),
         ));
-        Self::from_wm(wm)
+        let (tx, _) = bounded(256);
+        Self::from_wm(wm, tx)
     }
 
     /// Create a bare standalone app without system chrome.
@@ -99,7 +109,8 @@ impl TermWmApp {
             .app_ctx(Arc::new(app_ctx))
             .build()
             .expect("bare standalone build");
-        Self::from_wm(wm)
+        let (tx, _) = bounded(256);
+        Self::from_wm(wm, tx)
     }
 
     /// Create an embedded app without command menu, suitable for
@@ -110,11 +121,15 @@ impl TermWmApp {
             .app_ctx(Arc::new(app_ctx))
             .build()
             .expect("embedded build");
-        Self::from_wm(wm)
+        let (tx, _) = bounded(256);
+        Self::from_wm(wm, tx)
     }
 
-    /// Create from an already-constructed WindowManager.
-    pub fn from_wm(wm: WindowManager<AppRootComponent, LayerComponent, OverlayComponent>) -> Self {
+    /// Create from an already-constructed WindowManager and PTY event sender.
+    pub fn from_wm(
+        wm: WindowManager<AppRootComponent, LayerComponent, OverlayComponent>,
+        pty_wakeup_tx: Sender<UnifiedEvent>,
+    ) -> Self {
         Self {
             wm,
             debug_key: None,
@@ -122,7 +137,104 @@ impl TermWmApp {
             should_quit: false,
             engine: CoreEngine::new(),
             draw_renderer: DrawPlanRenderer::new(),
+            pty_wakeup_tx,
         }
+    }
+
+    /// Spawn a fully-wired PTY terminal window in a single call.
+    ///
+    /// Handles PTY creation, status callback wiring (`PtyWakeup`, `AppExited`,
+    /// `DirectInputChanged`), `ScrollViewComponent` wrapping, tracker registration,
+    /// clipboard/selection setup, initial command injection, and window title.
+    pub fn spawn_terminal_window(
+        &mut self,
+        cmd: portable_pty::CommandBuilder,
+        scrollback: usize,
+        initial_command: Option<String>,
+        title: impl Into<String>,
+    ) -> io::Result<WindowKey> {
+        let size = TerminalComponent::default_pty_size();
+        let pty = Pty::spawn_with_scrollback(cmd, size, scrollback).map_err(io::Error::other)?;
+        let tracker: std::sync::Arc<dyn DirectInputTracker> = pty.direct_input_tracker();
+        let mut pane = TerminalComponent::from_pane(Box::new(pty));
+
+        pane.set_link_handler_fn(|url| {
+            let _ = webbrowser::open(url);
+            true
+        });
+
+        let mut sv = ScrollViewComponent::new(pane);
+        sv.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
+        let key = self
+            .wm
+            .open_window(crate::components::AppRootComponent::Core(
+                CoreWmComponent::Terminal(sv),
+            ));
+        self.wm.set_window_tracker(key, tracker);
+
+        // Attach status callback AFTER open_window so the closure captures
+        // the known WindowKey directly — no OnceLock, no race condition.
+        let tx = self.pty_wakeup_tx.clone();
+        match self.wm.component_for_key_mut(key) {
+            Some(crate::components::AppRootComponent::Core(CoreWmComponent::Terminal(
+                scroll_view,
+            ))) => {
+                tracing::info!("[STAGE 2] Setting status callback for key {:?}", key);
+                scroll_view
+                    .content
+                    .borrow_mut()
+                    .set_pty_callback(move |status| match status {
+                        PtyStatus::Wakeup => {
+                            let _ =
+                                tx.send(crate::unified_event_source::UnifiedEvent::PtyWakeup(key));
+                        }
+                        PtyStatus::Exited => {
+                            let _ =
+                                tx.send(crate::unified_event_source::UnifiedEvent::AppExited(key));
+                        }
+                        PtyStatus::DirectInputChanged(enabled) => {
+                            tracing::info!(
+                                "[STAGE 2] Sending DirectInputChanged({}) for key {:?}",
+                                enabled,
+                                key
+                            );
+                            if let Err(e) = tx.send(
+                                crate::unified_event_source::UnifiedEvent::DirectInputChanged(
+                                    key, enabled,
+                                ),
+                            ) {
+                                tracing::error!("[STAGE 2] Channel send failed: {:?}", e);
+                            }
+                        }
+                    });
+            }
+            Some(_other) => {
+                tracing::error!(
+                    "[STAGE 2] Window {:?} has unexpected component type — \
+                     status callback will NOT be wired. PTY events will not fire.",
+                    key,
+                );
+            }
+            None => {
+                tracing::error!(
+                    "[STAGE 2] No component found for key {:?} after open_window. \
+                     Status callback will NOT be wired.",
+                    key
+                );
+            }
+        }
+
+        let clipboard_enabled = self.wm.clipboard_enabled();
+        if let Some(comp) = self.wm.component_for_key_mut(key) {
+            comp.set_selection_enabled(clipboard_enabled);
+            if let Some(line) = initial_command {
+                let mut line = line;
+                line.push_str(line_ending::LineEnding::from_current_platform().as_str());
+                let _ = comp.paste(&line);
+            }
+        }
+        self.wm.set_window_title(key, title.into());
+        Ok(key)
     }
 
     /// Initialize standard system windows (debug log + system panel).
@@ -301,7 +413,6 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for T
                             | TermWmAction::MaximizeWindow(_)
                             | TermWmAction::MinimizeWindow(_)
                             | TermWmAction::CloseWindow(_)
-                            | TermWmAction::ToggleDirectMode(_)
                     )
             })
             .collect();

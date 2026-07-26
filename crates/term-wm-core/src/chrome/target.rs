@@ -17,7 +17,7 @@ pub enum ChromeTarget {
     /// Minimize button in the window header.
     MinimizeButton(WindowKey),
     /// Toggle direct mode button in the window header.
-    ToggleDirectMode(WindowKey),
+
     /// Tiling layout split handle seam.
     SplitHandle(HitboxId),
     /// Empty-state placeholder ("No opened windows.") — opens command palette on click.

@@ -9,6 +9,7 @@ use std::time::Instant;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use crate::clipboard::{Clipboard, Osc52Extractor};
+use crate::pty_state_tracker::PtyPerformAdapter;
 
 /// Size of the PTY master read buffer (single `read()` call).
 /// 64KB keeps the reader parked most of the time under heavy output
@@ -71,6 +72,9 @@ pub struct Pty {
     reader: Option<JoinHandle<()>>,
     /// Status callback invoked by the reader thread on wakeup and exit.
     status_cb: StatusCallback,
+    /// Application state tracker (alternate screen, mouse tracking, margins).
+    /// Shared via Arc: reader thread writes (via PtyPerformAdapter), main thread reads.
+    pub(crate) tracker: std::sync::Arc<crate::PtyStateTracker>,
     /// Shutdown flag: when true, the reader thread exits its loop ASAP.
     /// Set by into_parts() and Drop.
     shutdown: Arc<AtomicBool>,
@@ -129,6 +133,8 @@ impl Pty {
         let pending_title = Arc::new(Mutex::new(None));
         let foreground_title = Arc::new(Mutex::new(None));
         let initial_parser = vt100::Parser::new(size.rows, size.cols, scrollback_len);
+        let tracker = std::sync::Arc::new(crate::PtyStateTracker::new(size.rows));
+        let reader_tracker = std::sync::Arc::clone(&tracker);
         let shared_parser = Arc::new(Mutex::new(initial_parser));
         let dirty = Arc::new(AtomicBool::new(false));
         let dirty_cond = Arc::new((Mutex::new(()), Condvar::new()));
@@ -152,6 +158,7 @@ impl Pty {
                 scrollback_len,
                 osc52_text: None,
                 exited_emitted: reader_exited_emitted,
+                tracker: reader_tracker,
             })
         });
         Ok(Self {
@@ -168,6 +175,7 @@ impl Pty {
             shared_parser,
             dirty,
             dirty_cond,
+            tracker,
             size,
             pty_size: size,
             scrollback_len,
@@ -232,6 +240,7 @@ impl Pty {
             .map_err(|err| wrap_err("resize", err))?;
         guard.screen_mut().set_size(size.rows, size.cols);
         drop(guard);
+        self.tracker.resize(size.rows);
         self.pty_size = size;
         self.size = size;
         Ok(())
@@ -452,6 +461,13 @@ impl Pty {
         let parser = self.shared_parser.lock().unwrap();
         parser.screen().alternate_screen()
     }
+
+    /// Return an `Arc<dyn DirectInputTracker>` for this PTY's state tracker.
+    /// Used by the window manager to auto-enable direct mode when the
+    /// application enters alternate screen, enables mouse tracking, etc.
+    pub fn direct_input_tracker(&self) -> std::sync::Arc<dyn crate::DirectInputTracker> {
+        self.tracker.clone()
+    }
 }
 
 impl Drop for Pty {
@@ -481,6 +497,8 @@ struct ParserReadLoopArgs {
     /// Test-only hook: when `Some`, the extracted OSC 52 text is written here
     /// in addition to the real clipboard, so tests can assert the value.
     osc52_text: Option<Arc<Mutex<Option<String>>>>,
+    /// Application state tracker — shared via Arc with Pty.
+    tracker: std::sync::Arc<crate::PtyStateTracker>,
 }
 
 fn parser_read_loop(args: ParserReadLoopArgs) {
@@ -498,11 +516,15 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
         scrollback_len: _scrollback_len,
         osc52_text,
         exited_emitted,
+        tracker,
     } = args;
     let mut prev_tail: [u8; HISTORY_TAIL_LEN] = [0; HISTORY_TAIL_LEN];
     let mut buf = [0u8; PTY_READ_BUF_SIZE];
     let mut osc52 = Osc52Extractor::new();
     let mut bytes_since_render = 0usize;
+    let mut vte_parser = vte::Parser::new();
+    let tracker_for_adapter = std::sync::Arc::clone(&tracker);
+    let mut tracker_adapter = PtyPerformAdapter::new(tracker_for_adapter);
     const IO_BURST_BUDGET: usize = 256 * 1024; // 256 KB
     loop {
         match reader.read(&mut buf) {
@@ -537,6 +559,26 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     const PENDING_CAP: usize = 1024 * 1024; // 1 MB
                     if p.len() > PENDING_CAP {
                         p.clear();
+                    }
+                }
+
+                // Process bytes through the application state tracker
+                // (alternate screen, mouse tracking, margins — atomics, no lock).
+                let prev_routing = tracker.requires_app_routing();
+                vte_parser.advance(&mut tracker_adapter, &buf[..n]);
+                let new_routing = tracker.requires_app_routing();
+                if prev_routing != new_routing {
+                    tracing::info!(
+                        "[STAGE 1] PTY routing flipped: {} -> {}",
+                        prev_routing,
+                        new_routing
+                    );
+                    if let Ok(guard) = status_cb.lock()
+                        && let Some(ref cb) = *guard
+                    {
+                        cb(crate::PtyStatus::DirectInputChanged(new_routing));
+                    } else {
+                        tracing::error!("[STAGE 1] status_cb is NONE when transition occurred!");
                     }
                 }
 
@@ -867,6 +909,7 @@ mod tests {
             scrollback_len: 0,
             exited_emitted: Arc::new(AtomicBool::new(false)),
             osc52_text: None,
+            tracker: std::sync::Arc::new(crate::PtyStateTracker::new(24)),
         }
     }
 

@@ -34,6 +34,8 @@ pub enum UnifiedEvent {
     PtyWakeup(WindowKey),
     /// A PTY child process has exited. Sent from the reader thread on EOF.
     AppExited(WindowKey),
+    /// Application direct-input routing state changed (alt screen, mouse tracking, margins).
+    DirectInputChanged(WindowKey, bool),
     /// An OS signal was received (SIGINT, SIGTERM).
     Signal,
     /// Periodic tick for timing.
@@ -56,6 +58,8 @@ pub struct UnifiedEventSource {
     dirty_windows: HashSet<WindowKey>,
     /// Accumulated window exit notifications since the last drain.
     exited_windows: Vec<WindowKey>,
+    /// Accumulated direct-input routing transitions since the last drain.
+    direct_input_changed: Vec<(WindowKey, bool)>,
     /// Cached input event (poll returned true, waiting for read).
     pending_event: Option<Event>,
     /// Buffer for input events drained during `drain_pending` so none are lost.
@@ -132,6 +136,7 @@ impl UnifiedEventSource {
             shutdown,
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
             pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
@@ -168,6 +173,15 @@ impl UnifiedEventSource {
                 }
                 Ok(UnifiedEvent::AppExited(key)) => {
                     self.exited_windows.push(key);
+                }
+                Ok(UnifiedEvent::DirectInputChanged(key, enabled)) => {
+                    tracing::info!(
+                        "[STAGE 3] drain_pending collected DirectInputChanged({:?}, {})",
+                        key,
+                        enabled
+                    );
+                    self.dirty_windows.insert(key);
+                    self.direct_input_changed.push((key, enabled));
                 }
                 Ok(UnifiedEvent::Signal) => {
                     self.signal_received = true;
@@ -277,6 +291,17 @@ impl EventSource for UnifiedEventSource {
                     self.frame_pacer.notify_pending(Instant::now());
                     continue;
                 }
+                Ok(UnifiedEvent::DirectInputChanged(key, enabled)) => {
+                    tracing::info!(
+                        "[STAGE 3] recv_timeout collected DirectInputChanged({:?}, {})",
+                        key,
+                        enabled
+                    );
+                    self.dirty_windows.insert(key);
+                    self.direct_input_changed.push((key, enabled));
+                    self.frame_pacer.notify_pending(Instant::now());
+                    return Ok(false);
+                }
                 Ok(UnifiedEvent::Signal) => {
                     self.signal_received = true;
                     return Ok(false);
@@ -327,6 +352,15 @@ impl EventSource for UnifiedEventSource {
                 Ok(UnifiedEvent::AppExited(key)) => {
                     self.exited_windows.push(key);
                 }
+                Ok(UnifiedEvent::DirectInputChanged(key, enabled)) => {
+                    tracing::info!(
+                        "[STAGE 3] drain_pending collected DirectInputChanged({:?}, {})",
+                        key,
+                        enabled
+                    );
+                    self.dirty_windows.insert(key);
+                    self.direct_input_changed.push((key, enabled));
+                }
                 Ok(UnifiedEvent::Signal) => {
                     self.signal_received = true;
                 }
@@ -356,6 +390,11 @@ impl EventSource for UnifiedEventSource {
                 Ok(UnifiedEvent::AppExited(key)) => {
                     self.exited_windows.push(key);
                 }
+                Ok(UnifiedEvent::DirectInputChanged(key, enabled)) => {
+                    self.dirty_windows.insert(key);
+                    self.direct_input_changed.push((key, enabled));
+                    continue;
+                }
                 Ok(UnifiedEvent::Signal) => self.signal_received = true,
                 Ok(UnifiedEvent::Tick) => {}
                 Err(_) => {
@@ -382,6 +421,11 @@ impl EventSource for UnifiedEventSource {
                 Ok(UnifiedEvent::PtyWakeup(_)) => {}
                 Ok(UnifiedEvent::AppExited(key)) => {
                     self.exited_windows.push(key);
+                }
+                Ok(UnifiedEvent::DirectInputChanged(key, enabled)) => {
+                    self.dirty_windows.insert(key);
+                    self.direct_input_changed.push((key, enabled));
+                    continue;
                 }
                 Ok(UnifiedEvent::Signal) => self.signal_received = true,
                 Ok(UnifiedEvent::Tick) => {}
@@ -445,6 +489,10 @@ impl EventSource for UnifiedEventSource {
         std::mem::take(&mut self.exited_windows)
     }
 
+    fn take_direct_input_changed(&mut self) -> Vec<(WindowKey, bool)> {
+        std::mem::take(&mut self.direct_input_changed)
+    }
+
     fn take_dirty_windows(&mut self) -> HashSet<WindowKey> {
         std::mem::take(&mut self.dirty_windows)
     }
@@ -492,6 +540,7 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
             pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
@@ -583,6 +632,7 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
             pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
@@ -659,6 +709,7 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
             pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
@@ -702,6 +753,7 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
             pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
@@ -760,6 +812,7 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: set,
             exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
             pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
@@ -787,6 +840,7 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
             pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
@@ -812,6 +866,7 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
             pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
@@ -847,6 +902,7 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: vec![key],
+            direct_input_changed: Vec::new(),
             pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
@@ -888,6 +944,7 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: set,
             exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
             pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
@@ -921,6 +978,7 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
             pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),

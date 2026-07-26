@@ -122,7 +122,7 @@ impl Component<TermWmAction> for TerminalComponent {
                 }
                 if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
                     && key.modifiers.shift
-                    && !self.pane.borrow_mut().alternate_screen()
+                    && !ctx.direct_mode()
                 {
                     let delta = if key.code == KeyCode::PageUp {
                         10isize
@@ -131,7 +131,8 @@ impl Component<TermWmAction> for TerminalComponent {
                     };
                     return EventResult::Action(TermWmAction::Scroll(delta));
                 }
-                let bytes = key.to_pty_bytes();
+                let app_cursor = self.pane.borrow().is_application_cursor_keys_active();
+                let bytes = key.to_pty_bytes(app_cursor);
                 if bytes.is_empty() {
                     return EventResult::Ignored;
                 }
@@ -451,6 +452,17 @@ impl TerminalComponent {
         self.pane.get_mut().write_bytes(input)
     }
 
+    /// Attach a callback to the underlying PTY's status event stream.
+    /// Call after `open_window` so the closure can capture the known `WindowKey`.
+    pub fn set_pty_callback<F>(&self, f: F)
+    where
+        F: Fn(term_wm_pty_engine::PtyStatus) + Send + Sync + 'static,
+    {
+        self.pane
+            .borrow_mut()
+            .set_status_callback(Some(Box::new(f)));
+    }
+
     #[allow(clippy::collapsible_if)]
     pub fn has_exited(&mut self) -> bool {
         let pane = self.pane.get_mut();
@@ -536,7 +548,7 @@ impl TerminalComponent {
             let mut pane = self.pane.borrow_mut();
 
             if let Some(handle) = ctx.scroll_handle() {
-                let suppress_scroll = ctx.direct_mode() || pane.alternate_screen();
+                let suppress_scroll = ctx.direct_mode();
 
                 if suppress_scroll {
                     handle.set_content_size(clipped.width as usize, clipped.height as usize);
@@ -593,7 +605,7 @@ impl TerminalComponent {
         let mut pane = self.pane.borrow_mut();
         let new_sb = pane.scrollback();
         if new_sb != sb_before_drag
-            && !pane.alternate_screen()
+            && !ctx.direct_mode()
             && let Some(handle) = ctx.scroll_handle()
         {
             let used = pane.max_scrollback();
@@ -1198,6 +1210,10 @@ impl Pane for TestPane {
         self.alt_screen
     }
 
+    fn requires_app_routing(&self) -> bool {
+        self.alt_screen
+    }
+
     fn scrollback(&mut self) -> usize {
         self.current_scrollback
     }
@@ -1511,7 +1527,7 @@ mod tests {
         };
         let buffer = Buffer::empty(area);
         let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
-        let ctx = make_ctx(100, handle);
+        let ctx = make_ctx(100, handle).with_direct_mode(true);
         term.render(
             &mut backend,
             LayoutRect {
@@ -2050,6 +2066,14 @@ mod tests {
         use term_wm_core::components::{Component, NoopOverlay, NoopWmComponent};
         use term_wm_core::config::AppBuilder;
         use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use term_wm_pty_engine::DirectInputTracker;
+
+        struct AlwaysDirect;
+        impl DirectInputTracker for AlwaysDirect {
+            fn requires_direct_input(&self) -> bool {
+                true
+            }
+        }
 
         let (term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
         let mut sv = crate::scroll_view::ScrollViewComponent::new(term);
@@ -2080,9 +2104,7 @@ mod tests {
             height: 24,
         });
         wm.focus_app_window(key);
-
-        // Set direct mode on the window
-        wm.set_direct_mode(key, true);
+        wm.set_window_tracker(key, Arc::new(AlwaysDirect));
         assert!(wm.direct_mode(key));
 
         // Render to set last_area
@@ -2725,7 +2747,7 @@ mod tests {
         let mut pane = TestPane::new(200);
         pane.alt_screen = true;
         let mut term = TerminalComponent::from_pane(Box::new(pane));
-        let ctx = make_ctx(0, handle);
+        let ctx = make_ctx(0, handle).with_direct_mode(true);
         let area = Rect::new(0, 0, 80, 24);
         let buffer = Buffer::empty(area);
         let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);

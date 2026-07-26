@@ -46,6 +46,20 @@ pub trait Pane {
     /// Sync dirty state and handle DSR/foreground polling.
     /// Call before locking the parser for cell access.
     fn sync_screen(&mut self) {}
+
+    /// Unified routing decision: returns true if keyboard/mouse inputs
+    /// should be forwarded to the PTY child rather than intercepted
+    /// by the window manager's native scrollbar.
+    /// Thread-safe: no mutable borrow needed (atomic reads).
+    fn requires_app_routing(&self) -> bool {
+        false
+    }
+
+    /// Returns true when DECCKM (DECSET 1 / Application Cursor Keys) is active.
+    /// When true, unmodified arrow keys must use SS3 (`\eOA`) instead of CSI (`\e[A`).
+    fn is_application_cursor_keys_active(&self) -> bool {
+        false
+    }
 }
 
 impl Pane for crate::Pty {
@@ -119,6 +133,14 @@ impl Pane for crate::Pty {
 
     fn set_status_callback(&mut self, cb: Option<Box<dyn Fn(PtyStatus) + Send + Sync>>) {
         crate::Pty::set_status_callback(self, cb)
+    }
+
+    fn requires_app_routing(&self) -> bool {
+        self.tracker.requires_app_routing()
+    }
+
+    fn is_application_cursor_keys_active(&self) -> bool {
+        self.tracker.is_application_cursor_keys_active()
     }
 
     fn shared_parser(&mut self) -> Arc<Mutex<vt100::Parser>> {
