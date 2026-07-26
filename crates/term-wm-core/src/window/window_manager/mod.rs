@@ -1348,10 +1348,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                                 if !self.is_window_floating(*key) {
                                     let rect = self.visible_region_for_key(*key);
 
-                                    let left_border =
-                                        i32::from(crate::chrome::LEFT_BORDER_WIDTH);
-                                    let top_border =
-                                        i32::from(crate::chrome::TOP_BORDER_HEIGHT);
+                                    let left_border = i32::from(crate::chrome::LEFT_BORDER_WIDTH);
+                                    let top_border = i32::from(crate::chrome::TOP_BORDER_HEIGHT);
 
                                     let expanded = crate::window::FloatRect {
                                         x: rect.x - left_border,
@@ -1368,9 +1366,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
                                     self.set_floating_rect(
                                         *key,
-                                        Some(crate::window::FloatRectSpec::Absolute(
-                                            expanded,
-                                        )),
+                                        Some(crate::window::FloatRectSpec::Absolute(expanded)),
                                     );
 
                                     // Synchronize the in-flight drag anchor
