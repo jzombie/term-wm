@@ -1527,7 +1527,7 @@ mod tests {
         };
         let buffer = Buffer::empty(area);
         let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
-        let ctx = make_ctx(100, handle);
+        let ctx = make_ctx(100, handle).with_direct_mode(true);
         term.render(
             &mut backend,
             LayoutRect {
@@ -2066,6 +2066,14 @@ mod tests {
         use term_wm_core::components::{Component, NoopOverlay, NoopWmComponent};
         use term_wm_core::config::AppBuilder;
         use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use term_wm_pty_engine::DirectInputTracker;
+
+        struct AlwaysDirect;
+        impl DirectInputTracker for AlwaysDirect {
+            fn requires_direct_input(&self) -> bool {
+                true
+            }
+        }
 
         let (term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
         let mut sv = crate::scroll_view::ScrollViewComponent::new(term);
@@ -2096,9 +2104,8 @@ mod tests {
             height: 24,
         });
         wm.focus_app_window(key);
-
-        // Direct mode is automatic (purely from tracker)
-        assert!(!wm.direct_mode(key));
+        wm.set_window_tracker(key, Arc::new(AlwaysDirect));
+        assert!(wm.direct_mode(key));
 
         // Render to set last_area
         use term_wm_core::components::ComponentContext;
@@ -2740,7 +2747,7 @@ mod tests {
         let mut pane = TestPane::new(200);
         pane.alt_screen = true;
         let mut term = TerminalComponent::from_pane(Box::new(pane));
-        let ctx = make_ctx(0, handle);
+        let ctx = make_ctx(0, handle).with_direct_mode(true);
         let area = Rect::new(0, 0, 80, 24);
         let buffer = Buffer::empty(area);
         let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
