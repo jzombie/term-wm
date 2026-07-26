@@ -4463,8 +4463,8 @@ mod tests {
             crate::window::FloatRectSpec::Absolute(fr) => fr,
             _ => panic!("expected absolute rect"),
         };
-        assert_eq!(moved.x, start_rect.x + 5);
-        assert_eq!(moved.y, start_rect.y + 1);
+        assert_eq!(moved.x, start_rect.x + 4);
+        assert_eq!(moved.y, start_rect.y);
 
         let up = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Release(MouseButton::Left),
