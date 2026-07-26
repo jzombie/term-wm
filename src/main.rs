@@ -21,6 +21,9 @@ use term_wm_pty_engine::{DirectInputTracker, Pty};
 use term_wm_ui_facade::core_component::CoreWmComponent;
 use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 
+// TODO: Make this user-configurable
+const PTY_SCROLLBACK_LEN: usize = 2000;
+
 /// Simple CLI for launching `term-wm` with optional commands / window count.
 #[derive(Parser, Debug)]
 #[command(
@@ -171,8 +174,8 @@ impl App {
         command_to_send: Option<String>,
     ) -> io::Result<()> {
         let size = TerminalComponent::default_pty_size();
-        // TODO: Make scrollback buffer user-configurable
-        let pty = Pty::spawn_with_scrollback(cmd, size, 2000).map_err(io::Error::other)?;
+        let pty =
+            Pty::spawn_with_scrollback(cmd, size, PTY_SCROLLBACK_LEN).map_err(io::Error::other)?;
         let tracker: Arc<dyn DirectInputTracker> = pty.direct_input_tracker();
         let mut pane = TerminalComponent::from_pane(Box::new(pty));
         pane.set_link_handler_fn(|url| {
@@ -261,8 +264,8 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
     fn wm_new_window(&mut self) -> io::Result<()> {
         let size = TerminalComponent::default_pty_size();
         let cmd = default_shell_command();
-        // TODO: Make scrollback buffer user-configurable
-        let pty = Pty::spawn_with_scrollback(cmd, size, 2000).map_err(io::Error::other)?;
+        let pty =
+            Pty::spawn_with_scrollback(cmd, size, PTY_SCROLLBACK_LEN).map_err(io::Error::other)?;
         let tracker: Arc<dyn DirectInputTracker> = pty.direct_input_tracker();
         let mut pane = TerminalComponent::from_pane(Box::new(pty));
         pane.set_link_handler_fn(|url| {
