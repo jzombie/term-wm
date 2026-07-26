@@ -28,7 +28,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             } else {
                 // Was tiled: restore Void → Leaf in layout tree
                 self.clear_floating_rect(key);
-                let void_id = self.window(key).and_then(|w| w.void_id);
+                let void_id = self.window(key).and_then(|w| w.void_id());
                 if let Some(vid) = void_id
                     && let Some(ref mut layout) = self.managed_layout
                 {
@@ -38,7 +38,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
             if let Some(w) = self.windows.get_mut(key) {
                 w.set_maximized(false);
-                w.void_id = None;
+                w.clear_void_id();
             }
             self.bring_floating_to_front_key(key);
             return;
@@ -61,7 +61,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 && let Some(void_id) = layout.replace_leaf_with_void(key)
                 && let Some(w) = self.windows.get_mut(key)
             {
-                w.void_id = Some(void_id);
+                w.set_void_id(Some(void_id));
             }
             self.set_prev_floating_rect(key, None);
         }
@@ -89,15 +89,15 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     ///   stay alive so the window can be re-shown via `transition_window`.
     pub fn close_window(&mut self, key: WindowKey) {
         tracing::debug!(window_key = ?key, "closing window");
-        let policy = self.window(key).map(|w| w.close_policy).unwrap_or_default();
+        let policy = self.window(key).map(|w| w.close_policy()).unwrap_or_default();
         self.transition_window(key, WindowState::Unmapped);
 
         if policy == ClosePolicy::Destroy {
             if let Some(w) = self.windows.get_mut(key) {
-                if let Some(c) = self.components.get_mut(w.component_key) {
+                if let Some(c) = self.components.get_mut(w.component_key()) {
                     c.destroy();
                 }
-                self.components.remove(w.component_key);
+                self.components.remove(w.component_key());
             }
             self.windows.remove(key);
         }

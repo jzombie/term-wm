@@ -406,8 +406,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 height: self.managed_area.height,
             });
             for (_id, window) in self.windows.iter_mut() {
-                if window.floating_rect == Some(prev_full) {
-                    window.floating_rect = Some(new_full);
+                if window.floating_rect() == Some(prev_full) {
+                    window.set_floating_rect(Some(new_full));
                 }
             }
         }
@@ -460,8 +460,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             .iter()
             .filter_map(|(key, window)| {
                 if window.is_floating()
-                    && window.state != WindowState::Iconic
-                    && window.state != WindowState::Unmapped
+                    && window.state() != WindowState::Iconic
+                    && window.state() != WindowState::Unmapped
                 {
                     Some(key)
                 } else {
@@ -512,11 +512,11 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     pub fn build_display_order(&self) -> Vec<WindowKey> {
         let mut ordered: Vec<(WindowKey, &super::Window)> = self.windows.iter().collect();
-        ordered.sort_by_key(|(_, window)| window.creation_order);
+        ordered.sort_by_key(|(_, window)| window.creation_order());
 
         let mut out: Vec<WindowKey> = Vec::new();
         for (key, window) in ordered {
-            if self.managed_draw_order.contains(&key) || window.state == WindowState::Iconic {
+            if self.managed_draw_order.contains(&key) || window.state() == WindowState::Iconic {
                 out.push(key);
             }
         }
@@ -532,14 +532,14 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         let title = title.into();
         let prev = self
             .window(key)
-            .and_then(|w| w.title.as_deref().map(|t| t.to_string()));
+            .and_then(|w| w.title().map(|t| t.to_string()));
         if prev.as_deref() != Some(&title)
             && let Some(window) = self.windows.get_mut(key)
         {
             let seq = self.next_title_seq;
             self.next_title_seq += 1;
-            window.title = Some(title);
-            window.title_set_order = Some(seq);
+            window.set_title(Some(title));
+            window.set_title_set_order(Some(seq));
         }
     }
 
@@ -668,7 +668,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         let floating_keys: Vec<WindowKey> = self
             .windows
             .iter()
-            .filter_map(|(key, window)| window.floating_rect.as_ref().map(|_| key))
+            .filter_map(|(key, window)| window.floating_rect().map(|_| key))
             .collect();
         for key in floating_keys {
             let Some(FloatRectSpec::Absolute(fr)) = self.floating_rect(key) else {
@@ -803,12 +803,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Idempotent — safe to call even if already detached.
     pub(super) fn detach_from_tiling_layout(&mut self, key: WindowKey) {
         // Capture void_id before the mutable layout borrow
-        let void_id = self.window(key).and_then(|w| w.void_id);
+        let void_id = self.window(key).and_then(|w| w.void_id());
         if let Some(ref mut layout) = self.managed_layout {
             if let Some(vid) = void_id {
                 layout.remove_void_by_id(vid);
                 if let Some(w) = self.windows.get_mut(key) {
-                    w.void_id = None;
+                    w.clear_void_id();
                 }
             } else {
                 let _ = layout.root_mut().remove_leaf(key);
@@ -840,7 +840,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         let current_focus = *self.focus.current();
         let floating_info = self
             .window(key)
-            .and_then(|w| w.floating_rect)
+            .and_then(|w| w.floating_rect())
             .map(|spec| spec.resolve(self.managed_area));
 
         let Some(layout) = self.managed_layout.as_mut() else {
@@ -1105,7 +1105,7 @@ mod window_mode_tests {
         assert_eq!(mode, WindowMode::Monocle);
 
         // 3. Floating window inside Monocle workspace -> Floating overrides Monocle
-        window.floating_rect = Some(dummy_float_spec());
+        window.set_floating_rect(Some(dummy_float_spec()));
         let mode = evaluate_mode(&window, is_monocle);
         assert_eq!(
             mode,

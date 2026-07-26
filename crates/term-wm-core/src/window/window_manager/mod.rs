@@ -414,7 +414,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Set the close policy for a window (Destroy or Unmap).
     pub fn set_close_policy(&mut self, key: WindowKey, policy: entry::ClosePolicy) {
         if let Some(w) = self.windows.get_mut(key) {
-            w.close_policy = policy;
+            w.set_close_policy(policy);
         }
     }
 
@@ -434,7 +434,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     pub fn window_state(&self, key: WindowKey) -> Option<WindowState> {
-        self.window(key).map(|w| w.state)
+        self.window(key).map(|w| w.state())
     }
 
     /// Validate that a state transition is legal.
@@ -457,7 +457,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     pub fn transition_window(&mut self, key: WindowKey, new_state: WindowState) {
         // Step 1: Read old state (immutable borrow, immediately dropped)
         let old_state = match self.window(key) {
-            Some(w) => w.state,
+            Some(w) => w.state(),
             None => {
                 tracing::warn!("transition_window: unknown key {:?}", key);
                 return;
@@ -474,7 +474,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         );
 
         // Step 2: Mutate state (brief mutable borrow, immediately dropped)
-        self.window_mut(key).state = new_state;
+        self.window_mut(key).set_state(new_state);
 
         // Step 3: Side-effects — full &mut self available
         match (old_state, new_state) {
@@ -528,7 +528,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 let has_other_floating = self
                     .windows
                     .values()
-                    .any(|w| w.state == WindowState::Mapped && w.is_floating());
+                    .any(|w| w.state() == WindowState::Mapped && w.is_floating());
                 let floating_mode = self.managed_layout.is_none();
 
                 if !self.is_window_floating(key) && (has_other_floating || floating_mode) {
@@ -559,7 +559,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     fn floating_rect(&self, key: WindowKey) -> Option<crate::window::FloatRectSpec> {
-        self.window(key).and_then(|window| window.floating_rect)
+        self.window(key).and_then(|window| window.floating_rect())
     }
 
     pub fn set_floating_rect(
@@ -568,13 +568,13 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         rect: Option<crate::window::FloatRectSpec>,
     ) {
         if let Some(w) = self.windows.get_mut(key) {
-            w.floating_rect = rect;
+            w.set_floating_rect(rect);
         }
     }
 
     fn clear_floating_rect(&mut self, key: WindowKey) {
         if let Some(w) = self.windows.get_mut(key) {
-            w.floating_rect = None;
+            w.set_floating_rect(None);
             w.set_maximized(false);
         }
     }
@@ -585,12 +585,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         rect: Option<crate::window::FloatRectSpec>,
     ) {
         if let Some(w) = self.windows.get_mut(key) {
-            w.prev_floating_rect = rect;
+            w.set_prev_floating_rect(rect);
         }
     }
 
     fn take_prev_floating_rect(&mut self, key: WindowKey) -> Option<crate::window::FloatRectSpec> {
-        self.windows.get_mut(key)?.prev_floating_rect.take()
+        self.windows.get_mut(key)?.take_prev_floating_rect()
     }
 
     pub fn is_window_floating(&self, key: WindowKey) -> bool {
@@ -624,16 +624,16 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     pub fn direct_mode(&self, key: WindowKey) -> bool {
-        self.window(key).is_some_and(|window| window.direct_mode)
+        self.window(key).is_some_and(|window| window.direct_mode())
     }
 
     pub fn set_direct_mode(&mut self, key: WindowKey, value: bool) {
         let title = self.window_title(key);
         if let Some(w) = self.windows.get_mut(key)
-            && w.direct_mode != value
+            && w.direct_mode() != value
         {
-            w.direct_mode = value;
-            if value && let Some(c) = self.components.get_mut(w.component_key) {
+            w.set_direct_mode(value);
+            if value && let Some(c) = self.components.get_mut(w.component_key()) {
                 c.clear_selection();
             }
             self.mark_layout_dirty();
@@ -688,7 +688,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 .window(oid)
                 .map(|w| w.title_or_default(oid))
                 .unwrap_or_else(|| format!("{:?}", oid));
-            let set_order = self.window(oid).and_then(|w| w.title_set_order);
+            let set_order = self.window(oid).and_then(|w| w.title_set_order());
             groups.entry(base).or_default().push((oid, set_order));
         }
         for group in groups.values_mut() {
@@ -714,8 +714,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     fn clear_all_floating(&mut self) {
         for (_key, window) in self.windows.iter_mut() {
-            window.floating_rect = None;
-            window.prev_floating_rect = None;
+            window.set_floating_rect(None);
+            window.set_prev_floating_rect(None);
         }
     }
 
@@ -1018,7 +1018,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             .with_screen_area(self.region(key));
         // Inject the window's active keyboard focus into the context.
         if let Some(window) = self.windows.get(key)
-            && let Some(focus_id) = window.active_keyboard_focus
+            && let Some(focus_id) = window.active_keyboard_focus()
         {
             ctx = ctx.with_keyboard_focus_id(focus_id);
         }
@@ -1187,7 +1187,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     pub fn floating_panes(&self) -> Vec<(WindowKey, crate::window::FloatRectSpec)> {
         self.windows
             .iter()
-            .filter_map(|(key, window)| window.floating_rect.map(|rect| (key, rect)))
+            .filter_map(|(key, window)| window.floating_rect().map(|rect| (key, rect)))
             .collect()
     }
 
@@ -1224,7 +1224,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         &self,
         key: WindowKey,
     ) -> Option<crate::hitbox_registry::HitboxId> {
-        self.windows.get(key).map(|w| w.content_hitbox_id)
+        self.windows.get(key).map(|w| w.content_hitbox_id())
     }
 
     /// Dispatch a mouse event through the hitbox registry.
@@ -2152,14 +2152,14 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Returns &C — no vtable cast. Callers in generic context get static dispatch.
     pub fn component_for_key(&self, key: WindowKey) -> Option<&C> {
         let w = self.windows.get(key)?;
-        self.components.get(w.component_key)
+        self.components.get(w.component_key())
     }
 
     /// Event/update-phase access: borrow component mutably.
     /// Returns &mut C — no vtable cast. Callers in generic context get static dispatch.
     pub fn component_for_key_mut(&mut self, key: WindowKey) -> Option<&mut C> {
         let w = self.windows.get_mut(key)?;
-        self.components.get_mut(w.component_key)
+        self.components.get_mut(w.component_key())
     }
 
     /// Return all window keys currently in the SlotMap.
@@ -2176,7 +2176,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     pub fn mapped_windows(&self) -> Vec<WindowKey> {
         self.windows
             .iter()
-            .filter(|(_, w)| w.state == WindowState::Mapped)
+            .filter(|(_, w)| w.state() == WindowState::Mapped)
             .map(|(key, _)| key)
             .collect()
     }
@@ -2447,7 +2447,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         hitbox_id: crate::hitbox_registry::HitboxId,
     ) {
         if let Some(window) = self.windows.get_mut(key) {
-            window.active_keyboard_focus = Some(hitbox_id);
+            window.set_active_keyboard_focus(Some(hitbox_id));
         }
     }
 
@@ -3191,13 +3191,13 @@ mod tests {
         // Maximize
         wm.toggle_maximize(keys[0]);
         assert!(wm.windows.get(keys[0]).unwrap().is_maximized());
-        assert!(wm.windows.get(keys[0]).unwrap().void_id.is_some());
+        assert!(wm.windows.get(keys[0]).unwrap().void_id().is_some());
 
         // Toggle back (unmaximize directly)
         wm.toggle_maximize(keys[0]);
         let w0 = wm.windows.get(keys[0]).unwrap();
         assert!(!w0.is_maximized(), "unmaximized");
-        assert!(w0.void_id.is_none(), "void_id cleared");
+        assert!(w0.void_id().is_none(), "void_id cleared");
         assert!(!w0.is_floating(), "not floating");
         // Should be back in tree at original position
         assert!(
@@ -3234,7 +3234,7 @@ mod tests {
         wm.toggle_maximize(keys[0]);
         let w0 = wm.windows.get(keys[0]).unwrap();
         assert!(
-            w0.void_id.is_some(),
+            w0.void_id().is_some(),
             "void_id set after maximizing tiled window"
         );
         // Tree should contain a Void, not a Leaf(keys[0])
@@ -3686,7 +3686,7 @@ mod tests {
         let leaves: Vec<_> = wm.managed_layout.as_ref().unwrap().root().collect_leaves();
         assert_eq!(leaves, vec![keys[1]], "only remaining window in tree");
         assert!(
-            wm.windows.get(keys[0]).unwrap().void_id.is_none(),
+            wm.windows.get(keys[0]).unwrap().void_id().is_none(),
             "void_id cleared"
         );
     }
@@ -5824,7 +5824,7 @@ mod tests {
         assert_eq!(wm.window_state(target), Some(WindowState::Unmapped));
         assert!(!wm.z_order.contains(&target), "removed from z_order");
         assert!(
-            wm.window(target).is_some_and(|w| w.floating_rect.is_some()),
+            wm.window(target).is_some_and(|w| w.floating_rect().is_some()),
             "floating rect preserved across Unmap"
         );
         // Focus ring auto-fallbacks via set_order removing current → first()
