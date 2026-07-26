@@ -1,5 +1,6 @@
 ---
 source: crates/term-wm-console/src/draw_plan_renderer.rs
+assertion_line: 2287
 expression: buffer
 ---
 Buffer {
