@@ -22,6 +22,10 @@ use term_wm_ui_components::helpers::{downcast_ratatui, layout_rect_to_clipped_re
 
 pub struct WmCommandPaletteComponent {
     area: Cell<LayoutRect>,
+    /// The actual dialog rectangle within the managed area (centered, sized to
+    /// content). Used for spatial hit-testing — clicks outside this rect
+    /// dismiss the palette and activate the window underneath.
+    dialog_bounds: Cell<LayoutRect>,
     dialog: DialogOverlayComponent,
     palette: CommandPaletteComponent,
     managed_area: LayoutRect,
@@ -54,6 +58,7 @@ impl WmCommandPaletteComponent {
         dialog.set_auto_close_on_outside_click(true);
         Self {
             area: Cell::new(LayoutRect::default()),
+            dialog_bounds: Cell::new(LayoutRect::default()),
             dialog,
             palette: CommandPaletteComponent::new(),
             managed_area: LayoutRect::default(),
@@ -153,6 +158,7 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
                 width: rect.width,
                 height: rect.height,
             };
+            self.dialog_bounds.set(content_rect);
             if content_rect.width > 0 && content_rect.height > 0 {
                 let ratatui = downcast_ratatui(backend);
                 Block::default()
@@ -175,6 +181,7 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
             width: rect.width,
             height: rect.height,
         };
+        self.dialog_bounds.set(content_rect);
 
         if content_rect.width == 0 || content_rect.height == 0 {
             return;
@@ -304,6 +311,15 @@ impl Overlay<TermWmAction> for WmCommandPaletteComponent {
 
     fn set_tab_outline(&mut self, expires_at: Option<Instant>) {
         self.tab_outline_until = expires_at;
+    }
+
+    fn render_area(&self) -> Option<LayoutRect> {
+        let bounds = self.dialog_bounds.get();
+        if bounds.width > 0 && bounds.height > 0 {
+            Some(bounds)
+        } else {
+            None
+        }
     }
 }
 

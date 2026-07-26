@@ -435,8 +435,30 @@ where
                     return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
 
-                // Command palette absolute event barrier (same pattern as help overlay)
+                // Command palette: spatial hit-test barrier.
+                // Clicks outside the palette bounds dismiss it AND activate the
+                // window under the cursor in one gesture. Clicks inside are
+                // handled by the palette as before — event does NOT propagate.
                 if app.wm().command_palette_visible() {
+                    // Outside-click detection via explicit bounds check
+                    if let Event::Mouse(mouse_evt) = &evt
+                        && matches!(mouse_evt.kind, MouseEventKind::Press(_))
+                        && let Some(palette_bounds) = app.wm().command_palette_bounds()
+                        && !palette_bounds.contains(mouse_evt.column, mouse_evt.row)
+                    {
+                        app.wm().close_command_palette();
+                        app.wm()
+                            .handle_mouse_focus_click(mouse_evt.column, mouse_evt.row);
+                        update_selection_snapshot(app);
+                        return flush_state_changes(
+                            app,
+                            driver,
+                            ControlFlow::Continue,
+                            false,
+                            None,
+                        );
+                    }
+
                     if let Some(action) = app.wm().handle_command_palette_event(&evt) {
                         match action {
                             TermWmAction::CloseMenu => {}

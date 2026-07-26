@@ -1,5 +1,6 @@
 use crate::components::{Component, Overlay, WmComponent};
 use crate::events::Event;
+use term_wm_layout_engine::LayoutRect;
 
 use super::WindowManager;
 use crate::actions::{ConfirmAction, EventResult, TermWmAction};
@@ -82,6 +83,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     pub fn command_palette_visible(&self) -> bool {
         self.command_palette_key.is_some()
+    }
+
+    pub fn command_palette_bounds(&self) -> Option<LayoutRect> {
+        self.command_palette_key
+            .and_then(|key| self.overlays.get(key))
+            .and_then(|o| o.render_area())
     }
 
     pub fn close_command_palette(&mut self) {

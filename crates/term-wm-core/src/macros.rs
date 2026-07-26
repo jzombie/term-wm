@@ -244,6 +244,9 @@ macro_rules! impl_overlay_delegate {
             fn set_tab_outline(&mut self, expires_at: Option<std::time::Instant>) {
                 match self { $(Self::$variant(c) => c.set_tab_outline(expires_at),)* }
             }
+            fn render_area(&self) -> Option<$crate::Rect> {
+                match self { $(Self::$variant(c) => c.render_area(),)* }
+            }
         }
     };
 }
