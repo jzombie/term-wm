@@ -33,18 +33,43 @@ use crate::unified_event_source::UnifiedEvent;
 
 /// A self-contained window manager app that eliminates dual-trait boilerplate.
 ///
-/// Generic parameter `C` allows injecting custom root-level components.
-/// When `C = NoopComponent` (the default), use the convenience constructors
-/// `new()`, `bare()`, and `embedded()`. For custom component types, use
-/// `new_custom()`, `bare_custom()`, or `embedded_custom()`.
+/// Generic parameter `C` allows injecting custom root-level components
+/// (beyond the built-in `CoreWmComponent` variants like `Terminal`,
+/// `DebugLog`, `SystemPanel`) without modifying term-wm source.
 ///
-/// # Example
+/// # Choosing a constructor
+///
+/// | You want…                                          | Use                              |
+/// |----------------------------------------------------|----------------------------------|
+/// | Only built-in components, no annotation needed     | `TermWmApp::new(ctx)`            |
+/// | Built-in + your own component type (e.g., `MyComp`)| `TermWmApp::<MyComp>::new_custom(ctx)` |
+///
+/// The `new()` / `bare()` / `embedded()` convenience methods exist only
+/// on `TermWmApp<NoopComponent>` so Rust can infer `C` without turbofish.
+/// When `C` is your own type you must call `new_custom()` / `bare_custom()`
+/// / `embedded_custom()` instead — they are defined on the generic block
+/// and work for any `C: Component<TermWmAction>`.
+///
+/// # Example (built-in only)
 /// ```ignore
 /// use term_wm::prelude::*;
 ///
 /// fn main() -> io::Result<()> {
 ///     let mut app = TermWmApp::new(AppContext::new("myapp", "1.0"));
 ///     let key = app.open_window(AppRootComponent::Core(core_component));
+///     app.run()
+/// }
+/// ```
+///
+/// # Example (with a custom component)
+/// ```ignore
+/// use term_wm::prelude::*;
+/// use term_wm::SvgImageComponent;
+/// use term_wm::components::AppRootComponent;
+///
+/// fn main() -> io::Result<()> {
+///     let mut app = TermWmApp::<SvgImageComponent>::new_custom(AppContext::new("myapp", "1.0"));
+///     app.open_window(AppRootComponent::Custom(my_svg));
 ///     app.run()
 /// }
 /// ```
@@ -66,6 +91,10 @@ where
 
 impl<C: Component<TermWmAction>> TermWmApp<C> {
     /// Create a new standalone app with all system chrome (panels, menu).
+    ///
+    /// This is the generic constructor — works for any `C: Component<TermWmAction>`.
+    /// When `C = NoopComponent` you can use `TermWmApp::new(ctx)` instead
+    /// (it forwards here) to avoid a type annotation.
     #[cfg(feature = "sys-ui")]
     pub fn new_custom(app_ctx: AppContext) -> Self {
         let app_name = app_ctx.app_name.clone();
@@ -106,6 +135,9 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
     }
 
     /// Create a bare standalone app without system chrome.
+    ///
+    /// Generic constructor — use `TermWmApp::bare(ctx)` instead when
+    /// `C = NoopComponent` to avoid a type annotation.
     pub fn bare_custom(app_ctx: AppContext) -> Self {
         let wm = AppBuilder::<LayerComponent>::bare()
             .app_ctx(Arc::new(app_ctx))
@@ -117,6 +149,9 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
 
     /// Create an embedded app without command menu, suitable for
     /// embedding in an existing Ratatui application.
+    ///
+    /// Generic constructor — use `TermWmApp::embedded(ctx)` instead when
+    /// `C = NoopComponent` to avoid a type annotation.
     pub fn embedded_custom(app_ctx: AppContext) -> Self {
         let wm = AppBuilder::<LayerComponent>::bare()
             .config(WmConfig::minimal())
