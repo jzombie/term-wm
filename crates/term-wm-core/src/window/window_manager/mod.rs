@@ -4466,6 +4466,24 @@ mod tests {
         assert_eq!(moved.x, start_rect.x + 4);
         assert_eq!(moved.y, start_rect.y);
 
+        // Second drag tick — confirms the anchor sync didn't snap back.
+        let drag2_col = drag_col.saturating_add(3);
+        let drag2_row = drag_row.saturating_add(2);
+        let drag2 = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: drag2_col,
+            row: drag2_row,
+            modifiers: KeyModifiers::NONE,
+        });
+        let wm_drag2 = crate::events::core_event_to_wm(&drag2).unwrap();
+        assert!(wm.dispatch_mouse(&wm_drag2).is_consumed());
+        let moved2 = match wm.floating_rect(debug_key).expect("floating rect present") {
+            crate::window::FloatRectSpec::Absolute(fr) => fr,
+            _ => panic!("expected absolute rect"),
+        };
+        assert_eq!(moved2.x, start_rect.x + 7);
+        assert_eq!(moved2.y, start_rect.y + 2);
+
         let up = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Release(MouseButton::Left),
             column: drag_col,
