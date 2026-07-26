@@ -55,6 +55,11 @@ pub trait EventSource {
         Vec::new()
     }
 
+    /// Take accumulated direct-input routing transitions. Default returns empty.
+    fn take_direct_input_changed(&mut self) -> Vec<(crate::window::WindowKey, bool)> {
+        Vec::new()
+    }
+
     /// Take accumulated dirty-window keys and reset the set.
     ///
     /// After a successful render the runner calls this to signal that all

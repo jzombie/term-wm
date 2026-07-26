@@ -197,6 +197,11 @@ impl App {
                     let _ = tx.send(UnifiedEvent::AppExited(key));
                 }
             }
+            PtyStatus::DirectInputChanged(enabled) => {
+                if let Some(&key) = kh.get() {
+                    let _ = tx.send(UnifiedEvent::DirectInputChanged(key, enabled));
+                }
+            }
         })));
         let mut sv = ScrollViewComponent::new(pane);
         sv.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
@@ -284,6 +289,11 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
             PtyStatus::Exited => {
                 if let Some(&key) = kh.get() {
                     let _ = tx.send(UnifiedEvent::AppExited(key));
+                }
+            }
+            PtyStatus::DirectInputChanged(enabled) => {
+                if let Some(&key) = kh.get() {
+                    let _ = tx.send(UnifiedEvent::DirectInputChanged(key, enabled));
                 }
             }
         })));

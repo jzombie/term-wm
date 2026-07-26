@@ -20,4 +20,6 @@ pub enum PtyStatus {
     Wakeup,
     /// Child process exited / EOF on PTY master.
     Exited,
+    /// Application input routing state changed (alt screen, mouse tracking, margins).
+    DirectInputChanged(bool),
 }
