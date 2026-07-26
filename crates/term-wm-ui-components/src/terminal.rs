@@ -122,7 +122,7 @@ impl Component<TermWmAction> for TerminalComponent {
                 }
                 if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
                     && key.modifiers.shift
-                    && !self.pane.borrow().requires_app_routing()
+                    && !ctx.direct_mode()
                 {
                     let delta = if key.code == KeyCode::PageUp {
                         10isize
@@ -537,7 +537,7 @@ impl TerminalComponent {
             let mut pane = self.pane.borrow_mut();
 
             if let Some(handle) = ctx.scroll_handle() {
-                let suppress_scroll = ctx.direct_mode() || pane.requires_app_routing();
+                let suppress_scroll = ctx.direct_mode();
 
                 if suppress_scroll {
                     handle.set_content_size(clipped.width as usize, clipped.height as usize);
@@ -594,7 +594,7 @@ impl TerminalComponent {
         let mut pane = self.pane.borrow_mut();
         let new_sb = pane.scrollback();
         if new_sb != sb_before_drag
-            && !pane.requires_app_routing()
+            && !ctx.direct_mode()
             && let Some(handle) = ctx.scroll_handle()
         {
             let used = pane.max_scrollback();

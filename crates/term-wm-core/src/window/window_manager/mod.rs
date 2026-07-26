@@ -623,31 +623,70 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             .unwrap_or_else(|| self.default_cascading_rect(index))
     }
 
+    /// Resolved direct mode: manual override takes precedence; falls back to automatic tracking.
     pub fn direct_mode(&self, key: WindowKey) -> bool {
-        self.window(key).is_some_and(|window| window.direct_mode())
+        let manual = self.windows.get(key).and_then(|w| w.direct_mode_override());
+        let auto = self
+            .windows
+            .get(key)
+            .map(|w| w.requires_direct_input())
+            .unwrap_or(false);
+        manual.unwrap_or(auto)
     }
 
-    pub fn set_direct_mode(&mut self, key: WindowKey, value: bool) {
+    /// Get the raw manual override state (`None` = automatic).
+    pub fn direct_mode_override(&self, key: WindowKey) -> Option<bool> {
+        self.windows.get(key).and_then(|w| w.direct_mode_override())
+    }
+
+    /// Set the manual override. `None` = automatic, `Some(true)` = force ON, `Some(false)` = force OFF.
+    pub fn set_direct_mode_override(&mut self, key: WindowKey, value: Option<bool>) {
         let title = self.window_title(key);
-        if let Some(w) = self.windows.get_mut(key)
-            && w.direct_mode() != value
-        {
-            w.set_direct_mode(value);
-            if value && let Some(c) = self.components.get_mut(w.component_key()) {
-                c.clear_selection();
+        // Resolve the override before the mutable borrow to satisfy the borrow checker.
+        let resolved = value.unwrap_or_else(|| {
+            self.windows
+                .get(key)
+                .map(|w| w.requires_direct_input())
+                .unwrap_or(false)
+        });
+        if let Some(w) = self.windows.get_mut(key) {
+            let old = w.direct_mode_override();
+            if old != value {
+                w.set_direct_mode_override(value);
+                if resolved && let Some(c) = self.components.get_mut(w.component_key()) {
+                    c.clear_selection();
+                }
+                self.mark_layout_dirty();
+                let status = match value {
+                    Some(true) => "enabled",
+                    Some(false) => "disabled",
+                    None => "auto",
+                };
+                self.push_notification(
+                    format!("Direct mode {} for {}", status, title),
+                    Duration::from_secs(3),
+                );
             }
-            self.mark_layout_dirty();
-            let status = if value { "enabled" } else { "disabled" };
-            self.push_notification(
-                format!("Direct mode {} for {}", status, title),
-                Duration::from_secs(3),
-            );
         }
     }
 
+    /// Convenience: set direct mode override to `Some(value)`.
+    pub fn set_direct_mode(&mut self, key: WindowKey, value: bool) {
+        self.set_direct_mode_override(key, Some(value));
+    }
+
+    /// Toggle the manual override. Always inverts the resolved direct mode.
+    /// Clears the override (`None`) whenever the target state matches `auto_dm`,
+    /// so the system returns to automatic tracking when no explicit override is needed.
     pub fn toggle_direct_mode(&mut self, key: WindowKey) {
-        let current = self.direct_mode(key);
-        self.set_direct_mode(key, !current);
+        let auto_dm = self
+            .windows
+            .get(key)
+            .map(|w| w.requires_direct_input())
+            .unwrap_or(false);
+        let target = !self.direct_mode(key);
+        let new_override = if target == auto_dm { None } else { Some(target) };
+        self.set_direct_mode_override(key, new_override);
     }
 
     /// Set the automatic direct-input tracker for a window.
@@ -1017,20 +1056,15 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     /// Create a [`ComponentContext`] for a specific window, including the
-    /// window's direct-mode state so children (scroll view, terminal) can
-    /// adapt their rendering and event handling automatically.
-    /// Unifies the manual toggle (chrome "D" / command palette) with the
-    /// automatic PTY heuristic (alternate screen, mouse tracking, margins).
+    /// window's resolved direct-mode state so children (scroll view, terminal)
+    /// can adapt their rendering and event handling automatically.
+    /// Resolves the manual override (`None` = auto) against the automatic
+    /// PTY heuristic (alternate screen, mouse tracking, margins).
     pub fn component_context_for(&self, focused: bool, key: WindowKey) -> ComponentContext {
-        let manual_dm = self.direct_mode(key);
-        let auto_dm = self
-            .windows
-            .get(key)
-            .map(|w| w.requires_direct_input())
-            .unwrap_or(false);
+        let resolved = self.direct_mode(key);
         let mut ctx = self
             .component_context(focused)
-            .with_direct_mode(manual_dm || auto_dm)
+            .with_direct_mode(resolved)
             .with_window_key(key)
             .with_screen_area(self.region(key));
         // Inject the window's active keyboard focus into the context.
