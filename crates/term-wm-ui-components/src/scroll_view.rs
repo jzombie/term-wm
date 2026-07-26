@@ -1204,10 +1204,7 @@ mod tests {
             term_wm_core::events::KeyKind::Press,
         ));
         let result = sv.handle_events(&down, &ctx);
-        assert!(
-            result.is_ignored(),
-            "Full mode must NOT intercept Down"
-        );
+        assert!(result.is_ignored(), "Full mode must NOT intercept Down");
         assert!(
             sv.content.borrow().received_scroll,
             "Down must reach the child component"

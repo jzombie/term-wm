@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
 
 use vte::{Params, Perform};
 
@@ -104,7 +104,8 @@ impl PtyStateTracker {
     }
 
     pub(crate) fn set_alt_scroll_mode(&self, active: bool) {
-        self.is_alt_scroll_mode_active.store(active, Ordering::Release);
+        self.is_alt_scroll_mode_active
+            .store(active, Ordering::Release);
     }
 
     pub(crate) fn set_custom_margins(&self, active: bool) {
@@ -115,7 +116,8 @@ impl PtyStateTracker {
     /// via CAS so we don't clobber a different active mode.
     pub(crate) fn update_mouse_tracking(&self, target_mode: u8, is_set: bool) {
         if is_set {
-            self.mouse_tracking_mode.store(target_mode, Ordering::Release);
+            self.mouse_tracking_mode
+                .store(target_mode, Ordering::Release);
         } else {
             let _ = self.mouse_tracking_mode.compare_exchange(
                 target_mode,
@@ -131,7 +133,8 @@ impl PtyStateTracker {
         self.is_alt_screen_active.store(false, Ordering::Release);
         self.mouse_tracking_mode.store(0, Ordering::Release);
         self.is_sgr_mouse_active.store(false, Ordering::Release);
-        self.is_alt_scroll_mode_active.store(false, Ordering::Release);
+        self.is_alt_scroll_mode_active
+            .store(false, Ordering::Release);
         self.has_custom_margins.store(false, Ordering::Release);
     }
 }
@@ -209,7 +212,11 @@ impl Perform for PtyPerformAdapter {
                     .unwrap_or(0);
                 let height = self.tracker.terminal_height.load(Ordering::Acquire);
                 let top = if top_param == 0 { 1 } else { top_param };
-                let bottom = if bottom_param == 0 { height } else { bottom_param };
+                let bottom = if bottom_param == 0 {
+                    height
+                } else {
+                    bottom_param
+                };
                 let has_margins = top > 1 || bottom < height;
                 self.tracker.set_custom_margins(has_margins);
             }
@@ -404,7 +411,10 @@ mod tests {
         assert!(tracker.has_custom_margins());
         // But if we re-evaluate with a new DECSTBM at the new height...
         feed(&tracker, b"\x1b[r");
-        assert!(!tracker.has_custom_margins(), "full-height reset at new size");
+        assert!(
+            !tracker.has_custom_margins(),
+            "full-height reset at new size"
+        );
     }
 
     #[test]
