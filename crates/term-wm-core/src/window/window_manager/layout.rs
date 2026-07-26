@@ -8,6 +8,8 @@ use crate::events::Event;
 use super::WindowManager;
 use crate::keybindings::ActionLayer;
 use crate::layout::{InsertPosition, LayoutNode, LayoutPlan, RegionMap, SplitHandle, TilingLayout};
+use crate::window::entry::WindowMode;
+use crate::window::window_manager::Window;
 use crate::window::{FloatRectSpec, WindowKey, WindowState};
 
 impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> WindowManager<C, L, O> {
@@ -144,6 +146,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     /// Update borders and store terminal width for monocle auto-detection.
     /// Called every render frame.
+    /// Update borders and store terminal width for monocle auto-detection.
+    /// Called every render frame.
     pub fn update_monocle_mode(&mut self, terminal_width: u16) {
         let old_monocle = self.is_monocle();
         self.last_terminal_width = terminal_width;
@@ -158,16 +162,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 format!("Monocle mode (auto): {status}"),
                 Duration::from_secs(3),
             );
-        }
-
-        for (_, window) in self.windows.iter_mut() {
-            if monocle {
-                window.borders_enabled = false;
-            } else if self.managed_layout.is_some() {
-                window.borders_enabled = window.floating_rect.is_some();
-            } else {
-                window.borders_enabled = true;
-            }
         }
     }
 
@@ -209,14 +203,44 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         );
     }
 
-    /// Whether the given window should render borders.
-    pub fn window_borders_enabled(&self, key: WindowKey) -> bool {
-        self.window(key).map(|w| w.borders_enabled).unwrap_or(false)
+    /// Evaluates the dominant [`WindowMode`] for a given window to resolve chrome rules.
+    ///
+    /// ### Precedence Hierarchy
+    /// 1. **`Maximized`**: User explicitly expanded a single window to full screen.
+    /// 2. **`Floating`**: Modals, popups, and floating utility dialogs must maintain
+    ///    their floating chrome rules (e.g., borders/headers) even if the active
+    ///    workspace layout is currently set to Monocle mode.
+    /// 3. **`Monocle`**: Workspace-wide layout mode where the active window takes full
+    ///    content area and omits tiled borders.
+    /// 4. **`Tiled`**: Default fallthrough state for managed windows in a standard layout tree.
+    pub fn window_mode(&self, w: &Window) -> WindowMode {
+        if w.is_maximized() {
+            WindowMode::Maximized
+        } else if w.is_floating() {
+            WindowMode::Floating
+        } else if self.is_monocle() {
+            WindowMode::Monocle
+        } else {
+            WindowMode::Tiled
+        }
     }
 
-    /// Whether the given window should render its header.
+    /// Single read boundary for border rendering.
+    pub fn window_borders_enabled(&self, key: WindowKey) -> bool {
+        self.window(key)
+            .map(|w| {
+                w.chrome_config()
+                    .rules_for(self.window_mode(w))
+                    .show_borders
+            })
+            .unwrap_or(false)
+    }
+
+    /// Single read boundary for header rendering.
     pub fn window_header_enabled(&self, key: WindowKey) -> bool {
-        self.window(key).map(|w| w.header_enabled).unwrap_or(false)
+        self.window(key)
+            .map(|w| w.chrome_config().rules_for(self.window_mode(w)).show_header)
+            .unwrap_or(false)
     }
 
     /// Handle mouse-click focus switching.
@@ -382,8 +406,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 height: self.managed_area.height,
             });
             for (_id, window) in self.windows.iter_mut() {
-                if window.floating_rect == Some(prev_full) {
-                    window.floating_rect = Some(new_full);
+                if window.floating_rect() == Some(prev_full) {
+                    window.set_floating_rect(Some(new_full));
                 }
             }
         }
@@ -436,8 +460,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             .iter()
             .filter_map(|(key, window)| {
                 if window.is_floating()
-                    && window.state != WindowState::Iconic
-                    && window.state != WindowState::Unmapped
+                    && window.state() != WindowState::Iconic
+                    && window.state() != WindowState::Unmapped
                 {
                     Some(key)
                 } else {
@@ -488,11 +512,11 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     pub fn build_display_order(&self) -> Vec<WindowKey> {
         let mut ordered: Vec<(WindowKey, &super::Window)> = self.windows.iter().collect();
-        ordered.sort_by_key(|(_, window)| window.creation_order);
+        ordered.sort_by_key(|(_, window)| window.creation_order());
 
         let mut out: Vec<WindowKey> = Vec::new();
         for (key, window) in ordered {
-            if self.managed_draw_order.contains(&key) || window.state == WindowState::Iconic {
+            if self.managed_draw_order.contains(&key) || window.state() == WindowState::Iconic {
                 out.push(key);
             }
         }
@@ -508,14 +532,14 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         let title = title.into();
         let prev = self
             .window(key)
-            .and_then(|w| w.title.as_deref().map(|t| t.to_string()));
+            .and_then(|w| w.title().map(|t| t.to_string()));
         if prev.as_deref() != Some(&title)
             && let Some(window) = self.windows.get_mut(key)
         {
             let seq = self.next_title_seq;
             self.next_title_seq += 1;
-            window.title = Some(title);
-            window.title_set_order = Some(seq);
+            window.set_title(Some(title));
+            window.set_title_set_order(Some(seq));
         }
     }
 
@@ -644,7 +668,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         let floating_keys: Vec<WindowKey> = self
             .windows
             .iter()
-            .filter_map(|(key, window)| window.floating_rect.as_ref().map(|_| key))
+            .filter_map(|(key, window)| window.floating_rect().map(|_| key))
             .collect();
         for key in floating_keys {
             let Some(FloatRectSpec::Absolute(fr)) = self.floating_rect(key) else {
@@ -779,12 +803,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Idempotent — safe to call even if already detached.
     pub(super) fn detach_from_tiling_layout(&mut self, key: WindowKey) {
         // Capture void_id before the mutable layout borrow
-        let void_id = self.window(key).and_then(|w| w.void_id);
+        let void_id = self.window(key).and_then(|w| w.void_id());
         if let Some(ref mut layout) = self.managed_layout {
             if let Some(vid) = void_id {
                 layout.remove_void_by_id(vid);
                 if let Some(w) = self.windows.get_mut(key) {
-                    w.void_id = None;
+                    w.clear_void_id();
                 }
             } else {
                 let _ = layout.root_mut().remove_leaf(key);
@@ -816,7 +840,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         let current_focus = *self.focus.current();
         let floating_info = self
             .window(key)
-            .and_then(|w| w.floating_rect)
+            .and_then(|w| w.floating_rect())
             .map(|spec| spec.resolve(self.managed_area));
 
         let Some(layout) = self.managed_layout.as_mut() else {
@@ -1047,5 +1071,68 @@ mod tests {
         };
         let result = wm.localize_event_content(key, &Event::Mouse(mouse));
         assert!(result.is_some());
+    }
+}
+
+#[cfg(test)]
+mod window_mode_tests {
+    use super::*;
+    use crate::window::window_manager::Window;
+    use crate::window::{ComponentKey, FloatRectSpec};
+
+    // Helper to spin up a stub Window
+    fn create_test_window(key_idx: usize) -> Window {
+        Window::new(key_idx, ComponentKey::default())
+    }
+
+    // Helper to create a dummy FloatRectSpec for testing floating state
+    fn dummy_float_spec() -> FloatRectSpec {
+        FloatRectSpec::Absolute(Default::default())
+    }
+
+    #[test]
+    fn test_window_mode_priority_hierarchy() {
+        let mut window = create_test_window(1);
+
+        // 1. Base state: Tiled (not floating, not maximized, not monocle)
+        let is_monocle = false;
+        let mode = evaluate_mode(&window, is_monocle);
+        assert_eq!(mode, WindowMode::Tiled);
+
+        // 2. Monocle active -> Monocle mode
+        let is_monocle = true;
+        let mode = evaluate_mode(&window, is_monocle);
+        assert_eq!(mode, WindowMode::Monocle);
+
+        // 3. Floating window inside Monocle workspace -> Floating overrides Monocle
+        window.set_floating_rect(Some(dummy_float_spec()));
+        let mode = evaluate_mode(&window, is_monocle);
+        assert_eq!(
+            mode,
+            WindowMode::Floating,
+            "Floating windows must preserve floating chrome rules even under Monocle layout"
+        );
+
+        // 4. Maximized window -> Maximized overrides Floating & Monocle
+        window.set_maximized(true);
+        let mode = evaluate_mode(&window, is_monocle);
+        assert_eq!(
+            mode,
+            WindowMode::Maximized,
+            "Maximized state must take precedence over all other modes"
+        );
+    }
+
+    /// Isolated helper mirroring `WindowManager::window_mode` priority order for pure testing
+    fn evaluate_mode(w: &Window, is_monocle: bool) -> WindowMode {
+        if w.is_maximized() {
+            WindowMode::Maximized
+        } else if w.is_floating() {
+            WindowMode::Floating
+        } else if is_monocle {
+            WindowMode::Monocle
+        } else {
+            WindowMode::Tiled
+        }
     }
 }

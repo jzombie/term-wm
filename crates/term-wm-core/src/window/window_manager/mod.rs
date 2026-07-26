@@ -414,7 +414,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Set the close policy for a window (Destroy or Unmap).
     pub fn set_close_policy(&mut self, key: WindowKey, policy: entry::ClosePolicy) {
         if let Some(w) = self.windows.get_mut(key) {
-            w.close_policy = policy;
+            w.set_close_policy(policy);
         }
     }
 
@@ -434,7 +434,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     pub fn window_state(&self, key: WindowKey) -> Option<WindowState> {
-        self.window(key).map(|w| w.state)
+        self.window(key).map(|w| w.state())
     }
 
     /// Validate that a state transition is legal.
@@ -457,7 +457,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     pub fn transition_window(&mut self, key: WindowKey, new_state: WindowState) {
         // Step 1: Read old state (immutable borrow, immediately dropped)
         let old_state = match self.window(key) {
-            Some(w) => w.state,
+            Some(w) => w.state(),
             None => {
                 tracing::warn!("transition_window: unknown key {:?}", key);
                 return;
@@ -474,7 +474,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         );
 
         // Step 2: Mutate state (brief mutable borrow, immediately dropped)
-        self.window_mut(key).state = new_state;
+        self.window_mut(key).set_state(new_state);
 
         // Step 3: Side-effects — full &mut self available
         match (old_state, new_state) {
@@ -528,7 +528,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 let has_other_floating = self
                     .windows
                     .values()
-                    .any(|w| w.state == WindowState::Mapped && w.is_floating());
+                    .any(|w| w.state() == WindowState::Mapped && w.is_floating());
                 let floating_mode = self.managed_layout.is_none();
 
                 if !self.is_window_floating(key) && (has_other_floating || floating_mode) {
@@ -559,7 +559,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     fn floating_rect(&self, key: WindowKey) -> Option<crate::window::FloatRectSpec> {
-        self.window(key).and_then(|window| window.floating_rect)
+        self.window(key).and_then(|window| window.floating_rect())
     }
 
     pub fn set_floating_rect(
@@ -568,14 +568,14 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         rect: Option<crate::window::FloatRectSpec>,
     ) {
         if let Some(w) = self.windows.get_mut(key) {
-            w.floating_rect = rect;
+            w.set_floating_rect(rect);
         }
     }
 
     fn clear_floating_rect(&mut self, key: WindowKey) {
         if let Some(w) = self.windows.get_mut(key) {
-            w.floating_rect = None;
-            w.is_maximized = false;
+            w.set_floating_rect(None);
+            w.set_maximized(false);
         }
     }
 
@@ -585,12 +585,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         rect: Option<crate::window::FloatRectSpec>,
     ) {
         if let Some(w) = self.windows.get_mut(key) {
-            w.prev_floating_rect = rect;
+            w.set_prev_floating_rect(rect);
         }
     }
 
     fn take_prev_floating_rect(&mut self, key: WindowKey) -> Option<crate::window::FloatRectSpec> {
-        self.windows.get_mut(key)?.prev_floating_rect.take()
+        self.windows.get_mut(key)?.take_prev_floating_rect()
     }
 
     pub fn is_window_floating(&self, key: WindowKey) -> bool {
@@ -624,16 +624,16 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     pub fn direct_mode(&self, key: WindowKey) -> bool {
-        self.window(key).is_some_and(|window| window.direct_mode)
+        self.window(key).is_some_and(|window| window.direct_mode())
     }
 
     pub fn set_direct_mode(&mut self, key: WindowKey, value: bool) {
         let title = self.window_title(key);
         if let Some(w) = self.windows.get_mut(key)
-            && w.direct_mode != value
+            && w.direct_mode() != value
         {
-            w.direct_mode = value;
-            if value && let Some(c) = self.components.get_mut(w.component_key) {
+            w.set_direct_mode(value);
+            if value && let Some(c) = self.components.get_mut(w.component_key()) {
                 c.clear_selection();
             }
             self.mark_layout_dirty();
@@ -688,7 +688,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 .window(oid)
                 .map(|w| w.title_or_default(oid))
                 .unwrap_or_else(|| format!("{:?}", oid));
-            let set_order = self.window(oid).and_then(|w| w.title_set_order);
+            let set_order = self.window(oid).and_then(|w| w.title_set_order());
             groups.entry(base).or_default().push((oid, set_order));
         }
         for group in groups.values_mut() {
@@ -714,8 +714,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     fn clear_all_floating(&mut self) {
         for (_key, window) in self.windows.iter_mut() {
-            window.floating_rect = None;
-            window.prev_floating_rect = None;
+            window.set_floating_rect(None);
+            window.set_prev_floating_rect(None);
         }
     }
 
@@ -1018,7 +1018,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             .with_screen_area(self.region(key));
         // Inject the window's active keyboard focus into the context.
         if let Some(window) = self.windows.get(key)
-            && let Some(focus_id) = window.active_keyboard_focus
+            && let Some(focus_id) = window.active_keyboard_focus()
         {
             ctx = ctx.with_keyboard_focus_id(focus_id);
         }
@@ -1187,7 +1187,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     pub fn floating_panes(&self) -> Vec<(WindowKey, crate::window::FloatRectSpec)> {
         self.windows
             .iter()
-            .filter_map(|(key, window)| window.floating_rect.map(|rect| (key, rect)))
+            .filter_map(|(key, window)| window.floating_rect().map(|rect| (key, rect)))
             .collect()
     }
 
@@ -1224,7 +1224,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         &self,
         key: WindowKey,
     ) -> Option<crate::hitbox_registry::HitboxId> {
-        self.windows.get(key).map(|w| w.content_hitbox_id)
+        self.windows.get(key).map(|w| w.content_hitbox_id())
     }
 
     /// Dispatch a mouse event through the hitbox registry.
@@ -1288,7 +1288,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                             let dx = col.abs_diff(*anchor_x);
                             let dy = row.abs_diff(*anchor_y);
                             let is_maximized =
-                                self.windows.get(*key).is_some_and(|w| w.is_maximized);
+                                self.windows.get(*key).is_some_and(|w| w.is_maximized());
 
                             if dx + dy <= 2 {
                                 // Deadzone guard: ignore micro-nudges
@@ -1654,8 +1654,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                         // Unset maximized so further resize/move isn't restricted,
                         // but keep the current rect so the cursor stays on the handle.
                         if let Some(w) = self.windows.get_mut(*h_key) {
-                            w.is_maximized = false;
-                            w.borders_enabled = true;
+                            w.set_maximized(false);
                         }
                         let rect = self.full_region_for_key(*h_key);
                         let (start_x, start_y, start_width, start_height) =
@@ -2153,14 +2152,14 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Returns &C — no vtable cast. Callers in generic context get static dispatch.
     pub fn component_for_key(&self, key: WindowKey) -> Option<&C> {
         let w = self.windows.get(key)?;
-        self.components.get(w.component_key)
+        self.components.get(w.component_key())
     }
 
     /// Event/update-phase access: borrow component mutably.
     /// Returns &mut C — no vtable cast. Callers in generic context get static dispatch.
     pub fn component_for_key_mut(&mut self, key: WindowKey) -> Option<&mut C> {
         let w = self.windows.get_mut(key)?;
-        self.components.get_mut(w.component_key)
+        self.components.get_mut(w.component_key())
     }
 
     /// Return all window keys currently in the SlotMap.
@@ -2177,7 +2176,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     pub fn mapped_windows(&self) -> Vec<WindowKey> {
         self.windows
             .iter()
-            .filter(|(_, w)| w.state == WindowState::Mapped)
+            .filter(|(_, w)| w.state() == WindowState::Mapped)
             .map(|(key, _)| key)
             .collect()
     }
@@ -2448,7 +2447,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         hitbox_id: crate::hitbox_registry::HitboxId,
     ) {
         if let Some(window) = self.windows.get_mut(key) {
-            window.active_keyboard_focus = Some(hitbox_id);
+            window.set_active_keyboard_focus(Some(hitbox_id));
         }
     }
 
@@ -2461,7 +2460,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         if !self.windows.contains_key(focused) {
             return Vec::new();
         }
-        let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized);
+        let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized());
         let mut btns = vec![WmButton {
             action: TermWmAction::CloseWindow(focused),
             label: "Close Window",
@@ -3079,7 +3078,7 @@ mod tests {
         // Maximize the tiled window
         wm.toggle_maximize(keys[0]);
         assert!(
-            wm.windows.get(keys[0]).unwrap().is_maximized,
+            wm.windows.get(keys[0]).unwrap().is_maximized(),
             "is_maximized set"
         );
 
@@ -3089,7 +3088,7 @@ mod tests {
 
         // Original window should be unmaximized and back in the tiling layout
         let w0 = wm.windows.get(keys[0]).unwrap();
-        assert!(!w0.is_maximized, "should no longer be maximized");
+        assert!(!w0.is_maximized(), "should no longer be maximized");
         assert!(!w0.is_floating(), "should be tiled (not floating)");
         assert!(
             wm.managed_layout
@@ -3137,7 +3136,7 @@ mod tests {
         // Maximize the floating window
         wm.toggle_maximize(keys[0]);
         assert!(
-            wm.windows.get(keys[0]).unwrap().is_maximized,
+            wm.windows.get(keys[0]).unwrap().is_maximized(),
             "is_maximized set"
         );
 
@@ -3148,7 +3147,7 @@ mod tests {
         // Original window should be unmaximized and still floating at its
         // pre-maximize position
         let w0 = wm.windows.get(keys[0]).unwrap();
-        assert!(!w0.is_maximized, "should no longer be maximized");
+        assert!(!w0.is_maximized(), "should no longer be maximized");
         assert!(w0.is_floating(), "should remain floating (not tiled)");
         // Its floating rect should be the original pre-maximize rect
         let restored = wm.floating_rect(keys[0]);
@@ -3191,14 +3190,14 @@ mod tests {
 
         // Maximize
         wm.toggle_maximize(keys[0]);
-        assert!(wm.windows.get(keys[0]).unwrap().is_maximized);
-        assert!(wm.windows.get(keys[0]).unwrap().void_id.is_some());
+        assert!(wm.windows.get(keys[0]).unwrap().is_maximized());
+        assert!(wm.windows.get(keys[0]).unwrap().void_id().is_some());
 
         // Toggle back (unmaximize directly)
         wm.toggle_maximize(keys[0]);
         let w0 = wm.windows.get(keys[0]).unwrap();
-        assert!(!w0.is_maximized, "unmaximized");
-        assert!(w0.void_id.is_none(), "void_id cleared");
+        assert!(!w0.is_maximized(), "unmaximized");
+        assert!(w0.void_id().is_none(), "void_id cleared");
         assert!(!w0.is_floating(), "not floating");
         // Should be back in tree at original position
         assert!(
@@ -3235,7 +3234,7 @@ mod tests {
         wm.toggle_maximize(keys[0]);
         let w0 = wm.windows.get(keys[0]).unwrap();
         assert!(
-            w0.void_id.is_some(),
+            w0.void_id().is_some(),
             "void_id set after maximizing tiled window"
         );
         // Tree should contain a Void, not a Leaf(keys[0])
@@ -3279,13 +3278,13 @@ mod tests {
         // Maximize floating window
         wm.toggle_maximize(keys[0]);
         let w0 = wm.windows.get(keys[0]).unwrap();
-        assert!(w0.is_maximized);
+        assert!(w0.is_maximized());
         // Window still has floating_rect (now = full), so is_floating is true
 
         // Toggle back
         wm.toggle_maximize(keys[0]);
         let w0 = wm.windows.get(keys[0]).unwrap();
-        assert!(!w0.is_maximized, "unmaximized");
+        assert!(!w0.is_maximized(), "unmaximized");
         assert!(w0.is_floating(), "still floating");
         let restored = wm.floating_rect(keys[0]);
         assert_eq!(restored, Some(float_rect), "original rect restored");
@@ -3328,7 +3327,7 @@ mod tests {
 
         assert_eq!(wm.focused_window(), keys[1], "focus moved to keys[1]");
         assert!(
-            !wm.windows.get(keys[0]).unwrap().is_maximized,
+            !wm.windows.get(keys[0]).unwrap().is_maximized(),
             "keys[0] unmaximized by focus shift"
         );
     }
@@ -3373,7 +3372,7 @@ mod tests {
             "focus moved to clicked window"
         );
         assert!(
-            !wm.windows.get(keys[0]).unwrap().is_maximized,
+            !wm.windows.get(keys[0]).unwrap().is_maximized(),
             "keys[0] unmaximized by mouse click"
         );
     }
@@ -3402,7 +3401,7 @@ mod tests {
         wm.focus_window_key(keys[0]);
 
         wm.toggle_maximize(keys[0]);
-        assert!(wm.windows.get(keys[0]).unwrap().is_maximized);
+        assert!(wm.windows.get(keys[0]).unwrap().is_maximized());
         // Tree should be Void (single leaf replaced)
         assert!(matches!(
             wm.managed_layout.as_ref().unwrap().root(),
@@ -3411,7 +3410,7 @@ mod tests {
 
         wm.toggle_maximize(keys[0]);
         let w0 = wm.windows.get(keys[0]).unwrap();
-        assert!(!w0.is_maximized, "unmaximized");
+        assert!(!w0.is_maximized(), "unmaximized");
         // Back to a leaf at root
         assert_eq!(
             wm.managed_layout.as_ref().unwrap().root().unwrap_leaf(),
@@ -3454,7 +3453,7 @@ mod tests {
 
         // Maximize middle window
         wm.toggle_maximize(keys[1]);
-        assert!(wm.windows.get(keys[1]).unwrap().is_maximized);
+        assert!(wm.windows.get(keys[1]).unwrap().is_maximized());
         // Other windows still in tree
         let leaves: Vec<_> = wm.managed_layout.as_ref().unwrap().root().collect_leaves();
         assert_eq!(
@@ -3509,7 +3508,7 @@ mod tests {
 
         // Still maximized after restore
         assert!(
-            wm.windows.get(keys[0]).unwrap().is_maximized,
+            wm.windows.get(keys[0]).unwrap().is_maximized(),
             "still maximized"
         );
     }
@@ -3541,7 +3540,7 @@ mod tests {
         wm.toggle_maximize(keys[0]); // unmaximize
         wm.toggle_maximize(keys[0]); // maximize again
         assert!(
-            wm.windows.get(keys[0]).unwrap().is_maximized,
+            wm.windows.get(keys[0]).unwrap().is_maximized(),
             "can re-maximize"
         );
     }
@@ -3572,7 +3571,7 @@ mod tests {
         // should NOT unmaximize it
         wm.focus_window_key(keys[0]);
         assert!(
-            wm.windows.get(keys[0]).unwrap().is_maximized,
+            wm.windows.get(keys[0]).unwrap().is_maximized(),
             "focus same window should not unmaximize"
         );
     }
@@ -3687,7 +3686,7 @@ mod tests {
         let leaves: Vec<_> = wm.managed_layout.as_ref().unwrap().root().collect_leaves();
         assert_eq!(leaves, vec![keys[1]], "only remaining window in tree");
         assert!(
-            wm.windows.get(keys[0]).unwrap().void_id.is_none(),
+            wm.windows.get(keys[0]).unwrap().void_id().is_none(),
             "void_id cleared"
         );
     }
@@ -3876,7 +3875,7 @@ mod tests {
 
         // Maximize keys[0] (was tiled)
         wm.toggle_maximize(keys[0]);
-        assert!(wm.windows.get(keys[0]).unwrap().is_maximized);
+        assert!(wm.windows.get(keys[0]).unwrap().is_maximized());
 
         // Simulate what open_window does manuallly to see where it breaks
         let b = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
@@ -3903,7 +3902,7 @@ mod tests {
         wm.tile_window_key(b);
         assert_eq!(wm.focused_window(), b, "focus moved to new window");
         assert!(
-            !wm.windows.get(keys[0]).unwrap().is_maximized,
+            !wm.windows.get(keys[0]).unwrap().is_maximized(),
             "keys[0] unmaximized by focus shift"
         );
         assert!(
@@ -3946,7 +3945,7 @@ mod tests {
 
         // Maximize keys[0] (was floating)
         wm.toggle_maximize(keys[0]);
-        assert!(wm.windows.get(keys[0]).unwrap().is_maximized);
+        assert!(wm.windows.get(keys[0]).unwrap().is_maximized());
         assert_eq!(
             wm.focused_window(),
             keys[0],
@@ -3976,7 +3975,7 @@ mod tests {
 
         wm.tile_window_key(b);
         assert!(
-            !wm.windows.get(keys[0]).unwrap().is_maximized,
+            !wm.windows.get(keys[0]).unwrap().is_maximized(),
             "keys[0] unmaximized by focus shift"
         );
         // B gets tiled (managed_layout exists with keys[1])
@@ -4109,8 +4108,8 @@ mod tests {
             .localize_event_to_app(keys[1], &event)
             .expect("content-local event");
         if let Event::Mouse(local) = content_local {
-            assert_eq!(local.column, 4);
-            assert_eq!(local.row, 2);
+            assert_eq!(local.column, 5);
+            assert_eq!(local.row, 3);
         } else {
             panic!("expected mouse event");
         }
@@ -5825,7 +5824,8 @@ mod tests {
         assert_eq!(wm.window_state(target), Some(WindowState::Unmapped));
         assert!(!wm.z_order.contains(&target), "removed from z_order");
         assert!(
-            wm.window(target).is_some_and(|w| w.floating_rect.is_some()),
+            wm.window(target)
+                .is_some_and(|w| w.floating_rect().is_some()),
             "floating rect preserved across Unmap"
         );
         // Focus ring auto-fallbacks via set_order removing current → first()
@@ -6523,7 +6523,7 @@ mod tests {
         let wm_click = crate::events::core_event_to_wm(&click).unwrap();
         assert!(wm.dispatch_mouse(&wm_click).is_consumed());
         assert!(wm.is_window_floating(win_key));
-        assert!(wm.windows.get(win_key).unwrap().is_maximized);
+        assert!(wm.windows.get(win_key).unwrap().is_maximized());
     }
 
     #[test]
