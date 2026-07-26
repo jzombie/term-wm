@@ -51,7 +51,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         // a different window, unmaximize it so the target window is not hidden
         // behind the full-area floating overlay.
         let prev_focus = *self.focus.current();
-        if prev_focus != key && self.window(prev_focus).is_some_and(|w| w.is_maximized) {
+        if prev_focus != key && self.window(prev_focus).is_some_and(|w| w.is_maximized()) {
             self.toggle_maximize(prev_focus);
         }
 
@@ -110,8 +110,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 self.clear_floating_rect(key);
             }
             if let Some(w) = self.windows.get_mut(key) {
-                w.is_maximized = false;
-                w.borders_enabled = true;
+                w.set_maximized(true);
             }
         }
     }
@@ -148,7 +147,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         let prev_focus = *self.focus.current();
         self.focus.advance(forward);
         let focused = *self.focus.current();
-        if prev_focus != focused && self.window(prev_focus).is_some_and(|w| w.is_maximized) {
+        if prev_focus != focused && self.window(prev_focus).is_some_and(|w| w.is_maximized()) {
             self.toggle_maximize(prev_focus);
         }
         self.focus_window_key(focused);

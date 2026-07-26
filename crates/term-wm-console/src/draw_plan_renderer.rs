@@ -710,7 +710,7 @@ pub fn render_panels<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Term
             .mapped_windows()
             .iter()
             .any(|k| !wm.is_window_floating(*k));
-        let label = if any_tiled { "[ tiled ]" } else { "[ float ]" };
+        let label = if any_tiled { "▢ float" } else { "⊞ tile" };
         Some((label, TermWmAction::ToggleTiling))
     } else {
         None
