@@ -78,6 +78,9 @@ macro_rules! impl_component_delegate {
             fn take_pending_title(&mut self) -> Option<String> {
                 match self { $(Self::$variant(c) => c.take_pending_title(),)* }
             }
+            fn take_alternate_screen_transition(&mut self) -> Option<bool> {
+                match self { $(Self::$variant(c) => c.take_alternate_screen_transition(),)* }
+            }
             fn take_teardown_parts(&mut self) -> Option<(Box<dyn std::any::Any + Send + Sync>, std::thread::JoinHandle<()>)> {
                 match self { $(Self::$variant(c) => c.take_teardown_parts(),)* }
             }

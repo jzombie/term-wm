@@ -438,24 +438,20 @@ where
                             TermWmAction::Quit | TermWmAction::ExitUi => {
                                 app.open_exit_confirm();
                             }
-                            TermWmAction::CloseWindow => {
-                                let id = app.wm().focused_window();
-                                app.wm().close_window(id);
+                            TermWmAction::CloseWindow(key) => {
+                                app.wm().close_window(key);
                             }
                             TermWmAction::NewWindow => {
                                 app.wm_new_window()?;
                             }
-                            TermWmAction::MinimizeWindow => {
-                                let id = app.wm().focused_window();
-                                app.wm().minimize_window(id);
+                            TermWmAction::MinimizeWindow(key) => {
+                                app.wm().minimize_window(key);
                             }
-                            TermWmAction::MaximizeWindow => {
-                                let id = app.wm().focused_window();
-                                app.wm().toggle_maximize(id);
+                            TermWmAction::MaximizeWindow(key) => {
+                                app.wm().toggle_maximize(key);
                             }
-                            TermWmAction::ToggleDirectMode => {
-                                let id = app.wm().focused_window();
-                                app.wm().toggle_direct_mode(id);
+                            TermWmAction::ToggleDirectMode(key) => {
+                                app.wm().toggle_direct_mode(key);
                             }
                             TermWmAction::ToggleMonocle => {
                                 app.wm().toggle_monocle();
@@ -788,7 +784,7 @@ pub fn auto_layout_for_windows(windows: &[WindowKey]) -> Option<TilingLayout<Win
     let first = *windows_iter.next().unwrap();
     let mut root: BspNode<WindowKey> = BspNode::leaf(first);
 
-    for (depth, &id) in windows_iter.enumerate() {
+    for (depth, &key) in windows_iter.enumerate() {
         let orientation = heuristic.choose(default_area, depth);
         let position = match orientation {
             term_wm_layout_engine::Orientation::Horizontal => {
@@ -803,7 +799,7 @@ pub fn auto_layout_for_windows(windows: &[WindowKey]) -> Option<TilingLayout<Win
         if let Some(&last) = all_ids.last() {
             let _ = root.insert_leaf(
                 last,
-                id,
+                key,
                 position,
                 default_area,
                 &term_wm_layout_engine::SizeConstraints {

@@ -76,7 +76,14 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             .into_iter()
             .filter(|item| {
                 supported.contains(&item.action)
-                    || matches!(item.action, crate::actions::TermWmAction::FocusWindow(_))
+                    || matches!(
+                        item.action,
+                        crate::actions::TermWmAction::FocusWindow(_)
+                            | crate::actions::TermWmAction::MaximizeWindow(_)
+                            | crate::actions::TermWmAction::MinimizeWindow(_)
+                            | crate::actions::TermWmAction::CloseWindow(_)
+                            | crate::actions::TermWmAction::ToggleDirectMode(_)
+                    )
             })
             .collect();
 

@@ -92,6 +92,8 @@ pub struct TerminalComponent {
     selection_enabled: bool,
     last_scrollback: Cell<usize>,
     last_max_scrollback: Cell<usize>,
+    last_mode_suppressed_scroll: Cell<bool>,
+    reported_alt_screen: Cell<bool>,
     window_key: Option<term_wm_core::window::WindowKey>,
 }
 
@@ -357,6 +359,16 @@ impl Component<TermWmAction> for TerminalComponent {
         self.pane.get_mut().take_pending_title()
     }
 
+    fn take_alternate_screen_transition(&mut self) -> Option<bool> {
+        let current = self.pane.get_mut().alternate_screen();
+        if current != self.reported_alt_screen.get() {
+            self.reported_alt_screen.set(current);
+            Some(current)
+        } else {
+            None
+        }
+    }
+
     fn set_selection_enabled(&mut self, enabled: bool) {
         if self.selection_enabled == enabled {
             return;
@@ -403,6 +415,8 @@ impl TerminalComponent {
             selection_enabled: false,
             last_scrollback: Cell::new(0),
             last_max_scrollback: Cell::new(0),
+            last_mode_suppressed_scroll: Cell::new(false),
+            reported_alt_screen: Cell::new(false),
             window_key: None,
         }
     }
@@ -426,6 +440,8 @@ impl TerminalComponent {
             selection_enabled: false,
             last_scrollback: Cell::new(0),
             last_max_scrollback: Cell::new(0),
+            last_mode_suppressed_scroll: Cell::new(false),
+            reported_alt_screen: Cell::new(false),
             window_key: None,
         };
         Ok(comp)
@@ -492,6 +508,11 @@ impl TerminalComponent {
     }
 
     #[cfg(test)]
+    pub fn last_mode_suppressed_scroll(&self) -> bool {
+        self.last_mode_suppressed_scroll.get()
+    }
+
+    #[cfg(test)]
     pub fn pane_mut(&mut self) -> &mut Box<dyn Pane> {
         self.pane.get_mut()
     }
@@ -513,31 +534,44 @@ impl TerminalComponent {
         let sb_before_drag = {
             let clipped = layout_rect_to_clipped_rect(area);
             let mut pane = self.pane.borrow_mut();
-            if !pane.alternate_screen()
-                && let Some(handle) = ctx.scroll_handle()
-            {
-                let used = pane.max_scrollback();
-                handle.set_content_size(clipped.width as usize, used + clipped.height as usize);
 
-                let current_sb = pane.scrollback();
-                let view_offset = ctx.viewport().offset_y;
-                if current_sb == 0 {
-                    if view_offset < self.last_max_scrollback.get().saturating_sub(1) {
-                        let target_sb = used.saturating_sub(view_offset);
-                        pane.set_scrollback(target_sb);
-                    } else {
-                        handle.scroll_vertical_to(usize::MAX);
-                    }
-                } else if current_sb != self.last_scrollback.get() {
-                    let new_offset = used.saturating_sub(current_sb);
-                    handle.scroll_vertical_to(new_offset);
+            if let Some(handle) = ctx.scroll_handle() {
+                let suppress_scroll = ctx.direct_mode() || pane.alternate_screen();
+
+                if suppress_scroll {
+                    handle.set_content_size(clipped.width as usize, clipped.height as usize);
+                    pane.set_scrollback(0);
+                    self.last_mode_suppressed_scroll.set(true);
                 } else {
-                    let target_sb = used.saturating_sub(view_offset);
-                    if target_sb != current_sb {
-                        pane.set_scrollback(target_sb);
+                    let used = pane.max_scrollback();
+                    handle.set_content_size(clipped.width as usize, used + clipped.height as usize);
+
+                    if self.last_mode_suppressed_scroll.get() {
+                        self.last_mode_suppressed_scroll.set(false);
+                        pane.set_scrollback(0);
+                        handle.scroll_vertical_to(usize::MAX);
+                    } else {
+                        let current_sb = pane.scrollback();
+                        let view_offset = ctx.viewport().offset_y;
+                        if current_sb == 0 {
+                            if view_offset < self.last_max_scrollback.get().saturating_sub(1) {
+                                let target_sb = used.saturating_sub(view_offset);
+                                pane.set_scrollback(target_sb);
+                            } else {
+                                handle.scroll_vertical_to(usize::MAX);
+                            }
+                        } else if current_sb != self.last_scrollback.get() {
+                            let new_offset = used.saturating_sub(current_sb);
+                            handle.scroll_vertical_to(new_offset);
+                        } else {
+                            let target_sb = used.saturating_sub(view_offset);
+                            if target_sb != current_sb {
+                                pane.set_scrollback(target_sb);
+                            }
+                        }
                     }
+                    self.last_max_scrollback.set(used);
                 }
-                self.last_max_scrollback.set(used);
             }
             pane.scrollback()
         };
@@ -1490,7 +1524,7 @@ mod tests {
             &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
         );
         let sb = term.pane_mut().scrollback();
-        assert_eq!(sb, 50, "scrollback should be unchanged during alt screen");
+        assert_eq!(sb, 0, "scrollback cleared during alt screen");
         assert!(
             shared.borrow().pending_offset_y.is_none(),
             "viewport should NOT be touched during alt screen"
@@ -1498,7 +1532,7 @@ mod tests {
         assert_eq!(
             shared.borrow().content_height,
             24,
-            "content size should NOT have been set during alt screen"
+            "content size set to viewport height during alt screen"
         );
     }
 
@@ -2631,5 +2665,114 @@ mod tests {
             Some(176),
             "ClipboardPaste must scroll viewport to bottom"
         );
+    }
+
+    #[test]
+    fn transition_returns_some_true_on_enter() {
+        let mut pane = TestPane::new(200);
+        pane.alt_screen = true;
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        let result = Component::<TermWmAction>::take_alternate_screen_transition(&mut term);
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn transition_returns_some_false_on_exit() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        term.reported_alt_screen.set(true);
+        // Alt screen is false by default on TestPane
+        let result = Component::<TermWmAction>::take_alternate_screen_transition(&mut term);
+        assert_eq!(result, Some(false));
+    }
+
+    #[test]
+    fn transition_returns_none_when_unchanged() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        // reported_alt_screen is false, TestPane alt_screen is false
+        let r1 = Component::<TermWmAction>::take_alternate_screen_transition(&mut term);
+        assert_eq!(r1, None);
+        let r2 = Component::<TermWmAction>::take_alternate_screen_transition(&mut term);
+        assert_eq!(r2, None);
+    }
+
+    #[test]
+    fn render_screen_entering_direct_mode_suppresses_scroll() {
+        let (handle, shared) = make_handle();
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        let ctx = make_ctx(0, handle).with_direct_mode(true);
+        let area = Rect::new(0, 0, 80, 24);
+        let buffer = Buffer::empty(area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
+        term.render(
+            &mut backend,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+            &ctx,
+            &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+        );
+        assert_eq!(shared.borrow().content_height, 24, "content = viewport");
+        assert_eq!(term.pane_mut().scrollback(), 0, "scrollback cleared");
+        assert!(term.last_mode_suppressed_scroll(), "suppress flag set");
+    }
+
+    #[test]
+    fn render_screen_entering_alt_screen_suppresses_scroll() {
+        let (handle, shared) = make_handle();
+        let mut pane = TestPane::new(200);
+        pane.alt_screen = true;
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        let ctx = make_ctx(0, handle);
+        let area = Rect::new(0, 0, 80, 24);
+        let buffer = Buffer::empty(area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
+        term.render(
+            &mut backend,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+            &ctx,
+            &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+        );
+        assert_eq!(shared.borrow().content_height, 24, "content = viewport");
+        assert_eq!(term.pane_mut().scrollback(), 0, "scrollback cleared");
+        assert!(term.last_mode_suppressed_scroll(), "suppress flag set");
+    }
+
+    #[test]
+    fn render_screen_exit_suppressed_mode_anchors_to_bottom() {
+        let (handle, shared) = make_handle();
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        term.last_mode_suppressed_scroll.set(true);
+        term.set_last_max_scrollback(200);
+        // Normal mode, no alt screen, no direct mode
+        let ctx = make_ctx(0, handle);
+        let area = Rect::new(0, 0, 80, 24);
+        let buffer = Buffer::empty(area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
+        term.render(
+            &mut backend,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+            &ctx,
+            &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+        );
+        assert_eq!(
+            shared.borrow().pending_offset_y,
+            Some(200),
+            "scroll to bottom"
+        );
+        assert_eq!(term.pane_mut().scrollback(), 0, "scrollback at bottom");
+        assert!(!term.last_mode_suppressed_scroll(), "suppress flag cleared");
     }
 }

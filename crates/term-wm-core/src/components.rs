@@ -211,6 +211,12 @@ pub trait Component<Msg>: std::any::Any {
         None
     }
 
+    /// Returns `Some(bool)` exactly once when the pane's alternate screen state changes.
+    /// `None` means no change since the last poll.
+    fn take_alternate_screen_transition(&mut self) -> Option<bool> {
+        None
+    }
+
     /// Extract child process and reader handles for the Reaper during teardown.
     /// Called during close_window, before the component is dropped.
     /// Default implementation returns None.

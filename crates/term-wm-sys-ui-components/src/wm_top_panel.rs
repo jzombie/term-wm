@@ -217,13 +217,13 @@ impl WmTopPanelComponent {
             let text = truncate_to_width(status, available as usize);
             safe_set_string(buffer, bounds, x as u16, y as u16, &text, Style::default());
         } else {
-            for id in display_order.iter().copied() {
-                let focused = id == focus_current;
+            for key in display_order.iter().copied() {
+                let focused = key == focus_current;
                 let mut label = self
                     .window_labels
-                    .get(&id)
+                    .get(&key)
                     .cloned()
-                    .unwrap_or_else(|| format!("{id:?}"));
+                    .unwrap_or_else(|| format!("{key:?}"));
                 let max_label = (max_x.saturating_sub(x).saturating_sub(2)) as usize;
                 if label.chars().count() > max_label {
                     label = truncate_to_width(&label, max_label);
@@ -243,7 +243,7 @@ impl WmTopPanelComponent {
                 };
                 safe_set_string(buffer, bounds, x as u16, y as u16, &chunk, item_style);
                 self.list.window_hits.push(PanelWindowHit {
-                    id,
+                    id: key,
                     rect: LayoutRect {
                         x,
                         y,

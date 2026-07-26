@@ -3116,6 +3116,7 @@ version = "0.8.20-alpha"
 dependencies = [
  "criterion",
  "crossterm",
+ "insta",
  "libc",
  "ratatui",
  "term-wm-core",
