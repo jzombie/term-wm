@@ -31,7 +31,7 @@ pub struct ChromeCtx<'a> {
 }
 
 use term_wm_core::chrome::{
-    button_x_pos, content_rect, LEFT_BORDER_WIDTH, RIGHT_BORDER_WIDTH, TOP_BORDER_HEIGHT,
+    LEFT_BORDER_WIDTH, RIGHT_BORDER_WIDTH, TOP_BORDER_HEIGHT, button_x_pos, content_rect,
 };
 use term_wm_core::constants::HEADER_BUTTON_GAP;
 

@@ -1,5 +1,5 @@
-use crate::constants::{CHROME_BUTTON_INSET_RIGHT, HEADER_BUTTON_GAP};
 use crate::Rect;
+use crate::constants::{CHROME_BUTTON_INSET_RIGHT, HEADER_BUTTON_GAP};
 
 /// Compute the x-position of a title button in window-chrome coordinates.
 ///
@@ -252,15 +252,13 @@ mod tests {
             let inner = content_rect(full, true, true);
 
             assert_eq!(
-                inner.width,
-                expected_content_w,
+                inner.width, expected_content_w,
                 "content width for {w}x{total_rows} window"
             );
             assert_eq!(inner.height, total_rows.saturating_sub(CHROME_ROWS_TOTAL));
 
             let content_cells = u32::from(inner.width) * u32::from(inner.height);
-            let chrome_cells =
-                u32::from(w) * u32::from(total_rows) - content_cells;
+            let chrome_cells = u32::from(w) * u32::from(total_rows) - content_cells;
             assert_eq!(
                 chrome_cells,
                 u32::from(expected_chrome),
@@ -274,9 +272,7 @@ mod tests {
         let win_a_chrome = 159u32;
         let win_b_chrome = 162u32;
         let split_cells = u32::from(handle_cols) * u32::from(total_rows);
-        let grand_total = win_a_content + win_b_content
-            + win_a_chrome + win_b_chrome
-            + split_cells;
+        let grand_total = win_a_content + win_b_content + win_a_chrome + win_b_chrome + split_cells;
         assert_eq!(
             grand_total,
             u32::from(total_cols) * u32::from(total_rows),
