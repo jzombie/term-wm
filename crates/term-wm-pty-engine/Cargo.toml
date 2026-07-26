@@ -17,5 +17,3 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 vt100 = { workspace = true }
 vte = { workspace = true }
-
-

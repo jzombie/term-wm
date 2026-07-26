@@ -310,6 +310,20 @@ where
             for key in driver.take_exited_windows() {
                 app.wm().close_window(key);
             }
+            // Process DirectInputChanged notifications — push toasts when apps
+            // enter/exit alternate screen, enable mouse tracking, etc.
+            let transitions = driver.take_direct_input_changed();
+            if !transitions.is_empty() {
+                tracing::info!("[STAGE 4] Draining {} transitions", transitions.len());
+            }
+            for (key, enabled) in transitions {
+                let status = if enabled { "enabled" } else { "disabled" };
+                let title = app.wm().window_title(key);
+                app.wm().push_notification(
+                    format!("Direct mode {} for {}", status, title),
+                    Duration::from_secs(3),
+                );
+            }
             // PTY child exit removed a window — redraw the layout.
             driver.request_redraw();
 
@@ -449,9 +463,6 @@ where
                             }
                             TermWmAction::MaximizeWindow(key) => {
                                 app.wm().toggle_maximize(key);
-                            }
-                            TermWmAction::ToggleDirectMode(key) => {
-                                app.wm().toggle_direct_mode(key);
                             }
                             TermWmAction::ToggleMonocle => {
                                 app.wm().toggle_monocle();
@@ -973,9 +984,7 @@ mod tests {
         );
         app.wm.focus_app_window(key);
 
-        let focus_id = app.wm.focused_window();
-        app.wm.set_direct_mode(focus_id, true);
-        assert!(app.wm.direct_mode(focus_id));
+        let _focus_id = app.wm.focused_window();
 
         let evt = Event::Key(KeyEvent {
             code: KeyCode::Char('x'),
@@ -1039,8 +1048,7 @@ mod tests {
         );
         app.wm.focus_app_window(key);
 
-        let focus_id = app.wm.focused_window();
-        app.wm.set_direct_mode(focus_id, true);
+        let _focus_id = app.wm.focused_window();
 
         let evt = Event::Key(KeyEvent {
             code: KeyCode::Char('x'),

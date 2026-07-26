@@ -461,6 +461,13 @@ impl Pty {
         let parser = self.shared_parser.lock().unwrap();
         parser.screen().alternate_screen()
     }
+
+    /// Return an `Arc<dyn DirectInputTracker>` for this PTY's state tracker.
+    /// Used by the window manager to auto-enable direct mode when the
+    /// application enters alternate screen, enables mouse tracking, etc.
+    pub fn direct_input_tracker(&self) -> std::sync::Arc<dyn crate::DirectInputTracker> {
+        self.tracker.clone()
+    }
 }
 
 impl Drop for Pty {
@@ -516,7 +523,8 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
     let mut osc52 = Osc52Extractor::new();
     let mut bytes_since_render = 0usize;
     let mut vte_parser = vte::Parser::new();
-    let mut tracker_adapter = PtyPerformAdapter::new(tracker);
+    let tracker_for_adapter = std::sync::Arc::clone(&tracker);
+    let mut tracker_adapter = PtyPerformAdapter::new(tracker_for_adapter);
     const IO_BURST_BUDGET: usize = 256 * 1024; // 256 KB
     loop {
         match reader.read(&mut buf) {
@@ -556,7 +564,23 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
 
                 // Process bytes through the application state tracker
                 // (alternate screen, mouse tracking, margins — atomics, no lock).
+                let prev_routing = tracker.requires_app_routing();
                 vte_parser.advance(&mut tracker_adapter, &buf[..n]);
+                let new_routing = tracker.requires_app_routing();
+                if prev_routing != new_routing {
+                    tracing::info!(
+                        "[STAGE 1] PTY routing flipped: {} -> {}",
+                        prev_routing,
+                        new_routing
+                    );
+                    if let Ok(guard) = status_cb.lock()
+                        && let Some(ref cb) = *guard
+                    {
+                        cb(crate::PtyStatus::DirectInputChanged(new_routing));
+                    } else {
+                        tracing::error!("[STAGE 1] status_cb is NONE when transition occurred!");
+                    }
+                }
 
                 // Process bytes directly into the shared parser.
                 {

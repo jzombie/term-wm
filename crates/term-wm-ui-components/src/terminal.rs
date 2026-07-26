@@ -122,7 +122,7 @@ impl Component<TermWmAction> for TerminalComponent {
                 }
                 if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
                     && key.modifiers.shift
-                    && !self.pane.borrow().requires_app_routing()
+                    && !ctx.direct_mode()
                 {
                     let delta = if key.code == KeyCode::PageUp {
                         10isize
@@ -452,6 +452,17 @@ impl TerminalComponent {
         self.pane.get_mut().write_bytes(input)
     }
 
+    /// Attach a callback to the underlying PTY's status event stream.
+    /// Call after `open_window` so the closure can capture the known `WindowKey`.
+    pub fn set_pty_callback<F>(&self, f: F)
+    where
+        F: Fn(term_wm_pty_engine::PtyStatus) + Send + Sync + 'static,
+    {
+        self.pane
+            .borrow_mut()
+            .set_status_callback(Some(Box::new(f)));
+    }
+
     #[allow(clippy::collapsible_if)]
     pub fn has_exited(&mut self) -> bool {
         let pane = self.pane.get_mut();
@@ -537,7 +548,7 @@ impl TerminalComponent {
             let mut pane = self.pane.borrow_mut();
 
             if let Some(handle) = ctx.scroll_handle() {
-                let suppress_scroll = ctx.direct_mode() || pane.requires_app_routing();
+                let suppress_scroll = ctx.direct_mode();
 
                 if suppress_scroll {
                     handle.set_content_size(clipped.width as usize, clipped.height as usize);
@@ -594,7 +605,7 @@ impl TerminalComponent {
         let mut pane = self.pane.borrow_mut();
         let new_sb = pane.scrollback();
         if new_sb != sb_before_drag
-            && !pane.requires_app_routing()
+            && !ctx.direct_mode()
             && let Some(handle) = ctx.scroll_handle()
         {
             let used = pane.max_scrollback();
@@ -2086,9 +2097,8 @@ mod tests {
         });
         wm.focus_app_window(key);
 
-        // Set direct mode on the window
-        wm.set_direct_mode(key, true);
-        assert!(wm.direct_mode(key));
+        // Direct mode is automatic (purely from tracker)
+        assert!(!wm.direct_mode(key));
 
         // Render to set last_area
         use term_wm_core::components::ComponentContext;
