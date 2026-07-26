@@ -301,7 +301,6 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for T
                             | TermWmAction::MaximizeWindow(_)
                             | TermWmAction::MinimizeWindow(_)
                             | TermWmAction::CloseWindow(_)
-                            | TermWmAction::ToggleDirectMode(_)
                     )
             })
             .collect();

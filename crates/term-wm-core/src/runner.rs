@@ -970,9 +970,8 @@ mod tests {
         );
         app.wm.focus_app_window(key);
 
-        let focus_id = app.wm.focused_window();
-        app.wm.set_direct_mode(focus_id, true);
-        assert!(app.wm.direct_mode(focus_id));
+        let _focus_id = app.wm.focused_window();
+
 
         let evt = Event::Key(KeyEvent {
             code: KeyCode::Char('x'),
@@ -1036,8 +1035,7 @@ mod tests {
         );
         app.wm.focus_app_window(key);
 
-        let focus_id = app.wm.focused_window();
-        app.wm.set_direct_mode(focus_id, true);
+        let _focus_id = app.wm.focused_window();
 
         let evt = Event::Key(KeyEvent {
             code: KeyCode::Char('x'),

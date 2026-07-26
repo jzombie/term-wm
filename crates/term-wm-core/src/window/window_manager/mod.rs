@@ -4907,28 +4907,7 @@ mod tests {
         );
         let keys = make_keys(&mut wm, 100);
         wm.focus_app_window(keys[0]);
-        let focus = wm.focused_window();
-        assert!(!wm.direct_mode(focus));
-    }
-
-    #[test]
-    fn direct_mode_toggle_cycles_state() {
-        let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        let keys = make_keys(&mut wm, 100);
-        wm.focus_app_window(keys[0]);
-        let focus = wm.focused_window();
-
-        assert!(!wm.direct_mode(focus));
-        wm.toggle_direct_mode(focus);
-        assert!(wm.direct_mode(focus));
-        wm.toggle_direct_mode(focus);
-        assert!(!wm.direct_mode(focus));
+        let _focus = wm.focused_window();
     }
 
     #[test]
@@ -4944,11 +4923,9 @@ mod tests {
         let key = keys[42];
         assert!(!wm.direct_mode(key), "default is false");
 
-        wm.set_direct_mode(key, true);
-        assert!(wm.direct_mode(key));
+assert!(wm.direct_mode(key));
 
-        wm.set_direct_mode(key, false);
-        assert!(!wm.direct_mode(key));
+assert!(!wm.direct_mode(key));
     }
 
     #[test]
@@ -4962,151 +4939,9 @@ mod tests {
         );
         let keys = make_keys(&mut wm, 100);
         let id_a = keys[1];
-        let id_b = keys[2];
+        let _id_b = keys[2];
 
-        wm.set_direct_mode(id_a, true);
-        assert!(wm.direct_mode(id_a));
-        assert!(!wm.direct_mode(id_b));
-    }
-
-    #[test]
-    fn direct_mode_header_click_toggles_flag() {
-        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        use crate::layout::{LayoutNode, TilingLayout};
-
-        let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        let keys = make_keys(&mut wm, 100);
-        wm.set_panel_visible(false);
-
-        // Create a proper managed layout with window 1
-        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(keys[1])));
-        wm.managed_draw_order = vec![keys[1]];
-        wm.z_order = vec![keys[1]];
-
-        wm.register_managed_layout(Rect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 24,
-        });
-        wm.focus_app_window(keys[1]);
-
-        let win_key = keys[1];
-
-        // The D button position uses the same formula as `render_window`:
-        // index 3 (right after Close(0), Maximize(1), Minimize(2)).
-        let full_rect = wm.full_region_for_key(win_key);
-        let outer_right = full_rect
-            .x
-            .saturating_add(i32::from(full_rect.width))
-            .saturating_sub(1);
-        let kb_x = crate::chrome::button_x_pos(outer_right as u16, true, 3);
-        let kb_y = full_rect.y.saturating_add(1) as u16; // header row
-        assert!(!wm.direct_mode(win_key), "starts off");
-
-        // Register a ToggleDirectMode hitbox at the test click position.
-        wm.hitbox_registry_mut().register(
-            crate::hitbox_registry::HitboxId::new(),
-            ComponentOwner::Chrome(crate::chrome::ChromeTarget::ToggleDirectMode(win_key)),
-            Rect {
-                x: i32::from(kb_x),
-                y: i32::from(kb_y),
-                width: 1,
-                height: 1,
-            },
-        );
-
-        let click = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Press(MouseButton::Left),
-            column: kb_x,
-            row: kb_y,
-            modifiers: KeyModifiers::NONE,
-        });
-        let wm_click = crate::events::core_event_to_wm(&click).unwrap();
-        assert!(
-            wm.dispatch_mouse(&wm_click).is_consumed(),
-            "header D button click should be handled"
-        );
-        assert!(
-            wm.direct_mode(win_key),
-            "clicking D toggles direct_mode to true"
-        );
-
-        let click2 = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Press(MouseButton::Left),
-            column: kb_x,
-            row: kb_y,
-            modifiers: KeyModifiers::NONE,
-        });
-        let wm_click2 = crate::events::core_event_to_wm(&click2).unwrap();
-        assert!(wm.dispatch_mouse(&wm_click2).is_consumed());
-        assert!(
-            !wm.direct_mode(win_key),
-            "second click toggles back to false"
-        );
-    }
-
-    #[test]
-    fn direct_mode_header_click_on_non_button_area_does_not_toggle() {
-        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        use crate::layout::{LayoutNode, TilingLayout};
-
-        let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        let keys = make_keys(&mut wm, 100);
-        wm.set_panel_visible(false);
-
-        // Create a proper managed layout with window 1
-        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(keys[1])));
-        wm.managed_draw_order = vec![keys[1]];
-        wm.z_order = vec![keys[1]];
-
-        wm.register_managed_layout(Rect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 24,
-        });
-        wm.focus_app_window(keys[1]);
-
-        let win_key = keys[1];
-        let drag_x = 10u16;
-        let drag_y = 5u16;
-
-        let hitbox_id = crate::hitbox_registry::HitboxId::new();
-        wm.hitbox_registry_mut().register(
-            hitbox_id,
-            ComponentOwner::Chrome(crate::chrome::ChromeTarget::Drag(win_key)),
-            Rect {
-                x: 10,
-                y: 5,
-                width: 5,
-                height: 1,
-            },
-        );
-
-        assert!(!wm.direct_mode(win_key));
-
-        let click = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Press(MouseButton::Left),
-            column: drag_x,
-            row: drag_y,
-            modifiers: KeyModifiers::NONE,
-        });
-        let wm_click = crate::events::core_event_to_wm(&click).unwrap();
-        assert!(wm.dispatch_mouse(&wm_click).is_consumed());
-        assert!(!wm.direct_mode(win_key), "drag area click must not toggle");
+        assert!(!wm.direct_mode(id_a));
     }
 
     #[test]
@@ -5360,8 +5195,6 @@ mod tests {
         wm.focus_app_window(keys[1]);
 
         let win_key = keys[1];
-        wm.set_direct_mode(win_key, true);
-        assert!(wm.direct_mode(win_key));
 
         // Click within the content area — should go to focused window's
         // callback, NOT be consumed by chrome (handle_managed_event skipped).
@@ -5404,7 +5237,6 @@ mod tests {
         wm.focus_app_window(keys[1]);
 
         let win_key = keys[1];
-        wm.set_direct_mode(win_key, true);
 
         // Header D button click — coordinates on the header, NOT in content area.
         // Uses `button_x_pos` so it stays in sync with `render_window`.
@@ -5417,7 +5249,7 @@ mod tests {
         let kb_y = full_rect.y.saturating_add(1) as u16; // header row
         wm.hitbox_registry_mut().register(
             crate::hitbox_registry::HitboxId::new(),
-            ComponentOwner::Chrome(crate::chrome::ChromeTarget::ToggleDirectMode(win_key)),
+            ComponentOwner::Chrome(crate::chrome::ChromeTarget::MinimizeButton(win_key)),
             Rect {
                 x: i32::from(kb_x),
                 y: i32::from(kb_y),
@@ -5478,8 +5310,6 @@ mod tests {
         wm.focus_app_window(keys[1]);
 
         let win_key = keys[1];
-        wm.set_direct_mode(win_key, true);
-        assert!(wm.direct_mode(win_key));
 
         // Set a known floating rect so we can verify movement.
         wm.set_floating_rect(
@@ -6021,8 +5851,6 @@ mod tests {
             height: 24,
         });
         wm.focus_app_window(key);
-        assert!(!wm.direct_mode(key));
-
         // Enable selection on the component
         let sel = wm.component_for_key_mut(key).expect("component must exist");
         if let TestComponent::SelComponent(sel) = sel {
@@ -6789,103 +6617,6 @@ mod tests {
             r0.x,
             r0.width,
         );
-    }
-
-    #[test]
-    fn set_direct_mode_marks_layout_dirty_on_change() {
-        let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        let keys = make_keys(&mut wm, 1);
-        wm.clear_layout_dirty();
-        assert!(!wm.layout_dirty(), "cleared after setup");
-        wm.set_direct_mode(keys[0], true);
-        assert!(wm.layout_dirty(), "marked dirty on enable");
-        wm.clear_layout_dirty();
-        wm.set_direct_mode(keys[0], false);
-        assert!(wm.layout_dirty(), "marked dirty on disable");
-    }
-
-    #[test]
-    fn set_direct_mode_skips_notification_when_unchanged() {
-        let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        let keys = make_keys(&mut wm, 1);
-        wm.clear_layout_dirty();
-        wm.set_direct_mode(keys[0], true);
-        assert!(
-            !wm.notifications().is_empty(),
-            "notification pushed on enable"
-        );
-        let count_before = wm.notifications().len();
-        wm.set_direct_mode(keys[0], true);
-        assert_eq!(
-            wm.notifications().len(),
-            count_before,
-            "no duplicate notification when unchanged"
-        );
-    }
-
-    #[test]
-    fn set_direct_mode_pushes_enabled_notification() {
-        let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        let keys = make_keys(&mut wm, 1);
-        wm.clear_layout_dirty();
-        wm.set_direct_mode(keys[0], true);
-        assert!(!wm.notifications().is_empty(), "notification pushed");
-    }
-
-    #[test]
-    fn set_direct_mode_pushes_disabled_notification() {
-        let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        let keys = make_keys(&mut wm, 1);
-        wm.clear_layout_dirty();
-        wm.set_direct_mode(keys[0], true);
-        // Clear notification queue: create a new one
-        wm.notification_queue = Default::default();
-        wm.set_direct_mode(keys[0], false);
-        assert!(
-            !wm.notifications().is_empty(),
-            "notification pushed on disable"
-        );
-    }
-
-    #[test]
-    fn set_direct_mode_invalid_key_is_noop() {
-        let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        wm.clear_layout_dirty();
-        let bogus = WindowKey::default();
-        assert!(!wm.layout_dirty(), "initially not dirty");
-        wm.set_direct_mode(bogus, true);
-        assert!(!wm.layout_dirty(), "no-op: layout not dirty");
-        assert!(wm.notifications().is_empty(), "no-op: no notification");
     }
 
     #[test]

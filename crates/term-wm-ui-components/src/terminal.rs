@@ -2086,9 +2086,8 @@ mod tests {
         });
         wm.focus_app_window(key);
 
-        // Set direct mode on the window
-        wm.set_direct_mode(key, true);
-        assert!(wm.direct_mode(key));
+        // Direct mode is automatic (purely from tracker)
+        assert!(!wm.direct_mode(key));
 
         // Render to set last_area
         use term_wm_core::components::ComponentContext;
