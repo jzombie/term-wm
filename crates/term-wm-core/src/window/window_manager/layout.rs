@@ -212,7 +212,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         } else if w.is_floating() {
             WindowMode::Floating
         } else {
-            WindowMode::Normal
+            WindowMode::Tiled
         }
     }
 

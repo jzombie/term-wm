@@ -37,20 +37,16 @@ pub struct ChromeRules {
 /// Chrome presentation rules mapped across layout modes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModeChromeConfig {
-    pub normal: ChromeRules,
-    pub maximized: ChromeRules,
+    pub tiled: ChromeRules,
     pub floating: ChromeRules,
     pub monocle: ChromeRules,
+    pub maximized: ChromeRules,
 }
 
 impl Default for ModeChromeConfig {
     fn default() -> Self {
         Self {
-            normal: ChromeRules {
-                show_borders: false,
-                show_header: true,
-            },
-            maximized: ChromeRules {
+            tiled: ChromeRules {
                 show_borders: false,
                 show_header: true,
             },
@@ -62,16 +58,20 @@ impl Default for ModeChromeConfig {
                 show_borders: false,
                 show_header: true,
             },
+            maximized: ChromeRules {
+                show_borders: false,
+                show_header: true,
+            },
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowMode {
+    Tiled,
+    Floating,
     Monocle,
     Maximized,
-    Floating,
-    Normal,
 }
 
 impl ModeChromeConfig {
@@ -81,7 +81,7 @@ impl ModeChromeConfig {
             WindowMode::Monocle => &self.monocle,
             WindowMode::Maximized => &self.maximized,
             WindowMode::Floating => &self.floating,
-            WindowMode::Normal => &self.normal,
+            WindowMode::Tiled => &self.tiled,
         }
     }
 }
@@ -181,7 +181,7 @@ impl Window {
         } else if self.is_floating() {
             &self.chrome_config.floating
         } else {
-            &self.chrome_config.normal
+            &self.chrome_config.tiled
         }
     }
 }
