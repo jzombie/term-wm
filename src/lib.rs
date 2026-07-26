@@ -55,6 +55,22 @@ pub fn render_app<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmA
         if let Some(title) = wm.window_pane_title(key) {
             wm.set_window_title(key, title);
         }
+        // Detect automatic direct_mode transitions and notify
+        let prev_direct = wm.last_direct_mode(key);
+        let current_direct = wm.direct_mode(key);
+        if prev_direct != current_direct {
+            wm.set_last_direct_mode(key, current_direct);
+            let title = wm.window_title(key);
+            let status = if current_direct {
+                "enabled"
+            } else {
+                "disabled"
+            };
+            wm.push_notification(
+                format!("Direct mode {} for {}", status, title),
+                std::time::Duration::from_secs(3),
+            );
+        }
         let _ = wm.take_alternate_screen_transition(key);
     }
 

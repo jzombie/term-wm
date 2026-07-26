@@ -120,6 +120,8 @@ pub struct Window {
     /// When Some and requires_direct_input() returns true, the window manager
     /// auto-enables direct_mode, bypassing native scroll interception.
     tracker: Option<std::sync::Arc<dyn term_wm_pty_engine::DirectInputTracker>>,
+    /// Previous automatic direct_mode value, used to detect transitions for notifications.
+    last_direct_mode: bool,
 }
 
 impl Window {
@@ -139,6 +141,7 @@ impl Window {
             content_hitbox_id: HitboxId::new(),
             active_keyboard_focus: None,
             tracker: None,
+            last_direct_mode: false,
         }
     }
 
@@ -279,6 +282,14 @@ impl Window {
             .as_ref()
             .map(|t| t.requires_direct_input())
             .unwrap_or(false)
+    }
+
+    pub fn last_direct_mode(&self) -> bool {
+        self.last_direct_mode
+    }
+
+    pub fn set_last_direct_mode(&mut self, v: bool) {
+        self.last_direct_mode = v;
     }
 
     // ── Chrome Presentation Evaluation ────────────────────────────────────────

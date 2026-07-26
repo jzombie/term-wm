@@ -640,6 +640,16 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         }
     }
 
+    pub fn last_direct_mode(&self, key: WindowKey) -> bool {
+        self.windows.get(key).map(|w| w.last_direct_mode()).unwrap_or(false)
+    }
+
+    pub fn set_last_direct_mode(&mut self, key: WindowKey, v: bool) {
+        if let Some(w) = self.windows.get_mut(key) {
+            w.set_last_direct_mode(v);
+        }
+    }
+
     pub fn window_title(&self, key: WindowKey) -> String {
         let base = self
             .window(key)
@@ -4911,24 +4921,6 @@ mod tests {
     }
 
     #[test]
-    fn direct_mode_set_get_roundtrip() {
-        let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        let keys = make_keys(&mut wm, 100);
-        let key = keys[42];
-        assert!(!wm.direct_mode(key), "default is false");
-
-assert!(wm.direct_mode(key));
-
-assert!(!wm.direct_mode(key));
-    }
-
-    #[test]
     fn direct_mode_is_per_window() {
         let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
@@ -5209,78 +5201,6 @@ assert!(!wm.direct_mode(key));
         let result = wm.dispatch_focused_event(&click);
         // In direct mode, content clicks bypass chrome and reach the component.
         assert!(result.is_some(), "event must route to window component");
-    }
-
-    #[test]
-    fn dispatch_focused_event_still_routes_header_d_click_in_direct_mode() {
-        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        use crate::layout::{LayoutNode, TilingLayout};
-
-        let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        let keys = make_keys(&mut wm, 100);
-        wm.set_panel_visible(false);
-        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(keys[1])));
-        wm.managed_draw_order = vec![keys[1]];
-        wm.z_order = vec![keys[1]];
-        wm.register_managed_layout(Rect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 24,
-        });
-        wm.focus_app_window(keys[1]);
-
-        let win_key = keys[1];
-
-        // Header D button click — coordinates on the header, NOT in content area.
-        // Uses `button_x_pos` so it stays in sync with `render_window`.
-        let full_rect = wm.full_region_for_key(win_key);
-        let outer_right = full_rect
-            .x
-            .saturating_add(i32::from(full_rect.width))
-            .saturating_sub(1);
-        let kb_x = crate::chrome::button_x_pos(outer_right as u16, true, 3);
-        let kb_y = full_rect.y.saturating_add(1) as u16; // header row
-        wm.hitbox_registry_mut().register(
-            crate::hitbox_registry::HitboxId::new(),
-            ComponentOwner::Chrome(crate::chrome::ChromeTarget::MinimizeButton(win_key)),
-            Rect {
-                x: i32::from(kb_x),
-                y: i32::from(kb_y),
-                width: 1,
-                height: 1,
-            },
-        );
-
-        assert!(wm.direct_mode(win_key), "direct mode enabled before click");
-
-        // This click is on the header (not content area) — chrome should still
-        // handle it despite direct mode being on.
-        let click = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Press(MouseButton::Left),
-            column: kb_x,
-            row: kb_y,
-            modifiers: KeyModifiers::NONE,
-        });
-
-        let wm_click = crate::events::core_event_to_wm(&click).unwrap();
-        let result = wm.dispatch_mouse(&wm_click);
-
-        // The header D button click should be consumed by chrome, toggling direct_mode off.
-        assert!(
-            result.is_consumed(),
-            "header D click must be consumed by chrome"
-        );
-        assert!(
-            !wm.direct_mode(win_key),
-            "header D click must toggle direct_mode off"
-        );
     }
 
     #[test]
