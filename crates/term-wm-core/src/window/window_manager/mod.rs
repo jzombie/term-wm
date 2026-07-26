@@ -650,6 +650,15 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.set_direct_mode(key, !current);
     }
 
+    /// Set the automatic direct-input tracker for a window.
+    /// When the tracker's `requires_direct_input()` returns true,
+    /// `component_context_for` auto-enables `direct_mode`.
+    pub fn set_window_tracker(&mut self, key: WindowKey, tracker: std::sync::Arc<dyn term_wm_pty_engine::DirectInputTracker>) {
+        if let Some(w) = self.windows.get_mut(key) {
+            w.set_tracker(tracker);
+        }
+    }
+
     pub fn window_title(&self, key: WindowKey) -> String {
         let base = self
             .window(key)
@@ -1010,10 +1019,18 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Create a [`ComponentContext`] for a specific window, including the
     /// window's direct-mode state so children (scroll view, terminal) can
     /// adapt their rendering and event handling automatically.
+    /// Unifies the manual toggle (chrome "D" / command palette) with the
+    /// automatic PTY heuristic (alternate screen, mouse tracking, margins).
     pub fn component_context_for(&self, focused: bool, key: WindowKey) -> ComponentContext {
+        let manual_dm = self.direct_mode(key);
+        let auto_dm = self
+            .windows
+            .get(key)
+            .map(|w| w.requires_direct_input())
+            .unwrap_or(false);
         let mut ctx = self
             .component_context(focused)
-            .with_direct_mode(self.direct_mode(key))
+            .with_direct_mode(manual_dm || auto_dm)
             .with_window_key(key)
             .with_screen_area(self.region(key));
         // Inject the window's active keyboard focus into the context.

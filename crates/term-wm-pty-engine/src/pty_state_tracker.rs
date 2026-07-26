@@ -2,6 +2,19 @@ use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU8, Ordering};
 
 use vte::{Params, Perform};
 
+/// Trait for automatic direct-input detection at the window boundary.
+/// Implemented by the PTY state tracker to signal when TUI applications
+/// (less, vim) require unfiltered keyboard input (no native scroll interception).
+pub trait DirectInputTracker: Send + Sync {
+    fn requires_direct_input(&self) -> bool;
+}
+
+impl DirectInputTracker for PtyStateTracker {
+    fn requires_direct_input(&self) -> bool {
+        self.requires_app_routing()
+    }
+}
+
 /// Decoded mouse tracking mode from DECSET 1000/1002/1003.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseTrackingMode {

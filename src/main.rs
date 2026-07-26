@@ -17,6 +17,7 @@ use term_wm::{
 };
 use term_wm_console::console_render_target::ConsoleRenderTarget;
 use term_wm_core::components::Component;
+use term_wm_pty_engine::{DirectInputTracker, Pty};
 use term_wm_ui_facade::core_component::CoreWmComponent;
 use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 
@@ -169,8 +170,11 @@ impl App {
         cmd: portable_pty::CommandBuilder,
         command_to_send: Option<String>,
     ) -> io::Result<()> {
-        // Configure the terminal BEFORE boxing (type erasure trap)
-        let mut pane = TerminalComponent::spawn_default(cmd).map_err(io::Error::other)?;
+        let size = TerminalComponent::default_pty_size();
+        // TODO: Make scrollback buffer user-configurable
+        let pty = Pty::spawn_with_scrollback(cmd, size, 2000).map_err(io::Error::other)?;
+        let tracker: Arc<dyn DirectInputTracker> = pty.direct_input_tracker();
+        let mut pane = TerminalComponent::from_pane(Box::new(pty));
         pane.set_link_handler_fn(|url| {
             let _ = webbrowser::open(url);
             true
@@ -197,6 +201,7 @@ impl App {
             .inner
             .wm()
             .open_window(AppRootComponent::Core(CoreWmComponent::Terminal(sv)));
+        self.inner.wm().set_window_tracker(key, tracker);
         let _ = key_holder.set(key);
 
         let clipboard_enabled = self.inner.wm().clipboard_enabled();
@@ -254,8 +259,12 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
     }
 
     fn wm_new_window(&mut self) -> io::Result<()> {
-        let mut pane =
-            TerminalComponent::spawn_default(default_shell_command()).map_err(io::Error::other)?;
+        let size = TerminalComponent::default_pty_size();
+        let cmd = default_shell_command();
+        // TODO: Make scrollback buffer user-configurable
+        let pty = Pty::spawn_with_scrollback(cmd, size, 2000).map_err(io::Error::other)?;
+        let tracker: Arc<dyn DirectInputTracker> = pty.direct_input_tracker();
+        let mut pane = TerminalComponent::from_pane(Box::new(pty));
         pane.set_link_handler_fn(|url| {
             let _ = webbrowser::open(url);
             true
@@ -281,6 +290,7 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
             .inner
             .wm()
             .open_window(AppRootComponent::Core(CoreWmComponent::Terminal(sv)));
+        self.inner.wm().set_window_tracker(key, tracker);
         let _ = key_holder.set(key);
         let clipboard_enabled = self.inner.wm().clipboard_enabled();
         if let Some(comp) = self.inner.wm().component_for_key_mut(key) {

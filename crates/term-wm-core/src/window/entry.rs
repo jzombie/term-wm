@@ -1,5 +1,4 @@
-use super::ComponentKey;
-use super::FloatRectSpec;
+use super::{ComponentKey, FloatRectSpec};
 use crate::hitbox_registry::HitboxId;
 
 /// Controls what happens when a window is closed via `close_window`.
@@ -117,6 +116,11 @@ pub struct Window {
     /// Set when a component returns `TermWmAction::RequestKeyboardFocus`.
     /// Cleared automatically when `FocusRing` switches to a different window.
     active_keyboard_focus: Option<HitboxId>,
+
+    /// Automatic direct-input heuristic (e.g., PtyStateTracker).
+    /// When Some and requires_direct_input() returns true, the window manager
+    /// auto-enables direct_mode, bypassing native scroll interception.
+    tracker: Option<std::sync::Arc<dyn term_wm_pty_engine::DirectInputTracker>>,
 }
 
 impl Window {
@@ -136,6 +140,7 @@ impl Window {
             close_policy: ClosePolicy::default(),
             content_hitbox_id: HitboxId::new(),
             active_keyboard_focus: None,
+            tracker: None,
         }
     }
 
@@ -273,6 +278,19 @@ impl Window {
 
     pub fn set_active_keyboard_focus(&mut self, id: Option<HitboxId>) {
         self.active_keyboard_focus = id;
+    }
+
+    // ── Direct Input Tracker ─────────────────────────────────────────────
+
+    pub fn set_tracker(&mut self, tracker: std::sync::Arc<dyn term_wm_pty_engine::DirectInputTracker>) {
+        self.tracker = Some(tracker);
+    }
+
+    pub fn requires_direct_input(&self) -> bool {
+        self.tracker
+            .as_ref()
+            .map(|t| t.requires_direct_input())
+            .unwrap_or(false)
     }
 
     // ── Chrome Presentation Evaluation ────────────────────────────────────────
