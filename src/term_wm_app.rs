@@ -1,5 +1,5 @@
 use std::io;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use crossbeam_channel::{Sender, bounded};
 
@@ -163,29 +163,6 @@ impl TermWmApp {
             true
         });
 
-        let key_holder = Arc::new(OnceLock::new());
-        let kh = key_holder.clone();
-        let tx = self.pty_wakeup_tx.clone();
-        pane.set_status_callback(Some(Box::new(move |status| match status {
-            PtyStatus::Wakeup => {
-                if let Some(&key) = kh.get() {
-                    let _ = tx.send(crate::unified_event_source::UnifiedEvent::PtyWakeup(key));
-                }
-            }
-            PtyStatus::Exited => {
-                if let Some(&key) = kh.get() {
-                    let _ = tx.send(crate::unified_event_source::UnifiedEvent::AppExited(key));
-                }
-            }
-            PtyStatus::DirectInputChanged(enabled) => {
-                if let Some(&key) = kh.get() {
-                    let _ = tx.send(
-                        crate::unified_event_source::UnifiedEvent::DirectInputChanged(key, enabled),
-                    );
-                }
-            }
-        })));
-
         let mut sv = ScrollViewComponent::new(pane);
         sv.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
         let key = self
@@ -193,8 +170,42 @@ impl TermWmApp {
             .open_window(crate::components::AppRootComponent::Core(
                 CoreWmComponent::Terminal(sv),
             ));
-        let _ = key_holder.set(key);
         self.wm.set_window_tracker(key, tracker);
+
+        // Attach status callback AFTER open_window so the closure captures
+        // the known WindowKey directly — no OnceLock, no race condition.
+        let tx = self.pty_wakeup_tx.clone();
+        if let crate::components::AppRootComponent::Core(CoreWmComponent::Terminal(scroll_view)) =
+            self.wm.component_for_key_mut(key).unwrap()
+        {
+            tracing::info!("[STAGE 2] Setting status callback for key {:?}", key);
+            scroll_view.content.borrow_mut().set_pty_callback(move |status| {
+                match status {
+                    PtyStatus::Wakeup => {
+                        let _ =
+                            tx.send(crate::unified_event_source::UnifiedEvent::PtyWakeup(key));
+                    }
+                    PtyStatus::Exited => {
+                        let _ =
+                            tx.send(crate::unified_event_source::UnifiedEvent::AppExited(key));
+                    }
+                    PtyStatus::DirectInputChanged(enabled) => {
+                        tracing::info!(
+                            "[STAGE 2] Sending DirectInputChanged({}) for key {:?}",
+                            enabled,
+                            key
+                        );
+                        if let Err(e) = tx.send(
+                            crate::unified_event_source::UnifiedEvent::DirectInputChanged(
+                                key, enabled,
+                            ),
+                        ) {
+                            tracing::error!("[STAGE 2] Channel send failed: {:?}", e);
+                        }
+                    }
+                }
+            });
+        }
 
         let clipboard_enabled = self.wm.clipboard_enabled();
         if let Some(comp) = self.wm.component_for_key_mut(key) {

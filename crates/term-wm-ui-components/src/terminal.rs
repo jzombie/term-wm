@@ -452,6 +452,17 @@ impl TerminalComponent {
         self.pane.get_mut().write_bytes(input)
     }
 
+    /// Attach a callback to the underlying PTY's status event stream.
+    /// Call after `open_window` so the closure can capture the known `WindowKey`.
+    pub fn set_pty_callback<F>(&self, f: F)
+    where
+        F: Fn(term_wm_pty_engine::PtyStatus) + Send + Sync + 'static,
+    {
+        self.pane
+            .borrow_mut()
+            .set_status_callback(Some(Box::new(f)));
+    }
+
     #[allow(clippy::collapsible_if)]
     pub fn has_exited(&mut self) -> bool {
         let pane = self.pane.get_mut();

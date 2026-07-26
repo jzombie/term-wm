@@ -567,11 +567,19 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 let prev_routing = tracker.requires_app_routing();
                 vte_parser.advance(&mut tracker_adapter, &buf[..n]);
                 let new_routing = tracker.requires_app_routing();
-                if prev_routing != new_routing
-                    && let Ok(guard) = status_cb.lock()
-                    && let Some(ref cb) = *guard
-                {
-                    cb(crate::PtyStatus::DirectInputChanged(new_routing));
+                if prev_routing != new_routing {
+                    tracing::info!(
+                        "[STAGE 1] PTY routing flipped: {} -> {}",
+                        prev_routing,
+                        new_routing
+                    );
+                    if let Ok(guard) = status_cb.lock()
+                        && let Some(ref cb) = *guard
+                    {
+                        cb(crate::PtyStatus::DirectInputChanged(new_routing));
+                    } else {
+                        tracing::error!("[STAGE 1] status_cb is NONE when transition occurred!");
+                    }
                 }
 
                 // Process bytes directly into the shared parser.
