@@ -143,7 +143,7 @@ fn register_window_chrome_hitboxes(registry: &mut HitboxRegistry, params: &Chrom
 
         // Window management buttons from centralized list
         for (i, btn) in wm_buttons.iter().enumerate() {
-            let bx = button_x_pos(outer_right, *borders_enabled, *floating, i);
+            let bx = button_x_pos(outer_right, *borders_enabled, i);
             let target = match btn.action {
                 TermWmAction::CloseWindow(..) => ChromeTarget::CloseButton(*key),
                 TermWmAction::MaximizeWindow(..) => ChromeTarget::MaximizeButton(*key),
@@ -1165,7 +1165,7 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
             let rel_y = header_y as usize - buffer.area.y as usize;
             // Buttons are laid out right-to-left from outer_right
             for (i, btn) in wm_buttons.iter().enumerate() {
-                let bx = button_x_pos(outer_right, borders_enabled, floating, i);
+                let bx = button_x_pos(outer_right, borders_enabled, i);
                 let rel_x = bx as usize - buffer.area.x as usize;
                 let cell = &mut buffer.content[rel_y * buf_w + rel_x];
                 cell.set_symbol(btn.symbol);

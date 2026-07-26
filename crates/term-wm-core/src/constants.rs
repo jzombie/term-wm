@@ -109,6 +109,3 @@ pub const CHROME_BUTTON_INSET_RIGHT: u16 = 1;
 
 /// Spacing between adjacent title buttons (button cell + 1 gap column).
 pub const HEADER_BUTTON_GAP: u16 = 2;
-
-/// Shift window-control buttons 1 cell left (tiled) or right (floating) for visual alignment.
-pub const CHROME_BUTTON_FLOAT_OFFSET: u16 = 1;

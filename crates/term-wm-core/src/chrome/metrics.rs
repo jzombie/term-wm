@@ -1,10 +1,10 @@
-use crate::constants::{CHROME_BUTTON_FLOAT_OFFSET, CHROME_BUTTON_INSET_RIGHT, HEADER_BUTTON_GAP};
+use crate::constants::{CHROME_BUTTON_INSET_RIGHT, HEADER_BUTTON_GAP};
 use crate::Rect;
 
 /// Compute the x-position of a title button in window-chrome coordinates.
 ///
 /// `outer_right` is the rightmost column of the full window frame.
-/// `borders_enabled` and `floating` reflect the window's current state.
+/// `borders_enabled` determines whether the right-border width is subtracted.
 /// `button_index` is the 0-based index into the window-management buttons
 /// (0 = rightmost button, 1 = next to the left, etc.).
 ///
@@ -12,25 +12,15 @@ use crate::Rect;
 /// (`register_window_chrome_hitboxes`) call this so the visual positions
 /// always match the click targets. Tests in `mod.rs` also use this to
 /// place extra hitboxes (e.g. the D button) at the correct coordinate.
-pub fn button_x_pos(
-    outer_right: u16,
-    borders_enabled: bool,
-    floating: bool,
-    button_index: usize,
-) -> u16 {
+pub fn button_x_pos(outer_right: u16, borders_enabled: bool, button_index: usize) -> u16 {
     let header_right = if borders_enabled {
         outer_right.saturating_sub(RIGHT_BORDER_WIDTH)
     } else {
         outer_right
     };
-    let bx = header_right
+    header_right
         .saturating_sub(CHROME_BUTTON_INSET_RIGHT)
-        .saturating_sub(HEADER_BUTTON_GAP * button_index as u16);
-    if floating {
-        bx.saturating_add(CHROME_BUTTON_FLOAT_OFFSET)
-    } else {
-        bx.saturating_sub(CHROME_BUTTON_FLOAT_OFFSET)
-    }
+        .saturating_sub(HEADER_BUTTON_GAP * button_index as u16)
 }
 
 pub const LEFT_BORDER_WIDTH: u16 = 1;

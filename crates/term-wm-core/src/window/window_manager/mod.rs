@@ -4998,7 +4998,7 @@ mod tests {
             .x
             .saturating_add(i32::from(full_rect.width))
             .saturating_sub(1);
-        let kb_x = crate::chrome::button_x_pos(outer_right as u16, true, false, 3);
+        let kb_x = crate::chrome::button_x_pos(outer_right as u16, true, 3);
         let kb_y = full_rect.y.saturating_add(1) as u16; // header row
         assert!(!wm.direct_mode(win_key), "starts off");
 
@@ -5405,7 +5405,7 @@ mod tests {
             .x
             .saturating_add(i32::from(full_rect.width))
             .saturating_sub(1);
-        let kb_x = crate::chrome::button_x_pos(outer_right as u16, true, false, 3);
+        let kb_x = crate::chrome::button_x_pos(outer_right as u16, true, 3);
         let kb_y = full_rect.y.saturating_add(1) as u16; // header row
         wm.hitbox_registry_mut().register(
             crate::hitbox_registry::HitboxId::new(),
