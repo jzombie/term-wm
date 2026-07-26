@@ -122,7 +122,7 @@ impl Component<TermWmAction> for TerminalComponent {
                 }
                 if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
                     && key.modifiers.shift
-                    && !self.pane.borrow_mut().alternate_screen()
+                    && !self.pane.borrow().requires_app_routing()
                 {
                     let delta = if key.code == KeyCode::PageUp {
                         10isize
@@ -131,7 +131,8 @@ impl Component<TermWmAction> for TerminalComponent {
                     };
                     return EventResult::Action(TermWmAction::Scroll(delta));
                 }
-                let bytes = key.to_pty_bytes();
+                let app_cursor = self.pane.borrow().is_application_cursor_keys_active();
+                let bytes = key.to_pty_bytes(app_cursor);
                 if bytes.is_empty() {
                     return EventResult::Ignored;
                 }
@@ -536,7 +537,7 @@ impl TerminalComponent {
             let mut pane = self.pane.borrow_mut();
 
             if let Some(handle) = ctx.scroll_handle() {
-                let suppress_scroll = ctx.direct_mode() || pane.alternate_screen();
+                let suppress_scroll = ctx.direct_mode() || pane.requires_app_routing();
 
                 if suppress_scroll {
                     handle.set_content_size(clipped.width as usize, clipped.height as usize);
@@ -593,7 +594,7 @@ impl TerminalComponent {
         let mut pane = self.pane.borrow_mut();
         let new_sb = pane.scrollback();
         if new_sb != sb_before_drag
-            && !pane.alternate_screen()
+            && !pane.requires_app_routing()
             && let Some(handle) = ctx.scroll_handle()
         {
             let used = pane.max_scrollback();
@@ -1195,6 +1196,10 @@ impl Pane for TestPane {
     }
 
     fn alternate_screen(&mut self) -> bool {
+        self.alt_screen
+    }
+
+    fn requires_app_routing(&self) -> bool {
         self.alt_screen
     }
 

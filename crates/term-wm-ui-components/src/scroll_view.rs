@@ -381,7 +381,6 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
             && let Event::Key(key) = event
             && key.kind == term_wm_core::events::KeyKind::Press
         {
-            let is_full = self.keyboard_mode == ScrollKeyMode::Full;
             let kb = &ctx.config().keybindings;
 
             // Pagination-level scrolling (active in PaginationOnly and Full)
@@ -395,12 +394,6 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
                 return EventResult::Action(TermWmAction::ScrollToTop);
             } else if kb.matches(TermWmAction::ScrollEnd, key) {
                 return EventResult::Action(TermWmAction::ScrollToBottom);
-            }
-            // Line-level scrolling (only in Full mode)
-            else if is_full && kb.matches(TermWmAction::ScrollUp, key) {
-                return EventResult::Action(TermWmAction::ScrollView(-1));
-            } else if is_full && kb.matches(TermWmAction::ScrollDown, key) {
-                return EventResult::Action(TermWmAction::ScrollView(1));
             }
         }
 
@@ -1181,7 +1174,7 @@ mod tests {
     }
 
     #[test]
-    fn scroll_view_full_mode_intercepts_all_scroll_keys() {
+    fn scroll_view_full_mode_passes_arrow_keys() {
         let mut sv = ScrollViewComponent::new(EventRecorder {
             received_scroll: false,
         });
@@ -1196,11 +1189,37 @@ mod tests {
         ));
         let result = sv.handle_events(&up, &ctx);
         assert!(
-            matches!(result, EventResult::Action(TermWmAction::ScrollView(-1))),
-            "Full mode must intercept Up"
+            result.is_ignored(),
+            "Full mode must NOT intercept Up — arrow keys always pass through"
+        );
+        assert!(
+            sv.content.borrow().received_scroll,
+            "Up must reach the child component"
         );
 
         sv.content.borrow_mut().received_scroll = false;
+        let down = Event::Key(term_wm_core::events::KeyEvent::new(
+            term_wm_core::events::KeyCode::Down,
+            term_wm_core::events::KeyModifiers::NONE,
+            term_wm_core::events::KeyKind::Press,
+        ));
+        let result = sv.handle_events(&down, &ctx);
+        assert!(result.is_ignored(), "Full mode must NOT intercept Down");
+        assert!(
+            sv.content.borrow().received_scroll,
+            "Down must reach the child component"
+        );
+    }
+
+    #[test]
+    fn scroll_view_full_mode_intercepts_pagination_keys() {
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+        sv.set_keyboard_mode(ScrollKeyMode::Full);
+
+        let ctx = ComponentContext::new(true);
+
         let home = Event::Key(term_wm_core::events::KeyEvent::new(
             term_wm_core::events::KeyCode::Home,
             term_wm_core::events::KeyModifiers::NONE,

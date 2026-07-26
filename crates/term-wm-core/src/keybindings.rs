@@ -98,8 +98,8 @@ impl Default for KeyBindings {
             ScrollPageDown: [ (KeyCode::PageDown, KeyModifiers::NONE) ],
             ScrollHome: [ (KeyCode::Home, KeyModifiers::NONE) ],
             ScrollEnd: [ (KeyCode::End, KeyModifiers::NONE) ],
-            ScrollUp: [ (KeyCode::Up, KeyModifiers::NONE) ],
-            ScrollDown: [ (KeyCode::Down, KeyModifiers::NONE) ],
+            ScrollUp: [ (KeyCode::Up, KeyModifiers { shift: true, control: false, alt: false }) ],
+            ScrollDown: [ (KeyCode::Down, KeyModifiers { shift: true, control: false, alt: false }) ],
             ToggleSelection: [ (KeyCode::Char(' '), KeyModifiers::NONE) ],
 
         }
