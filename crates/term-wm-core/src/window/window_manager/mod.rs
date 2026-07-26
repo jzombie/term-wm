@@ -5824,7 +5824,8 @@ mod tests {
         assert_eq!(wm.window_state(target), Some(WindowState::Unmapped));
         assert!(!wm.z_order.contains(&target), "removed from z_order");
         assert!(
-            wm.window(target).is_some_and(|w| w.floating_rect().is_some()),
+            wm.window(target)
+                .is_some_and(|w| w.floating_rect().is_some()),
             "floating rect preserved across Unmap"
         );
         // Focus ring auto-fallbacks via set_order removing current → first()
