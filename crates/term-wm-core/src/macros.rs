@@ -7,6 +7,93 @@
 /// ```
 #[macro_export]
 macro_rules! impl_component_delegate {
+    ($enum_name:ident, param: $param:ident, bound: $bound:path, variants: { $($variant:ident),* $(,)? }) => {
+        impl<$param: $bound> $crate::components::Component<$crate::actions::TermWmAction>
+            for $enum_name<$param>
+        {
+            fn init(&mut self) {
+                match self { $(Self::$variant(c) => c.init(),)* }
+            }
+            fn on_mount(&mut self, key: $crate::window::WindowKey, app: &$crate::app_context::AppContext) {
+                match self { $(Self::$variant(c) => c.on_mount(key, app),)* }
+            }
+            fn hitbox_id(&self) -> Option<$crate::hitbox_registry::HitboxId> {
+                match self { $(Self::$variant(c) => c.hitbox_id(),)* }
+            }
+            fn handle_events(&mut self, event: &$crate::events::Event, ctx: &$crate::component_context::ComponentContext) -> $crate::actions::EventResult<$crate::actions::TermWmAction> {
+                match self { $(Self::$variant(c) => c.handle_events(event, ctx),)* }
+            }
+            fn on_mouse_press(
+                &mut self, col: u16, row: u16, button: $crate::events::MouseButton,
+                modifiers: $crate::events::KeyModifiers, ctx: &$crate::component_context::ComponentContext,
+            ) -> $crate::actions::EventResult<$crate::actions::TermWmAction> {
+                match self { $(Self::$variant(c) => c.on_mouse_press(col, row, button, modifiers, ctx),)* }
+            }
+            fn on_mouse_release(
+                &mut self, col: u16, row: u16, button: $crate::events::MouseButton,
+                modifiers: $crate::events::KeyModifiers, ctx: &$crate::component_context::ComponentContext,
+            ) -> $crate::actions::EventResult<$crate::actions::TermWmAction> {
+                match self { $(Self::$variant(c) => c.on_mouse_release(col, row, button, modifiers, ctx),)* }
+            }
+            fn on_mouse_drag(
+                &mut self, col: u16, row: u16, button: $crate::events::MouseButton,
+                modifiers: $crate::events::KeyModifiers, ctx: &$crate::component_context::ComponentContext,
+            ) -> $crate::actions::EventResult<$crate::actions::TermWmAction> {
+                match self { $(Self::$variant(c) => c.on_mouse_drag(col, row, button, modifiers, ctx),)* }
+            }
+            fn on_mouse_scroll(
+                &mut self, col: u16, row: u16, kind: $crate::events::MouseEventKind,
+                modifiers: $crate::events::KeyModifiers, ctx: &$crate::component_context::ComponentContext,
+            ) -> $crate::actions::EventResult<$crate::actions::TermWmAction> {
+                match self { $(Self::$variant(c) => c.on_mouse_scroll(col, row, kind, modifiers, ctx),)* }
+            }
+            fn on_mouse_move(
+                &mut self, col: u16, row: u16, modifiers: $crate::events::KeyModifiers,
+                ctx: &$crate::component_context::ComponentContext,
+            ) -> $crate::actions::EventResult<$crate::actions::TermWmAction> {
+                match self { $(Self::$variant(c) => c.on_mouse_move(col, row, modifiers, ctx),)* }
+            }
+            fn on_key(&mut self, event: &$crate::events::Event, ctx: &$crate::component_context::ComponentContext) -> $crate::actions::EventResult<$crate::actions::TermWmAction> {
+                match self { $(Self::$variant(c) => c.on_key(event, ctx),)* }
+            }
+            fn update(&mut self, action: $crate::actions::TermWmAction, ctx: &$crate::component_context::ComponentContext, actions: &mut std::collections::VecDeque<($crate::window::WindowKey, $crate::actions::TermWmAction)>) {
+                match self { $(Self::$variant(c) => c.update(action, ctx, actions),)* }
+            }
+            fn render(&mut self, backend: &mut dyn term_wm_render::RenderBackend, area: $crate::Rect, ctx: &$crate::component_context::ComponentContext, registry: &mut $crate::hitbox_registry::HitboxRegistry) {
+                match self { $(Self::$variant(c) => $crate::components::Component::<$crate::actions::TermWmAction>::render(c, backend, area, ctx, registry),)* }
+            }
+            fn destroy(&mut self) {
+                match self { $(Self::$variant(c) => c.destroy(),)* }
+            }
+            fn clear_selection(&mut self) {
+                match self { $(Self::$variant(c) => c.clear_selection(),)* }
+            }
+            fn selection_status(&self) -> $crate::components::SelectionStatus {
+                match self { $(Self::$variant(c) => c.selection_status(),)* }
+            }
+            fn selection_text(&self) -> Option<String> {
+                match self { $(Self::$variant(c) => c.selection_text(),)* }
+            }
+            fn desired_height(&self, width: u16) -> u16 {
+                match self { $(Self::$variant(c) => c.desired_height(width),)* }
+            }
+            fn take_pending_title(&mut self) -> Option<String> {
+                match self { $(Self::$variant(c) => c.take_pending_title(),)* }
+            }
+            fn take_alternate_screen_transition(&mut self) -> Option<bool> {
+                match self { $(Self::$variant(c) => c.take_alternate_screen_transition(),)* }
+            }
+            fn take_teardown_parts(&mut self) -> Option<(Box<dyn std::any::Any + Send + Sync>, std::thread::JoinHandle<()>)> {
+                match self { $(Self::$variant(c) => c.take_teardown_parts(),)* }
+            }
+            fn set_selection_enabled(&mut self, enabled: bool) {
+                match self { $(Self::$variant(c) => c.set_selection_enabled(enabled),)* }
+            }
+            fn paste(&mut self, text: &str) -> bool {
+                match self { $(Self::$variant(c) => c.paste(text),)* }
+            }
+        }
+    };
     ($enum_name:ident { $($variant:ident),* $(,)? }) => {
         impl $crate::components::Component<$crate::actions::TermWmAction> for $enum_name {
             fn init(&mut self) {
