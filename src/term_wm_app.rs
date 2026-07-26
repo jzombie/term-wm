@@ -180,15 +180,17 @@ impl TermWmApp {
                 scroll_view,
             ))) => {
                 tracing::info!("[STAGE 2] Setting status callback for key {:?}", key);
-                scroll_view.content.borrow_mut().set_pty_callback(move |status| {
-                    match status {
+                scroll_view
+                    .content
+                    .borrow_mut()
+                    .set_pty_callback(move |status| match status {
                         PtyStatus::Wakeup => {
-                            let _ = tx
-                                .send(crate::unified_event_source::UnifiedEvent::PtyWakeup(key));
+                            let _ =
+                                tx.send(crate::unified_event_source::UnifiedEvent::PtyWakeup(key));
                         }
                         PtyStatus::Exited => {
-                            let _ = tx
-                                .send(crate::unified_event_source::UnifiedEvent::AppExited(key));
+                            let _ =
+                                tx.send(crate::unified_event_source::UnifiedEvent::AppExited(key));
                         }
                         PtyStatus::DirectInputChanged(enabled) => {
                             tracing::info!(
@@ -204,8 +206,7 @@ impl TermWmApp {
                                 tracing::error!("[STAGE 2] Channel send failed: {:?}", e);
                             }
                         }
-                    }
-                });
+                    });
             }
             Some(_other) => {
                 tracing::error!(

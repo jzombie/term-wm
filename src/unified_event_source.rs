@@ -175,7 +175,11 @@ impl UnifiedEventSource {
                     self.exited_windows.push(key);
                 }
                 Ok(UnifiedEvent::DirectInputChanged(key, enabled)) => {
-                    tracing::info!("[STAGE 3] drain_pending collected DirectInputChanged({:?}, {})", key, enabled);
+                    tracing::info!(
+                        "[STAGE 3] drain_pending collected DirectInputChanged({:?}, {})",
+                        key,
+                        enabled
+                    );
                     self.dirty_windows.insert(key);
                     self.direct_input_changed.push((key, enabled));
                 }
@@ -288,7 +292,11 @@ impl EventSource for UnifiedEventSource {
                     continue;
                 }
                 Ok(UnifiedEvent::DirectInputChanged(key, enabled)) => {
-                    tracing::info!("[STAGE 3] recv_timeout collected DirectInputChanged({:?}, {})", key, enabled);
+                    tracing::info!(
+                        "[STAGE 3] recv_timeout collected DirectInputChanged({:?}, {})",
+                        key,
+                        enabled
+                    );
                     self.dirty_windows.insert(key);
                     self.direct_input_changed.push((key, enabled));
                     self.frame_pacer.notify_pending(Instant::now());
@@ -345,7 +353,11 @@ impl EventSource for UnifiedEventSource {
                     self.exited_windows.push(key);
                 }
                 Ok(UnifiedEvent::DirectInputChanged(key, enabled)) => {
-                    tracing::info!("[STAGE 3] drain_pending collected DirectInputChanged({:?}, {})", key, enabled);
+                    tracing::info!(
+                        "[STAGE 3] drain_pending collected DirectInputChanged({:?}, {})",
+                        key,
+                        enabled
+                    );
                     self.dirty_windows.insert(key);
                     self.direct_input_changed.push((key, enabled));
                 }
