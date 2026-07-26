@@ -31,16 +31,12 @@ pub struct ChromeCtx<'a> {
 }
 
 use term_wm_core::chrome::{
-    LEFT_BORDER_WIDTH, RIGHT_BORDER_WIDTH, TOP_BORDER_HEIGHT, content_rect,
+    button_x_pos, content_rect, LEFT_BORDER_WIDTH, RIGHT_BORDER_WIDTH, TOP_BORDER_HEIGHT,
 };
-use term_wm_core::constants::CHROME_BUTTON_INSET_RIGHT;
+use term_wm_core::constants::HEADER_BUTTON_GAP;
 
 // ── Chrome layout constants (console-specific) ──────────────
-/// Spacing between adjacent title buttons (button cell + 1 gap column).
-const HEADER_BUTTON_GAP: u16 = 2;
 const EDGE_INDEX_ADJUST: u16 = 1;
-/// Shift window-control buttons 1 cell left (tiled) or right (floating) for visual alignment.
-const CHROME_BUTTON_FLOAT_OFFSET: u16 = 1;
 
 /// Register chrome hitboxes for a window (resize, drag, close, maximize buttons).
 /// Parameters for chrome hitbox registration.
@@ -146,26 +142,8 @@ fn register_window_chrome_hitboxes(registry: &mut HitboxRegistry, params: &Chrom
         );
 
         // Window management buttons from centralized list
-        let btn_right = if *borders_enabled {
-            outer_right.saturating_sub(RIGHT_BORDER_WIDTH)
-        } else {
-            outer_right
-        };
         for (i, btn) in wm_buttons.iter().enumerate() {
-            let bx = if *borders_enabled {
-                btn_right
-                    .saturating_sub(CHROME_BUTTON_INSET_RIGHT)
-                    .saturating_sub(HEADER_BUTTON_GAP * i as u16)
-            } else {
-                btn_right
-                    .saturating_sub(CHROME_BUTTON_INSET_RIGHT)
-                    .saturating_sub(HEADER_BUTTON_GAP * i as u16)
-            };
-            let bx = if *floating {
-                bx.saturating_add(CHROME_BUTTON_FLOAT_OFFSET)
-            } else {
-                bx.saturating_sub(CHROME_BUTTON_FLOAT_OFFSET)
-            };
+            let bx = button_x_pos(outer_right, *borders_enabled, *floating, i);
             let target = match btn.action {
                 TermWmAction::CloseWindow(..) => ChromeTarget::CloseButton(*key),
                 TermWmAction::MaximizeWindow(..) => ChromeTarget::MaximizeButton(*key),
@@ -1187,20 +1165,7 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
             let rel_y = header_y as usize - buffer.area.y as usize;
             // Buttons are laid out right-to-left from outer_right
             for (i, btn) in wm_buttons.iter().enumerate() {
-                let bx = if borders_enabled {
-                    header_right
-                        .saturating_sub(CHROME_BUTTON_INSET_RIGHT)
-                        .saturating_sub(HEADER_BUTTON_GAP * i as u16)
-                } else {
-                    header_right
-                        .saturating_sub(CHROME_BUTTON_INSET_RIGHT)
-                        .saturating_sub(HEADER_BUTTON_GAP * i as u16)
-                };
-                let bx = if floating {
-                    bx.saturating_add(CHROME_BUTTON_FLOAT_OFFSET)
-                } else {
-                    bx.saturating_sub(CHROME_BUTTON_FLOAT_OFFSET)
-                };
+                let bx = button_x_pos(outer_right, borders_enabled, floating, i);
                 let rel_x = bx as usize - buffer.area.x as usize;
                 let cell = &mut buffer.content[rel_y * buf_w + rel_x];
                 cell.set_symbol(btn.symbol);
