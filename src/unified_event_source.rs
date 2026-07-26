@@ -9,9 +9,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, bounded};
 
-use term_wm_core::events::{
-    Event, KeyCode, KeyEvent, KeyKind, KeyModifiers, MouseEvent, MouseEventKind,
-};
+use term_wm_core::events::{Event, KeyEvent, MouseEvent};
 use term_wm_core::io::EventSource;
 use term_wm_core::io::frame_pacer::FramePacer;
 use term_wm_core::power_profile::PowerProfile;
@@ -383,11 +381,7 @@ impl EventSource for UnifiedEventSource {
                 Ok(UnifiedEvent::DirectInputChanged(key, enabled)) => {
                     self.dirty_windows.insert(key);
                     self.direct_input_changed.push((key, enabled));
-                    return Ok(KeyEvent {
-                        code: KeyCode::Char('\0'),
-                        modifiers: KeyModifiers::NONE,
-                        kind: KeyKind::Release,
-                    });
+                    continue;
                 }
                 Ok(UnifiedEvent::Signal) => self.signal_received = true,
                 Ok(UnifiedEvent::Tick) => {}
@@ -419,12 +413,7 @@ impl EventSource for UnifiedEventSource {
                 Ok(UnifiedEvent::DirectInputChanged(key, enabled)) => {
                     self.dirty_windows.insert(key);
                     self.direct_input_changed.push((key, enabled));
-                    return Ok(MouseEvent {
-                        kind: MouseEventKind::Moved,
-                        column: 0,
-                        row: 0,
-                        modifiers: KeyModifiers::NONE,
-                    });
+                    continue;
                 }
                 Ok(UnifiedEvent::Signal) => self.signal_received = true,
                 Ok(UnifiedEvent::Tick) => {}
