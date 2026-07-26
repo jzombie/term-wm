@@ -175,36 +175,52 @@ impl TermWmApp {
         // Attach status callback AFTER open_window so the closure captures
         // the known WindowKey directly — no OnceLock, no race condition.
         let tx = self.pty_wakeup_tx.clone();
-        if let crate::components::AppRootComponent::Core(CoreWmComponent::Terminal(scroll_view)) =
-            self.wm.component_for_key_mut(key).unwrap()
-        {
-            tracing::info!("[STAGE 2] Setting status callback for key {:?}", key);
-            scroll_view.content.borrow_mut().set_pty_callback(move |status| {
-                match status {
-                    PtyStatus::Wakeup => {
-                        let _ =
-                            tx.send(crate::unified_event_source::UnifiedEvent::PtyWakeup(key));
-                    }
-                    PtyStatus::Exited => {
-                        let _ =
-                            tx.send(crate::unified_event_source::UnifiedEvent::AppExited(key));
-                    }
-                    PtyStatus::DirectInputChanged(enabled) => {
-                        tracing::info!(
-                            "[STAGE 2] Sending DirectInputChanged({}) for key {:?}",
-                            enabled,
-                            key
-                        );
-                        if let Err(e) = tx.send(
-                            crate::unified_event_source::UnifiedEvent::DirectInputChanged(
-                                key, enabled,
-                            ),
-                        ) {
-                            tracing::error!("[STAGE 2] Channel send failed: {:?}", e);
+        match self.wm.component_for_key_mut(key) {
+            Some(crate::components::AppRootComponent::Core(CoreWmComponent::Terminal(
+                scroll_view,
+            ))) => {
+                tracing::info!("[STAGE 2] Setting status callback for key {:?}", key);
+                scroll_view.content.borrow_mut().set_pty_callback(move |status| {
+                    match status {
+                        PtyStatus::Wakeup => {
+                            let _ = tx
+                                .send(crate::unified_event_source::UnifiedEvent::PtyWakeup(key));
+                        }
+                        PtyStatus::Exited => {
+                            let _ = tx
+                                .send(crate::unified_event_source::UnifiedEvent::AppExited(key));
+                        }
+                        PtyStatus::DirectInputChanged(enabled) => {
+                            tracing::info!(
+                                "[STAGE 2] Sending DirectInputChanged({}) for key {:?}",
+                                enabled,
+                                key
+                            );
+                            if let Err(e) = tx.send(
+                                crate::unified_event_source::UnifiedEvent::DirectInputChanged(
+                                    key, enabled,
+                                ),
+                            ) {
+                                tracing::error!("[STAGE 2] Channel send failed: {:?}", e);
+                            }
                         }
                     }
-                }
-            });
+                });
+            }
+            Some(_other) => {
+                tracing::error!(
+                    "[STAGE 2] Window {:?} has unexpected component type — \
+                     status callback will NOT be wired. PTY events will not fire.",
+                    key,
+                );
+            }
+            None => {
+                tracing::error!(
+                    "[STAGE 2] No component found for key {:?} after open_window. \
+                     Status callback will NOT be wired.",
+                    key
+                );
+            }
         }
 
         let clipboard_enabled = self.wm.clipboard_enabled();
