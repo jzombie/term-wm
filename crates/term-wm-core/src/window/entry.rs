@@ -156,6 +156,10 @@ impl Window {
         self.active_chrome_rules().show_header
     }
 
+    pub fn chrome_config(&self) -> &ModeChromeConfig {
+        &self.chrome_config
+    }
+
     // ── Rule Resolution ──────────────────────────────────────────────────────
 
     fn active_chrome_rules(&self) -> &ChromeRules {

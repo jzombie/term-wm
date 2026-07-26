@@ -201,18 +201,42 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         );
     }
 
-    /// Whether the given window should render borders.
+    /// Whether the given window should render borders for the current frame.
     pub fn window_borders_enabled(&self, key: WindowKey) -> bool {
-        self.window(key)
-            .map(|w| w.borders_enabled())
-            .unwrap_or(false)
+        let Some(w) = self.window(key) else {
+            return false;
+        };
+
+        let config = w.chrome_config();
+
+        if self.is_monocle() {
+            config.monocle.show_borders
+        } else if w.is_maximized() {
+            config.maximized.show_borders
+        } else if w.is_floating() {
+            config.floating.show_borders
+        } else {
+            config.normal.show_borders
+        }
     }
 
-    /// Whether the given window should render its header.
+    /// Whether the given window should render its header for the current frame.
     pub fn window_header_enabled(&self, key: WindowKey) -> bool {
-        self.window(key)
-            .map(|w| w.header_enabled())
-            .unwrap_or(false)
+        let Some(w) = self.window(key) else {
+            return false;
+        };
+
+        let config = w.chrome_config();
+
+        if self.is_monocle() {
+            config.monocle.show_header
+        } else if w.is_maximized() {
+            config.maximized.show_header
+        } else if w.is_floating() {
+            config.floating.show_header
+        } else {
+            config.normal.show_header
+        }
     }
 
     /// Handle mouse-click focus switching.
