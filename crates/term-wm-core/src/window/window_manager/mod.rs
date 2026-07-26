@@ -4991,17 +4991,14 @@ mod tests {
 
         let win_key = keys[1];
 
-        // The K button position must match what hit_test computes
-        // using the full window rect (not the inset header rect).
+        // The D button position uses the same formula as `render_window`:
+        // index 3 (right after Close(0), Maximize(1), Minimize(2)).
         let full_rect = wm.full_region_for_key(win_key);
         let outer_right = full_rect
             .x
             .saturating_add(i32::from(full_rect.width))
             .saturating_sub(1);
-        let close_x = outer_right.saturating_sub(2);
-        let max_x = close_x.saturating_sub(2);
-        let min_x = max_x.saturating_sub(2);
-        let kb_x = min_x.saturating_sub(2) as u16;
+        let kb_x = crate::chrome::button_x_pos(outer_right as u16, true, 3);
         let kb_y = full_rect.y.saturating_add(1) as u16; // header row
         assert!(!wm.direct_mode(win_key), "starts off");
 
@@ -5402,15 +5399,13 @@ mod tests {
         wm.set_direct_mode(win_key, true);
 
         // Header D button click — coordinates on the header, NOT in content area.
+        // Uses `button_x_pos` so it stays in sync with `render_window`.
         let full_rect = wm.full_region_for_key(win_key);
         let outer_right = full_rect
             .x
             .saturating_add(i32::from(full_rect.width))
             .saturating_sub(1);
-        let close_x = outer_right.saturating_sub(2);
-        let max_x = close_x.saturating_sub(2);
-        let min_x = max_x.saturating_sub(2);
-        let kb_x = min_x.saturating_sub(2) as u16;
+        let kb_x = crate::chrome::button_x_pos(outer_right as u16, true, 3);
         let kb_y = full_rect.y.saturating_add(1) as u16; // header row
         wm.hitbox_registry_mut().register(
             crate::hitbox_registry::HitboxId::new(),

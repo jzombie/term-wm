@@ -31,14 +31,12 @@ pub struct ChromeCtx<'a> {
 }
 
 use term_wm_core::chrome::{
-    LEFT_BORDER_WIDTH, RIGHT_BORDER_WIDTH, TOP_BORDER_HEIGHT, content_rect,
+    LEFT_BORDER_WIDTH, RIGHT_BORDER_WIDTH, TOP_BORDER_HEIGHT, button_x_pos, content_rect,
 };
+use term_wm_core::constants::HEADER_BUTTON_GAP;
 
 // ── Chrome layout constants (console-specific) ──────────────
-const HEADER_BUTTON_GAP: u16 = 2;
 const EDGE_INDEX_ADJUST: u16 = 1;
-/// Shift window-control buttons 1 cell left (tiled) or right (floating) for visual alignment.
-const CHROME_BUTTON_FLOAT_OFFSET: u16 = 1;
 
 /// Register chrome hitboxes for a window (resize, drag, close, maximize buttons).
 /// Parameters for chrome hitbox registration.
@@ -50,7 +48,6 @@ struct ChromeHitboxParams {
     wm_buttons: Vec<term_wm_core::window::WmButton>,
     borders_enabled: bool,
     header_enabled: bool,
-    floating: bool,
 }
 
 /// Register chrome hitboxes for a window (resize, drag, close, maximize buttons).
@@ -69,7 +66,7 @@ fn register_window_chrome_hitboxes(registry: &mut HitboxRegistry, params: &Chrom
         wm_buttons,
         borders_enabled,
         header_enabled,
-        floating,
+        ..
     } = params;
     let (width, height) = *frame_size;
     let (ox, oy) = *screen_origin;
@@ -144,24 +141,8 @@ fn register_window_chrome_hitboxes(registry: &mut HitboxRegistry, params: &Chrom
         );
 
         // Window management buttons from centralized list
-        let btn_right = if *borders_enabled {
-            outer_right.saturating_sub(RIGHT_BORDER_WIDTH)
-        } else {
-            outer_right
-        };
         for (i, btn) in wm_buttons.iter().enumerate() {
-            let bx = if *borders_enabled {
-                btn_right
-                    .saturating_sub(HEADER_BUTTON_GAP)
-                    .saturating_sub(HEADER_BUTTON_GAP * i as u16)
-            } else {
-                btn_right.saturating_sub(HEADER_BUTTON_GAP * i as u16)
-            };
-            let bx = if *floating {
-                bx.saturating_add(CHROME_BUTTON_FLOAT_OFFSET)
-            } else {
-                bx.saturating_sub(CHROME_BUTTON_FLOAT_OFFSET)
-            };
+            let bx = button_x_pos(outer_right, *borders_enabled, i);
             let target = match btn.action {
                 TermWmAction::CloseWindow(..) => ChromeTarget::CloseButton(*key),
                 TermWmAction::MaximizeWindow(..) => ChromeTarget::MaximizeButton(*key),
@@ -254,7 +235,6 @@ pub fn render_window_chrome(
             wm_buttons: ctx.wm_buttons.clone(),
             borders_enabled: ctx.borders_enabled,
             header_enabled: ctx.header_enabled,
-            floating: ctx.floating,
         },
     );
 
@@ -1183,18 +1163,7 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
             let rel_y = header_y as usize - buffer.area.y as usize;
             // Buttons are laid out right-to-left from outer_right
             for (i, btn) in wm_buttons.iter().enumerate() {
-                let bx = if borders_enabled {
-                    header_right
-                        .saturating_sub(HEADER_BUTTON_GAP)
-                        .saturating_sub(HEADER_BUTTON_GAP * i as u16)
-                } else {
-                    header_right.saturating_sub(HEADER_BUTTON_GAP * i as u16)
-                };
-                let bx = if floating {
-                    bx.saturating_add(CHROME_BUTTON_FLOAT_OFFSET)
-                } else {
-                    bx.saturating_sub(CHROME_BUTTON_FLOAT_OFFSET)
-                };
+                let bx = button_x_pos(outer_right, borders_enabled, i);
                 let rel_x = bx as usize - buffer.area.x as usize;
                 let cell = &mut buffer.content[rel_y * buf_w + rel_x];
                 cell.set_symbol(btn.symbol);
@@ -2288,5 +2257,31 @@ mod tests {
             "single cell should be REVERSED"
         );
         assert_eq!(buf.cell((0, 0)).unwrap().symbol(), "·");
+    }
+
+    // ── Window chrome snapshot tests ────────────────────────────────────
+
+    #[test]
+    fn chrome_header_buttons_snapshot() {
+        let area = RatatuiRect::new(0, 0, 30, 8);
+        let mut buffer = Buffer::empty(area);
+        let ctx = ChromeCtx {
+            title: "term-wm",
+            focused: true,
+            floating: false,
+            hover_pos: None,
+            theme: NOIR,
+            wm_buttons: test_wm_buttons(),
+            borders_enabled: true,
+            header_enabled: true,
+        };
+        let rect = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 8,
+        };
+        render_window(&mut buffer, rect, ctx);
+        insta::assert_debug_snapshot!("chrome_header_buttons", buffer);
     }
 }

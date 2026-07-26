@@ -19,6 +19,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+insta = { workspace = true }
 libc = { workspace = true }
 term-wm-pty-engine = { workspace = true }
 
