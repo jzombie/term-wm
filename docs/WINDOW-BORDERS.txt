@@ -11,7 +11,7 @@ difference between the two modes is how their resize and drag handles appear.
 Every window gets a 1-cell-thick border drawn around it with:
 
   ┌───────────────────────────────┐
-  │terminal window title  _ ▢ ✖ │   <- header row (1 cell tall)
+  │terminal window title    _ ▢ ✖ │   <- header row (1 cell tall)
   ├───────────────────────────────┤   <- separator
   │                               │
   │         content area          │
@@ -19,7 +19,7 @@ Every window gets a 1-cell-thick border drawn around it with:
   └───────────────────────────────┘
 
   - Top edge:      ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐   (1 cell tall)
-  - Header row:     │          title        _ ▢ ✖ │   (1 cell tall)
+  - Header row:    │          title          _ ▢ ✖ │   (1 cell tall)
   - Separator:     ├ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┤   (1 cell tall)
   - Side edges:    │                               │   (1 cell wide)
   - Bottom edge:   └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘   (1 cell tall)
@@ -90,11 +90,11 @@ Content area = window_rect - (2 columns, 4 rows)
     rect.x + 1            rect.x + rect.width - 1
          |                       |
          v                       v
-    ┌─────┬────────────────────┬────────┐
-    │     │  <- drag handle ->  _ ▢ ✖ │
-    ├─────┴────────────────────┴────────┤
-   │                                   │
-   │                                   │
+    ┌─────┬──────────────────────┬───────┐
+    │     │  <- drag handle ->   │ _ ▢ ✖ │
+    ├─────┴──────────────────────┴───────┤
+    │                                    │
+    │                                    │
 
   Dimensions: (window_width - 2) cells wide x 1 cell tall
   Occupies:   1 row (the header row), spanning the full width between borders
