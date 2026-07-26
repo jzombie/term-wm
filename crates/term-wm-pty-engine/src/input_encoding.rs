@@ -93,10 +93,18 @@ pub fn key_to_bytes(key: &KeyEvent, application_cursor_keys: bool) -> Vec<u8> {
         (KeyCode::Esc, _) => vec![0x1b],
         (KeyCode::Tab, _) => vec![b'\t'],
         // Application Cursor Keys (DECCKM): SS3 for unmodified arrows only
-        (KeyCode::Up, m) if application_cursor_keys && m == KeyModifiers::NONE => b"\x1bOA".to_vec(),
-        (KeyCode::Down, m) if application_cursor_keys && m == KeyModifiers::NONE => b"\x1bOB".to_vec(),
-        (KeyCode::Right, m) if application_cursor_keys && m == KeyModifiers::NONE => b"\x1bOC".to_vec(),
-        (KeyCode::Left, m) if application_cursor_keys && m == KeyModifiers::NONE => b"\x1bOD".to_vec(),
+        (KeyCode::Up, m) if application_cursor_keys && m == KeyModifiers::NONE => {
+            b"\x1bOA".to_vec()
+        }
+        (KeyCode::Down, m) if application_cursor_keys && m == KeyModifiers::NONE => {
+            b"\x1bOB".to_vec()
+        }
+        (KeyCode::Right, m) if application_cursor_keys && m == KeyModifiers::NONE => {
+            b"\x1bOC".to_vec()
+        }
+        (KeyCode::Left, m) if application_cursor_keys && m == KeyModifiers::NONE => {
+            b"\x1bOD".to_vec()
+        }
         // Normal cursor keys (CSI sequences)
         (KeyCode::Up, _) => b"\x1b[A".to_vec(),
         (KeyCode::Down, _) => b"\x1b[B".to_vec(),

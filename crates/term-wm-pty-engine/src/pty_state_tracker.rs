@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU8, Ordering};
 
 use vte::{Params, Perform};
 
@@ -75,7 +75,8 @@ impl PtyStateTracker {
     }
 
     pub fn is_application_cursor_keys_active(&self) -> bool {
-        self.is_application_cursor_keys_active.load(Ordering::Acquire)
+        self.is_application_cursor_keys_active
+            .load(Ordering::Acquire)
     }
 
     pub fn mouse_tracking_mode(&self) -> MouseTrackingMode {

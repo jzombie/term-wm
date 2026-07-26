@@ -15,7 +15,5 @@ libc = { workspace = true }
 portable-pty = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-vte = { workspace = true }
 vt100 = { workspace = true }
-
-
+vte = { workspace = true }
