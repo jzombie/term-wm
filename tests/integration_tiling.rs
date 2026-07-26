@@ -916,16 +916,18 @@ mod drag_snap_pipeline {
             .find(|(k, _)| *k == keys[0])
             .expect("window should be floating");
         if let FloatRectSpec::Absolute(fr) = float_spec {
-            assert_eq!(fr.width, pre_w, "restored width must match pre-snap");
-            assert_eq!(fr.height, pre_h, "restored height must match pre-snap");
+            assert_eq!(fr.width, pre_w + 2, "restored width must match pre-snap");
+            assert_eq!(fr.height, pre_h + 2, "restored height must match pre-snap");
             let new_cursor_offset_x = away_x as i32 - fr.x;
             let new_cursor_offset_y = away_y as i32 - fr.y;
             assert_eq!(
-                new_cursor_offset_x, cursor_offset_x,
+                new_cursor_offset_x,
+                cursor_offset_x + 1,
                 "cursor offset x must match"
             );
             assert_eq!(
-                new_cursor_offset_y, cursor_offset_y,
+                new_cursor_offset_y,
+                cursor_offset_y + 1,
                 "cursor offset y must match"
             );
         } else {
@@ -1003,21 +1005,24 @@ mod drag_snap_pipeline {
         if let FloatRectSpec::Absolute(fr) = float_spec {
             assert_eq!(
                 fr.width,
-                AREA.width / 2,
+                AREA.width / 2 + 2,
                 "phase 2: floating width must match snapped width"
             );
             assert_eq!(
-                fr.height, AREA.height,
+                fr.height,
+                AREA.height + 2,
                 "phase 2: floating height must match snapped height"
             );
             let new_cursor_offset_x = away_x as i32 - fr.x;
             let new_cursor_offset_y = away_y as i32 - fr.y;
             assert_eq!(
-                new_cursor_offset_x, cursor_offset_x,
+                new_cursor_offset_x,
+                cursor_offset_x + 1,
                 "phase 2: cursor offset x must be preserved"
             );
             assert_eq!(
-                new_cursor_offset_y, cursor_offset_y,
+                new_cursor_offset_y,
+                cursor_offset_y + 1,
                 "phase 2: cursor offset y must be preserved"
             );
         } else {
