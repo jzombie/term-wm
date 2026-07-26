@@ -84,13 +84,13 @@ pub enum TermWmAction {
     // WM-level actions from WmMenuAction
     CloseMenu,
     Help,
-    CloseWindow,
+    CloseWindow(WindowKey),
     ToggleMouseCapture,
     ToggleClipboardMode,
     ToggleWindowSelection,
-    MinimizeWindow,
-    MaximizeWindow,
-    ToggleDirectMode,
+    MinimizeWindow(WindowKey),
+    MaximizeWindow(WindowKey),
+    ToggleDirectMode(WindowKey),
     ToggleMonocle,
     ToggleTiling,
     ToggleDebugWindow,
@@ -204,13 +204,13 @@ impl TermWmAction {
             | TermWmAction::HintToggle
             | TermWmAction::CloseMenu
             | TermWmAction::Help
-            | TermWmAction::CloseWindow
+            | TermWmAction::CloseWindow(_)
             | TermWmAction::ToggleMouseCapture
             | TermWmAction::ToggleClipboardMode
             | TermWmAction::ToggleWindowSelection
-            | TermWmAction::MinimizeWindow
-            | TermWmAction::MaximizeWindow
-            | TermWmAction::ToggleDirectMode
+            | TermWmAction::MinimizeWindow(_)
+            | TermWmAction::MaximizeWindow(_)
+            | TermWmAction::ToggleDirectMode(_)
             | TermWmAction::ToggleMonocle
             | TermWmAction::ToggleTiling
             | TermWmAction::ToggleDebugWindow
@@ -316,13 +316,13 @@ impl fmt::Display for TermWmAction {
             TermWmAction::ScrollToBottom => "Scroll view to bottom",
             TermWmAction::CloseMenu => "Close menu",
             TermWmAction::Help => "Help",
-            TermWmAction::CloseWindow => "Close window",
+            TermWmAction::CloseWindow(_) => "Close window",
             TermWmAction::ToggleMouseCapture => "Toggle mouse capture",
             TermWmAction::ToggleClipboardMode => "Toggle clipboard mode",
             TermWmAction::ToggleWindowSelection => "Toggle window selection",
-            TermWmAction::MinimizeWindow => "Minimize window",
-            TermWmAction::MaximizeWindow => "Maximize window",
-            TermWmAction::ToggleDirectMode => "Toggle direct mode",
+            TermWmAction::MinimizeWindow(_) => "Minimize window",
+            TermWmAction::MaximizeWindow(_) => "Maximize window",
+            TermWmAction::ToggleDirectMode(_) => "Toggle direct mode",
             TermWmAction::ToggleMonocle => "Toggle monocle mode",
             TermWmAction::ToggleTiling => "Toggle tiling",
             TermWmAction::ToggleDebugWindow => "Toggle debug window",

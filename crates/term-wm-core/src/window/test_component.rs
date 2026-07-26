@@ -74,6 +74,9 @@ impl Component<TermWmAction> for ActionRecorder {
     fn take_pending_title(&mut self) -> Option<String> {
         None
     }
+    fn take_alternate_screen_transition(&mut self) -> Option<bool> {
+        None
+    }
     fn set_selection_enabled(&mut self, _enabled: bool) {}
     fn paste(&mut self, _text: &str) -> bool {
         false
@@ -188,6 +191,9 @@ impl Component<TermWmAction> for KeyRecorder {
     fn take_pending_title(&mut self) -> Option<String> {
         None
     }
+    fn take_alternate_screen_transition(&mut self) -> Option<bool> {
+        None
+    }
     fn set_selection_enabled(&mut self, _enabled: bool) {}
     fn paste(&mut self, _text: &str) -> bool {
         false
@@ -297,6 +303,9 @@ impl Component<TermWmAction> for SelComponent {
         0
     }
     fn take_pending_title(&mut self) -> Option<String> {
+        None
+    }
+    fn take_alternate_screen_transition(&mut self) -> Option<bool> {
         None
     }
     fn set_selection_enabled(&mut self, enabled: bool) {

@@ -629,17 +629,20 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     pub fn set_direct_mode(&mut self, key: WindowKey, value: bool) {
         let title = self.window_title(key);
-        if let Some(w) = self.windows.get_mut(key) {
+        if let Some(w) = self.windows.get_mut(key)
+            && w.direct_mode != value
+        {
             w.direct_mode = value;
             if value && let Some(c) = self.components.get_mut(w.component_key) {
                 c.clear_selection();
             }
+            self.mark_layout_dirty();
+            let status = if value { "enabled" } else { "disabled" };
+            self.push_notification(
+                format!("Direct mode {} for {}", status, title),
+                Duration::from_secs(3),
+            );
         }
-        let status = if value { "enabled" } else { "disabled" };
-        self.push_notification(
-            format!("Direct mode {status} for {title}"),
-            Duration::from_secs(3),
-        );
     }
 
     pub fn toggle_direct_mode(&mut self, key: WindowKey) {
@@ -734,10 +737,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 TermWmAction::ToggleSystemPanel,
                 TermWmAction::Help,
                 TermWmAction::ExitUi,
-                TermWmAction::MaximizeWindow,
-                TermWmAction::MinimizeWindow,
-                TermWmAction::CloseWindow,
-                TermWmAction::ToggleDirectMode,
                 TermWmAction::ToggleMonocle,
                 TermWmAction::ToggleTiling,
             ]
@@ -2189,6 +2188,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             .and_then(|c| c.take_pending_title())
     }
 
+    /// Returns `Some(bool)` when the pane's alternate screen state transitions.
+    pub fn take_alternate_screen_transition(&mut self, key: WindowKey) -> Option<bool> {
+        self.component_for_key_mut(key)
+            .and_then(|c| c.take_alternate_screen_transition())
+    }
+
     pub fn overlay_for_key_mut(&mut self, key: OverlayKey) -> Option<&mut O> {
         self.overlays.get_mut(key)
     }
@@ -2452,20 +2457,19 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// the focused window fills the screen). All window-specific buttons are
     /// excluded when there is no focused window.
     pub fn window_management_buttons(&self) -> Vec<WmButton> {
-        let has_focused = self.window(self.focused_window()).is_some();
-        if !has_focused {
+        let focused = self.focused_window();
+        if !self.windows.contains_key(focused) {
             return Vec::new();
         }
+        let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized);
         let mut btns = vec![WmButton {
-            action: TermWmAction::CloseWindow,
+            action: TermWmAction::CloseWindow(focused),
             label: "Close Window",
             symbol: "X",
         }];
         if !self.is_monocle() {
-            let focused = self.focused_window();
-            let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized);
             btns.push(WmButton {
-                action: TermWmAction::MaximizeWindow,
+                action: TermWmAction::MaximizeWindow(focused),
                 label: if is_maxed {
                     "Restore Window"
                 } else {
@@ -2474,16 +2478,11 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 symbol: if is_maxed { "─" } else { "▢" },
             });
             btns.push(WmButton {
-                action: TermWmAction::MinimizeWindow,
+                action: TermWmAction::MinimizeWindow(focused),
                 label: "Minimize Window",
                 symbol: "_",
             });
         }
-        btns.push(WmButton {
-            action: TermWmAction::ToggleDirectMode,
-            label: "Toggle Direct Mode",
-            symbol: "D",
-        });
         btns
     }
 
@@ -2579,8 +2578,20 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             },
         ];
 
-        let has_focused_window = self.window_count() > 0;
-        if has_focused_window {
+        let focused = self.focused_window();
+        let has_active = self.windows.contains_key(focused);
+
+        items.push(MenuItem {
+            label: {
+                let on = has_active && self.direct_mode(focused);
+                format!("Toggle Direct Mode: {}", if on { "On" } else { "Off" }).into()
+            },
+            icon: Some("D"),
+            action: crate::actions::TermWmAction::ToggleDirectMode(focused),
+            disabled: !has_active,
+        });
+
+        if has_active {
             // Window management buttons from centralized list
             for btn in self.window_management_buttons() {
                 items.push(MenuItem {
@@ -2591,7 +2602,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 });
             }
             // Switch-to navigation for all windows
-            let focused = *self.focus.current();
             for (key, title) in self.window_titles() {
                 items.push(MenuItem {
                     label: format!("Switch to: {}", title).into(),
@@ -2601,6 +2611,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 });
             }
         }
+
         items
     }
 }
@@ -2672,7 +2683,7 @@ fn map_layout_node(node: &LayoutNode<WindowKey>) -> LayoutNode<WindowKey> {
             weights: weights.clone(),
             resizable: *resizable,
         },
-        LayoutNode::Void(id) => LayoutNode::Void(*id),
+        LayoutNode::Void(key) => LayoutNode::Void(*key),
     }
 }
 
@@ -6774,5 +6785,131 @@ mod tests {
             r0.x,
             r0.width,
         );
+    }
+
+    #[test]
+    fn set_direct_mode_marks_layout_dirty_on_change() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.clear_layout_dirty();
+        assert!(!wm.layout_dirty(), "cleared after setup");
+        wm.set_direct_mode(keys[0], true);
+        assert!(wm.layout_dirty(), "marked dirty on enable");
+        wm.clear_layout_dirty();
+        wm.set_direct_mode(keys[0], false);
+        assert!(wm.layout_dirty(), "marked dirty on disable");
+    }
+
+    #[test]
+    fn set_direct_mode_skips_notification_when_unchanged() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.clear_layout_dirty();
+        wm.set_direct_mode(keys[0], true);
+        assert!(
+            !wm.notifications().is_empty(),
+            "notification pushed on enable"
+        );
+        let count_before = wm.notifications().len();
+        wm.set_direct_mode(keys[0], true);
+        assert_eq!(
+            wm.notifications().len(),
+            count_before,
+            "no duplicate notification when unchanged"
+        );
+    }
+
+    #[test]
+    fn set_direct_mode_pushes_enabled_notification() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.clear_layout_dirty();
+        wm.set_direct_mode(keys[0], true);
+        assert!(!wm.notifications().is_empty(), "notification pushed");
+    }
+
+    #[test]
+    fn set_direct_mode_pushes_disabled_notification() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.clear_layout_dirty();
+        wm.set_direct_mode(keys[0], true);
+        // Clear notification queue: create a new one
+        wm.notification_queue = Default::default();
+        wm.set_direct_mode(keys[0], false);
+        assert!(
+            !wm.notifications().is_empty(),
+            "notification pushed on disable"
+        );
+    }
+
+    #[test]
+    fn set_direct_mode_invalid_key_is_noop() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.clear_layout_dirty();
+        let bogus = WindowKey::default();
+        assert!(!wm.layout_dirty(), "initially not dirty");
+        wm.set_direct_mode(bogus, true);
+        assert!(!wm.layout_dirty(), "no-op: layout not dirty");
+        assert!(wm.notifications().is_empty(), "no-op: no notification");
+    }
+
+    #[test]
+    fn take_alternate_screen_transition_no_component() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let bogus = WindowKey::default();
+        let result = wm.take_alternate_screen_transition(bogus);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn take_alternate_screen_transition_delegates() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        // ActionRecorder returns None by default
+        let result = wm.take_alternate_screen_transition(keys[0]);
+        assert_eq!(result, None);
     }
 }

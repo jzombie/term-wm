@@ -295,7 +295,14 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for T
             .into_iter()
             .filter(|item| {
                 supported.contains(&item.action)
-                    || matches!(item.action, TermWmAction::FocusWindow(_))
+                    || matches!(
+                        item.action,
+                        TermWmAction::FocusWindow(_)
+                            | TermWmAction::MaximizeWindow(_)
+                            | TermWmAction::MinimizeWindow(_)
+                            | TermWmAction::CloseWindow(_)
+                            | TermWmAction::ToggleDirectMode(_)
+                    )
             })
             .collect();
         palette.set_items(items);
