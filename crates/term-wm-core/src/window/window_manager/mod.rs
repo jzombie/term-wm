@@ -1341,23 +1341,40 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                                 // If the window is not yet floating, this is the
                                 // first Drag event that breached the kinetic
                                 // deadzone — install the floating rect now.
-                                // start_x/start_y/initial_x/initial_y were
-                                // already set at Press time and must NOT be
-                                // touched here — they anchor the cursor-to-
-                                // window offset for move_floating.
+                                // Borders will render (floating mode has
+                                // show_borders: true), so expand the frame
+                                // rect so the content area stays in the same
+                                // visual position as the tiled frame.
                                 if !self.is_window_floating(*key) {
                                     let rect = self.visible_region_for_key(*key);
+
+                                    let left_border = i32::from(crate::chrome::LEFT_BORDER_WIDTH);
+                                    let top_border = i32::from(crate::chrome::TOP_BORDER_HEIGHT);
+
+                                    let expanded = crate::window::FloatRect {
+                                        x: rect.x - left_border,
+                                        y: rect.y - top_border,
+                                        width: rect.width.saturating_add(
+                                            crate::chrome::LEFT_BORDER_WIDTH
+                                                + crate::chrome::RIGHT_BORDER_WIDTH,
+                                        ),
+                                        height: rect.height.saturating_add(
+                                            crate::chrome::TOP_BORDER_HEIGHT
+                                                + crate::chrome::BOTTOM_BORDER_HEIGHT,
+                                        ),
+                                    };
+
                                     self.set_floating_rect(
                                         *key,
-                                        Some(crate::window::FloatRectSpec::Absolute(
-                                            crate::window::FloatRect {
-                                                x: rect.x,
-                                                y: rect.y,
-                                                width: rect.width.max(1),
-                                                height: rect.height.max(1),
-                                            },
-                                        )),
+                                        Some(crate::window::FloatRectSpec::Absolute(expanded)),
                                     );
+
+                                    // Synchronize the in-flight drag anchor
+                                    // so the next MouseMove doesn't snap back
+                                    // to the old unexpanded origin.
+                                    *initial_x = expanded.x;
+                                    *initial_y = expanded.y;
+
                                     self.bring_to_front_key(*key);
                                 }
 
@@ -4442,8 +4459,26 @@ mod tests {
             crate::window::FloatRectSpec::Absolute(fr) => fr,
             _ => panic!("expected absolute rect"),
         };
-        assert_eq!(moved.x, start_rect.x + 5);
-        assert_eq!(moved.y, start_rect.y + 1);
+        assert_eq!(moved.x, start_rect.x + 4);
+        assert_eq!(moved.y, start_rect.y);
+
+        // Second drag tick — confirms the anchor sync didn't snap back.
+        let drag2_col = drag_col.saturating_add(3);
+        let drag2_row = drag_row.saturating_add(2);
+        let drag2 = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: drag2_col,
+            row: drag2_row,
+            modifiers: KeyModifiers::NONE,
+        });
+        let wm_drag2 = crate::events::core_event_to_wm(&drag2).unwrap();
+        assert!(wm.dispatch_mouse(&wm_drag2).is_consumed());
+        let moved2 = match wm.floating_rect(debug_key).expect("floating rect present") {
+            crate::window::FloatRectSpec::Absolute(fr) => fr,
+            _ => panic!("expected absolute rect"),
+        };
+        assert_eq!(moved2.x, start_rect.x + 7);
+        assert_eq!(moved2.y, start_rect.y + 2);
 
         let up = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Release(MouseButton::Left),
