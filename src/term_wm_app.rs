@@ -204,18 +204,14 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
         sv.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
         let key = self
             .wm
-            .open_window(AppRootComponent::Core(
-                CoreWmComponent::Terminal(sv),
-            ));
+            .open_window(AppRootComponent::Core(CoreWmComponent::Terminal(sv)));
         self.wm.set_window_tracker(key, tracker);
 
         // Attach status callback AFTER open_window so the closure captures
         // the known WindowKey directly — no OnceLock, no race condition.
         let tx = self.pty_wakeup_tx.clone();
         match self.wm.component_for_key_mut(key) {
-            Some(AppRootComponent::Core(CoreWmComponent::Terminal(
-                scroll_view,
-            ))) => {
+            Some(AppRootComponent::Core(CoreWmComponent::Terminal(scroll_view))) => {
                 tracing::info!("[STAGE 2] Setting status callback for key {:?}", key);
                 scroll_view
                     .content
@@ -330,7 +326,9 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
     }
 
     /// Borrow the WindowManager for configuration or direct access.
-    pub fn wm(&mut self) -> &mut WindowManager<AppRootComponent<C>, LayerComponent, OverlayComponent> {
+    pub fn wm(
+        &mut self,
+    ) -> &mut WindowManager<AppRootComponent<C>, LayerComponent, OverlayComponent> {
         &mut self.wm
     }
 
@@ -415,8 +413,8 @@ impl TermWmApp<NoopComponent> {
     }
 }
 
-impl<C: Component<TermWmAction>> WindowManagerHost<AppRootComponent<C>, LayerComponent, OverlayComponent>
-    for TermWmApp<C>
+impl<C: Component<TermWmAction>>
+    WindowManagerHost<AppRootComponent<C>, LayerComponent, OverlayComponent> for TermWmApp<C>
 {
     fn wm(&mut self) -> &mut WindowManager<AppRootComponent<C>, LayerComponent, OverlayComponent> {
         &mut self.wm

@@ -14,7 +14,8 @@ fn main() -> io::Result<()> {
         paths.push(paths[0].clone());
     }
 
-    let mut app: TermWmApp<SvgImageComponent> = TermWmApp::new_custom(AppContext::new("example", "0.0.0"));
+    let mut app: TermWmApp<SvgImageComponent> =
+        TermWmApp::new_custom(AppContext::new("example", "0.0.0"));
 
     let mut left = SvgImageComponent::new();
     left.set_keep_aspect(true);
