@@ -161,12 +161,12 @@ impl Window {
     // ── Chrome Presentation Evaluation ───────────────────────────────────────
 
     /// Evaluates local window chrome rules based on window mode.
-    pub fn borders_enabled(&self) -> bool {
-        self.active_chrome_rules().show_borders
+    pub fn borders_enabled(&self, mode: WindowMode) -> bool {
+        self.active_chrome_rules(mode).show_borders
     }
 
-    pub fn header_enabled(&self) -> bool {
-        self.active_chrome_rules().show_header
+    pub fn header_enabled(&self, mode: WindowMode) -> bool {
+        self.active_chrome_rules(mode).show_header
     }
 
     pub fn chrome_config(&self) -> &ModeChromeConfig {
@@ -175,13 +175,12 @@ impl Window {
 
     // ── Rule Resolution ──────────────────────────────────────────────────────
 
-    fn active_chrome_rules(&self) -> &ChromeRules {
-        if self.is_maximized {
-            &self.chrome_config.maximized
-        } else if self.is_floating() {
-            &self.chrome_config.floating
-        } else {
-            &self.chrome_config.tiled
+    pub fn active_chrome_rules(&self, mode: WindowMode) -> &ChromeRules {
+        match mode {
+            WindowMode::Tiled => &self.chrome_config.tiled,
+            WindowMode::Floating => &self.chrome_config.floating,
+            WindowMode::Monocle => &self.chrome_config.monocle,
+            WindowMode::Maximized => &self.chrome_config.maximized,
         }
     }
 }
