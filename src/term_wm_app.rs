@@ -1,35 +1,35 @@
 use std::io;
 use std::sync::{Arc, OnceLock};
 
-use crossbeam_channel::{bounded, Sender};
+use crossbeam_channel::{Sender, bounded};
 
 use term_wm_console::console_event_source::ConsoleEventSource;
 use term_wm_console::console_render_target::ConsoleRenderTarget;
 use term_wm_console::draw_plan_renderer::DrawPlanRenderer;
 use term_wm_core::actions::TermWmAction;
 use term_wm_core::app_context::AppContext;
+use term_wm_core::components::Component;
 use term_wm_core::config::AppBuilder;
 use term_wm_core::debug_log::set_global_debug_log;
 use term_wm_core::engine::CoreEngine;
-use term_wm_core::components::Component;
 use term_wm_core::io::{EventSource, RenderTarget};
 use term_wm_core::runner::{WindowManagerHost, run_with_defaults};
 use term_wm_core::window::{ClosePolicy, WindowKey, WindowManager, WindowState};
 use term_wm_core::wm_config::WmConfig;
 
+use term_wm_pty_engine::{DirectInputTracker, Pty, PtyStatus};
 use term_wm_sys_ui_components::WmSystemPanelComponent;
 use term_wm_sys_ui_components::wm_command_palette::WmCommandPaletteComponent;
 use term_wm_sys_ui_components::wm_debug_log::{WmDebugLogComponent, install_panic_hook};
 use term_wm_sys_ui_components::wm_help_overlay::WmHelpOverlayComponent;
-use term_wm_ui_components::confirm_overlay::ConfirmOverlayComponent;
-use term_wm_pty_engine::{DirectInputTracker, Pty, PtyStatus};
-use term_wm_ui_components::scroll_view::{ScrollKeyMode, ScrollViewComponent};
 use term_wm_ui_components::TerminalComponent;
+use term_wm_ui_components::confirm_overlay::ConfirmOverlayComponent;
+use term_wm_ui_components::scroll_view::{ScrollKeyMode, ScrollViewComponent};
 use term_wm_ui_facade::core_component::CoreWmComponent;
 use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 
-use crate::unified_event_source::UnifiedEvent;
 use crate::components::AppRootComponent;
+use crate::unified_event_source::UnifiedEvent;
 
 /// A self-contained window manager app that eliminates dual-trait boilerplate.
 ///
@@ -154,8 +154,7 @@ impl TermWmApp {
         title: impl Into<String>,
     ) -> io::Result<WindowKey> {
         let size = TerminalComponent::default_pty_size();
-        let pty =
-            Pty::spawn_with_scrollback(cmd, size, scrollback).map_err(io::Error::other)?;
+        let pty = Pty::spawn_with_scrollback(cmd, size, scrollback).map_err(io::Error::other)?;
         let tracker: std::sync::Arc<dyn DirectInputTracker> = pty.direct_input_tracker();
         let mut pane = TerminalComponent::from_pane(Box::new(pty));
 
@@ -180,7 +179,9 @@ impl TermWmApp {
             }
             PtyStatus::DirectInputChanged(enabled) => {
                 if let Some(&key) = kh.get() {
-                    let _ = tx.send(crate::unified_event_source::UnifiedEvent::DirectInputChanged(key, enabled));
+                    let _ = tx.send(
+                        crate::unified_event_source::UnifiedEvent::DirectInputChanged(key, enabled),
+                    );
                 }
             }
         })));
@@ -189,7 +190,9 @@ impl TermWmApp {
         sv.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
         let key = self
             .wm
-            .open_window(crate::components::AppRootComponent::Core(CoreWmComponent::Terminal(sv)));
+            .open_window(crate::components::AppRootComponent::Core(
+                CoreWmComponent::Terminal(sv),
+            ));
         let _ = key_holder.set(key);
         self.wm.set_window_tracker(key, tracker);
 

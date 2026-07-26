@@ -7,12 +7,12 @@ use crossbeam_channel::Sender;
 use term_wm::app_context::AppContext;
 use term_wm::components::AppRootComponent;
 use term_wm::config::AppBuilder;
+use term_wm::default_shell_command;
 use term_wm::io::RenderTarget;
 use term_wm::runner::WindowManagerHost;
 use term_wm::term_wm_app::TermWmApp;
 use term_wm::unified_event_source::{UnifiedEvent, UnifiedEventSource};
 use term_wm::wm_config::WmConfig;
-use term_wm::{default_shell_command};
 use term_wm_console::console_render_target::ConsoleRenderTarget;
 use term_wm_core::components::Component;
 use term_wm_ui_facade::{LayerComponent, OverlayComponent};
@@ -170,8 +170,12 @@ impl App {
         command_to_send: Option<String>,
     ) -> io::Result<()> {
         let count = self.inner.wm().window_count() + 1;
-        self.inner
-            .spawn_terminal_window(cmd, PTY_SCROLLBACK_LEN, command_to_send, format!("Shell {}", count))?;
+        self.inner.spawn_terminal_window(
+            cmd,
+            PTY_SCROLLBACK_LEN,
+            command_to_send,
+            format!("Shell {}", count),
+        )?;
         Ok(())
     }
 }
@@ -210,8 +214,12 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
 
     fn wm_new_window(&mut self) -> io::Result<()> {
         let count = self.inner.wm().window_count() + 1;
-        self.inner
-            .spawn_terminal_window(default_shell_command(), PTY_SCROLLBACK_LEN, None, format!("Shell {}", count))?;
+        self.inner.spawn_terminal_window(
+            default_shell_command(),
+            PTY_SCROLLBACK_LEN,
+            None,
+            format!("Shell {}", count),
+        )?;
         Ok(())
     }
 

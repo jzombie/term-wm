@@ -634,13 +634,15 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     /// Set the automatic direct-input tracker for a window.
-    pub fn set_window_tracker(&mut self, key: WindowKey, tracker: std::sync::Arc<dyn term_wm_pty_engine::DirectInputTracker>) {
+    pub fn set_window_tracker(
+        &mut self,
+        key: WindowKey,
+        tracker: std::sync::Arc<dyn term_wm_pty_engine::DirectInputTracker>,
+    ) {
         if let Some(w) = self.windows.get_mut(key) {
             w.set_tracker(tracker);
         }
     }
-
-
 
     pub fn window_title(&self, key: WindowKey) -> String {
         let base = self

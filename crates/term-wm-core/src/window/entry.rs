@@ -270,7 +270,10 @@ impl Window {
 
     // ── Direct Input Tracker ─────────────────────────────────────────────
 
-    pub fn set_tracker(&mut self, tracker: std::sync::Arc<dyn term_wm_pty_engine::DirectInputTracker>) {
+    pub fn set_tracker(
+        &mut self,
+        tracker: std::sync::Arc<dyn term_wm_pty_engine::DirectInputTracker>,
+    ) {
         self.tracker = Some(tracker);
     }
 

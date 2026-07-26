@@ -972,7 +972,6 @@ mod tests {
 
         let _focus_id = app.wm.focused_window();
 
-
         let evt = Event::Key(KeyEvent {
             code: KeyCode::Char('x'),
             modifiers: KeyModifiers::NONE,
