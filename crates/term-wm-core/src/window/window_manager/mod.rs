@@ -623,75 +623,17 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             .unwrap_or_else(|| self.default_cascading_rect(index))
     }
 
-    /// Resolved direct mode: manual override takes precedence; falls back to automatic tracking.
+    /// Direct mode: purely automatic from the PTY state tracker.
+    /// Returns true when the application requires unfiltered input
+    /// (alternate screen, mouse tracking, custom margins).
     pub fn direct_mode(&self, key: WindowKey) -> bool {
-        let manual = self.windows.get(key).and_then(|w| w.direct_mode_override());
-        let auto = self
-            .windows
+        self.windows
             .get(key)
             .map(|w| w.requires_direct_input())
-            .unwrap_or(false);
-        manual.unwrap_or(auto)
-    }
-
-    /// Get the raw manual override state (`None` = automatic).
-    pub fn direct_mode_override(&self, key: WindowKey) -> Option<bool> {
-        self.windows.get(key).and_then(|w| w.direct_mode_override())
-    }
-
-    /// Set the manual override. `None` = automatic, `Some(true)` = force ON, `Some(false)` = force OFF.
-    pub fn set_direct_mode_override(&mut self, key: WindowKey, value: Option<bool>) {
-        let title = self.window_title(key);
-        // Resolve the override before the mutable borrow to satisfy the borrow checker.
-        let resolved = value.unwrap_or_else(|| {
-            self.windows
-                .get(key)
-                .map(|w| w.requires_direct_input())
-                .unwrap_or(false)
-        });
-        if let Some(w) = self.windows.get_mut(key) {
-            let old = w.direct_mode_override();
-            if old != value {
-                w.set_direct_mode_override(value);
-                if resolved && let Some(c) = self.components.get_mut(w.component_key()) {
-                    c.clear_selection();
-                }
-                self.mark_layout_dirty();
-                let status = match value {
-                    Some(true) => "enabled",
-                    Some(false) => "disabled",
-                    None => "auto",
-                };
-                self.push_notification(
-                    format!("Direct mode {} for {}", status, title),
-                    Duration::from_secs(3),
-                );
-            }
-        }
-    }
-
-    /// Convenience: set direct mode override to `Some(value)`.
-    pub fn set_direct_mode(&mut self, key: WindowKey, value: bool) {
-        self.set_direct_mode_override(key, Some(value));
-    }
-
-    /// Toggle the manual override. Always inverts the resolved direct mode.
-    /// Clears the override (`None`) whenever the target state matches `auto_dm`,
-    /// so the system returns to automatic tracking when no explicit override is needed.
-    pub fn toggle_direct_mode(&mut self, key: WindowKey) {
-        let auto_dm = self
-            .windows
-            .get(key)
-            .map(|w| w.requires_direct_input())
-            .unwrap_or(false);
-        let target = !self.direct_mode(key);
-        let new_override = if target == auto_dm { None } else { Some(target) };
-        self.set_direct_mode_override(key, new_override);
+            .unwrap_or(false)
     }
 
     /// Set the automatic direct-input tracker for a window.
-    /// When the tracker's `requires_direct_input()` returns true,
-    /// `component_context_for` auto-enables `direct_mode`.
     pub fn set_window_tracker(&mut self, key: WindowKey, tracker: std::sync::Arc<dyn term_wm_pty_engine::DirectInputTracker>) {
         if let Some(w) = self.windows.get_mut(key) {
             w.set_tracker(tracker);
@@ -1776,15 +1718,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                             EventResult::Ignored
                         }
                     }
-                    crate::chrome::ChromeTarget::ToggleDirectMode(key) => {
-                        if matches!(kind, MouseEventKind::Press(_)) {
-                            self.toggle_direct_mode(*key);
-                            self.last_header_click = None;
-                            EventResult::Consumed
-                        } else {
-                            EventResult::Ignored
-                        }
-                    }
                     crate::chrome::ChromeTarget::SplitHandle(_id) => {
                         self.mouse_capture = Some(MouseCaptureState::LayoutHandle);
                         if let Some(layout) = self.managed_layout.as_mut() {
@@ -2647,16 +2580,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
         let focused = self.focused_window();
         let has_active = self.windows.contains_key(focused);
-
-        items.push(MenuItem {
-            label: {
-                let on = has_active && self.direct_mode(focused);
-                format!("Toggle Direct Mode: {}", if on { "On" } else { "Off" }).into()
-            },
-            icon: Some("D"),
-            action: crate::actions::TermWmAction::ToggleDirectMode(focused),
-            disabled: !has_active,
-        });
 
         if has_active {
             // Window management buttons from centralized list

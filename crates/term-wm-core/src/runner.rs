@@ -450,9 +450,6 @@ where
                             TermWmAction::MaximizeWindow(key) => {
                                 app.wm().toggle_maximize(key);
                             }
-                            TermWmAction::ToggleDirectMode(key) => {
-                                app.wm().toggle_direct_mode(key);
-                            }
                             TermWmAction::ToggleMonocle => {
                                 app.wm().toggle_monocle();
                             }

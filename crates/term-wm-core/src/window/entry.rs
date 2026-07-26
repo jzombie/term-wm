@@ -98,7 +98,6 @@ pub struct Window {
     floating_rect: Option<FloatRectSpec>,
     prev_floating_rect: Option<FloatRectSpec>,
     creation_order: usize,
-    direct_mode_override: Option<bool>,
 
     /// Layout mode flag.
     is_maximized: bool,
@@ -132,7 +131,6 @@ impl Window {
             floating_rect: None,
             prev_floating_rect: None,
             creation_order,
-            direct_mode_override: None,
             is_maximized: false,
             void_id: None,
             chrome_config: ModeChromeConfig::default(),
@@ -210,18 +208,6 @@ impl Window {
 
     pub fn creation_order(&self) -> usize {
         self.creation_order
-    }
-
-    // ── Direct Mode Override ───────────────────────────────────────────────────
-
-    /// Returns the raw manual override: `None` = automatic, `Some(true)` = force ON, `Some(false)` = force OFF.
-    pub fn direct_mode_override(&self) -> Option<bool> {
-        self.direct_mode_override
-    }
-
-    /// Set the manual override. `None` = automatic, `Some(true)` = force ON, `Some(false)` = force OFF.
-    pub fn set_direct_mode_override(&mut self, value: Option<bool>) {
-        self.direct_mode_override = value;
     }
 
     // ── Maximized ─────────────────────────────────────────────────────────────
