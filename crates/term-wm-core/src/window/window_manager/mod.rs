@@ -6,11 +6,21 @@ pub(crate) mod layer_manager;
 mod layout;
 mod overlays;
 
+use std::any::TypeId;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 
 use crate::window::entry;
 use std::time::{Duration, Instant};
+
+/// Marker types for strongly-typed system window and overlay resolution.
+pub mod system_tags {
+    pub struct DebugLog;
+    pub struct SystemPanel;
+    pub struct CommandPalette;
+    pub struct HelpOverlay;
+    pub struct ExitConfirm;
+}
 
 use crate::Rect;
 use crate::events::{Event, MouseEvent, MouseEventKind};
@@ -326,13 +336,9 @@ pub struct WindowManager<
     system_task_handle: Option<TaskHandle<SystemTask>>,
     pub(crate) last_frame_area: LayoutRect,
     overlays: SlotMap<OverlayKey, O>,
-    help_key: Option<OverlayKey>,
-    exit_confirm_key: Option<OverlayKey>,
-    command_palette_key: Option<OverlayKey>,
-    /// Window key for the debug log window (for resolving visibility in menu items).
-    debug_key: Option<WindowKey>,
-    /// Window key for the system panel window (for resolving visibility in menu items).
-    system_panel_key: Option<WindowKey>,
+    /// TypeId-keyed registries for strongly-typed system window/overlay resolution.
+    pub system_windows: HashMap<TypeId, WindowKey>,
+    pub system_overlays: HashMap<TypeId, OverlayKey>,
     /// When `Some(instant)`, tab outline mode is active until that instant.
     pub(crate) tab_outline_until: Option<Instant>,
     /// Tracks last cell coordinate passed to `update_snap_preview` for
@@ -821,17 +827,32 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             notification_queue: NotificationQueue::default(),
             semantic_registry,
             overlays: SlotMap::with_key(),
-            help_key: None,
-            exit_confirm_key: None,
-            command_palette_key: None,
-            debug_key: None,
-            system_panel_key: None,
+            system_windows: HashMap::new(),
+            system_overlays: HashMap::new(),
             tab_outline_until: None,
             last_snap_cursor: None,
             input_mode: crate::actions::WmInputMode::Passthrough,
             fab_enabled: true,
             tap_swap_state: None,
         }
+    }
+
+    // === TypeId registry accessors ===
+
+    pub fn register_system_window<T: 'static>(&mut self, key: WindowKey) {
+        self.system_windows.insert(TypeId::of::<T>(), key);
+    }
+
+    pub fn get_system_window<T: 'static>(&self) -> Option<WindowKey> {
+        self.system_windows.get(&TypeId::of::<T>()).copied()
+    }
+
+    pub fn register_overlay<T: 'static>(&mut self, key: OverlayKey) {
+        self.system_overlays.insert(TypeId::of::<T>(), key);
+    }
+
+    pub fn get_overlay<T: 'static>(&self) -> Option<OverlayKey> {
+        self.system_overlays.get(&TypeId::of::<T>()).copied()
     }
 
     /// Request a clean shutdown on the next idle tick.
@@ -2226,16 +2247,19 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     pub fn open_help_overlay(&mut self, overlay: O) {
-        self.help_key = Some(self.overlays.insert(overlay));
+        let key = self.overlays.insert(overlay);
+        self.register_overlay::<system_tags::HelpOverlay>(key);
         self.input_mode = crate::actions::WmInputMode::Help;
     }
 
     pub fn open_exit_confirm_overlay(&mut self, overlay: O) {
-        self.exit_confirm_key = Some(self.overlays.insert(overlay));
+        let key = self.overlays.insert(overlay);
+        self.register_overlay::<system_tags::ExitConfirm>(key);
     }
 
     pub fn open_command_palette_overlay(&mut self, overlay: O) {
-        self.command_palette_key = Some(self.overlays.insert(overlay));
+        let key = self.overlays.insert(overlay);
+        self.register_overlay::<system_tags::CommandPalette>(key);
         self.input_mode = crate::actions::WmInputMode::CommandPalette;
     }
 
@@ -2247,7 +2271,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     pub fn set_tab_outline_mode(&mut self, duration: Duration) {
         let expires = Instant::now() + duration;
         self.tab_outline_until = Some(expires);
-        if let Some(key) = self.command_palette_key
+        if let Some(key) = self.get_overlay::<system_tags::CommandPalette>()
             && let Some(overlay) = self.overlays.get_mut(key)
         {
             overlay.set_tab_outline(Some(expires));
@@ -2260,7 +2284,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Clear tab outline mode — restore palette/panels to normal.
     pub fn clear_tab_outline(&mut self) {
         self.tab_outline_until = None;
-        if let Some(key) = self.command_palette_key
+        if let Some(key) = self.get_overlay::<system_tags::CommandPalette>()
             && let Some(overlay) = self.overlays.get_mut(key)
         {
             overlay.set_tab_outline(None);
@@ -2588,25 +2612,18 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         btns
     }
 
-    pub fn set_debug_key(&mut self, key: crate::window::WindowKey) {
-        self.debug_key = Some(key);
-    }
-
-    pub fn set_system_panel_key(&mut self, key: crate::window::WindowKey) {
-        self.system_panel_key = Some(key);
-    }
-
     pub fn wm_menu_items(
         &self,
     ) -> Vec<crate::components::MenuDisplayItem<crate::actions::TermWmAction>> {
         use crate::components::{MenuDisplayItem, MenuItem};
+        use crate::window::window_manager::system_tags;
         use crate::window::WindowState;
 
         let debug_log_visible = self
-            .debug_key
+            .get_system_window::<system_tags::DebugLog>()
             .is_some_and(|k| self.window_state(k) == Some(WindowState::Mapped));
         let system_panel_visible = self
-            .system_panel_key
+            .get_system_window::<system_tags::SystemPanel>()
             .is_some_and(|k| self.window_state(k) == Some(WindowState::Mapped));
 
         let mouse_label = if self.mouse_capture_enabled {
