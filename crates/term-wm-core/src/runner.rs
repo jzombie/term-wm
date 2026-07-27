@@ -1583,6 +1583,61 @@ mod tests {
         drain_action_queue(&mut app, &mut queue);
         assert!(queue.is_empty());
     }
+
+    #[test]
+    fn dispatch_action_toggle_mouse_capture_toggles() {
+        use crate::window::WindowManager;
+        struct App { wm: WindowManager<TestComponent> }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> { &mut self.wm }
+        }
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None, crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let initial = wm.mouse_capture_enabled();
+        let k = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(k, crate::window::WindowState::Mapped);
+        let mut app = App { wm };
+        let mut queue = std::collections::VecDeque::new();
+        dispatch_action(&mut app, k, TermWmAction::ToggleMouseCapture, &mut queue);
+        assert_ne!(
+            app.wm.mouse_capture_enabled(),
+            initial,
+            "mouse capture should toggle"
+        );
+    }
+
+    #[test]
+    fn dispatch_action_toggle_clipboard_mode_toggles() {
+        use crate::window::WindowManager;
+        struct App { wm: WindowManager<TestComponent> }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> { &mut self.wm }
+        }
+        let wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None, crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let initial = wm.clipboard_enabled();
+        let mut app = App { wm };
+        let mut queue = std::collections::VecDeque::new();
+        dispatch_action(
+            &mut app,
+            slotmap::DefaultKey::default(),
+            TermWmAction::ToggleClipboardMode,
+            &mut queue,
+        );
+        assert_ne!(
+            app.wm.clipboard_enabled(),
+            initial,
+            "clipboard mode should toggle"
+        );
+    }
 }
 
 #[cfg(test)]
