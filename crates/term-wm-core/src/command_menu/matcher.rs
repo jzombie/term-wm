@@ -25,9 +25,11 @@ impl FuzzyMatch {
         }
     }
 
-    /// Score a list of (name, description, disabled) triples against a query string.
+    /// Score a list of (name, description, searchable_text, disabled) tuples
+    /// against a query string.  `searchable_text` is a precomputed string that
+    /// includes both the display name and icon text so both are fuzzy-matchable.
     /// Returns indices into the input slice, sorted by score descending.
-    pub fn score(&mut self, query: &str, items: &[(String, String, bool)]) -> Vec<usize> {
+    pub fn score(&mut self, query: &str, items: &[(String, String, String, bool)]) -> Vec<usize> {
         if query.is_empty() {
             return (0..items.len()).collect();
         }
@@ -47,13 +49,13 @@ impl FuzzyMatch {
         let mut scored: Vec<(u32, usize)> = items
             .iter()
             .enumerate()
-            .filter_map(|(i, (name, _desc, _disabled))| {
+            .filter_map(|(i, (_name, _desc, searchable_text, _disabled))| {
                 // Clear the buffer before use. Utf32Str::new appends to the
                 // buffer for non-ASCII strings. Without this, the buffer grows
                 // indefinitely until it breaches nucleo's max haystack length
                 // and returns None.
                 self.char_buf.clear();
-                let haystack = Utf32Str::new(name, &mut self.char_buf);
+                let haystack = Utf32Str::new(searchable_text, &mut self.char_buf);
                 let score = pattern.score(haystack, &mut self.matcher);
                 score.map(|s| (s, i))
             })
@@ -125,8 +127,18 @@ mod tests {
     fn fuzzy_empty_query_returns_all() {
         let mut fmatch = FuzzyMatch::new();
         let items = vec![
-            ("New Window".to_string(), String::new(), false),
-            ("Close Window".to_string(), String::new(), false),
+            (
+                "New Window".to_string(),
+                String::new(),
+                "New Window".to_string(),
+                false,
+            ),
+            (
+                "Close Window".to_string(),
+                String::new(),
+                "Close Window".to_string(),
+                false,
+            ),
         ];
         let results = fmatch.score("", &items);
         assert_eq!(results, vec![0, 1]);
@@ -136,8 +148,18 @@ mod tests {
     fn fuzzy_matching_prefix() {
         let mut fmatch = FuzzyMatch::new();
         let items = vec![
-            ("New Window".to_string(), String::new(), false),
-            ("Close Window".to_string(), String::new(), false),
+            (
+                "New Window".to_string(),
+                String::new(),
+                "New Window".to_string(),
+                false,
+            ),
+            (
+                "Close Window".to_string(),
+                String::new(),
+                "Close Window".to_string(),
+                false,
+            ),
         ];
         let results = fmatch.score("new", &items);
         assert_eq!(results.len(), 1);
@@ -148,8 +170,18 @@ mod tests {
     fn fuzzy_no_match_returns_empty() {
         let mut fmatch = FuzzyMatch::new();
         let items = vec![
-            ("New Window".to_string(), String::new(), false),
-            ("Close Window".to_string(), String::new(), false),
+            (
+                "New Window".to_string(),
+                String::new(),
+                "New Window".to_string(),
+                false,
+            ),
+            (
+                "Close Window".to_string(),
+                String::new(),
+                "Close Window".to_string(),
+                false,
+            ),
         ];
         let results = fmatch.score("zzzzz", &items);
         assert!(results.is_empty());
@@ -162,8 +194,18 @@ mod tests {
     fn fuzzy_multiple_successive_scores() {
         let mut fmatch = FuzzyMatch::new();
         let items = vec![
-            ("New Window".to_string(), String::new(), false),
-            ("Close Window".to_string(), String::new(), false),
+            (
+                "New Window".to_string(),
+                String::new(),
+                "New Window".to_string(),
+                false,
+            ),
+            (
+                "Close Window".to_string(),
+                String::new(),
+                "Close Window".to_string(),
+                false,
+            ),
         ];
 
         // Empty query → all items
@@ -196,8 +238,18 @@ mod tests {
     fn fuzzy_case_and_multi_char() {
         let mut fmatch = FuzzyMatch::new();
         let items = vec![
-            ("Resume".to_string(), String::new(), false),
-            ("Exit UI".to_string(), String::new(), false),
+            (
+                "Resume".to_string(),
+                String::new(),
+                "Resume".to_string(),
+                false,
+            ),
+            (
+                "Exit UI".to_string(),
+                String::new(),
+                "Exit UI".to_string(),
+                false,
+            ),
         ];
 
         // All queries are case-insensitive with CaseMatching::Ignore
@@ -224,6 +276,62 @@ mod tests {
         let r5 = fmatch.score("Res", &items);
         assert_eq!(r5.len(), 1, "'Res' should match 'Resume'");
         assert_eq!(r5[0], 0);
+    }
+
+    #[test]
+    fn test_icon_searchability() {
+        let mut matcher = FuzzyMatch::new();
+
+        let items = vec![
+            (
+                "Toggle System Panel".into(),
+                "Show or hide the system panel".into(),
+                "* Toggle System Panel".into(),
+                false,
+            ),
+            (
+                "New Tab".into(),
+                "Open a new terminal tab".into(),
+                "+ New Tab".into(),
+                false,
+            ),
+            (
+                "Close Tab".into(),
+                "Close the current tab".into(),
+                "x Close Tab".into(),
+                false,
+            ),
+            (
+                "No Icon Command".into(),
+                "A command without an icon".into(),
+                "No Icon Command".into(),
+                false,
+            ),
+        ];
+
+        let results = matcher.score("*", &items);
+        assert_eq!(results.len(), 1, "'*' should match exactly one item");
+        assert_eq!(results[0], 0, "'*' should match 'Toggle System Panel'");
+
+        let results = matcher.score("+", &items);
+        assert_eq!(results.len(), 1, "'+' should match exactly one item");
+        assert_eq!(results[0], 1, "'+' should match 'New Tab'");
+
+        let results = matcher.score("* sys", &items);
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0], 0,
+            "combined '* sys' should match 'Toggle System Panel'"
+        );
+
+        let results = matcher.score("Tab", &items);
+        assert_eq!(
+            results.len(),
+            2,
+            "'Tab' should match both commands containing 'Tab'"
+        );
+        assert!(results.contains(&1));
+        assert!(results.contains(&2));
     }
 
     #[test]
