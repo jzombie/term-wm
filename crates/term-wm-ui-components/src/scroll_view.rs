@@ -882,9 +882,17 @@ mod tests {
         assert_eq!(r1, Some(0));
         assert!(drag.dragging);
         // Drag to the very bottom cell of the track (mouse_rel = SB_H - 1)
-        let drag_evt = mouse_event(MouseEventKind::Drag(MouseButton::Left), 79, (SB_H - 1) as u16);
+        let drag_evt = mouse_event(
+            MouseEventKind::Drag(MouseButton::Left),
+            79,
+            (SB_H - 1) as u16,
+        );
         let r2 = drag.handle_mouse(&drag_evt, area, total, view, 0, ScrollbarAxis::Vertical);
-        assert_eq!(r2, Some(max_offset), "dragging to bottom should reach max_offset={max_offset}");
+        assert_eq!(
+            r2,
+            Some(max_offset),
+            "dragging to bottom should reach max_offset={max_offset}"
+        );
     }
 
     #[test]
