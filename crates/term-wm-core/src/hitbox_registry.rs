@@ -208,6 +208,27 @@ impl HitboxRegistry {
             .map(|entry| (entry.id, entry.owner, entry.area))
     }
 
+    /// Like `hit_test`, but accepts a filter predicate and checks overlay
+    /// then standard entries. Returns the first entry for which the predicate
+    /// returns `true`.
+    pub fn hit_test_filtered(
+        &self,
+        position: MousePosition,
+        filter: impl Fn(&ComponentOwner) -> bool,
+    ) -> Option<(HitboxId, ComponentOwner, LayoutRect)> {
+        for entry in self.overlay_entries.iter().rev() {
+            if position.is_inside(entry.area) && filter(&entry.owner) {
+                return Some((entry.id, entry.owner, entry.area));
+            }
+        }
+        for entry in self.entries.iter().rev() {
+            if position.is_inside(entry.area) && filter(&entry.owner) {
+                return Some((entry.id, entry.owner, entry.area));
+            }
+        }
+        None
+    }
+
     /// Returns the number of registered entries (for diagnostics / metrics).
     pub fn len(&self) -> usize {
         self.entries.len() + self.overlay_entries.len()

@@ -2299,6 +2299,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// from clicking a window title tab), or `None` if the click missed all panels
     /// or the panel ignored it.
     pub fn panel_hit_test(&mut self, col: u16, row: u16, event: &Event) -> Option<TermWmAction> {
+        use crate::hitbox_registry::ComponentOwner;
         use crate::mouse_coord::{CoordSpace, MousePosition};
 
         let position = MousePosition {
@@ -2306,10 +2307,18 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             row: row as i16,
             space: CoordSpace::Screen,
         };
-        let (hitbox_id, owner, hit_rect) = self.hitbox_registry.hit_test(position)?;
+
+        // Filter for Layer/Overlay hitboxes only — ignores full-screen window
+        // hitboxes underneath (monocle mode) and the palette itself.
+        let (hitbox_id, owner, hit_rect) = self
+            .hitbox_registry
+            .hit_test_filtered(position, |o| match o {
+                ComponentOwner::Layer(_) => true,
+                ComponentOwner::Overlay(key) => Some(*key) != self.command_palette_key,
+                _ => false,
+            })?;
 
         match owner {
-            // Panel layers (TopPanel, BottomPanel, FAB) — pure UI chrome, safe.
             ComponentOwner::Layer(layer_id) => {
                 let ctx = self
                     .component_context(false)
@@ -2322,16 +2331,14 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                     return Some(action);
                 }
             }
-            // Non-palette overlays (floating popovers, etc.)
-            ComponentOwner::Overlay(key) if Some(key) != self.command_palette_key => {
-                    if let Some(overlay) = self.overlays.get_mut(key) {
-                        let ctx = ComponentContext::new(true).with_screen_area(hit_rect);
-                        if let EventResult::Action(action) = overlay.handle_events(event, &ctx) {
-                            return Some(action);
-                        }
+            ComponentOwner::Overlay(key) => {
+                if let Some(overlay) = self.overlays.get_mut(key) {
+                    let ctx = ComponentContext::new(true).with_screen_area(hit_rect);
+                    if let EventResult::Action(action) = overlay.handle_events(event, &ctx) {
+                        return Some(action);
                     }
+                }
             }
-            // Window content, chrome, command palette — skip (PTY safety).
             _ => {}
         }
 
