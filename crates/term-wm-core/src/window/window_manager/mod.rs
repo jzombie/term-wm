@@ -2628,7 +2628,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             },
             MenuItem {
                 label: "Toggle System Panel".into(),
-                icon: Some("⚙"),
+                icon: Some("*"),
                 action: crate::actions::TermWmAction::ToggleSystemPanel,
                 disabled: false,
             },
