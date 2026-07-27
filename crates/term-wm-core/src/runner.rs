@@ -425,13 +425,24 @@ where
                         app.wm().close_help_overlay();
                         let mut actions = std::collections::VecDeque::new();
                         if !app.wm().handle_outside_click(
-                            mouse_evt.column, mouse_evt.row, &evt, &mut actions, stale_key,
+                            mouse_evt.column,
+                            mouse_evt.row,
+                            &evt,
+                            &mut actions,
+                            stale_key,
                         ) {
-                            app.wm().handle_mouse_focus_click(mouse_evt.column, mouse_evt.row);
+                            app.wm()
+                                .handle_mouse_focus_click(mouse_evt.column, mouse_evt.row);
                         }
                         drain_action_queue(app, &mut actions);
                         update_selection_snapshot(app);
-                        return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
+                        return flush_state_changes(
+                            app,
+                            driver,
+                            ControlFlow::Continue,
+                            false,
+                            None,
+                        );
                     }
                     let _ = app.wm().handle_help_event(&evt);
                     update_selection_snapshot(app);
@@ -481,7 +492,6 @@ where
                         && !palette_bounds.contains(mouse_evt.column, mouse_evt.row)
                     {
                         let palette_key = app.wm().command_palette_key();
-                        app.wm().close_command_palette();
                         let mut actions = std::collections::VecDeque::new();
                         if !app.wm().handle_outside_click(
                             mouse_evt.column,
@@ -494,7 +504,12 @@ where
                             app.wm()
                                 .handle_mouse_focus_click(mouse_evt.column, mouse_evt.row);
                         }
+                        // Process panel/overlay actions BEFORE closing the palette
+                        // so the OpenCommandPalette toggle behavior works correctly:
+                        // action checks command_menu_visible() → true → closes palette.
                         drain_action_queue(app, &mut actions);
+                        // Close palette (no-op if already closed by the action above)
+                        app.wm().close_command_palette();
                         update_selection_snapshot(app);
                         return flush_state_changes(
                             app,
