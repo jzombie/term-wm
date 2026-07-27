@@ -206,20 +206,18 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Evaluates the dominant [`WindowMode`] for a given window to resolve chrome rules.
     ///
     /// ### Precedence Hierarchy
-    /// 1. **`Maximized`**: User explicitly expanded a single window to full screen.
-    /// 2. **`Floating`**: Modals, popups, and floating utility dialogs must maintain
-    ///    their floating chrome rules (e.g., borders/headers) even if the active
-    ///    workspace layout is currently set to Monocle mode.
-    /// 3. **`Monocle`**: Workspace-wide layout mode where the active window takes full
-    ///    content area and omits tiled borders.
-    /// 4. **`Tiled`**: Default fallthrough state for managed windows in a standard layout tree.
+    /// 1. **`Maximized`**: Local window override — user explicitly expanded this window.
+    /// 2. **`Monocle`**: Global layout constraint — workspace-wide mode overrides
+    ///    per-window floating chrome when active.
+    /// 3. **`Floating`**: Local window override — user dragged window out of layout tree.
+    /// 4. **`Tiled`**: Default fallthrough for managed windows in the layout tree.
     pub fn window_mode(&self, w: &Window) -> WindowMode {
         if w.is_maximized() {
             WindowMode::Maximized
-        } else if w.is_floating() {
-            WindowMode::Floating
         } else if self.is_monocle() {
             WindowMode::Monocle
+        } else if w.is_floating() {
+            WindowMode::Floating
         } else {
             WindowMode::Tiled
         }
