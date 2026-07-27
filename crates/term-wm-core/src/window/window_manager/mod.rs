@@ -6,7 +6,7 @@ pub(crate) mod layer_manager;
 mod layout;
 mod overlays;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 
 use crate::window::entry;
@@ -2291,6 +2291,89 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         }
     }
 
+    /// Handles a mouse click landing outside the command palette upon dismissal.
+    ///
+    /// Inspects ALL hitboxes at (col, row) in Z-order with priority:
+    /// 1. Layer components (TopPanel, BottomPanel, FAB) — dispatch event
+    /// 2. Non-palette Overlays — dispatch event
+    /// 3. Window Chrome (titlebar, buttons, resize handles) — focus window
+    /// 4. Window body — focus window
+    ///
+    /// Returns `true` if any hitbox was handled. Panel/overlay actions are
+    /// pushed to `actions` for the caller to dispatch.
+    pub fn handle_outside_click(
+        &mut self,
+        col: u16,
+        row: u16,
+        event: &Event,
+        actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+        ignored_overlay: Option<OverlayKey>,
+    ) -> bool {
+        use crate::mouse_coord::{CoordSpace, MousePosition};
+
+        let position = MousePosition {
+            column: col as i16,
+            row: row as i16,
+            space: CoordSpace::Screen,
+        };
+        let hits: Vec<_> = self.hitbox_registry.hit_test_all(position).collect();
+
+        for (hitbox_id, owner, hit_rect) in hits {
+            match owner {
+                ComponentOwner::Layer(layer_id) => {
+                    let ctx = self
+                        .component_context(false)
+                        .with_screen_area(hit_rect)
+                        .with_active_hitbox(hitbox_id);
+                    if let Some(layer_comp) = self.layer_manager.get_mut(layer_id) {
+                        match layer_comp.handle_events(event, &ctx) {
+                            EventResult::Action(action) => {
+                                actions.push_back((self.focused_window(), action));
+                                return true;
+                            }
+                            EventResult::Consumed => return true,
+                            EventResult::Ignored => {}
+                        }
+                    }
+                }
+                ComponentOwner::Overlay(key) if Some(key) != ignored_overlay => {
+                    if let Some(overlay) = self.overlays.get_mut(key) {
+                        let ctx = ComponentContext::new(true).with_screen_area(hit_rect);
+                        match overlay.handle_events(event, &ctx) {
+                            EventResult::Action(action) => {
+                                actions.push_back((self.focused_window(), action));
+                                return true;
+                            }
+                            EventResult::Consumed => return true,
+                            EventResult::Ignored => {}
+                        }
+                    }
+                }
+                ComponentOwner::Chrome(target) => {
+                    let win_key = match target {
+                        crate::chrome::ChromeTarget::Resize(k, _)
+                        | crate::chrome::ChromeTarget::Drag(k)
+                        | crate::chrome::ChromeTarget::CloseButton(k)
+                        | crate::chrome::ChromeTarget::MaximizeButton(k)
+                        | crate::chrome::ChromeTarget::MinimizeButton(k) => Some(k),
+                        _ => None,
+                    };
+                    if let Some(k) = win_key {
+                        self.focus_app_window(k);
+                        return true;
+                    }
+                }
+                ComponentOwner::Window(key) => {
+                    self.focus_app_window(key);
+                    return true;
+                }
+                _ => {}
+            }
+        }
+
+        false
+    }
+
     /// No-op: chrome hitbox registration is now handled by the console
     /// during the rendering pass. See `render_window_chrome` in
     /// `term-wm-console/src/draw_plan_renderer.rs`.
@@ -2707,6 +2790,7 @@ fn make_keys<L: WmComponent, O: Overlay<TermWmAction>>(
 mod tests {
     use super::*;
     use crate::components::NoopOverlay;
+    use crate::components::NoopWmComponent;
     use crate::events::{KeyModifiers, MouseButton};
     use crate::hitbox_registry::HitboxId;
     use crate::layout::Direction;
@@ -6560,5 +6644,594 @@ mod tests {
         // ActionRecorder returns None by default
         let result = wm.take_alternate_screen_transition(keys[0]);
         assert_eq!(result, None);
+    }
+
+    // ── TestOverlay for command_palette_bounds tests ──────────────────────
+
+    struct TestOverlay {
+        bounds: Option<LayoutRect>,
+    }
+
+    impl Component<TermWmAction> for TestOverlay {
+        fn render(
+            &mut self,
+            _backend: &mut dyn term_wm_render::RenderBackend,
+            _area: LayoutRect,
+            _ctx: &crate::component_context::ComponentContext,
+            _registry: &mut crate::hitbox_registry::HitboxRegistry,
+        ) {
+        }
+        fn update(
+            &mut self,
+            _action: TermWmAction,
+            _ctx: &crate::component_context::ComponentContext,
+            _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+        ) {
+        }
+    }
+
+    impl Overlay<TermWmAction> for TestOverlay {
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+        fn render_area(&self) -> Option<LayoutRect> {
+            self.bounds.filter(|b| b.width > 0 && b.height > 0)
+        }
+    }
+
+    // ── command_palette_bounds tests ──────────────────────────────────────
+
+    #[test]
+    fn command_palette_bounds_returns_none_when_no_key() {
+        let wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        assert_eq!(wm.command_palette_bounds(), None);
+    }
+
+    #[test]
+    fn command_palette_bounds_delegates_to_overlay_render_area() {
+        let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let expected = LayoutRect {
+            x: 10,
+            y: 5,
+            width: 40,
+            height: 10,
+        };
+        let overlay = TestOverlay {
+            bounds: Some(expected),
+        };
+        wm.open_command_palette_overlay(overlay);
+        assert_eq!(wm.command_palette_bounds(), Some(expected));
+    }
+
+    #[test]
+    fn command_palette_bounds_returns_none_for_zero_size() {
+        let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let overlay = TestOverlay {
+            bounds: Some(LayoutRect::default()),
+        };
+        wm.open_command_palette_overlay(overlay);
+        // zero-size is filtered by render_area() → None
+        assert_eq!(wm.command_palette_bounds(), None);
+    }
+
+    #[test]
+    fn command_palette_bounds_returns_none_for_missing_overlay() {
+        let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        // Insert a different overlay but don't set command_palette_key
+        let other = TestOverlay {
+            bounds: Some(LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            }),
+        };
+        wm.overlays.insert(other);
+        assert_eq!(wm.command_palette_bounds(), None);
+    }
+
+    // ── handle_outside_click tests ───────────────────────────────────────
+
+    #[test]
+    fn handle_outside_click_empty_registry_returns_false() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        assert!(!wm.handle_outside_click(5, 5, &event, &mut actions, None));
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn handle_outside_click_window_hitbox_focuses_window() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Window(keys[0]),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        assert!(wm.handle_outside_click(5, 5, &event, &mut actions, None));
+        assert_eq!(*wm.focus.current(), keys[0]);
+    }
+
+    #[test]
+    fn handle_outside_click_chrome_hitbox_focuses_window() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Chrome(crate::chrome::ChromeTarget::Drag(
+                keys[0],
+            )),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 1,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 0,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        assert!(wm.handle_outside_click(5, 0, &event, &mut actions, None));
+        assert_eq!(*wm.focus.current(), keys[0]);
+    }
+
+    #[test]
+    fn handle_outside_click_layer_no_component_returns_false() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Layer(
+                crate::window::window_manager::layer_manager::LayerId(42),
+            ),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        assert!(!wm.handle_outside_click(5, 5, &event, &mut actions, None));
+    }
+
+    #[test]
+    fn handle_outside_click_layer_consumed_returns_true() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        // Insert a layer component at a known layer_id via semantic_registry
+        let layer_id = crate::window::window_manager::layer_manager::LayerId(1);
+        wm.layer_manager.insert(
+            crate::components::NoopWmComponent,
+            crate::window::window_manager::layer_manager::ZPlane::Background,
+        );
+        // LayerManager.insert returns the new LayerId — use it via semantic_registry
+        wm.semantic_registry.insert(
+            crate::window::window_manager::layer_manager::ComponentTag::TopPanel,
+            layer_id,
+        );
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Layer(layer_id),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 1,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 0,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        // NoopWmComponent.handle_events returns Ignored → Layer arm falls through
+        // No other hitbox → returns false
+        assert!(!wm.handle_outside_click(5, 0, &event, &mut actions, None));
+    }
+
+    #[test]
+    fn handle_outside_click_overlay_ignored_by_key() {
+        let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let overlay = TestOverlay { bounds: None };
+        let overlay_key = wm.overlays.insert(overlay);
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Overlay(overlay_key),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        // ignored_overlay matches the overlay key → skipped → false
+        assert!(!wm.handle_outside_click(5, 5, &event, &mut actions, Some(overlay_key)));
+    }
+
+    #[test]
+    fn handle_outside_click_chrome_non_window_skipped() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        // EmptyStatePlaceholder has no WindowKey → should not focus any window
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Chrome(
+                crate::chrome::ChromeTarget::EmptyStatePlaceholder,
+            ),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        // Also register a Window hitbox → Chrome should be checked first
+        let keys = make_keys(&mut wm, 1);
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Window(keys[0]),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        // Chrome(EmptyStatePlaceholder) has no key → skipped. Then Window hitbox found → focuses.
+        assert!(wm.handle_outside_click(5, 5, &event, &mut actions, None));
+        assert_eq!(*wm.focus.current(), keys[0]);
+    }
+
+    // ── overlay key accessor tests ─────────────────────────────────────────
+
+    #[test]
+    fn help_key_returns_none_initially() {
+        let wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        assert_eq!(wm.help_key(), None);
+    }
+
+    #[test]
+    fn command_palette_key_returns_none_initially() {
+        let wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        assert_eq!(wm.command_palette_key(), None);
+    }
+
+    // ── help_overlay_bounds tests ──────────────────────────────────────────
+
+    #[test]
+    fn help_overlay_bounds_returns_none_when_no_key() {
+        let wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        assert_eq!(wm.help_overlay_bounds(), None);
+    }
+
+    #[test]
+    fn help_overlay_bounds_delegates_to_overlay_render_area() {
+        let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let expected = LayoutRect {
+            x: 5,
+            y: 5,
+            width: 40,
+            height: 15,
+        };
+        let overlay = TestOverlay {
+            bounds: Some(expected),
+        };
+        wm.open_help_overlay(overlay);
+        assert_eq!(wm.help_overlay_bounds(), Some(expected));
+    }
+
+    #[test]
+    fn handle_outside_click_layer_action_queued() {
+        let mut wm = WindowManager::<TestComponent, NoopWmComponent,
+            crate::components::NoopOverlay>::with_config(
+            WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")),
+            None, crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let layer_id = wm.layer_manager.insert(
+            crate::components::NoopWmComponent,
+            crate::window::window_manager::layer_manager::ZPlane::Background,
+        );
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Layer(layer_id),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        // NoopWmComponent returns Ignored → no action, returns false
+        assert!(!wm.handle_outside_click(5, 5, &event, &mut actions, None));
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn handle_outside_click_overlay_not_ignored_routes_event() {
+        let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        // Insert overlay with known bounds
+        let overlay = TestOverlay {
+            bounds: Some(LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            }),
+        };
+        let overlay_key = wm.overlays.insert(overlay);
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Overlay(overlay_key),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        // TestOverlay.handle_events falls through to Component::handle_events default
+        // which checks hitbox_id → TestOverlay has None → ignores → returns false
+        assert!(!wm.handle_outside_click(5, 5, &event, &mut actions, None));
+    }
+
+    #[test]
+    fn handle_outside_click_priority_layer_over_window() {
+        let mut wm = WindowManager::<TestComponent, NoopWmComponent,
+            crate::components::NoopOverlay>::with_config(
+            WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")),
+            None, crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        let layer_id = wm.layer_manager.insert(
+            crate::components::NoopWmComponent,
+            crate::window::window_manager::layer_manager::ZPlane::Background,
+        );
+        // Register both at same position → Layer registered after Window → Layer checked first
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Window(keys[0]),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Layer(layer_id),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        // Layer checked first (last-registered in entries, hit_test_all iterates in reverse)
+        // NoopWmComponent returns Ignored → falls through → Window hitbox focuses window
+        assert!(wm.handle_outside_click(5, 5, &event, &mut actions, None));
+        assert_eq!(*wm.focus.current(), keys[0]);
+    }
+
+    #[test]
+    fn handle_outside_click_stacked_overlay_ignores_stale() {
+        let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        // Overlay A (stale, will be ignored)
+        let overlay_a = TestOverlay { bounds: None };
+        let key_a = wm.overlays.insert(overlay_a);
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Overlay(key_a),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        // Overlay B (active, should be found)
+        let overlay_b = TestOverlay { bounds: None };
+        let key_b = wm.overlays.insert(overlay_b);
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Overlay(key_b),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        // Also add a Window hitbox as tertiary fallback
+        let keys = make_keys(&mut wm, 1);
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Window(keys[0]),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        // ignored_overlay = key_a → Overlay A skipped. Overlay B → TestOverlay.handle_events
+        // returns Ignored (no hitbox_id) → falls through to Window → focuses
+        assert!(wm.handle_outside_click(5, 5, &event, &mut actions, Some(key_a)));
+        assert_eq!(*wm.focus.current(), keys[0]);
     }
 }
