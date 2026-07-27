@@ -1638,6 +1638,59 @@ mod tests {
             "clipboard mode should toggle"
         );
     }
+
+    #[test]
+    fn keybinding_barrier_focus_window_drains() {
+        use crate::window::WindowManager;
+        struct App { wm: WindowManager<TestComponent> }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> { &mut self.wm }
+        }
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None, crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        // Create two windows and focus the first
+        let k1 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k2 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(k1, crate::window::WindowState::Mapped);
+        wm.transition_window(k2, crate::window::WindowState::Mapped);
+        wm.focus_window_key(k1);
+        let mut app = App { wm };
+        // Simulate the keybinding barrier: action from handle_command_palette_event
+        let action = TermWmAction::FocusWindow(k2);
+        let key = app.wm.focused_window();
+        let mut actions = std::collections::VecDeque::new();
+        actions.push_back((key, action));
+        drain_action_queue(&mut app, &mut actions);
+        assert_eq!(app.wm.focused_window(), k2, "FocusWindow should switch focus");
+        assert!(actions.is_empty(), "all actions should be drained");
+    }
+
+    #[test]
+    fn keybinding_barrier_send_notification_drains() {
+        use crate::window::WindowManager;
+        struct App { wm: WindowManager<TestComponent> }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> { &mut self.wm }
+        }
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None, crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let k = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(k, crate::window::WindowState::Mapped);
+        let mut app = App { wm };
+        let key = app.wm.focused_window();
+        let mut actions = std::collections::VecDeque::new();
+        actions.push_back((key, TermWmAction::SendNotification("test".into())));
+        drain_action_queue(&mut app, &mut actions);
+        assert!(actions.is_empty(), "notification action should drain without error");
+    }
 }
 
 #[cfg(test)]
