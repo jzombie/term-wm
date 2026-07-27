@@ -1118,7 +1118,7 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
         focused,
         floating,
 
-        hover_pos,
+        hover_pos: _,
         theme,
         wm_buttons,
         borders_enabled,
@@ -1206,7 +1206,6 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
             }
         }
         {
-            let contrast_fg = theme.menu_selected_fg.to_ratatui();
             let buf_w = buffer.area.width as usize;
             let rel_y = header_y as usize - buffer.area.y as usize;
             // Buttons are laid out right-to-left from outer_right
@@ -1221,25 +1220,10 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
                     TermWmAction::MaximizeWindow(..) => theme.accent.to_ratatui(),
                     _ => theme.decorator_header_fg.to_ratatui(),
                 };
-                let is_hovered = hover_pos == Some((bx, header_y));
-                let style = if is_hovered {
-                    let (hover_bg, hover_fg) = match btn.action {
-                        TermWmAction::CloseWindow(..) => (theme.error.to_ratatui(), contrast_fg),
-                        TermWmAction::MinimizeWindow(..) => {
-                            (theme.warning.to_ratatui(), contrast_fg)
-                        }
-                        TermWmAction::MaximizeWindow(..) => {
-                            (theme.accent.to_ratatui(), contrast_fg)
-                        }
-                        _ => (theme.accent_alt.to_ratatui(), contrast_fg),
-                    };
-                    Style::default()
-                        .bg(hover_bg)
-                        .fg(hover_fg)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().bg(header_bg.to_ratatui()).fg(stoplight_fg)
-                };
+                let style = Style::default()
+                    .bg(header_bg.to_ratatui())
+                    .fg(stoplight_fg)
+                    .add_modifier(Modifier::BOLD);
                 cell.set_style(style);
             }
         }
