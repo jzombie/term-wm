@@ -415,6 +415,24 @@ where
                 }
 
                 if app.wm().help_overlay_visible() {
+                    // Spatial check for outside-click dismissal
+                    if let Event::Mouse(mouse_evt) = &evt
+                        && matches!(mouse_evt.kind, MouseEventKind::Press(_))
+                        && let Some(bounds) = app.wm().help_overlay_bounds()
+                        && !bounds.contains(mouse_evt.column, mouse_evt.row)
+                    {
+                        let stale_key = app.wm().help_key();
+                        app.wm().close_help_overlay();
+                        let mut actions = std::collections::VecDeque::new();
+                        if !app.wm().handle_outside_click(
+                            mouse_evt.column, mouse_evt.row, &evt, &mut actions, stale_key,
+                        ) {
+                            app.wm().handle_mouse_focus_click(mouse_evt.column, mouse_evt.row);
+                        }
+                        drain_action_queue(app, &mut actions);
+                        update_selection_snapshot(app);
+                        return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
+                    }
                     let _ = app.wm().handle_help_event(&evt);
                     update_selection_snapshot(app);
                     return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
@@ -462,6 +480,7 @@ where
                         && let Some(palette_bounds) = app.wm().command_palette_bounds()
                         && !palette_bounds.contains(mouse_evt.column, mouse_evt.row)
                     {
+                        let palette_key = app.wm().command_palette_key();
                         app.wm().close_command_palette();
                         let mut actions = std::collections::VecDeque::new();
                         if !app.wm().handle_outside_click(
@@ -469,6 +488,7 @@ where
                             mouse_evt.row,
                             &evt,
                             &mut actions,
+                            palette_key,
                         ) {
                             // No panel/overlay/chrome hit — activate window under cursor
                             app.wm()

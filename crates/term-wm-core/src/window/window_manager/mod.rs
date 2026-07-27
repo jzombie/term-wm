@@ -2307,6 +2307,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         row: u16,
         event: &Event,
         actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+        ignored_overlay: Option<OverlayKey>,
     ) -> bool {
         use crate::mouse_coord::{CoordSpace, MousePosition};
 
@@ -2335,7 +2336,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                         }
                     }
                 }
-                ComponentOwner::Overlay(key) if Some(key) != self.command_palette_key => {
+                ComponentOwner::Overlay(key) if Some(key) != ignored_overlay => {
                     if let Some(overlay) = self.overlays.get_mut(key) {
                         let ctx = ComponentContext::new(true).with_screen_area(hit_rect);
                         match overlay.handle_events(event, &ctx) {
@@ -6771,7 +6772,7 @@ mod tests {
             modifiers: crate::events::KeyModifiers::NONE,
         });
         let mut actions = VecDeque::new();
-        assert!(!wm.handle_outside_click(5, 5, &event, &mut actions));
+        assert!(!wm.handle_outside_click(5, 5, &event, &mut actions, None));
         assert!(actions.is_empty());
     }
 
@@ -6785,16 +6786,10 @@ mod tests {
             std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 1);
-        // Register a Window hitbox
         wm.hitbox_registry.register(
             crate::hitbox_registry::HitboxId::new(),
             crate::hitbox_registry::ComponentOwner::Window(keys[0]),
-            LayoutRect {
-                x: 0,
-                y: 0,
-                width: 80,
-                height: 24,
-            },
+            LayoutRect { x: 0, y: 0, width: 80, height: 24 },
         );
         let event = crate::events::Event::Mouse(crate::events::MouseEvent {
             kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
@@ -6803,8 +6798,7 @@ mod tests {
             modifiers: crate::events::KeyModifiers::NONE,
         });
         let mut actions = VecDeque::new();
-        assert!(wm.handle_outside_click(5, 5, &event, &mut actions));
-        // Window should be focused
+        assert!(wm.handle_outside_click(5, 5, &event, &mut actions, None));
         assert_eq!(*wm.focus.current(), keys[0]);
     }
 
@@ -6818,18 +6812,12 @@ mod tests {
             std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 1);
-        // Register a Chrome(Drag) hitbox
         wm.hitbox_registry.register(
             crate::hitbox_registry::HitboxId::new(),
             crate::hitbox_registry::ComponentOwner::Chrome(crate::chrome::ChromeTarget::Drag(
                 keys[0],
             )),
-            LayoutRect {
-                x: 0,
-                y: 0,
-                width: 80,
-                height: 1,
-            },
+            LayoutRect { x: 0, y: 0, width: 80, height: 1 },
         );
         let event = crate::events::Event::Mouse(crate::events::MouseEvent {
             kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
@@ -6838,8 +6826,7 @@ mod tests {
             modifiers: crate::events::KeyModifiers::NONE,
         });
         let mut actions = VecDeque::new();
-        assert!(wm.handle_outside_click(5, 0, &event, &mut actions));
-        // Window should be focused
+        assert!(wm.handle_outside_click(5, 0, &event, &mut actions, None));
         assert_eq!(*wm.focus.current(), keys[0]);
     }
 
@@ -6852,18 +6839,12 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        // Register a Layer hitbox but no component at that layer_id
         wm.hitbox_registry.register(
             crate::hitbox_registry::HitboxId::new(),
             crate::hitbox_registry::ComponentOwner::Layer(
                 crate::window::window_manager::layer_manager::LayerId(42),
             ),
-            LayoutRect {
-                x: 0,
-                y: 0,
-                width: 10,
-                height: 10,
-            },
+            LayoutRect { x: 0, y: 0, width: 10, height: 10 },
         );
         let event = crate::events::Event::Mouse(crate::events::MouseEvent {
             kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
@@ -6872,7 +6853,6 @@ mod tests {
             modifiers: crate::events::KeyModifiers::NONE,
         });
         let mut actions = VecDeque::new();
-        // No layer component exists → layer_comp is None → ignored → false
-        assert!(!wm.handle_outside_click(5, 5, &event, &mut actions));
+        assert!(!wm.handle_outside_click(5, 5, &event, &mut actions, None));
     }
 }

@@ -25,6 +25,7 @@ pub struct WmHelpOverlayComponent {
     dialog: DialogOverlayComponent,
     content: ScrollViewComponent<MarkdownViewerComponent>,
     area: Cell<LayoutRect>,
+    dialog_bounds: Cell<LayoutRect>,
     keybindings: KeyBindings,
     app_ctx: Arc<AppContext>,
 }
@@ -45,6 +46,12 @@ impl Component<TermWmAction> for WmHelpOverlayComponent {
         self.dialog.render_backdrop(backend, area, None);
         let ratatui_area = layout_rect_to_clipped_rect(area);
         let rect = self.dialog.rect_for(ratatui_area);
+        self.dialog_bounds.set(LayoutRect {
+            x: i32::from(rect.x),
+            y: i32::from(rect.y),
+            width: rect.width,
+            height: rect.height,
+        });
         {
             let backend = term_wm_ui_components::helpers::downcast_ratatui(backend);
             let buffer = &mut backend.buffer;
@@ -130,6 +137,15 @@ impl Overlay<TermWmAction> for WmHelpOverlayComponent {
         self
     }
 
+    fn render_area(&self) -> Option<LayoutRect> {
+        let bounds = self.dialog_bounds.get();
+        if bounds.width > 0 && bounds.height > 0 {
+            Some(bounds)
+        } else {
+            None
+        }
+    }
+
     fn shadow_rect(&self, area: LayoutRect) -> Option<LayoutRect> {
         if !self.dialog.visible() {
             return None;
@@ -157,6 +173,7 @@ impl WmHelpOverlayComponent {
             dialog,
             content: viewer,
             area: Cell::new(LayoutRect::default()),
+            dialog_bounds: Cell::new(LayoutRect::default()),
             keybindings,
             app_ctx: Arc::clone(app_ctx),
         };
