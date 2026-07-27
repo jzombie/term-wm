@@ -1420,6 +1420,75 @@ mod tests {
         }
     }
     impl crate::components::WmComponent for TestMenu {}
+
+    // ── dispatch_action / drain_action_queue tests ─────────────────────────
+
+    #[test]
+    fn dispatch_action_focus_window_focuses() {
+        use crate::window::WindowManager;
+        struct App { wm: WindowManager<TestComponent> }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> { &mut self.wm }
+        }
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None, crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let k1 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k2 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(k1, crate::window::WindowState::Mapped);
+        wm.transition_window(k2, crate::window::WindowState::Mapped);
+        wm.focus_window_key(k1);
+        let mut app = App { wm };
+        let mut queue = std::collections::VecDeque::new();
+        dispatch_action(&mut app, k1, TermWmAction::FocusWindow(k2), &mut queue);
+        assert_eq!(app.wm.focused_window(), k2);
+    }
+
+    #[test]
+    fn dispatch_action_focus_next_advances_focus() {
+        use crate::window::WindowManager;
+        struct App { wm: WindowManager<TestComponent> }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> { &mut self.wm }
+        }
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None, crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let k1 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k2 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(k1, crate::window::WindowState::Mapped);
+        wm.transition_window(k2, crate::window::WindowState::Mapped);
+        wm.set_focus_order(vec![k1, k2]);
+        wm.focus_window_key(k1);
+        let mut app = App { wm };
+        let mut queue = std::collections::VecDeque::new();
+        dispatch_action(&mut app, k1, TermWmAction::FocusNext, &mut queue);
+        assert_eq!(app.wm.focused_window(), k2);
+    }
+
+    #[test]
+    fn drain_action_queue_empty_does_nothing() {
+        use crate::window::WindowManager;
+        struct App { wm: WindowManager<TestComponent> }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> { &mut self.wm }
+        }
+        let wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None, crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let mut app = App { wm };
+        let mut queue = std::collections::VecDeque::new();
+        drain_action_queue(&mut app, &mut queue);
+    }
 }
 
 #[cfg(test)]
