@@ -408,4 +408,56 @@ mod tests {
             "overlay should be closed by outside click"
         );
     }
+
+    #[test]
+    fn help_render_area_returns_none_before_render() {
+        let overlay = WmHelpOverlayComponent::new(
+            &Arc::new(AppContext::new("test", "0.0.0")),
+            KeyBindings::new(),
+        );
+        assert_eq!(
+            <WmHelpOverlayComponent as Overlay<TermWmAction>>::render_area(&overlay),
+            None
+        );
+    }
+
+    #[test]
+    fn help_render_area_returns_some_after_render() {
+        let mut overlay = WmHelpOverlayComponent::new(
+            &Arc::new(AppContext::new("test", "0.0.0")),
+            KeyBindings::new(),
+        );
+        overlay.dialog.set_visible(true);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
+            buffer,
+            ratatui::prelude::Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let ctx = term_wm_core::components::ComponentContext::new(true);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        overlay.render(&mut backend, area, &ctx, &mut registry);
+
+        let bounds =
+            <WmHelpOverlayComponent as Overlay<TermWmAction>>::render_area(&overlay);
+        assert!(bounds.is_some(), "dialog_bounds should be populated after render");
+        let bounds = bounds.unwrap();
+        assert!(bounds.width > 0);
+        assert!(bounds.height > 0);
+    }
 }

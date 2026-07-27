@@ -737,4 +737,52 @@ mod tests {
         assert!(reg.active_owner.is_some());
         assert_eq!(reg.active_owner.unwrap(), ComponentOwner::Test);
     }
+
+    #[test]
+    fn hit_test_all_returns_overlay_then_standard_in_order() {
+        let mut reg = HitboxRegistry::new();
+        reg.register(
+            HitboxId::new(),
+            ComponentOwner::Window(slotmap::DefaultKey::default()),
+            LayoutRect { x: 0, y: 0, width: 10, height: 10 },
+        );
+        reg.register(
+            HitboxId::new(),
+            ComponentOwner::Overlay(OverlayKey::default()),
+            LayoutRect { x: 0, y: 0, width: 10, height: 10 },
+        );
+        let results: Vec<_> = reg.hit_test_all(screen_pos(5, 5)).collect();
+        assert_eq!(results.len(), 2);
+        // Overlay entry should come first
+        assert_eq!(results[0].1, ComponentOwner::Overlay(OverlayKey::default()));
+        assert_eq!(
+            results[1].1,
+            ComponentOwner::Window(slotmap::DefaultKey::default())
+        );
+    }
+
+    #[test]
+    fn hit_test_all_empty_returns_empty_iterator() {
+        let reg = HitboxRegistry::new();
+        let results: Vec<_> = reg.hit_test_all(screen_pos(5, 5)).collect();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn hit_test_all_only_returns_matching_position() {
+        let mut reg = HitboxRegistry::new();
+        reg.register(
+            HitboxId::new(),
+            ComponentOwner::Test,
+            LayoutRect { x: 0, y: 0, width: 10, height: 10 },
+        );
+        reg.register(
+            HitboxId::new(),
+            ComponentOwner::Chrome(crate::chrome::ChromeTarget::EmptyStatePlaceholder),
+            LayoutRect { x: 20, y: 20, width: 10, height: 10 },
+        );
+        let results: Vec<_> = reg.hit_test_all(screen_pos(5, 5)).collect();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1, ComponentOwner::Test);
+    }
 }
