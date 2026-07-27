@@ -117,6 +117,12 @@ fn drain_action_queue<
                 }
                 app.wm().focus_window_key(k);
             }
+            TermWmAction::FocusNext => {
+                app.wm().advance_focus(true);
+            }
+            TermWmAction::FocusPrev => {
+                app.wm().advance_focus(false);
+            }
             TermWmAction::Callback(f) => f(),
             action => {
                 let ctx = app.wm().component_context_for(true, key);

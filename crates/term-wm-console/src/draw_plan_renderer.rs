@@ -847,7 +847,10 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
             height: 1,
         };
         let mut bottom_hb = HitboxRegistry::new();
+        // Extract hints before mutable borrow (borrow checker safety).
+        let hints = wm.keybindings().bottom_hints(term_wm_core::constants::MAX_BOTTOM_HINTS);
         if let Some(p) = wm.get_semantic_component_mut(ComponentTag::BottomPanel) {
+            p.process_action(&ComponentAction::SetKeybindingHints(hints));
             let ctx = ComponentContext::new(false).with_screen_area(bottom_area);
             p.render(backend, bottom_area, &ctx, &mut bottom_hb);
         }
