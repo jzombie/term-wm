@@ -2291,6 +2291,38 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         }
     }
 
+    /// Dispatch a mouse click to the panel component if the click falls within
+    /// a panel region. Panels are pure UI chrome — they never forward clicks to
+    /// terminal processes, so dispatching here is safe from PTY event leakage.
+    ///
+    /// Returns `Some(action)` if the panel produced an action (e.g. `FocusWindow`
+    /// from clicking a window title tab), or `None` if the click missed all panels
+    /// or the panel ignored it.
+    pub fn panel_hit_test(&mut self, col: u16, row: u16, event: &Event) -> Option<TermWmAction> {
+        let top_claimed = self.top_claimed;
+        let bottom_claimed = self.bottom_claimed;
+
+        if !top_claimed.is_empty() && crate::layout::rect_contains(top_claimed, col, row) {
+            let ctx = self.component_context(true).with_screen_area(top_claimed);
+            if let Some(panel) = self.get_semantic_component_mut(layer_manager::ComponentTag::TopPanel)
+                && let EventResult::Action(action) = panel.handle_events(event, &ctx)
+            {
+                return Some(action);
+            }
+        }
+
+        if !bottom_claimed.is_empty() && crate::layout::rect_contains(bottom_claimed, col, row) {
+            let ctx = self.component_context(true).with_screen_area(bottom_claimed);
+            if let Some(panel) = self.get_semantic_component_mut(layer_manager::ComponentTag::BottomPanel)
+                && let EventResult::Action(action) = panel.handle_events(event, &ctx)
+            {
+                return Some(action);
+            }
+        }
+
+        None
+    }
+
     /// No-op: chrome hitbox registration is now handled by the console
     /// during the rendering pass. See `render_window_chrome` in
     /// `term-wm-console/src/draw_plan_renderer.rs`.
@@ -6669,5 +6701,48 @@ mod tests {
         };
         wm.overlays.insert(other);
         assert_eq!(wm.command_palette_bounds(), None);
+    }
+
+    // ── panel_hit_test tests ──────────────────────────────────────────────
+
+    #[test]
+    fn panel_hit_test_no_panels_returns_none() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        // No panel regions set → no hit
+        wm.top_claimed = LayoutRect { x: 0, y: 0, width: 80, height: 1 };
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 0,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        // get_semantic_component_mut returns None (no panels registered),
+        // but the method should not panic and return None.
+        assert_eq!(wm.panel_hit_test(5, 0, &event), None);
+    }
+
+    #[test]
+    fn panel_hit_test_miss_returns_none() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.top_claimed = LayoutRect { x: 0, y: 0, width: 80, height: 1 };
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 10, // outside the top panel region
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        assert_eq!(wm.panel_hit_test(5, 10, &event), None);
     }
 }
