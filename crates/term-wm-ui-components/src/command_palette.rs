@@ -41,7 +41,7 @@ pub struct CommandPaletteComponent {
     pub query_dirty: bool,
     pub current_context_mask: ContextMask,
     active_ids: Vec<CommandNodeId>,
-    display_items: Vec<(String, String, bool)>,
+    display_items: Vec<(String, String, String, bool)>,
     nav_keys: KeyBindings,
     list_scroll: ScrollViewComponent<MenuComponent>,
     last_list_area: LayoutRect,
@@ -108,7 +108,13 @@ impl CommandPaletteComponent {
                 let node = registry.get(*id)?;
                 let display_name = node.name.format(self.current_context_mask);
                 let desc = node.description.clone().unwrap_or_default();
-                Some((display_name, desc, node.disabled))
+                let icon_text = node.icon.unwrap_or("");
+                let searchable_text = if icon_text.is_empty() {
+                    display_name.clone()
+                } else {
+                    format!("{} {}", icon_text, display_name)
+                };
+                Some((display_name, desc, searchable_text, node.disabled))
             })
             .collect();
         self.data_dirty = false;
@@ -121,7 +127,7 @@ impl CommandPaletteComponent {
             .iter()
             .filter_map(|&i| {
                 let id = self.active_ids.get(i)?;
-                let (display_name, description, is_disabled) = self.display_items.get(i)?;
+                let (display_name, description, _, is_disabled) = self.display_items.get(i)?;
                 let node_ref = self.registry_getter_placeholder(*id, display_name, description);
                 Some(PaletteItem {
                     stable_id: node_ref.0,
@@ -205,7 +211,7 @@ impl CommandPaletteComponent {
             .iter()
             .filter_map(|&i| {
                 let id = *self.active_ids.get(i)?;
-                let (ref display_name, ref desc, _disabled) = self.display_items[i];
+                let (ref display_name, ref desc, _, _disabled) = self.display_items[i];
                 let data = Self::extract_palette_data(id, display_name, desc, registry)?;
                 Some(PaletteItem {
                     stable_id: data.0,
