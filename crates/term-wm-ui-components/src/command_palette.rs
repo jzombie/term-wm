@@ -337,40 +337,6 @@ impl CommandPaletteComponent {
         self.query_dirty = false;
     }
 
-    fn extract_palette_data(
-        id: CommandNodeId,
-        display_name: &str,
-        description: &str,
-        registry: &CommandRegistry,
-    ) -> Option<(String, String, String, TermWmAction, Option<&'static str>)> {
-        let node = registry.get(id)?;
-        let action = match &node.action {
-            term_wm_core::command_menu::CommandAction::AppAction(a) => a.clone(),
-        };
-        Some((
-            node.stable_id.clone(),
-            display_name.to_string(),
-            description.to_string(),
-            action,
-            node.icon,
-        ))
-    }
-
-    fn registry_getter_placeholder(
-        &self,
-        _id: CommandNodeId,
-        display_name: &str,
-        description: &str,
-    ) -> (String, String, String, TermWmAction, Option<&'static str>) {
-        (
-            String::new(),
-            display_name.to_string(),
-            description.to_string(),
-            TermWmAction::CloseMenu,
-            None,
-        )
-    }
-
     pub fn selected_action(&self) -> Option<&TermWmAction> {
         self.filtered_items.get(self.selected).and_then(|item| {
             if item.disabled {
@@ -391,7 +357,7 @@ impl CommandPaletteComponent {
         &mut self,
         fmatch: &mut FuzzyMatch,
         mru: &MruRanker,
-        registry: &CommandRegistry,
+        _registry: &CommandRegistry,
     ) {
         // Build searchable texts from non-separator cache entries
         let item_indices: Vec<usize> = self

@@ -23,7 +23,7 @@ use super::entry::{Window, WindowState};
 use crate::actions::{EventResult, SystemTask, TermWmAction};
 use crate::app_context::AppContext;
 use crate::components::{
-    Component, ComponentAction, ComponentContext, MenuItem, Overlay, WmComponent,
+    Component, ComponentAction, ComponentContext, Overlay, WmComponent,
 };
 use crate::hitbox_registry::{ComponentOwner, HitboxRegistry};
 use crate::keybindings::KeyBindings;
@@ -2653,10 +2653,10 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                     "View: Disable Tiling"
                 };
                 let mut item = mi(label, Some("⊞"), crate::actions::TermWmAction::ToggleTiling);
-                if self.is_monocle() {
-                    if let MenuDisplayItem::Item(ref mut mi) = item {
-                        mi.disabled = true;
-                    }
+                if self.is_monocle()
+                    && let MenuDisplayItem::Item(ref mut mi) = item
+                {
+                    mi.disabled = true;
                 }
                 item
             },
