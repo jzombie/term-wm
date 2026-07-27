@@ -1549,25 +1549,17 @@ mod tests {
         let mut wm = WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
+            None, crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        // Register a managed layout so toggle_tiling has state to flip
         let k = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.transition_window(k, crate::window::WindowState::Mapped);
-        wm.register_managed_layout(LayoutRect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 24,
-        });
-        assert!(wm.managed_layout.is_some());
         let mut app = App { wm };
         let mut queue = std::collections::VecDeque::new();
         dispatch_action(&mut app, k, TermWmAction::ToggleTiling, &mut queue);
-        // ToggleTiling clears managed_layout when disabling
-        // (exact outcome depends on config, but the call must not panic)
+        // ToggleTiling flips config.tiling_enabled without cascading actions
+        assert!(queue.is_empty(), "ToggleTiling should not cascade");
+        assert_eq!(app.wm.focused_window(), k, "focus should be unchanged after toggle");
     }
 
     #[test]
