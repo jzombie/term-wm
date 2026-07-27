@@ -337,13 +337,14 @@ pub async fn run_server(
             let mut guard = st.lock().await;
 
             if guard.subscribers.is_empty() {
+                let mut exited = false;
                 if let Some(session) = guard.session.as_mut() {
-                    // No subscribers — drain dirty flag to keep reader budget flowing
                     session.sync_screen();
-                    if session.check_exited() {
-                        tracing::info!("Session {} exited, tearing down", session.id);
-                        guard.session = None;
-                    }
+                    exited = session.check_exited();
+                }
+                if exited {
+                    tracing::info!("Session exited, tearing down");
+                    guard.session = None;
                 }
                 continue;
             }
