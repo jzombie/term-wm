@@ -1078,7 +1078,7 @@ mod tests {
                 stable_id: format!("item:{}", i),
                 display_name: format!("Item {}", i),
                 description: String::new(),
-                action: TermWmAction::Noop,
+                action: TermWmAction::CloseMenu,
                 icon: None,
                 disabled: false,
             })
@@ -1100,7 +1100,7 @@ mod tests {
                 x: 0,
                 y: 0,
                 width: 80,
-                height: i32::from(height),
+                height,
             },
             &ctx,
             &mut registry,
@@ -1111,9 +1111,12 @@ mod tests {
     fn auto_scroll_starts_at_offset_zero() {
         let mut palette = make_palette_with_many_items(20);
         render_palette(&mut palette, 6);
-        let scroll = palette.list_scroll.scroll_handle().scroll.borrow();
-        assert_eq!(scroll.offset_y, 0);
-        assert_eq!(scroll.content_height, 20);
+        {
+            let handle = palette.list_scroll.scroll_handle();
+            let scroll = handle.scroll.borrow();
+            assert_eq!(scroll.offset_y, 0);
+            assert_eq!(scroll.content_height, 20);
+        }
     }
 
     #[test]
@@ -1127,27 +1130,39 @@ mod tests {
         palette.update(TermWmAction::MenuDown, &ctx, &mut VecDeque::new());
         // update wrapped to 8
         render_palette(&mut palette, 6);
-        let scroll = palette.list_scroll.scroll_handle().scroll.borrow();
-        assert_eq!(scroll.offset_y, 4, "offset should advance to keep item 8 visible at bottom");
+        {
+            let handle = palette.list_scroll.scroll_handle();
+            let scroll = handle.scroll.borrow();
+            assert_eq!(
+                scroll.offset_y, 4,
+                "offset should advance to keep item 8 visible at bottom"
+            );
+        }
     }
 
     #[test]
     fn auto_scroll_goes_back_when_selection_moves_up() {
         let mut palette = make_palette_with_many_items(20);
-        let ctx = ComponentContext::new(true);
-
         // First navigate down to item 15
         palette.selected = 15;
         render_palette(&mut palette, 6);
-        let scroll = palette.list_scroll.scroll_handle().scroll.borrow();
-        assert_eq!(scroll.offset_y, 11, "offset should be at 11 for item 15");
+        {
+            let handle = palette.list_scroll.scroll_handle();
+            let scroll = handle.scroll.borrow();
+            assert_eq!(scroll.offset_y, 11, "offset should be at 11 for item 15");
+        }
 
         // Now navigate back up to item 0
         palette.selected = 0;
-        // Simulate render with new selection
         render_palette(&mut palette, 6);
-        let scroll2 = palette.list_scroll.scroll_handle().scroll.borrow();
-        assert_eq!(scroll2.offset_y, 0, "offset should reset to 0 when selection moves to top");
+        {
+            let handle2 = palette.list_scroll.scroll_handle();
+            let scroll2 = handle2.scroll.borrow();
+            assert_eq!(
+                scroll2.offset_y, 0,
+                "offset should reset to 0 when selection moves to top"
+            );
+        }
     }
 
     #[test]
@@ -1165,10 +1180,16 @@ mod tests {
             scroll.offset_y = 8;
         }
 
-        // Re-render with same selection — auto-scroll should NOT fire
+        // Re-render with same selection -- auto-scroll should NOT fire
         render_palette(&mut palette, 6);
-        let scroll = palette.list_scroll.scroll_handle().scroll.borrow();
-        assert_eq!(scroll.offset_y, 8, "manual scroll should be preserved when selection unchanged");
+        {
+            let handle = palette.list_scroll.scroll_handle();
+            let scroll = handle.scroll.borrow();
+            assert_eq!(
+                scroll.offset_y, 8,
+                "manual scroll should be preserved when selection unchanged"
+            );
+        }
     }
 
     #[test]
@@ -1189,8 +1210,14 @@ mod tests {
         // Change selection past viewport
         palette.selected = 15;
         render_palette(&mut palette, 6);
-        let scroll = palette.list_scroll.scroll_handle().scroll.borrow();
-        // display_sel=15, list_height=5, offset was 8. 15 >= 8 + 5 = 13 → snap to 15 - 5 + 1 = 11
-        assert_eq!(scroll.offset_y, 11, "auto-scroll should re-engage when selection changes");
+        {
+            let handle = palette.list_scroll.scroll_handle();
+            let scroll = handle.scroll.borrow();
+            // display_sel=15, list_height=5, offset was 8. 15 >= 8 + 5 = 13 -> snap to 15 - 5 + 1 = 11
+            assert_eq!(
+                scroll.offset_y, 11,
+                "auto-scroll should re-engage when selection changes"
+            );
+        }
     }
 }
