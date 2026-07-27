@@ -1068,4 +1068,129 @@ mod tests {
 
         assert_eq!(searchable_text_empty, "System Panel");
     }
+
+    fn make_palette_with_many_items(count: usize) -> CommandPaletteComponent {
+        let mut palette = CommandPaletteComponent::new();
+        palette.data_dirty = false;
+        palette.query_dirty = false;
+        let items: Vec<PaletteItem> = (0..count)
+            .map(|i| PaletteItem {
+                stable_id: format!("item:{}", i),
+                display_name: format!("Item {}", i),
+                description: String::new(),
+                action: TermWmAction::Noop,
+                icon: None,
+                disabled: false,
+            })
+            .collect();
+        palette.filtered_items = items.clone();
+        palette.display_nodes = items.into_iter().map(PaletteDisplayNode::Item).collect();
+        palette
+    }
+
+    fn render_palette(palette: &mut CommandPaletteComponent, height: u16) {
+        let area = ratatui::prelude::Rect::new(0, 0, 80, height);
+        let buffer = ratatui::buffer::Buffer::empty(area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
+        let ctx = ComponentContext::new(true);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        palette.render(
+            &mut backend,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: i32::from(height),
+            },
+            &ctx,
+            &mut registry,
+        );
+    }
+
+    #[test]
+    fn auto_scroll_starts_at_offset_zero() {
+        let mut palette = make_palette_with_many_items(20);
+        render_palette(&mut palette, 6);
+        let scroll = palette.list_scroll.scroll_handle().scroll.borrow();
+        assert_eq!(scroll.offset_y, 0);
+        assert_eq!(scroll.content_height, 20);
+    }
+
+    #[test]
+    fn auto_scroll_advances_when_selection_moves_past_viewport() {
+        let mut palette = make_palette_with_many_items(20);
+        let ctx = ComponentContext::new(true);
+
+        // Navigate to item 7 (display_sel=7). List height = 6 - 1 = 5 rows.
+        // 7 >= 0 + 5 = 5, so offset should snap to 7 - 5 + 1 = 3.
+        palette.selected = 7;
+        palette.update(TermWmAction::MenuDown, &ctx, &mut VecDeque::new());
+        // update wrapped to 8
+        render_palette(&mut palette, 6);
+        let scroll = palette.list_scroll.scroll_handle().scroll.borrow();
+        assert_eq!(scroll.offset_y, 4, "offset should advance to keep item 8 visible at bottom");
+    }
+
+    #[test]
+    fn auto_scroll_goes_back_when_selection_moves_up() {
+        let mut palette = make_palette_with_many_items(20);
+        let ctx = ComponentContext::new(true);
+
+        // First navigate down to item 15
+        palette.selected = 15;
+        render_palette(&mut palette, 6);
+        let scroll = palette.list_scroll.scroll_handle().scroll.borrow();
+        assert_eq!(scroll.offset_y, 11, "offset should be at 11 for item 15");
+
+        // Now navigate back up to item 0
+        palette.selected = 0;
+        // Simulate render with new selection
+        render_palette(&mut palette, 6);
+        let scroll2 = palette.list_scroll.scroll_handle().scroll.borrow();
+        assert_eq!(scroll2.offset_y, 0, "offset should reset to 0 when selection moves to top");
+    }
+
+    #[test]
+    fn auto_scroll_does_not_override_manual_scroll() {
+        let mut palette = make_palette_with_many_items(20);
+
+        // Render initially so last_display_sel is set
+        palette.selected = 0;
+        render_palette(&mut palette, 6);
+
+        // Manually scroll down (simulate user scrolling with mouse)
+        {
+            let handle = palette.list_scroll.scroll_handle();
+            let mut scroll = handle.scroll.borrow_mut();
+            scroll.offset_y = 8;
+        }
+
+        // Re-render with same selection — auto-scroll should NOT fire
+        render_palette(&mut palette, 6);
+        let scroll = palette.list_scroll.scroll_handle().scroll.borrow();
+        assert_eq!(scroll.offset_y, 8, "manual scroll should be preserved when selection unchanged");
+    }
+
+    #[test]
+    fn auto_scroll_engages_again_after_manual_scroll_when_selection_changes() {
+        let mut palette = make_palette_with_many_items(20);
+
+        // Render initially so last_display_sel is set
+        palette.selected = 0;
+        render_palette(&mut palette, 6);
+
+        // Manually scroll down
+        {
+            let handle = palette.list_scroll.scroll_handle();
+            let mut scroll = handle.scroll.borrow_mut();
+            scroll.offset_y = 8;
+        }
+
+        // Change selection past viewport
+        palette.selected = 15;
+        render_palette(&mut palette, 6);
+        let scroll = palette.list_scroll.scroll_handle().scroll.borrow();
+        // display_sel=15, list_height=5, offset was 8. 15 >= 8 + 5 = 13 → snap to 15 - 5 + 1 = 11
+        assert_eq!(scroll.offset_y, 11, "auto-scroll should re-engage when selection changes");
+    }
 }
