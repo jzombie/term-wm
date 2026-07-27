@@ -233,6 +233,55 @@ mod tests {
     }
 
     #[test]
+    fn test_icon_searchability() {
+        let mut matcher = FuzzyMatch::new();
+
+        let items = vec![
+            (
+                "Toggle System Panel".into(),
+                "Show or hide the system panel".into(),
+                "* Toggle System Panel".into(),
+                false,
+            ),
+            (
+                "New Tab".into(),
+                "Open a new terminal tab".into(),
+                "+ New Tab".into(),
+                false,
+            ),
+            (
+                "Close Tab".into(),
+                "Close the current tab".into(),
+                "x Close Tab".into(),
+                false,
+            ),
+            (
+                "No Icon Command".into(),
+                "A command without an icon".into(),
+                "No Icon Command".into(),
+                false,
+            ),
+        ];
+
+        let results = matcher.score("*", &items);
+        assert_eq!(results.len(), 1, "'*' should match exactly one item");
+        assert_eq!(results[0], 0, "'*' should match 'Toggle System Panel'");
+
+        let results = matcher.score("+", &items);
+        assert_eq!(results.len(), 1, "'+' should match exactly one item");
+        assert_eq!(results[0], 1, "'+' should match 'New Tab'");
+
+        let results = matcher.score("* sys", &items);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], 0, "combined '* sys' should match 'Toggle System Panel'");
+
+        let results = matcher.score("Tab", &items);
+        assert_eq!(results.len(), 2, "'Tab' should match both commands containing 'Tab'");
+        assert!(results.contains(&1));
+        assert!(results.contains(&2));
+    }
+
+    #[test]
     fn mru_weight_starts_at_zero() {
         let ranker = MruRanker::new();
         assert_eq!(ranker.weight("nonexistent"), 0.0);

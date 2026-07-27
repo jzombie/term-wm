@@ -785,4 +785,27 @@ mod tests {
         assert!(palette.filtered_items[1].disabled);
         assert!(!palette.filtered_items[2].disabled);
     }
+
+    #[test]
+    fn test_searchable_text_generation() {
+        let display_name = "System Panel";
+        let icon_text = "*";
+
+        let searchable_text = if icon_text.is_empty() {
+            display_name.to_string()
+        } else {
+            format!("{} {}", icon_text, display_name)
+        };
+
+        assert_eq!(searchable_text, "* System Panel");
+
+        let no_icon = "";
+        let searchable_text_empty = if no_icon.is_empty() {
+            display_name.to_string()
+        } else {
+            format!("{} {}", no_icon, display_name)
+        };
+
+        assert_eq!(searchable_text_empty, "System Panel");
+    }
 }
