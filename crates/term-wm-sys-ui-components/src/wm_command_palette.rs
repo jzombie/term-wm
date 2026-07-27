@@ -11,7 +11,7 @@ use term_wm_core::{
     command_menu::{CommandRegistry, ContextMask, FuzzyMatch, MruRanker},
     components::{
         Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse,
-        MenuDisplayItem, MenuItem, Overlay, WmComponent,
+        MenuDisplayItem, Overlay, WmComponent,
     },
     hitbox_registry::HitboxId,
     window::WindowKey,
@@ -141,7 +141,7 @@ impl WmCommandPaletteComponent {
     }
 
     fn compute_content_dimensions(&self) -> (u16, u16) {
-        let item_count = self.palette.filtered_items.len();
+        let item_count = self.palette.display_nodes.len();
         let max_label_width = self
             .palette
             .filtered_items
@@ -324,10 +324,8 @@ impl Overlay<TermWmAction> for WmCommandPaletteComponent {
         self.palette.mark_data_dirty();
     }
 
-    fn set_menu_items(&mut self, items: Vec<MenuItem<TermWmAction>>) {
-        let display_items: Vec<MenuDisplayItem<TermWmAction>> =
-            items.into_iter().map(MenuDisplayItem::Item).collect();
-        self.set_items(display_items);
+    fn set_menu_items(&mut self, items: Vec<MenuDisplayItem<TermWmAction>>) {
+        self.set_items(items);
     }
 
     fn set_tab_outline(&mut self, expires_at: Option<Instant>) {

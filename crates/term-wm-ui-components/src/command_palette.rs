@@ -448,37 +448,6 @@ impl CommandPaletteComponent {
                         disabled,
                         stable_id,
                         icon,
-                        ..
-                    } => PaletteDisplayNode::Item(PaletteItem {
-                        stable_id: stable_id.clone(),
-                        display_name: display_name.clone(),
-                        description: description.clone(),
-                        action: TermWmAction::CloseMenu,
-                        icon: *icon,
-                        disabled: *disabled,
-                    }),
-                    DisplayCacheEntry::Separator => PaletteDisplayNode::Separator,
-                })
-                .collect();
-        } else {
-            self.display_nodes = self
-                .filtered_items
-                .iter()
-                .map(|pi| PaletteDisplayNode::Item(pi.clone()))
-                .collect();
-        }
-        // Build display_nodes for rendering
-        if self.query.is_empty() {
-            self.display_nodes = self
-                .display_cache
-                .iter()
-                .map(|e| match e {
-                    DisplayCacheEntry::Item {
-                        display_name,
-                        description,
-                        disabled,
-                        stable_id,
-                        icon,
                         action,
                         ..
                     } => PaletteDisplayNode::Item(PaletteItem {

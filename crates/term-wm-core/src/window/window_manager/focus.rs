@@ -70,17 +70,14 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         };
 
         // Build fresh items BEFORE accessing the overlay (borrow checker).
-        // Focus change doesn't know debug/system panel visibility, but
-        // those items are already correct from the initial open_command_palette call.
-        // Toggle item labels will be refreshed here without debug/panel state.
         use crate::components::MenuDisplayItem;
-        let items = self.wm_menu_items(false, false);
+        let items = self.wm_menu_items();
         let supported = &self.supported_menu_actions;
-        let filtered: Vec<_> = items
+        let filtered: Vec<MenuDisplayItem<crate::actions::TermWmAction>> = items
             .into_iter()
-            .filter_map(|entry| match entry {
+            .filter(|entry| match entry {
                 MenuDisplayItem::Item(item) => {
-                    if supported.contains(&item.action)
+                    supported.contains(&item.action)
                         || matches!(
                             item.action,
                             crate::actions::TermWmAction::FocusWindow(_)
@@ -88,13 +85,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                                 | crate::actions::TermWmAction::MinimizeWindow(_)
                                 | crate::actions::TermWmAction::CloseWindow(_)
                         )
-                    {
-                        Some(item)
-                    } else {
-                        None
-                    }
                 }
-                MenuDisplayItem::Separator => None,
+                MenuDisplayItem::Separator => true,
             })
             .collect();
 

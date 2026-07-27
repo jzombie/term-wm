@@ -329,6 +329,10 @@ pub struct WindowManager<
     help_key: Option<OverlayKey>,
     exit_confirm_key: Option<OverlayKey>,
     command_palette_key: Option<OverlayKey>,
+    /// Window key for the debug log window (for resolving visibility in menu items).
+    debug_key: Option<WindowKey>,
+    /// Window key for the system panel window (for resolving visibility in menu items).
+    system_panel_key: Option<WindowKey>,
     /// When `Some(instant)`, tab outline mode is active until that instant.
     pub(crate) tab_outline_until: Option<Instant>,
     /// Tracks last cell coordinate passed to `update_snap_preview` for
@@ -820,6 +824,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             help_key: None,
             exit_confirm_key: None,
             command_palette_key: None,
+            debug_key: None,
+            system_panel_key: None,
             tab_outline_until: None,
             last_snap_cursor: None,
             input_mode: crate::actions::WmInputMode::Passthrough,
@@ -2582,12 +2588,26 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         btns
     }
 
+    pub fn set_debug_key(&mut self, key: crate::window::WindowKey) {
+        self.debug_key = Some(key);
+    }
+
+    pub fn set_system_panel_key(&mut self, key: crate::window::WindowKey) {
+        self.system_panel_key = Some(key);
+    }
+
     pub fn wm_menu_items(
         &self,
-        debug_log_visible: bool,
-        system_panel_visible: bool,
     ) -> Vec<crate::components::MenuDisplayItem<crate::actions::TermWmAction>> {
         use crate::components::{MenuDisplayItem, MenuItem};
+        use crate::window::WindowState;
+
+        let debug_log_visible = self
+            .debug_key
+            .is_some_and(|k| self.window_state(k) == Some(WindowState::Mapped));
+        let system_panel_visible = self
+            .system_panel_key
+            .is_some_and(|k| self.window_state(k) == Some(WindowState::Mapped));
 
         let mouse_label = if self.mouse_capture_enabled {
             "Mouse: Disable Capture"
