@@ -136,11 +136,7 @@ impl CommandPaletteComponent {
             .take(menu_selected)
             .filter(|n| matches!(n, PaletteDisplayNode::Item(_)))
             .count();
-        self.selected = item_count.min(
-            self.filtered_items
-                .len()
-                .saturating_sub(1),
-        );
+        self.selected = item_count.min(self.filtered_items.len().saturating_sub(1));
     }
 
     /// Map a filtered_items index to its position in display_nodes
@@ -163,7 +159,9 @@ impl CommandPaletteComponent {
         for node in &self.active_nodes {
             match node {
                 ActivePaletteNode::Node(id) => {
-                    let Some(cmd_node) = registry.get(*id) else { continue };
+                    let Some(cmd_node) = registry.get(*id) else {
+                        continue;
+                    };
                     if (self.current_context_mask & cmd_node.required_context)
                         != cmd_node.required_context
                     {

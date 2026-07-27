@@ -65,7 +65,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         if !self.command_menu_visible() {
             return;
         }
-        let Some(palette_key) = self.get_overlay::<crate::window::window_manager::system_tags::CommandPalette>() else {
+        let Some(palette_key) =
+            self.get_overlay::<crate::window::window_manager::system_tags::CommandPalette>()
+        else {
             return;
         };
 

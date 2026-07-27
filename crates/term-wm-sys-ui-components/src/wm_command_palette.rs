@@ -90,8 +90,7 @@ impl WmCommandPaletteComponent {
         for display_item in items {
             match display_item {
                 MenuDisplayItem::Item(item) => {
-                    let stable_id =
-                        format!("core:{}", item.label.replace(' ', "_").to_lowercase());
+                    let stable_id = format!("core:{}", item.label.replace(' ', "_").to_lowercase());
                     let node = CommandNode {
                         stable_id,
                         name: CommandName::Static(item.label.to_string()),
@@ -103,14 +102,12 @@ impl WmCommandPaletteComponent {
                         disabled: item.disabled,
                     };
                     let id = self.registry.register(node);
-                    active_nodes.push(
-                        term_wm_ui_components::command_palette::ActivePaletteNode::Node(id),
-                    );
+                    active_nodes
+                        .push(term_wm_ui_components::command_palette::ActivePaletteNode::Node(id));
                 }
                 MenuDisplayItem::Separator => {
-                    active_nodes.push(
-                        term_wm_ui_components::command_palette::ActivePaletteNode::Separator,
-                    );
+                    active_nodes
+                        .push(term_wm_ui_components::command_palette::ActivePaletteNode::Separator);
                 }
             }
         }

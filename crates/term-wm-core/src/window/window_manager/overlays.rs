@@ -10,17 +10,22 @@ use crate::window::window_manager::system_tags;
 
 impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> WindowManager<C, L, O> {
     pub fn close_exit_confirm(&mut self) {
-        if let Some(key) = self.system_overlays.remove(&TypeId::of::<system_tags::ExitConfirm>()) {
+        if let Some(key) = self
+            .system_overlays
+            .remove(&TypeId::of::<system_tags::ExitConfirm>())
+        {
             self.overlays.remove(key);
         }
     }
 
     pub fn exit_confirm_visible(&self) -> bool {
-        self.system_overlays.contains_key(&TypeId::of::<system_tags::ExitConfirm>())
+        self.system_overlays
+            .contains_key(&TypeId::of::<system_tags::ExitConfirm>())
     }
 
     pub fn help_overlay_visible(&self) -> bool {
-        self.system_overlays.contains_key(&TypeId::of::<system_tags::HelpOverlay>())
+        self.system_overlays
+            .contains_key(&TypeId::of::<system_tags::HelpOverlay>())
     }
 
     pub fn help_key(&self) -> Option<OverlayKey> {
@@ -32,7 +37,10 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     pub fn close_help_overlay(&mut self) {
-        if let Some(key) = self.system_overlays.remove(&TypeId::of::<system_tags::HelpOverlay>()) {
+        if let Some(key) = self
+            .system_overlays
+            .remove(&TypeId::of::<system_tags::HelpOverlay>())
+        {
             self.overlays.remove(key);
         }
         self.input_mode = crate::actions::WmInputMode::Passthrough;
@@ -92,7 +100,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     pub fn command_palette_visible(&self) -> bool {
-        self.system_overlays.contains_key(&TypeId::of::<system_tags::CommandPalette>())
+        self.system_overlays
+            .contains_key(&TypeId::of::<system_tags::CommandPalette>())
     }
 
     pub fn command_palette_bounds(&self) -> Option<LayoutRect> {
@@ -108,7 +117,10 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     pub fn close_command_palette(&mut self) {
-        if let Some(key) = self.system_overlays.remove(&TypeId::of::<system_tags::CommandPalette>()) {
+        if let Some(key) = self
+            .system_overlays
+            .remove(&TypeId::of::<system_tags::CommandPalette>())
+        {
             self.overlays.remove(key);
         }
         self.input_mode = crate::actions::WmInputMode::Passthrough;

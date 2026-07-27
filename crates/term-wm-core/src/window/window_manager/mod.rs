@@ -32,9 +32,7 @@ use super::WindowKey;
 use super::entry::{Window, WindowState};
 use crate::actions::{EventResult, SystemTask, TermWmAction};
 use crate::app_context::AppContext;
-use crate::components::{
-    Component, ComponentAction, ComponentContext, Overlay, WmComponent,
-};
+use crate::components::{Component, ComponentAction, ComponentContext, Overlay, WmComponent};
 use crate::hitbox_registry::{ComponentOwner, HitboxRegistry};
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
@@ -2616,8 +2614,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         &self,
     ) -> Vec<crate::components::MenuDisplayItem<crate::actions::TermWmAction>> {
         use crate::components::{MenuDisplayItem, MenuItem};
-        use crate::window::window_manager::system_tags;
         use crate::window::WindowState;
+        use crate::window::window_manager::system_tags;
 
         let debug_log_visible = self
             .get_system_window::<system_tags::DebugLog>()
@@ -2667,13 +2665,37 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
         let mut items: Vec<MenuDisplayItem<crate::actions::TermWmAction>> = vec![
             mi("Resume", Some("▶"), crate::actions::TermWmAction::CloseMenu),
-            mi("New Window", Some("+"), crate::actions::TermWmAction::NewWindow),
+            mi(
+                "New Window",
+                Some("+"),
+                crate::actions::TermWmAction::NewWindow,
+            ),
             MenuDisplayItem::Separator,
-            mi(mouse_label, Some("◆"), crate::actions::TermWmAction::ToggleMouseCapture),
-            mi(clipboard_label, Some("■"), crate::actions::TermWmAction::ToggleClipboardMode),
-            mi(selection_label, Some("●"), crate::actions::TermWmAction::ToggleWindowSelection),
-            mi(debug_label, Some("≣"), crate::actions::TermWmAction::ToggleDebugWindow),
-            mi(panel_label, Some("*"), crate::actions::TermWmAction::ToggleSystemPanel),
+            mi(
+                mouse_label,
+                Some("◆"),
+                crate::actions::TermWmAction::ToggleMouseCapture,
+            ),
+            mi(
+                clipboard_label,
+                Some("■"),
+                crate::actions::TermWmAction::ToggleClipboardMode,
+            ),
+            mi(
+                selection_label,
+                Some("●"),
+                crate::actions::TermWmAction::ToggleWindowSelection,
+            ),
+            mi(
+                debug_label,
+                Some("≣"),
+                crate::actions::TermWmAction::ToggleDebugWindow,
+            ),
+            mi(
+                panel_label,
+                Some("*"),
+                crate::actions::TermWmAction::ToggleSystemPanel,
+            ),
             MenuDisplayItem::Separator,
             mi("Help", Some("?"), crate::actions::TermWmAction::Help),
             mi("Exit UI", Some("⏻"), crate::actions::TermWmAction::ExitUi),
