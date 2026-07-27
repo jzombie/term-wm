@@ -2678,83 +2678,89 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         ];
 
         // Window management group (directly below top group)
-        if has_active {
-            for btn in self.window_management_buttons() {
-                items.push(MenuDisplayItem::Item(MenuItem {
-                    label: btn.label.into(),
-                    icon: Some(btn.symbol),
-                    action: btn.action,
-                    disabled: false,
-                }));
-            }
-            for (key, title) in self.window_titles() {
-                items.push(MenuDisplayItem::Item(MenuItem {
-                    label: format!("Switch to: {}", title).into(),
-                    icon: Some("→"),
-                    action: crate::actions::TermWmAction::FocusWindow(key),
-                    disabled: key == focused,
-                }));
+        {
+            if has_active {
+                for btn in self.window_management_buttons() {
+                    items.push(MenuDisplayItem::Item(MenuItem {
+                        label: btn.label.into(),
+                        icon: Some(btn.symbol),
+                        action: btn.action,
+                        disabled: false,
+                    }));
+                }
+                for (key, title) in self.window_titles() {
+                    items.push(MenuDisplayItem::Item(MenuItem {
+                        label: format!("Switch to: {}", title).into(),
+                        icon: Some("→"),
+                        action: crate::actions::TermWmAction::FocusWindow(key),
+                        disabled: key == focused,
+                    }));
+                }
             }
         }
 
         // View group
-        items.push(MenuDisplayItem::Separator);
-        items.push(mi(
-            self.monocle_mode.action_label(),
-            Some("▢"),
-            crate::actions::TermWmAction::ToggleMonocle,
-        ));
         {
-            let label = if self.managed_layout.is_some() {
-                "View: Enable Tiling"
-            } else {
-                "View: Disable Tiling"
-            };
-            let mut item = mi(label, Some("⊞"), crate::actions::TermWmAction::ToggleTiling);
-            if self.is_monocle()
-                && let MenuDisplayItem::Item(ref mut mi) = item
+            items.push(MenuDisplayItem::Separator);
+            items.push(mi(
+                self.monocle_mode.action_label(),
+                Some("▢"),
+                crate::actions::TermWmAction::ToggleMonocle,
+            ));
             {
-                mi.disabled = true;
+                let label = if self.managed_layout.is_some() {
+                    "View: Enable Tiling"
+                } else {
+                    "View: Disable Tiling"
+                };
+                let mut item = mi(label, Some("⊞"), crate::actions::TermWmAction::ToggleTiling);
+                if self.is_monocle()
+                    && let MenuDisplayItem::Item(ref mut mi) = item
+                {
+                    mi.disabled = true;
+                }
+                items.push(item);
             }
-            items.push(item);
         }
 
         // Settings group
-        items.push(MenuDisplayItem::Separator);
-        items.push(mi(
-            mouse_label,
-            Some("◆"),
-            crate::actions::TermWmAction::ToggleMouseCapture,
-        ));
-        items.push(mi(
-            clipboard_label,
-            Some("■"),
-            crate::actions::TermWmAction::ToggleClipboardMode,
-        ));
-        items.push(mi(
-            selection_label,
-            Some("●"),
-            crate::actions::TermWmAction::ToggleWindowSelection,
-        ));
-        items.push(mi(
-            debug_label,
-            Some("≣"),
-            crate::actions::TermWmAction::ToggleDebugWindow,
-        ));
-        items.push(mi(
-            panel_label,
-            Some("*"),
-            crate::actions::TermWmAction::ToggleSystemPanel,
-        ));
+        {
+            items.push(MenuDisplayItem::Separator);
+            items.push(mi(
+                mouse_label,
+                Some("◆"),
+                crate::actions::TermWmAction::ToggleMouseCapture,
+            ));
+            items.push(mi(
+                clipboard_label,
+                Some("■"),
+                crate::actions::TermWmAction::ToggleClipboardMode,
+            ));
+            items.push(mi(
+                selection_label,
+                Some("●"),
+                crate::actions::TermWmAction::ToggleWindowSelection,
+            ));
+            items.push(mi(
+                debug_label,
+                Some("≣"),
+                crate::actions::TermWmAction::ToggleDebugWindow,
+            ));
+            items.push(mi(
+                panel_label,
+                Some("*"),
+                crate::actions::TermWmAction::ToggleSystemPanel,
+            ));
 
-        // Help/Exit as last group
-        items.push(MenuDisplayItem::Separator);
-        items.push(mi("Help", Some("?"), crate::actions::TermWmAction::Help));
-        items.push(mi(
-            "Exit UI",
-            Some("⏻"),
-            crate::actions::TermWmAction::ExitUi,
-        ));
+            // Help/Exit as last group
+            items.push(MenuDisplayItem::Separator);
+            items.push(mi("Help", Some("?"), crate::actions::TermWmAction::Help));
+            items.push(mi(
+                "Exit UI",
+                Some("⏻"),
+                crate::actions::TermWmAction::ExitUi,
+            ));
+        }
 
         items
     }
