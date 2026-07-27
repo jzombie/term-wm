@@ -1,12 +1,14 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use term_wm_core::actions::TermWmAction;
-use term_wm_core::components::{Component, ComponentContext, NoopComponent, NoopWmComponent, Overlay};
-use term_wm_core::events::{Event, MouseButton, MouseEvent, MouseEventKind, KeyModifiers};
-use term_wm_core::window::{WindowKey, WindowManager, LayerManager};
-use term_wm_core::wm_config::WmConfig;
 use term_wm_core::AppContext;
+use term_wm_core::actions::TermWmAction;
+use term_wm_core::components::{
+    Component, ComponentContext, NoopComponent, NoopWmComponent, Overlay,
+};
+use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use term_wm_core::window::{LayerManager, WindowKey, WindowManager};
+use term_wm_core::wm_config::WmConfig;
 use term_wm_layout_engine::LayoutRect;
 
 /// An overlay that returns known render_area bounds for spatial hit-testing.
@@ -80,7 +82,10 @@ fn make_mouse_event(col: u16, row: u16) -> Event {
 #[test]
 fn command_palette_with_bounds_outside_click_closes_palette() {
     let mut wm = setup_wm_with_palette(Some(LayoutRect {
-        x: 20, y: 5, width: 40, height: 10,
+        x: 20,
+        y: 5,
+        width: 40,
+        height: 10,
     }));
     assert!(wm.command_palette_visible());
 
@@ -91,13 +96,19 @@ fn command_palette_with_bounds_outside_click_closes_palette() {
     wm.close_command_palette();
     let _handled = wm.handle_outside_click(5, 2, &evt, &mut actions, stale_key);
 
-    assert!(!wm.command_palette_visible(), "palette should be closed after outside click");
+    assert!(
+        !wm.command_palette_visible(),
+        "palette should be closed after outside click"
+    );
 }
 
 #[test]
 fn command_palette_with_bounds_inside_click_does_not_close() {
     let wm = setup_wm_with_palette(Some(LayoutRect {
-        x: 20, y: 5, width: 40, height: 10,
+        x: 20,
+        y: 5,
+        width: 40,
+        height: 10,
     }));
     assert!(wm.command_palette_visible());
 
@@ -114,11 +125,19 @@ fn command_palette_with_bounds_inside_click_does_not_close() {
 #[test]
 fn command_palette_bounds_delegates_to_overlay_render_area() {
     let wm = setup_wm_with_palette(Some(LayoutRect {
-        x: 10, y: 5, width: 40, height: 10,
+        x: 10,
+        y: 5,
+        width: 40,
+        height: 10,
     }));
     assert_eq!(
         wm.command_palette_bounds(),
-        Some(LayoutRect { x: 10, y: 5, width: 40, height: 10 })
+        Some(LayoutRect {
+            x: 10,
+            y: 5,
+            width: 40,
+            height: 10
+        })
     );
 }
 
@@ -132,7 +151,10 @@ fn command_palette_no_bounds_falls_through() {
 #[test]
 fn handle_outside_click_returns_false_with_palette_key_ignored() {
     let mut wm = setup_wm_with_palette(Some(LayoutRect {
-        x: 0, y: 0, width: 80, height: 24,
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
     }));
     let palette_key = wm.command_palette_key();
 
@@ -142,5 +164,8 @@ fn handle_outside_click_returns_false_with_palette_key_ignored() {
     let result = wm.handle_outside_click(5, 5, &evt, &mut actions, palette_key);
     assert!(!result, "no hitboxes means nothing was handled");
     assert!(actions.is_empty(), "no actions expected");
-    assert!(wm.command_palette_visible(), "palette should still be visible (no outside-click routed)");
+    assert!(
+        wm.command_palette_visible(),
+        "palette should still be visible (no outside-click routed)"
+    );
 }

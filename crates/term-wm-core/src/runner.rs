@@ -1549,7 +1549,8 @@ mod tests {
         let mut wm = WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
-            None, crate::window::LayerManager::new(),
+            None,
+            crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
         let k = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
@@ -1559,7 +1560,11 @@ mod tests {
         dispatch_action(&mut app, k, TermWmAction::ToggleTiling, &mut queue);
         // ToggleTiling flips config.tiling_enabled without cascading actions
         assert!(queue.is_empty(), "ToggleTiling should not cascade");
-        assert_eq!(app.wm.focused_window(), k, "focus should be unchanged after toggle");
+        assert_eq!(
+            app.wm.focused_window(),
+            k,
+            "focus should be unchanged after toggle"
+        );
     }
 
     #[test]
