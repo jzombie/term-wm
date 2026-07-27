@@ -191,12 +191,36 @@ impl Pty {
 
     /// Set a status callback invoked by the reader thread on data and exit.
     /// Uses `Arc<Mutex<>>` so the reader thread (which holds a clone) sees updates.
+    ///
+    /// If the child has already exited (reader thread detected EOF before the
+    /// callback was registered, or ConPTY swallowed the EOF), fires the callback
+    /// immediately so the async polling loop can process the exit state.
     pub fn set_status_callback(&mut self, cb: Option<Box<dyn Fn(PtyStatus) + Send + Sync>>) {
         if let Ok(mut guard) = self.status_cb.lock() {
             *guard = cb;
         }
         if let Some(reader) = &self.reader {
             reader.thread().unpark();
+        }
+        if self.exited {
+            if let Ok(guard) = self.status_cb.lock()
+                && let Some(ref cb_fn) = *guard
+                && !self.exited_emitted.swap(true, Ordering::AcqRel)
+            {
+                cb_fn(PtyStatus::Exited);
+            }
+        } else if let Some(child) = self.child.as_mut()
+            && let Ok(Some(status)) = child.try_wait()
+        {
+            self.exited = true;
+            self.exit_status = Some(status);
+            self.child = None;
+            if let Ok(guard) = self.status_cb.lock()
+                && let Some(ref cb_fn) = *guard
+                && !self.exited_emitted.swap(true, Ordering::AcqRel)
+            {
+                cb_fn(PtyStatus::Exited);
+            }
         }
     }
 

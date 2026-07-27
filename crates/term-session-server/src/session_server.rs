@@ -281,6 +281,7 @@ pub async fn run_server(
                     // output or exit state that needs processing.
                     guard.notify.notify_one();
 
+                    let is_dead = guard.session.is_none();
                     drop(guard);
 
                     if let Some(data) = snapshot
@@ -290,6 +291,9 @@ pub async fn run_server(
                     }
                     if let Some(data) = early {
                         respond.respond(data, false);
+                    }
+                    if is_dead {
+                        respond.respond(Vec::new(), true);
                     }
                 });
             }
@@ -336,6 +340,10 @@ pub async fn run_server(
                 if let Some(session) = guard.session.as_mut() {
                     // No subscribers — drain dirty flag to keep reader budget flowing
                     session.sync_screen();
+                    if session.check_exited() {
+                        tracing::info!("Session {} exited, tearing down", session.id);
+                        guard.session = None;
+                    }
                 }
                 continue;
             }
