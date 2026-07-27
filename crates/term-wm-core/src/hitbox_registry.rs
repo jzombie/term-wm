@@ -744,12 +744,22 @@ mod tests {
         reg.register(
             HitboxId::new(),
             ComponentOwner::Window(slotmap::DefaultKey::default()),
-            LayoutRect { x: 0, y: 0, width: 10, height: 10 },
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
         );
         reg.register(
             HitboxId::new(),
             ComponentOwner::Overlay(OverlayKey::default()),
-            LayoutRect { x: 0, y: 0, width: 10, height: 10 },
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
         );
         let results: Vec<_> = reg.hit_test_all(screen_pos(5, 5)).collect();
         assert_eq!(results.len(), 2);
@@ -774,12 +784,22 @@ mod tests {
         reg.register(
             HitboxId::new(),
             ComponentOwner::Test,
-            LayoutRect { x: 0, y: 0, width: 10, height: 10 },
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
         );
         reg.register(
             HitboxId::new(),
             ComponentOwner::Chrome(crate::chrome::ChromeTarget::EmptyStatePlaceholder),
-            LayoutRect { x: 20, y: 20, width: 10, height: 10 },
+            LayoutRect {
+                x: 20,
+                y: 20,
+                width: 10,
+                height: 10,
+            },
         );
         let results: Vec<_> = reg.hit_test_all(screen_pos(5, 5)).collect();
         assert_eq!(results.len(), 1);

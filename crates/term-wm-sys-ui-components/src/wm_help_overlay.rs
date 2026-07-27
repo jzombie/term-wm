@@ -453,9 +453,11 @@ mod tests {
         let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
         overlay.render(&mut backend, area, &ctx, &mut registry);
 
-        let bounds =
-            <WmHelpOverlayComponent as Overlay<TermWmAction>>::render_area(&overlay);
-        assert!(bounds.is_some(), "dialog_bounds should be populated after render");
+        let bounds = <WmHelpOverlayComponent as Overlay<TermWmAction>>::render_area(&overlay);
+        assert!(
+            bounds.is_some(),
+            "dialog_bounds should be populated after render"
+        );
         let bounds = bounds.unwrap();
         assert!(bounds.width > 0);
         assert!(bounds.height > 0);
