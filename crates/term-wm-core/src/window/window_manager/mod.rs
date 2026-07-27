@@ -2663,7 +2663,11 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             })
         }
 
+        let focused = self.focused_window();
+        let has_active = self.windows.contains_key(focused);
+
         let mut items: Vec<MenuDisplayItem<crate::actions::TermWmAction>> = vec![
+            // Top group
             mi("Resume", Some("▶"), crate::actions::TermWmAction::CloseMenu),
             mi(
                 "New Window",
@@ -2671,60 +2675,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 crate::actions::TermWmAction::NewWindow,
             ),
             MenuDisplayItem::Separator,
-            mi(
-                mouse_label,
-                Some("◆"),
-                crate::actions::TermWmAction::ToggleMouseCapture,
-            ),
-            mi(
-                clipboard_label,
-                Some("■"),
-                crate::actions::TermWmAction::ToggleClipboardMode,
-            ),
-            mi(
-                selection_label,
-                Some("●"),
-                crate::actions::TermWmAction::ToggleWindowSelection,
-            ),
-            mi(
-                debug_label,
-                Some("≣"),
-                crate::actions::TermWmAction::ToggleDebugWindow,
-            ),
-            mi(
-                panel_label,
-                Some("*"),
-                crate::actions::TermWmAction::ToggleSystemPanel,
-            ),
-            MenuDisplayItem::Separator,
-            mi("Help", Some("?"), crate::actions::TermWmAction::Help),
-            mi("Exit UI", Some("⏻"), crate::actions::TermWmAction::ExitUi),
-            MenuDisplayItem::Separator,
-            mi(
-                self.monocle_mode.action_label(),
-                Some("▢"),
-                crate::actions::TermWmAction::ToggleMonocle,
-            ),
-            {
-                let label = if self.managed_layout.is_some() {
-                    "View: Enable Tiling"
-                } else {
-                    "View: Disable Tiling"
-                };
-                let mut item = mi(label, Some("⊞"), crate::actions::TermWmAction::ToggleTiling);
-                if self.is_monocle()
-                    && let MenuDisplayItem::Item(ref mut mi) = item
-                {
-                    mi.disabled = true;
-                }
-                item
-            },
-            MenuDisplayItem::Separator,
         ];
 
-        let focused = self.focused_window();
-        let has_active = self.windows.contains_key(focused);
-
+        // Window management group (directly below top group)
         if has_active {
             for btn in self.window_management_buttons() {
                 items.push(MenuDisplayItem::Item(MenuItem {
@@ -2743,6 +2696,61 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 }));
             }
         }
+
+        // Settings group
+        items.push(MenuDisplayItem::Separator);
+        items.push(mi(
+            mouse_label,
+            Some("◆"),
+            crate::actions::TermWmAction::ToggleMouseCapture,
+        ));
+        items.push(mi(
+            clipboard_label,
+            Some("■"),
+            crate::actions::TermWmAction::ToggleClipboardMode,
+        ));
+        items.push(mi(
+            selection_label,
+            Some("●"),
+            crate::actions::TermWmAction::ToggleWindowSelection,
+        ));
+        items.push(mi(
+            debug_label,
+            Some("≣"),
+            crate::actions::TermWmAction::ToggleDebugWindow,
+        ));
+        items.push(mi(
+            panel_label,
+            Some("*"),
+            crate::actions::TermWmAction::ToggleSystemPanel,
+        ));
+
+        // View group
+        items.push(MenuDisplayItem::Separator);
+        items.push(mi(
+            self.monocle_mode.action_label(),
+            Some("▢"),
+            crate::actions::TermWmAction::ToggleMonocle,
+        ));
+        {
+            let label = if self.managed_layout.is_some() {
+                "View: Enable Tiling"
+            } else {
+                "View: Disable Tiling"
+            };
+            let mut item = mi(label, Some("⊞"), crate::actions::TermWmAction::ToggleTiling);
+            if self.is_monocle()
+                && let MenuDisplayItem::Item(ref mut mi) = item
+            {
+                mi.disabled = true;
+            }
+            items.push(item);
+        }
+
+        // Help/Exit as last group
+        items.push(MenuDisplayItem::Separator);
+        items.push(mi("Help", Some("?"), crate::actions::TermWmAction::Help));
+        items.push(mi("Exit UI", Some("⏻"), crate::actions::TermWmAction::ExitUi));
 
         items
     }
