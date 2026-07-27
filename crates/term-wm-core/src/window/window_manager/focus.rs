@@ -65,24 +65,30 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         if !self.command_menu_visible() {
             return;
         }
-        let Some(palette_key) = self.command_palette_key else {
+        let Some(palette_key) =
+            self.get_overlay::<crate::window::window_manager::system_tags::CommandPalette>()
+        else {
             return;
         };
 
         // Build fresh items BEFORE accessing the overlay (borrow checker).
+        use crate::components::MenuDisplayItem;
         let items = self.wm_menu_items();
         let supported = &self.supported_menu_actions;
-        let filtered: Vec<_> = items
+        let filtered: Vec<MenuDisplayItem<crate::actions::TermWmAction>> = items
             .into_iter()
-            .filter(|item| {
-                supported.contains(&item.action)
-                    || matches!(
-                        item.action,
-                        crate::actions::TermWmAction::FocusWindow(_)
-                            | crate::actions::TermWmAction::MaximizeWindow(_)
-                            | crate::actions::TermWmAction::MinimizeWindow(_)
-                            | crate::actions::TermWmAction::CloseWindow(_)
-                    )
+            .filter(|entry| match entry {
+                MenuDisplayItem::Item(item) => {
+                    supported.contains(&item.action)
+                        || matches!(
+                            item.action,
+                            crate::actions::TermWmAction::FocusWindow(_)
+                                | crate::actions::TermWmAction::MaximizeWindow(_)
+                                | crate::actions::TermWmAction::MinimizeWindow(_)
+                                | crate::actions::TermWmAction::CloseWindow(_)
+                        )
+                }
+                MenuDisplayItem::Separator => true,
             })
             .collect();
 

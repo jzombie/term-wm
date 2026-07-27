@@ -6,14 +6,14 @@ use term_wm_core::events::{Event, KeyKind, MouseEventKind};
 
 use crate::helpers::{color_to_ratatui, layout_rect_to_clipped_rect, safe_set_string};
 use term_wm_core::actions::{EventResult, TermWmAction};
-use term_wm_core::components::{Component, ComponentContext, MenuItem};
+use term_wm_core::components::{Component, ComponentContext, MenuDisplayItem, MenuItem};
 use term_wm_core::keybindings::KeyBindings;
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
 
 #[derive(Debug)]
 pub struct MenuComponent {
-    items: Vec<MenuItem<TermWmAction>>,
+    items: Vec<MenuDisplayItem<TermWmAction>>,
     selected: usize,
     nav_keys: KeyBindings,
     pub show_header: bool,
@@ -30,11 +30,16 @@ impl MenuComponent {
     }
 
     pub fn set_items(&mut self, items: Vec<MenuItem<TermWmAction>>) {
-        self.items = items;
-        self.selected = self.selected.min(self.items.len().saturating_sub(1));
+        self.items = items.into_iter().map(MenuDisplayItem::Item).collect();
+        self.selected = clamp_selected(self.selected, &self.items);
     }
 
-    pub fn items(&self) -> &[MenuItem<TermWmAction>] {
+    pub fn set_display_items(&mut self, items: Vec<MenuDisplayItem<TermWmAction>>) {
+        self.items = items;
+        self.selected = clamp_selected(self.selected, &self.items);
+    }
+
+    pub fn items(&self) -> &[MenuDisplayItem<TermWmAction>] {
         &self.items
     }
 
@@ -43,17 +48,30 @@ impl MenuComponent {
     }
 
     pub fn set_selected(&mut self, index: usize) {
-        self.selected = index.min(self.items.len().saturating_sub(1));
+        self.selected = clamp_selected(index, &self.items);
     }
 
     pub fn selected_action(&self) -> Option<&TermWmAction> {
-        self.items.get(self.selected).and_then(|item| {
-            if item.disabled {
-                None
-            } else {
-                Some(&item.action)
+        match self.items.get(self.selected)? {
+            MenuDisplayItem::Item(item) if !item.disabled => Some(&item.action),
+            _ => None,
+        }
+    }
+
+    /// Move selection to the next non-separator index (wrapping).
+    fn advance_selection(&mut self, direction: isize) {
+        let total = self.items.len();
+        if total == 0 {
+            return;
+        }
+        let mut idx = self.selected as isize;
+        for _ in 0..total {
+            idx = (idx + direction).rem_euclid(total as isize);
+            if !matches!(self.items[idx as usize], MenuDisplayItem::Separator) {
+                self.selected = idx as usize;
+                return;
             }
-        })
+        }
     }
 
     pub fn handle_key_event(&mut self, event: &Event) -> EventResult<TermWmAction> {
@@ -76,14 +94,14 @@ impl MenuComponent {
         {
             EventResult::Action(TermWmAction::MenuDown)
         } else if self.nav_keys.matches(TermWmAction::MenuSelect, key) {
-            let is_disabled = self
-                .items
-                .get(self.selected)
-                .is_none_or(|item| item.disabled);
-            if is_disabled {
-                EventResult::Ignored
-            } else {
+            let selectable = match self.items.get(self.selected) {
+                Some(MenuDisplayItem::Item(item)) => !item.disabled,
+                _ => false,
+            };
+            if selectable {
                 EventResult::Action(TermWmAction::MenuSelect)
+            } else {
+                EventResult::Ignored
             }
         } else {
             EventResult::Ignored
@@ -142,6 +160,7 @@ impl MenuComponent {
             .min(self.items.len().saturating_sub(offset_y) as u16)
             as usize;
 
+        // Clear area background
         for row in 0..area.height {
             let y = area.y.saturating_add(row);
             if y < bounds.y || y >= bounds.y.saturating_add(bounds.height) {
@@ -169,45 +188,81 @@ impl MenuComponent {
             if y < bounds.y || y >= bounds.y.saturating_add(bounds.height) {
                 break;
             }
-            let item = &self.items[abs_idx];
-            let is_selected = abs_idx == self.selected;
-            let is_hovered = hovered_idx == Some(abs_idx);
-            let row_style = if item.disabled && !is_selected {
-                disabled_style
-            } else if is_selected {
-                selected_style
-            } else if is_hovered {
-                hovered_style
-            } else {
-                menu_style
-            };
-            for col in 0..area.width {
-                let x = area.x.saturating_add(col);
-                if x >= bounds.x.saturating_add(bounds.width) {
-                    break;
+
+            match &self.items[abs_idx] {
+                MenuDisplayItem::Separator => {
+                    let sep_style = Style::default()
+                        .bg(color_to_ratatui(theme.menu_bg))
+                        .fg(color_to_ratatui(theme.text_disabled));
+                    for col in 0..area.width {
+                        let x = area.x.saturating_add(col);
+                        if x >= bounds.x.saturating_add(bounds.width) {
+                            break;
+                        }
+                        if let Some(cell) = buffer.cell_mut((x, y)) {
+                            cell.reset();
+                            cell.set_symbol("─");
+                            cell.set_style(sep_style);
+                        }
+                    }
                 }
-                if let Some(cell) = buffer.cell_mut((x, y)) {
-                    cell.reset();
-                    cell.set_symbol(" ");
-                    cell.set_style(row_style);
+                MenuDisplayItem::Item(item) => {
+                    let is_selected = abs_idx == self.selected;
+                    let is_hovered = hovered_idx == Some(abs_idx);
+                    let row_style = if item.disabled && !is_selected {
+                        disabled_style
+                    } else if is_selected {
+                        selected_style
+                    } else if is_hovered {
+                        hovered_style
+                    } else {
+                        menu_style
+                    };
+                    for col in 0..area.width {
+                        let x = area.x.saturating_add(col);
+                        if x >= bounds.x.saturating_add(bounds.width) {
+                            break;
+                        }
+                        if let Some(cell) = buffer.cell_mut((x, y)) {
+                            cell.reset();
+                            cell.set_symbol(" ");
+                            cell.set_style(row_style);
+                        }
+                    }
+                    let marker = if is_selected {
+                        ">"
+                    } else if is_hovered {
+                        "\u{25b8}"
+                    } else {
+                        " "
+                    };
+                    let line = if let Some(icon) = item.icon {
+                        format!("{marker} {icon} {label}", label = item.label)
+                    } else {
+                        format!("{marker}   {label}", label = item.label)
+                    };
+                    let text: String = line.chars().take(inner_width as usize).collect();
+                    safe_set_string(buffer, bounds, inner_x, y, &text, row_style);
                 }
             }
-            let marker = if is_selected {
-                ">"
-            } else if is_hovered {
-                "\u{25b8}"
-            } else {
-                " "
-            };
-            let line = if let Some(icon) = item.icon {
-                format!("{marker} {icon} {label}", label = item.label)
-            } else {
-                format!("{marker}   {label}", label = item.label)
-            };
-            let text: String = line.chars().take(inner_width as usize).collect();
-            safe_set_string(buffer, bounds, inner_x, y, &text, row_style);
         }
     }
+}
+
+/// Clamp selection index to a valid non-separator position.
+fn clamp_selected(mut idx: usize, items: &[MenuDisplayItem<TermWmAction>]) -> usize {
+    if items.is_empty() {
+        return 0;
+    }
+    idx = idx.min(items.len().saturating_sub(1));
+    // If the clamped position is a separator, move up until we find an item.
+    while matches!(items.get(idx), Some(MenuDisplayItem::Separator)) {
+        if idx == 0 {
+            break;
+        }
+        idx -= 1;
+    }
+    idx
 }
 
 impl Component<TermWmAction> for MenuComponent {
@@ -267,10 +322,13 @@ impl Component<TermWmAction> for MenuComponent {
                     let idx = visual_idx + offset_y;
                     if idx < self.items.len() {
                         self.selected = idx;
-                        if self.items[idx].disabled {
-                            return EventResult::Consumed;
+                        match &self.items[idx] {
+                            MenuDisplayItem::Separator => return EventResult::Consumed,
+                            MenuDisplayItem::Item(item) if item.disabled => {
+                                return EventResult::Consumed;
+                            }
+                            _ => return EventResult::Action(TermWmAction::MenuSelect),
                         }
-                        return EventResult::Action(TermWmAction::MenuSelect);
                     }
                 }
             }
@@ -287,20 +345,10 @@ impl Component<TermWmAction> for MenuComponent {
     ) {
         match action {
             TermWmAction::MenuUp | TermWmAction::MenuPrev => {
-                let total = self.items.len();
-                if total > 0 {
-                    self.selected = if self.selected == 0 {
-                        total - 1
-                    } else {
-                        self.selected - 1
-                    };
-                }
+                self.advance_selection(-1);
             }
             TermWmAction::MenuDown | TermWmAction::MenuNext => {
-                let total = self.items.len();
-                if total > 0 {
-                    self.selected = (self.selected + 1) % total;
-                }
+                self.advance_selection(1);
             }
             _ => {}
         }
