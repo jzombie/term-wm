@@ -1528,37 +1528,50 @@ mod tests {
             None, crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
+        // Register a managed layout so toggle_tiling has state to flip
         let k = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.transition_window(k, crate::window::WindowState::Mapped);
+        wm.register_managed_layout(LayoutRect { x: 0, y: 0, width: 80, height: 24 });
+        assert!(wm.managed_layout.is_some());
         let mut app = App { wm };
         let mut queue = std::collections::VecDeque::new();
         dispatch_action(&mut app, k, TermWmAction::ToggleTiling, &mut queue);
-        // No crash = success. ToggleTiling modifies managed_layout state.
+        // ToggleTiling clears managed_layout when disabling
+        // (exact outcome depends on config, but the call must not panic)
     }
 
     #[test]
     fn dispatch_action_unknown_forwards_to_component() {
         use crate::window::WindowManager;
+        use crate::window::test_component::ActionRecorder;
         struct App { wm: WindowManager<TestComponent> }
         impl WindowManagerHost<TestComponent> for App {
             fn wm(&mut self) -> &mut WindowManager<TestComponent> { &mut self.wm }
         }
-        // Use ActionRecorder to verify unknown actions reach comp.update
         let mut wm = WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None, crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let k = wm.create_window(TestComponent::ActionRecorder(
-            crate::window::test_component::ActionRecorder {
-                actions: Vec::new(), received_mouse_bytes: false }));
+        let recorder = ActionRecorder { actions: Vec::new(), received_mouse_bytes: false };
+        let k = wm.create_window(TestComponent::ActionRecorder(recorder));
         wm.transition_window(k, crate::window::WindowState::Mapped);
         wm.focus_window_key(k);
         let mut app = App { wm };
         let mut queue = std::collections::VecDeque::new();
         dispatch_action(&mut app, k, TermWmAction::ScrollView(42), &mut queue);
-        // ActionRecorder records the action — no panic means it was forwarded
+        // Verify the action was forwarded to the component's update method
+        if let Some(comp) = app.wm.component_for_key_mut(k) {
+            if let TestComponent::ActionRecorder(r) = comp {
+                assert!(r.actions.contains(&TermWmAction::ScrollView(42)),
+                    "ActionRecorder should have received the forwarded action");
+            } else {
+                panic!("expected ActionRecorder component");
+            }
+        } else {
+            panic!("component should exist at the created key");
+        }
     }
 
     #[test]
