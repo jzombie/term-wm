@@ -1077,10 +1077,10 @@ mod window_mode_tests {
     use super::*;
     use crate::app_context::AppContext;
     use crate::components::NoopComponent;
-    use crate::wm_config::WmConfig;
     use crate::window::window_manager::MonocleMode;
     use crate::window::window_manager::Window;
     use crate::window::{ComponentKey, FloatRectSpec};
+    use crate::wm_config::WmConfig;
     use std::sync::Arc;
 
     fn make_wm() -> WindowManager<NoopComponent> {
