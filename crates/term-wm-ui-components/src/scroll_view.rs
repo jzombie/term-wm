@@ -306,7 +306,7 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
         // Vertical scrollbar: assumes it is immediately to the right of viewport
         let current_off_y = self.scroll_state.borrow().offset_y;
         let current_off_x = { self.scroll_state.borrow().offset_x };
-        if content_h > sa.height as usize {
+        if content_h > va.height as usize {
             let sb_area = LayoutRect {
                 x: va.x.saturating_add(i32::from(va.width)),
                 y: va.y,
@@ -317,7 +317,7 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
                 mouse,
                 sb_area,
                 content_h,
-                sa.height as usize,
+                va.height as usize,
                 current_off_y,
                 ScrollbarAxis::Vertical,
             ) {
@@ -328,7 +328,7 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
             }
         }
 
-        if content_w > sa.width as usize {
+        if content_w > va.width as usize {
             let sb_area = LayoutRect {
                 x: va.x,
                 y: va.y.saturating_add(i32::from(va.height)),
@@ -339,7 +339,7 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
                 mouse,
                 sb_area,
                 content_w,
-                sa.width as usize,
+                va.width as usize,
                 current_off_x,
                 ScrollbarAxis::Horizontal,
             ) {
@@ -867,6 +867,32 @@ mod tests {
         );
         assert!(r.is_none());
         assert!(!drag.dragging);
+    }
+
+    #[test]
+    fn scrollbar_drag_to_bottom_reaches_max_offset() {
+        let mut drag = ScrollbarDrag::new();
+        let area = sb_area();
+        let total = SB_TOTAL;
+        let view = SB_VIEW;
+        let max_offset = total - view;
+        // Press on thumb at mouse_rel=2 (middleish of thumb)
+        let press = mouse_event(MouseEventKind::Press(MouseButton::Left), 79, 3);
+        let r1 = drag.handle_mouse(&press, area, total, view, 0, ScrollbarAxis::Vertical);
+        assert_eq!(r1, Some(0));
+        assert!(drag.dragging);
+        // Drag to the very bottom cell of the track (mouse_rel = SB_H - 1)
+        let drag_evt = mouse_event(
+            MouseEventKind::Drag(MouseButton::Left),
+            79,
+            (SB_H - 1) as u16,
+        );
+        let r2 = drag.handle_mouse(&drag_evt, area, total, view, 0, ScrollbarAxis::Vertical);
+        assert_eq!(
+            r2,
+            Some(max_offset),
+            "dragging to bottom should reach max_offset={max_offset}"
+        );
     }
 
     #[test]
