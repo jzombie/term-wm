@@ -852,6 +852,25 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
             p.render(backend, bottom_area, &ctx, &mut bottom_hb);
         }
         wm.hitbox_registry_mut().merge(bottom_hb);
+
+        // Register the bottom panel's outer hitbox for the overlay area, same
+        // reason as top panel above — the panel's render ignores the registry.
+        #[allow(clippy::manual_option_zip)]
+        let bottom_panel_meta = wm
+            .get_semantic_component(ComponentTag::BottomPanel)
+            .and_then(|p| p.hitbox_id())
+            .and_then(|hitbox_id| {
+                wm.semantic_registry
+                    .get(&ComponentTag::BottomPanel)
+                    .copied()
+                    .map(|layer_id| (hitbox_id, layer_id))
+            });
+
+        if let Some((hitbox_id, layer_id)) = bottom_panel_meta {
+            use term_wm_core::hitbox_registry::ComponentOwner;
+            wm.hitbox_registry_mut()
+                .register(hitbox_id, ComponentOwner::Layer(layer_id), bottom_area);
+        }
     }
 
     let hover_pos = wm.hover_pos();
