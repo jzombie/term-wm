@@ -63,6 +63,7 @@ pub struct CommandPaletteComponent {
     display_cache: Vec<DisplayCacheEntry>,
     nav_keys: KeyBindings,
     list_scroll: ScrollViewComponent<MenuComponent>,
+    last_display_sel: usize,
     last_list_area: LayoutRect,
 }
 
@@ -121,6 +122,7 @@ impl CommandPaletteComponent {
             display_cache: Vec::new(),
             nav_keys,
             list_scroll,
+            last_display_sel: 0,
             last_list_area: LayoutRect::default(),
         }
     }
@@ -567,10 +569,26 @@ impl Component<TermWmAction> for CommandPaletteComponent {
             .borrow_mut()
             .set_selected(display_sel);
 
-        // Set content height for ScrollViewComponent
+        // Set content height for ScrollViewComponent and auto-scroll to keep selected item visible
         let total = self.display_nodes.len();
         let handle = self.list_scroll.scroll_handle();
-        handle.scroll.borrow_mut().content_height = total;
+        {
+            let mut scroll = handle.scroll.borrow_mut();
+            scroll.content_height = total;
+
+            // Only auto-scroll when the selection index changes (not on manual scroll)
+            if display_sel != self.last_display_sel {
+                let list_height = bounds.height.saturating_sub(1) as usize;
+                if list_height > 0 {
+                    if display_sel < scroll.offset_y {
+                        scroll.offset_y = display_sel;
+                    } else if display_sel >= scroll.offset_y.saturating_add(list_height) {
+                        scroll.offset_y = display_sel.saturating_sub(list_height).saturating_add(1);
+                    }
+                }
+            }
+        }
+        self.last_display_sel = display_sel;
 
         // Clear background
         let menu_style = Style::default()
