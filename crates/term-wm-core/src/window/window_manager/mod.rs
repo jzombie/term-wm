@@ -2709,9 +2709,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             ));
             {
                 let label = if self.managed_layout.is_some() {
-                    "View: Enable Tiling"
+                    "View: Float Windows"
                 } else {
-                    "View: Disable Tiling"
+                    "View: Tile Windows"
                 };
                 let mut item = mi(label, Some("⊞"), crate::actions::TermWmAction::ToggleTiling);
                 if self.is_monocle()
