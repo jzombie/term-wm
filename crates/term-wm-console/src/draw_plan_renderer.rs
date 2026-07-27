@@ -1118,7 +1118,7 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
         focused,
         floating,
 
-        hover_pos,
+        hover_pos: _,
         theme,
         wm_buttons,
         borders_enabled,
@@ -1220,24 +1220,10 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
                     TermWmAction::MaximizeWindow(..) => theme.accent.to_ratatui(),
                     _ => theme.decorator_header_fg.to_ratatui(),
                 };
-                let is_hovered = hover_pos == Some((bx, header_y));
-                let style = if is_hovered {
-                    let hover_bg = match btn.action {
-                        TermWmAction::CloseWindow(..) => theme.error.to_ratatui(),
-                        TermWmAction::MinimizeWindow(..) => theme.warning.to_ratatui(),
-                        TermWmAction::MaximizeWindow(..) => theme.accent.to_ratatui(),
-                        _ => theme.accent_alt.to_ratatui(),
-                    };
-                    Style::default()
-                        .bg(hover_bg)
-                        .fg(header_bg.to_ratatui())
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                        .bg(header_bg.to_ratatui())
-                        .fg(stoplight_fg)
-                        .add_modifier(Modifier::BOLD)
-                };
+                let style = Style::default()
+                    .bg(header_bg.to_ratatui())
+                    .fg(stoplight_fg)
+                    .add_modifier(Modifier::BOLD);
                 cell.set_style(style);
             }
         }
