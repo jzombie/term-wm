@@ -2304,7 +2304,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
         if !top_claimed.is_empty() && crate::layout::rect_contains(top_claimed, col, row) {
             let ctx = self.component_context(true).with_screen_area(top_claimed);
-            if let Some(panel) = self.get_semantic_component_mut(layer_manager::ComponentTag::TopPanel)
+            if let Some(panel) =
+                self.get_semantic_component_mut(layer_manager::ComponentTag::TopPanel)
                 && let EventResult::Action(action) = panel.handle_events(event, &ctx)
             {
                 return Some(action);
@@ -2312,8 +2313,11 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         }
 
         if !bottom_claimed.is_empty() && crate::layout::rect_contains(bottom_claimed, col, row) {
-            let ctx = self.component_context(true).with_screen_area(bottom_claimed);
-            if let Some(panel) = self.get_semantic_component_mut(layer_manager::ComponentTag::BottomPanel)
+            let ctx = self
+                .component_context(true)
+                .with_screen_area(bottom_claimed);
+            if let Some(panel) =
+                self.get_semantic_component_mut(layer_manager::ComponentTag::BottomPanel)
                 && let EventResult::Action(action) = panel.handle_events(event, &ctx)
             {
                 return Some(action);
@@ -6715,7 +6719,12 @@ mod tests {
             std::collections::HashMap::new(),
         );
         // No panel regions set → no hit
-        wm.top_claimed = LayoutRect { x: 0, y: 0, width: 80, height: 1 };
+        wm.top_claimed = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
         let event = crate::events::Event::Mouse(crate::events::MouseEvent {
             kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
             column: 5,
@@ -6736,7 +6745,12 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        wm.top_claimed = LayoutRect { x: 0, y: 0, width: 80, height: 1 };
+        wm.top_claimed = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
         let event = crate::events::Event::Mouse(crate::events::MouseEvent {
             kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
             column: 5,
