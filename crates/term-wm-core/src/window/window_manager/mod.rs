@@ -2299,31 +2299,40 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// from clicking a window title tab), or `None` if the click missed all panels
     /// or the panel ignored it.
     pub fn panel_hit_test(&mut self, col: u16, row: u16, event: &Event) -> Option<TermWmAction> {
-        let top_claimed = self.top_claimed;
-        let bottom_claimed = self.bottom_claimed;
+        use crate::mouse_coord::{CoordSpace, MousePosition};
 
-        // 1. Check top claimed panel (tiled mode)
-        if !top_claimed.is_empty() && crate::layout::rect_contains(top_claimed, col, row) {
-            let ctx = self.component_context(true).with_screen_area(top_claimed);
-            if let Some(panel) =
-                self.get_semantic_component_mut(layer_manager::ComponentTag::TopPanel)
-                && let EventResult::Action(action) = panel.handle_events(event, &ctx)
-            {
-                return Some(action);
-            }
-        }
+        let position = MousePosition {
+            column: col as i16,
+            row: row as i16,
+            space: CoordSpace::Screen,
+        };
+        let (hitbox_id, owner, hit_rect) = self.hitbox_registry.hit_test(position)?;
 
-        // 2. Check bottom claimed panel (tiled mode)
-        if !bottom_claimed.is_empty() && crate::layout::rect_contains(bottom_claimed, col, row) {
-            let ctx = self
-                .component_context(true)
-                .with_screen_area(bottom_claimed);
-            if let Some(panel) =
-                self.get_semantic_component_mut(layer_manager::ComponentTag::BottomPanel)
-                && let EventResult::Action(action) = panel.handle_events(event, &ctx)
-            {
-                return Some(action);
+        match owner {
+            // Panel layers (TopPanel, BottomPanel, FAB) — pure UI chrome, safe.
+            ComponentOwner::Layer(layer_id) => {
+                let ctx = self
+                    .component_context(false)
+                    .with_screen_area(hit_rect)
+                    .with_active_hitbox(hitbox_id);
+                if let Some(layer_comp) = self.layer_manager.get_mut(layer_id)
+                    && let EventResult::Action(action) =
+                        layer_comp.handle_events(event, &ctx)
+                {
+                    return Some(action);
+                }
             }
+            // Non-palette overlays (floating popovers, etc.)
+            ComponentOwner::Overlay(key) if Some(key) != self.command_palette_key => {
+                    if let Some(overlay) = self.overlays.get_mut(key) {
+                        let ctx = ComponentContext::new(true).with_screen_area(hit_rect);
+                        if let EventResult::Action(action) = overlay.handle_events(event, &ctx) {
+                            return Some(action);
+                        }
+                    }
+            }
+            // Window content, chrome, command palette — skip (PTY safety).
+            _ => {}
         }
 
         None
@@ -6760,5 +6769,62 @@ mod tests {
             modifiers: crate::events::KeyModifiers::NONE,
         });
         assert_eq!(wm.panel_hit_test(5, 10, &event), None);
+    }
+
+    #[test]
+    fn panel_hit_test_via_hitbox_registry() {
+        // Verify that a Layer hitbox in the registry is dispatched to the
+        // layer component (even if it returns Ignored).
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        // Register a Layer hitbox in the registry
+        let layer_id = crate::window::window_manager::layer_manager::LayerId(42);
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Layer(layer_id),
+            LayoutRect { x: 0, y: 0, width: 10, height: 10 },
+        );
+
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        // No layer component registered at layer_id, so get_mut returns
+        // None and panel_hit_test returns None (no crash).
+        assert_eq!(wm.panel_hit_test(5, 5, &event), None);
+    }
+
+    #[test]
+    fn panel_hit_test_skips_window_hitbox() {
+        // Verify that Window hitboxes are NOT dispatched (PTY safety).
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        // Create a window and register its key as a hitbox owner
+        let keys = make_keys(&mut wm, 1);
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Window(keys[0]),
+            LayoutRect { x: 0, y: 0, width: 80, height: 24 },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        // Window hitbox is explicitly skipped → None
+        assert_eq!(wm.panel_hit_test(5, 5, &event), None);
     }
 }

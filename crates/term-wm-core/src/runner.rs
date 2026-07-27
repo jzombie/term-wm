@@ -447,9 +447,8 @@ where
                         && !palette_bounds.contains(mouse_evt.column, mouse_evt.row)
                     {
                         app.wm().close_command_palette();
-                        app.wm()
-                            .handle_mouse_focus_click(mouse_evt.column, mouse_evt.row);
-                        // Route to panels if click landed on one (safe: no PTY forwarding)
+                        // Check panel click FIRST (handles tab switches in monocle
+                        // mode where window spans full screen including panel row)
                         if let Some(action) =
                             app.wm()
                                 .panel_hit_test(mouse_evt.column, mouse_evt.row, &evt)
@@ -457,6 +456,10 @@ where
                             let mut queue = std::collections::VecDeque::new();
                             queue.push_back((app.wm().focused_window(), action));
                             drain_action_queue(app, &mut queue);
+                        } else {
+                            // Fallback: activate window under cursor
+                            app.wm()
+                                .handle_mouse_focus_click(mouse_evt.column, mouse_evt.row);
                         }
                         update_selection_snapshot(app);
                         return flush_state_changes(
