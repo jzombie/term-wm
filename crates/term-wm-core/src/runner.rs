@@ -65,6 +65,71 @@ pub trait WindowManagerHost<
     }
 }
 
+/// Single authoritative action dispatcher. Both the component action queue
+/// and the overlay keybinding barrier route through this function.
+fn dispatch_action<
+    C: Component<TermWmAction>,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+    A: WindowManagerHost<C, L, O>,
+>(
+    app: &mut A,
+    key: WindowKey,
+    action: TermWmAction,
+    queue: &mut VecDeque<(WindowKey, TermWmAction)>,
+) {
+    match action {
+        TermWmAction::Quit | TermWmAction::ExitUi => app.open_exit_confirm(),
+        TermWmAction::Help | TermWmAction::OpenHelp => app.open_help_overlay(),
+        TermWmAction::CloseWindow(k) => app.wm().close_window(k),
+        TermWmAction::NewWindow => drop(app.wm_new_window()),
+        TermWmAction::MinimizeWindow(k) => app.wm().minimize_window(k),
+        TermWmAction::MaximizeWindow(k) => app.wm().toggle_maximize(k),
+        TermWmAction::ToggleMonocle => app.wm().toggle_monocle(),
+        TermWmAction::ToggleTiling => app.wm().toggle_tiling(),
+        TermWmAction::ToggleMouseCapture => app.wm().toggle_mouse_capture(),
+        TermWmAction::ToggleClipboardMode => app.wm().toggle_clipboard_enabled(),
+        TermWmAction::ToggleWindowSelection => app.wm().toggle_window_selection(),
+        TermWmAction::ToggleDebugWindow => app.toggle_debug_window(),
+        TermWmAction::ToggleSystemPanel => app.toggle_system_panel(),
+        TermWmAction::FocusWindow(k) => {
+            if app.wm().window_state(k) == Some(crate::window::WindowState::Iconic) {
+                app.wm()
+                    .transition_window(k, crate::window::WindowState::Mapped);
+            }
+            app.wm().focus_window_key(k);
+        }
+        TermWmAction::FocusNext => app.wm().advance_focus(true),
+        TermWmAction::FocusPrev => app.wm().advance_focus(false),
+        TermWmAction::OpenCommandPalette => {
+            if app.wm().command_menu_visible() {
+                app.wm().close_command_palette();
+            } else {
+                app.open_command_palette();
+            }
+        }
+        TermWmAction::SendNotification(msg) => {
+            app.wm()
+                .push_notification(msg, std::time::Duration::from_secs(3));
+        }
+        TermWmAction::Callback(f) => f(),
+        TermWmAction::RequestKeyboardFocus(id) => {
+            app.wm().set_keyboard_focus(key, id);
+        }
+        TermWmAction::PasteClipboard => {
+            if let Some(text) = app.wm().clipboard_mut().and_then(|cb| cb.get().ok()) {
+                queue.push_back((key, TermWmAction::ClipboardPaste(text)));
+            }
+        }
+        action => {
+            let ctx = app.wm().component_context_for(true, key);
+            if let Some(comp) = app.wm().component_for_key_mut(key) {
+                comp.update(action, &ctx, queue);
+            }
+        }
+    }
+}
+
 fn drain_action_queue<
     C: Component<TermWmAction>,
     L: WmComponent,
@@ -75,62 +140,7 @@ fn drain_action_queue<
     queue: &mut VecDeque<(WindowKey, TermWmAction)>,
 ) {
     while let Some((key, action)) = queue.pop_front() {
-        match action {
-            TermWmAction::SendNotification(msg) => {
-                tracing::info!("drain_action_queue: SendNotification({})", msg);
-                app.wm()
-                    .push_notification(msg, std::time::Duration::from_secs(3));
-            }
-            TermWmAction::OpenCommandPalette => {
-                if app.wm().command_menu_visible() {
-                    app.wm().close_command_palette();
-                } else {
-                    app.open_command_palette();
-                }
-            }
-            TermWmAction::RequestKeyboardFocus(id) => {
-                app.wm().set_keyboard_focus(key, id);
-            }
-            TermWmAction::PasteClipboard => {
-                let text = app.wm().clipboard_mut().and_then(|cb| cb.get().ok());
-                if let Some(text) = text {
-                    queue.push_back((key, TermWmAction::ClipboardPaste(text)));
-                }
-            }
-            TermWmAction::ToggleMouseCapture => {
-                app.wm().toggle_mouse_capture();
-            }
-            TermWmAction::ToggleWindowSelection => {
-                app.wm().toggle_window_selection();
-            }
-            TermWmAction::ToggleClipboardMode => {
-                app.wm().toggle_clipboard_enabled();
-            }
-            TermWmAction::ToggleTiling => {
-                app.wm().toggle_tiling();
-            }
-            TermWmAction::FocusWindow(k) => {
-                let state = app.wm().window_state(k);
-                if state == Some(crate::window::WindowState::Iconic) {
-                    app.wm()
-                        .transition_window(k, crate::window::WindowState::Mapped);
-                }
-                app.wm().focus_window_key(k);
-            }
-            TermWmAction::FocusNext => {
-                app.wm().advance_focus(true);
-            }
-            TermWmAction::FocusPrev => {
-                app.wm().advance_focus(false);
-            }
-            TermWmAction::Callback(f) => f(),
-            action => {
-                let ctx = app.wm().component_context_for(true, key);
-                if let Some(comp) = app.wm().component_for_key_mut(key) {
-                    comp.update(action, &ctx, queue);
-                }
-            }
-        }
+        dispatch_action(app, key, action, queue);
     }
 }
 
@@ -476,60 +486,15 @@ where
                     }
 
                     if let Some(action) = app.wm().handle_command_palette_event(&evt) {
-                        match action {
-                            TermWmAction::CloseMenu => {}
-                            TermWmAction::ToggleDebugWindow => {
-                                app.toggle_debug_window();
-                            }
-                            TermWmAction::ToggleSystemPanel => {
-                                app.toggle_system_panel();
-                            }
-                            TermWmAction::Help | TermWmAction::OpenHelp => {
-                                app.open_help_overlay();
-                            }
-                            TermWmAction::Quit | TermWmAction::ExitUi => {
-                                app.open_exit_confirm();
-                            }
-                            TermWmAction::CloseWindow(key) => {
-                                app.wm().close_window(key);
-                            }
-                            TermWmAction::NewWindow => {
-                                app.wm_new_window()?;
-                            }
-                            TermWmAction::MinimizeWindow(key) => {
-                                app.wm().minimize_window(key);
-                            }
-                            TermWmAction::MaximizeWindow(key) => {
-                                app.wm().toggle_maximize(key);
-                            }
-                            TermWmAction::ToggleMonocle => {
-                                app.wm().toggle_monocle();
-                            }
-                            TermWmAction::ToggleTiling => {
-                                app.wm().toggle_tiling();
-                            }
-                            TermWmAction::ToggleMouseCapture => app.wm().toggle_mouse_capture(),
-                            TermWmAction::ToggleClipboardMode => {
-                                app.wm().toggle_clipboard_enabled()
-                            }
-                            TermWmAction::ToggleWindowSelection => {
-                                app.wm().toggle_window_selection()
-                            }
-                            TermWmAction::FocusWindow(k) => {
-                                let state = app.wm().window_state(k);
-                                if state == Some(crate::window::WindowState::Iconic) {
-                                    app.wm()
-                                        .transition_window(k, crate::window::WindowState::Mapped);
-                                }
-                                app.wm().focus_window_key(k);
-                            }
-                            TermWmAction::SendNotification(msg) => {
-                                app.wm()
-                                    .push_notification(msg, std::time::Duration::from_secs(3));
-                            }
-                            TermWmAction::Callback(f) => f(),
-                            _ => {}
+                        let key = app.wm().focused_window();
+                        let mut actions = std::collections::VecDeque::new();
+                        // NewWindow returns Result — propagate the error
+                        if matches!(action, TermWmAction::NewWindow) {
+                            app.wm_new_window()?;
+                        } else {
+                            actions.push_back((key, action));
                         }
+                        drain_action_queue(app, &mut actions);
                     }
                     // Focus routing while menu is open (Tab/Shift+Tab)
                     if matches!(&evt, Event::Key(_)) && app.wm().handle_focus_event(&evt) {
