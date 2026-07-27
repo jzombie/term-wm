@@ -6789,7 +6789,12 @@ mod tests {
         wm.hitbox_registry.register(
             crate::hitbox_registry::HitboxId::new(),
             crate::hitbox_registry::ComponentOwner::Window(keys[0]),
-            LayoutRect { x: 0, y: 0, width: 80, height: 24 },
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
         );
         let event = crate::events::Event::Mouse(crate::events::MouseEvent {
             kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
@@ -6816,10 +6821,15 @@ mod tests {
         // Register a Chrome(Drag) hitbox
         wm.hitbox_registry.register(
             crate::hitbox_registry::HitboxId::new(),
-            crate::hitbox_registry::ComponentOwner::Chrome(
-                crate::chrome::ChromeTarget::Drag(keys[0]),
-            ),
-            LayoutRect { x: 0, y: 0, width: 80, height: 1 },
+            crate::hitbox_registry::ComponentOwner::Chrome(crate::chrome::ChromeTarget::Drag(
+                keys[0],
+            )),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 1,
+            },
         );
         let event = crate::events::Event::Mouse(crate::events::MouseEvent {
             kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
@@ -6848,7 +6858,12 @@ mod tests {
             crate::hitbox_registry::ComponentOwner::Layer(
                 crate::window::window_manager::layer_manager::LayerId(42),
             ),
-            LayoutRect { x: 0, y: 0, width: 10, height: 10 },
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
         );
         let event = crate::events::Event::Mouse(crate::events::MouseEvent {
             kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),

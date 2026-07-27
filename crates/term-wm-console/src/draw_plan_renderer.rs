@@ -848,7 +848,9 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
         };
         let mut bottom_hb = HitboxRegistry::new();
         // Extract hints before mutable borrow (borrow checker safety).
-        let hints = wm.keybindings().bottom_hints(term_wm_core::constants::MAX_BOTTOM_HINTS);
+        let hints = wm
+            .keybindings()
+            .bottom_hints(term_wm_core::constants::MAX_BOTTOM_HINTS);
         if let Some(p) = wm.get_semantic_component_mut(ComponentTag::BottomPanel) {
             p.process_action(&ComponentAction::SetKeybindingHints(hints));
             let ctx = ComponentContext::new(false).with_screen_area(bottom_area);
@@ -871,8 +873,11 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
 
         if let Some((hitbox_id, layer_id)) = bottom_panel_meta {
             use term_wm_core::hitbox_registry::ComponentOwner;
-            wm.hitbox_registry_mut()
-                .register(hitbox_id, ComponentOwner::Layer(layer_id), bottom_area);
+            wm.hitbox_registry_mut().register(
+                hitbox_id,
+                ComponentOwner::Layer(layer_id),
+                bottom_area,
+            );
         }
     }
 
