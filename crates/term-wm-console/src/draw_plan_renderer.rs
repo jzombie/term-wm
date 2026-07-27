@@ -818,6 +818,27 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
         }
         wm.hitbox_registry_mut().merge(top_hb);
 
+        // Register the top panel's outer hitbox for the overlay area so
+        // handle_outside_click can find it via hit_test_all and dispatch
+        // to the panel component (which hit-tests sub-elements internally).
+        // Extract metadata first to drop the immutable borrow before mutation.
+        #[allow(clippy::manual_option_zip)]
+        let panel_meta = wm
+            .get_semantic_component(ComponentTag::TopPanel)
+            .and_then(|p| p.hitbox_id())
+            .and_then(|hitbox_id| {
+                wm.semantic_registry
+                    .get(&ComponentTag::TopPanel)
+                    .copied()
+                    .map(|layer_id| (hitbox_id, layer_id))
+            });
+
+        if let Some((hitbox_id, layer_id)) = panel_meta {
+            use term_wm_core::hitbox_registry::ComponentOwner;
+            wm.hitbox_registry_mut()
+                .register(hitbox_id, ComponentOwner::Layer(layer_id), top_area);
+        }
+
         // Bottom panel overlay in monocle mode — keybinding hints
         let bottom_area = LayoutRect {
             x: full_area.x,
@@ -826,11 +847,38 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
             height: 1,
         };
         let mut bottom_hb = HitboxRegistry::new();
+        // Extract hints before mutable borrow (borrow checker safety).
+        let hints = wm
+            .keybindings()
+            .bottom_hints(term_wm_core::constants::MAX_BOTTOM_HINTS);
         if let Some(p) = wm.get_semantic_component_mut(ComponentTag::BottomPanel) {
+            p.process_action(&ComponentAction::SetKeybindingHints(hints));
             let ctx = ComponentContext::new(false).with_screen_area(bottom_area);
             p.render(backend, bottom_area, &ctx, &mut bottom_hb);
         }
         wm.hitbox_registry_mut().merge(bottom_hb);
+
+        // Register the bottom panel's outer hitbox for the overlay area, same
+        // reason as top panel above — the panel's render ignores the registry.
+        #[allow(clippy::manual_option_zip)]
+        let bottom_panel_meta = wm
+            .get_semantic_component(ComponentTag::BottomPanel)
+            .and_then(|p| p.hitbox_id())
+            .and_then(|hitbox_id| {
+                wm.semantic_registry
+                    .get(&ComponentTag::BottomPanel)
+                    .copied()
+                    .map(|layer_id| (hitbox_id, layer_id))
+            });
+
+        if let Some((hitbox_id, layer_id)) = bottom_panel_meta {
+            use term_wm_core::hitbox_registry::ComponentOwner;
+            wm.hitbox_registry_mut().register(
+                hitbox_id,
+                ComponentOwner::Layer(layer_id),
+                bottom_area,
+            );
+        }
     }
 
     let hover_pos = wm.hover_pos();

@@ -22,6 +22,10 @@ use term_wm_ui_components::helpers::{downcast_ratatui, layout_rect_to_clipped_re
 
 pub struct WmCommandPaletteComponent {
     area: Cell<LayoutRect>,
+    /// The actual dialog rectangle within the managed area (centered, sized to
+    /// content). Used for spatial hit-testing — clicks outside this rect
+    /// dismiss the palette and activate the window underneath.
+    dialog_bounds: Cell<LayoutRect>,
     dialog: DialogOverlayComponent,
     palette: CommandPaletteComponent,
     managed_area: LayoutRect,
@@ -54,6 +58,7 @@ impl WmCommandPaletteComponent {
         dialog.set_auto_close_on_outside_click(true);
         Self {
             area: Cell::new(LayoutRect::default()),
+            dialog_bounds: Cell::new(LayoutRect::default()),
             dialog,
             palette: CommandPaletteComponent::new(),
             managed_area: LayoutRect::default(),
@@ -153,6 +158,7 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
                 width: rect.width,
                 height: rect.height,
             };
+            self.dialog_bounds.set(content_rect);
             if content_rect.width > 0 && content_rect.height > 0 {
                 let ratatui = downcast_ratatui(backend);
                 Block::default()
@@ -175,6 +181,7 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
             width: rect.width,
             height: rect.height,
         };
+        self.dialog_bounds.set(content_rect);
 
         if content_rect.width == 0 || content_rect.height == 0 {
             return;
@@ -305,6 +312,15 @@ impl Overlay<TermWmAction> for WmCommandPaletteComponent {
     fn set_tab_outline(&mut self, expires_at: Option<Instant>) {
         self.tab_outline_until = expires_at;
     }
+
+    fn render_area(&self) -> Option<LayoutRect> {
+        let bounds = self.dialog_bounds.get();
+        if bounds.width > 0 && bounds.height > 0 {
+            Some(bounds)
+        } else {
+            None
+        }
+    }
 }
 
 impl WmComponent for WmCommandPaletteComponent {
@@ -349,7 +365,9 @@ impl WmComponent for WmCommandPaletteComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use term_wm_console::RatatuiBackend;
     use term_wm_core::components::MenuItem;
+    use term_wm_core::components::Overlay;
 
     #[test]
     fn new_default_state() {
@@ -485,5 +503,56 @@ mod tests {
         let (consumed, remaining) = palette.consume_area(available);
         assert_eq!(consumed, LayoutRect::default());
         assert_eq!(remaining, available);
+    }
+
+    #[test]
+    fn render_area_returns_none_before_render() {
+        let palette = WmCommandPaletteComponent::new();
+        // dialog_bounds defaults to zero dimensions, so render_area returns None
+        assert_eq!(
+            <WmCommandPaletteComponent as Overlay<TermWmAction>>::render_area(&palette),
+            None
+        );
+    }
+
+    #[test]
+    fn render_area_returns_some_after_render() {
+        let mut palette = WmCommandPaletteComponent::new();
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        palette.set_managed_area(area);
+        palette.show();
+
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let mut backend = RatatuiBackend::new_simple(
+            buffer,
+            ratatui::prelude::Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let ctx = term_wm_core::components::ComponentContext::new(true);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+
+        palette.render(&mut backend, area, &ctx, &mut registry);
+
+        let bounds = <WmCommandPaletteComponent as Overlay<TermWmAction>>::render_area(&palette);
+        assert!(bounds.is_some(), "bounds should be populated after render");
+        let bounds = bounds.unwrap();
+        assert!(bounds.width > 0);
+        assert!(bounds.height > 0);
+        assert!(bounds.x >= 0);
+        assert!(bounds.y >= 0);
     }
 }

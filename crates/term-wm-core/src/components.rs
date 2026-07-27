@@ -260,6 +260,11 @@ impl Component<TermWmAction> for NoopComponent {
 }
 
 pub trait Overlay<Msg>: Component<Msg> + std::any::Any {
+    /// Returns the overlay's current render area, if available, for spatial
+    /// hit-testing (e.g. dismissing the overlay on outside-click).
+    fn render_area(&self) -> Option<LayoutRect> {
+        None
+    }
     fn visible(&self) -> bool {
         true
     }

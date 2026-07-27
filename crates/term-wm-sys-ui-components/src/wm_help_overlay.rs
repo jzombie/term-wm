@@ -25,6 +25,7 @@ pub struct WmHelpOverlayComponent {
     dialog: DialogOverlayComponent,
     content: ScrollViewComponent<MarkdownViewerComponent>,
     area: Cell<LayoutRect>,
+    dialog_bounds: Cell<LayoutRect>,
     keybindings: KeyBindings,
     app_ctx: Arc<AppContext>,
 }
@@ -45,6 +46,12 @@ impl Component<TermWmAction> for WmHelpOverlayComponent {
         self.dialog.render_backdrop(backend, area, None);
         let ratatui_area = layout_rect_to_clipped_rect(area);
         let rect = self.dialog.rect_for(ratatui_area);
+        self.dialog_bounds.set(LayoutRect {
+            x: i32::from(rect.x),
+            y: i32::from(rect.y),
+            width: rect.width,
+            height: rect.height,
+        });
         {
             let backend = term_wm_ui_components::helpers::downcast_ratatui(backend);
             let buffer = &mut backend.buffer;
@@ -130,6 +137,15 @@ impl Overlay<TermWmAction> for WmHelpOverlayComponent {
         self
     }
 
+    fn render_area(&self) -> Option<LayoutRect> {
+        let bounds = self.dialog_bounds.get();
+        if bounds.width > 0 && bounds.height > 0 {
+            Some(bounds)
+        } else {
+            None
+        }
+    }
+
     fn shadow_rect(&self, area: LayoutRect) -> Option<LayoutRect> {
         if !self.dialog.visible() {
             return None;
@@ -157,6 +173,7 @@ impl WmHelpOverlayComponent {
             dialog,
             content: viewer,
             area: Cell::new(LayoutRect::default()),
+            dialog_bounds: Cell::new(LayoutRect::default()),
             keybindings,
             app_ctx: Arc::clone(app_ctx),
         };
@@ -173,11 +190,6 @@ impl WmHelpOverlayComponent {
             let focus_prev = kb.combos_for(TermWmAction::FocusPrev).join(" / ");
             let new_win = kb.combos_for(TermWmAction::NewWindow).join(" / ");
             let menu_nav = {
-                let a = kb.combos_for(TermWmAction::MenuNext).join(" / ");
-                let b = kb.combos_for(TermWmAction::MenuPrev).join(" / ");
-                format!("{a} / {b}")
-            };
-            let menu_alt = {
                 let a = kb.combos_for(TermWmAction::MenuUp).join(" / ");
                 let b = kb.combos_for(TermWmAction::MenuDown).join(" / ");
                 format!("{a} / {b}")
@@ -196,7 +208,6 @@ impl WmHelpOverlayComponent {
                 .replace("%FOCUS_PREV%", &focus_prev)
                 .replace("%NEW_WINDOW%", &new_win)
                 .replace("%MENU_NAV%", &menu_nav)
-                .replace("%MENU_ALT%", &menu_alt)
                 .replace("%MENU_SELECT%", &select)
                 .replace("%SUPER%", &super_key)
                 .replace("%HELP_MENU%", &help_label);
@@ -396,5 +407,59 @@ mod tests {
             !overlay.visible(),
             "overlay should be closed by outside click"
         );
+    }
+
+    #[test]
+    fn help_render_area_returns_none_before_render() {
+        let overlay = WmHelpOverlayComponent::new(
+            &Arc::new(AppContext::new("test", "0.0.0")),
+            KeyBindings::new(),
+        );
+        assert_eq!(
+            <WmHelpOverlayComponent as Overlay<TermWmAction>>::render_area(&overlay),
+            None
+        );
+    }
+
+    #[test]
+    fn help_render_area_returns_some_after_render() {
+        let mut overlay = WmHelpOverlayComponent::new(
+            &Arc::new(AppContext::new("test", "0.0.0")),
+            KeyBindings::new(),
+        );
+        overlay.dialog.set_visible(true);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
+            buffer,
+            ratatui::prelude::Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let ctx = term_wm_core::components::ComponentContext::new(true);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        overlay.render(&mut backend, area, &ctx, &mut registry);
+
+        let bounds = <WmHelpOverlayComponent as Overlay<TermWmAction>>::render_area(&overlay);
+        assert!(
+            bounds.is_some(),
+            "dialog_bounds should be populated after render"
+        );
+        let bounds = bounds.unwrap();
+        assert!(bounds.width > 0);
+        assert!(bounds.height > 0);
     }
 }

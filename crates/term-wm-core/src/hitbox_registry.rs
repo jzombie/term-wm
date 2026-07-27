@@ -208,6 +208,41 @@ impl HitboxRegistry {
             .map(|entry| (entry.id, entry.owner, entry.area))
     }
 
+    /// Like `hit_test`, but accepts a filter predicate and checks overlay
+    /// then standard entries. Returns the first entry for which the predicate
+    /// returns `true`.
+    pub fn hit_test_filtered(
+        &self,
+        position: MousePosition,
+        filter: impl Fn(&ComponentOwner) -> bool,
+    ) -> Option<(HitboxId, ComponentOwner, LayoutRect)> {
+        for entry in self.overlay_entries.iter().rev() {
+            if position.is_inside(entry.area) && filter(&entry.owner) {
+                return Some((entry.id, entry.owner, entry.area));
+            }
+        }
+        for entry in self.entries.iter().rev() {
+            if position.is_inside(entry.area) && filter(&entry.owner) {
+                return Some((entry.id, entry.owner, entry.area));
+            }
+        }
+        None
+    }
+
+    /// Returns ALL entries (overlay then standard) whose area contains `position`,
+    /// in reverse-registration order (topmost first).
+    pub fn hit_test_all(
+        &self,
+        position: MousePosition,
+    ) -> impl Iterator<Item = (HitboxId, ComponentOwner, LayoutRect)> + '_ {
+        self.overlay_entries
+            .iter()
+            .rev()
+            .chain(self.entries.iter().rev())
+            .filter(move |entry| position.is_inside(entry.area))
+            .map(|entry| (entry.id, entry.owner, entry.area))
+    }
+
     /// Returns the number of registered entries (for diagnostics / metrics).
     pub fn len(&self) -> usize {
         self.entries.len() + self.overlay_entries.len()
@@ -701,5 +736,73 @@ mod tests {
         let reg = HitboxRegistry::with_owner(ComponentOwner::Test);
         assert!(reg.active_owner.is_some());
         assert_eq!(reg.active_owner.unwrap(), ComponentOwner::Test);
+    }
+
+    #[test]
+    fn hit_test_all_returns_overlay_then_standard_in_order() {
+        let mut reg = HitboxRegistry::new();
+        reg.register(
+            HitboxId::new(),
+            ComponentOwner::Window(slotmap::DefaultKey::default()),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
+        );
+        reg.register(
+            HitboxId::new(),
+            ComponentOwner::Overlay(OverlayKey::default()),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
+        );
+        let results: Vec<_> = reg.hit_test_all(screen_pos(5, 5)).collect();
+        assert_eq!(results.len(), 2);
+        // Overlay entry should come first
+        assert_eq!(results[0].1, ComponentOwner::Overlay(OverlayKey::default()));
+        assert_eq!(
+            results[1].1,
+            ComponentOwner::Window(slotmap::DefaultKey::default())
+        );
+    }
+
+    #[test]
+    fn hit_test_all_empty_returns_empty_iterator() {
+        let reg = HitboxRegistry::new();
+        let results: Vec<_> = reg.hit_test_all(screen_pos(5, 5)).collect();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn hit_test_all_only_returns_matching_position() {
+        let mut reg = HitboxRegistry::new();
+        reg.register(
+            HitboxId::new(),
+            ComponentOwner::Test,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
+        );
+        reg.register(
+            HitboxId::new(),
+            ComponentOwner::Chrome(crate::chrome::ChromeTarget::EmptyStatePlaceholder),
+            LayoutRect {
+                x: 20,
+                y: 20,
+                width: 10,
+                height: 10,
+            },
+        );
+        let results: Vec<_> = reg.hit_test_all(screen_pos(5, 5)).collect();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1, ComponentOwner::Test);
     }
 }
