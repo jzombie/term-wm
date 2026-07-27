@@ -2302,6 +2302,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         let top_claimed = self.top_claimed;
         let bottom_claimed = self.bottom_claimed;
 
+        // 1. Check top claimed panel (tiled mode)
         if !top_claimed.is_empty() && crate::layout::rect_contains(top_claimed, col, row) {
             let ctx = self.component_context(true).with_screen_area(top_claimed);
             if let Some(panel) =
@@ -2312,6 +2313,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             }
         }
 
+        // 2. Check bottom claimed panel (tiled mode)
         if !bottom_claimed.is_empty() && crate::layout::rect_contains(bottom_claimed, col, row) {
             let ctx = self
                 .component_context(true)
