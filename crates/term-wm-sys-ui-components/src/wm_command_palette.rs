@@ -365,7 +365,9 @@ impl WmComponent for WmCommandPaletteComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use term_wm_console::RatatuiBackend;
     use term_wm_core::components::MenuItem;
+    use term_wm_core::components::Overlay;
 
     #[test]
     fn new_default_state() {
@@ -501,5 +503,56 @@ mod tests {
         let (consumed, remaining) = palette.consume_area(available);
         assert_eq!(consumed, LayoutRect::default());
         assert_eq!(remaining, available);
+    }
+
+    #[test]
+    fn render_area_returns_none_before_render() {
+        let palette = WmCommandPaletteComponent::new();
+        // dialog_bounds defaults to zero dimensions, so render_area returns None
+        assert_eq!(
+            <WmCommandPaletteComponent as Overlay<TermWmAction>>::render_area(&palette),
+            None
+        );
+    }
+
+    #[test]
+    fn render_area_returns_some_after_render() {
+        let mut palette = WmCommandPaletteComponent::new();
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        palette.set_managed_area(area);
+        palette.show();
+
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let mut backend = RatatuiBackend::new_simple(
+            buffer,
+            ratatui::prelude::Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let ctx = term_wm_core::components::ComponentContext::new(true);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+
+        palette.render(&mut backend, area, &ctx, &mut registry);
+
+        let bounds = <WmCommandPaletteComponent as Overlay<TermWmAction>>::render_area(&palette);
+        assert!(bounds.is_some(), "bounds should be populated after render");
+        let bounds = bounds.unwrap();
+        assert!(bounds.width > 0);
+        assert!(bounds.height > 0);
+        assert!(bounds.x >= 0);
+        assert!(bounds.y >= 0);
     }
 }
