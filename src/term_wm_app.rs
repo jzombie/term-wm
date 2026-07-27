@@ -463,21 +463,28 @@ impl<C: Component<TermWmAction>>
     }
 
     fn open_command_palette(&mut self) {
+        use term_wm_core::components::MenuDisplayItem;
         let mut palette = WmCommandPaletteComponent::new();
         palette.show();
-        let items = self.wm.wm_menu_items();
+        let debug_visible = self.debug_key.is_some();
+        let panel_visible = self.system_panel_key.is_some();
+        let items = self.wm.wm_menu_items(debug_visible, panel_visible);
         let supported = self.wm.supported_menu_actions();
+        // Filter out items not in the supported set; keep separators.
         let items: Vec<_> = items
             .into_iter()
-            .filter(|item| {
-                supported.contains(&item.action)
-                    || matches!(
-                        item.action,
-                        TermWmAction::FocusWindow(_)
-                            | TermWmAction::MaximizeWindow(_)
-                            | TermWmAction::MinimizeWindow(_)
-                            | TermWmAction::CloseWindow(_)
-                    )
+            .filter(|entry| match entry {
+                MenuDisplayItem::Item(item) => {
+                    supported.contains(&item.action)
+                        || matches!(
+                            item.action,
+                            TermWmAction::FocusWindow(_)
+                                | TermWmAction::MaximizeWindow(_)
+                                | TermWmAction::MinimizeWindow(_)
+                                | TermWmAction::CloseWindow(_)
+                        )
+                }
+                MenuDisplayItem::Separator => true,
             })
             .collect();
         palette.set_items(items);

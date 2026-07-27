@@ -528,6 +528,12 @@ pub struct MenuItem<R> {
     pub disabled: bool,
 }
 
+#[derive(Debug, Clone)]
+pub enum MenuDisplayItem<R> {
+    Item(MenuItem<R>),
+    Separator,
+}
+
 /// Actions the engine broadcasts to components.
 #[derive(Debug, Clone)]
 pub enum ComponentAction {

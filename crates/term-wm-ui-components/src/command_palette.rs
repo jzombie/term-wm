@@ -7,7 +7,7 @@ use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::command_menu::{
     CommandNodeId, CommandRegistry, ContextMask, FuzzyMatch, MruRanker,
 };
-use term_wm_core::components::{Component, ComponentContext, MenuItem};
+use term_wm_core::components::{Component, ComponentContext, MenuDisplayItem, MenuItem};
 use term_wm_core::events::{Event, KeyCode, KeyKind, KeyModifiers};
 use term_wm_core::keybindings::{KeyBindings, KeyCombo};
 use term_wm_core::window::WindowKey;
@@ -27,6 +27,22 @@ pub struct PaletteItem {
     pub disabled: bool,
 }
 
+/// Sum type for the palette's active node sequence — carries separators
+/// alongside registry IDs so the cache rebuild never needs positional metadata.
+#[derive(Debug, Clone)]
+pub enum ActivePaletteNode {
+    Node(CommandNodeId),
+    Separator,
+}
+
+/// Sum type for the palette's display list — items that pass context filtering
+/// plus explicit separator markers.
+#[derive(Debug, Clone)]
+pub enum PaletteDisplayNode {
+    Item(PaletteItem),
+    Separator,
+}
+
 /// A universal, fuzzy-searchable Command Palette component.
 ///
 /// The search bar is rendered directly; the item list is wrapped in a
@@ -36,15 +52,33 @@ pub struct CommandPaletteComponent {
     pub query: String,
     pub cursor: usize,
     pub filtered_items: Vec<PaletteItem>,
+    /// Full display list for the next render (includes separators when
+    /// the query is empty, items-only during active search).
+    pub display_nodes: Vec<PaletteDisplayNode>,
     pub selected: usize,
     pub data_dirty: bool,
     pub query_dirty: bool,
     pub current_context_mask: ContextMask,
-    active_ids: Vec<CommandNodeId>,
-    display_items: Vec<(String, String, String, bool)>,
+    pub active_nodes: Vec<ActivePaletteNode>,
+    display_cache: Vec<DisplayCacheEntry>,
     nav_keys: KeyBindings,
     list_scroll: ScrollViewComponent<MenuComponent>,
     last_list_area: LayoutRect,
+}
+
+/// Internal cache entry parallel to `active_nodes`.
+#[derive(Debug, Clone)]
+enum DisplayCacheEntry {
+    Item {
+        display_name: String,
+        description: String,
+        searchable_text: String,
+        disabled: bool,
+        stable_id: String,
+        icon: Option<&'static str>,
+        action: TermWmAction,
+    },
+    Separator,
 }
 
 impl Default for CommandPaletteComponent {
@@ -78,12 +112,13 @@ impl CommandPaletteComponent {
             query: String::new(),
             cursor: 0,
             filtered_items: Vec::new(),
+            display_nodes: Vec::new(),
             selected: 0,
             data_dirty: true,
             query_dirty: true,
             current_context_mask: ContextMask::NONE,
-            active_ids: Vec::new(),
-            display_items: Vec::new(),
+            active_nodes: Vec::new(),
+            display_cache: Vec::new(),
             nav_keys,
             list_scroll,
             last_list_area: LayoutRect::default(),
@@ -91,8 +126,32 @@ impl CommandPaletteComponent {
     }
 
     /// Sync CommandPaletteComponent's selected index from the inner MenuComponent.
+    /// Maps from display_nodes index (may include separators) to filtered_items index.
     fn sync_selected(&mut self) {
-        self.selected = self.list_scroll.content.borrow().selected();
+        let menu_selected = self.list_scroll.content.borrow().selected();
+        // Find the nth PaletteItem in display_nodes at position menu_selected
+        let item_count = self
+            .display_nodes
+            .iter()
+            .take(menu_selected)
+            .filter(|n| matches!(n, PaletteDisplayNode::Item(_)))
+            .count();
+        self.selected = item_count.min(
+            self.filtered_items
+                .len()
+                .saturating_sub(1),
+        );
+    }
+
+    /// Map a filtered_items index to its position in display_nodes
+    fn display_index(&self, item_idx: usize) -> usize {
+        self.display_nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| matches!(n, PaletteDisplayNode::Item(_)))
+            .nth(item_idx)
+            .map(|(i, _)| i)
+            .unwrap_or(item_idx)
     }
 
     pub fn mark_data_dirty(&mut self) {
@@ -100,45 +159,140 @@ impl CommandPaletteComponent {
     }
 
     pub fn rebuild_data_cache(&mut self, registry: &CommandRegistry) {
-        self.active_ids = registry.build_item_list(self.current_context_mask);
-        self.display_items = self
-            .active_ids
-            .iter()
-            .filter_map(|id| {
-                let node = registry.get(*id)?;
-                let display_name = node.name.format(self.current_context_mask);
-                let desc = node.description.clone().unwrap_or_default();
-                let icon_text = node.icon.unwrap_or("");
-                let searchable_text = if icon_text.is_empty() {
-                    display_name.clone()
-                } else {
-                    format!("{} {}", icon_text, display_name)
-                };
-                Some((display_name, desc, searchable_text, node.disabled))
-            })
-            .collect();
+        let mut collapsed: Vec<DisplayCacheEntry> = Vec::new();
+        for node in &self.active_nodes {
+            match node {
+                ActivePaletteNode::Node(id) => {
+                    let Some(cmd_node) = registry.get(*id) else { continue };
+                    if (self.current_context_mask & cmd_node.required_context)
+                        != cmd_node.required_context
+                    {
+                        continue;
+                    }
+                    let display_name = cmd_node.name.format(self.current_context_mask);
+                    let desc = cmd_node.description.clone().unwrap_or_default();
+                    let icon_text = cmd_node.icon.unwrap_or("");
+                    let searchable_text = if icon_text.is_empty() {
+                        display_name.clone()
+                    } else {
+                        format!("{} {}", icon_text, display_name)
+                    };
+                    let action = match &cmd_node.action {
+                        term_wm_core::command_menu::CommandAction::AppAction(a) => a.clone(),
+                    };
+                    collapsed.push(DisplayCacheEntry::Item {
+                        display_name,
+                        description: desc,
+                        searchable_text,
+                        disabled: cmd_node.disabled,
+                        stable_id: cmd_node.stable_id.clone(),
+                        icon: cmd_node.icon,
+                        action,
+                    });
+                }
+                ActivePaletteNode::Separator => {
+                    // Collapse rules applied inline:
+                    // No leading separator
+                    if collapsed.is_empty() {
+                        continue;
+                    }
+                    // No consecutive separators
+                    if matches!(collapsed.last(), Some(DisplayCacheEntry::Separator)) {
+                        continue;
+                    }
+                    collapsed.push(DisplayCacheEntry::Separator);
+                }
+            }
+        }
+        // No trailing separator
+        if matches!(collapsed.last(), Some(DisplayCacheEntry::Separator)) {
+            collapsed.pop();
+        }
+        self.display_cache = collapsed;
         self.data_dirty = false;
         self.query_dirty = true;
     }
 
     pub fn rerank(&mut self, fmatch: &mut FuzzyMatch, mru: &MruRanker) {
-        let indices = fmatch.score(&self.query, &self.display_items);
-        self.filtered_items = indices
+        // Build searchable texts from non-separator cache entries
+        let item_indices: Vec<usize> = self
+            .display_cache
             .iter()
-            .filter_map(|&i| {
-                let id = self.active_ids.get(i)?;
-                let (display_name, description, _, is_disabled) = self.display_items.get(i)?;
-                let node_ref = self.registry_getter_placeholder(*id, display_name, description);
-                Some(PaletteItem {
-                    stable_id: node_ref.0,
-                    display_name: node_ref.1,
-                    description: node_ref.2,
-                    action: node_ref.3,
-                    icon: node_ref.4,
-                    disabled: *is_disabled,
-                })
+            .enumerate()
+            .filter_map(|(i, e)| match e {
+                DisplayCacheEntry::Item { .. } => Some(i),
+                DisplayCacheEntry::Separator => None,
             })
             .collect();
+        let searchable: Vec<(String, String, String, bool)> = item_indices
+            .iter()
+            .filter_map(|&i| match &self.display_cache[i] {
+                DisplayCacheEntry::Item {
+                    display_name,
+                    description,
+                    searchable_text,
+                    disabled,
+                    ..
+                } => Some((
+                    display_name.clone(),
+                    description.clone(),
+                    searchable_text.clone(),
+                    *disabled,
+                )),
+                DisplayCacheEntry::Separator => None,
+            })
+            .collect();
+
+        self.filtered_items = if self.query.is_empty() {
+            // Empty query: all items in cache order
+            item_indices
+                .iter()
+                .filter_map(|&i| match &self.display_cache[i] {
+                    DisplayCacheEntry::Item {
+                        display_name,
+                        description,
+                        disabled,
+                        stable_id,
+                        icon,
+                        ..
+                    } => Some(PaletteItem {
+                        stable_id: stable_id.clone(),
+                        display_name: display_name.clone(),
+                        description: description.clone(),
+                        action: TermWmAction::CloseMenu,
+                        icon: *icon,
+                        disabled: *disabled,
+                    }),
+                    _ => None,
+                })
+                .collect()
+        } else {
+            let indices = fmatch.score(&self.query, &searchable);
+            indices
+                .iter()
+                .filter_map(|&idx| {
+                    let cache_idx = item_indices.get(idx)?;
+                    match self.display_cache.get(*cache_idx)? {
+                        DisplayCacheEntry::Item {
+                            display_name,
+                            description,
+                            disabled,
+                            stable_id,
+                            icon,
+                            ..
+                        } => Some(PaletteItem {
+                            stable_id: stable_id.clone(),
+                            display_name: display_name.clone(),
+                            description: description.clone(),
+                            action: TermWmAction::CloseMenu,
+                            icon: *icon,
+                            disabled: *disabled,
+                        }),
+                        _ => None,
+                    }
+                })
+                .collect()
+        };
         self.filtered_items.sort_by(|a, b| {
             let wa = mru.weight(&a.stable_id);
             let wb = mru.weight(&b.stable_id);
@@ -147,6 +301,39 @@ impl CommandPaletteComponent {
         self.selected = self
             .selected
             .min(self.filtered_items.len().saturating_sub(1));
+
+        // Build display_nodes for rendering
+        if self.query.is_empty() {
+            self.display_nodes = self
+                .display_cache
+                .iter()
+                .map(|e| match e {
+                    DisplayCacheEntry::Item {
+                        display_name,
+                        description,
+                        disabled,
+                        stable_id,
+                        icon,
+                        action,
+                        ..
+                    } => PaletteDisplayNode::Item(PaletteItem {
+                        stable_id: stable_id.clone(),
+                        display_name: display_name.clone(),
+                        description: description.clone(),
+                        action: action.clone(),
+                        icon: *icon,
+                        disabled: *disabled,
+                    }),
+                    DisplayCacheEntry::Separator => PaletteDisplayNode::Separator,
+                })
+                .collect();
+        } else {
+            self.display_nodes = self
+                .filtered_items
+                .iter()
+                .map(|pi| PaletteDisplayNode::Item(pi.clone()))
+                .collect();
+        }
         self.query_dirty = false;
     }
 
@@ -206,23 +393,74 @@ impl CommandPaletteComponent {
         mru: &MruRanker,
         registry: &CommandRegistry,
     ) {
-        let indices = fmatch.score(&self.query, &self.display_items);
-        self.filtered_items = indices
+        // Build searchable texts from non-separator cache entries
+        let item_indices: Vec<usize> = self
+            .display_cache
             .iter()
-            .filter_map(|&i| {
-                let id = *self.active_ids.get(i)?;
-                let (ref display_name, ref desc, _, _disabled) = self.display_items[i];
-                let data = Self::extract_palette_data(id, display_name, desc, registry)?;
-                Some(PaletteItem {
-                    stable_id: data.0,
-                    display_name: data.1,
-                    description: data.2,
-                    action: data.3,
-                    icon: data.4,
-                    disabled: _disabled,
-                })
+            .enumerate()
+            .filter_map(|(i, e)| match e {
+                DisplayCacheEntry::Item { .. } => Some(i),
+                DisplayCacheEntry::Separator => None,
             })
             .collect();
+        let searchable: Vec<(String, String, String, bool)> = item_indices
+            .iter()
+            .filter_map(|&i| match &self.display_cache[i] {
+                DisplayCacheEntry::Item {
+                    display_name,
+                    description,
+                    searchable_text,
+                    disabled,
+                    ..
+                } => Some((
+                    display_name.clone(),
+                    description.clone(),
+                    searchable_text.clone(),
+                    *disabled,
+                )),
+                DisplayCacheEntry::Separator => None,
+            })
+            .collect();
+
+        // Resolve PaletteItem from cache entry
+        let resolve_item = |cache_idx: usize| -> Option<PaletteItem> {
+            match self.display_cache.get(cache_idx)? {
+                DisplayCacheEntry::Item {
+                    display_name,
+                    description,
+                    disabled,
+                    stable_id,
+                    icon,
+                    action,
+                    ..
+                } => Some(PaletteItem {
+                    stable_id: stable_id.clone(),
+                    display_name: display_name.clone(),
+                    description: description.clone(),
+                    action: action.clone(),
+                    icon: *icon,
+                    disabled: *disabled,
+                }),
+                _ => None,
+            }
+        };
+
+        if self.query.is_empty() {
+            self.filtered_items = item_indices
+                .iter()
+                .filter_map(|&i| resolve_item(i))
+                .collect();
+        } else {
+            let indices = fmatch.score(&self.query, &searchable);
+            self.filtered_items = indices
+                .iter()
+                .filter_map(|&idx| {
+                    let cache_idx = *item_indices.get(idx)?;
+                    resolve_item(cache_idx)
+                })
+                .collect();
+        }
+
         self.filtered_items.sort_by(|a, b| {
             let wa = mru.weight(&a.stable_id);
             let wb = mru.weight(&b.stable_id);
@@ -231,6 +469,70 @@ impl CommandPaletteComponent {
         self.selected = self
             .selected
             .min(self.filtered_items.len().saturating_sub(1));
+
+        // Build display_nodes for rendering
+        if self.query.is_empty() {
+            self.display_nodes = self
+                .display_cache
+                .iter()
+                .map(|e| match e {
+                    DisplayCacheEntry::Item {
+                        display_name,
+                        description,
+                        disabled,
+                        stable_id,
+                        icon,
+                        ..
+                    } => PaletteDisplayNode::Item(PaletteItem {
+                        stable_id: stable_id.clone(),
+                        display_name: display_name.clone(),
+                        description: description.clone(),
+                        action: TermWmAction::CloseMenu,
+                        icon: *icon,
+                        disabled: *disabled,
+                    }),
+                    DisplayCacheEntry::Separator => PaletteDisplayNode::Separator,
+                })
+                .collect();
+        } else {
+            self.display_nodes = self
+                .filtered_items
+                .iter()
+                .map(|pi| PaletteDisplayNode::Item(pi.clone()))
+                .collect();
+        }
+        // Build display_nodes for rendering
+        if self.query.is_empty() {
+            self.display_nodes = self
+                .display_cache
+                .iter()
+                .map(|e| match e {
+                    DisplayCacheEntry::Item {
+                        display_name,
+                        description,
+                        disabled,
+                        stable_id,
+                        icon,
+                        action,
+                        ..
+                    } => PaletteDisplayNode::Item(PaletteItem {
+                        stable_id: stable_id.clone(),
+                        display_name: display_name.clone(),
+                        description: description.clone(),
+                        action: action.clone(),
+                        icon: *icon,
+                        disabled: *disabled,
+                    }),
+                    DisplayCacheEntry::Separator => PaletteDisplayNode::Separator,
+                })
+                .collect();
+        } else {
+            self.display_nodes = self
+                .filtered_items
+                .iter()
+                .map(|pi| PaletteDisplayNode::Item(pi.clone()))
+                .collect();
+        }
         self.query_dirty = false;
     }
 
@@ -308,25 +610,32 @@ impl Component<TermWmAction> for CommandPaletteComponent {
             return;
         }
 
-        // Build MenuItems from filtered_items and set on the inner MenuComponent
-        let menu_items: Vec<MenuItem<TermWmAction>> = self
-            .filtered_items
+        // Build MenuDisplayItems from display_nodes and set on the inner MenuComponent
+        let menu_items: Vec<MenuDisplayItem<TermWmAction>> = self
+            .display_nodes
             .iter()
-            .map(|p| MenuItem {
-                icon: p.icon,
-                label: Cow::Owned(p.display_name.clone()),
-                action: p.action.clone(),
-                disabled: p.disabled,
+            .map(|node| match node {
+                PaletteDisplayNode::Item(p) => MenuDisplayItem::Item(MenuItem {
+                    icon: p.icon,
+                    label: Cow::Owned(p.display_name.clone()),
+                    action: p.action.clone(),
+                    disabled: p.disabled,
+                }),
+                PaletteDisplayNode::Separator => MenuDisplayItem::Separator,
             })
             .collect();
-        self.list_scroll.content.borrow_mut().set_items(menu_items);
         self.list_scroll
             .content
             .borrow_mut()
-            .set_selected(self.selected);
+            .set_display_items(menu_items);
+        let display_sel = self.display_index(self.selected);
+        self.list_scroll
+            .content
+            .borrow_mut()
+            .set_selected(display_sel);
 
         // Set content height for ScrollViewComponent
-        let total = self.filtered_items.len();
+        let total = self.display_nodes.len();
         let handle = self.list_scroll.scroll_handle();
         handle.scroll.borrow_mut().content_height = total;
 

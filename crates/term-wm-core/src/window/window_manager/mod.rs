@@ -260,6 +260,15 @@ impl MonocleMode {
             MonocleMode::Off => "Off",
         }
     }
+
+    /// Action-oriented label for the command palette — describes what clicking will do.
+    pub fn action_label(self) -> &'static str {
+        match self {
+            MonocleMode::Auto => "Enable Monocle Mode",
+            MonocleMode::On => "Disable Monocle Mode",
+            MonocleMode::Off => "Set Monocle Mode Auto",
+        }
+    }
 }
 
 pub struct WindowManager<
@@ -2573,119 +2582,106 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         btns
     }
 
-    pub fn wm_menu_items(&self) -> Vec<MenuItem<crate::actions::TermWmAction>> {
+    pub fn wm_menu_items(
+        &self,
+        debug_log_visible: bool,
+        system_panel_visible: bool,
+    ) -> Vec<crate::components::MenuDisplayItem<crate::actions::TermWmAction>> {
+        use crate::components::{MenuDisplayItem, MenuItem};
+
         let mouse_label = if self.mouse_capture_enabled {
-            "Mouse Capture: On"
+            "Mouse: Disable Capture"
         } else {
-            "Mouse Capture: Off"
+            "Mouse: Enable Capture"
         };
         let clipboard_label = if self.clipboard_enabled {
-            "Clipboard Mode: On"
+            "Clipboard: Disable"
         } else {
-            "Clipboard Mode: Off"
+            "Clipboard: Enable"
         };
         let selection_label = if self.window_selection_enabled {
-            "Window Selection: On"
+            "Window: Disable Selection"
         } else {
-            "Window Selection: Off"
+            "Window: Enable Selection"
         };
-        let mut items = vec![
-            MenuItem {
-                label: "Resume".into(),
-                icon: Some("▶"),
-                action: crate::actions::TermWmAction::CloseMenu,
+        let debug_label = if debug_log_visible {
+            "System: Disable Debug Log"
+        } else {
+            "System: Enable Debug Log"
+        };
+        let panel_label = if system_panel_visible {
+            "System: Disable Panel"
+        } else {
+            "System: Enable Panel"
+        };
+
+        fn mi(
+            label: &'static str,
+            icon: Option<&'static str>,
+            action: crate::actions::TermWmAction,
+        ) -> MenuDisplayItem<crate::actions::TermWmAction> {
+            MenuDisplayItem::Item(MenuItem {
+                label: label.into(),
+                icon,
+                action,
                 disabled: false,
+            })
+        }
+
+        let mut items: Vec<MenuDisplayItem<crate::actions::TermWmAction>> = vec![
+            mi("Resume", Some("▶"), crate::actions::TermWmAction::CloseMenu),
+            mi("New Window", Some("+"), crate::actions::TermWmAction::NewWindow),
+            MenuDisplayItem::Separator,
+            mi(mouse_label, Some("◆"), crate::actions::TermWmAction::ToggleMouseCapture),
+            mi(clipboard_label, Some("■"), crate::actions::TermWmAction::ToggleClipboardMode),
+            mi(selection_label, Some("●"), crate::actions::TermWmAction::ToggleWindowSelection),
+            mi(debug_label, Some("≣"), crate::actions::TermWmAction::ToggleDebugWindow),
+            mi(panel_label, Some("*"), crate::actions::TermWmAction::ToggleSystemPanel),
+            MenuDisplayItem::Separator,
+            mi("Help", Some("?"), crate::actions::TermWmAction::Help),
+            mi("Exit UI", Some("⏻"), crate::actions::TermWmAction::ExitUi),
+            MenuDisplayItem::Separator,
+            mi(
+                self.monocle_mode.action_label(),
+                Some("▢"),
+                crate::actions::TermWmAction::ToggleMonocle,
+            ),
+            {
+                let label = if self.managed_layout.is_some() {
+                    "View: Enable Tiling"
+                } else {
+                    "View: Disable Tiling"
+                };
+                let mut item = mi(label, Some("⊞"), crate::actions::TermWmAction::ToggleTiling);
+                if self.is_monocle() {
+                    if let MenuDisplayItem::Item(ref mut mi) = item {
+                        mi.disabled = true;
+                    }
+                }
+                item
             },
-            MenuItem {
-                label: "New Window".into(),
-                icon: Some("+"),
-                action: crate::actions::TermWmAction::NewWindow,
-                disabled: false,
-            },
-            MenuItem {
-                label: mouse_label.into(),
-                icon: Some("◆"),
-                action: crate::actions::TermWmAction::ToggleMouseCapture,
-                disabled: false,
-            },
-            MenuItem {
-                label: clipboard_label.into(),
-                icon: Some("■"),
-                action: crate::actions::TermWmAction::ToggleClipboardMode,
-                disabled: false,
-            },
-            MenuItem {
-                label: selection_label.into(),
-                icon: Some("●"),
-                action: crate::actions::TermWmAction::ToggleWindowSelection,
-                disabled: false,
-            },
-            MenuItem {
-                label: "Toggle Debug Log".into(),
-                icon: Some("≣"),
-                action: crate::actions::TermWmAction::ToggleDebugWindow,
-                disabled: false,
-            },
-            MenuItem {
-                label: "Toggle System Panel".into(),
-                icon: Some("*"),
-                action: crate::actions::TermWmAction::ToggleSystemPanel,
-                disabled: false,
-            },
-            MenuItem {
-                label: "Help".into(),
-                icon: Some("?"),
-                action: crate::actions::TermWmAction::Help,
-                disabled: false,
-            },
-            MenuItem {
-                label: "Exit UI".into(),
-                icon: Some("⏻"),
-                action: crate::actions::TermWmAction::ExitUi,
-                disabled: false,
-            },
-            MenuItem {
-                label: format!("Monocle Mode: {}", self.monocle_mode.label()).into(),
-                icon: Some("▢"),
-                action: crate::actions::TermWmAction::ToggleMonocle,
-                disabled: false,
-            },
-            MenuItem {
-                label: {
-                    let mode = if self.managed_layout.is_some() {
-                        "Float"
-                    } else {
-                        "Tile"
-                    };
-                    format!("Toggle {mode} Mode").into()
-                },
-                icon: Some("⊞"),
-                action: crate::actions::TermWmAction::ToggleTiling,
-                disabled: self.is_monocle(),
-            },
+            MenuDisplayItem::Separator,
         ];
 
         let focused = self.focused_window();
         let has_active = self.windows.contains_key(focused);
 
         if has_active {
-            // Window management buttons from centralized list
             for btn in self.window_management_buttons() {
-                items.push(MenuItem {
+                items.push(MenuDisplayItem::Item(MenuItem {
                     label: btn.label.into(),
                     icon: Some(btn.symbol),
                     action: btn.action,
                     disabled: false,
-                });
+                }));
             }
-            // Switch-to navigation for all windows
             for (key, title) in self.window_titles() {
-                items.push(MenuItem {
+                items.push(MenuDisplayItem::Item(MenuItem {
                     label: format!("Switch to: {}", title).into(),
                     icon: Some("→"),
                     action: crate::actions::TermWmAction::FocusWindow(key),
                     disabled: key == focused,
-                });
+                }));
             }
         }
 

@@ -10,8 +10,8 @@ use term_wm_core::{
     actions::{EventResult, TermWmAction},
     command_menu::{CommandRegistry, ContextMask, FuzzyMatch, MruRanker},
     components::{
-        Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse, MenuItem,
-        Overlay, WmComponent,
+        Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse,
+        MenuDisplayItem, MenuItem, Overlay, WmComponent,
     },
     hitbox_registry::HitboxId,
     window::WindowKey,
@@ -79,23 +79,42 @@ impl WmCommandPaletteComponent {
         self.dialog.set_visible(false);
     }
 
-    pub fn set_items(&mut self, items: Vec<term_wm_core::components::MenuItem<TermWmAction>>) {
-        self.registry = CommandRegistry::new();
+    pub fn set_items(
+        &mut self,
+        items: Vec<term_wm_core::components::MenuDisplayItem<TermWmAction>>,
+    ) {
         use term_wm_core::command_menu::{CommandAction, CommandName, CommandNode, ContextMask};
-        for item in items {
-            let stable_id = format!("core:{}", item.label.replace(' ', "_").to_lowercase());
-            let node = CommandNode {
-                stable_id,
-                name: CommandName::Static(item.label.to_string()),
-                description: None,
-                action: CommandAction::AppAction(item.action),
-                icon: item.icon,
-                required_context: ContextMask::NONE,
-                owner_id: None,
-                disabled: item.disabled,
-            };
-            self.registry.register(node);
+        use term_wm_core::components::MenuDisplayItem;
+        self.registry = CommandRegistry::new();
+        let mut active_nodes = Vec::new();
+        for display_item in items {
+            match display_item {
+                MenuDisplayItem::Item(item) => {
+                    let stable_id =
+                        format!("core:{}", item.label.replace(' ', "_").to_lowercase());
+                    let node = CommandNode {
+                        stable_id,
+                        name: CommandName::Static(item.label.to_string()),
+                        description: None,
+                        action: CommandAction::AppAction(item.action),
+                        icon: item.icon,
+                        required_context: ContextMask::NONE,
+                        owner_id: None,
+                        disabled: item.disabled,
+                    };
+                    let id = self.registry.register(node);
+                    active_nodes.push(
+                        term_wm_ui_components::command_palette::ActivePaletteNode::Node(id),
+                    );
+                }
+                MenuDisplayItem::Separator => {
+                    active_nodes.push(
+                        term_wm_ui_components::command_palette::ActivePaletteNode::Separator,
+                    );
+                }
+            }
         }
+        self.palette.active_nodes = active_nodes;
         self.palette.mark_data_dirty();
     }
 
@@ -306,7 +325,9 @@ impl Overlay<TermWmAction> for WmCommandPaletteComponent {
     }
 
     fn set_menu_items(&mut self, items: Vec<MenuItem<TermWmAction>>) {
-        self.set_items(items);
+        let display_items: Vec<MenuDisplayItem<TermWmAction>> =
+            items.into_iter().map(MenuDisplayItem::Item).collect();
+        self.set_items(display_items);
     }
 
     fn set_tab_outline(&mut self, expires_at: Option<Instant>) {
@@ -339,7 +360,9 @@ impl WmComponent for WmCommandPaletteComponent {
                 self.palette.query_dirty = true;
             }
             ComponentAction::SetMenuItems(items) => {
-                self.set_items(items.clone());
+                let display_items: Vec<MenuDisplayItem<TermWmAction>> =
+                    items.iter().cloned().map(MenuDisplayItem::Item).collect();
+                self.set_items(display_items);
             }
             ComponentAction::SetManagedArea(area) => self.set_managed_area(*area),
             _ => {}
@@ -390,18 +413,18 @@ mod tests {
     fn set_items_populates_registry() {
         let mut palette = WmCommandPaletteComponent::new();
         palette.set_items(vec![
-            MenuItem {
+            MenuDisplayItem::Item(MenuItem {
                 icon: None,
                 label: "New Window".into(),
                 action: TermWmAction::NewWindow,
                 disabled: false,
-            },
-            MenuItem {
+            }),
+            MenuDisplayItem::Item(MenuItem {
                 icon: None,
                 label: "Close".into(),
                 action: TermWmAction::CloseWindow(Default::default()),
                 disabled: false,
-            },
+            }),
         ]);
         assert!(!palette.registry.arena().is_empty());
     }
@@ -443,18 +466,18 @@ mod tests {
     fn selecting_disabled_item_returns_no_action() {
         let mut palette = WmCommandPaletteComponent::new();
         palette.set_items(vec![
-            MenuItem {
+            MenuDisplayItem::Item(MenuItem {
                 icon: None,
                 label: "Enabled".into(),
                 action: TermWmAction::NewWindow,
                 disabled: false,
-            },
-            MenuItem {
+            }),
+            MenuDisplayItem::Item(MenuItem {
                 icon: None,
                 label: "Disabled".into(),
                 action: TermWmAction::CloseWindow(Default::default()),
                 disabled: true,
-            },
+            }),
         ]);
         palette.show();
         palette.refresh_if_dirty();
