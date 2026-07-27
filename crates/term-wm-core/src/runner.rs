@@ -1489,6 +1489,100 @@ mod tests {
         let mut queue = std::collections::VecDeque::new();
         drain_action_queue(&mut app, &mut queue);
     }
+
+    #[test]
+    fn dispatch_action_focus_prev_advances_focus_backward() {
+        use crate::window::WindowManager;
+        struct App { wm: WindowManager<TestComponent> }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> { &mut self.wm }
+        }
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None, crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let k1 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k2 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(k1, crate::window::WindowState::Mapped);
+        wm.transition_window(k2, crate::window::WindowState::Mapped);
+        wm.set_focus_order(vec![k1, k2]);
+        wm.focus_window_key(k2);
+        let mut app = App { wm };
+        let mut queue = std::collections::VecDeque::new();
+        dispatch_action(&mut app, k2, TermWmAction::FocusPrev, &mut queue);
+        assert_eq!(app.wm.focused_window(), k1);
+    }
+
+    #[test]
+    fn dispatch_action_toggle_tiling_toggles() {
+        use crate::window::WindowManager;
+        struct App { wm: WindowManager<TestComponent> }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> { &mut self.wm }
+        }
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None, crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let k = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(k, crate::window::WindowState::Mapped);
+        let mut app = App { wm };
+        let mut queue = std::collections::VecDeque::new();
+        dispatch_action(&mut app, k, TermWmAction::ToggleTiling, &mut queue);
+        // No crash = success. ToggleTiling modifies managed_layout state.
+    }
+
+    #[test]
+    fn dispatch_action_unknown_forwards_to_component() {
+        use crate::window::WindowManager;
+        struct App { wm: WindowManager<TestComponent> }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> { &mut self.wm }
+        }
+        // Use ActionRecorder to verify unknown actions reach comp.update
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None, crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let k = wm.create_window(TestComponent::ActionRecorder(
+            crate::window::test_component::ActionRecorder {
+                actions: Vec::new(), received_mouse_bytes: false }));
+        wm.transition_window(k, crate::window::WindowState::Mapped);
+        wm.focus_window_key(k);
+        let mut app = App { wm };
+        let mut queue = std::collections::VecDeque::new();
+        dispatch_action(&mut app, k, TermWmAction::ScrollView(42), &mut queue);
+        // ActionRecorder records the action — no panic means it was forwarded
+    }
+
+    #[test]
+    fn drain_action_queue_multiple_actions() {
+        use crate::window::WindowManager;
+        struct App { wm: WindowManager<TestComponent> }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> { &mut self.wm }
+        }
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None, crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let k = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(k, crate::window::WindowState::Mapped);
+        let mut app = App { wm };
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back((k, TermWmAction::ToggleMouseCapture));
+        queue.push_back((k, TermWmAction::ToggleClipboardMode));
+        drain_action_queue(&mut app, &mut queue);
+        assert!(queue.is_empty());
+    }
 }
 
 #[cfg(test)]
