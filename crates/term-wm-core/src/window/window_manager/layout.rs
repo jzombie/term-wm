@@ -206,20 +206,18 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Evaluates the dominant [`WindowMode`] for a given window to resolve chrome rules.
     ///
     /// ### Precedence Hierarchy
-    /// 1. **`Maximized`**: User explicitly expanded a single window to full screen.
-    /// 2. **`Floating`**: Modals, popups, and floating utility dialogs must maintain
-    ///    their floating chrome rules (e.g., borders/headers) even if the active
-    ///    workspace layout is currently set to Monocle mode.
-    /// 3. **`Monocle`**: Workspace-wide layout mode where the active window takes full
-    ///    content area and omits tiled borders.
-    /// 4. **`Tiled`**: Default fallthrough state for managed windows in a standard layout tree.
+    /// 1. **`Maximized`**: Local window override — user explicitly expanded this window.
+    /// 2. **`Monocle`**: Global layout constraint — workspace-wide mode overrides
+    ///    per-window floating chrome when active.
+    /// 3. **`Floating`**: Local window override — user dragged window out of layout tree.
+    /// 4. **`Tiled`**: Default fallthrough for managed windows in the layout tree.
     pub fn window_mode(&self, w: &Window) -> WindowMode {
         if w.is_maximized() {
             WindowMode::Maximized
-        } else if w.is_floating() {
-            WindowMode::Floating
         } else if self.is_monocle() {
             WindowMode::Monocle
+        } else if w.is_floating() {
+            WindowMode::Floating
         } else {
             WindowMode::Tiled
         }
@@ -1077,62 +1075,59 @@ mod tests {
 #[cfg(test)]
 mod window_mode_tests {
     use super::*;
+    use crate::app_context::AppContext;
+    use crate::components::NoopComponent;
+    use crate::window::window_manager::MonocleMode;
     use crate::window::window_manager::Window;
     use crate::window::{ComponentKey, FloatRectSpec};
+    use crate::wm_config::WmConfig;
+    use std::sync::Arc;
 
-    // Helper to spin up a stub Window
-    fn create_test_window(key_idx: usize) -> Window {
+    fn make_wm() -> WindowManager<NoopComponent> {
+        WindowManager::<NoopComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        )
+    }
+
+    fn window(key_idx: usize) -> Window {
         Window::new(key_idx, ComponentKey::default())
     }
 
-    // Helper to create a dummy FloatRectSpec for testing floating state
-    fn dummy_float_spec() -> FloatRectSpec {
-        FloatRectSpec::Absolute(Default::default())
-    }
-
     #[test]
-    fn test_window_mode_priority_hierarchy() {
-        let mut window = create_test_window(1);
+    fn test_window_mode_precedence() {
+        let mut wm = make_wm();
+        let mut w = window(1);
 
-        // 1. Base state: Tiled (not floating, not maximized, not monocle)
-        let is_monocle = false;
-        let mode = evaluate_mode(&window, is_monocle);
-        assert_eq!(mode, WindowMode::Tiled);
+        // 1. Base state: Tiled (no flags set)
+        assert_eq!(wm.window_mode(&w), WindowMode::Tiled);
 
-        // 2. Monocle active -> Monocle mode
-        let is_monocle = true;
-        let mode = evaluate_mode(&window, is_monocle);
-        assert_eq!(mode, WindowMode::Monocle);
+        // 2. Floating only: Floating
+        w.set_floating_rect(Some(FloatRectSpec::Absolute(Default::default())));
+        assert_eq!(wm.window_mode(&w), WindowMode::Floating);
 
-        // 3. Floating window inside Monocle workspace -> Floating overrides Monocle
-        window.set_floating_rect(Some(dummy_float_spec()));
-        let mode = evaluate_mode(&window, is_monocle);
+        // 3. Monocle only (non-floating): Monocle
+        w.set_floating_rect(None);
+        wm.monocle_mode = MonocleMode::On;
+        assert_eq!(wm.window_mode(&w), WindowMode::Monocle);
+
+        // 4. Floating + Monocle: Monocle takes precedence
+        w.set_floating_rect(Some(FloatRectSpec::Absolute(Default::default())));
         assert_eq!(
-            mode,
-            WindowMode::Floating,
-            "Floating windows must preserve floating chrome rules even under Monocle layout"
+            wm.window_mode(&w),
+            WindowMode::Monocle,
+            "Monocle layout must take precedence over floating chrome rules"
         );
 
-        // 4. Maximized window -> Maximized overrides Floating & Monocle
-        window.set_maximized(true);
-        let mode = evaluate_mode(&window, is_monocle);
+        // 5. Maximized + Floating + Monocle: Maximized takes precedence
+        w.set_maximized(true);
         assert_eq!(
-            mode,
+            wm.window_mode(&w),
             WindowMode::Maximized,
             "Maximized state must take precedence over all other modes"
         );
-    }
-
-    /// Isolated helper mirroring `WindowManager::window_mode` priority order for pure testing
-    fn evaluate_mode(w: &Window, is_monocle: bool) -> WindowMode {
-        if w.is_maximized() {
-            WindowMode::Maximized
-        } else if w.is_floating() {
-            WindowMode::Floating
-        } else if is_monocle {
-            WindowMode::Monocle
-        } else {
-            WindowMode::Tiled
-        }
     }
 }
