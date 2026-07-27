@@ -818,6 +818,27 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
         }
         wm.hitbox_registry_mut().merge(top_hb);
 
+        // Register the top panel's outer hitbox for the overlay area so
+        // handle_outside_click can find it via hit_test_all and dispatch
+        // to the panel component (which hit-tests sub-elements internally).
+        // Extract metadata first to drop the immutable borrow before mutation.
+        #[allow(clippy::manual_option_zip)]
+        let panel_meta = wm
+            .get_semantic_component(ComponentTag::TopPanel)
+            .and_then(|p| p.hitbox_id())
+            .and_then(|hitbox_id| {
+                wm.semantic_registry
+                    .get(&ComponentTag::TopPanel)
+                    .copied()
+                    .map(|layer_id| (hitbox_id, layer_id))
+            });
+
+        if let Some((hitbox_id, layer_id)) = panel_meta {
+            use term_wm_core::hitbox_registry::ComponentOwner;
+            wm.hitbox_registry_mut()
+                .register(hitbox_id, ComponentOwner::Layer(layer_id), top_area);
+        }
+
         // Bottom panel overlay in monocle mode — keybinding hints
         let bottom_area = LayoutRect {
             x: full_area.x,
