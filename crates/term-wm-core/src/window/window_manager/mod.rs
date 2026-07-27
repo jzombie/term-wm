@@ -2697,6 +2697,28 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             }
         }
 
+        // View group
+        items.push(MenuDisplayItem::Separator);
+        items.push(mi(
+            self.monocle_mode.action_label(),
+            Some("▢"),
+            crate::actions::TermWmAction::ToggleMonocle,
+        ));
+        {
+            let label = if self.managed_layout.is_some() {
+                "View: Enable Tiling"
+            } else {
+                "View: Disable Tiling"
+            };
+            let mut item = mi(label, Some("⊞"), crate::actions::TermWmAction::ToggleTiling);
+            if self.is_monocle()
+                && let MenuDisplayItem::Item(ref mut mi) = item
+            {
+                mi.disabled = true;
+            }
+            items.push(item);
+        }
+
         // Settings group
         items.push(MenuDisplayItem::Separator);
         items.push(mi(
@@ -2725,32 +2747,14 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             crate::actions::TermWmAction::ToggleSystemPanel,
         ));
 
-        // View group
-        items.push(MenuDisplayItem::Separator);
-        items.push(mi(
-            self.monocle_mode.action_label(),
-            Some("▢"),
-            crate::actions::TermWmAction::ToggleMonocle,
-        ));
-        {
-            let label = if self.managed_layout.is_some() {
-                "View: Enable Tiling"
-            } else {
-                "View: Disable Tiling"
-            };
-            let mut item = mi(label, Some("⊞"), crate::actions::TermWmAction::ToggleTiling);
-            if self.is_monocle()
-                && let MenuDisplayItem::Item(ref mut mi) = item
-            {
-                mi.disabled = true;
-            }
-            items.push(item);
-        }
-
         // Help/Exit as last group
         items.push(MenuDisplayItem::Separator);
         items.push(mi("Help", Some("?"), crate::actions::TermWmAction::Help));
-        items.push(mi("Exit UI", Some("⏻"), crate::actions::TermWmAction::ExitUi));
+        items.push(mi(
+            "Exit UI",
+            Some("⏻"),
+            crate::actions::TermWmAction::ExitUi,
+        ));
 
         items
     }
