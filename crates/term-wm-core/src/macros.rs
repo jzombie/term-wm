@@ -238,7 +238,7 @@ macro_rules! impl_overlay_delegate {
             fn mark_dirty(&mut self) {
                 match self { $(Self::$variant(c) => c.mark_dirty(),)* }
             }
-            fn set_menu_items(&mut self, items: Vec<$crate::components::MenuItem<$crate::actions::TermWmAction>>) {
+            fn set_menu_items(&mut self, items: Vec<$crate::components::MenuDisplayItem<$crate::actions::TermWmAction>>) {
                 match self { $(Self::$variant(c) => c.set_menu_items(items),)* }
             }
             fn set_tab_outline(&mut self, expires_at: Option<std::time::Instant>) {

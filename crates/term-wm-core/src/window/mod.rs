@@ -1,7 +1,7 @@
 pub mod decorator;
 mod entry;
 pub mod test_component;
-mod window_manager;
+pub mod window_manager;
 
 use crate::Rect;
 use term_wm_layout_engine::{LayoutRect, RectSpec};

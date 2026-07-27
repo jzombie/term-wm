@@ -295,6 +295,7 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
             self.wm.transition_window(debug_key, WindowState::Unmapped);
             self.wm.set_window_title(debug_key, "Debug Log");
             self.debug_key = Some(debug_key);
+            self.wm.register_system_window::<term_wm_core::window::window_manager::system_tags::DebugLog>(debug_key);
             install_panic_hook();
             crate::logging::init_default();
         }
@@ -311,6 +312,7 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
             self.wm.transition_window(sys_key, WindowState::Unmapped);
             self.wm.set_window_title(sys_key, "System Panel");
             self.system_panel_key = Some(sys_key);
+            self.wm.register_system_window::<term_wm_core::window::window_manager::system_tags::SystemPanel>(sys_key);
         }
     }
 
@@ -463,21 +465,26 @@ impl<C: Component<TermWmAction>>
     }
 
     fn open_command_palette(&mut self) {
+        use term_wm_core::components::MenuDisplayItem;
         let mut palette = WmCommandPaletteComponent::new();
         palette.show();
         let items = self.wm.wm_menu_items();
         let supported = self.wm.supported_menu_actions();
+        // Filter out items not in the supported set; keep separators.
         let items: Vec<_> = items
             .into_iter()
-            .filter(|item| {
-                supported.contains(&item.action)
-                    || matches!(
-                        item.action,
-                        TermWmAction::FocusWindow(_)
-                            | TermWmAction::MaximizeWindow(_)
-                            | TermWmAction::MinimizeWindow(_)
-                            | TermWmAction::CloseWindow(_)
-                    )
+            .filter(|entry| match entry {
+                MenuDisplayItem::Item(item) => {
+                    supported.contains(&item.action)
+                        || matches!(
+                            item.action,
+                            TermWmAction::FocusWindow(_)
+                                | TermWmAction::MaximizeWindow(_)
+                                | TermWmAction::MinimizeWindow(_)
+                                | TermWmAction::CloseWindow(_)
+                        )
+                }
+                MenuDisplayItem::Separator => true,
             })
             .collect();
         palette.set_items(items);

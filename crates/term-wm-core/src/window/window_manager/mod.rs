@@ -6,11 +6,21 @@ pub(crate) mod layer_manager;
 mod layout;
 mod overlays;
 
+use std::any::TypeId;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 
 use crate::window::entry;
 use std::time::{Duration, Instant};
+
+/// Marker types for strongly-typed system window and overlay resolution.
+pub mod system_tags {
+    pub struct DebugLog;
+    pub struct SystemPanel;
+    pub struct CommandPalette;
+    pub struct HelpOverlay;
+    pub struct ExitConfirm;
+}
 
 use crate::Rect;
 use crate::events::{Event, MouseEvent, MouseEventKind};
@@ -22,9 +32,7 @@ use super::WindowKey;
 use super::entry::{Window, WindowState};
 use crate::actions::{EventResult, SystemTask, TermWmAction};
 use crate::app_context::AppContext;
-use crate::components::{
-    Component, ComponentAction, ComponentContext, MenuItem, Overlay, WmComponent,
-};
+use crate::components::{Component, ComponentAction, ComponentContext, Overlay, WmComponent};
 use crate::hitbox_registry::{ComponentOwner, HitboxRegistry};
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
@@ -260,6 +268,15 @@ impl MonocleMode {
             MonocleMode::Off => "Off",
         }
     }
+
+    /// Action-oriented label for the command palette — describes what clicking will do.
+    pub fn action_label(self) -> &'static str {
+        match self {
+            MonocleMode::Auto => "Enable Monocle Mode",
+            MonocleMode::On => "Disable Monocle Mode",
+            MonocleMode::Off => "Set Monocle Mode Auto",
+        }
+    }
 }
 
 pub struct WindowManager<
@@ -317,9 +334,9 @@ pub struct WindowManager<
     system_task_handle: Option<TaskHandle<SystemTask>>,
     pub(crate) last_frame_area: LayoutRect,
     overlays: SlotMap<OverlayKey, O>,
-    help_key: Option<OverlayKey>,
-    exit_confirm_key: Option<OverlayKey>,
-    command_palette_key: Option<OverlayKey>,
+    /// TypeId-keyed registries for strongly-typed system window/overlay resolution.
+    pub system_windows: HashMap<TypeId, WindowKey>,
+    pub system_overlays: HashMap<TypeId, OverlayKey>,
     /// When `Some(instant)`, tab outline mode is active until that instant.
     pub(crate) tab_outline_until: Option<Instant>,
     /// Tracks last cell coordinate passed to `update_snap_preview` for
@@ -808,15 +825,32 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             notification_queue: NotificationQueue::default(),
             semantic_registry,
             overlays: SlotMap::with_key(),
-            help_key: None,
-            exit_confirm_key: None,
-            command_palette_key: None,
+            system_windows: HashMap::new(),
+            system_overlays: HashMap::new(),
             tab_outline_until: None,
             last_snap_cursor: None,
             input_mode: crate::actions::WmInputMode::Passthrough,
             fab_enabled: true,
             tap_swap_state: None,
         }
+    }
+
+    // === TypeId registry accessors ===
+
+    pub fn register_system_window<T: 'static>(&mut self, key: WindowKey) {
+        self.system_windows.insert(TypeId::of::<T>(), key);
+    }
+
+    pub fn get_system_window<T: 'static>(&self) -> Option<WindowKey> {
+        self.system_windows.get(&TypeId::of::<T>()).copied()
+    }
+
+    pub fn register_overlay<T: 'static>(&mut self, key: OverlayKey) {
+        self.system_overlays.insert(TypeId::of::<T>(), key);
+    }
+
+    pub fn get_overlay<T: 'static>(&self) -> Option<OverlayKey> {
+        self.system_overlays.get(&TypeId::of::<T>()).copied()
     }
 
     /// Request a clean shutdown on the next idle tick.
@@ -2211,16 +2245,19 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     pub fn open_help_overlay(&mut self, overlay: O) {
-        self.help_key = Some(self.overlays.insert(overlay));
+        let key = self.overlays.insert(overlay);
+        self.register_overlay::<system_tags::HelpOverlay>(key);
         self.input_mode = crate::actions::WmInputMode::Help;
     }
 
     pub fn open_exit_confirm_overlay(&mut self, overlay: O) {
-        self.exit_confirm_key = Some(self.overlays.insert(overlay));
+        let key = self.overlays.insert(overlay);
+        self.register_overlay::<system_tags::ExitConfirm>(key);
     }
 
     pub fn open_command_palette_overlay(&mut self, overlay: O) {
-        self.command_palette_key = Some(self.overlays.insert(overlay));
+        let key = self.overlays.insert(overlay);
+        self.register_overlay::<system_tags::CommandPalette>(key);
         self.input_mode = crate::actions::WmInputMode::CommandPalette;
     }
 
@@ -2232,7 +2269,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     pub fn set_tab_outline_mode(&mut self, duration: Duration) {
         let expires = Instant::now() + duration;
         self.tab_outline_until = Some(expires);
-        if let Some(key) = self.command_palette_key
+        if let Some(key) = self.get_overlay::<system_tags::CommandPalette>()
             && let Some(overlay) = self.overlays.get_mut(key)
         {
             overlay.set_tab_outline(Some(expires));
@@ -2245,7 +2282,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Clear tab outline mode — restore palette/panels to normal.
     pub fn clear_tab_outline(&mut self) {
         self.tab_outline_until = None;
-        if let Some(key) = self.command_palette_key
+        if let Some(key) = self.get_overlay::<system_tags::CommandPalette>()
             && let Some(overlay) = self.overlays.get_mut(key)
         {
             overlay.set_tab_outline(None);
@@ -2573,120 +2610,156 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         btns
     }
 
-    pub fn wm_menu_items(&self) -> Vec<MenuItem<crate::actions::TermWmAction>> {
+    pub fn wm_menu_items(
+        &self,
+    ) -> Vec<crate::components::MenuDisplayItem<crate::actions::TermWmAction>> {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        use crate::window::WindowState;
+        use crate::window::window_manager::system_tags;
+
+        let debug_log_visible = self
+            .get_system_window::<system_tags::DebugLog>()
+            .is_some_and(|k| self.window_state(k) == Some(WindowState::Mapped));
+        let system_panel_visible = self
+            .get_system_window::<system_tags::SystemPanel>()
+            .is_some_and(|k| self.window_state(k) == Some(WindowState::Mapped));
+
         let mouse_label = if self.mouse_capture_enabled {
-            "Mouse Capture: On"
+            "Mouse: Disable Capture"
         } else {
-            "Mouse Capture: Off"
+            "Mouse: Enable Capture"
         };
         let clipboard_label = if self.clipboard_enabled {
-            "Clipboard Mode: On"
+            "Clipboard: Disable"
         } else {
-            "Clipboard Mode: Off"
+            "Clipboard: Enable"
         };
         let selection_label = if self.window_selection_enabled {
-            "Window Selection: On"
+            "Clipboard: Disable Selection"
         } else {
-            "Window Selection: Off"
+            "Clipboard: Enable Selection"
         };
-        let mut items = vec![
-            MenuItem {
-                label: "Resume".into(),
-                icon: Some("▶"),
-                action: crate::actions::TermWmAction::CloseMenu,
+        let debug_label = if debug_log_visible {
+            "System: Disable Debug Log"
+        } else {
+            "System: Enable Debug Log"
+        };
+        let panel_label = if system_panel_visible {
+            "System: Disable Panel"
+        } else {
+            "System: Enable Panel"
+        };
+
+        fn mi(
+            label: &'static str,
+            icon: Option<&'static str>,
+            action: crate::actions::TermWmAction,
+        ) -> MenuDisplayItem<crate::actions::TermWmAction> {
+            MenuDisplayItem::Item(MenuItem {
+                label: label.into(),
+                icon,
+                action,
                 disabled: false,
-            },
-            MenuItem {
-                label: "New Window".into(),
-                icon: Some("+"),
-                action: crate::actions::TermWmAction::NewWindow,
-                disabled: false,
-            },
-            MenuItem {
-                label: mouse_label.into(),
-                icon: Some("◆"),
-                action: crate::actions::TermWmAction::ToggleMouseCapture,
-                disabled: false,
-            },
-            MenuItem {
-                label: clipboard_label.into(),
-                icon: Some("■"),
-                action: crate::actions::TermWmAction::ToggleClipboardMode,
-                disabled: false,
-            },
-            MenuItem {
-                label: selection_label.into(),
-                icon: Some("●"),
-                action: crate::actions::TermWmAction::ToggleWindowSelection,
-                disabled: false,
-            },
-            MenuItem {
-                label: "Toggle Debug Log".into(),
-                icon: Some("≣"),
-                action: crate::actions::TermWmAction::ToggleDebugWindow,
-                disabled: false,
-            },
-            MenuItem {
-                label: "Toggle System Panel".into(),
-                icon: Some("*"),
-                action: crate::actions::TermWmAction::ToggleSystemPanel,
-                disabled: false,
-            },
-            MenuItem {
-                label: "Help".into(),
-                icon: Some("?"),
-                action: crate::actions::TermWmAction::Help,
-                disabled: false,
-            },
-            MenuItem {
-                label: "Exit UI".into(),
-                icon: Some("⏻"),
-                action: crate::actions::TermWmAction::ExitUi,
-                disabled: false,
-            },
-            MenuItem {
-                label: format!("Monocle Mode: {}", self.monocle_mode.label()).into(),
-                icon: Some("▢"),
-                action: crate::actions::TermWmAction::ToggleMonocle,
-                disabled: false,
-            },
-            MenuItem {
-                label: {
-                    let mode = if self.managed_layout.is_some() {
-                        "Float"
-                    } else {
-                        "Tile"
-                    };
-                    format!("Toggle {mode} Mode").into()
-                },
-                icon: Some("⊞"),
-                action: crate::actions::TermWmAction::ToggleTiling,
-                disabled: self.is_monocle(),
-            },
-        ];
+            })
+        }
 
         let focused = self.focused_window();
         let has_active = self.windows.contains_key(focused);
 
-        if has_active {
-            // Window management buttons from centralized list
-            for btn in self.window_management_buttons() {
-                items.push(MenuItem {
-                    label: btn.label.into(),
-                    icon: Some(btn.symbol),
-                    action: btn.action,
-                    disabled: false,
-                });
+        let mut items: Vec<MenuDisplayItem<crate::actions::TermWmAction>> = vec![
+            // Top group
+            mi("Resume", Some("▶"), crate::actions::TermWmAction::CloseMenu),
+            mi(
+                "New Window",
+                Some("+"),
+                crate::actions::TermWmAction::NewWindow,
+            ),
+            MenuDisplayItem::Separator,
+        ];
+
+        // Window management group (directly below top group)
+        {
+            if has_active {
+                for btn in self.window_management_buttons() {
+                    items.push(MenuDisplayItem::Item(MenuItem {
+                        label: btn.label.into(),
+                        icon: Some(btn.symbol),
+                        action: btn.action,
+                        disabled: false,
+                    }));
+                }
+                for (key, title) in self.window_titles() {
+                    items.push(MenuDisplayItem::Item(MenuItem {
+                        label: format!("Switch to: {}", title).into(),
+                        icon: Some("→"),
+                        action: crate::actions::TermWmAction::FocusWindow(key),
+                        disabled: key == focused,
+                    }));
+                }
             }
-            // Switch-to navigation for all windows
-            for (key, title) in self.window_titles() {
-                items.push(MenuItem {
-                    label: format!("Switch to: {}", title).into(),
-                    icon: Some("→"),
-                    action: crate::actions::TermWmAction::FocusWindow(key),
-                    disabled: key == focused,
-                });
+        }
+
+        // View group
+        {
+            items.push(MenuDisplayItem::Separator);
+            items.push(mi(
+                self.monocle_mode.action_label(),
+                Some("▢"),
+                crate::actions::TermWmAction::ToggleMonocle,
+            ));
+            {
+                let label = if self.managed_layout.is_some() {
+                    "View: Float Windows"
+                } else {
+                    "View: Tile Windows"
+                };
+                let mut item = mi(label, Some("⊞"), crate::actions::TermWmAction::ToggleTiling);
+                if self.is_monocle()
+                    && let MenuDisplayItem::Item(ref mut mi) = item
+                {
+                    mi.disabled = true;
+                }
+                items.push(item);
             }
+        }
+
+        // Settings group
+        {
+            items.push(MenuDisplayItem::Separator);
+            items.push(mi(
+                mouse_label,
+                Some("◆"),
+                crate::actions::TermWmAction::ToggleMouseCapture,
+            ));
+            items.push(mi(
+                clipboard_label,
+                Some("■"),
+                crate::actions::TermWmAction::ToggleClipboardMode,
+            ));
+            items.push(mi(
+                selection_label,
+                Some("●"),
+                crate::actions::TermWmAction::ToggleWindowSelection,
+            ));
+            items.push(mi(
+                debug_label,
+                Some("≣"),
+                crate::actions::TermWmAction::ToggleDebugWindow,
+            ));
+            items.push(mi(
+                panel_label,
+                Some("*"),
+                crate::actions::TermWmAction::ToggleSystemPanel,
+            ));
+
+            // Help/Exit as last group
+            items.push(MenuDisplayItem::Separator);
+            items.push(mi("Help", Some("?"), crate::actions::TermWmAction::Help));
+            items.push(mi(
+                "Exit UI",
+                Some("⏻"),
+                crate::actions::TermWmAction::ExitUi,
+            ));
         }
 
         items
