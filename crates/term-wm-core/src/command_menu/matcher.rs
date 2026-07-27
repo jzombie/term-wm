@@ -29,11 +29,7 @@ impl FuzzyMatch {
     /// against a query string.  `searchable_text` is a precomputed string that
     /// includes both the display name and icon text so both are fuzzy-matchable.
     /// Returns indices into the input slice, sorted by score descending.
-    pub fn score(
-        &mut self,
-        query: &str,
-        items: &[(String, String, String, bool)],
-    ) -> Vec<usize> {
+    pub fn score(&mut self, query: &str, items: &[(String, String, String, bool)]) -> Vec<usize> {
         if query.is_empty() {
             return (0..items.len()).collect();
         }
@@ -131,8 +127,18 @@ mod tests {
     fn fuzzy_empty_query_returns_all() {
         let mut fmatch = FuzzyMatch::new();
         let items = vec![
-            ("New Window".to_string(), String::new(), "New Window".to_string(), false),
-            ("Close Window".to_string(), String::new(), "Close Window".to_string(), false),
+            (
+                "New Window".to_string(),
+                String::new(),
+                "New Window".to_string(),
+                false,
+            ),
+            (
+                "Close Window".to_string(),
+                String::new(),
+                "Close Window".to_string(),
+                false,
+            ),
         ];
         let results = fmatch.score("", &items);
         assert_eq!(results, vec![0, 1]);
@@ -142,8 +148,18 @@ mod tests {
     fn fuzzy_matching_prefix() {
         let mut fmatch = FuzzyMatch::new();
         let items = vec![
-            ("New Window".to_string(), String::new(), "New Window".to_string(), false),
-            ("Close Window".to_string(), String::new(), "Close Window".to_string(), false),
+            (
+                "New Window".to_string(),
+                String::new(),
+                "New Window".to_string(),
+                false,
+            ),
+            (
+                "Close Window".to_string(),
+                String::new(),
+                "Close Window".to_string(),
+                false,
+            ),
         ];
         let results = fmatch.score("new", &items);
         assert_eq!(results.len(), 1);
@@ -154,8 +170,18 @@ mod tests {
     fn fuzzy_no_match_returns_empty() {
         let mut fmatch = FuzzyMatch::new();
         let items = vec![
-            ("New Window".to_string(), String::new(), "New Window".to_string(), false),
-            ("Close Window".to_string(), String::new(), "Close Window".to_string(), false),
+            (
+                "New Window".to_string(),
+                String::new(),
+                "New Window".to_string(),
+                false,
+            ),
+            (
+                "Close Window".to_string(),
+                String::new(),
+                "Close Window".to_string(),
+                false,
+            ),
         ];
         let results = fmatch.score("zzzzz", &items);
         assert!(results.is_empty());
@@ -168,8 +194,18 @@ mod tests {
     fn fuzzy_multiple_successive_scores() {
         let mut fmatch = FuzzyMatch::new();
         let items = vec![
-            ("New Window".to_string(), String::new(), "New Window".to_string(), false),
-            ("Close Window".to_string(), String::new(), "Close Window".to_string(), false),
+            (
+                "New Window".to_string(),
+                String::new(),
+                "New Window".to_string(),
+                false,
+            ),
+            (
+                "Close Window".to_string(),
+                String::new(),
+                "Close Window".to_string(),
+                false,
+            ),
         ];
 
         // Empty query → all items
@@ -202,8 +238,18 @@ mod tests {
     fn fuzzy_case_and_multi_char() {
         let mut fmatch = FuzzyMatch::new();
         let items = vec![
-            ("Resume".to_string(), String::new(), "Resume".to_string(), false),
-            ("Exit UI".to_string(), String::new(), "Exit UI".to_string(), false),
+            (
+                "Resume".to_string(),
+                String::new(),
+                "Resume".to_string(),
+                false,
+            ),
+            (
+                "Exit UI".to_string(),
+                String::new(),
+                "Exit UI".to_string(),
+                false,
+            ),
         ];
 
         // All queries are case-insensitive with CaseMatching::Ignore
@@ -273,10 +319,17 @@ mod tests {
 
         let results = matcher.score("* sys", &items);
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0], 0, "combined '* sys' should match 'Toggle System Panel'");
+        assert_eq!(
+            results[0], 0,
+            "combined '* sys' should match 'Toggle System Panel'"
+        );
 
         let results = matcher.score("Tab", &items);
-        assert_eq!(results.len(), 2, "'Tab' should match both commands containing 'Tab'");
+        assert_eq!(
+            results.len(),
+            2,
+            "'Tab' should match both commands containing 'Tab'"
+        );
         assert!(results.contains(&1));
         assert!(results.contains(&2));
     }
