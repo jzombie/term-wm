@@ -6,7 +6,7 @@ pub(crate) mod layer_manager;
 mod layout;
 mod overlays;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 
 use crate::window::entry;
@@ -2291,15 +2291,23 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         }
     }
 
-    /// Dispatch a mouse click to the panel component if the click falls within
-    /// a panel region. Panels are pure UI chrome — they never forward clicks to
-    /// terminal processes, so dispatching here is safe from PTY event leakage.
+    /// Handles a mouse click landing outside the command palette upon dismissal.
     ///
-    /// Returns `Some(action)` if the panel produced an action (e.g. `FocusWindow`
-    /// from clicking a window title tab), or `None` if the click missed all panels
-    /// or the panel ignored it.
-    pub fn panel_hit_test(&mut self, col: u16, row: u16, event: &Event) -> Option<TermWmAction> {
-        use crate::hitbox_registry::ComponentOwner;
+    /// Inspects ALL hitboxes at (col, row) in Z-order with priority:
+    /// 1. Layer components (TopPanel, BottomPanel, FAB) — dispatch event
+    /// 2. Non-palette Overlays — dispatch event
+    /// 3. Window Chrome (titlebar, buttons, resize handles) — focus window
+    /// 4. Window body — focus window
+    ///
+    /// Returns `true` if any hitbox was handled. Panel/overlay actions are
+    /// pushed to `actions` for the caller to dispatch.
+    pub fn handle_outside_click(
+        &mut self,
+        col: u16,
+        row: u16,
+        event: &Event,
+        actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+    ) -> bool {
         use crate::mouse_coord::{CoordSpace, MousePosition};
 
         let position = MousePosition {
@@ -2307,42 +2315,62 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             row: row as i16,
             space: CoordSpace::Screen,
         };
+        let hits: Vec<_> = self.hitbox_registry.hit_test_all(position).collect();
 
-        // Filter for Layer/Overlay hitboxes only — ignores full-screen window
-        // hitboxes underneath (monocle mode) and the palette itself.
-        let (hitbox_id, owner, hit_rect) = self
-            .hitbox_registry
-            .hit_test_filtered(position, |o| match o {
-                ComponentOwner::Layer(_) => true,
-                ComponentOwner::Overlay(key) => Some(*key) != self.command_palette_key,
-                _ => false,
-            })?;
-
-        match owner {
-            ComponentOwner::Layer(layer_id) => {
-                let ctx = self
-                    .component_context(false)
-                    .with_screen_area(hit_rect)
-                    .with_active_hitbox(hitbox_id);
-                if let Some(layer_comp) = self.layer_manager.get_mut(layer_id)
-                    && let EventResult::Action(action) =
-                        layer_comp.handle_events(event, &ctx)
-                {
-                    return Some(action);
-                }
-            }
-            ComponentOwner::Overlay(key) => {
-                if let Some(overlay) = self.overlays.get_mut(key) {
-                    let ctx = ComponentContext::new(true).with_screen_area(hit_rect);
-                    if let EventResult::Action(action) = overlay.handle_events(event, &ctx) {
-                        return Some(action);
+        for (hitbox_id, owner, hit_rect) in hits {
+            match owner {
+                ComponentOwner::Layer(layer_id) => {
+                    let ctx = self
+                        .component_context(false)
+                        .with_screen_area(hit_rect)
+                        .with_active_hitbox(hitbox_id);
+                    if let Some(layer_comp) = self.layer_manager.get_mut(layer_id) {
+                        match layer_comp.handle_events(event, &ctx) {
+                            EventResult::Action(action) => {
+                                actions.push_back((self.focused_window(), action));
+                                return true;
+                            }
+                            EventResult::Consumed => return true,
+                            EventResult::Ignored => {}
+                        }
                     }
                 }
+                ComponentOwner::Overlay(key) if Some(key) != self.command_palette_key => {
+                    if let Some(overlay) = self.overlays.get_mut(key) {
+                        let ctx = ComponentContext::new(true).with_screen_area(hit_rect);
+                        match overlay.handle_events(event, &ctx) {
+                            EventResult::Action(action) => {
+                                actions.push_back((self.focused_window(), action));
+                                return true;
+                            }
+                            EventResult::Consumed => return true,
+                            EventResult::Ignored => {}
+                        }
+                    }
+                }
+                ComponentOwner::Chrome(target) => {
+                    let win_key = match target {
+                        crate::chrome::ChromeTarget::Resize(k, _)
+                        | crate::chrome::ChromeTarget::Drag(k)
+                        | crate::chrome::ChromeTarget::CloseButton(k)
+                        | crate::chrome::ChromeTarget::MaximizeButton(k)
+                        | crate::chrome::ChromeTarget::MinimizeButton(k) => Some(k),
+                        _ => None,
+                    };
+                    if let Some(k) = win_key {
+                        self.focus_app_window(k);
+                        return true;
+                    }
+                }
+                ComponentOwner::Window(key) => {
+                    self.focus_app_window(key);
+                    return true;
+                }
+                _ => {}
             }
-            _ => {}
         }
 
-        None
+        false
     }
 
     /// No-op: chrome hitbox registration is now handled by the console
@@ -6725,10 +6753,10 @@ mod tests {
         assert_eq!(wm.command_palette_bounds(), None);
     }
 
-    // ── panel_hit_test tests ──────────────────────────────────────────────
+    // ── handle_outside_click tests ───────────────────────────────────────
 
     #[test]
-    fn panel_hit_test_no_panels_returns_none() {
+    fn handle_outside_click_empty_registry_returns_false() {
         let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
@@ -6736,81 +6764,19 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        // No panel regions set → no hit
-        wm.top_claimed = LayoutRect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 1,
-        };
-        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
-            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
-            column: 5,
-            row: 0,
-            modifiers: crate::events::KeyModifiers::NONE,
-        });
-        // get_semantic_component_mut returns None (no panels registered),
-        // but the method should not panic and return None.
-        assert_eq!(wm.panel_hit_test(5, 0, &event), None);
-    }
-
-    #[test]
-    fn panel_hit_test_miss_returns_none() {
-        let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        wm.top_claimed = LayoutRect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 1,
-        };
-        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
-            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
-            column: 5,
-            row: 10, // outside the top panel region
-            modifiers: crate::events::KeyModifiers::NONE,
-        });
-        assert_eq!(wm.panel_hit_test(5, 10, &event), None);
-    }
-
-    #[test]
-    fn panel_hit_test_via_hitbox_registry() {
-        // Verify that a Layer hitbox in the registry is dispatched to the
-        // layer component (even if it returns Ignored).
-        let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        // Register a Layer hitbox in the registry
-        let layer_id = crate::window::window_manager::layer_manager::LayerId(42);
-        wm.hitbox_registry.register(
-            crate::hitbox_registry::HitboxId::new(),
-            crate::hitbox_registry::ComponentOwner::Layer(layer_id),
-            LayoutRect { x: 0, y: 0, width: 10, height: 10 },
-        );
-
         let event = crate::events::Event::Mouse(crate::events::MouseEvent {
             kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
             column: 5,
             row: 5,
             modifiers: crate::events::KeyModifiers::NONE,
         });
-        // No layer component registered at layer_id, so get_mut returns
-        // None and panel_hit_test returns None (no crash).
-        assert_eq!(wm.panel_hit_test(5, 5, &event), None);
+        let mut actions = VecDeque::new();
+        assert!(!wm.handle_outside_click(5, 5, &event, &mut actions));
+        assert!(actions.is_empty());
     }
 
     #[test]
-    fn panel_hit_test_skips_window_hitbox() {
-        // Verify that Window hitboxes are NOT dispatched (PTY safety).
+    fn handle_outside_click_window_hitbox_focuses_window() {
         let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
@@ -6818,8 +6784,8 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        // Create a window and register its key as a hitbox owner
         let keys = make_keys(&mut wm, 1);
+        // Register a Window hitbox
         wm.hitbox_registry.register(
             crate::hitbox_registry::HitboxId::new(),
             crate::hitbox_registry::ComponentOwner::Window(keys[0]),
@@ -6831,7 +6797,67 @@ mod tests {
             row: 5,
             modifiers: crate::events::KeyModifiers::NONE,
         });
-        // Window hitbox is explicitly skipped → None
-        assert_eq!(wm.panel_hit_test(5, 5, &event), None);
+        let mut actions = VecDeque::new();
+        assert!(wm.handle_outside_click(5, 5, &event, &mut actions));
+        // Window should be focused
+        assert_eq!(*wm.focus.current(), keys[0]);
+    }
+
+    #[test]
+    fn handle_outside_click_chrome_hitbox_focuses_window() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        // Register a Chrome(Drag) hitbox
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Chrome(
+                crate::chrome::ChromeTarget::Drag(keys[0]),
+            ),
+            LayoutRect { x: 0, y: 0, width: 80, height: 1 },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 0,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        assert!(wm.handle_outside_click(5, 0, &event, &mut actions));
+        // Window should be focused
+        assert_eq!(*wm.focus.current(), keys[0]);
+    }
+
+    #[test]
+    fn handle_outside_click_layer_no_component_returns_false() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        // Register a Layer hitbox but no component at that layer_id
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Layer(
+                crate::window::window_manager::layer_manager::LayerId(42),
+            ),
+            LayoutRect { x: 0, y: 0, width: 10, height: 10 },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        // No layer component exists → layer_comp is None → ignored → false
+        assert!(!wm.handle_outside_click(5, 5, &event, &mut actions));
     }
 }

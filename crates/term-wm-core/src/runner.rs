@@ -447,20 +447,18 @@ where
                         && !palette_bounds.contains(mouse_evt.column, mouse_evt.row)
                     {
                         app.wm().close_command_palette();
-                        // Check panel click FIRST (handles tab switches in monocle
-                        // mode where window spans full screen including panel row)
-                        if let Some(action) =
-                            app.wm()
-                                .panel_hit_test(mouse_evt.column, mouse_evt.row, &evt)
-                        {
-                            let mut queue = std::collections::VecDeque::new();
-                            queue.push_back((app.wm().focused_window(), action));
-                            drain_action_queue(app, &mut queue);
-                        } else {
-                            // Fallback: activate window under cursor
+                        let mut actions = std::collections::VecDeque::new();
+                        if !app.wm().handle_outside_click(
+                            mouse_evt.column,
+                            mouse_evt.row,
+                            &evt,
+                            &mut actions,
+                        ) {
+                            // No panel/overlay/chrome hit — activate window under cursor
                             app.wm()
                                 .handle_mouse_focus_click(mouse_evt.column, mouse_evt.row);
                         }
+                        drain_action_queue(app, &mut actions);
                         update_selection_snapshot(app);
                         return flush_state_changes(
                             app,

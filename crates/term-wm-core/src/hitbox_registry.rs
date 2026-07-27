@@ -229,6 +229,20 @@ impl HitboxRegistry {
         None
     }
 
+    /// Returns ALL entries (overlay then standard) whose area contains `position`,
+    /// in reverse-registration order (topmost first).
+    pub fn hit_test_all(
+        &self,
+        position: MousePosition,
+    ) -> impl Iterator<Item = (HitboxId, ComponentOwner, LayoutRect)> + '_ {
+        self.overlay_entries
+            .iter()
+            .rev()
+            .chain(self.entries.iter().rev())
+            .filter(move |entry| position.is_inside(entry.area))
+            .map(|entry| (entry.id, entry.owner, entry.area))
+    }
+
     /// Returns the number of registered entries (for diagnostics / metrics).
     pub fn len(&self) -> usize {
         self.entries.len() + self.overlay_entries.len()
