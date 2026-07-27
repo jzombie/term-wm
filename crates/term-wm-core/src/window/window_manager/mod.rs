@@ -2635,9 +2635,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             "Clipboard: Enable"
         };
         let selection_label = if self.window_selection_enabled {
-            "Window: Disable Selection"
+            "Clipboard: Disable Selection"
         } else {
-            "Window: Enable Selection"
+            "Clipboard: Enable Selection"
         };
         let debug_label = if debug_log_visible {
             "System: Disable Debug Log"
