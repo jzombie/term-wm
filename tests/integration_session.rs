@@ -263,6 +263,40 @@ async fn session_child_exit() {
     assert!(got_end, "Stream should end when child exits");
 }
 
+// Note: [serial] was added due to some Windows flakiness
+#[tokio::test]
+#[serial]
+async fn session_child_exit_before_subscribe() {
+    let mock = get_mock_bin();
+    let (client, _dir) =
+        spawn_session(vec![mock, "exit".into(), "0".into()], TEST_COLS, TEST_ROWS).await;
+
+    // Give the server time to detect child exit and tear down the session
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let (_, mut reader) = client
+        .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
+        .await
+        .unwrap();
+
+    let mut got_end = false;
+    let start = std::time::Instant::now();
+    while start.elapsed() < Duration::from_secs(3) {
+        match tokio::time::timeout(Duration::from_millis(500), reader.recv()).await {
+            Ok(None) => {
+                got_end = true;
+                break;
+            }
+            Ok(Some(_)) => continue,
+            Err(_) => continue,
+        }
+    }
+    assert!(
+        got_end,
+        "Should get end-of-stream when subscribing after child exit"
+    );
+}
+
 #[tokio::test]
 async fn session_reconnect() {
     let mock = get_mock_bin();

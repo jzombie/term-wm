@@ -191,12 +191,38 @@ impl Pty {
 
     /// Set a status callback invoked by the reader thread on data and exit.
     /// Uses `Arc<Mutex<>>` so the reader thread (which holds a clone) sees updates.
+    ///
+    /// If the child has already exited (reader thread detected EOF before the
+    /// callback was registered, or ConPTY swallowed the EOF), fires the callback
+    /// immediately so the async polling loop can process the exit state.
     pub fn set_status_callback(&mut self, cb: Option<Box<dyn Fn(PtyStatus) + Send + Sync>>) {
+        let mut fire_cb = None;
+
         if let Ok(mut guard) = self.status_cb.lock() {
-            *guard = cb;
+            if self.exited {
+                self.exited_emitted.store(true, Ordering::Release);
+                fire_cb = cb;
+                *guard = None;
+            } else if let Some(child) = self.child.as_mut()
+                && let Ok(Some(status)) = child.try_wait()
+            {
+                self.exited = true;
+                self.exit_status = Some(status);
+                self.child = None;
+                self.exited_emitted.store(true, Ordering::Release);
+                fire_cb = cb;
+                *guard = None;
+            } else {
+                *guard = cb;
+            }
         }
+
         if let Some(reader) = &self.reader {
             reader.thread().unpark();
+        }
+
+        if let Some(cb_fn) = fire_cb {
+            cb_fn(PtyStatus::Exited);
         }
     }
 
@@ -1120,6 +1146,85 @@ mod tests {
         assert_eq!(
             count_after_first, count_after_second,
             "has_exited() must not re-fire the Exited callback after returning true"
+        );
+    }
+
+    // ── set_status_callback with pre-exited child ────────────────────
+
+    #[test]
+    fn set_status_callback_fires_when_child_already_exited() {
+        let cmd = CommandBuilder::new(get_test_executable());
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+
+        // Kill and reap the child process, consuming the latch via has_exited().
+        if let Some(child) = pty.child.as_mut() {
+            let _ = child.kill();
+        }
+        for _ in 0..250 {
+            if pty.has_exited() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        let exited_fired = Arc::new(AtomicBool::new(false));
+        let exited_cb = Arc::clone(&exited_fired);
+
+        // Register a new callback — must fire immediately (self.exited branch
+        // with latch reset).
+        pty.set_status_callback(Some(Box::new(move |status| {
+            if status == PtyStatus::Exited {
+                exited_cb.store(true, Ordering::Relaxed);
+            }
+        })));
+
+        assert!(
+            exited_fired.load(Ordering::Relaxed),
+            "set_status_callback must fire PtyStatus::Exited when child already exited"
+        );
+    }
+
+    #[test]
+    fn set_status_callback_fires_via_try_wait_after_direct_kill() {
+        let cmd = CommandBuilder::new(get_test_executable());
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+
+        // Kill the child but do NOT call has_exited() — let the try_wait()
+        // path in set_status_callback detect the exit.
+        if let Some(child) = pty.child.as_mut() {
+            let _ = child.kill();
+        }
+        for _ in 0..250 {
+            if let Some(Ok(Some(_))) = pty.child.as_mut().map(|c| c.try_wait()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        let exited_fired = Arc::new(AtomicBool::new(false));
+        let exited_cb = Arc::clone(&exited_fired);
+
+        pty.set_status_callback(Some(Box::new(move |status| {
+            if status == PtyStatus::Exited {
+                exited_cb.store(true, Ordering::Relaxed);
+            }
+        })));
+
+        assert!(
+            exited_fired.load(Ordering::Relaxed),
+            "set_status_callback must fire PtyStatus::Exited via try_wait() when child killed"
         );
     }
 
