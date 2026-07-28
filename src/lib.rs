@@ -62,7 +62,7 @@ pub fn render_app<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmA
     let draw_plan = engine.project_draw_plan(area.width as u32, area.height as u32, wm);
     let all_titles: std::collections::BTreeMap<_, _> = wm.window_titles().into_iter().collect();
     let num_windows = draw_plan.len();
-    let total = num_windows + wm.visible_overlay_count();
+    let total = num_windows + wm.overlays().len();
 
     // Register panel hitboxes BEFORE the window loop (lowest Z-order)
     let top_panel_owner = wm
