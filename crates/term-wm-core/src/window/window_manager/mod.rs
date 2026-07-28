@@ -1056,21 +1056,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         ctx
     }
 
-    /// Number of overlays that will be rendered this frame.
-    pub fn visible_overlay_count(&self) -> usize {
-        let mut n = 0usize;
-        if self.command_menu_visible() {
-            n += 1;
-        }
-        if self.exit_confirm_visible() {
-            n += 1;
-        }
-        if self.help_overlay_visible() {
-            n += 1;
-        }
-        n
-    }
-
     /// Normalised z-depth [0.0–1.0] for a drawable at `position` in a
     /// stack of `total` items (windows + overlays).  The topmost item
     /// always maps to 1.0 (darkest shadow).
@@ -1123,8 +1108,50 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     /// Return the currently hovered tiling split handle, if any.
+    /// Checks geometric occlusion against panels, overlays, and floating windows
+    /// (synchronous — does not depend on the hitbox registry, which is cleared
+    /// before handles are rendered).
     pub fn hovered_tiling_handle(&self) -> Option<crate::layout::tiling::SplitHandle> {
         let (col, row) = self.hover?;
+        let pos_x = col as i32;
+        let pos_y = row as i32;
+
+        let in_rect = |x: i32, y: i32, w: u16, h: u16| -> bool {
+            pos_x >= x
+                && pos_x < x.saturating_add(w as i32)
+                && pos_y >= y
+                && pos_y < y.saturating_add(h as i32)
+        };
+
+        if in_rect(
+            self.top_claimed.x,
+            self.top_claimed.y,
+            self.top_claimed.width,
+            self.top_claimed.height,
+        ) || in_rect(
+            self.bottom_claimed.x,
+            self.bottom_claimed.y,
+            self.bottom_claimed.width,
+            self.bottom_claimed.height,
+        ) {
+            return None;
+        }
+
+        // 2. Overlay occlusion — any visible overlay suppresses handle hover
+        //    (overlays are modal with full-screen dimmed backdrops).
+        if !self.overlays.is_empty() {
+            return None;
+        }
+
+        for key in &self.z_order {
+            if self.is_window_floating(*key)
+                && let Some(crate::window::FloatRectSpec::Absolute(r)) = self.floating_rect(*key)
+                && in_rect(r.x, r.y, r.width, r.height)
+            {
+                return None;
+            }
+        }
+
         let pos = crate::mouse_coord::MousePosition {
             column: col as i16,
             row: row as i16,
@@ -1770,10 +1797,39 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             }
         }
 
-        // Forward Moved events to tiling layout for hover feedback on split handles.
+        // Forward Moved events to tiling layout for hover feedback on split
+        // handles.  When higher-Z elements (panels, overlays, floating windows,
+        // non-split chrome) obscure the handle, send a synthetic off-screen
+        // event to clear the layout's internal hover state rather than silently
+        // dropping — silently dropping would trap the layout in a stale hover.
         if matches!(kind, MouseEventKind::Moved) {
+            let obscured = match &owner {
+                crate::hitbox_registry::ComponentOwner::Layer(_)
+                | crate::hitbox_registry::ComponentOwner::Overlay(_) => true,
+                crate::hitbox_registry::ComponentOwner::Window(key)
+                    if self.is_window_floating(*key) =>
+                {
+                    true
+                }
+                crate::hitbox_registry::ComponentOwner::Chrome(target)
+                    if !matches!(target, crate::chrome::ChromeTarget::SplitHandle(_)) =>
+                {
+                    true
+                }
+                _ => false,
+            } || !self.overlays.is_empty();
             if let Some(layout) = self.managed_layout.as_mut() {
-                layout.handle_event(&core_event, self.managed_area);
+                if obscured {
+                    let clear_event = crate::events::Event::Mouse(crate::events::MouseEvent {
+                        kind: crate::events::MouseEventKind::Moved,
+                        column: u16::MAX,
+                        row: u16::MAX,
+                        modifiers: crate::events::KeyModifiers::NONE,
+                    });
+                    layout.handle_event(&clear_event, self.managed_area);
+                } else {
+                    layout.handle_event(&core_event, self.managed_area);
+                }
             }
         }
 
@@ -7306,5 +7362,97 @@ mod tests {
         // returns Ignored (no hitbox_id) → falls through to Window → focuses
         assert!(wm.handle_outside_click(5, 5, &event, &mut actions, Some(key_a)));
         assert_eq!(*wm.focus.current(), keys[0]);
+    }
+
+    #[test]
+    fn hovered_tiling_handle_obscured_by_panel() {
+        let (mut wm, _keys, gap_col, gap_row) = setup_tiling_with_gap();
+
+        wm.top_claimed = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        wm.hover = Some((gap_col, gap_row));
+
+        assert!(
+            wm.hovered_tiling_handle().is_none(),
+            "handle hover must be suppressed when a panel covers the cursor"
+        );
+    }
+
+    #[test]
+    fn hovered_tiling_handle_obscured_by_any_overlay() {
+        let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.set_panel_visible(false);
+        let keys = make_keys(&mut wm, 100);
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.set_managed_layout(TilingLayout::new(split));
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let handles = wm.handles.clone();
+        assert!(!handles.is_empty(), "tiling must produce split handles");
+
+        let gap = handles[0].rect;
+        let gap_col = (gap.x + i32::from(gap.width) / 2) as u16;
+        let gap_row = (gap.y + i32::from(gap.height) / 2) as u16;
+
+        // Open an overlay — its render_area is irrelevant; the global check
+        // !self.overlays.is_empty() must suppress handle hover everywhere.
+        wm.open_command_palette_overlay(TestOverlay { bounds: None });
+        wm.hover = Some((gap_col, gap_row));
+
+        assert!(
+            wm.hovered_tiling_handle().is_none(),
+            "handle hover must be suppressed when any overlay is open"
+        );
+    }
+
+    #[test]
+    fn hovered_tiling_handle_obscured_by_floating_window() {
+        let (mut wm, keys, gap_col, gap_row) = setup_tiling_with_gap();
+
+        wm.set_floating_rect(
+            keys[0],
+            Some(crate::window::FloatRectSpec::Absolute(Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            })),
+        );
+        wm.hover = Some((gap_col, gap_row));
+
+        assert!(
+            wm.hovered_tiling_handle().is_none(),
+            "handle hover must be suppressed when a floating window covers the cursor"
+        );
+    }
+
+    #[test]
+    fn hovered_tiling_handle_shows_on_empty_space() {
+        let (mut wm, _keys, gap_col, gap_row) = setup_tiling_with_gap();
+        wm.hover = Some((gap_col, gap_row));
+
+        assert!(
+            wm.hovered_tiling_handle().is_some(),
+            "handle hover must show when no higher-Z element obscures it"
+        );
     }
 }
