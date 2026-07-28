@@ -95,7 +95,7 @@ impl ScrollbarDrag {
 
         match mouse.kind {
             MouseEventKind::Press(_) if on_scrollbar => {
-                if mouse_rel >= current_thumb_rel && mouse_rel < current_thumb_rel + thumb_size {
+                if mouse_rel >= current_thumb_rel - 1 && mouse_rel <= current_thumb_rel + thumb_size {
                     self.dragging = true;
                     self.drag_anchor = mouse_rel - current_thumb_rel;
                     Some(current_offset)
