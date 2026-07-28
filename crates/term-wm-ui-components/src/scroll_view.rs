@@ -68,7 +68,8 @@ impl ScrollbarDrag {
 
         let thumb_size = ((view as f64 * track_len as f64) / total as f64).round() as i32;
         let thumb_size = thumb_size.clamp(MIN_THUMB_SIZE, track_len);
-        let available_track = ((max_offset as f64 * track_len as f64) / total as f64).round() as i32;
+        let available_track =
+            ((max_offset as f64 * track_len as f64) / total as f64).round() as i32;
 
         if available_track <= 0 {
             return None;
@@ -95,7 +96,8 @@ impl ScrollbarDrag {
 
         match mouse.kind {
             MouseEventKind::Press(_) if on_scrollbar => {
-                if mouse_rel >= current_thumb_rel - 1 && mouse_rel <= current_thumb_rel + thumb_size {
+                if mouse_rel >= current_thumb_rel - 1 && mouse_rel <= current_thumb_rel + thumb_size
+                {
                     self.dragging = true;
                     self.drag_anchor = mouse_rel - current_thumb_rel;
                     Some(current_offset)
