@@ -42,10 +42,10 @@ impl ScrollbarDrag {
 
     /// Returns `Some(new_offset)` if a scroll event occurred.
     ///
-    /// Uses correct `available_track = track_len - thumb_size` so dragging to
-    /// the bottom of the bar maps precisely to `max_offset`.  Floating-point
-    /// rounding eliminates the integer-truncation dead zones that make the bar
-    /// feel sluggish.
+    /// Track math matches ratatui's `rounding_divide` exactly: `available_track =
+    /// round(max_offset * track / total)` not `track_len - thumb_size`, so the
+    /// thumb never drifts from the cursor during drag.  The 1-cell hit-test
+    /// tolerance absorbs `rounding_divide` truncation artifacts.
     pub fn handle_mouse(
         &mut self,
         mouse: &MouseEvent,
@@ -66,16 +66,16 @@ impl ScrollbarDrag {
             ScrollbarAxis::Horizontal => (i32::from(mouse.column), area.x, i32::from(area.width)),
         };
 
-        let thumb_size = ((view as f64 / total as f64) * track_len as f64).round() as i32;
+        let thumb_size = ((view as f64 * track_len as f64) / total as f64).round() as i32;
         let thumb_size = thumb_size.clamp(MIN_THUMB_SIZE, track_len);
-        let available_track = track_len - thumb_size;
+        let available_track = ((max_offset as f64 * track_len as f64) / total as f64).round() as i32;
 
         if available_track <= 0 {
             return None;
         }
 
         let current_thumb_rel =
-            ((current_offset as f64 / max_offset as f64) * available_track as f64).round() as i32;
+            ((current_offset as f64 * track_len as f64) / total as f64).round() as i32;
         let mouse_rel = mouse_pos - area_start;
 
         let on_scrollbar = match axis {
@@ -792,6 +792,51 @@ mod tests {
             ScrollbarAxis::Vertical,
         );
         assert_eq!(resp, Some(offset));
+        assert!(drag.dragging);
+    }
+
+    #[test]
+    fn scrollbar_press_on_thumb_edge_with_tolerance_does_not_jump() {
+        let mut drag = ScrollbarDrag::new();
+        let area = sb_area();
+        let offset = 30usize;
+        // Strict math: thumb starts at rel row 9. Click at row 8 (1 cell above, inside tolerance).
+        let down = mouse_event(MouseEventKind::Press(MouseButton::Left), 79, 8);
+        let resp = drag.handle_mouse(
+            &down,
+            area,
+            SB_TOTAL,
+            SB_VIEW,
+            offset,
+            ScrollbarAxis::Vertical,
+        );
+        assert_eq!(
+            resp,
+            Some(offset),
+            "1-cell tolerance should absorb edge click"
+        );
+        assert!(drag.dragging);
+    }
+
+    #[test]
+    fn scrollbar_press_outside_tolerance_jumps() {
+        let mut drag = ScrollbarDrag::new();
+        let area = sb_area();
+        let offset = 30usize;
+        // Click at row 7 (2 cells above strict math, 1 cell outside tolerance).
+        let down = mouse_event(MouseEventKind::Press(MouseButton::Left), 79, 7);
+        let resp = drag.handle_mouse(
+            &down,
+            area,
+            SB_TOTAL,
+            SB_VIEW,
+            offset,
+            ScrollbarAxis::Vertical,
+        );
+        assert!(
+            resp.is_some_and(|o| o < offset),
+            "clicking outside tolerance should jump"
+        );
         assert!(drag.dragging);
     }
 
