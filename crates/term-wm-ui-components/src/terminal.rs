@@ -2808,18 +2808,34 @@ mod tests {
     #[test]
     fn shrink_then_expand_no_duplication() {
         let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
-        let area30 = LayoutRect { x: 0, y: 0, width: 80, height: 30 };
-        let area24 = LayoutRect { x: 0, y: 0, width: 80, height: 24 };
+        let area30 = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 30,
+        };
+        let area24 = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         let (handle, _shared) = make_handle();
         let ctx30 = ComponentContext::new(true).with_viewport(
             term_wm_core::component_context::ScrollViewport {
-                offset_x: 0, offset_y: 0, width: 80, height: 30
+                offset_x: 0,
+                offset_y: 0,
+                width: 80,
+                height: 30,
             },
             Some(handle.clone()),
         );
         let ctx24 = ComponentContext::new(true).with_viewport(
             term_wm_core::component_context::ScrollViewport {
-                offset_x: 0, offset_y: 0, width: 80, height: 24
+                offset_x: 0,
+                offset_y: 0,
+                width: 80,
+                height: 24,
             },
             Some(handle.clone()),
         );
@@ -2846,8 +2862,9 @@ mod tests {
         let shared_parser = pane.shared_parser();
         let parser = shared_parser.lock().unwrap();
         let count = parser.screen().contents().matches("DUPLICHECK").count();
-        assert!(count < 2,
-            "marker must not be duplicated (got {count} occurrences, expected 0 or 1)");
+        assert!(
+            count < 2,
+            "marker must not be duplicated (got {count} occurrences, expected 0 or 1)"
+        );
     }
-
 }

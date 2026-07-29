@@ -260,7 +260,12 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
         }
     }
 
-    pub(crate) fn compute_layout(&self, area: LayoutRect, needs_vertical: bool, needs_horizontal: bool) -> LayoutRect {
+    pub(crate) fn compute_layout(
+        &self,
+        area: LayoutRect,
+        needs_vertical: bool,
+        needs_horizontal: bool,
+    ) -> LayoutRect {
         let mut view_w = area.width;
         let mut view_h = area.height;
 
@@ -1539,9 +1544,14 @@ mod tests {
     #[test]
     fn scrollbar_persistent_state_tracks_overflow() {
         let sv = ScrollViewComponent::new(
-            term_wm_core::window::test_component::ActionRecorder::default()
+            term_wm_core::window::test_component::ActionRecorder::default(),
         );
-        let area = LayoutRect { x: 0, y: 0, width: 80, height: 10 };
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 10,
+        };
 
         assert!(!sv.scroll_state.borrow().last_needs_vertical);
 
