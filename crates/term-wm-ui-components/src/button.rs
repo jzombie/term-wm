@@ -12,7 +12,7 @@ use term_wm_layout_engine::LayoutRect;
 use crate::helpers::layout_rect_to_clipped_rect;
 
 /// A clickable button rendered as styled borders + label.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ButtonComponent {
     label: String,
     action: TermWmAction,
