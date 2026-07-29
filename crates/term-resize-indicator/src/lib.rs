@@ -77,16 +77,16 @@ fn run_loop(
 ) -> std::io::Result<()> {
     loop {
         // Fire deferred SetSize if debounce timer has elapsed
-        if let Some(snap_time) = app.pending_snap {
-            if Instant::now() >= snap_time {
-                app.pending_snap = None;
-                if let Mode::Locked(locked) = app.mode {
-                    let _ = crossterm::execute!(
-                        terminal.backend_mut(),
-                        SetSize(locked.width, locked.height)
-                    );
-                    app.live_size = locked;
-                }
+        if let Some(snap_time) = app.pending_snap
+            && Instant::now() >= snap_time
+        {
+            app.pending_snap = None;
+            if let Mode::Locked(locked) = app.mode {
+                let _ = crossterm::execute!(
+                    terminal.backend_mut(),
+                    SetSize(locked.width, locked.height)
+                );
+                app.live_size = locked;
             }
         }
 
@@ -203,12 +203,11 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool
         }
         if x >= full.left() as i32 && x < full.right() as i32
             && y >= full.top() as i32 && y < full.bottom() as i32
+            && let Some(cell) = buf.cell_mut((x as u16, y as u16))
         {
-            if let Some(cell) = buf.cell_mut((x as u16, y as u16)) {
-                let mut s = [0u8; 4];
-                let s = ch.encode_utf8(&mut s);
-                cell.set_symbol(s).set_style(line_style);
-            }
+            let mut s = [0u8; 4];
+            let s = ch.encode_utf8(&mut s);
+            cell.set_symbol(s).set_style(line_style);
         }
     };
 
