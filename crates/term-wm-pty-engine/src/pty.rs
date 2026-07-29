@@ -1764,8 +1764,10 @@ mod tests {
         parser.process(format!("\x1b[{}S", scroll_lines).as_bytes());
         parser.screen_mut().set_size(new_rows, 80);
 
-        assert!(parser.screen().contents().contains("LASTLINE"),
-            "bottom content preserved when cursor at bottom");
+        assert!(
+            parser.screen().contents().contains("LASTLINE"),
+            "bottom content preserved when cursor at bottom"
+        );
         assert_eq!(parser.screen().size(), (24, 80));
     }
 
@@ -1778,11 +1780,16 @@ mod tests {
         parser.process(b"MIDLINE");
 
         let (cursor_row, _) = parser.screen().cursor_position();
-        assert!(cursor_row < 24, "cursor ({cursor_row}) above new viewport height");
+        assert!(
+            cursor_row < 24,
+            "cursor ({cursor_row}) above new viewport height"
+        );
 
         parser.screen_mut().set_size(24, 80);
-        assert!(parser.screen().contents().contains("MIDLINE"),
-            "content preserved without any SU shift");
+        assert!(
+            parser.screen().contents().contains("MIDLINE"),
+            "content preserved without any SU shift"
+        );
         assert_eq!(parser.screen().size(), (24, 80));
     }
 }

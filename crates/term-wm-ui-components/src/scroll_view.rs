@@ -1567,7 +1567,12 @@ mod tests {
         let mut sv = ScrollViewComponent::new(
             term_wm_core::window::test_component::ActionRecorder::default(),
         );
-        let area = LayoutRect { x: 0, y: 0, width: 80, height: 10 };
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 10,
+        };
         let ctx = term_wm_core::components::ComponentContext::new(true);
 
         sv.scroll_state.borrow_mut().last_needs_vertical = true;
