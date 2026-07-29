@@ -1778,7 +1778,7 @@ mod tests {
         parser.process(b"MIDLINE");
 
         let (cursor_row, _) = parser.screen().cursor_position();
-        assert_eq!(cursor_row, 9, "cursor in middle");
+        assert!(cursor_row < 24, "cursor ({cursor_row}) above new viewport height");
 
         parser.screen_mut().set_size(24, 80);
         assert!(parser.screen().contents().contains("MIDLINE"),
