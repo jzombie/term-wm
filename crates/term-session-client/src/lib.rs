@@ -6,6 +6,7 @@ use std::io::{self, IsTerminal, Write, stdout};
 #[cfg(unix)]
 use std::os::unix::io::FromRawFd;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crossterm::QueueableCommand;
@@ -171,8 +172,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     // Get terminal size
     let (term_cols, term_rows) = crossterm::terminal::size()?;
 
-    // Spawn session on the server, get the actual constrained size
-    let _id = rt.block_on(async {
+    let (_session_id, actual_cols, actual_rows) = rt.block_on(async {
         Spawn::call(&*client, (None, term_cols, term_rows))
             .await
             .map_err(|e| io::Error::other(format!("spawn: {e:?}")))
@@ -261,6 +261,17 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         std::thread::sleep(Duration::from_millis(50));
     }
 
+    // Resize local parser to server-constrained geometry
+    {
+        let parser = pane.shared_parser();
+        let mut parser_lk = parser.lock().unwrap();
+        let (cur_rows, cur_cols) = parser_lk.screen().size();
+        if actual_cols != cur_cols || actual_rows != cur_rows {
+            parser_lk.screen_mut().set_size(actual_rows, actual_cols);
+        }
+        drop(parser_lk);
+    }
+
     // Pass one stdout handle to init_terminal for the startup sequences
     // and TerminalGuard teardown; keep a second handle for rendering.
     let _guard = init_terminal(stdout())?;
@@ -268,6 +279,8 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
 
     let mut clipboard = Clipboard::new();
     let sigint = install_sigint_handler()?;
+    let resize_pending = Arc::new(AtomicBool::new(false));
+    let resize_flag = Arc::clone(&resize_pending);
 
     // Register OnPtyResized handler so the server can notify us of
     // geometry changes (e.g., when another client connects at a smaller size).
@@ -276,11 +289,13 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         OnPtyResized::METHOD_ID,
         move |payload, _ctx| {
             let parser = Arc::clone(&parser_handle);
+            let pending = Arc::clone(&resize_flag);
             async move {
                 let (cols, rows) = OnPtyResized::decode_request(&payload)
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
                 let mut parser = parser.lock().unwrap();
                 parser.screen_mut().set_size(rows, cols);
+                pending.store(true, Ordering::Relaxed);
                 OnPtyResized::encode_response(())
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
             }
@@ -447,6 +462,13 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         // Connection health — check after wakeup
         if !client.is_connected() {
             return Err(io::Error::other("connection to session server lost"));
+        }
+
+        // Check if OnPtyResized signaled a geometry change
+        if resize_pending.swap(false, Ordering::Relaxed) {
+            prev_content = None;
+            let _ = out.write_all(b"\x1b[2J\x1b[H");
+            let _ = out.flush();
         }
 
         // Diff-based incremental render (raw ANSI via vt100)

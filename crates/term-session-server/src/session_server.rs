@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::collections::HashMap;
 
 use muxio_core::rpc::rpc_internals::RpcStreamEvent;
 use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;
@@ -27,8 +28,7 @@ pub struct SessionServerConfig {
 
 #[derive(Clone)]
 struct ClientEntry {
-    conn_id: usize,
-    caller: RpcIpcConnectionContextHandle,
+    caller: Option<RpcIpcConnectionContextHandle>,
     cols: u16,
     rows: u16,
 }
@@ -40,7 +40,7 @@ struct SubscriberEntry {
 
 struct ServerState {
     session: Option<Session>,
-    clients: Vec<ClientEntry>,
+    clients: HashMap<usize, ClientEntry>,
     subscribers: Vec<SubscriberEntry>,
     notify: Arc<Notify>,
 }
@@ -49,7 +49,7 @@ impl ServerState {
     fn new(notify: Arc<Notify>) -> Self {
         Self {
             session: None,
-            clients: Vec::new(),
+            clients: HashMap::new(),
             subscribers: Vec::new(),
             notify,
         }
@@ -96,16 +96,12 @@ impl ServerState {
         if self.clients.is_empty() {
             return;
         }
-        let min_cols = self
-            .clients
-            .iter()
+        let min_cols = self.clients.values()
             .map(|c| c.cols)
             .filter(|&c| c != u16::MAX)
             .min()
             .unwrap_or(80);
-        let min_rows = self
-            .clients
-            .iter()
+        let min_rows = self.clients.values()
             .map(|c| c.rows)
             .filter(|&r| r != u16::MAX)
             .min()
@@ -120,7 +116,7 @@ impl ServerState {
     /// Call AFTER releasing the ServerState lock.
     fn notify_clients(clients: &[ClientEntry], cols: u16, rows: u16) {
         for client in clients {
-            let caller = client.caller.clone();
+            let Some(caller) = client.caller.clone() else { continue; };
             tokio::spawn(async move {
                 if let Err(e) = OnPtyResized::call(&caller, (cols, rows)).await {
                     tracing::debug!(error = ?e, "Failed to deliver OnPtyResized notification");
@@ -159,12 +155,15 @@ pub async fn run_server(
                 let mut guard = state.lock().await;
                 let (cmd, cols, rows) = Spawn::decode_request(&payload)
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-                if let Some(client) =
-                    guard.clients.iter_mut().find(|c| c.conn_id == ctx.conn_id)
-                {
-                    client.cols = cols;
-                    client.rows = rows;
-                }
+                let entry = guard.clients.entry(ctx.conn_id).or_insert_with(|| {
+                    ClientEntry {
+                        caller: None,
+                        cols,
+                        rows,
+                    }
+                });
+                entry.cols = cols;
+                entry.rows = rows;
 
                 // If a session already exists and hasn't exited, reuse it.
                 if guard.session.as_ref().is_some_and(|s| !s.exited) {
@@ -174,7 +173,7 @@ pub async fn run_server(
                         .as_ref()
                         .map(|s| (s.cols, s.rows))
                         .unwrap_or((80, 24));
-                    let targets = guard.clients.clone();
+                    let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
                     let id = guard.session.as_ref().map(|s| s.id).unwrap_or(1);
                     let cols = guard.session.as_ref().map(|s| s.cols).unwrap_or(cols);
                     let rows = guard.session.as_ref().map(|s| s.rows).unwrap_or(rows);
@@ -193,7 +192,7 @@ pub async fn run_server(
                     .as_ref()
                     .map(|s| (s.cols, s.rows))
                     .unwrap_or((80, 24));
-                let targets = guard.clients.clone();
+                let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
                 let session = guard.session.as_ref().unwrap();
                 let (sid, scol, srow) = (session.id, session.cols, session.rows);
                 drop(guard);
@@ -215,7 +214,7 @@ pub async fn run_server(
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
                 let mut guard = state.lock().await;
                 if let Some(client) =
-                    guard.clients.iter_mut().find(|c| c.conn_id == ctx.conn_id)
+                    guard.clients.get_mut(&ctx.conn_id)
                 {
                     client.cols = cols;
                     client.rows = rows;
@@ -226,7 +225,7 @@ pub async fn run_server(
                     .as_ref()
                     .map(|s| (s.cols, s.rows))
                     .unwrap_or((cols, rows));
-                let targets = guard.clients.clone();
+                let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
                 drop(guard);
                 ServerState::notify_clients(&targets, ncols, nrows);
                 ResizePty::encode_response((ncols, nrows))
@@ -367,9 +366,8 @@ pub async fn run_server(
                     tracing::info!("Client {} connected", handle.0.conn_id);
                     let mut guard = st.lock().await;
                     let handle_clone = handle.clone();
-                    guard.clients.push(ClientEntry {
-                        conn_id: handle.0.conn_id,
-                        caller: handle_clone,
+                    guard.clients.insert(handle.0.conn_id, ClientEntry {
+                        caller: Some(handle_clone),
                         cols: u16::MAX,
                         rows: u16::MAX,
                     });
@@ -377,7 +375,7 @@ pub async fn run_server(
                 RpcIpcServerEvent::ClientDisconnected(conn_id) => {
                     tracing::info!("Client {conn_id} disconnected");
                     let mut guard = st.lock().await;
-                    guard.clients.retain(|c| c.conn_id != conn_id);
+                    guard.clients.remove(&conn_id);
                     guard.subscribers.retain(|s| s.conn_id != conn_id);
                     guard.recalculate_pty_size();
                     let (ncols, nrows) = guard
@@ -385,7 +383,7 @@ pub async fn run_server(
                         .as_ref()
                         .map(|s| (s.cols, s.rows))
                         .unwrap_or((80, 24));
-                    let targets = guard.clients.clone();
+                    let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
                     drop(guard);
                     ServerState::notify_clients(&targets, ncols, nrows);
                 }
