@@ -89,8 +89,11 @@ impl WmSystemPanelComponent {
         mut self,
         state: Rc<RefCell<Option<KeyEvent>>>,
     ) -> Self {
-        self.children
-            .push(PanelChild::KeyMonitor(KeyMonitorComponent::new(state)));
+        self.children.insert(0, PanelChild::Spacer(SpacerComponent::new(1)));
+        self.children.insert(0, PanelChild::Label(
+            LabelComponent::new("Last key pressed:").with_color(Color::DarkGray),
+        ));
+        self.children.insert(0, PanelChild::KeyMonitor(KeyMonitorComponent::new(state)));
         self.scroll_view = build_scroll_view(self.children.clone());
         self
     }
