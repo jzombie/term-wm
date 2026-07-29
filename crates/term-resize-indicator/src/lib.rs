@@ -40,7 +40,7 @@ pub fn run(initial_lock: Option<Size>) -> std::io::Result<()> {
 
     let current = terminal::size().unwrap_or((80, 24));
     let mut app = if let Some(size) = initial_lock {
-        let _ = crossterm::execute!(std::io::stdout(), SetSize(size.width, size.height));
+        let _ = crossterm::execute!(terminal.backend_mut(), SetSize(size.width, size.height));
         App {
             mode: Mode::Locked(size),
             last_size: Size::new(current.0, current.1),
@@ -67,11 +67,11 @@ fn run_loop(
     loop {
         terminal.draw(|f| {
             let area = f.area();
-            let display = match app.mode {
-                Mode::Locked(s) => s,
-                Mode::Interactive => app.last_size,
+            let (disp_w, disp_h, locked) = match app.mode {
+                Mode::Locked(s) => (s.width, s.height, true),
+                Mode::Interactive => (app.last_size.width, app.last_size.height, false),
             };
-            draw_overlay(f, area, display.width, display.height, matches!(app.mode, Mode::Locked(_)));
+            draw_overlay(f, area, disp_w, disp_h, locked);
         })?;
 
         if !event::poll(std::time::Duration::from_millis(100))? {
@@ -79,7 +79,7 @@ fn run_loop(
         }
 
         match event::read()? {
-            Event::Resize(w, h) => on_resize(app, w, h),
+            Event::Resize(w, h) => on_resize(app, terminal, w, h),
             Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                 KeyCode::Char('l' | 'L') => toggle_lock(app),
                 KeyCode::Char('q' | 'Q') | KeyCode::Esc => break,
@@ -92,10 +92,15 @@ fn run_loop(
     Ok(())
 }
 
-fn on_resize(app: &mut App, w: u16, h: u16) {
+fn on_resize(
+    app: &mut App,
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    w: u16,
+    h: u16,
+) {
     app.last_size = Size::new(w, h);
     if let Mode::Locked(locked) = app.mode {
-        let _ = crossterm::execute!(std::io::stdout(), SetSize(locked.width, locked.height));
+        let _ = crossterm::execute!(terminal.backend_mut(), SetSize(locked.width, locked.height));
     }
 }
 
@@ -112,10 +117,25 @@ fn toggle_lock(app: &mut App) {
     }
 }
 
-fn draw_overlay(f: &mut ratatui::Frame, area: Rect, width: u16, height: u16, locked: bool) {
-    if area.width < 4 || area.height < 3 {
+fn draw_overlay(f: &mut ratatui::Frame, full: Rect, disp_w: u16, disp_h: u16, locked: bool) {
+    if full.width < 4 || full.height < 3 {
         return;
     }
+
+    // When locked, draw the border at the locked dimensions (centered).
+    // When interactive, draw it at the full terminal size.
+    let border = if locked {
+        let bw = disp_w.min(full.width);
+        let bh = disp_h.min(full.height);
+        Rect {
+            x: full.left() + (full.width.saturating_sub(bw)) / 2,
+            y: full.top() + (full.height.saturating_sub(bh)) / 2,
+            width: bw,
+            height: bh,
+        }
+    } else {
+        full
+    };
 
     let dot_style = Style::default()
         .fg(Color::Cyan)
@@ -126,8 +146,9 @@ fn draw_overlay(f: &mut ratatui::Frame, area: Rect, width: u16, height: u16, loc
 
     let buf = f.buffer_mut();
 
-    for y in area.top()..area.bottom() {
-        for x in area.left()..area.right() {
+    // Fill background across the full terminal
+    for y in full.top()..full.bottom() {
+        for x in full.left()..full.right() {
             if let Some(cell) = buf.cell_mut((x, y)) {
                 cell.set_style(bg_style);
                 cell.set_symbol(" ");
@@ -135,28 +156,30 @@ fn draw_overlay(f: &mut ratatui::Frame, area: Rect, width: u16, height: u16, loc
         }
     }
 
-    for x in area.left()..area.right() {
-        if let Some(cell) = buf.cell_mut((x, area.top())) {
-            cell.set_symbol("·").set_style(dot_style);
+    // Dotted border at the border rect
+    if border.width >= 2 && border.height >= 2 {
+        for x in border.left()..border.right() {
+            if let Some(cell) = buf.cell_mut((x, border.top())) {
+                cell.set_symbol("·").set_style(dot_style);
+            }
+            if let Some(cell) = buf.cell_mut((x, border.bottom() - 1)) {
+                cell.set_symbol("·").set_style(dot_style);
+            }
         }
-        if let Some(cell) = buf.cell_mut((x, area.bottom() - 1)) {
-            cell.set_symbol("·").set_style(dot_style);
-        }
-    }
-
-    for y in (area.top() + 1)..(area.bottom() - 1) {
-        if let Some(cell) = buf.cell_mut((area.left(), y)) {
-            cell.set_symbol("·").set_style(dot_style);
-        }
-        if let Some(cell) = buf.cell_mut((area.right() - 1, y)) {
-            cell.set_symbol("·").set_style(dot_style);
+        for y in (border.top() + 1)..(border.bottom() - 1) {
+            if let Some(cell) = buf.cell_mut((border.left(), y)) {
+                cell.set_symbol("·").set_style(dot_style);
+            }
+            if let Some(cell) = buf.cell_mut((border.right() - 1, y)) {
+                cell.set_symbol("·").set_style(dot_style);
+            }
         }
     }
 
     let label = if locked {
-        format!("{}x{}  [LOCKED]", width, height)
+        format!("{}x{}  [LOCKED]", disp_w, disp_h)
     } else {
-        format!("{}x{}", width, height)
+        format!("{}x{}", disp_w, disp_h)
     };
 
     let text_style = Style::default()
@@ -165,13 +188,16 @@ fn draw_overlay(f: &mut ratatui::Frame, area: Rect, width: u16, height: u16, loc
         .add_modifier(Modifier::BOLD);
 
     let inner = Rect {
-        x: area.left() + 1,
-        y: area.top() + area.height / 2,
-        width: area.width.saturating_sub(2),
+        x: border.left() + 1,
+        y: border.top() + border.height / 2,
+        width: border.width.saturating_sub(2),
         height: 1,
     };
     let para = Paragraph::new(label)
         .alignment(Alignment::Center)
         .style(text_style);
-    para.render(inner, buf);
+
+    if inner.width > 0 {
+        para.render(inner, buf);
+    }
 }
