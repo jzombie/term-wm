@@ -418,22 +418,37 @@ async fn session_multi_client_pty_constrained_to_smallest() {
     let start = std::time::Instant::now();
     loop {
         let (cols, rows) = ResizePty::call(&*c1, (pid1, 120u16, 40u16)).await.unwrap();
-        if (cols, rows) == (80u16, 24u16) { break; }
-        assert!(start.elapsed() < Duration::from_secs(3), "timed out waiting for 80x24");
+        if (cols, rows) == (80u16, 24u16) {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "timed out waiting for 80x24"
+        );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     let start = std::time::Instant::now();
     loop {
         let (cols, rows) = ResizePty::call(&*c2, (pid2, 80u16, 24u16)).await.unwrap();
-        if (cols, rows) == (80u16, 24u16) { break; }
-        assert!(start.elapsed() < Duration::from_secs(3), "timed out waiting for 80x24");
+        if (cols, rows) == (80u16, 24u16) {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "timed out waiting for 80x24"
+        );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     let start = std::time::Instant::now();
     loop {
         let (cols, rows) = ResizePty::call(&*c3, (pid3, 100u16, 30u16)).await.unwrap();
-        if (cols, rows) == (80u16, 24u16) { break; }
-        assert!(start.elapsed() < Duration::from_secs(3), "timed out waiting for 80x24");
+        if (cols, rows) == (80u16, 24u16) {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "timed out waiting for 80x24"
+        );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
@@ -466,8 +481,13 @@ async fn session_multi_client_disconnect_expands_pty() {
     let start = std::time::Instant::now();
     loop {
         let (cols, rows) = ResizePty::call(&*c1, (pid1, 120u16, 40u16)).await.unwrap();
-        if (cols, rows) == (80u16, 24u16) { break; }
-        assert!(start.elapsed() < Duration::from_secs(3), "timed out waiting for 80x24");
+        if (cols, rows) == (80u16, 24u16) {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "timed out waiting for 80x24"
+        );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
@@ -476,8 +496,13 @@ async fn session_multi_client_disconnect_expands_pty() {
     let start = std::time::Instant::now();
     loop {
         let (cols, rows) = ResizePty::call(&*c1, (pid1, 120u16, 40u16)).await.unwrap();
-        if (cols, rows) == (100u16, 30u16) { break; }
-        assert!(start.elapsed() < Duration::from_secs(3), "timed out waiting for 100x30");
+        if (cols, rows) == (100u16, 30u16) {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "timed out waiting for 100x30"
+        );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
@@ -486,8 +511,13 @@ async fn session_multi_client_disconnect_expands_pty() {
     let start = std::time::Instant::now();
     loop {
         let (cols, rows) = ResizePty::call(&*c1, (pid1, 120u16, 40u16)).await.unwrap();
-        if (cols, rows) == (120u16, 40u16) { break; }
-        assert!(start.elapsed() < Duration::from_secs(3), "timed out waiting for 120x40");
+        if (cols, rows) == (120u16, 40u16) {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "timed out waiting for 120x40"
+        );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
