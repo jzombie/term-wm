@@ -391,3 +391,105 @@ fn find_sgr_mouse_token_static() {
     let params = &token[3..token.len() - 1];
     assert_eq!(params, b"0;5;10");
 }
+
+#[tokio::test]
+#[serial]
+async fn session_multi_client_pty_constrained_to_smallest() {
+    let mock = get_mock_bin();
+    let (tempdir, socket_path) = generate_socket_path();
+    let config = term_session_server::SessionServerConfig {
+        socket_path: socket_path.clone(),
+        cmd: vec![mock, "echo".into()],
+        cols: 120,
+        rows: 40,
+    };
+    tokio::spawn(async move { term_session_server::run_server(config).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let c1 = connect_client_with_retry(&socket_path).await;
+    let c2 = connect_client_with_retry(&socket_path).await;
+    let c3 = connect_client_with_retry(&socket_path).await;
+
+    let (pid1, _, _) = Spawn::call(&*c1, (None, 120u16, 40u16)).await.unwrap();
+    let (pid2, _, _) = Spawn::call(&*c2, (None, 80u16, 24u16)).await.unwrap();
+    let (pid3, _, _) = Spawn::call(&*c3, (None, 100u16, 30u16)).await.unwrap();
+
+    // All clients should see 80x24 (c2 is smallest)
+    let start = std::time::Instant::now();
+    loop {
+        let (cols, rows) = ResizePty::call(&*c1, (pid1, 120u16, 40u16)).await.unwrap();
+        if (cols, rows) == (80u16, 24u16) { break; }
+        assert!(start.elapsed() < Duration::from_secs(3), "timed out waiting for 80x24");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let start = std::time::Instant::now();
+    loop {
+        let (cols, rows) = ResizePty::call(&*c2, (pid2, 80u16, 24u16)).await.unwrap();
+        if (cols, rows) == (80u16, 24u16) { break; }
+        assert!(start.elapsed() < Duration::from_secs(3), "timed out waiting for 80x24");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let start = std::time::Instant::now();
+    loop {
+        let (cols, rows) = ResizePty::call(&*c3, (pid3, 100u16, 30u16)).await.unwrap();
+        if (cols, rows) == (80u16, 24u16) { break; }
+        assert!(start.elapsed() < Duration::from_secs(3), "timed out waiting for 80x24");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    drop(tempdir);
+}
+
+#[tokio::test]
+#[serial]
+async fn session_multi_client_disconnect_expands_pty() {
+    let mock = get_mock_bin();
+    let (tempdir, socket_path) = generate_socket_path();
+    let config = term_session_server::SessionServerConfig {
+        socket_path: socket_path.clone(),
+        cmd: vec![mock, "echo".into()],
+        cols: 120,
+        rows: 40,
+    };
+    tokio::spawn(async move { term_session_server::run_server(config).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let c1 = connect_client_with_retry(&socket_path).await;
+    let c2 = connect_client_with_retry(&socket_path).await;
+    let c3 = connect_client_with_retry(&socket_path).await;
+
+    let (pid1, _, _) = Spawn::call(&*c1, (None, 120u16, 40u16)).await.unwrap();
+    let (_pid2, _, _) = Spawn::call(&*c2, (None, 80u16, 24u16)).await.unwrap();
+    let (_pid3, _, _) = Spawn::call(&*c3, (None, 100u16, 30u16)).await.unwrap();
+
+    // Verify constrained to 80x24
+    let start = std::time::Instant::now();
+    loop {
+        let (cols, rows) = ResizePty::call(&*c1, (pid1, 120u16, 40u16)).await.unwrap();
+        if (cols, rows) == (80u16, 24u16) { break; }
+        assert!(start.elapsed() < Duration::from_secs(3), "timed out waiting for 80x24");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    // Drop c2 (smallest) → PTY expands to 100x30 (c3's size)
+    drop(c2);
+    let start = std::time::Instant::now();
+    loop {
+        let (cols, rows) = ResizePty::call(&*c1, (pid1, 120u16, 40u16)).await.unwrap();
+        if (cols, rows) == (100u16, 30u16) { break; }
+        assert!(start.elapsed() < Duration::from_secs(3), "timed out waiting for 100x30");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    // Drop c3 → only c1 remains, PTY expands to 120x40
+    drop(c3);
+    let start = std::time::Instant::now();
+    loop {
+        let (cols, rows) = ResizePty::call(&*c1, (pid1, 120u16, 40u16)).await.unwrap();
+        if (cols, rows) == (120u16, 40u16) { break; }
+        assert!(start.elapsed() < Duration::from_secs(3), "timed out waiting for 120x40");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    drop(tempdir);
+}
