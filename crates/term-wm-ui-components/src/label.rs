@@ -11,7 +11,7 @@ use term_wm_layout_engine::LayoutRect;
 use crate::helpers::layout_rect_to_clipped_rect;
 
 /// A single-line text label.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LabelComponent {
     text: String,
     color: Color,
