@@ -261,11 +261,6 @@ impl Pty {
         // thread cannot process post-SIGWINCH bytes against stale dimensions.
         let sp = self.shared_parser.clone();
         let mut guard = sp.lock().unwrap();
-        if size.rows < self.pty_size.rows && !self.tracker.has_custom_margins() {
-            let delta = self.pty_size.rows - size.rows;
-            let seq = format!("[{delta}S[{delta}A");
-            guard.process(seq.as_bytes());
-        }
         self.master
             .resize(size)
             .map_err(|err| wrap_err("resize", err))?;
