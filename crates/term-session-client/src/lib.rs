@@ -582,8 +582,8 @@ pub fn rewrite_diff(diff: &[u8], parser_cols: u16) -> Vec<u8> {
             let mut buf = [0u8; 4];
             out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
         }
-        out
     }
+    out
 }
 
 #[cfg(test)]
