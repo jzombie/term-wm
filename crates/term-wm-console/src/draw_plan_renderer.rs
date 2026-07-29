@@ -16,6 +16,7 @@ use term_wm_core::layout::tiling::SplitHandle;
 use term_wm_core::layout::{Direction, FloatingPane, RectSpec, RegionMap};
 use term_wm_core::term_color::lerp_color;
 use term_wm_core::theme::{Color, Theme};
+use term_wm_core::utils::truncate_with_ellipsis;
 use term_wm_core::window::{ComponentTag, WindowKey, WindowManager, WindowSurface};
 
 /// Render context for window chrome (owned by console, not core).
@@ -1191,19 +1192,18 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
                 cell.set_style(header_style);
             }
         }
-        let title_len = title.len() as u16;
         let header_width = header_right.saturating_sub(header_left).saturating_add(1);
-        if title_len <= header_width {
-            let start_x = header_left + (header_width - title_len) / 2;
-            let buf_w = buffer.area.width as usize;
-            let rel_y = header_y as usize - buffer.area.y as usize;
-            for (idx, ch) in title.chars().enumerate() {
-                let x = start_x + idx as u16;
-                let rel_x = x as usize - buffer.area.x as usize;
-                let cell = &mut buffer.content[rel_y * buf_w + rel_x];
-                cell.set_symbol(&ch.to_string());
-                cell.set_style(header_style);
-            }
+        let display_title = truncate_with_ellipsis(title, header_width as usize);
+        let display_len = display_title.chars().count() as u16;
+        let start_x = header_left + (header_width.saturating_sub(display_len)) / 2;
+        let buf_w = buffer.area.width as usize;
+        let rel_y = header_y as usize - buffer.area.y as usize;
+        for (idx, ch) in display_title.chars().enumerate() {
+            let x = start_x + idx as u16;
+            let rel_x = x as usize - buffer.area.x as usize;
+            let cell = &mut buffer.content[rel_y * buf_w + rel_x];
+            cell.set_symbol(&ch.to_string());
+            cell.set_style(header_style);
         }
         {
             let buf_w = buffer.area.width as usize;

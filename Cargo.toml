@@ -89,6 +89,7 @@ term-wm-ui-facade = { path = "crates/term-wm-ui-facade", version = "0.8.20-alpha
 textwrap = "0.16.2"
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["full"] }
+unicode-width = "0.2.2"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 vt100 = "0.16.2"

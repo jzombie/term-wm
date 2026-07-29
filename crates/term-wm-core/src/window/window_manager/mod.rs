@@ -2737,11 +2737,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         {
             if has_active {
                 let raw_title = self.window_title(focused);
-                let title = if raw_title.chars().count() > 25 {
-                    format!("{}…", raw_title.chars().take(22).collect::<String>())
-                } else {
-                    raw_title
-                };
+                let title = crate::utils::truncate_with_ellipsis(&raw_title, 25);
                 let super_key = self
                     .keybindings()
                     .combos_for(crate::actions::TermWmAction::OpenCommandPalette)
