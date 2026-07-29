@@ -2,13 +2,15 @@ use std::sync::Arc;
 
 use muxio_core::rpc::rpc_internals::RpcStreamEvent;
 use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;
+use muxio_rpc_service_caller::prebuffered::RpcCallPrebuffered;
+use muxio_rpc_service_caller::RpcServiceCallerInterface;
 use muxio_rpc_service_endpoint::{RpcServiceEndpointInterface, StreamResponder};
 use muxio_tokio_rpc_ipc_server::{RpcIpcServer, RpcIpcServerEvent};
 use portable_pty::PtySize;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 
 use term_session_muxio_service_definitions::{
-    CloseSession, ListSessions, ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
+    CloseSession, ListSessions, OnPtyResized, ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
     Spawn, WriteInput,
 };
 use term_wm_pty_engine::PtyStatus;
@@ -22,14 +24,20 @@ pub struct SessionServerConfig {
     pub rows: u16,
 }
 
+#[derive(Clone)]
+#[derive(Clone)]
 struct ClientEntry {
     conn_id: usize,
+    caller: muxio_tokio_rpc_ipc_server::RpcIpcConnectionContextHandle,
+    caller: Arc<dyn RpcServiceCallerInterface + Send + Sync>,
     cols: u16,
     rows: u16,
 }
 
 struct SubscriberEntry {
     conn_id: usize,
+    caller: muxio_tokio_rpc_ipc_server::RpcIpcConnectionContextHandle,
+    caller: Arc<dyn RpcServiceCallerInterface + Send + Sync>,
     respond: StreamResponder,
 }
 
@@ -110,6 +118,19 @@ impl ServerState {
         let _ = session.pty.resize(size);
         session.cols = min_cols;
         session.rows = min_rows;
+
+    /// Broadcast geometry to all clients via detached async tasks.
+    /// Call AFTER releasing the ServerState lock.
+    fn notify_clients(clients: &[ClientEntry], cols: u16, rows: u16) {
+        for client in clients {
+            let caller = Arc::clone(&client.caller);
+            tokio::spawn(async move {
+                if let Err(e) = OnPtyResized::call(&*caller, (cols, rows)).await {
+                    tracing::debug!(error = ?e, "Failed to deliver OnPtyResized notification");
+                }
+            });
+        }
+    }
     }
 }
 

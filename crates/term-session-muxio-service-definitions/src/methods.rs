@@ -245,3 +245,41 @@ impl RpcMethodPrebuffered for ListSessions {
         Ok(r.sessions)
     }
 }
+
+// ── OnPtyResized (server calls client to notify geometry change) ─────
+
+#[derive(Encode, Decode)]
+struct OnPtyResizedRequest {
+    pub cols: u16,
+    pub rows: u16,
+}
+
+pub struct OnPtyResized;
+
+impl RpcMethodPrebuffered for OnPtyResized {
+    const METHOD_ID: u64 = rpc_method_id!("session.on_pty_resized");
+
+    type Input = (u16, u16);
+    type Output = ();
+
+    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&OnPtyResizedRequest {
+            cols: input.0,
+            rows: input.1,
+        }))
+    }
+
+    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        let r = bitcode::decode::<OnPtyResizedRequest>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Ok((r.cols, r.rows))
+    }
+
+    fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(Vec::new())
+    }
+
+    fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        Ok(())
+    }
+}
