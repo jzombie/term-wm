@@ -3,15 +3,16 @@ use std::sync::Arc;
 use muxio_core::rpc::rpc_internals::RpcStreamEvent;
 use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;
 use muxio_rpc_service_caller::prebuffered::RpcCallPrebuffered;
-use muxio_rpc_service_caller::RpcServiceCallerInterface;
 use muxio_rpc_service_endpoint::{RpcServiceEndpointInterface, StreamResponder};
-use muxio_tokio_rpc_ipc_server::{RpcIpcServer, RpcIpcServerEvent};
+use muxio_tokio_rpc_ipc_server::{
+    RpcIpcConnectionContextHandle, RpcIpcServer, RpcIpcServerEvent,
+};
 use portable_pty::PtySize;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 
 use term_session_muxio_service_definitions::{
-    CloseSession, ListSessions, OnPtyResized, ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
-    Spawn, WriteInput,
+    CloseSession, ListSessions, OnPtyResized, ResizePty, STREAM_INPUT_METHOD_ID,
+    SUBSCRIBE_OUTPUT_METHOD_ID, Spawn, WriteInput,
 };
 use term_wm_pty_engine::PtyStatus;
 
@@ -25,19 +26,15 @@ pub struct SessionServerConfig {
 }
 
 #[derive(Clone)]
-#[derive(Clone)]
 struct ClientEntry {
     conn_id: usize,
-    caller: muxio_tokio_rpc_ipc_server::RpcIpcConnectionContextHandle,
-    caller: Arc<dyn RpcServiceCallerInterface + Send + Sync>,
+    caller: RpcIpcConnectionContextHandle,
     cols: u16,
     rows: u16,
 }
 
 struct SubscriberEntry {
     conn_id: usize,
-    caller: muxio_tokio_rpc_ipc_server::RpcIpcConnectionContextHandle,
-    caller: Arc<dyn RpcServiceCallerInterface + Send + Sync>,
     respond: StreamResponder,
 }
 
@@ -96,41 +93,40 @@ impl ServerState {
     /// This guarantees the virtual buffer never exceeds any attached monitor.
     fn recalculate_pty_size(&mut self) {
         let Some(session) = self.session.as_mut() else { return; };
-        if self.clients.is_empty() { return; }
-
-        let min_cols = self.clients.iter()
+        if self.clients.is_empty() {
+            return;
+        }
+        let min_cols = self
+            .clients
+            .iter()
             .map(|c| c.cols)
             .filter(|&c| c != u16::MAX)
             .min()
             .unwrap_or(80);
-        let min_rows = self.clients.iter()
+        let min_rows = self
+            .clients
+            .iter()
             .map(|c| c.rows)
             .filter(|&r| r != u16::MAX)
             .min()
             .unwrap_or(24);
-
-        let size = PtySize {
-            rows: min_rows,
-            cols: min_cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        };
+        let size = PtySize { rows: min_rows, cols: min_cols, pixel_width: 0, pixel_height: 0 };
         let _ = session.pty.resize(size);
         session.cols = min_cols;
         session.rows = min_rows;
+    }
 
     /// Broadcast geometry to all clients via detached async tasks.
     /// Call AFTER releasing the ServerState lock.
     fn notify_clients(clients: &[ClientEntry], cols: u16, rows: u16) {
         for client in clients {
-            let caller = Arc::clone(&client.caller);
+            let caller = client.caller.clone();
             tokio::spawn(async move {
-                if let Err(e) = OnPtyResized::call(&*caller, (cols, rows)).await {
+                if let Err(e) = OnPtyResized::call(&caller, (cols, rows)).await {
                     tracing::debug!(error = ?e, "Failed to deliver OnPtyResized notification");
                 }
             });
         }
-    }
     }
 }
 
@@ -143,14 +139,9 @@ pub async fn run_server(
     let notify = Arc::new(Notify::new());
     let state: SharedState = Arc::new(Mutex::new(ServerState::new(notify.clone())));
 
-    // Spawn initial session
     {
         let mut st = state.lock().await;
-        let cmd = if config.cmd.is_empty() {
-            None
-        } else {
-            Some(config.cmd.clone())
-        };
+        let cmd = if config.cmd.is_empty() { None } else { Some(config.cmd.clone()) };
         let session = Session::spawn(1, cmd, config.cols, config.rows)?;
         st.set_session(session);
     }
@@ -166,12 +157,11 @@ pub async fn run_server(
             let state = Arc::clone(&st);
             async move {
                 let mut guard = state.lock().await;
-
                 let (cmd, cols, rows) = Spawn::decode_request(&payload)
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-
-                // Update calling client's geometry
-                if let Some(client) = guard.clients.iter_mut().find(|c| c.conn_id == ctx.conn_id) {
+                if let Some(client) =
+                    guard.clients.iter_mut().find(|c| c.conn_id == ctx.conn_id)
+                {
                     client.cols = cols;
                     client.rows = rows;
                 }
@@ -179,22 +169,36 @@ pub async fn run_server(
                 // If a session already exists and hasn't exited, reuse it.
                 if guard.session.as_ref().is_some_and(|s| !s.exited) {
                     guard.recalculate_pty_size();
+                    let (ncols, nrows) = guard
+                        .session
+                        .as_ref()
+                        .map(|s| (s.cols, s.rows))
+                        .unwrap_or((80, 24));
+                    let targets = guard.clients.clone();
                     let id = guard.session.as_ref().map(|s| s.id).unwrap_or(1);
                     let cols = guard.session.as_ref().map(|s| s.cols).unwrap_or(cols);
                     let rows = guard.session.as_ref().map(|s| s.rows).unwrap_or(rows);
-
+                    drop(guard);
+                    ServerState::notify_clients(&targets, ncols, nrows);
                     return Spawn::encode_response((id, cols, rows))
                         .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
                 }
-
                 let id = 1;
                 let session = Session::spawn(id, cmd, cols, rows)?;
                 guard.set_session(session);
                 // Enforce global geometric constraints on the newly instantiated PTY
                 guard.recalculate_pty_size();
-
+                let (ncols, nrows) = guard
+                    .session
+                    .as_ref()
+                    .map(|s| (s.cols, s.rows))
+                    .unwrap_or((80, 24));
+                let targets = guard.clients.clone();
                 let session = guard.session.as_ref().unwrap();
-                Spawn::encode_response((session.id, session.cols, session.rows))
+                let (sid, scol, srow) = (session.id, session.cols, session.rows);
+                drop(guard);
+                ServerState::notify_clients(&targets, ncols, nrows);
+                Spawn::encode_response((sid, scol, srow))
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
             }
         })
@@ -210,20 +214,22 @@ pub async fn run_server(
                 let (_id, cols, rows) = ResizePty::decode_request(&payload)
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
                 let mut guard = state.lock().await;
-
-                // Update calling client's geometry
-                if let Some(client) = guard.clients.iter_mut().find(|c| c.conn_id == ctx.conn_id) {
+                if let Some(client) =
+                    guard.clients.iter_mut().find(|c| c.conn_id == ctx.conn_id)
+                {
                     client.cols = cols;
                     client.rows = rows;
                 }
-
                 guard.recalculate_pty_size();
-
-                let (actual_cols, actual_rows) = guard.session.as_ref()
+                let (ncols, nrows) = guard
+                    .session
+                    .as_ref()
                     .map(|s| (s.cols, s.rows))
                     .unwrap_or((cols, rows));
-
-                ResizePty::encode_response((actual_cols, actual_rows))
+                let targets = guard.clients.clone();
+                drop(guard);
+                ServerState::notify_clients(&targets, ncols, nrows);
+                ResizePty::encode_response((ncols, nrows))
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
             }
         })
@@ -274,9 +280,7 @@ pub async fn run_server(
                 let (id, data) = WriteInput::decode_request(&payload)
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
                 let mut guard = state.lock().await;
-                if let Some(session) = guard.session.as_mut()
-                    && session.id == id
-                {
+                if let Some(session) = guard.session.as_mut() && session.id == id {
                     let _ = session.pty.write_bytes(&data);
                 }
                 WriteInput::encode_response(())
@@ -312,7 +316,7 @@ pub async fn run_server(
         }
     });
 
-    // Register SubscribeOutput (streaming handler for PTY output pushes)
+    // Register SubscribeOutput
     let st = Arc::clone(&state);
     endpoint
         .register_stream_handler(SUBSCRIBE_OUTPUT_METHOD_ID, move |event, respond, ctx| {
@@ -329,7 +333,6 @@ pub async fn run_server(
                         if data.is_empty() { None } else { Some(data) }
                     });
                     let snapshot = guard.session.as_mut().map(|s| s.generate_snapshot());
-
                     guard.subscribers.push(SubscriberEntry {
                         conn_id: ctx.conn_id,
                         respond: respond.clone(),
@@ -338,13 +341,9 @@ pub async fn run_server(
                     // Wake the polling loop — the session may have pending
                     // output or exit state that needs processing.
                     guard.notify.notify_one();
-
                     let is_dead = guard.session.is_none();
                     drop(guard);
-
-                    if let Some(data) = snapshot
-                        && !data.is_empty()
-                    {
+                    if let Some(data) = snapshot && !data.is_empty() {
                         respond.respond(data, false);
                     }
                     if let Some(data) = early {
@@ -366,10 +365,11 @@ pub async fn run_server(
             match event {
                 RpcIpcServerEvent::ClientConnected(handle) => {
                     tracing::info!("Client {} connected", handle.0.conn_id);
-
                     let mut guard = st.lock().await;
+                    let handle_clone = handle.clone();
                     guard.clients.push(ClientEntry {
                         conn_id: handle.0.conn_id,
+                        caller: handle_clone,
                         cols: u16::MAX,
                         rows: u16::MAX,
                     });
@@ -380,6 +380,14 @@ pub async fn run_server(
                     guard.clients.retain(|c| c.conn_id != conn_id);
                     guard.subscribers.retain(|s| s.conn_id != conn_id);
                     guard.recalculate_pty_size();
+                    let (ncols, nrows) = guard
+                        .session
+                        .as_ref()
+                        .map(|s| (s.cols, s.rows))
+                        .unwrap_or((80, 24));
+                    let targets = guard.clients.clone();
+                    drop(guard);
+                    ServerState::notify_clients(&targets, ncols, nrows);
                 }
             }
         }
@@ -394,9 +402,7 @@ pub async fn run_server(
         loop {
             // Block until PTY actually produces output — 0 wakeups when idle
             notify.notified().await;
-
             let mut guard = st.lock().await;
-
             if guard.subscribers.is_empty() {
                 let mut exited = false;
                 if let Some(session) = guard.session.as_mut() {
@@ -409,24 +415,18 @@ pub async fn run_server(
                 }
                 continue;
             }
-
             let (raw, exited, code) = {
                 let Some(session) = guard.session.as_mut() else {
                     let _ = exit_tx.send(0);
                     break;
                 };
-
                 let raw = session.read_output();
                 let exited = session.check_exited();
                 let code = session.exit_code;
                 (raw, exited, code)
             };
-
             if raw.is_empty() && !guard.subscribers.is_empty() {
-                tracing::debug!(
-                    "PTY output empty with {} subscribers",
-                    guard.subscribers.len()
-                );
+                tracing::debug!("PTY output empty with {} subscribers", guard.subscribers.len());
             }
 
             // Push raw PTY output to all subscribers
@@ -457,9 +457,7 @@ pub async fn run_server(
             result.map_err(|e| format!("serve: {e:?}"))?;
             0
         }
-        code = &mut exit_rx => {
-            code.unwrap_or(0)
-        }
+        code = &mut exit_rx => code.unwrap_or(0)
     };
 
     Ok(exit_code)

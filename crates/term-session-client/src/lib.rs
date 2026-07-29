@@ -14,11 +14,12 @@ use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
+use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
 use muxio_tokio_mpsc_adapter::ChannelCallerExt;
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient, RpcServiceCallerInterface};
 use portable_pty::PtySize;
 use term_session_muxio_service_definitions::{
-    STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
+    OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
 };
 use term_wm_core::events::{Event, KeyKind};
 use term_wm_pty_engine::Pane;
@@ -265,6 +266,26 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
 
     let mut clipboard = Clipboard::new();
     let sigint = install_sigint_handler()?;
+
+    // Register OnPtyResized handler so the server can notify us of
+    // geometry changes (e.g., when another client connects at a smaller size).
+    let parser_handle = pane.shared_parser();
+    rt.block_on(
+        client
+            .get_endpoint()
+            .register_prebuffered(OnPtyResized::METHOD_ID, move |payload, _ctx| {
+                let parser = Arc::clone(&parser_handle);
+                async move {
+                    let (cols, rows) = OnPtyResized::decode_request(&payload)
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                    let mut parser = parser.lock().unwrap();
+                    parser.screen_mut().set_size(rows, cols);
+                    OnPtyResized::encode_response(())
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                }
+            }),
+    )
+    .map_err(|e| io::Error::other(format!("register OnPtyResized: {e:?}")))?;
 
     // Channel for crossterm input events from a background thread
     let (input_tx, input_rx) = crossbeam_channel::bounded::<Event>(INPUT_CHANNEL_CAPACITY);
