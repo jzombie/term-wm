@@ -495,6 +495,8 @@ impl<C: Component<TermWmAction>>
                                 | TermWmAction::MaximizeWindow(_)
                                 | TermWmAction::MinimizeWindow(_)
                                 | TermWmAction::CloseWindow(_)
+                                | TermWmAction::SendSuperKeyToWindow(_)
+                                | TermWmAction::SendSuperKeyToFocusedWindow
                         )
                 }
                 MenuDisplayItem::Separator => true,

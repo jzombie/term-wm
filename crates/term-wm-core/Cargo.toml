@@ -26,3 +26,4 @@ term-wm-pty-engine = { workspace = true }
 term-wm-render = { workspace = true }
 textwrap = "0.16"
 tracing = { workspace = true }
+unicode-width = { workspace = true }

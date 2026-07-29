@@ -16,6 +16,7 @@ term-wm-crossterm-adapter = { workspace = true }
 term-wm-layout-engine = { workspace = true }
 term-wm-render = { workspace = true }
 tracing = { workspace = true }
+unicode-width = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

@@ -1,7 +1,7 @@
 use std::io;
 use std::time::{Duration, Instant};
 
-use crate::events::{Event, KeyKind, MouseEventKind};
+use crate::events::{Event, KeyEvent, KeyKind, MouseEventKind};
 use term_wm_render::RenderTarget;
 
 use std::collections::VecDeque;
@@ -119,6 +119,29 @@ fn dispatch_action<
         TermWmAction::PasteClipboard => {
             if let Some(text) = app.wm().clipboard_mut().and_then(|cb| cb.get().ok()) {
                 queue.push_back((key, TermWmAction::ClipboardPaste(text)));
+            }
+        }
+        TermWmAction::SendSuperKeyToWindow(target) => {
+            let kb = app.wm().keybindings();
+            if let Some(combo) = kb.first_combo(TermWmAction::OpenCommandPalette) {
+                let bytes =
+                    KeyEvent::new(combo.code, combo.mods, KeyKind::Press).to_pty_bytes(false);
+                if !bytes.is_empty() {
+                    queue.push_back((target, TermWmAction::KeyToBytes(bytes)));
+                }
+            }
+        }
+        TermWmAction::SendSuperKeyToFocusedWindow => {
+            if let Some(combo) = app
+                .wm()
+                .keybindings()
+                .first_combo(TermWmAction::OpenCommandPalette)
+            {
+                let bytes =
+                    KeyEvent::new(combo.code, combo.mods, KeyKind::Press).to_pty_bytes(false);
+                if !bytes.is_empty() {
+                    queue.push_back((key, TermWmAction::KeyToBytes(bytes)));
+                }
             }
         }
         action => {
@@ -464,13 +487,19 @@ where
                         .keybindings()
                         .matches(TermWmAction::OpenCommandPalette, key)
                 {
-                    if app.wm().command_palette_visible() {
-                        app.wm().close_command_palette();
-                    } else {
+                    // When palette is visible, don't close — fall through to palette barrier
+                    // where the CommandPalette-layer keybinding handles the SUPER combo.
+                    if !app.wm().command_palette_visible() {
                         app.open_command_palette();
+                        update_selection_snapshot(app);
+                        return flush_state_changes(
+                            app,
+                            driver,
+                            ControlFlow::Continue,
+                            false,
+                            None,
+                        );
                     }
-                    update_selection_snapshot(app);
-                    return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
 
                 // In tab outline mode, any non-focus key closes the palette immediately.
@@ -525,7 +554,8 @@ where
                         );
                     }
 
-                    if let Some(action) = app.wm().handle_command_palette_event(&evt) {
+                    let palette_handled = app.wm().handle_command_palette_event(&evt);
+                    if let Some(action) = palette_handled {
                         let key = app.wm().focused_window();
                         let mut actions = std::collections::VecDeque::new();
                         // NewWindow returns Result — propagate the error
@@ -535,6 +565,32 @@ where
                             actions.push_back((key, action));
                         }
                         drain_action_queue(app, &mut actions);
+                    } else if let Event::Key(key) = &evt {
+                        // SendSuperKeyToFocusedWindow is bound in the CommandPalette layer.
+                        // Only intercept it specifically — not FocusNext/FocusPrev (Tab/Shift+Tab),
+                        // which need to reach handle_focus_event below.
+                        if app
+                            .wm()
+                            .keybindings()
+                            .matches(TermWmAction::SendSuperKeyToFocusedWindow, key)
+                        {
+                            let focused_key = app.wm().focused_window();
+                            let mut actions = std::collections::VecDeque::new();
+                            actions.push_back((
+                                focused_key,
+                                TermWmAction::SendSuperKeyToFocusedWindow,
+                            ));
+                            drain_action_queue(app, &mut actions);
+                            app.wm().close_command_palette();
+                            update_selection_snapshot(app);
+                            return flush_state_changes(
+                                app,
+                                driver,
+                                ControlFlow::Continue,
+                                false,
+                                None,
+                            );
+                        }
                     }
                     // Focus routing while menu is open (Tab/Shift+Tab)
                     if matches!(&evt, Event::Key(_)) && app.wm().handle_focus_event(&evt) {
