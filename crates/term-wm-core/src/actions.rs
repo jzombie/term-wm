@@ -275,6 +275,7 @@ impl TermWmAction {
             TermWmAction::CyclePrevWindow => Some(55),
             TermWmAction::NewWindow => Some(50),
             TermWmAction::HintToggle => Some(40),
+            TermWmAction::SendSuperKeyToFocusedWindow => Some(45),
 
             _ => None,
         }
