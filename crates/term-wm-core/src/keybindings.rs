@@ -86,6 +86,7 @@ impl Default for KeyBindings {
             FocusNext: [ (KeyCode::Tab, KeyModifiers::NONE) ],
             FocusPrev: [ (KeyCode::Tab, KeyModifiers { shift: true, control: false, alt: false }) ],
             OpenCommandPalette: [ (KeyCode::Char('a'), KeyModifiers { control: true, shift: false, alt: false }) ],
+            SendSuperKeyToFocusedWindow: [ (KeyCode::Char('a'), KeyModifiers { control: true, shift: false, alt: false }) ],
             MenuUp: [ (KeyCode::Up, KeyModifiers::NONE) ],
             MenuDown: [ (KeyCode::Down, KeyModifiers::NONE) ],
             MenuSelect: [ (KeyCode::Enter, KeyModifiers::NONE) ],

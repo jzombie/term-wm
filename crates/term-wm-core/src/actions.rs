@@ -128,6 +128,9 @@ pub enum TermWmAction {
     Callback(fn()),
     /// Send the OpenCommandPalette key combo bytes to the given window.
     SendSuperKeyToWindow(WindowKey),
+    /// Send the OpenCommandPalette key combo bytes to the focused window
+    /// (payload-free for palette-layer keybinding).
+    SendSuperKeyToFocusedWindow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -224,7 +227,8 @@ impl TermWmAction {
             | TermWmAction::TapSwapTarget(_)
             | TermWmAction::ConfirmSwap
             | TermWmAction::CancelSwap
-            | TermWmAction::SendSuperKeyToWindow(_) => Category::Windows,
+            | TermWmAction::SendSuperKeyToWindow(_)
+            | TermWmAction::SendSuperKeyToFocusedWindow => Category::Windows,
 
             TermWmAction::MenuUp
             | TermWmAction::MenuDown
@@ -343,6 +347,7 @@ impl fmt::Display for TermWmAction {
             TermWmAction::CancelSwap => "Cancel swap",
             TermWmAction::Callback(_) => "Callback",
             TermWmAction::SendSuperKeyToWindow(_) => "Send SUPER key to window",
+            TermWmAction::SendSuperKeyToFocusedWindow => "Send SUPER key to focused window",
         };
         write!(f, "{}", s)
     }

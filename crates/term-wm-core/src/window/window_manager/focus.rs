@@ -87,6 +87,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                                 | crate::actions::TermWmAction::MinimizeWindow(_)
                                 | crate::actions::TermWmAction::CloseWindow(_)
                                 | crate::actions::TermWmAction::SendSuperKeyToWindow(_)
+                                | crate::actions::TermWmAction::SendSuperKeyToFocusedWindow
                         )
                 }
                 MenuDisplayItem::Separator => true,
