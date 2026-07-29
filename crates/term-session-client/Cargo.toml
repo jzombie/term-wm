@@ -20,10 +20,15 @@ muxio-rpc-service-endpoint = { workspace = true }
 muxio-tokio-mpsc-adapter = { workspace = true }
 muxio-tokio-rpc-ipc-client = { workspace = true }
 portable-pty = { workspace = true }
+ratatui = { workspace = true }
 term-session-muxio-service-definitions = { workspace = true }
+term-wm-console = { workspace = true }
 term-wm-core = { workspace = true }
 term-wm-crossterm-adapter = { workspace = true }
+term-wm-layout-engine = { workspace = true }
 term-wm-pty-engine = { workspace = true }
+term-wm-render = { workspace = true }
+term-wm-ui-components = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 vt100 = { workspace = true }

@@ -17,8 +17,12 @@ use crossterm::terminal::{
 use muxio_tokio_mpsc_adapter::ChannelCallerExt;
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient, RpcServiceCallerInterface};
 use portable_pty::PtySize;
+use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::widgets::Clear;
 use term_session_muxio_service_definitions::{
-    STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
+    SessionPushFrame, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
 };
 use term_wm_core::events::{Event, KeyKind};
 use term_wm_pty_engine::Pane;
@@ -164,6 +168,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     // Bounded to cap head-of-line queuing under burst load.
     let (push_tx, push_rx) = crossbeam_channel::bounded::<Vec<u8>>(PTY_OUTPUT_CHANNEL_CAPACITY);
     let (clip_tx, clip_rx) = crossbeam_channel::bounded::<String>(CLIPBOARD_CHANNEL_CAPACITY);
+    let (resize_tx, resize_rx) = crossbeam_channel::bounded::<(u16, u16)>(8);
 
     // Get terminal size
     let (term_cols, term_rows) = crossterm::terminal::size()?;
@@ -184,37 +189,58 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             .await
             .map_err(|e| io::Error::other(format!("subscribe: {e:?}")))?;
 
-        // Forward response chunks to push_tx.  When the stream ends
-        // (session exits), the sender is dropped, and `drain_pushes`
-        // detects the disconnect.
-        // Intercept OSC 52 clipboard sequences from the raw byte stream
+        // Forward framed response chunks to push_tx.  Accumulate bytes
+        // in a buffer and decode SessionPushFrame frames, since the
+        // underlying stream does not preserve message boundaries.
+        // Intercept PtyResized frames to forward via resize_tx.
+        // Intercept OSC 52 clipboard sequences from RawOutput data
         // before the VT100 parser can consume them.
         rt.spawn(async move {
             let mut osc52 = Osc52Extractor::new();
             let mut prev_tail: [u8; 8] = [0; 8];
+            let mut acc = Vec::new();
 
             while let Some(chunk) = reader.recv().await {
                 match chunk {
-                    Ok(mut data) => {
-                        if let Some(text) = osc52.push(&data, &prev_tail) {
-                            let _ = clip_tx.try_send(text);
-                        }
+                    Ok(data) => {
+                        acc.extend_from_slice(&data);
+                        loop {
+                            match SessionPushFrame::decode(&acc) {
+                                Ok((frame, consumed)) => {
+                                    acc.drain(..consumed);
+                                    match frame {
+                                        SessionPushFrame::RawOutput { data: raw_data, .. } => {
+                                            if let Some(text) =
+                                                osc52.push(&raw_data, &prev_tail)
+                                            {
+                                                let _ = clip_tx.try_send(text);
+                                            }
 
-                        let n = data.len();
-                        if n >= 8 {
-                            prev_tail.copy_from_slice(&data[n - 8..n]);
-                        } else if n > 0 {
-                            prev_tail.rotate_left(n);
-                            prev_tail[8 - n..].copy_from_slice(&data[..n]);
-                        }
+                                            let n = raw_data.len();
+                                            if n >= 8 {
+                                                prev_tail
+                                                    .copy_from_slice(&raw_data[n - 8..n]);
+                                            } else if n > 0 {
+                                                prev_tail.rotate_left(n);
+                                                prev_tail[8 - n..].copy_from_slice(&raw_data[..n]);
+                                            }
 
-                        // Non-blocking push; if saturated, sleep 1ms to allow
-                        // the main loop to drain the channel without CPU spinning.
-                        while let Err(crossbeam_channel::TrySendError::Full(pending)) =
-                            push_tx.try_send(data)
-                        {
-                            data = pending;
-                            tokio::time::sleep(Duration::from_millis(1)).await;
+                                            let _ = push_tx.try_send(raw_data);
+                                        }
+                                        SessionPushFrame::PtyResized { cols, rows, .. } => {
+                                            let _ = resize_tx.try_send((cols, rows));
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                                    break;
+                                }
+                                Err(_) => {
+                                    acc.drain(..1);
+                                    continue;
+                                }
+                            }
                         }
                     }
                     Err(_) => break,
@@ -238,6 +264,11 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             .map_err(|e| io::Error::other(e.to_string()))?;
         Ok(())
     });
+
+    // Track current parser dimensions for centering math.
+    // Updated from PtyResized frames received via resize_rx.
+    let mut live_cols = term_cols;
+    let mut live_rows = term_rows;
 
     let mut pane = RemotePane::new(
         1u64,
@@ -264,10 +295,12 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     // Pass one stdout handle to init_terminal for the startup sequences
     // and TerminalGuard teardown; keep a second handle for rendering.
     let _guard = init_terminal(stdout())?;
-    let mut out = stdout();
+    let mut stdout = stdout();
 
     let mut clipboard = Clipboard::new();
     let sigint = install_sigint_handler()?;
+    let mut terminal = Terminal::new(CrosstermBackend::new(&mut stdout))
+        .map_err(|e| io::Error::other(format!("terminal: {e}")))?;
 
     // Channel for crossterm input events from a background thread
     let (input_tx, input_rx) = crossbeam_channel::bounded::<Event>(INPUT_CHANNEL_CAPACITY);
@@ -295,20 +328,37 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         })
         .map_err(|e| io::Error::other(format!("spawn input thread: {e}")))?;
 
-    // Initial full screen render
-    {
-        let parser = pane.shared_parser();
-        let parser = parser.lock().unwrap();
-        let screen = parser.screen();
-        let data = screen.contents_formatted();
-        out.write_all(&data)?;
-        out.flush()?;
-    }
-
-    let mut prev_content: Option<Vec<u8>> = None;
-    let mut prev_parser: Option<vt100::Parser> = None;
+    // Initial render
+    terminal
+        .draw(|f| {
+            let area = f.area();
+            let parser = pane.shared_parser();
+            let parser = parser.lock().unwrap();
+            render_centered(f, area, &parser, live_cols, live_rows);
+        })
+        .map_err(|e| io::Error::other(format!("initial draw: {e}")))?;
 
     loop {
+        // Non-blocking poll for PtyResized frames from the server
+        while let Ok((cols, rows)) = resize_rx.try_recv() {
+            live_cols = cols;
+            live_rows = rows;
+            let size = PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            };
+            // RIS mitigation: resize and reset local parser to flush
+            // stale ConPTY state before processing subsequent frames.
+            let parser = pane.shared_parser();
+            let mut parser = parser.lock().unwrap();
+            parser.screen_mut().set_size(rows, cols);
+            parser.process(b"\x1bc");
+            drop(parser);
+            let _ = pane.resize(size);
+        }
+
         // Block until either user input or PTY output arrives (0 CPU when idle)
         let input_event = crossbeam_channel::select! {
             recv(input_rx) -> msg => {
@@ -321,8 +371,8 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                 match msg {
                     Ok(data) => {
                         // PTY output — process directly into parser
-                        let shared = pane.shared_parser();
-                        let mut parser = shared.lock().unwrap();
+                        let parser = pane.shared_parser();
+                        let mut parser = parser.lock().unwrap();
                         parser.process(&data);
                         None
                     }
@@ -411,7 +461,6 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                         pixel_width: 0,
                         pixel_height: 0,
                     };
-                    prev_content = None;
                     let _ = pane.resize(size);
                 }
                 Event::Paste(text) => {
@@ -430,35 +479,77 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             return Err(io::Error::other("connection to session server lost"));
         }
 
-        // Diff-based incremental render
-        if has_new_data || prev_content.is_none() {
-            let parser = pane.shared_parser();
-            let parser = parser.lock().unwrap();
-            let screen = parser.screen();
-            let (rows, cols) = screen.size();
-
-            let diff = match &prev_content {
-                Some(prev) => {
-                    let p = prev_parser.get_or_insert_with(|| vt100::Parser::new(rows, cols, 0));
-                    p.screen_mut().set_size(rows, cols);
-                    p.process(b"\x1bc");
-                    p.process(prev);
-                    screen.contents_diff(p.screen())
-                }
-                None => screen.contents_formatted(),
-            };
-
-            if !diff.is_empty() {
-                out.write_all(&diff)?;
-                out.flush()?;
-            }
-
-            prev_content = Some(screen.contents_formatted());
+        // Ratatui-based render with centered projection
+        if has_new_data {
+            terminal
+                .draw(|f| {
+                    let area = f.area();
+                    let parser = pane.shared_parser();
+                    let parser = parser.lock().unwrap();
+                    render_centered(f, area, &parser, live_cols, live_rows);
+                })
+                .map_err(|e| io::Error::other(format!("draw: {e}")))?;
         }
 
         // Exit on session exit
         if pane.has_exited() {
             return Ok(());
+        }
+    }
+}
+
+/// Render the vt100 parser content centered within the given area.
+///
+/// Maps vt100 cell attributes to Ratatui styles and writes each cell
+/// at the correct offset position in the frame buffer.
+fn render_centered(
+    f: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    parser: &vt100::Parser,
+    parser_cols: u16,
+    parser_rows: u16,
+) {
+    let render_w = parser_cols.min(area.width);
+    let render_h = parser_rows.min(area.height);
+    let offset_x = (area.width - render_w) / 2;
+    let offset_y = (area.height - render_h) / 2;
+
+    // Clear dead space
+    f.render_widget(Clear, area);
+
+    let buf = f.buffer_mut();
+    let screen = parser.screen();
+
+    for row in 0u16..render_h {
+        for col in 0u16..render_w {
+            let Some(cell) = screen.cell(row, col) else { continue; };
+            let Some(ratatui_cell) = buf.cell_mut((offset_x + col, offset_y + row)) else { continue; };
+
+            let mut style = Style::default();
+
+            // Foreground
+            match cell.fgcolor() {
+                vt100::Color::Default => {}
+                vt100::Color::Idx(n) => style = style.fg(Color::Indexed(n)),
+                vt100::Color::Rgb(r, g, b) => style = style.fg(Color::Rgb(r, g, b)),
+            }
+            // Background
+            match cell.bgcolor() {
+                vt100::Color::Default => {}
+                vt100::Color::Idx(n) => style = style.bg(Color::Indexed(n)),
+                vt100::Color::Rgb(r, g, b) => style = style.bg(Color::Rgb(r, g, b)),
+            }
+
+            let mut modifier = Modifier::empty();
+            if cell.bold() { modifier |= Modifier::BOLD; }
+            if cell.italic() { modifier |= Modifier::ITALIC; }
+            if cell.underline() { modifier |= Modifier::UNDERLINED; }
+            if cell.inverse() { modifier |= Modifier::REVERSED; }
+            if cell.dim() { modifier |= Modifier::DIM; }
+            style = style.add_modifier(modifier);
+
+            ratatui_cell.set_style(style);
+            ratatui_cell.set_symbol(cell.contents());
         }
     }
 }

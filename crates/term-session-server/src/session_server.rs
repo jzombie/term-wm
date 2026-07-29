@@ -8,8 +8,8 @@ use portable_pty::PtySize;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 
 use term_session_muxio_service_definitions::{
-    CloseSession, ListSessions, ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
-    Spawn, WriteInput,
+    CloseSession, ListSessions, ResizePty, SessionPushFrame, STREAM_INPUT_METHOD_ID,
+    SUBSCRIBE_OUTPUT_METHOD_ID, Spawn, WriteInput,
 };
 use term_wm_pty_engine::PtyStatus;
 
@@ -69,11 +69,13 @@ impl ServerState {
     /// and stream completion markers to all active subscribers.
     fn clear_session(&mut self) {
         if let Some(mut session) = self.session.take() {
+            let id = session.id;
             let _ = session.pty.kill_child();
             let raw = session.read_output();
             if !raw.is_empty() {
+                let frame = SessionPushFrame::RawOutput { id, data: raw }.encode();
                 for sub in &self.subscribers {
-                    sub.respond.respond(raw.clone(), false);
+                    sub.respond.respond(frame.clone(), false);
                 }
             }
         }
@@ -110,6 +112,17 @@ impl ServerState {
         let _ = session.pty.resize(size);
         session.cols = min_cols;
         session.rows = min_rows;
+
+        // Broadcast out-of-band resize frame to all subscribers
+        let frame = SessionPushFrame::PtyResized {
+            id: session.id,
+            cols: min_cols,
+            rows: min_rows,
+        }
+        .encode();
+        for sub in &self.subscribers {
+            sub.respond.respond(frame.clone(), false);
+        }
     }
 }
 
@@ -312,15 +325,18 @@ pub async fn run_server(
                     guard.notify.notify_one();
 
                     let is_dead = guard.session.is_none();
+                    let id = guard.session.as_ref().map(|s| s.id).unwrap_or(0);
                     drop(guard);
 
                     if let Some(data) = snapshot
                         && !data.is_empty()
                     {
-                        respond.respond(data, false);
+                        let frame = SessionPushFrame::RawOutput { id, data }.encode();
+                        respond.respond(frame, false);
                     }
                     if let Some(data) = early {
-                        respond.respond(data, false);
+                        let frame = SessionPushFrame::RawOutput { id, data }.encode();
+                        respond.respond(frame, false);
                     }
                     if is_dead {
                         respond.respond(Vec::new(), true);
@@ -382,14 +398,18 @@ pub async fn run_server(
                 continue;
             }
 
-            let Some(session) = guard.session.as_mut() else {
-                let _ = exit_tx.send(0);
-                break;
-            };
+            let (raw, exited, code, session_id) = {
+                let Some(session) = guard.session.as_mut() else {
+                    let _ = exit_tx.send(0);
+                    break;
+                };
 
-            let raw = session.read_output();
-            let exited = session.check_exited();
-            let code = session.exit_code;
+                let raw = session.read_output();
+                let exited = session.check_exited();
+                let code = session.exit_code;
+                let session_id = session.id;
+                (raw, exited, code, session_id)
+            };
 
             if raw.is_empty() && !guard.subscribers.is_empty() {
                 tracing::debug!(
@@ -398,10 +418,11 @@ pub async fn run_server(
                 );
             }
 
-            // Push raw PTY output to all subscribers via StreamResponder
+            // Push framed PTY output to all subscribers
             if !raw.is_empty() {
+                let frame = SessionPushFrame::RawOutput { id: session_id, data: raw }.encode();
                 for sub in &guard.subscribers {
-                    sub.respond.respond(raw.clone(), false);
+                    sub.respond.respond(frame.clone(), false);
                 }
             }
 

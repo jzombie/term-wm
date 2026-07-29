@@ -5,18 +5,20 @@ use std::io;
 /// Each frame starts with a one-byte tag, followed by message-type-specific
 /// content. The stream is bidirectional:
 ///   - Client→Server: raw PTY input bytes (keyboard, mouse) — no framing.
-///   - Server→Client: tagged frames — RawOutput / SessionExited / TitleChanged.
+///   - Server→Client: tagged frames — RawOutput / SessionExited / TitleChanged / PtyResized.
 #[derive(Debug, Clone)]
 pub enum SessionPushFrame {
     RawOutput { id: u64, data: Vec<u8> },
     SessionExited { id: u64, status: i32 },
     TitleChanged { id: u64, title: String },
+    PtyResized { id: u64, cols: u16, rows: u16 },
 }
 
 // Tag byte constants
 const TAG_RAW_OUTPUT: u8 = 0x01;
 const TAG_SESSION_EXITED: u8 = 0x02;
 const TAG_TITLE_CHANGED: u8 = 0x03;
+const TAG_PTY_RESIZED: u8 = 0x04;
 
 impl SessionPushFrame {
     pub fn encode(&self) -> Vec<u8> {
@@ -49,6 +51,17 @@ impl SessionPushFrame {
                 buf.extend_from_slice(&id_bytes);
                 buf.extend_from_slice(&len_bytes);
                 buf.extend_from_slice(title_bytes);
+                buf
+            }
+            Self::PtyResized { id, cols, rows } => {
+                let id_bytes = id.to_le_bytes();
+                let cols_bytes = cols.to_le_bytes();
+                let rows_bytes = rows.to_le_bytes();
+                let mut buf = Vec::with_capacity(1 + 8 + 2 + 2);
+                buf.push(TAG_PTY_RESIZED);
+                buf.extend_from_slice(&id_bytes);
+                buf.extend_from_slice(&cols_bytes);
+                buf.extend_from_slice(&rows_bytes);
                 buf
             }
         }
@@ -106,6 +119,18 @@ impl SessionPushFrame {
                 }
                 let title = String::from_utf8_lossy(&bytes[13..13 + len]).into_owned();
                 Ok((Self::TitleChanged { id, title }, 13 + len))
+            }
+            TAG_PTY_RESIZED => {
+                if bytes.len() < 13 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "truncated pty_resized",
+                    ));
+                }
+                let id = u64::from_le_bytes(bytes[1..9].try_into().unwrap());
+                let cols = u16::from_le_bytes(bytes[9..11].try_into().unwrap());
+                let rows = u16::from_le_bytes(bytes[11..13].try_into().unwrap());
+                Ok((Self::PtyResized { id, cols, rows }, 13))
             }
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
