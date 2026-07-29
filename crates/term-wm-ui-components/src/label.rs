@@ -59,10 +59,7 @@ impl Component<TermWmAction> for LabelComponent {
         if self.bold {
             style = style.add_modifier(Modifier::BOLD);
         }
-        let para = Paragraph::new(Line::from(Span::styled(
-            self.text.as_str(),
-            style,
-        )));
+        let para = Paragraph::new(Line::from(Span::styled(self.text.as_str(), style)));
         para.render(rect, &mut backend.buffer);
     }
 

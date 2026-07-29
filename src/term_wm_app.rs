@@ -308,8 +308,7 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
 
         // System Panel — hidden, toggled via keybinding, persists across close.
         {
-            let sys_panel = WmSystemPanelComponent::new()
-                .with_key_monitor(self.last_key.clone());
+            let sys_panel = WmSystemPanelComponent::new().with_key_monitor(self.last_key.clone());
             let sys_key =
                 self.wm
                     .create_window(AppRootComponent::Core(CoreWmComponent::SystemPanel(
