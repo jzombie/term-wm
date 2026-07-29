@@ -92,10 +92,6 @@ impl WmSystemPanelComponent {
     pub fn with_key_monitor(mut self, state: Rc<RefCell<Option<KeyEvent>>>) -> Self {
         self.children
             .insert(0, PanelChild::KeyMonitor(KeyMonitorComponent::new(state)));
-        self.children
-            .insert(0, PanelChild::Separator(SeparatorComponent::new()));
-        self.children
-            .insert(0, PanelChild::Spacer(SpacerComponent::new(1)));
         self.scroll_view = build_scroll_view(self.children.clone());
         self
     }
