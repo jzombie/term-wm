@@ -515,8 +515,26 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 if !self.managed_draw_order.contains(&key) {
                     self.managed_draw_order.push(key);
                 }
-                self.reattach_to_tiling_layout(key);
+
+                let has_other_floating = self
+                    .windows
+                    .values()
+                    .any(|w| w.state() == WindowState::Mapped && w.is_floating());
+                let floating_mode = self.managed_layout.is_none();
+
+                if !self.is_window_floating(key) && (has_other_floating || floating_mode) {
+                    let index = self.windows.len().saturating_sub(1);
+                    let fallback = self.default_cascading_rect(index);
+                    self.set_floating_rect(
+                        key,
+                        Some(crate::window::FloatRectSpec::Absolute(fallback)),
+                    );
+                } else if !self.is_window_floating(key) {
+                    self.reattach_to_tiling_layout(key);
+                }
+
                 self.focus_add(key);
+                self.bring_to_front_key(key);
             }
             (_, WindowState::Unmapped) => {
                 // Preserve floating_rect so re-mapping restores previous
@@ -5798,6 +5816,81 @@ mod tests {
         assert!(
             wm.managed_draw_order.contains(&target),
             "restored to draw order"
+        );
+    }
+
+    #[test]
+    fn transition_iconic_to_mapped_in_float_mode_preserves_geometry_and_elevates_z_index() {
+        use crate::window::{FloatRect, FloatRectSpec};
+
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+
+        let keys = mapped_keys(&mut wm, 2);
+        let target_key = keys[0];
+        let secondary_key = keys[1];
+
+        // Force float mode
+        wm.managed_layout = None;
+
+        // Assign explicit floating geometries
+        let target_rect = FloatRectSpec::Absolute(FloatRect {
+            x: 10,
+            y: 10,
+            width: 40,
+            height: 20,
+        });
+        wm.set_floating_rect(target_key, Some(target_rect));
+        wm.set_floating_rect(
+            secondary_key,
+            Some(FloatRectSpec::Absolute(FloatRect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 20,
+            })),
+        );
+
+        // Shift z-order to secondary window
+        wm.bring_to_front_key(secondary_key);
+
+        // Minimize
+        wm.transition_window(target_key, WindowState::Iconic);
+        assert_eq!(wm.window_state(target_key), Some(WindowState::Iconic));
+        assert!(
+            wm.floating_rect(target_key).is_some(),
+            "Floating geometry must survive minimization"
+        );
+
+        // Restore
+        wm.transition_window(target_key, WindowState::Mapped);
+
+        // Assertions
+        assert_eq!(wm.window_state(target_key), Some(WindowState::Mapped));
+        assert_eq!(
+            wm.floating_rect(target_key),
+            Some(target_rect),
+            "Pre-minimization floating geometry was corrupted"
+        );
+        assert_eq!(
+            wm.z_order.last(),
+            Some(&target_key),
+            "Restored window must be top of z_order"
+        );
+        assert_eq!(
+            wm.managed_draw_order.last(),
+            Some(&target_key),
+            "Restored window must be top of draw order"
+        );
+        assert_eq!(
+            *wm.focus.current(),
+            target_key,
+            "Restored window must have focus"
         );
     }
 
