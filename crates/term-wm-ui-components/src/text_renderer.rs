@@ -1049,7 +1049,7 @@ mod tests {
         // (w + usable - 1) / usable gave 2, truncating the third line.
         let line = Line::from(vec![
             ratatui::text::Span::raw(
-                "To send Ctrl+G to the currently focused application, press Ctrl+G",
+                "To send Ctrl+A to the currently focused application, press Ctrl+A",
             ),
             ratatui::text::Span::raw(
                 " twice quickly. (The second press is forwarded to the active window.)",
