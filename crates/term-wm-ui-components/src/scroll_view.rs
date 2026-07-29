@@ -260,28 +260,14 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
         }
     }
 
-    pub(crate) fn compute_layout(&self, area: LayoutRect) -> LayoutRect {
-        // Simple reservation strategy:
-        // Use previous frame's content size to decide on scrollbars.
-        let state = self.scroll_state.borrow();
-        let content_w = state.content_width;
-        let content_h = state.content_height;
-        drop(state);
-
-        if content_w == 0 && content_h == 0 {
-            return area;
-        }
-
+    pub(crate) fn compute_layout(&self, area: LayoutRect, needs_vertical: bool, needs_horizontal: bool) -> LayoutRect {
         let mut view_w = area.width;
         let mut view_h = area.height;
 
-        let needs_v = content_h > view_h as usize;
-        if needs_v && view_w > 0 {
+        if needs_vertical && view_w > 0 {
             view_w = view_w.saturating_sub(1);
         }
-
-        let needs_h = content_w > view_w as usize;
-        if needs_h && view_h > 0 {
+        if needs_horizontal && view_h > 0 {
             view_h = view_h.saturating_sub(1);
         }
 
@@ -303,7 +289,9 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
         drop(state);
 
         let sa = ctx.screen_area().unwrap_or_default();
-        let va = self.compute_layout(sa);
+        let state = self.scroll_state.borrow();
+        let va = self.compute_layout(sa, state.last_needs_vertical, state.last_needs_horizontal);
+        drop(state);
 
         // Vertical scrollbar: assumes it is immediately to the right of viewport
         let current_off_y = self.scroll_state.borrow().offset_y;
@@ -418,8 +406,17 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
         let max_attempts = 3;
         let mut attempt = 0;
 
+        let mut needs_vertical = {
+            let st = self.scroll_state.borrow();
+            st.last_needs_vertical
+        };
+        let mut needs_horizontal = {
+            let st = self.scroll_state.borrow();
+            st.last_needs_horizontal
+        };
+
         loop {
-            let inner_area = self.compute_layout(area);
+            let inner_area = self.compute_layout(area, needs_vertical, needs_horizontal);
 
             {
                 let mut state = self.scroll_state.borrow_mut();
@@ -461,9 +458,35 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
             // Detect if the child's measurement triggered a sticky auto-scroll
             let offset_changed = off_x != info.offset_x || off_y != info.offset_y;
 
-            let needs_vertical = inner_area.height > 0 && content_h > inner_area.height as usize;
+            // Passive bounds for scrollbar transitions — no probe renders.
+            if needs_vertical {
+                if content_h <= inner_area.height as usize {
+                    needs_vertical = false;
+                    attempt = 0;
+                    continue;
+                }
+            } else {
+                if inner_area.height > 0 && content_h > inner_area.height as usize {
+                    needs_vertical = true;
+                    attempt = 0;
+                    continue;
+                }
+            }
+            if needs_horizontal {
+                if content_w <= inner_area.width as usize {
+                    needs_horizontal = false;
+                    attempt = 0;
+                    continue;
+                }
+            } else {
+                if inner_area.width > 0 && content_w > inner_area.width as usize {
+                    needs_horizontal = true;
+                    attempt = 0;
+                    continue;
+                }
+            }
+
             let has_vertical_reserved = inner_area.width < area.width;
-            let needs_horizontal = inner_area.width > 0 && content_w > inner_area.width as usize;
             let has_horizontal_reserved = inner_area.height < area.height;
 
             let drop_vertical = has_vertical_reserved && !needs_vertical && area.width > 0;
@@ -479,6 +502,13 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
             {
                 attempt += 1;
                 continue;
+            }
+
+            // Persist scrollbar state for next frame
+            {
+                let mut st = self.scroll_state.borrow_mut();
+                st.last_needs_vertical = needs_vertical;
+                st.last_needs_horizontal = needs_horizontal;
             }
 
             if !ctx.direct_mode() {
@@ -1504,5 +1534,21 @@ mod tests {
         assert_eq!(r1, None);
         let r2 = Component::<TermWmAction>::take_alternate_screen_transition(&mut sv);
         assert_eq!(r2, None);
+    }
+
+    #[test]
+    fn scrollbar_persistent_state_tracks_overflow() {
+        let sv = ScrollViewComponent::new(
+            term_wm_core::window::test_component::ActionRecorder::default()
+        );
+        let area = LayoutRect { x: 0, y: 0, width: 80, height: 10 };
+
+        assert!(!sv.scroll_state.borrow().last_needs_vertical);
+
+        let inner = sv.compute_layout(area, false, false);
+        assert_eq!(inner.width, 80);
+
+        let inner = sv.compute_layout(area, true, false);
+        assert_eq!(inner.width, 79);
     }
 }
