@@ -107,8 +107,9 @@ fn on_resize(
 fn toggle_lock(app: &mut App) {
     match app.mode {
         Mode::Interactive => {
-            let size = app.last_size;
-            app.mode = Mode::Locked(size);
+            if let Ok((w, h)) = terminal::size() {
+                app.mode = Mode::Locked(Size::new(w, h));
+            }
         }
         Mode::Locked(locked) => {
             app.last_size = locked;
