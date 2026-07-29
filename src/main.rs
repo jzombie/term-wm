@@ -15,6 +15,7 @@ use term_wm::unified_event_source::{UnifiedEvent, UnifiedEventSource};
 use term_wm::wm_config::WmConfig;
 use term_wm_console::console_render_target::ConsoleRenderTarget;
 use term_wm_core::components::Component;
+use term_wm_core::events::Event;
 use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 
 // TODO: Make this user-configurable
@@ -186,6 +187,10 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
     ) -> &mut term_wm::window::WindowManager<AppRootComponent, LayerComponent, OverlayComponent>
     {
         self.inner.wm()
+    }
+
+    fn handle_app_event(&mut self, event: &Event) -> bool {
+        self.inner.handle_app_event(event)
     }
 
     fn open_help_overlay(&mut self) {

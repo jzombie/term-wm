@@ -398,9 +398,14 @@ where
 
                 frame_pacer.notify_pending(Instant::now());
 
-                // Pre-compute the keybinding action using the configured
-                // KeyBindings from WindowManager (not hardcoded defaults).
-                // CommandPalette actions are handled when the WM overlay is open.
+                // PRE-LAYER: Global app event observer.
+                // Runs before all layer checks so the app can observe or consume
+                // EVERY event — including those later consumed by overlays,
+                // keybindings, or direct-mode PTY routing.
+                if app.handle_app_event(&evt) {
+                    update_selection_snapshot(app);
+                    return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
+                }
 
                 // Layer 1: Active overlays (exit confirm, selection preview, help)
                 if app.wm().exit_confirm_visible() {
@@ -546,9 +551,7 @@ where
                     return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
 
-                // If keyboard capture is disabled for the focused window, key events
-
-                // Layer 2b: Direct mode check — intercepts ALL other keys
+                // Layer 2c: Direct mode check — forward key events straight to PTY
                 if let Event::Key(key) = &evt {
                     let focus_id = app.wm().focused_window();
                     if app.wm().direct_mode(focus_id)
@@ -566,12 +569,6 @@ where
                             None,
                         );
                     }
-                }
-
-                // Layer 2c: App-level event handler (before WM actions, after overlays)
-                if app.handle_app_event(&evt) {
-                    update_selection_snapshot(app);
-                    return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
 
                 // Mouse capture check
