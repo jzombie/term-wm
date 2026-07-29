@@ -17,7 +17,9 @@ use crossterm::terminal::{
 use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
 use muxio_tokio_mpsc_adapter::ChannelCallerExt;
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient, RpcServiceCallerInterface};
+use line_ending::PeekableLineEndingExt;
 use portable_pty::PtySize;
+use unicode_width::UnicodeWidthChar;
 use term_session_muxio_service_definitions::{
     OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
 };
@@ -467,7 +469,17 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             };
 
             if !diff.is_empty() {
-                out.write_all(&diff)?;
+                let clean = rewrite_diff(&diff, cols);
+                if !clean.is_empty() {
+                    out.write_all(&clean)?;
+                }
+                let (cur_row, cur_col) = screen.cursor_position();
+                write!(out, "[{};{}H", cur_row + 1, cur_col + 1)?;
+                if screen.hide_cursor() {
+                    out.write_all(b"[?25l")?;
+                } else {
+                    out.write_all(b"[?25h")?;
+                }
                 out.flush()?;
             }
 
@@ -481,20 +493,95 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::{Arc, Mutex};
+pub fn rewrite_diff(diff: &[u8], parser_cols: u16) -> Vec<u8> {
+    let text = String::from_utf8_lossy(diff);
+    let mut chars = text.chars().peekable();
+    let mut out = Vec::with_capacity(diff.len() + 64);
+    let mut col: u16 = 0;
 
-    /// Helper writer that captures bytes into a shared `Vec<u8>`.
-    struct TestWriter {
-        buf: Arc<Mutex<Vec<u8>>>,
-    }
+    while let Some(&ch) = chars.peek() {
+        if ch == '\x1b' {
+            chars.next();
+            if chars.peek() == Some(&'[') {
+                chars.next();
 
-    impl TestWriter {
-        fn new() -> (Self, Arc<Mutex<Vec<u8>>>) {
-            let buf = Arc::new(Mutex::new(Vec::new()));
-            (Self { buf: buf.clone() }, buf)
+                let mut param_str = String::new();
+                while let Some(&p) = chars.peek() {
+                    if (0x40..=0x7e).contains(&(p as u8)) {
+                        break;
+                    }
+                    param_str.push(chars.next().unwrap());
+                }
+
+                if let Some(cmd) = chars.next() {
+                    let cmd_byte = cmd as u8;
+                    match cmd_byte {
+                        b'K' => {
+                            let param = param_str.parse::<u16>().unwrap_or(0);
+                            match param {
+                                1 => {
+                                    let _ = write!(out, "\x1b[{}K", param_str);
+                                }
+                                2 => {
+                                    out.extend_from_slice(b"\x1b[1G");
+                                    out.extend(std::iter::repeat_n(b' ', parser_cols as usize));
+                                    let _ = write!(out, "\x1b[{}G", col + 1);
+                                }
+                                _ => {
+                                    let spaces = parser_cols.saturating_sub(col) as usize;
+                                    out.extend(std::iter::repeat_n(b' ', spaces));
+                                    let _ = write!(out, "\x1b[{}G", col + 1);
+                                }
+                            }
+                        }
+                        b'H' | b'f' => {
+                            let parts: Vec<&str> = param_str.split(';').collect();
+                            if parts.len() >= 2 {
+                                if let Ok(c) = parts[1].parse::<u16>() {
+                                    col = c.saturating_sub(1);
+                                }
+                            } else {
+                                col = 0;
+                            }
+                            let _ = write!(out, "\x1b[{}", param_str);
+                            out.push(cmd_byte);
+                        }
+                        b'C' => {
+                            let n = param_str.parse::<u16>().unwrap_or(1);
+                            col = col.saturating_add(n).min(parser_cols);
+                            let _ = write!(out, "\x1b[{}C", param_str);
+                        }
+                        b'D' => {
+                            let n = param_str.parse::<u16>().unwrap_or(1);
+                            col = col.saturating_sub(n);
+                            let _ = write!(out, "\x1b[{}D", param_str);
+                        }
+                        b'G' => {
+                            if let Ok(c) = param_str.parse::<u16>() {
+                                col = c.saturating_sub(1);
+                            }
+                            let _ = write!(out, "\x1b[{}G", param_str);
+                        }
+                        _ => {
+                            let _ = write!(out, "\x1b[{}", param_str);
+                            out.push(cmd_byte);
+                        }
+                    }
+                }
+            } else {
+                out.push(b'\x1b');
+            }
+        } else if let Some(ending) = chars.consume_line_ending() {
+            col = 0;
+            out.extend_from_slice(ending.as_str().as_bytes());
+        } else {
+            let ch = chars.next().unwrap();
+            if ch >= ' ' && ch != '\x7f' {
+                let width = UnicodeWidthChar::width(ch).unwrap_or(1) as u16;
+                col = col.saturating_add(width).min(parser_cols);
+            }
+            let mut buf = [0u8; 4];
+            out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
         }
     }
 

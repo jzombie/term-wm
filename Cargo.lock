@@ -3035,6 +3035,7 @@ dependencies = [
  "crossbeam-channel",
  "crossterm",
  "libc",
+ "line-ending",
  "muxio-core",
  "muxio-rpc-service",
  "muxio-rpc-service-caller",
@@ -3048,6 +3049,7 @@ dependencies = [
  "term-wm-pty-engine",
  "tokio",
  "tracing",
+ "unicode-width",
  "vt100",
 ]
 
