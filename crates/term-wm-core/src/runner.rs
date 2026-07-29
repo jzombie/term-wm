@@ -1,7 +1,7 @@
 use std::io;
 use std::time::{Duration, Instant};
 
-use crate::events::{Event, KeyKind, MouseEventKind};
+use crate::events::{Event, KeyEvent, KeyKind, MouseEventKind};
 use term_wm_render::RenderTarget;
 
 use std::collections::VecDeque;
@@ -119,6 +119,16 @@ fn dispatch_action<
         TermWmAction::PasteClipboard => {
             if let Some(text) = app.wm().clipboard_mut().and_then(|cb| cb.get().ok()) {
                 queue.push_back((key, TermWmAction::ClipboardPaste(text)));
+            }
+        }
+        TermWmAction::SendCommandPaletteKeyToWindow(target) => {
+            let kb = app.wm().keybindings();
+            if let Some(combo) = kb.first_combo(TermWmAction::OpenCommandPalette) {
+                let bytes =
+                    KeyEvent::new(combo.code, combo.mods, KeyKind::Press).to_pty_bytes(false);
+                if !bytes.is_empty() {
+                    queue.push_back((target, TermWmAction::KeyToBytes(bytes)));
+                }
             }
         }
         action => {

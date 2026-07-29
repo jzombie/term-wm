@@ -126,6 +126,8 @@ pub enum TermWmAction {
     CancelSwap,
     /// Execute an inline callback.
     Callback(fn()),
+    /// Send the OpenCommandPalette key combo bytes to the given window.
+    SendCommandPaletteKeyToWindow(WindowKey),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -221,7 +223,8 @@ impl TermWmAction {
             | TermWmAction::BeginTapSwap(_)
             | TermWmAction::TapSwapTarget(_)
             | TermWmAction::ConfirmSwap
-            | TermWmAction::CancelSwap => Category::Windows,
+            | TermWmAction::CancelSwap
+            | TermWmAction::SendCommandPaletteKeyToWindow(_) => Category::Windows,
 
             TermWmAction::MenuUp
             | TermWmAction::MenuDown
@@ -339,6 +342,9 @@ impl fmt::Display for TermWmAction {
             TermWmAction::ConfirmSwap => "Confirm swap",
             TermWmAction::CancelSwap => "Cancel swap",
             TermWmAction::Callback(_) => "Callback",
+            TermWmAction::SendCommandPaletteKeyToWindow(_) => {
+                "Send command palette key to window"
+            }
         };
         write!(f, "{}", s)
     }

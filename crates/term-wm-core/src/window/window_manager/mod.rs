@@ -2736,17 +2736,63 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         // Window management group (directly below top group)
         {
             if has_active {
-                for btn in self.window_management_buttons() {
+                let raw_title = self.window_title(focused);
+                let title = if raw_title.chars().count() > 25 {
+                    format!("{}…", raw_title.chars().take(22).collect::<String>())
+                } else {
+                    raw_title
+                };
+                let super_key = self
+                    .keybindings()
+                    .combos_for(crate::actions::TermWmAction::OpenCommandPalette)
+                    .first()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "Super".to_string());
+
+                // Send SUPER key to window
+                items.push(MenuDisplayItem::Item(MenuItem {
+                    label: format!("Send {} to {}", super_key, title).into(),
+                    icon: Some("S"),
+                    action: crate::actions::TermWmAction::SendCommandPaletteKeyToWindow(
+                        focused,
+                    ),
+                    disabled: false,
+                }));
+
+                // Close window
+                items.push(MenuDisplayItem::Item(MenuItem {
+                    label: format!("Close {}", title).into(),
+                    icon: Some("X"),
+                    action: crate::actions::TermWmAction::CloseWindow(focused),
+                    disabled: false,
+                }));
+
+                // Maximize / Restore
+                let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized());
+                if !self.is_monocle() {
                     items.push(MenuDisplayItem::Item(MenuItem {
-                        label: btn.label.into(),
-                        icon: Some(btn.symbol),
-                        action: btn.action,
+                        label: (if is_maxed {
+                            format!("Restore {}", title)
+                        } else {
+                            format!("Maximize {}", title)
+                        })
+                        .into(),
+                        icon: Some(if is_maxed { "─" } else { "▢" }),
+                        action: crate::actions::TermWmAction::MaximizeWindow(focused),
+                        disabled: false,
+                    }));
+                    items.push(MenuDisplayItem::Item(MenuItem {
+                        label: format!("Minimize {}", title).into(),
+                        icon: Some("_"),
+                        action: crate::actions::TermWmAction::MinimizeWindow(focused),
                         disabled: false,
                     }));
                 }
-                for (key, title) in self.window_titles() {
+
+                // Switch to windows
+                for (key, switch_title) in self.window_titles() {
                     items.push(MenuDisplayItem::Item(MenuItem {
-                        label: format!("Switch to: {}", title).into(),
+                        label: format!("Switch to: {}", switch_title).into(),
                         icon: Some("→"),
                         action: crate::actions::TermWmAction::FocusWindow(key),
                         disabled: key == focused,
