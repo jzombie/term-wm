@@ -2833,7 +2833,7 @@ mod tests {
 
         let mut render_fn = |area: LayoutRect, ctx: &ComponentContext| {
             let rect = crate::helpers::layout_rect_to_clipped_rect(area);
-            let mut buffer = ratatui::buffer::Buffer::empty(rect);
+            let buffer = ratatui::buffer::Buffer::empty(rect);
             let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, rect);
             let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
             term.render(&mut backend, area, ctx, &mut registry);
