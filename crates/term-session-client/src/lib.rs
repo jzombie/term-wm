@@ -17,10 +17,6 @@ use crossterm::terminal::{
 use muxio_tokio_mpsc_adapter::ChannelCallerExt;
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient, RpcServiceCallerInterface};
 use portable_pty::PtySize;
-use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::Clear;
 use term_session_muxio_service_definitions::{
     STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
 };
@@ -173,7 +169,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     let (term_cols, term_rows) = crossterm::terminal::size()?;
 
     // Spawn session on the server, get the actual constrained size
-    let (_id, mut live_cols, mut live_rows) = rt.block_on(async {
+    let _id = rt.block_on(async {
         Spawn::call(&*client, (None, term_cols, term_rows))
             .await
             .map_err(|e| io::Error::other(format!("spawn: {e:?}")))
@@ -265,12 +261,10 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     // Pass one stdout handle to init_terminal for the startup sequences
     // and TerminalGuard teardown; keep a second handle for rendering.
     let _guard = init_terminal(stdout())?;
-    let mut stdout = stdout();
+    let mut out = stdout();
 
     let mut clipboard = Clipboard::new();
     let sigint = install_sigint_handler()?;
-    let mut terminal = Terminal::new(CrosstermBackend::new(&mut stdout))
-        .map_err(|e| io::Error::other(format!("terminal: {e}")))?;
 
     // Channel for crossterm input events from a background thread
     let (input_tx, input_rx) = crossbeam_channel::bounded::<Event>(INPUT_CHANNEL_CAPACITY);
@@ -298,15 +292,18 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         })
         .map_err(|e| io::Error::other(format!("spawn input thread: {e}")))?;
 
-    // Initial render
-    terminal
-        .draw(|f| {
-            let area = f.area();
-            let parser = pane.shared_parser();
-            let parser = parser.lock().unwrap();
-            render_centered(f, area, &parser, live_cols, live_rows);
-        })
-        .map_err(|e| io::Error::other(format!("initial draw: {e}")))?;
+    // Initial full-screen render (raw ANSI via vt100)
+    {
+        let parser = pane.shared_parser();
+        let parser = parser.lock().unwrap();
+        let screen = parser.screen();
+        let data = screen.contents_formatted();
+        out.write_all(&data)?;
+        out.flush()?;
+    }
+
+    let mut prev_content: Option<Vec<u8>> = None;
+    let mut prev_parser: Option<vt100::Parser> = None;
 
     loop {
         // Block until either user input or PTY output arrives (0 CPU when idle)
@@ -411,13 +408,8 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                         pixel_width: 0,
                         pixel_height: 0,
                     };
+                    prev_content = None;
                     let _ = pane.resize(size);
-                    // Read actual constrained size from parser (set by
-                    // RemotePane::resize() using the ResizePty RPC response).
-                    let parser = pane.shared_parser();
-                    let parser = parser.lock().unwrap();
-                    live_cols = parser.screen().size().1;
-                    live_rows = parser.screen().size().0;
                 }
                 Event::Paste(text) => {
                     let mut wrapped = Vec::with_capacity(text.len() + 12);
@@ -435,77 +427,35 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             return Err(io::Error::other("connection to session server lost"));
         }
 
-        // Ratatui-based render with centered projection
-        if has_new_data {
-            terminal
-                .draw(|f| {
-                    let area = f.area();
-                    let parser = pane.shared_parser();
-                    let parser = parser.lock().unwrap();
-                    render_centered(f, area, &parser, live_cols, live_rows);
-                })
-                .map_err(|e| io::Error::other(format!("draw: {e}")))?;
+        // Diff-based incremental render (raw ANSI via vt100)
+        if has_new_data || prev_content.is_none() {
+            let parser = pane.shared_parser();
+            let parser = parser.lock().unwrap();
+            let screen = parser.screen();
+            let (rows, cols) = screen.size();
+
+            let diff = match &prev_content {
+                Some(prev) => {
+                    let p = prev_parser.get_or_insert_with(|| vt100::Parser::new(rows, cols, 0));
+                    p.screen_mut().set_size(rows, cols);
+                    p.process(b"\x1bc");
+                    p.process(prev);
+                    screen.contents_diff(p.screen())
+                }
+                None => screen.contents_formatted(),
+            };
+
+            if !diff.is_empty() {
+                out.write_all(&diff)?;
+                out.flush()?;
+            }
+
+            prev_content = Some(screen.contents_formatted());
         }
 
         // Exit on session exit
         if pane.has_exited() {
             return Ok(());
-        }
-    }
-}
-
-/// Render the vt100 parser content centered within the given area.
-///
-/// Maps vt100 cell attributes to Ratatui styles and writes each cell
-/// at the correct offset position in the frame buffer.
-fn render_centered(
-    f: &mut ratatui::Frame,
-    area: ratatui::layout::Rect,
-    parser: &vt100::Parser,
-    parser_cols: u16,
-    parser_rows: u16,
-) {
-    let render_w = parser_cols.min(area.width);
-    let render_h = parser_rows.min(area.height);
-    let offset_x = (area.width - render_w) / 2;
-    let offset_y = (area.height - render_h) / 2;
-
-    // Clear dead space
-    f.render_widget(Clear, area);
-
-    let buf = f.buffer_mut();
-    let screen = parser.screen();
-
-    for row in 0u16..render_h {
-        for col in 0u16..render_w {
-            let Some(cell) = screen.cell(row, col) else { continue; };
-            let Some(ratatui_cell) = buf.cell_mut((offset_x + col, offset_y + row)) else { continue; };
-
-            let mut style = Style::default();
-
-            // Foreground
-            match cell.fgcolor() {
-                vt100::Color::Default => {}
-                vt100::Color::Idx(n) => style = style.fg(Color::Indexed(n)),
-                vt100::Color::Rgb(r, g, b) => style = style.fg(Color::Rgb(r, g, b)),
-            }
-            // Background
-            match cell.bgcolor() {
-                vt100::Color::Default => {}
-                vt100::Color::Idx(n) => style = style.bg(Color::Indexed(n)),
-                vt100::Color::Rgb(r, g, b) => style = style.bg(Color::Rgb(r, g, b)),
-            }
-
-            let mut modifier = Modifier::empty();
-            if cell.bold() { modifier |= Modifier::BOLD; }
-            if cell.italic() { modifier |= Modifier::ITALIC; }
-            if cell.underline() { modifier |= Modifier::UNDERLINED; }
-            if cell.inverse() { modifier |= Modifier::REVERSED; }
-            if cell.dim() { modifier |= Modifier::DIM; }
-            style = style.add_modifier(modifier);
-
-            ratatui_cell.set_style(style);
-            ratatui_cell.set_symbol(cell.contents());
         }
     }
 }
