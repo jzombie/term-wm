@@ -132,7 +132,11 @@ fn dispatch_action<
             }
         }
         TermWmAction::SendSuperKeyToFocusedWindow => {
-            if let Some(combo) = app.wm().keybindings().first_combo(TermWmAction::OpenCommandPalette) {
+            if let Some(combo) = app
+                .wm()
+                .keybindings()
+                .first_combo(TermWmAction::OpenCommandPalette)
+            {
                 let bytes =
                     KeyEvent::new(combo.code, combo.mods, KeyKind::Press).to_pty_bytes(false);
                 if !bytes.is_empty() {
@@ -488,7 +492,13 @@ where
                     if !app.wm().command_palette_visible() {
                         app.open_command_palette();
                         update_selection_snapshot(app);
-                        return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
+                        return flush_state_changes(
+                            app,
+                            driver,
+                            ControlFlow::Continue,
+                            false,
+                            None,
+                        );
                     }
                 }
 
@@ -559,14 +569,27 @@ where
                         // SendSuperKeyToFocusedWindow is bound in the CommandPalette layer.
                         // Only intercept it specifically — not FocusNext/FocusPrev (Tab/Shift+Tab),
                         // which need to reach handle_focus_event below.
-                        if app.wm().keybindings().matches(TermWmAction::SendSuperKeyToFocusedWindow, key) {
+                        if app
+                            .wm()
+                            .keybindings()
+                            .matches(TermWmAction::SendSuperKeyToFocusedWindow, key)
+                        {
                             let focused_key = app.wm().focused_window();
                             let mut actions = std::collections::VecDeque::new();
-                            actions.push_back((focused_key, TermWmAction::SendSuperKeyToFocusedWindow));
+                            actions.push_back((
+                                focused_key,
+                                TermWmAction::SendSuperKeyToFocusedWindow,
+                            ));
                             drain_action_queue(app, &mut actions);
                             app.wm().close_command_palette();
                             update_selection_snapshot(app);
-                            return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
+                            return flush_state_changes(
+                                app,
+                                driver,
+                                ControlFlow::Continue,
+                                false,
+                                None,
+                            );
                         }
                     }
                     // Focus routing while menu is open (Tab/Shift+Tab)
