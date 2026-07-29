@@ -462,26 +462,26 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
             if needs_vertical {
                 if content_h <= inner_area.height as usize {
                     needs_vertical = false;
-                    attempt = 0;
+                    attempt += 1;
                     continue;
                 }
             } else {
                 if inner_area.height > 0 && content_h > inner_area.height as usize {
                     needs_vertical = true;
-                    attempt = 0;
+                    attempt += 1;
                     continue;
                 }
             }
             if needs_horizontal {
                 if content_w <= inner_area.width as usize {
                     needs_horizontal = false;
-                    attempt = 0;
+                    attempt += 1;
                     continue;
                 }
             } else {
                 if inner_area.width > 0 && content_w > inner_area.width as usize {
                     needs_horizontal = true;
-                    attempt = 0;
+                    attempt += 1;
                     continue;
                 }
             }

@@ -1738,29 +1738,22 @@ mod tests {
     }
 
     #[test]
-    fn shrink_grid_preserves_bottom_rows() {
+    fn vt100_set_size_truncates_bottom_rows() {
+        // Non-zero scrollback capacity (200) proves the limitation:
+        // vt100 truncates viewport rows instead of pushing them into scrollback.
         let mut parser = vt100::Parser::new(30, 80, 200);
 
         for i in 0..30 {
-            parser.process(format!("line {i}
-").as_bytes());
+            parser.process(format!("line {}\r\n", i).as_bytes());
         }
         parser.process(b"BOTTOMLINE");
 
-        // Shrink viewport from 30 to 24
         parser.screen_mut().set_size(24, 80);
 
-        // Scrollback should have grown (delta = 6 rows moved to scrollback)
-        parser.screen_mut().set_scrollback(usize::MAX);
-        let sb = parser.screen().scrollback();
-        assert!(sb >= 6, "at least 6 rows in scrollback after shrink");
-
-        // Reset to bottom and verify bottom content is visible
-        parser.screen_mut().set_scrollback(0);
         let visible = parser.screen().contents();
         assert!(
-            visible.contains("BOTTOMLINE"),
-            "bottom content must be visible after shrink"
+            !visible.contains("BOTTOMLINE"),
+            "vt100 0.16.2 drops bottom rows on shrink (known limitation)"
         );
         assert_eq!(
             parser.screen().size(),
