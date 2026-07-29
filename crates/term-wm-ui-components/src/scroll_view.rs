@@ -1561,4 +1561,28 @@ mod tests {
         let inner = sv.compute_layout(area, true, false);
         assert_eq!(inner.width, 79);
     }
+
+    #[test]
+    fn scrollbar_off_transition_when_content_fits() {
+        let mut sv = ScrollViewComponent::new(
+            term_wm_core::window::test_component::ActionRecorder::default(),
+        );
+        let area = LayoutRect { x: 0, y: 0, width: 80, height: 10 };
+        let ctx = term_wm_core::components::ComponentContext::new(true);
+
+        sv.scroll_state.borrow_mut().last_needs_vertical = true;
+        sv.scroll_state.borrow_mut().content_width = 80;
+        sv.scroll_state.borrow_mut().content_height = 9;
+
+        let rect = crate::helpers::layout_rect_to_clipped_rect(area);
+        let buffer = ratatui::buffer::Buffer::empty(rect);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, rect);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        sv.render(&mut backend, area, &ctx, &mut registry);
+
+        assert!(
+            !sv.scroll_state.borrow().last_needs_vertical,
+            "ScrollViewComponent::render() must flip scrollbar OFF when content fits at W-1"
+        );
+    }
 }
