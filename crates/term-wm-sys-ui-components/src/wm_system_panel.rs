@@ -12,11 +12,11 @@ use term_wm_core::events::{Event, KeyCode, KeyEvent};
 use term_wm_core::impl_component_delegate;
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
+use term_wm_ui_components::helpers::{downcast_ratatui, layout_rect_to_clipped_rect};
 use term_wm_ui_components::{
     ButtonComponent, CanvasScrollView, CanvasSizingPolicy, LabelComponent, ScrollViewComponent,
     VerticalStackComponent,
 };
-use term_wm_ui_components::helpers::{downcast_ratatui, layout_rect_to_clipped_rect};
 
 /// Local enum wrapping all child types used in the system panel stack.
 #[derive(Clone)]
@@ -25,6 +25,7 @@ enum PanelChild {
     Button(ButtonComponent),
     Spacer(SpacerComponent),
     KeyMonitor(KeyMonitorComponent),
+    Separator(SeparatorComponent),
 }
 
 impl_component_delegate!(PanelChild {
@@ -32,6 +33,7 @@ impl_component_delegate!(PanelChild {
     Button,
     Spacer,
     KeyMonitor,
+    Separator,
 });
 
 /// A system panel with utility buttons, built from declarative components.
@@ -56,9 +58,8 @@ fn build_scroll_view(
 impl WmSystemPanelComponent {
     pub fn new() -> Self {
         let children = vec![
-            PanelChild::Label(
-                LabelComponent::new("Notification test panel").with_color(Color::DarkGray),
-            ),
+            PanelChild::Spacer(SpacerComponent::new(1)),
+            PanelChild::Separator(SeparatorComponent::new()),
             PanelChild::Spacer(SpacerComponent::new(1)),
             PanelChild::Label(
                 LabelComponent::new("Click below to send a test toast:")
@@ -70,9 +71,9 @@ impl WmSystemPanelComponent {
                 TermWmAction::SendNotification("Hello from System Panel!".to_string()),
             )),
             PanelChild::Spacer(SpacerComponent::new(1)),
-            PanelChild::Label(
-                LabelComponent::new("Debug utilities:").with_color(Color::DarkGray),
-            ),
+            PanelChild::Separator(SeparatorComponent::new()),
+            PanelChild::Spacer(SpacerComponent::new(1)),
+            PanelChild::Label(LabelComponent::new("Debug utilities:").with_color(Color::DarkGray)),
             PanelChild::Spacer(SpacerComponent::new(1)),
             PanelChild::Button(ButtonComponent::new(
                 "  Trigger Panic  ",
@@ -80,20 +81,21 @@ impl WmSystemPanelComponent {
             )),
         ];
         let scroll_view = build_scroll_view(children.clone());
-        Self { children, scroll_view }
+        Self {
+            children,
+            scroll_view,
+        }
     }
 
     /// Attach a key-monitor applet that displays the most recently pressed key.
     /// The shared `state` is populated externally (e.g. by the event loop).
-    pub fn with_key_monitor(
-        mut self,
-        state: Rc<RefCell<Option<KeyEvent>>>,
-    ) -> Self {
-        self.children.insert(0, PanelChild::Spacer(SpacerComponent::new(1)));
-        self.children.insert(0, PanelChild::KeyMonitor(KeyMonitorComponent::new(state)));
-        self.children.insert(0, PanelChild::Label(
-            LabelComponent::new("Last key pressed:").with_color(Color::DarkGray),
-        ));
+    pub fn with_key_monitor(mut self, state: Rc<RefCell<Option<KeyEvent>>>) -> Self {
+        self.children
+            .insert(0, PanelChild::KeyMonitor(KeyMonitorComponent::new(state)));
+        self.children
+            .insert(0, PanelChild::Separator(SeparatorComponent::new()));
+        self.children
+            .insert(0, PanelChild::Spacer(SpacerComponent::new(1)));
         self.scroll_view = build_scroll_view(self.children.clone());
         self
     }
@@ -232,12 +234,66 @@ impl Component<TermWmAction> for KeyMonitorComponent {
             .as_ref()
             .map(format_key_event)
             .unwrap_or_else(|| "—".to_string());
-        let text = format!("Key: {}", display);
         let rect = layout_rect_to_clipped_rect(area);
         let backend = downcast_ratatui(backend);
+        let line = Line::from(vec![
+            Span::raw("Last key pressed: "),
+            Span::styled(display, Style::default().fg(Color::Cyan)),
+        ]);
+        let para = Paragraph::new(line);
+        para.render(rect, &mut backend.buffer);
+    }
+
+    fn handle_events(
+        &mut self,
+        _event: &Event,
+        _ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
+        EventResult::Ignored
+    }
+
+    fn update(
+        &mut self,
+        _action: TermWmAction,
+        _ctx: &ComponentContext,
+        _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+    ) {
+    }
+
+    fn destroy(&mut self) {}
+}
+
+/// A horizontal separator line drawn across the full width.
+#[derive(Clone)]
+struct SeparatorComponent;
+
+impl SeparatorComponent {
+    fn new() -> Self {
+        Self
+    }
+}
+
+impl Component<TermWmAction> for SeparatorComponent {
+    fn desired_height(&self, _width: u16) -> u16 {
+        1
+    }
+
+    fn render(
+        &mut self,
+        backend: &mut dyn term_wm_render::RenderBackend,
+        area: LayoutRect,
+        _ctx: &ComponentContext,
+        _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+    ) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        let rect = layout_rect_to_clipped_rect(area);
+        let backend = downcast_ratatui(backend);
+        let line = "─".repeat(area.width as usize);
         let para = Paragraph::new(Line::from(Span::styled(
-            text,
-            Style::default().fg(Color::Cyan),
+            line,
+            Style::default().fg(Color::DarkGray),
         )));
         para.render(rect, &mut backend.buffer);
     }
@@ -549,11 +605,7 @@ mod tests {
 
     #[test]
     fn format_key_event_plain_char() {
-        let key = KeyEvent::new(
-            KeyCode::Char('x'),
-            KeyModifiers::NONE,
-            KeyKind::Press,
-        );
+        let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE, KeyKind::Press);
         assert_eq!(format_key_event(&key), "x");
     }
 
