@@ -27,6 +27,7 @@ members = [
     "crates/term-wm-sys-ui-components",
     "crates/term-wm-ui-components",
     "crates/term-wm-ui-facade",
+    "crates/term-resize-indicator",
 ]
 resolver = "2"
 
