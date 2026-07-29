@@ -584,7 +584,7 @@ mod markdown_tests {
             with_scroll = backend.buffer;
         }
 
-        let viewport = scroll.compute_layout(layout_area, false, false);
+        let viewport = scroll.compute_layout(layout_area, true, false);
         assert_eq!(
             viewport.width + 1,
             area.width,
