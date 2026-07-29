@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen, SetSize};
+use crossterm::terminal::{self, DisableLineWrap, EnableLineWrap, EnterAlternateScreen, LeaveAlternateScreen, SetSize};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -42,7 +42,7 @@ struct App {
 pub fn run(initial_lock: Option<Size>) -> std::io::Result<()> {
     terminal::enable_raw_mode()?;
     let mut stdout = std::io::stdout();
-    crossterm::execute!(stdout, EnterAlternateScreen)?;
+    crossterm::execute!(stdout, EnterAlternateScreen, DisableLineWrap)?;
 
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -65,7 +65,7 @@ pub fn run(initial_lock: Option<Size>) -> std::io::Result<()> {
 
     let res = run_loop(&mut terminal, &mut app);
 
-    let _ = crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    let _ = crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen, EnableLineWrap);
     let _ = terminal::disable_raw_mode();
 
     res
@@ -164,16 +164,8 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool
 
     let buf = f.buffer_mut();
 
-    // Bottom-right cell — writing here triggers VT100 DECAWM auto-wrap hardware
-    // scroll.  Exclude it from all rendering to keep the buffer in sync.
-    let br_x = full.right().saturating_sub(1);
-    let br_y = full.bottom().saturating_sub(1);
-
     for y in full.top()..full.bottom() {
         for x in full.left()..full.right() {
-            if x == br_x && y == br_y {
-                continue;
-            }
             if let Some(cell) = buf.cell_mut((x, y)) {
                 cell.set_style(bg_style);
                 cell.set_symbol(" ");
@@ -196,11 +188,7 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool
     let y_hi = (by + bh).min(full.bottom() as i32);
 
     // Helper to draw a box-drawing character at a buffer cell if in range.
-    // Skips the bottom-right cell to avoid VT100 DECAWM auto-wrap scroll.
     let set_cell = |buf: &mut ratatui::buffer::Buffer, x: i32, y: i32, ch: char| {
-        if x == br_x as i32 && y == br_y as i32 {
-            return;
-        }
         if x >= full.left() as i32 && x < full.right() as i32
             && y >= full.top() as i32 && y < full.bottom() as i32
             && let Some(cell) = buf.cell_mut((x as u16, y as u16))
@@ -264,7 +252,6 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool
     for (i, ch) in label.chars().enumerate() {
         let cx = text_x.saturating_add(i as u16);
         if cx >= max_x { break; }
-        if cx == br_x && text_y == br_y { continue; }
         let Some(cell) = buf.cell_mut((cx, text_y)) else { continue; };
         let mut s = [0u8; 4];
         let s = ch.encode_utf8(&mut s);
