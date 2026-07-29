@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen, SetSize};
 use ratatui::backend::CrosstermBackend;
@@ -30,8 +32,11 @@ enum Mode {
 struct App {
     mode: Mode,
     /// Current live terminal dimensions (updated on every Resize event).
-    /// In locked mode this gets immediately snapped back to the locked size.
+    /// In locked mode this tracks actual size; SetSize is deferred via pending_snap.
     live_size: Size,
+    /// When armed, the SetSize command will fire after this instant elapses.
+    /// Reset on each new Resize event to implement debounce.
+    pending_snap: Option<Instant>,
 }
 
 pub fn run(initial_lock: Option<Size>) -> std::io::Result<()> {
@@ -48,11 +53,13 @@ pub fn run(initial_lock: Option<Size>) -> std::io::Result<()> {
         App {
             mode: Mode::Locked(size),
             live_size: Size::new(current.0, current.1),
+            pending_snap: None,
         }
     } else {
         App {
             mode: Mode::Interactive,
             live_size: Size::new(current.0, current.1),
+            pending_snap: None,
         }
     };
 
@@ -69,6 +76,20 @@ fn run_loop(
     app: &mut App,
 ) -> std::io::Result<()> {
     loop {
+        // Fire deferred SetSize if debounce timer has elapsed
+        if let Some(snap_time) = app.pending_snap {
+            if Instant::now() >= snap_time {
+                app.pending_snap = None;
+                if let Mode::Locked(locked) = app.mode {
+                    let _ = crossterm::execute!(
+                        terminal.backend_mut(),
+                        SetSize(locked.width, locked.height)
+                    );
+                    app.live_size = locked;
+                }
+            }
+        }
+
         terminal.draw(|f| {
             let area = f.area();
             let dim = app.live_size;
@@ -76,14 +97,17 @@ fn run_loop(
             draw_overlay(f, area, dim.width, dim.height, locked);
         })?;
 
-        if !event::poll(std::time::Duration::from_millis(100))? {
+        if !event::poll(std::time::Duration::from_millis(50))? {
             continue;
         }
 
         match event::read()? {
-            Event::Resize(w, h) => on_resize(app, terminal, w, h),
+            Event::Resize(w, h) => on_resize(app, w, h),
             Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                KeyCode::Char('l' | 'L') => toggle_lock(app),
+                KeyCode::Char('l' | 'L') => {
+                    app.pending_snap = None;
+                    toggle_lock(app);
+                }
                 KeyCode::Char('q' | 'Q') | KeyCode::Esc => break,
                 KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => break,
                 _ => {}
@@ -94,16 +118,13 @@ fn run_loop(
     Ok(())
 }
 
-fn on_resize(
-    app: &mut App,
-    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
-    w: u16,
-    h: u16,
-) {
+fn on_resize(app: &mut App, w: u16, h: u16) {
     app.live_size = Size::new(w, h);
-    if let Mode::Locked(locked) = app.mode {
-        let _ = crossterm::execute!(terminal.backend_mut(), SetSize(locked.width, locked.height));
-        app.live_size = locked;
+    if matches!(app.mode, Mode::Locked(_)) {
+        // Defer SetSize — arm the debounce timer.
+        // Every new resize event pushes the deadline forward, so SetSize
+        // only fires after 250ms of silence from the OS window manager.
+        app.pending_snap = Some(Instant::now() + std::time::Duration::from_millis(250));
     }
 }
 
@@ -143,8 +164,16 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool
 
     let buf = f.buffer_mut();
 
+    // Bottom-right cell — writing here triggers VT100 DECAWM auto-wrap hardware
+    // scroll.  Exclude it from all rendering to keep the buffer in sync.
+    let br_x = full.right().saturating_sub(1);
+    let br_y = full.bottom().saturating_sub(1);
+
     for y in full.top()..full.bottom() {
         for x in full.left()..full.right() {
+            if x == br_x && y == br_y {
+                continue;
+            }
             if let Some(cell) = buf.cell_mut((x, y)) {
                 cell.set_style(bg_style);
                 cell.set_symbol(" ");
@@ -154,8 +183,9 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool
 
     // Border position in i32 — no .max(0) clamping.  Parts that extend beyond
     // the terminal boundaries simply won't have buffer cells to draw to.
-    let bx = full.left() as i32 + full.width as i32 / 2 - w as i32 / 2;
-    let by = full.top() as i32 + full.height as i32 / 2 - h as i32 / 2;
+    // Use exact signed centering: (full - w) / 2 to avoid truncation asymmetry.
+    let bx = full.left() as i32 + (full.width as i32 - w as i32) / 2;
+    let by = full.top() as i32 + (full.height as i32 - h as i32) / 2;
     let bw = w as i32;
     let bh = h as i32;
 
@@ -165,8 +195,12 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool
     let y_lo = by.max(full.top() as i32);
     let y_hi = (by + bh).min(full.bottom() as i32);
 
-    // Helper to draw a box-drawing character at a buffer cell if in range
+    // Helper to draw a box-drawing character at a buffer cell if in range.
+    // Skips the bottom-right cell to avoid VT100 DECAWM auto-wrap scroll.
     let set_cell = |buf: &mut ratatui::buffer::Buffer, x: i32, y: i32, ch: char| {
+        if x == br_x as i32 && y == br_y as i32 {
+            return;
+        }
         if x >= full.left() as i32 && x < full.right() as i32
             && y >= full.top() as i32 && y < full.bottom() as i32
         {
@@ -229,8 +263,9 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool
     let max_x = full.right();
 
     for (i, ch) in label.chars().enumerate() {
-        let cx = text_x + i as u16;
+        let cx = text_x.saturating_add(i as u16);
         if cx >= max_x { break; }
+        if cx == br_x && text_y == br_y { continue; }
         let Some(cell) = buf.cell_mut((cx, text_y)) else { continue; };
         let mut s = [0u8; 4];
         let s = ch.encode_utf8(&mut s);
