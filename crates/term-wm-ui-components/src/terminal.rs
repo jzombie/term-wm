@@ -1198,7 +1198,8 @@ impl TestPane {
 
 #[cfg(test)]
 impl Pane for TestPane {
-    fn resize(&mut self, _size: PtySize) -> term_wm_pty_engine::PtyResult<()> {
+    fn resize(&mut self, size: PtySize) -> term_wm_pty_engine::PtyResult<()> {
+        self.set_parser_size(size.rows, size.cols);
         Ok(())
     }
 
@@ -1303,6 +1304,8 @@ mod tests {
                 pending_offset_x: None,
                 pending_offset_y: None,
                 sticky_bottom: false,
+                last_needs_vertical: false,
+                last_needs_horizontal: false,
             },
         ));
         (
@@ -2636,6 +2639,8 @@ mod tests {
                 pending_offset_x: None,
                 pending_offset_y: None,
                 sticky_bottom: false,
+                last_needs_vertical: false,
+                last_needs_horizontal: false,
             },
         ));
         let handle = ScrollHandle {
@@ -2667,6 +2672,8 @@ mod tests {
                 pending_offset_x: None,
                 pending_offset_y: None,
                 sticky_bottom: false,
+                last_needs_vertical: false,
+                last_needs_horizontal: false,
             },
         ));
         let handle = ScrollHandle {
@@ -2796,5 +2803,68 @@ mod tests {
         );
         assert_eq!(term.pane_mut().scrollback(), 0, "scrollback at bottom");
         assert!(!term.last_mode_suppressed_scroll(), "suppress flag cleared");
+    }
+
+    #[test]
+    fn shrink_then_expand_no_duplication() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        let area30 = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 30,
+        };
+        let area24 = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let (handle, _shared) = make_handle();
+        let ctx30 = ComponentContext::new(true).with_viewport(
+            term_wm_core::component_context::ScrollViewport {
+                offset_x: 0,
+                offset_y: 0,
+                width: 80,
+                height: 30,
+            },
+            Some(handle.clone()),
+        );
+        let ctx24 = ComponentContext::new(true).with_viewport(
+            term_wm_core::component_context::ScrollViewport {
+                offset_x: 0,
+                offset_y: 0,
+                width: 80,
+                height: 24,
+            },
+            Some(handle.clone()),
+        );
+
+        let mut pane = term.pane.borrow_mut();
+        for i in 0..30 {
+            pane.write_bytes(format!("line {}\r\n", i).as_bytes()).ok();
+        }
+        pane.write_bytes(b"DUPLICHECK").ok();
+        drop(pane);
+
+        let mut render_fn = |area: LayoutRect, ctx: &ComponentContext| {
+            let rect = crate::helpers::layout_rect_to_clipped_rect(area);
+            let buffer = ratatui::buffer::Buffer::empty(rect);
+            let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, rect);
+            let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+            term.render(&mut backend, area, ctx, &mut registry);
+        };
+        render_fn(area30, &ctx30);
+        render_fn(area24, &ctx24);
+        render_fn(area30, &ctx30);
+
+        let pane = term.pane_mut();
+        let shared_parser = pane.shared_parser();
+        let parser = shared_parser.lock().unwrap();
+        let count = parser.screen().contents().matches("DUPLICHECK").count();
+        assert!(
+            count < 2,
+            "marker must not be duplicated (got {count} occurrences, expected 0 or 1)"
+        );
     }
 }
