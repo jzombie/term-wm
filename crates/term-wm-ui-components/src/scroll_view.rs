@@ -1535,4 +1535,20 @@ mod tests {
         let r2 = Component::<TermWmAction>::take_alternate_screen_transition(&mut sv);
         assert_eq!(r2, None);
     }
+
+    #[test]
+    fn scrollbar_persistent_state_tracks_overflow() {
+        let sv = ScrollViewComponent::new(
+            term_wm_core::window::test_component::ActionRecorder::default()
+        );
+        let area = LayoutRect { x: 0, y: 0, width: 80, height: 10 };
+
+        assert!(!sv.scroll_state.borrow().last_needs_vertical);
+
+        let inner = sv.compute_layout(area, false, false);
+        assert_eq!(inner.width, 80);
+
+        let inner = sv.compute_layout(area, true, false);
+        assert_eq!(inner.width, 79);
+    }
 }

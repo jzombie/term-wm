@@ -2804,4 +2804,58 @@ mod tests {
         assert_eq!(term.pane_mut().scrollback(), 0, "scrollback at bottom");
         assert!(!term.last_mode_suppressed_scroll(), "suppress flag cleared");
     }
+
+    #[test]
+    fn shrink_then_expand_no_duplication() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        let area30 = LayoutRect { x: 0, y: 0, width: 80, height: 30 };
+        let area24 = LayoutRect { x: 0, y: 0, width: 80, height: 24 };
+        let (handle, shared) = make_handle();
+        let ctx30 = crate::components::ComponentContext::new(true).with_viewport(
+            term_wm_core::component_context::ScrollViewport {
+                offset_x: 0, offset_y: 0, width: 80, height: 30
+            },
+            Some(handle.clone()),
+        );
+        let ctx24 = crate::components::ComponentContext::new(true).with_viewport(
+            term_wm_core::component_context::ScrollViewport {
+                offset_x: 0, offset_y: 0, width: 80, height: 24
+            },
+            Some(handle.clone()),
+        );
+
+        let mut pane = term.pane.borrow_mut();
+        for i in 0..30 {
+            pane.write_bytes(format!("line {i}
+").as_bytes()).ok();
+        }
+        pane.write_bytes(b"BOTTOMMARKER").ok();
+        drop(pane);
+
+        // Render at 30, shrink to 24, expand back to 30
+        let mut render_term = |area: LayoutRect, ctx: &crate::components::ComponentContext| {
+            let rect = crate::helpers::layout_rect_to_clipped_rect(area);
+            let mut buffer = ratatui::buffer::Buffer::empty(rect);
+            let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, rect);
+            let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new(area);
+            term.render(&mut backend, area, ctx, &mut registry);
+        };
+        render_term(area30, &ctx30);
+        render_term(area24, &ctx24);
+        render_term(area30, &ctx30);
+
+        let pane = term.pane.borrow();
+        let parser = pane.shared_parser().lock().unwrap();
+        let contents = parser.screen().contents();
+
+        assert_eq!(
+            contents.matches("BOTTOMMARKER").count(),
+            1,
+            "bottom marker must not be duplicated after shrink+expand"
+        );
+        assert!(
+            contents.trim_end().ends_with("BOTTOMMARKER"),
+            "bottom marker must be at the last line of content"
+        );
+    }
 }
