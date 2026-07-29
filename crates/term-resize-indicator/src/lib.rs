@@ -1,11 +1,11 @@
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen, SetSize};
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Paragraph, Widget};
 use ratatui::Terminal;
 
+/// Dark background to distinguish the overlay from normal terminal content.
 const BG: Color = Color::Rgb(20, 20, 48);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +20,8 @@ impl Size {
     }
 }
 
+/// Only two modes: unlocked (interactive) and locked.
+/// Both viewers see the same session, so they always see identical output.
 enum Mode {
     Interactive,
     Locked(Size),
@@ -27,7 +29,9 @@ enum Mode {
 
 struct App {
     mode: Mode,
-    last_size: Size,
+    /// Current live terminal dimensions (updated on every Resize event).
+    /// In locked mode this gets immediately snapped back to the locked size.
+    live_size: Size,
 }
 
 pub fn run(initial_lock: Option<Size>) -> std::io::Result<()> {
@@ -43,12 +47,12 @@ pub fn run(initial_lock: Option<Size>) -> std::io::Result<()> {
         let _ = crossterm::execute!(terminal.backend_mut(), SetSize(size.width, size.height));
         App {
             mode: Mode::Locked(size),
-            last_size: Size::new(current.0, current.1),
+            live_size: Size::new(current.0, current.1),
         }
     } else {
         App {
             mode: Mode::Interactive,
-            last_size: Size::new(current.0, current.1),
+            live_size: Size::new(current.0, current.1),
         }
     };
 
@@ -67,11 +71,9 @@ fn run_loop(
     loop {
         terminal.draw(|f| {
             let area = f.area();
-            let (disp_w, disp_h, locked) = match app.mode {
-                Mode::Locked(s) => (s.width, s.height, true),
-                Mode::Interactive => (app.last_size.width, app.last_size.height, false),
-            };
-            draw_overlay(f, area, disp_w, disp_h, locked);
+            let dim = app.live_size;
+            let locked = matches!(app.mode, Mode::Locked(_));
+            draw_overlay(f, area, dim.width, dim.height, locked);
         })?;
 
         if !event::poll(std::time::Duration::from_millis(100))? {
@@ -98,9 +100,10 @@ fn on_resize(
     w: u16,
     h: u16,
 ) {
-    app.last_size = Size::new(w, h);
+    app.live_size = Size::new(w, h);
     if let Mode::Locked(locked) = app.mode {
         let _ = crossterm::execute!(terminal.backend_mut(), SetSize(locked.width, locked.height));
+        app.live_size = locked;
     }
 }
 
@@ -108,30 +111,30 @@ fn toggle_lock(app: &mut App) {
     match app.mode {
         Mode::Interactive => {
             if let Ok((w, h)) = terminal::size() {
-                app.mode = Mode::Locked(Size::new(w, h));
+                let locked = Size::new(w, h);
+                app.live_size = locked;
+                app.mode = Mode::Locked(locked);
             }
         }
         Mode::Locked(locked) => {
-            app.last_size = locked;
+            app.live_size = locked;
             app.mode = Mode::Interactive;
         }
     }
 }
 
-fn draw_overlay(f: &mut ratatui::Frame, full: Rect, disp_w: u16, disp_h: u16, locked: bool) {
+/// Draw the full-screen overlay.
+///
+/// - Background fill (dark blue) so both viewers see a uniform canvas.
+/// - Box-drawing border (`┌─┐│└─┘`) edge-to-edge — a deliberate measured box
+///   that is visually distinct from the terminal boundary.
+/// - Centered text shows the live terminal dimensions (and lock state).
+fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool) {
     if full.width < 4 || full.height < 3 {
         return;
     }
 
-    // When locked, draw the border at the locked dimensions (centered).
-    // When interactive, draw it at the full terminal size.
-    let x = (i32::from(full.left()) + i32::from(full.width) / 2 - i32::from(disp_w) / 2)
-        .max(0) as u16;
-    let y = (i32::from(full.top()) + i32::from(full.height) / 2 - i32::from(disp_h) / 2)
-        .max(0) as u16;
-    let border = Rect { x, y, width: disp_w, height: disp_h };
-
-    let dot_style = Style::default()
+    let line_style = Style::default()
         .fg(Color::Cyan)
         .bg(BG)
         .add_modifier(Modifier::BOLD);
@@ -140,7 +143,6 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, disp_w: u16, disp_h: u16, lo
 
     let buf = f.buffer_mut();
 
-    // Fill background across the full terminal
     for y in full.top()..full.bottom() {
         for x in full.left()..full.right() {
             if let Some(cell) = buf.cell_mut((x, y)) {
@@ -150,30 +152,33 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, disp_w: u16, disp_h: u16, lo
         }
     }
 
-    // Dotted border at the border rect
-    if border.width >= 2 && border.height >= 2 {
-        for x in border.left()..border.right() {
-            if let Some(cell) = buf.cell_mut((x, border.top())) {
-                cell.set_symbol("·").set_style(dot_style);
-            }
-            if let Some(cell) = buf.cell_mut((x, border.bottom() - 1)) {
-                cell.set_symbol("·").set_style(dot_style);
-            }
-        }
-        for y in (border.top() + 1)..(border.bottom() - 1) {
-            if let Some(cell) = buf.cell_mut((border.left(), y)) {
-                cell.set_symbol("·").set_style(dot_style);
-            }
-            if let Some(cell) = buf.cell_mut((border.right() - 1, y)) {
-                cell.set_symbol("·").set_style(dot_style);
-            }
-        }
+    let x0 = full.left();
+    let x1 = full.right().saturating_sub(1);
+    let y0 = full.top();
+    let y1 = full.bottom().saturating_sub(1);
+
+    // Corners
+    if let Some(cell) = buf.cell_mut((x0, y0)) { cell.set_symbol("┌").set_style(line_style); }
+    if let Some(cell) = buf.cell_mut((x1, y0)) { cell.set_symbol("┐").set_style(line_style); }
+    if let Some(cell) = buf.cell_mut((x0, y1)) { cell.set_symbol("└").set_style(line_style); }
+    if let Some(cell) = buf.cell_mut((x1, y1)) { cell.set_symbol("┘").set_style(line_style); }
+
+    // Top and bottom edges
+    for x in (x0 + 1)..x1 {
+        if let Some(cell) = buf.cell_mut((x, y0)) { cell.set_symbol("─").set_style(line_style); }
+        if let Some(cell) = buf.cell_mut((x, y1)) { cell.set_symbol("─").set_style(line_style); }
+    }
+
+    // Left and right edges
+    for y in (y0 + 1)..y1 {
+        if let Some(cell) = buf.cell_mut((x0, y)) { cell.set_symbol("│").set_style(line_style); }
+        if let Some(cell) = buf.cell_mut((x1, y)) { cell.set_symbol("│").set_style(line_style); }
     }
 
     let label = if locked {
-        format!("{}x{}  [LOCKED]", disp_w, disp_h)
+        format!("{}x{}  [LOCKED]", w, h)
     } else {
-        format!("{}x{}", disp_w, disp_h)
+        format!("{}x{}", w, h)
     };
 
     let text_style = Style::default()
@@ -181,17 +186,20 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, disp_w: u16, disp_h: u16, lo
         .bg(BG)
         .add_modifier(Modifier::BOLD);
 
-    let inner = Rect {
-        x: border.left() + 1,
-        y: border.top() + border.height / 2,
-        width: border.width.saturating_sub(2),
-        height: 1,
-    };
-    let para = Paragraph::new(label)
-        .alignment(Alignment::Center)
-        .style(text_style);
+    let text_x = full.left() + (full.width.saturating_sub(label.len() as u16)) / 2;
+    let text_y = full.top() + full.height / 2;
+    let max_x = full.left() + full.width;
 
-    if inner.width > 0 {
-        para.render(inner, buf);
+    for (i, ch) in label.chars().enumerate() {
+        let cx = text_x + i as u16;
+        if cx >= max_x {
+            break;
+        }
+        let Some(cell) = buf.cell_mut((cx, text_y)) else {
+            continue;
+        };
+        let mut s = [0u8; 4];
+        let s = ch.encode_utf8(&mut s);
+        cell.set_symbol(s).set_style(text_style);
     }
 }
