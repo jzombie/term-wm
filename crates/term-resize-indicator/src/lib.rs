@@ -125,15 +125,11 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, disp_w: u16, disp_h: u16, lo
 
     // When locked, draw the border at the locked dimensions (centered).
     // When interactive, draw it at the full terminal size.
-    let border = if locked {
-        let x = (i32::from(full.left()) + i32::from(full.width) / 2 - i32::from(disp_w) / 2)
-            .max(0) as u16;
-        let y = (i32::from(full.top()) + i32::from(full.height) / 2 - i32::from(disp_h) / 2)
-            .max(0) as u16;
-        Rect { x, y, width: disp_w, height: disp_h }
-    } else {
-        full
-    };
+    let x = (i32::from(full.left()) + i32::from(full.width) / 2 - i32::from(disp_w) / 2)
+        .max(0) as u16;
+    let y = (i32::from(full.top()) + i32::from(full.height) / 2 - i32::from(disp_h) / 2)
+        .max(0) as u16;
+    let border = Rect { x, y, width: disp_w, height: disp_h };
 
     let dot_style = Style::default()
         .fg(Color::Cyan)
