@@ -248,6 +248,8 @@ impl KeyBindings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::actions::ActionLayer;
+    use crate::events::{KeyEvent, KeyKind};
 
     #[test]
     fn default_keybindings_is_not_empty() {
@@ -256,5 +258,16 @@ mod tests {
             !kb.combos_for(TermWmAction::CloseHelp).is_empty(),
             "CloseHelp should have at least one keybinding"
         );
+    }
+
+    #[test]
+    fn send_super_key_matches_open_command_palette() {
+        let kb = KeyBindings::default();
+        let global_combo = kb
+            .first_combo(TermWmAction::OpenCommandPalette)
+            .expect("OpenCommandPalette must have a default keybinding");
+        let test_key = KeyEvent::new(global_combo.code, global_combo.mods, KeyKind::Press);
+        let found = kb.action_for_key_in_layer(&test_key, ActionLayer::CommandPalette);
+        assert_eq!(found, Some(TermWmAction::SendSuperKeyToFocusedWindow));
     }
 }
