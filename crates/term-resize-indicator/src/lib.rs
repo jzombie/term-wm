@@ -152,27 +152,63 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool
         }
     }
 
-    let x0 = full.left();
-    let x1 = full.right().saturating_sub(1);
-    let y0 = full.top();
-    let y1 = full.bottom().saturating_sub(1);
+    // Border position in i32 — no .max(0) clamping.  Parts that extend beyond
+    // the terminal boundaries simply won't have buffer cells to draw to.
+    let bx = full.left() as i32 + full.width as i32 / 2 - w as i32 / 2;
+    let by = full.top() as i32 + full.height as i32 / 2 - h as i32 / 2;
+    let bw = w as i32;
+    let bh = h as i32;
 
-    // Corners
-    if let Some(cell) = buf.cell_mut((x0, y0)) { cell.set_symbol("┌").set_style(line_style); }
-    if let Some(cell) = buf.cell_mut((x1, y0)) { cell.set_symbol("┐").set_style(line_style); }
-    if let Some(cell) = buf.cell_mut((x0, y1)) { cell.set_symbol("└").set_style(line_style); }
-    if let Some(cell) = buf.cell_mut((x1, y1)) { cell.set_symbol("┘").set_style(line_style); }
+    // Visible region of the border intersecting the terminal buffer
+    let x_lo = bx.max(full.left() as i32);
+    let x_hi = (bx + bw).min(full.right() as i32);
+    let y_lo = by.max(full.top() as i32);
+    let y_hi = (by + bh).min(full.bottom() as i32);
 
-    // Top and bottom edges
-    for x in (x0 + 1)..x1 {
-        if let Some(cell) = buf.cell_mut((x, y0)) { cell.set_symbol("─").set_style(line_style); }
-        if let Some(cell) = buf.cell_mut((x, y1)) { cell.set_symbol("─").set_style(line_style); }
-    }
+    // Helper to draw a box-drawing character at a buffer cell if in range
+    let set_cell = |buf: &mut ratatui::buffer::Buffer, x: i32, y: i32, ch: char| {
+        if x >= full.left() as i32 && x < full.right() as i32
+            && y >= full.top() as i32 && y < full.bottom() as i32
+        {
+            if let Some(cell) = buf.cell_mut((x as u16, y as u16)) {
+                let mut s = [0u8; 4];
+                let s = ch.encode_utf8(&mut s);
+                cell.set_symbol(s).set_style(line_style);
+            }
+        }
+    };
 
-    // Left and right edges
-    for y in (y0 + 1)..y1 {
-        if let Some(cell) = buf.cell_mut((x0, y)) { cell.set_symbol("│").set_style(line_style); }
-        if let Some(cell) = buf.cell_mut((x1, y)) { cell.set_symbol("│").set_style(line_style); }
+    if x_lo < x_hi && y_lo < y_hi {
+        // Top edge
+        let ty = by;
+        if ty >= full.top() as i32 && ty < full.bottom() as i32 {
+            for x in x_lo..x_hi {
+                let ch = if x == bx { '┌' } else if x == bx + bw - 1 { '┐' } else { '─' };
+                set_cell(buf, x, ty, ch);
+            }
+        }
+        // Bottom edge
+        let ty2 = by + bh - 1;
+        if ty2 >= full.top() as i32 && ty2 < full.bottom() as i32 {
+            for x in x_lo..x_hi {
+                let ch = if x == bx { '└' } else if x == bx + bw - 1 { '┘' } else { '─' };
+                set_cell(buf, x, ty2, ch);
+            }
+        }
+        // Left edge (skip corners — already drawn above)
+        let lx = bx;
+        if lx >= full.left() as i32 && lx < full.right() as i32 {
+            for y in (by + 1).max(y_lo)..(by + bh - 1).min(y_hi) {
+                set_cell(buf, lx, y, '│');
+            }
+        }
+        // Right edge
+        let rx = bx + bw - 1;
+        if rx >= full.left() as i32 && rx < full.right() as i32 {
+            for y in (by + 1).max(y_lo)..(by + bh - 1).min(y_hi) {
+                set_cell(buf, rx, y, '│');
+            }
+        }
     }
 
     let label = if locked {
@@ -186,18 +222,16 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool
         .bg(BG)
         .add_modifier(Modifier::BOLD);
 
-    let text_x = full.left() + (full.width.saturating_sub(label.len() as u16)) / 2;
-    let text_y = full.top() + full.height / 2;
-    let max_x = full.left() + full.width;
+    // Text centered on the border rect, clamped to terminal bounds
+    let text_x = (bx + bw / 2 - label.len() as i32 / 2).max(full.left() as i32) as u16;
+    let text_y = (by + bh / 2)
+        .clamp(full.top() as i32, full.bottom().saturating_sub(1) as i32) as u16;
+    let max_x = full.right();
 
     for (i, ch) in label.chars().enumerate() {
         let cx = text_x + i as u16;
-        if cx >= max_x {
-            break;
-        }
-        let Some(cell) = buf.cell_mut((cx, text_y)) else {
-            continue;
-        };
+        if cx >= max_x { break; }
+        let Some(cell) = buf.cell_mut((cx, text_y)) else { continue; };
         let mut s = [0u8; 4];
         let s = ch.encode_utf8(&mut s);
         cell.set_symbol(s).set_style(text_style);
