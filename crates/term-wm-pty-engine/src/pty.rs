@@ -261,6 +261,16 @@ impl Pty {
         // thread cannot process post-SIGWINCH bytes against stale dimensions.
         let sp = self.shared_parser.clone();
         let mut guard = sp.lock().unwrap();
+        let old_rows = self.pty_size.rows;
+        let new_rows = size.rows;
+        if new_rows < old_rows && !self.tracker.has_custom_margins() {
+            let (cursor_row, _) = guard.screen().cursor_position();
+            if cursor_row >= new_rows {
+                let scroll_lines = cursor_row - new_rows + 1;
+                let seq = format!("[{scroll_lines}S");
+                guard.process(seq.as_bytes());
+            }
+        }
         self.master
             .resize(size)
             .map_err(|err| wrap_err("resize", err))?;
@@ -1738,27 +1748,41 @@ mod tests {
     }
 
     #[test]
-    fn vt100_set_size_truncates_bottom_rows() {
-        // Non-zero scrollback capacity (200) proves the limitation:
-        // vt100 truncates viewport rows instead of pushing them into scrollback.
+    fn cursor_bounded_shrink_preserves_bottom_when_cursor_at_bottom() {
         let mut parser = vt100::Parser::new(30, 80, 200);
-
         for i in 0..30 {
             parser.process(format!("line {}\r\n", i).as_bytes());
         }
-        parser.process(b"BOTTOMLINE");
+        parser.process(b"LASTLINE");
+
+        let (cursor_row, _) = parser.screen().cursor_position();
+        let new_rows: u16 = 24;
+        assert_eq!(cursor_row, 29, "cursor at bottom");
+
+        let scroll_lines = cursor_row - new_rows + 1;
+        assert_eq!(scroll_lines, 6);
+        parser.process(format!("\x1b[{}S", scroll_lines).as_bytes());
+        parser.screen_mut().set_size(new_rows, 80);
+
+        assert!(parser.screen().contents().contains("LASTLINE"),
+            "bottom content preserved when cursor at bottom");
+        assert_eq!(parser.screen().size(), (24, 80));
+    }
+
+    #[test]
+    fn cursor_bounded_shrink_skips_when_cursor_above_new_height() {
+        let mut parser = vt100::Parser::new(30, 80, 200);
+        for i in 0..10 {
+            parser.process(format!("line {}\r\n", i).as_bytes());
+        }
+        parser.process(b"MIDLINE");
+
+        let (cursor_row, _) = parser.screen().cursor_position();
+        assert_eq!(cursor_row, 9, "cursor in middle");
 
         parser.screen_mut().set_size(24, 80);
-
-        let visible = parser.screen().contents();
-        assert!(
-            !visible.contains("BOTTOMLINE"),
-            "vt100 0.16.2 drops bottom rows on shrink (known limitation)"
-        );
-        assert_eq!(
-            parser.screen().size(),
-            (24, 80),
-            "viewport should be 24 rows after shrink"
-        );
+        assert!(parser.screen().contents().contains("MIDLINE"),
+            "content preserved without any SU shift");
+        assert_eq!(parser.screen().size(), (24, 80));
     }
 }
