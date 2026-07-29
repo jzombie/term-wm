@@ -3125,6 +3125,7 @@ dependencies = [
  "term-wm-pty-engine",
  "term-wm-render",
  "tracing",
+ "unicode-width",
 ]
 
 [[package]]
@@ -3145,6 +3146,7 @@ dependencies = [
  "term-wm-render",
  "textwrap",
  "tracing",
+ "unicode-width",
 ]
 
 [[package]]
