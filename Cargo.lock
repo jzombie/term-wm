@@ -3125,6 +3125,7 @@ dependencies = [
  "term-wm-pty-engine",
  "term-wm-render",
  "tracing",
+ "unicode-width",
 ]
 
 [[package]]

@@ -17,6 +17,7 @@ use term_wm_core::layout::{Direction, FloatingPane, RectSpec, RegionMap};
 use term_wm_core::term_color::lerp_color;
 use term_wm_core::theme::{Color, Theme};
 use term_wm_core::utils::truncate_with_ellipsis;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use term_wm_core::window::{ComponentTag, WindowKey, WindowManager, WindowSurface};
 
 /// Render context for window chrome (owned by console, not core).
@@ -1194,16 +1195,24 @@ fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
         }
         let header_width = header_right.saturating_sub(header_left).saturating_add(1);
         let display_title = truncate_with_ellipsis(title, header_width as usize);
-        let display_len = display_title.chars().count() as u16;
-        let start_x = header_left + (header_width.saturating_sub(display_len)) / 2;
+        let start_x = header_left + (header_width.saturating_sub(display_title.width() as u16)) / 2;
         let buf_w = buffer.area.width as usize;
         let rel_y = header_y as usize - buffer.area.y as usize;
-        for (idx, ch) in display_title.chars().enumerate() {
-            let x = start_x + idx as u16;
-            let rel_x = x as usize - buffer.area.x as usize;
-            let cell = &mut buffer.content[rel_y * buf_w + rel_x];
-            cell.set_symbol(&ch.to_string());
-            cell.set_style(header_style);
+        let mut cx = start_x;
+        for c in display_title.chars() {
+            let cw = c.width().unwrap_or(0) as u16;
+            if cw == 0 {
+                continue;
+            }
+            let rel_x = cx as usize - buffer.area.x as usize;
+            buffer.content[rel_y * buf_w + rel_x].set_symbol(&c.to_string());
+            buffer.content[rel_y * buf_w + rel_x].set_style(header_style);
+            for i in 1..cw {
+                let span_x = rel_x + i as usize;
+                buffer.content[rel_y * buf_w + span_x].set_symbol("");
+                buffer.content[rel_y * buf_w + span_x].set_style(header_style);
+            }
+            cx += cw;
         }
         {
             let buf_w = buffer.area.width as usize;

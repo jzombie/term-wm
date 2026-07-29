@@ -45,3 +45,48 @@ pub fn truncate_to_width(value: &str, width: usize) -> String {
     }
     value.chars().take(width).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_string_returns_empty() {
+        assert_eq!(truncate_with_ellipsis("", 10), "");
+    }
+
+    #[test]
+    fn zero_max_width_returns_empty() {
+        assert_eq!(truncate_with_ellipsis("hello", 0), "");
+    }
+
+    #[test]
+    fn fits_exactly_returns_unchanged() {
+        assert_eq!(truncate_with_ellipsis("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncates_with_ellipsis() {
+        assert_eq!(truncate_with_ellipsis("hello world", 8), "hello w…");
+    }
+
+    #[test]
+    fn single_char_target() {
+        assert_eq!(truncate_with_ellipsis("ab", 1), "…");
+    }
+
+    #[test]
+    fn cjk_fits_one_char_plus_ellipsis() {
+        assert_eq!(truncate_with_ellipsis("日本語", 3), "日…");
+    }
+
+    #[test]
+    fn cjk_rejected_when_no_room() {
+        assert_eq!(truncate_with_ellipsis("日本語", 2), "…");
+    }
+
+    #[test]
+    fn cjk_mixed_truncation() {
+        assert_eq!(truncate_with_ellipsis("ab日本語", 6), "ab日…");
+    }
+}
