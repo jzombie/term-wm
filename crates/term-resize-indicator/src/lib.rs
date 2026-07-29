@@ -1,7 +1,5 @@
-use std::time::Instant;
-
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use crossterm::terminal::{self, DisableLineWrap, EnableLineWrap, EnterAlternateScreen, LeaveAlternateScreen, SetSize};
+use crossterm::terminal::{self, DisableLineWrap, EnableLineWrap, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -31,12 +29,7 @@ enum Mode {
 
 struct App {
     mode: Mode,
-    /// Current live terminal dimensions (updated on every Resize event).
-    /// In locked mode this tracks actual size; SetSize is deferred via pending_snap.
     live_size: Size,
-    /// When armed, the SetSize command will fire after this instant elapses.
-    /// Reset on each new Resize event to implement debounce.
-    pending_snap: Option<Instant>,
 }
 
 pub fn run(initial_lock: Option<Size>) -> std::io::Result<()> {
@@ -49,17 +42,14 @@ pub fn run(initial_lock: Option<Size>) -> std::io::Result<()> {
 
     let current = terminal::size().unwrap_or((80, 24));
     let mut app = if let Some(size) = initial_lock {
-        let _ = crossterm::execute!(terminal.backend_mut(), SetSize(size.width, size.height));
         App {
             mode: Mode::Locked(size),
-            live_size: Size::new(current.0, current.1),
-            pending_snap: None,
+            live_size: size,
         }
     } else {
         App {
             mode: Mode::Interactive,
             live_size: Size::new(current.0, current.1),
-            pending_snap: None,
         }
     };
 
@@ -76,20 +66,6 @@ fn run_loop(
     app: &mut App,
 ) -> std::io::Result<()> {
     loop {
-        // Fire deferred SetSize if debounce timer has elapsed
-        if let Some(snap_time) = app.pending_snap
-            && Instant::now() >= snap_time
-        {
-            app.pending_snap = None;
-            if let Mode::Locked(locked) = app.mode {
-                let _ = crossterm::execute!(
-                    terminal.backend_mut(),
-                    SetSize(locked.width, locked.height)
-                );
-                app.live_size = locked;
-            }
-        }
-
         terminal.draw(|f| {
             let area = f.area();
             let dim = app.live_size;
@@ -102,12 +78,9 @@ fn run_loop(
         }
 
         match event::read()? {
-            Event::Resize(w, h) => on_resize(app, w, h),
+            Event::Resize(w, h) => app.live_size = Size::new(w, h),
             Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                KeyCode::Char('l' | 'L') => {
-                    app.pending_snap = None;
-                    toggle_lock(app);
-                }
+                KeyCode::Char('l' | 'L') => toggle_lock(app),
                 KeyCode::Char('q' | 'Q') | KeyCode::Esc => break,
                 KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => break,
                 _ => {}
@@ -116,16 +89,6 @@ fn run_loop(
         }
     }
     Ok(())
-}
-
-fn on_resize(app: &mut App, w: u16, h: u16) {
-    app.live_size = Size::new(w, h);
-    if matches!(app.mode, Mode::Locked(_)) {
-        // Defer SetSize — arm the debounce timer.
-        // Every new resize event pushes the deadline forward, so SetSize
-        // only fires after 250ms of silence from the OS window manager.
-        app.pending_snap = Some(Instant::now() + std::time::Duration::from_millis(250));
-    }
 }
 
 fn toggle_lock(app: &mut App) {
