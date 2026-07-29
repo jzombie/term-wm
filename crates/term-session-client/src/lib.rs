@@ -15,7 +15,6 @@ use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use line_ending::PeekableLineEndingExt;
 use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
 use muxio_tokio_mpsc_adapter::ChannelCallerExt;
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient, RpcServiceCallerInterface};
@@ -28,8 +27,7 @@ use term_wm_pty_engine::Pane;
 use term_wm_pty_engine::clipboard::{Clipboard, Osc52Extractor};
 use term_wm_pty_engine::input_encoding::mouse_event_to_bytes;
 use term_wm_pty_engine::signal::install_sigint_handler;
-use unicode_width::UnicodeWidthChar;
-use vt100::{MouseProtocolEncoding, MouseProtocolMode};
+use vt100::{MouseProtocolEncoding, MouseProtocolMode, Screen};
 
 /// Redirect an OS-level file descriptor (stdout or stderr) into `tracing`.
 ///
@@ -329,18 +327,14 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         })
         .map_err(|e| io::Error::other(format!("spawn input thread: {e}")))?;
 
-    // Initial full-screen render (raw ANSI via vt100)
+    // Initial full-frame render
     {
         let parser = pane.shared_parser();
         let parser = parser.lock().unwrap();
         let screen = parser.screen();
-        let data = screen.contents_formatted();
-        out.write_all(&data)?;
-        out.flush()?;
+        let (rows, cols) = screen.size();
+        render_frame(&mut out, screen, rows, cols)?;
     }
-
-    let mut prev_content: Option<Vec<u8>> = None;
-    let mut prev_parser: Option<vt100::Parser> = None;
 
     loop {
         // Block until either user input or PTY output arrives (0 CPU when idle)
@@ -445,7 +439,6 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                         pixel_width: 0,
                         pixel_height: 0,
                     };
-                    prev_content = None;
                     let _ = pane.resize(size);
                 }
                 Event::Paste(text) => {
@@ -466,46 +459,19 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
 
         // Check if OnPtyResized signaled a geometry change
         if resize_pending.swap(false, Ordering::Relaxed) {
-            prev_content = None;
-            let _ = out.write_all(b"\x1b[2J\x1b[H");
+            let _ = out.write_all(b"\x1b[0m\x1b[2J\x1b[H");
             let _ = out.flush();
         }
 
-        // Diff-based incremental render (raw ANSI via vt100)
-        if has_new_data || prev_content.is_none() {
+        // Full-frame explicit row-by-row render
+        if has_new_data {
             let parser = pane.shared_parser();
             let parser = parser.lock().unwrap();
             let screen = parser.screen();
             let (rows, cols) = screen.size();
-
-            let diff = match &prev_content {
-                Some(prev) => {
-                    let p = prev_parser.get_or_insert_with(|| vt100::Parser::new(rows, cols, 0));
-                    p.screen_mut().set_size(rows, cols);
-                    p.process(b"\x1bc");
-                    p.process(prev);
-                    screen.contents_diff(p.screen())
-                }
-                None => screen.contents_formatted(),
-            };
-
-            if !diff.is_empty() {
-                let clean = rewrite_diff(&diff, cols);
-                if !clean.is_empty() {
-                    out.write_all(&clean)?;
-                }
-                let (cur_row, cur_col) = screen.cursor_position();
-                write!(out, "[{};{}H", cur_row + 1, cur_col + 1)?;
-                if screen.hide_cursor() {
-                    out.write_all(b"[?25l")?;
-                } else {
-                    out.write_all(b"[?25h")?;
-                }
-                out.flush()?;
-            }
-
-            prev_content = Some(screen.contents_formatted());
+            render_frame(&mut out, screen, rows, cols)?;
         }
+
 
         // Exit on session exit
         if pane.has_exited() {
@@ -514,98 +480,97 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     }
 }
 
-pub fn rewrite_diff(diff: &[u8], parser_cols: u16) -> Vec<u8> {
-    let text = String::from_utf8_lossy(diff);
-    let mut chars = text.chars().peekable();
-    let mut out = Vec::with_capacity(diff.len() + 64);
-    let mut col: u16 = 0;
 
-    while let Some(&ch) = chars.peek() {
-        if ch == '\x1b' {
-            chars.next();
-            if chars.peek() == Some(&'[') {
-                chars.next();
 
-                let mut param_str = String::new();
-                while let Some(&p) = chars.peek() {
-                    if (0x40..=0x7e).contains(&(p as u8)) {
-                        break;
-                    }
-                    param_str.push(chars.next().unwrap());
-                }
+#[derive(Default, PartialEq, Clone, Copy)]
+struct CellStyle {
+    fg: vt100::Color,
+    bg: vt100::Color,
+    bold: bool,
+    dim: bool,
+    italic: bool,
+    underline: bool,
+    inverse: bool,
+}
 
-                if let Some(cmd) = chars.next() {
-                    let cmd_byte = cmd as u8;
-                    match cmd_byte {
-                        b'K' => {
-                            let param = param_str.parse::<u16>().unwrap_or(0);
-                            match param {
-                                1 => {
-                                    let _ = write!(out, "\x1b[{}K", param_str);
-                                }
-                                2 => {
-                                    out.extend_from_slice(b"\x1b[1G");
-                                    out.extend(std::iter::repeat_n(b' ', parser_cols as usize));
-                                    let _ = write!(out, "\x1b[{}G", col + 1);
-                                }
-                                _ => {
-                                    let spaces = parser_cols.saturating_sub(col) as usize;
-                                    out.extend(std::iter::repeat_n(b' ', spaces));
-                                    let _ = write!(out, "\x1b[{}G", col + 1);
-                                }
-                            }
-                        }
-                        b'H' | b'f' => {
-                            let parts: Vec<&str> = param_str.split(';').collect();
-                            if parts.len() >= 2 {
-                                if let Ok(c) = parts[1].parse::<u16>() {
-                                    col = c.saturating_sub(1);
-                                }
-                            } else {
-                                col = 0;
-                            }
-                            let _ = write!(out, "\x1b[{}", param_str);
-                            out.push(cmd_byte);
-                        }
-                        b'C' => {
-                            let n = param_str.parse::<u16>().unwrap_or(1);
-                            col = col.saturating_add(n).min(parser_cols);
-                            let _ = write!(out, "\x1b[{}C", param_str);
-                        }
-                        b'D' => {
-                            let n = param_str.parse::<u16>().unwrap_or(1);
-                            col = col.saturating_sub(n);
-                            let _ = write!(out, "\x1b[{}D", param_str);
-                        }
-                        b'G' => {
-                            if let Ok(c) = param_str.parse::<u16>() {
-                                col = c.saturating_sub(1);
-                            }
-                            let _ = write!(out, "\x1b[{}G", param_str);
-                        }
-                        _ => {
-                            let _ = write!(out, "\x1b[{}", param_str);
-                            out.push(cmd_byte);
-                        }
-                    }
-                }
-            } else {
-                out.push(b'\x1b');
-            }
-        } else if let Some(ending) = chars.consume_line_ending() {
-            col = 0;
-            out.extend_from_slice(ending.as_str().as_bytes());
-        } else {
-            let ch = chars.next().unwrap();
-            if ch >= ' ' && ch != '\x7f' {
-                let width = UnicodeWidthChar::width(ch).unwrap_or(1) as u16;
-                col = col.saturating_add(width).min(parser_cols);
-            }
-            let mut buf = [0u8; 4];
-            out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+impl CellStyle {
+    fn from_cell(cell: &vt100::Cell) -> Self {
+        Self {
+            fg: cell.fgcolor(),
+            bg: cell.bgcolor(),
+            bold: cell.bold(),
+            dim: cell.dim(),
+            italic: cell.italic(),
+            underline: cell.underline(),
+            inverse: cell.inverse(),
         }
     }
-    out
+}
+
+fn apply_sgr(out: &mut dyn Write, style: &CellStyle) -> io::Result<()> {
+    write!(out, "\x1b[0m")?;
+    if style.bold { write!(out, "\x1b[1m")?; }
+    if style.dim { write!(out, "\x1b[2m")?; }
+    if style.italic { write!(out, "\x1b[3m")?; }
+    if style.underline { write!(out, "\x1b[4m")?; }
+    if style.inverse { write!(out, "\x1b[7m")?; }
+    match style.fg {
+        vt100::Color::Idx(i) => write!(out, "\x1b[38;5;{}m", i)?,
+        vt100::Color::Rgb(r, g, b) => write!(out, "\x1b[38;2;{};{};{}m", r, g, b)?,
+        _ => {}
+    }
+    match style.bg {
+        vt100::Color::Idx(i) => write!(out, "\x1b[48;5;{}m", i)?,
+        vt100::Color::Rgb(r, g, b) => write!(out, "\x1b[48;2;{};{};{}m", r, g, b)?,
+        _ => {}
+    }
+    Ok(())
+}
+
+pub fn render_frame(out: &mut dyn Write, screen: &Screen, rows: u16, cols: u16) -> io::Result<()> {
+    let mut buf = Vec::with_capacity((rows as usize) * (cols as usize) * 3);
+    let mut active_style = CellStyle::default();
+
+    buf.extend_from_slice(b"\x1b[0m");
+
+    for row in 0..rows {
+        write!(buf, "\x1b[{};1H", row + 1)?;
+        let mut col: u16 = 0;
+        while col < cols {
+            let cell_opt = screen.cell(row, col);
+            let style = cell_opt.map(CellStyle::from_cell).unwrap_or_default();
+            
+            if style != active_style {
+                apply_sgr(&mut buf, &style)?;
+                active_style = style;
+            }
+
+            if let Some(cell) = cell_opt {
+                let c = cell.contents();
+                if !c.is_empty() {
+                    buf.extend_from_slice(c.as_bytes());
+                    let w = unicode_width::UnicodeWidthStr::width(c).max(1) as u16;
+                    col += w;
+                    continue;
+                }
+            }
+
+            buf.push(b' ');
+            col += 1;
+        }
+    }
+
+    buf.extend_from_slice(b"\x1b[0m");
+    let (cur_row, cur_col) = screen.cursor_position();
+    write!(buf, "\x1b[{};{}H", cur_row + 1, cur_col + 1)?;
+    if screen.hide_cursor() {
+        buf.extend_from_slice(b"\x1b[?25l");
+    } else {
+        buf.extend_from_slice(b"\x1b[?25h");
+    }
+
+    out.write_all(&buf)?;
+    out.flush()
 }
 
 #[cfg(test)]
