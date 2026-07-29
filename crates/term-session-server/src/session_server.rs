@@ -8,8 +8,8 @@ use portable_pty::PtySize;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 
 use term_session_muxio_service_definitions::{
-    CloseSession, ListSessions, ResizePty, SessionPushFrame, STREAM_INPUT_METHOD_ID,
-    SUBSCRIBE_OUTPUT_METHOD_ID, Spawn, WriteInput,
+    CloseSession, ListSessions, ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
+    Spawn, WriteInput,
 };
 use term_wm_pty_engine::PtyStatus;
 
@@ -69,13 +69,11 @@ impl ServerState {
     /// and stream completion markers to all active subscribers.
     fn clear_session(&mut self) {
         if let Some(mut session) = self.session.take() {
-            let id = session.id;
             let _ = session.pty.kill_child();
             let raw = session.read_output();
             if !raw.is_empty() {
-                let frame = SessionPushFrame::RawOutput { id, data: raw }.encode();
                 for sub in &self.subscribers {
-                    sub.respond.respond(frame.clone(), false);
+                    sub.respond.respond(raw.clone(), false);
                 }
             }
         }
@@ -112,17 +110,6 @@ impl ServerState {
         let _ = session.pty.resize(size);
         session.cols = min_cols;
         session.rows = min_rows;
-
-        // Broadcast out-of-band resize frame to all subscribers
-        let frame = SessionPushFrame::PtyResized {
-            id: session.id,
-            cols: min_cols,
-            rows: min_rows,
-        }
-        .encode();
-        for sub in &self.subscribers {
-            sub.respond.respond(frame.clone(), false);
-        }
     }
 }
 
@@ -172,8 +159,10 @@ pub async fn run_server(
                 if guard.session.as_ref().is_some_and(|s| !s.exited) {
                     guard.recalculate_pty_size();
                     let id = guard.session.as_ref().map(|s| s.id).unwrap_or(1);
+                    let cols = guard.session.as_ref().map(|s| s.cols).unwrap_or(cols);
+                    let rows = guard.session.as_ref().map(|s| s.rows).unwrap_or(rows);
 
-                    return Spawn::encode_response(id)
+                    return Spawn::encode_response((id, cols, rows))
                         .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
                 }
 
@@ -183,7 +172,8 @@ pub async fn run_server(
                 // Enforce global geometric constraints on the newly instantiated PTY
                 guard.recalculate_pty_size();
 
-                Spawn::encode_response(id)
+                let session = guard.session.as_ref().unwrap();
+                Spawn::encode_response((session.id, session.cols, session.rows))
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
             }
         })
@@ -208,7 +198,11 @@ pub async fn run_server(
 
                 guard.recalculate_pty_size();
 
-                ResizePty::encode_response(())
+                let (actual_cols, actual_rows) = guard.session.as_ref()
+                    .map(|s| (s.cols, s.rows))
+                    .unwrap_or((cols, rows));
+
+                ResizePty::encode_response((actual_cols, actual_rows))
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
             }
         })
@@ -325,18 +319,15 @@ pub async fn run_server(
                     guard.notify.notify_one();
 
                     let is_dead = guard.session.is_none();
-                    let id = guard.session.as_ref().map(|s| s.id).unwrap_or(0);
                     drop(guard);
 
                     if let Some(data) = snapshot
                         && !data.is_empty()
                     {
-                        let frame = SessionPushFrame::RawOutput { id, data }.encode();
-                        respond.respond(frame, false);
+                        respond.respond(data, false);
                     }
                     if let Some(data) = early {
-                        let frame = SessionPushFrame::RawOutput { id, data }.encode();
-                        respond.respond(frame, false);
+                        respond.respond(data, false);
                     }
                     if is_dead {
                         respond.respond(Vec::new(), true);
@@ -398,7 +389,7 @@ pub async fn run_server(
                 continue;
             }
 
-            let (raw, exited, code, session_id) = {
+            let (raw, exited, code) = {
                 let Some(session) = guard.session.as_mut() else {
                     let _ = exit_tx.send(0);
                     break;
@@ -407,8 +398,7 @@ pub async fn run_server(
                 let raw = session.read_output();
                 let exited = session.check_exited();
                 let code = session.exit_code;
-                let session_id = session.id;
-                (raw, exited, code, session_id)
+                (raw, exited, code)
             };
 
             if raw.is_empty() && !guard.subscribers.is_empty() {
@@ -418,11 +408,10 @@ pub async fn run_server(
                 );
             }
 
-            // Push framed PTY output to all subscribers
+            // Push raw PTY output to all subscribers
             if !raw.is_empty() {
-                let frame = SessionPushFrame::RawOutput { id: session_id, data: raw }.encode();
                 for sub in &guard.subscribers {
-                    sub.respond.respond(frame.clone(), false);
+                    sub.respond.respond(raw.clone(), false);
                 }
             }
 

@@ -19,7 +19,7 @@ use term_wm_pty_engine::clipboard::Osc52Extractor;
 async fn session_spawn_returns_id() {
     let mock = get_mock_bin();
     let (client, _dir) = spawn_session(vec![mock, "echo".into()], TEST_COLS, TEST_ROWS).await;
-    let id = Spawn::call(&*client, (None, TEST_COLS, TEST_ROWS))
+    let (id, _, _) = Spawn::call(&*client, (None, TEST_COLS, TEST_ROWS))
         .await
         .unwrap();
     assert_eq!(id, 1);

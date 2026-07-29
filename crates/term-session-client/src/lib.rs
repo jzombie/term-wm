@@ -22,7 +22,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::Clear;
 use term_session_muxio_service_definitions::{
-    SessionPushFrame, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
+    STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
 };
 use term_wm_core::events::{Event, KeyKind};
 use term_wm_pty_engine::Pane;
@@ -168,13 +168,12 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     // Bounded to cap head-of-line queuing under burst load.
     let (push_tx, push_rx) = crossbeam_channel::bounded::<Vec<u8>>(PTY_OUTPUT_CHANNEL_CAPACITY);
     let (clip_tx, clip_rx) = crossbeam_channel::bounded::<String>(CLIPBOARD_CHANNEL_CAPACITY);
-    let (resize_tx, resize_rx) = crossbeam_channel::bounded::<(u16, u16)>(8);
 
     // Get terminal size
     let (term_cols, term_rows) = crossterm::terminal::size()?;
 
-    // Spawn session on the server
-    rt.block_on(async {
+    // Spawn session on the server, get the actual constrained size
+    let (_id, mut live_cols, mut live_rows) = rt.block_on(async {
         Spawn::call(&*client, (None, term_cols, term_rows))
             .await
             .map_err(|e| io::Error::other(format!("spawn: {e:?}")))
@@ -189,61 +188,37 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             .await
             .map_err(|e| io::Error::other(format!("subscribe: {e:?}")))?;
 
-        // Forward framed response chunks to push_tx.  Accumulate bytes
-        // in a buffer and decode SessionPushFrame frames, since the
-        // underlying stream does not preserve message boundaries.
-        // Intercept PtyResized frames to forward via resize_tx.
-        // Intercept OSC 52 clipboard sequences from RawOutput data
-        // before the VT100 parser can consume them.
+        // Forward raw PTY output chunks to push_tx.  Each chunk from the
+        // muxio stream is a complete message — no custom framing needed.
+        // Intercept OSC 52 clipboard sequences before the parser consumes them.
         rt.spawn(async move {
             let mut osc52 = Osc52Extractor::new();
             let mut prev_tail: [u8; 8] = [0; 8];
-            let mut acc = Vec::new();
 
             while let Some(chunk) = reader.recv().await {
-                match chunk {
-                    Ok(data) => {
-                        acc.extend_from_slice(&data);
-                        loop {
-                            match SessionPushFrame::decode(&acc) {
-                                Ok((frame, consumed)) => {
-                                    acc.drain(..consumed);
-                                    match frame {
-                                        SessionPushFrame::RawOutput { data: raw_data, .. } => {
-                                            if let Some(text) =
-                                                osc52.push(&raw_data, &prev_tail)
-                                            {
-                                                let _ = clip_tx.try_send(text);
-                                            }
-
-                                            let n = raw_data.len();
-                                            if n >= 8 {
-                                                prev_tail
-                                                    .copy_from_slice(&raw_data[n - 8..n]);
-                                            } else if n > 0 {
-                                                prev_tail.rotate_left(n);
-                                                prev_tail[8 - n..].copy_from_slice(&raw_data[..n]);
-                                            }
-
-                                            let _ = push_tx.try_send(raw_data);
-                                        }
-                                        SessionPushFrame::PtyResized { cols, rows, .. } => {
-                                            let _ = resize_tx.try_send((cols, rows));
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                                Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => {
-                                    break;
-                                }
-                                Err(_) => {
-                                    acc.drain(..1);
-                                    continue;
-                                }
-                            }
-                        }
+                if let Ok(mut data) = chunk {
+                    if let Some(text) = osc52.push(&data, &prev_tail) {
+                        let _ = clip_tx.try_send(text);
                     }
-                    Err(_) => break,
+
+                    let n = data.len();
+                    if n >= 8 {
+                        prev_tail.copy_from_slice(&data[n - 8..n]);
+                    } else if n > 0 {
+                        prev_tail.rotate_left(n);
+                        prev_tail[8 - n..].copy_from_slice(&data[..n]);
+                    }
+
+                    // Non-blocking push; if saturated, sleep 1ms to allow
+                    // the main loop to drain the channel without CPU spinning.
+                    while let Err(crossbeam_channel::TrySendError::Full(pending)) =
+                        push_tx.try_send(data)
+                    {
+                        data = pending;
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                } else {
+                    break;
                 }
             }
         });
@@ -264,11 +239,6 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             .map_err(|e| io::Error::other(e.to_string()))?;
         Ok(())
     });
-
-    // Track current parser dimensions for centering math.
-    // Updated from PtyResized frames received via resize_rx.
-    let mut live_cols = term_cols;
-    let mut live_rows = term_rows;
 
     let mut pane = RemotePane::new(
         1u64,
@@ -339,26 +309,6 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         .map_err(|e| io::Error::other(format!("initial draw: {e}")))?;
 
     loop {
-        // Non-blocking poll for PtyResized frames from the server
-        while let Ok((cols, rows)) = resize_rx.try_recv() {
-            live_cols = cols;
-            live_rows = rows;
-            let size = PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            };
-            // RIS mitigation: resize and reset local parser to flush
-            // stale ConPTY state before processing subsequent frames.
-            let parser = pane.shared_parser();
-            let mut parser = parser.lock().unwrap();
-            parser.screen_mut().set_size(rows, cols);
-            parser.process(b"\x1bc");
-            drop(parser);
-            let _ = pane.resize(size);
-        }
-
         // Block until either user input or PTY output arrives (0 CPU when idle)
         let input_event = crossbeam_channel::select! {
             recv(input_rx) -> msg => {
@@ -462,6 +412,12 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                         pixel_height: 0,
                     };
                     let _ = pane.resize(size);
+                    // Read actual constrained size from parser (set by
+                    // RemotePane::resize() using the ResizePty RPC response).
+                    let parser = pane.shared_parser();
+                    let parser = parser.lock().unwrap();
+                    live_cols = parser.screen().size().1;
+                    live_rows = parser.screen().size().0;
                 }
                 Event::Paste(text) => {
                     let mut wrapped = Vec::with_capacity(text.len() + 12);

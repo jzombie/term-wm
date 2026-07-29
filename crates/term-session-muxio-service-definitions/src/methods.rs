@@ -15,6 +15,8 @@ struct SpawnRequest {
 #[derive(Encode, Decode)]
 struct SpawnResponse {
     pub id: u64,
+    pub cols: u16,
+    pub rows: u16,
 }
 
 pub struct Spawn;
@@ -23,7 +25,7 @@ impl RpcMethodPrebuffered for Spawn {
     const METHOD_ID: u64 = rpc_method_id!("session.spawn");
 
     type Input = (Option<Vec<String>>, u16, u16);
-    type Output = u64;
+    type Output = (u64, u16, u16);
 
     fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
         Ok(bitcode::encode(&SpawnRequest {
@@ -40,13 +42,17 @@ impl RpcMethodPrebuffered for Spawn {
     }
 
     fn encode_response(output: Self::Output) -> Result<Vec<u8>, io::Error> {
-        Ok(bitcode::encode(&SpawnResponse { id: output }))
+        Ok(bitcode::encode(&SpawnResponse {
+            id: output.0,
+            cols: output.1,
+            rows: output.2,
+        }))
     }
 
     fn decode_response(bytes: &[u8]) -> Result<Self::Output, io::Error> {
         let r = bitcode::decode::<SpawnResponse>(bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        Ok(r.id)
+        Ok((r.id, r.cols, r.rows))
     }
 }
 
@@ -59,13 +65,19 @@ struct ResizeRequest {
     pub rows: u16,
 }
 
+#[derive(Encode, Decode)]
+struct ResizeResponse {
+    pub cols: u16,
+    pub rows: u16,
+}
+
 pub struct ResizePty;
 
 impl RpcMethodPrebuffered for ResizePty {
     const METHOD_ID: u64 = rpc_method_id!("session.resize");
 
     type Input = (u64, u16, u16);
-    type Output = ();
+    type Output = (u16, u16);
 
     fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
         Ok(bitcode::encode(&ResizeRequest {
@@ -81,12 +93,17 @@ impl RpcMethodPrebuffered for ResizePty {
         Ok((r.id, r.cols, r.rows))
     }
 
-    fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
-        Ok(Vec::new())
+    fn encode_response(output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&ResizeResponse {
+            cols: output.0,
+            rows: output.1,
+        }))
     }
 
-    fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
-        Ok(())
+    fn decode_response(bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        let r = bitcode::decode::<ResizeResponse>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Ok((r.cols, r.rows))
     }
 }
 

@@ -3,7 +3,6 @@ use std::io;
 use std::sync::{Arc, Mutex};
 
 use crossbeam_channel::{Receiver, TryRecvError};
-use muxio_rpc_service::error::RpcServiceError;
 use muxio_tokio_rpc_ipc_client::RpcIpcClient;
 use portable_pty::{ExitStatus, PtySize};
 use term_session_muxio_service_definitions::{CloseSession, ResizePty};
@@ -75,16 +74,18 @@ impl Pane for RemotePane {
     }
 
     fn resize(&mut self, size: PtySize) -> PtyResult<()> {
-        if let Some(ref client) = self.client {
-            let result: Result<(), RpcServiceError> = self.rt.block_on(async {
+        let (actual_cols, actual_rows) = if let Some(ref client) = self.client {
+            let result = self.rt.block_on(async {
                 use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
                 ResizePty::call(&**client, (self.id, size.cols, size.rows)).await
             });
-            result.map_err(Self::rpc_to_pty)?;
-        }
+            result.map_err(Self::rpc_to_pty)?
+        } else {
+            (size.cols, size.rows)
+        };
         {
             let mut parser = self.parser.lock().unwrap();
-            parser.screen_mut().set_size(size.rows, size.cols);
+            parser.screen_mut().set_size(actual_rows, actual_cols);
         }
         Ok(())
     }
