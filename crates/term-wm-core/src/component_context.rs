@@ -81,6 +81,8 @@ pub struct ScrollBounds {
     pub pending_offset_x: Option<usize>,
     pub pending_offset_y: Option<usize>,
     pub sticky_bottom: bool,
+    pub last_needs_vertical: bool,
+    pub last_needs_horizontal: bool,
 }
 
 impl ScrollBounds {

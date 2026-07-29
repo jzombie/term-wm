@@ -1198,7 +1198,8 @@ impl TestPane {
 
 #[cfg(test)]
 impl Pane for TestPane {
-    fn resize(&mut self, _size: PtySize) -> term_wm_pty_engine::PtyResult<()> {
+    fn resize(&mut self, size: PtySize) -> term_wm_pty_engine::PtyResult<()> {
+        self.set_parser_size(size.rows, size.cols);
         Ok(())
     }
 
@@ -1303,6 +1304,8 @@ mod tests {
                 pending_offset_x: None,
                 pending_offset_y: None,
                 sticky_bottom: false,
+                last_needs_vertical: false,
+                last_needs_horizontal: false,
             },
         ));
         (
@@ -2636,6 +2639,8 @@ mod tests {
                 pending_offset_x: None,
                 pending_offset_y: None,
                 sticky_bottom: false,
+                last_needs_vertical: false,
+                last_needs_horizontal: false,
             },
         ));
         let handle = ScrollHandle {
@@ -2667,6 +2672,8 @@ mod tests {
                 pending_offset_x: None,
                 pending_offset_y: None,
                 sticky_bottom: false,
+                last_needs_vertical: false,
+                last_needs_horizontal: false,
             },
         ));
         let handle = ScrollHandle {
