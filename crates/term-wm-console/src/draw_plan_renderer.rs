@@ -17,8 +17,8 @@ use term_wm_core::layout::{Direction, FloatingPane, RectSpec, RegionMap};
 use term_wm_core::term_color::lerp_color;
 use term_wm_core::theme::{Color, Theme};
 use term_wm_core::utils::truncate_with_ellipsis;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use term_wm_core::window::{ComponentTag, WindowKey, WindowManager, WindowSurface};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Render context for window chrome (owned by console, not core).
 pub struct ChromeCtx<'a> {

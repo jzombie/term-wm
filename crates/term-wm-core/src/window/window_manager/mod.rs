@@ -2749,9 +2749,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 items.push(MenuDisplayItem::Item(MenuItem {
                     label: format!("Send {} to {}", super_key, title).into(),
                     icon: Some("S"),
-                    action: crate::actions::TermWmAction::SendSuperKeyToWindow(
-                        focused,
-                    ),
+                    action: crate::actions::TermWmAction::SendSuperKeyToWindow(focused),
                     disabled: false,
                 }));
 
