@@ -472,15 +472,12 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             render_frame(&mut out, screen, rows, cols)?;
         }
 
-
         // Exit on session exit
         if pane.has_exited() {
             return Ok(());
         }
     }
 }
-
-
 
 #[derive(Default, PartialEq, Clone, Copy)]
 struct CellStyle {
@@ -509,11 +506,21 @@ impl CellStyle {
 
 fn apply_sgr(out: &mut dyn Write, style: &CellStyle) -> io::Result<()> {
     write!(out, "\x1b[0m")?;
-    if style.bold { write!(out, "\x1b[1m")?; }
-    if style.dim { write!(out, "\x1b[2m")?; }
-    if style.italic { write!(out, "\x1b[3m")?; }
-    if style.underline { write!(out, "\x1b[4m")?; }
-    if style.inverse { write!(out, "\x1b[7m")?; }
+    if style.bold {
+        write!(out, "\x1b[1m")?;
+    }
+    if style.dim {
+        write!(out, "\x1b[2m")?;
+    }
+    if style.italic {
+        write!(out, "\x1b[3m")?;
+    }
+    if style.underline {
+        write!(out, "\x1b[4m")?;
+    }
+    if style.inverse {
+        write!(out, "\x1b[7m")?;
+    }
     match style.fg {
         vt100::Color::Idx(i) => write!(out, "\x1b[38;5;{}m", i)?,
         vt100::Color::Rgb(r, g, b) => write!(out, "\x1b[38;2;{};{};{}m", r, g, b)?,
@@ -539,7 +546,7 @@ pub fn render_frame(out: &mut dyn Write, screen: &Screen, rows: u16, cols: u16) 
         while col < cols {
             let cell_opt = screen.cell(row, col);
             let style = cell_opt.map(CellStyle::from_cell).unwrap_or_default();
-            
+
             if style != active_style {
                 apply_sgr(&mut buf, &style)?;
                 active_style = style;
@@ -578,7 +585,9 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    struct TestWriter { buf: Arc<Mutex<Vec<u8>>> }
+    struct TestWriter {
+        buf: Arc<Mutex<Vec<u8>>>,
+    }
 
     impl TestWriter {
         fn new() -> (Self, Arc<Mutex<Vec<u8>>>) {
@@ -592,7 +601,9 @@ mod tests {
             self.buf.lock().unwrap().extend_from_slice(buf);
             Ok(buf.len())
         }
-        fn flush(&mut self) -> io::Result<()> { Ok(()) }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
 
     /// Calls the real `init_terminal()` with a test writer and verifies
@@ -604,7 +615,11 @@ mod tests {
         let (writer, buf) = TestWriter::new();
         let _guard = init_terminal(writer).expect("init_terminal");
         let bytes = buf.lock().unwrap();
-        assert!(bytes.windows(b"\x1b[?2004h".len()).any(|w| w == b"\x1b[?2004h"));
+        assert!(
+            bytes
+                .windows(b"\x1b[?2004h".len())
+                .any(|w| w == b"\x1b[?2004h")
+        );
     }
 
     /// Constructs a TerminalGuard with a test writer and verifies that
@@ -612,9 +627,17 @@ mod tests {
     #[test]
     fn terminal_guard_teardown_writes_bracketed_paste_disable() {
         let (writer, buf) = TestWriter::new();
-        { let _guard = TerminalGuard { writer: Some(writer) }; }
+        {
+            let _guard = TerminalGuard {
+                writer: Some(writer),
+            };
+        }
         let bytes = buf.lock().unwrap();
-        assert!(bytes.windows(b"\x1b[?2004l".len()).any(|w| w == b"\x1b[?2004l"));
+        assert!(
+            bytes
+                .windows(b"\x1b[?2004l".len())
+                .any(|w| w == b"\x1b[?2004l")
+        );
     }
 
     /// Full lifecycle: init_terminal followed by TerminalGuard teardown
@@ -625,8 +648,16 @@ mod tests {
         let guard = init_terminal(writer).expect("init_terminal");
         drop(guard);
         let bytes = buf.lock().unwrap();
-        assert!(bytes.windows(b"\x1b[?2004h".len()).any(|w| w == b"\x1b[?2004h"));
-        assert!(bytes.windows(b"\x1b[?2004l".len()).any(|w| w == b"\x1b[?2004l"));
+        assert!(
+            bytes
+                .windows(b"\x1b[?2004h".len())
+                .any(|w| w == b"\x1b[?2004h")
+        );
+        assert!(
+            bytes
+                .windows(b"\x1b[?2004l".len())
+                .any(|w| w == b"\x1b[?2004l")
+        );
     }
 
     /// Proves that reusing a parser via set_size + RIS + process yields

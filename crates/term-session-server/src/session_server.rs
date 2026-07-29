@@ -1,13 +1,11 @@
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use muxio_core::rpc::rpc_internals::RpcStreamEvent;
 use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;
 use muxio_rpc_service_caller::prebuffered::RpcCallPrebuffered;
 use muxio_rpc_service_endpoint::{RpcServiceEndpointInterface, StreamResponder};
-use muxio_tokio_rpc_ipc_server::{
-    RpcIpcConnectionContextHandle, RpcIpcServer, RpcIpcServerEvent,
-};
+use muxio_tokio_rpc_ipc_server::{RpcIpcConnectionContextHandle, RpcIpcServer, RpcIpcServerEvent};
 use portable_pty::PtySize;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 
@@ -92,21 +90,32 @@ impl ServerState {
     /// Constrain the PTY to the smallest geometry across all connected clients.
     /// This guarantees the virtual buffer never exceeds any attached monitor.
     fn recalculate_pty_size(&mut self) {
-        let Some(session) = self.session.as_mut() else { return; };
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
         if self.clients.is_empty() {
             return;
         }
-        let min_cols = self.clients.values()
+        let min_cols = self
+            .clients
+            .values()
             .map(|c| c.cols)
             .filter(|&c| c != u16::MAX)
             .min()
             .unwrap_or(80);
-        let min_rows = self.clients.values()
+        let min_rows = self
+            .clients
+            .values()
             .map(|c| c.rows)
             .filter(|&r| r != u16::MAX)
             .min()
             .unwrap_or(24);
-        let size = PtySize { rows: min_rows, cols: min_cols, pixel_width: 0, pixel_height: 0 };
+        let size = PtySize {
+            rows: min_rows,
+            cols: min_cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
         let _ = session.pty.resize(size);
         session.cols = min_cols;
         session.rows = min_rows;
@@ -116,7 +125,9 @@ impl ServerState {
     /// Call AFTER releasing the ServerState lock.
     fn notify_clients(clients: &[ClientEntry], cols: u16, rows: u16) {
         for client in clients {
-            let Some(caller) = client.caller.clone() else { continue; };
+            let Some(caller) = client.caller.clone() else {
+                continue;
+            };
             tokio::spawn(async move {
                 if let Err(e) = OnPtyResized::call(&caller, (cols, rows)).await {
                     tracing::debug!(error = ?e, "Failed to deliver OnPtyResized notification");
@@ -137,7 +148,11 @@ pub async fn run_server(
 
     {
         let mut st = state.lock().await;
-        let cmd = if config.cmd.is_empty() { None } else { Some(config.cmd.clone()) };
+        let cmd = if config.cmd.is_empty() {
+            None
+        } else {
+            Some(config.cmd.clone())
+        };
         let session = Session::spawn(1, cmd, config.cols, config.rows)?;
         st.set_session(session);
     }
@@ -155,13 +170,14 @@ pub async fn run_server(
                 let mut guard = state.lock().await;
                 let (cmd, cols, rows) = Spawn::decode_request(&payload)
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-                let entry = guard.clients.entry(ctx.conn_id).or_insert_with(|| {
-                    ClientEntry {
+                let entry = guard
+                    .clients
+                    .entry(ctx.conn_id)
+                    .or_insert_with(|| ClientEntry {
                         caller: None,
                         cols,
                         rows,
-                    }
-                });
+                    });
                 entry.cols = cols;
                 entry.rows = rows;
 
@@ -213,9 +229,7 @@ pub async fn run_server(
                 let (_id, cols, rows) = ResizePty::decode_request(&payload)
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
                 let mut guard = state.lock().await;
-                if let Some(client) =
-                    guard.clients.get_mut(&ctx.conn_id)
-                {
+                if let Some(client) = guard.clients.get_mut(&ctx.conn_id) {
                     client.cols = cols;
                     client.rows = rows;
                 }
@@ -279,7 +293,9 @@ pub async fn run_server(
                 let (id, data) = WriteInput::decode_request(&payload)
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
                 let mut guard = state.lock().await;
-                if let Some(session) = guard.session.as_mut() && session.id == id {
+                if let Some(session) = guard.session.as_mut()
+                    && session.id == id
+                {
                     let _ = session.pty.write_bytes(&data);
                 }
                 WriteInput::encode_response(())
@@ -342,7 +358,9 @@ pub async fn run_server(
                     guard.notify.notify_one();
                     let is_dead = guard.session.is_none();
                     drop(guard);
-                    if let Some(data) = snapshot && !data.is_empty() {
+                    if let Some(data) = snapshot
+                        && !data.is_empty()
+                    {
                         respond.respond(data, false);
                     }
                     if let Some(data) = early {
@@ -366,11 +384,14 @@ pub async fn run_server(
                     tracing::info!("Client {} connected", handle.0.conn_id);
                     let mut guard = st.lock().await;
                     let handle_clone = handle.clone();
-                    guard.clients.insert(handle.0.conn_id, ClientEntry {
-                        caller: Some(handle_clone),
-                        cols: u16::MAX,
-                        rows: u16::MAX,
-                    });
+                    guard.clients.insert(
+                        handle.0.conn_id,
+                        ClientEntry {
+                            caller: Some(handle_clone),
+                            cols: u16::MAX,
+                            rows: u16::MAX,
+                        },
+                    );
                 }
                 RpcIpcServerEvent::ClientDisconnected(conn_id) => {
                     tracing::info!("Client {conn_id} disconnected");
@@ -424,7 +445,10 @@ pub async fn run_server(
                 (raw, exited, code)
             };
             if raw.is_empty() && !guard.subscribers.is_empty() {
-                tracing::debug!("PTY output empty with {} subscribers", guard.subscribers.len());
+                tracing::debug!(
+                    "PTY output empty with {} subscribers",
+                    guard.subscribers.len()
+                );
             }
 
             // Push raw PTY output to all subscribers

@@ -1,8 +1,11 @@
 use clap::Parser;
-use term_resize_indicator::{run, Size};
+use term_resize_indicator::{Size, run};
 
 #[derive(Parser)]
-#[command(version, about = "Dotted-line border overlay showing terminal dimensions on resize, with lock-to-size.")]
+#[command(
+    version,
+    about = "Dotted-line border overlay showing terminal dimensions on resize, with lock-to-size."
+)]
 struct Args {
     #[arg(
         long,
@@ -15,11 +18,7 @@ struct Args {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    let initial_lock = args
-        .size
-        .as_deref()
-        .map(parse_size)
-        .transpose()?;
+    let initial_lock = args.size.as_deref().map(parse_size).transpose()?;
 
     run(initial_lock)?;
     Ok(())

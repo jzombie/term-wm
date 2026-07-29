@@ -1,9 +1,11 @@
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use crossterm::terminal::{self, DisableLineWrap, EnableLineWrap, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{
+    self, DisableLineWrap, EnableLineWrap, EnterAlternateScreen, LeaveAlternateScreen,
+};
+use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::Terminal;
 
 /// Dark background to distinguish the overlay from normal terminal content.
 const BG: Color = Color::Rgb(20, 20, 48);
@@ -152,8 +154,10 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool
 
     // Helper to draw a box-drawing character at a buffer cell if in range.
     let set_cell = |buf: &mut ratatui::buffer::Buffer, x: i32, y: i32, ch: char| {
-        if x >= full.left() as i32 && x < full.right() as i32
-            && y >= full.top() as i32 && y < full.bottom() as i32
+        if x >= full.left() as i32
+            && x < full.right() as i32
+            && y >= full.top() as i32
+            && y < full.bottom() as i32
             && let Some(cell) = buf.cell_mut((x as u16, y as u16))
         {
             let mut s = [0u8; 4];
@@ -167,7 +171,13 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool
         let ty = by;
         if ty >= full.top() as i32 && ty < full.bottom() as i32 {
             for x in x_lo..x_hi {
-                let ch = if x == bx { '┌' } else if x == bx + bw - 1 { '┐' } else { '─' };
+                let ch = if x == bx {
+                    '┌'
+                } else if x == bx + bw - 1 {
+                    '┐'
+                } else {
+                    '─'
+                };
                 set_cell(buf, x, ty, ch);
             }
         }
@@ -175,7 +185,13 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool
         let ty2 = by + bh - 1;
         if ty2 >= full.top() as i32 && ty2 < full.bottom() as i32 {
             for x in x_lo..x_hi {
-                let ch = if x == bx { '└' } else if x == bx + bw - 1 { '┘' } else { '─' };
+                let ch = if x == bx {
+                    '└'
+                } else if x == bx + bw - 1 {
+                    '┘'
+                } else {
+                    '─'
+                };
                 set_cell(buf, x, ty2, ch);
             }
         }
@@ -208,14 +224,18 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool
 
     // Text centered on the border rect, clamped to terminal bounds
     let text_x = (bx + bw / 2 - label.len() as i32 / 2).max(full.left() as i32) as u16;
-    let text_y = (by + bh / 2)
-        .clamp(full.top() as i32, full.bottom().saturating_sub(1) as i32) as u16;
+    let text_y =
+        (by + bh / 2).clamp(full.top() as i32, full.bottom().saturating_sub(1) as i32) as u16;
     let max_x = full.right();
 
     for (i, ch) in label.chars().enumerate() {
         let cx = text_x.saturating_add(i as u16);
-        if cx >= max_x { break; }
-        let Some(cell) = buf.cell_mut((cx, text_y)) else { continue; };
+        if cx >= max_x {
+            break;
+        }
+        let Some(cell) = buf.cell_mut((cx, text_y)) else {
+            continue;
+        };
         let mut s = [0u8; 4];
         let s = ch.encode_utf8(&mut s);
         cell.set_symbol(s).set_style(text_style);
