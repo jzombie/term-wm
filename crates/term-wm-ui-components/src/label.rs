@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use term_wm_core::actions::{EventResult, TermWmAction};
@@ -11,10 +11,11 @@ use term_wm_layout_engine::LayoutRect;
 use crate::helpers::layout_rect_to_clipped_rect;
 
 /// A single-line text label.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LabelComponent {
     text: String,
     color: Color,
+    bold: bool,
 }
 
 impl LabelComponent {
@@ -22,11 +23,17 @@ impl LabelComponent {
         Self {
             text: text.into(),
             color: Color::White,
+            bold: false,
         }
     }
 
     pub fn with_color(mut self, color: Color) -> Self {
         self.color = color;
+        self
+    }
+
+    pub fn with_bold(mut self) -> Self {
+        self.bold = true;
         self
     }
 }
@@ -48,10 +55,11 @@ impl Component<TermWmAction> for LabelComponent {
         }
         let rect = layout_rect_to_clipped_rect(area);
         let backend = crate::helpers::downcast_ratatui(backend);
-        let para = Paragraph::new(Line::from(Span::styled(
-            self.text.as_str(),
-            Style::default().fg(self.color),
-        )));
+        let mut style = Style::default().fg(self.color);
+        if self.bold {
+            style = style.add_modifier(Modifier::BOLD);
+        }
+        let para = Paragraph::new(Line::from(Span::styled(self.text.as_str(), style)));
         para.render(rect, &mut backend.buffer);
     }
 

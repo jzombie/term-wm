@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::io;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crossbeam_channel::{Sender, bounded};
@@ -12,6 +14,7 @@ use term_wm_core::components::Component;
 use term_wm_core::config::AppBuilder;
 use term_wm_core::debug_log::set_global_debug_log;
 use term_wm_core::engine::CoreEngine;
+use term_wm_core::events::{Event, KeyEvent};
 use term_wm_core::io::{EventSource, RenderTarget};
 use term_wm_core::runner::{WindowManagerHost, run_with_defaults};
 use term_wm_core::window::{ClosePolicy, WindowKey, WindowManager, WindowState};
@@ -87,6 +90,8 @@ where
     draw_renderer: DrawPlanRenderer,
     /// Sender for PTY events (wakeup, exit, direct-input transitions).
     pty_wakeup_tx: Sender<UnifiedEvent>,
+    /// Shared state for the key-monitor applet in the system panel.
+    last_key: Rc<RefCell<Option<KeyEvent>>>,
 }
 
 impl<C: Component<TermWmAction>> TermWmApp<C> {
@@ -175,6 +180,7 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
             engine: CoreEngine::new(),
             draw_renderer: DrawPlanRenderer::new(),
             pty_wakeup_tx,
+            last_key: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -302,7 +308,7 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
 
         // System Panel — hidden, toggled via keybinding, persists across close.
         {
-            let sys_panel = WmSystemPanelComponent::new();
+            let sys_panel = WmSystemPanelComponent::new().with_key_monitor(self.last_key.clone());
             let sys_key =
                 self.wm
                     .create_window(AppRootComponent::Core(CoreWmComponent::SystemPanel(
@@ -433,6 +439,13 @@ impl<C: Component<TermWmAction>>
             &mut self.engine,
             &mut self.draw_renderer,
         );
+    }
+
+    fn handle_app_event(&mut self, event: &Event) -> bool {
+        if let Event::Key(key) = event {
+            *self.last_key.borrow_mut() = Some(*key);
+        }
+        false
     }
 
     fn on_panic(&mut self) {
