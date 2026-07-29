@@ -121,7 +121,7 @@ fn dispatch_action<
                 queue.push_back((key, TermWmAction::ClipboardPaste(text)));
             }
         }
-        TermWmAction::SendCommandPaletteKeyToWindow(target) => {
+        TermWmAction::SendSuperKeyToWindow(target) => {
             let kb = app.wm().keybindings();
             if let Some(combo) = kb.first_combo(TermWmAction::OpenCommandPalette) {
                 let bytes =
