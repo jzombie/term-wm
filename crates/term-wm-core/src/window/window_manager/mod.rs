@@ -515,8 +515,26 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 if !self.managed_draw_order.contains(&key) {
                     self.managed_draw_order.push(key);
                 }
-                self.reattach_to_tiling_layout(key);
+
+                let has_other_floating = self
+                    .windows
+                    .values()
+                    .any(|w| w.state() == WindowState::Mapped && w.is_floating());
+                let floating_mode = self.managed_layout.is_none();
+
+                if !self.is_window_floating(key) && (has_other_floating || floating_mode) {
+                    let index = self.windows.len().saturating_sub(1);
+                    let fallback = self.default_cascading_rect(index);
+                    self.set_floating_rect(
+                        key,
+                        Some(crate::window::FloatRectSpec::Absolute(fallback)),
+                    );
+                } else if !self.is_window_floating(key) {
+                    self.reattach_to_tiling_layout(key);
+                }
+
                 self.focus_add(key);
+                self.bring_to_front_key(key);
             }
             (_, WindowState::Unmapped) => {
                 // Preserve floating_rect so re-mapping restores previous
