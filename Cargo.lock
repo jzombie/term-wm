@@ -3019,6 +3019,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "term-resize-indicator"
+version = "0.8.20-alpha"
+dependencies = [
+ "clap",
+ "crossterm",
+ "ratatui",
+]
+
+[[package]]
 name = "term-session-client"
 version = "0.8.20-alpha"
 dependencies = [
@@ -3026,6 +3035,7 @@ dependencies = [
  "crossbeam-channel",
  "crossterm",
  "libc",
+ "line-ending",
  "muxio-core",
  "muxio-rpc-service",
  "muxio-rpc-service-caller",
@@ -3039,6 +3049,7 @@ dependencies = [
  "term-wm-pty-engine",
  "tokio",
  "tracing",
+ "unicode-width",
  "vt100",
 ]
 
