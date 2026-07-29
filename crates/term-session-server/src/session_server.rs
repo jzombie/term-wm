@@ -24,6 +24,8 @@ pub struct SessionServerConfig {
 
 struct ClientEntry {
     conn_id: usize,
+    cols: u16,
+    rows: u16,
 }
 
 struct SubscriberEntry {
@@ -81,6 +83,34 @@ impl ServerState {
         self.subscribers.clear();
         self.notify.notify_one();
     }
+
+    /// Constrain the PTY to the smallest geometry across all connected clients.
+    /// This guarantees the virtual buffer never exceeds any attached monitor.
+    fn recalculate_pty_size(&mut self) {
+        let Some(session) = self.session.as_mut() else { return; };
+        if self.clients.is_empty() { return; }
+
+        let min_cols = self.clients.iter()
+            .map(|c| c.cols)
+            .filter(|&c| c != u16::MAX)
+            .min()
+            .unwrap_or(80);
+        let min_rows = self.clients.iter()
+            .map(|c| c.rows)
+            .filter(|&r| r != u16::MAX)
+            .min()
+            .unwrap_or(24);
+
+        let size = PtySize {
+            rows: min_rows,
+            cols: min_cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let _ = session.pty.resize(size);
+        session.cols = min_cols;
+        session.rows = min_rows;
+    }
 }
 
 type SharedState = Arc<Mutex<ServerState>>;
@@ -111,7 +141,7 @@ pub async fn run_server(
     // Register Spawn
     let st = Arc::clone(&state);
     endpoint
-        .register_prebuffered(Spawn::METHOD_ID, move |payload, _ctx| {
+        .register_prebuffered(Spawn::METHOD_ID, move |payload, ctx| {
             let state = Arc::clone(&st);
             async move {
                 let mut guard = state.lock().await;
@@ -119,27 +149,27 @@ pub async fn run_server(
                 let (cmd, cols, rows) = Spawn::decode_request(&payload)
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
-                // If a session already exists and hasn't exited, resize and return it.
-                if let Some(ref mut session) = guard.session
-                    && !session.exited
-                {
-                    let size = PtySize {
-                        rows,
-                        cols,
-                        pixel_width: 0,
-                        pixel_height: 0,
-                    };
-                    let _ = session.pty.resize(size);
-                    session.cols = cols;
-                    session.rows = rows;
+                // Update calling client's geometry
+                if let Some(client) = guard.clients.iter_mut().find(|c| c.conn_id == ctx.conn_id) {
+                    client.cols = cols;
+                    client.rows = rows;
+                }
 
-                    return Spawn::encode_response(session.id)
+                // If a session already exists and hasn't exited, reuse it.
+                if guard.session.as_ref().is_some_and(|s| !s.exited) {
+                    guard.recalculate_pty_size();
+                    let id = guard.session.as_ref().map(|s| s.id).unwrap_or(1);
+
+                    return Spawn::encode_response(id)
                         .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
                 }
 
                 let id = 1;
                 let session = Session::spawn(id, cmd, cols, rows)?;
                 guard.set_session(session);
+                // Enforce global geometric constraints on the newly instantiated PTY
+                guard.recalculate_pty_size();
+
                 Spawn::encode_response(id)
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
             }
@@ -150,21 +180,21 @@ pub async fn run_server(
     // Register ResizePty
     let st = Arc::clone(&state);
     endpoint
-        .register_prebuffered(ResizePty::METHOD_ID, move |payload, _ctx| {
+        .register_prebuffered(ResizePty::METHOD_ID, move |payload, ctx| {
             let state = Arc::clone(&st);
             async move {
                 let (_id, cols, rows) = ResizePty::decode_request(&payload)
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
                 let mut guard = state.lock().await;
-                if let Some(session) = guard.session.as_mut() {
-                    let size = portable_pty::PtySize {
-                        rows,
-                        cols,
-                        pixel_width: 0,
-                        pixel_height: 0,
-                    };
-                    let _ = session.pty.resize(size);
+
+                // Update calling client's geometry
+                if let Some(client) = guard.clients.iter_mut().find(|c| c.conn_id == ctx.conn_id) {
+                    client.cols = cols;
+                    client.rows = rows;
                 }
+
+                guard.recalculate_pty_size();
+
                 ResizePty::encode_response(())
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
             }
@@ -312,6 +342,8 @@ pub async fn run_server(
                     let mut guard = st.lock().await;
                     guard.clients.push(ClientEntry {
                         conn_id: handle.0.conn_id,
+                        cols: u16::MAX,
+                        rows: u16::MAX,
                     });
                 }
                 RpcIpcServerEvent::ClientDisconnected(conn_id) => {
@@ -319,6 +351,7 @@ pub async fn run_server(
                     let mut guard = st.lock().await;
                     guard.clients.retain(|c| c.conn_id != conn_id);
                     guard.subscribers.retain(|s| s.conn_id != conn_id);
+                    guard.recalculate_pty_size();
                 }
             }
         }
