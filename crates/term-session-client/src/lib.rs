@@ -14,12 +14,11 @@ use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
+use line_ending::PeekableLineEndingExt;
 use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
 use muxio_tokio_mpsc_adapter::ChannelCallerExt;
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient, RpcServiceCallerInterface};
-use line_ending::PeekableLineEndingExt;
 use portable_pty::PtySize;
-use unicode_width::UnicodeWidthChar;
 use term_session_muxio_service_definitions::{
     OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
 };
@@ -28,6 +27,7 @@ use term_wm_pty_engine::Pane;
 use term_wm_pty_engine::clipboard::{Clipboard, Osc52Extractor};
 use term_wm_pty_engine::input_encoding::mouse_event_to_bytes;
 use term_wm_pty_engine::signal::install_sigint_handler;
+use unicode_width::UnicodeWidthChar;
 use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
 /// Redirect an OS-level file descriptor (stdout or stderr) into `tracing`.
@@ -272,21 +272,20 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     // Register OnPtyResized handler so the server can notify us of
     // geometry changes (e.g., when another client connects at a smaller size).
     let parser_handle = pane.shared_parser();
-    rt.block_on(
-        client
-            .get_endpoint()
-            .register_prebuffered(OnPtyResized::METHOD_ID, move |payload, _ctx| {
-                let parser = Arc::clone(&parser_handle);
-                async move {
-                    let (cols, rows) = OnPtyResized::decode_request(&payload)
-                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-                    let mut parser = parser.lock().unwrap();
-                    parser.screen_mut().set_size(rows, cols);
-                    OnPtyResized::encode_response(())
-                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
-                }
-            }),
-    )
+    rt.block_on(client.get_endpoint().register_prebuffered(
+        OnPtyResized::METHOD_ID,
+        move |payload, _ctx| {
+            let parser = Arc::clone(&parser_handle);
+            async move {
+                let (cols, rows) = OnPtyResized::decode_request(&payload)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                let mut parser = parser.lock().unwrap();
+                parser.screen_mut().set_size(rows, cols);
+                OnPtyResized::encode_response(())
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+            }
+        },
+    ))
     .map_err(|e| io::Error::other(format!("register OnPtyResized: {e:?}")))?;
 
     // Channel for crossterm input events from a background thread
@@ -583,6 +582,22 @@ pub fn rewrite_diff(diff: &[u8], parser_cols: u16) -> Vec<u8> {
             let mut buf = [0u8; 4];
             out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
         }
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    struct TestWriter { buf: Arc<Mutex<Vec<u8>>> }
+
+    impl TestWriter {
+        fn new() -> (Self, Arc<Mutex<Vec<u8>>>) {
+            let buf = Arc::new(Mutex::new(Vec::new()));
+            (Self { buf: buf.clone() }, buf)
+        }
     }
 
     impl Write for TestWriter {
@@ -590,9 +605,7 @@ pub fn rewrite_diff(diff: &[u8], parser_cols: u16) -> Vec<u8> {
             self.buf.lock().unwrap().extend_from_slice(buf);
             Ok(buf.len())
         }
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
+        fn flush(&mut self) -> io::Result<()> { Ok(()) }
     }
 
     /// Calls the real `init_terminal()` with a test writer and verifies
@@ -604,15 +617,7 @@ pub fn rewrite_diff(diff: &[u8], parser_cols: u16) -> Vec<u8> {
         let (writer, buf) = TestWriter::new();
         let _guard = init_terminal(writer).expect("init_terminal");
         let bytes = buf.lock().unwrap();
-        assert!(
-            bytes
-                .windows(b"\x1b[?2004h".len())
-                .any(|w| w == b"\x1b[?2004h"),
-            "init_terminal must write bracketed paste enable \\x1b[?2004h. \
-             If this fails, EnableBracketedPaste may have been removed \
-             from the startup sequence. Captured bytes: {:?}",
-            String::from_utf8_lossy(&bytes)
-        );
+        assert!(bytes.windows(b"\x1b[?2004h".len()).any(|w| w == b"\x1b[?2004h"));
     }
 
     /// Constructs a TerminalGuard with a test writer and verifies that
@@ -620,21 +625,9 @@ pub fn rewrite_diff(diff: &[u8], parser_cols: u16) -> Vec<u8> {
     #[test]
     fn terminal_guard_teardown_writes_bracketed_paste_disable() {
         let (writer, buf) = TestWriter::new();
-        {
-            let _guard = TerminalGuard {
-                writer: Some(writer),
-            };
-        }
+        { let _guard = TerminalGuard { writer: Some(writer) }; }
         let bytes = buf.lock().unwrap();
-        assert!(
-            bytes
-                .windows(b"\x1b[?2004l".len())
-                .any(|w| w == b"\x1b[?2004l"),
-            "TerminalGuard drop must write bracketed paste disable \\x1b[?2004l. \
-             If this fails, DisableBracketedPaste may have been removed \
-             from TerminalGuard::drop. Captured bytes: {:?}",
-            String::from_utf8_lossy(&bytes)
-        );
+        assert!(bytes.windows(b"\x1b[?2004l".len()).any(|w| w == b"\x1b[?2004l"));
     }
 
     /// Full lifecycle: init_terminal followed by TerminalGuard teardown
@@ -645,18 +638,8 @@ pub fn rewrite_diff(diff: &[u8], parser_cols: u16) -> Vec<u8> {
         let guard = init_terminal(writer).expect("init_terminal");
         drop(guard);
         let bytes = buf.lock().unwrap();
-        assert!(
-            bytes
-                .windows(b"\x1b[?2004h".len())
-                .any(|w| w == b"\x1b[?2004h"),
-            "init/teardown roundtrip must contain enable \\x1b[?2004h"
-        );
-        assert!(
-            bytes
-                .windows(b"\x1b[?2004l".len())
-                .any(|w| w == b"\x1b[?2004l"),
-            "init/teardown roundtrip must contain disable \\x1b[?2004l"
-        );
+        assert!(bytes.windows(b"\x1b[?2004h".len()).any(|w| w == b"\x1b[?2004h"));
+        assert!(bytes.windows(b"\x1b[?2004l".len()).any(|w| w == b"\x1b[?2004l"));
     }
 
     /// Proves that reusing a parser via set_size + RIS + process yields
