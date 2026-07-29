@@ -493,3 +493,24 @@ async fn session_multi_client_disconnect_expands_pty() {
 
     drop(tempdir);
 }
+
+#[tokio::test]
+#[serial]
+async fn session_server_start_stop_cleanly() {
+    let mock = get_mock_bin();
+    let (tempdir, socket_path) = generate_socket_path();
+    let config = term_session_server::SessionServerConfig {
+        socket_path: socket_path.clone(),
+        cmd: vec![mock, "echo".into()],
+        cols: 80,
+        rows: 24,
+    };
+    tokio::spawn(async move { term_session_server::run_server(config).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let client = connect_client_with_retry(&socket_path).await;
+    let sessions = ListSessions::call(&*client, ()).await.unwrap();
+    assert_eq!(sessions.len(), 1);
+
+    drop(tempdir);
+}

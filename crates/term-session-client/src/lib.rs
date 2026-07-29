@@ -690,4 +690,29 @@ mod tests {
             "Reused parser state after set_size + RIS must match fresh parser"
         );
     }
+
+    #[test]
+    fn render_frame_outputs_correct_cup_and_sgr() {
+        let mut parser = vt100::Parser::new(4, 8, 0);
+        parser.process(b"\x1b[31mhello\x1b[0m");
+        let screen = parser.screen();
+        let mut buf: Vec<u8> = Vec::new();
+        let (rows, cols) = screen.size();
+        render_frame(&mut buf, screen, rows, cols).unwrap();
+        let output = String::from_utf8_lossy(&buf);
+        // Should contain CUP to each row (4 rows)
+        assert!(output.contains("\x1b[1;1H"));
+        assert!(output.contains("\x1b[2;1H"));
+        assert!(output.contains("\x1b[3;1H"));
+        assert!(output.contains("\x1b[4;1H"));
+        // Should contain "hello"
+        assert!(output.contains("hello"));
+        // Should contain red foreground SGR
+        assert!(
+            output.contains("\x1b[38;5;1m") || output.contains("\x1b[31m"),
+            "Expected red foreground SGR in output: {output:?}"
+        );
+        // Should not contain raw ESC characters without following sequences
+        assert!(!output.contains("\x1b\x1b"), "no double ESC sequences");
+    }
 }
