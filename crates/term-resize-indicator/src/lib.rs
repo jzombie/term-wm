@@ -74,6 +74,12 @@ fn run_loop(
     Ok(())
 }
 
+/// Draw the full-screen overlay.
+///
+/// - Background fill (dark blue) so both viewers see a uniform canvas.
+/// - Box-drawing border (`┌─┐│└─┘`) edge-to-edge — a deliberate measured box
+///   that is visually distinct from the terminal boundary.
+/// - Centered text shows the live terminal dimensions.
 fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16) {
     if full.width < 4 || full.height < 3 {
         return;
