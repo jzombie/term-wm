@@ -29,10 +29,17 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 // Was tiled: restore Void → Leaf in layout tree
                 self.clear_floating_rect(key);
                 let void_id = self.window(key).and_then(|w| w.void_id());
+
+                let mut restored = false;
                 if let Some(vid) = void_id
                     && let Some(ref mut layout) = self.managed_layout
                 {
-                    layout.replace_void_by_id(vid, LayoutNode::leaf(key));
+                    restored = layout.replace_void_by_id(vid, LayoutNode::leaf(key));
+                }
+
+                // Force re-attachment if the Void node was destroyed (e.g., during minimize)
+                if !restored && self.window_state(key) == Some(WindowState::Mapped) {
+                    self.reattach_to_tiling_layout(key);
                 }
             }
 
@@ -104,5 +111,83 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             }
             self.windows.remove(key);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Rect;
+    use crate::app_context::AppContext;
+    use crate::components::NoopComponent;
+    use crate::window::WindowState;
+    use crate::wm_config::WmConfig;
+    use std::sync::Arc;
+
+    fn make_wm() -> WindowManager<NoopComponent> {
+        WindowManager::<NoopComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        )
+    }
+
+    #[test]
+    fn maximize_minimize_unmaximize_retains_window() {
+        let mut wm = make_wm();
+
+        let key_a = wm.create_window(NoopComponent);
+        let key_b = wm.create_window(NoopComponent);
+        wm.transition_window(key_a, WindowState::Mapped);
+        wm.transition_window(key_b, WindowState::Mapped);
+
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        // 1. Maximize window A (creates Void in tree, stores void_id)
+        wm.toggle_maximize(key_a);
+        assert!(wm.window(key_a).is_some_and(|w| w.is_maximized()));
+        assert!(wm.is_window_floating(key_a));
+
+        // 2. Minimize window A (destroys Void, clears void_id)
+        wm.minimize_window(key_a);
+        assert_eq!(wm.window_state(key_a), Some(WindowState::Iconic));
+
+        // 3. Restore window A (state -> Mapped)
+        wm.restore_minimized(key_a);
+        assert_eq!(wm.window_state(key_a), Some(WindowState::Mapped));
+
+        // 4. Unmaximize window A (toggle_maximize — void_id pointer is now stale/None)
+        wm.toggle_maximize(key_a);
+        assert!(!wm.window(key_a).is_some_and(|w| w.is_maximized()));
+        assert!(!wm.is_window_floating(key_a));
+
+        // Assert: Window A was forcefully reattached to tiling layout via fallback
+        assert!(
+            wm.layout_contains(key_a),
+            "Window A must be reattached to tiling layout despite stale void_id"
+        );
+        assert!(
+            wm.z_order.contains(&key_a),
+            "Window A must remain in z_order"
+        );
+
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let reg = wm.region(key_a);
+        assert!(
+            reg.width > 0 && reg.height > 0,
+            "Window A must have a valid rendered region after unmaximize"
+        );
     }
 }

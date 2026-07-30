@@ -104,11 +104,30 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
         self.root.remove_void_by_id(void_id)
     }
 
+    /// Unified topological fallback: consumes the first available Void node.
+    /// Returns true if a Void was successfully filled.
+    pub fn consume_first_void(&mut self, insert: Id, area: Rect) -> bool {
+        let voids = self.void_regions(area);
+        if !voids.is_empty() {
+            let target_void_id = voids[0].0;
+            self.replace_void_by_id(target_void_id, LayoutNode::leaf(insert));
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn swap_nodes(&mut self, source: &Id, target: &Id) -> bool {
         self.root.swap_leaves(source, target)
     }
 
     pub fn insert_window_balanced(&mut self, insert: Id, area: Rect) {
+        // 1. Unified topological fallback — fill voids before splitting
+        if self.consume_first_void(insert, area) {
+            return;
+        }
+
+        // 2. Existing largest-leaf split logic
         let regions = self.regions(area);
         if regions.is_empty() {
             self.split_root(insert, InsertPosition::Right);
@@ -266,6 +285,55 @@ impl<Id: Copy + Eq + Ord> LayoutPlan<Id> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn insert_window_balanced_consumes_void_before_splitting_leaf() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+
+        // Construct tree: Split [ Leaf(1), Void(42) ]
+        let root = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::leaf(1), LayoutNode::Void(42)],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        let mut layout = TilingLayout::new(root);
+
+        assert_eq!(
+            layout.void_regions(area).len(),
+            1,
+            "Initial tree must contain 1 void"
+        );
+
+        // Insert window 2 into tree with void
+        layout.insert_window_balanced(2, area);
+
+        // Assert: Void node was consumed, no new splits were created
+        assert_eq!(
+            layout.void_regions(area).len(),
+            0,
+            "Void must be completely consumed"
+        );
+        let leaves = layout.root().collect_leaves();
+        assert_eq!(leaves, vec![1, 2], "Window 2 must occupy the vacant slot");
+
+        if let LayoutNode::Split { children, .. } = layout.root() {
+            assert_eq!(
+                children.len(),
+                2,
+                "Topology must remain a 2-child split (no nesting)"
+            );
+            assert_eq!(children[0].unwrap_leaf(), Some(1));
+            assert_eq!(children[1].unwrap_leaf(), Some(2));
+        } else {
+            panic!("Root must remain a Split");
+        }
+    }
 
     #[test]
     fn tiling_handle_event_direct() {
