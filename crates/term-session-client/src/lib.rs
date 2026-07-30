@@ -5,8 +5,8 @@ pub use remote_pane::RemotePane;
 use std::io::{self, IsTerminal, Write, stdout};
 #[cfg(unix)]
 use std::os::unix::io::FromRawFd;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crossterm::QueueableCommand;
@@ -22,12 +22,12 @@ use portable_pty::PtySize;
 use term_session_muxio_service_definitions::{
     OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
 };
-use term_wm_core::events::{Event, KeyKind};
+use term_wm_core::events::{Event, KeyKind, KeyModifiers, MouseEventKind};
 use term_wm_pty_engine::Pane;
 use term_wm_pty_engine::clipboard::{Clipboard, Osc52Extractor};
 use term_wm_pty_engine::input_encoding::mouse_event_to_bytes;
 use term_wm_pty_engine::signal::install_sigint_handler;
-use vt100::{MouseProtocolEncoding, MouseProtocolMode, Screen};
+use vt100::{MouseProtocolEncoding, MouseProtocolMode, Parser, Screen};
 
 /// Redirect an OS-level file descriptor (stdout or stderr) into `tracing`.
 ///
@@ -93,6 +93,29 @@ const CLIPBOARD_CHANNEL_CAPACITY: usize = 64;
 /// Maximum buffered input events (covers paste bursts without over-allocating).
 const INPUT_CHANNEL_CAPACITY: usize = 64;
 
+/// Number of trailing bytes retained to detect OSC 52 clipboard sequences
+/// that straddle chunk boundaries.  8 bytes is enough to hold the longest
+/// OSC 52 tail (the BEL terminator and preceding data).
+const PREV_TAIL_LEN: usize = 8;
+
+/// Sleep duration (ms) between iterations while waiting for initial PTY output.
+const INITIAL_WAIT_SLEEP_MS: u64 = 50;
+
+/// Crossterm input polling interval (ms).  Short enough for responsive
+/// input, long enough to keep CPU idle when nothing is happening.
+const INPUT_POLL_MS: u64 = 50;
+
+/// Sleep duration (ms) in the output-backpressure loop when the PTY
+/// output channel is saturated.
+const BACKPRESSURE_SLEEP_MS: u64 = 1;
+
+/// Extra allocation headroom for bracketed-paste wrapper sequences:
+/// 6 bytes for `\x1b[200~` + 6 bytes for `\x1b[201~`.
+const BRACKETED_PASTE_OVERHEAD: usize = 12;
+
+/// Rough per-cell ANSI byte multiplier for initial render-buffer capacity.
+const RENDER_BUF_CELL_MULTIPLIER: usize = 3;
+
 /// Initialize terminal for TUI mode: write startup escape sequences
 /// (alternate screen, hide cursor, bracketed paste, mouse capture) to
 /// the given writer, enable raw mode on stdin, and return a guard that
@@ -141,6 +164,26 @@ fn convert_crossterm_event(evt: crossterm::event::Event) -> Option<Event> {
     term_wm_crossterm_adapter::try_translate_event(evt)
 }
 
+/// Two motion mouse events may be coalesced (keep only the latest position)
+/// only when both the event kind and modifier flags match.  Modifier changes
+/// mid-drag (Shift/Ctrl/Alt pressed or released) must be preserved — they
+/// signal state transitions that terminal applications rely on.
+fn is_coalescable_mouse(
+    a_kind: &MouseEventKind,
+    a_mod: &KeyModifiers,
+    b_kind: &MouseEventKind,
+    b_mod: &KeyModifiers,
+) -> bool {
+    if a_mod != b_mod {
+        return false;
+    }
+    match (a_kind, b_kind) {
+        (MouseEventKind::Moved, MouseEventKind::Moved) => true,
+        (MouseEventKind::Drag(btn1), MouseEventKind::Drag(btn2)) => btn1 == btn2,
+        _ => false,
+    }
+}
+
 /// Connect to a term-session-server and run the TUI viewer.
 ///
 /// This function is synchronous. It creates a background tokio runtime
@@ -160,6 +203,37 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     let client: Arc<RpcIpcClient> = rt
         .block_on(RpcIpcClient::new(socket_path))
         .map_err(|e| io::Error::new(io::ErrorKind::ConnectionRefused, format!("{e:?}")))?;
+
+    // Atomic registers for server-initiated geometry changes (OnPtyResized).
+    // Initialised before Spawn::call() so the handler is registered before
+    // the server can send any notifications — prevents RpcMethodNotFound.
+    let server_cols = Arc::new(AtomicU16::new(0));
+    let server_rows = Arc::new(AtomicU16::new(0));
+    let resize_pending = Arc::new(AtomicBool::new(false));
+
+    {
+        let cols_ref = Arc::clone(&server_cols);
+        let rows_ref = Arc::clone(&server_rows);
+        let pending_ref = Arc::clone(&resize_pending);
+        rt.block_on(client.get_endpoint().register_prebuffered(
+            OnPtyResized::METHOD_ID,
+            move |payload, _ctx| {
+                let cols_ref = Arc::clone(&cols_ref);
+                let rows_ref = Arc::clone(&rows_ref);
+                let pending_ref = Arc::clone(&pending_ref);
+                async move {
+                    let (cols, rows) = OnPtyResized::decode_request(&payload)
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                    cols_ref.store(cols, Ordering::Relaxed);
+                    rows_ref.store(rows, Ordering::Relaxed);
+                    pending_ref.store(true, Ordering::Relaxed);
+                    OnPtyResized::encode_response(())
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                }
+            },
+        ))
+        .map_err(|e| io::Error::other(format!("register OnPtyResized: {e:?}")))?;
+    }
 
     // Channels for raw PTY output bytes and clipboard text from the subscription stream.
     // Using crossbeam so the main loop can block on both input and PTY output.
@@ -190,7 +264,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         // Intercept OSC 52 clipboard sequences before the parser consumes them.
         rt.spawn(async move {
             let mut osc52 = Osc52Extractor::new();
-            let mut prev_tail: [u8; 8] = [0; 8];
+            let mut prev_tail: [u8; PREV_TAIL_LEN] = [0; PREV_TAIL_LEN];
 
             while let Some(chunk) = reader.recv().await {
                 if let Ok(mut data) = chunk {
@@ -199,11 +273,11 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                     }
 
                     let n = data.len();
-                    if n >= 8 {
-                        prev_tail.copy_from_slice(&data[n - 8..n]);
+                    if n >= PREV_TAIL_LEN {
+                        prev_tail.copy_from_slice(&data[n - PREV_TAIL_LEN..n]);
                     } else if n > 0 {
                         prev_tail.rotate_left(n);
-                        prev_tail[8 - n..].copy_from_slice(&data[..n]);
+                        prev_tail[PREV_TAIL_LEN - n..].copy_from_slice(&data[..n]);
                     }
 
                     // Non-blocking push; if saturated, sleep 1ms to allow
@@ -212,7 +286,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                         push_tx.try_send(data)
                     {
                         data = pending;
-                        tokio::time::sleep(Duration::from_millis(1)).await;
+                        tokio::time::sleep(Duration::from_millis(BACKPRESSURE_SLEEP_MS)).await;
                     }
                 } else {
                     break;
@@ -256,7 +330,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             break;
         }
         drop(parser);
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(INITIAL_WAIT_SLEEP_MS));
     }
 
     // Resize local parser to server-constrained geometry
@@ -277,41 +351,18 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
 
     let mut clipboard = Clipboard::new();
     let sigint = install_sigint_handler()?;
-    let resize_pending = Arc::new(AtomicBool::new(false));
-    let resize_flag = Arc::clone(&resize_pending);
-
-    // Register OnPtyResized handler so the server can notify us of
-    // geometry changes (e.g., when another client connects at a smaller size).
-    let parser_handle = pane.shared_parser();
-    rt.block_on(client.get_endpoint().register_prebuffered(
-        OnPtyResized::METHOD_ID,
-        move |payload, _ctx| {
-            let parser = Arc::clone(&parser_handle);
-            let pending = Arc::clone(&resize_flag);
-            async move {
-                let (cols, rows) = OnPtyResized::decode_request(&payload)
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-                let mut parser = parser.lock().unwrap();
-                parser.screen_mut().set_size(rows, cols);
-                pending.store(true, Ordering::Relaxed);
-                OnPtyResized::encode_response(())
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
-            }
-        },
-    ))
-    .map_err(|e| io::Error::other(format!("register OnPtyResized: {e:?}")))?;
 
     // Channel for crossterm input events from a background thread
     let (input_tx, input_rx) = crossbeam_channel::bounded::<Event>(INPUT_CHANNEL_CAPACITY);
 
     // Spawn background crossterm input thread.
-    // Uses poll(50ms) so the thread can detect disconnection and exit
+    // Uses poll(INPUT_POLL_MS) so the thread can detect disconnection and exit
     // promptly when run_session terminates.
     std::thread::Builder::new()
         .name("crossterm-input".into())
         .spawn(move || {
             loop {
-                match crossterm::event::poll(Duration::from_millis(50)) {
+                match crossterm::event::poll(Duration::from_millis(INPUT_POLL_MS)) {
                     Ok(true) => {
                         if let Ok(crossterm_evt) = crossterm::event::read()
                             && let Some(e) = convert_crossterm_event(crossterm_evt)
@@ -333,31 +384,71 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         let parser = parser.lock().unwrap();
         let screen = parser.screen();
         let (rows, cols) = screen.size();
-        render_frame(&mut out, screen, rows, cols)?;
+        render_frame(&mut out, screen, rows, cols, false)?;
     }
 
+    let mut pending_input: Option<Event> = None;
     loop {
-        // Block until either user input or PTY output arrives (0 CPU when idle)
-        let input_event = crossbeam_channel::select! {
-            recv(input_rx) -> msg => {
-                match msg {
-                    Ok(evt) => Some(evt),
-                    Err(_) => return Err(io::Error::other("input thread died")),
+        let mut force_render = false;
+        let mut clear_display = false;
+
+        // Helper: synchronize parser geometry from server-driven resize signal.
+        // Returns true if geometry was actually updated.
+        let apply_pending_resize = |shared_parser: &Arc<Mutex<Parser>>| -> bool {
+            if resize_pending.swap(false, Ordering::Relaxed) {
+                let cols = server_cols.load(Ordering::Relaxed);
+                let rows = server_rows.load(Ordering::Relaxed);
+                if cols > 0 && rows > 0 {
+                    let mut parser_lk = shared_parser.lock().unwrap();
+                    let (cur_rows, cur_cols) = parser_lk.screen().size();
+                    if cur_cols != cols || cur_rows != rows {
+                        parser_lk.screen_mut().set_size(rows, cols);
+                        return true;
+                    }
                 }
             }
-            recv(push_rx) -> msg => {
-                match msg {
-                    Ok(data) => {
-                        // PTY output — process directly into parser
-                        let parser = pane.shared_parser();
-                        let mut parser = parser.lock().unwrap();
-                        parser.process(&data);
-                        None
+            false
+        };
+
+        // Site 1: Apply any pending resize that arrived before this iteration
+        let resized = apply_pending_resize(&pane.shared_parser());
+        force_render |= resized;
+        clear_display |= resized;
+
+        // Retrieve next input event (either buffered from previous coalescing
+        // pass or blocking on the input/PTY-output channel)
+        let input_event = if let Some(evt) = pending_input.take() {
+            Some(evt)
+        } else {
+            crossbeam_channel::select! {
+                recv(input_rx) -> msg => {
+                    match msg {
+                        Ok(evt) => Some(evt),
+                        Err(_) => return Err(io::Error::other("input thread died")),
                     }
-                    Err(_) => {
-                        // push channel disconnected → will be detected
-                        // by drain_pushes() below
-                        None
+                }
+                recv(push_rx) -> msg => {
+                    match msg {
+                        Ok(data) => {
+                            // Site 2: Apply pending resize before parsing PTY bytes
+                            // (prevents DECAWM auto-scroll row duplication when
+                            // geometry changed between entering select and receiving
+                            // push_rx data)
+                            let resized = apply_pending_resize(&pane.shared_parser());
+                            force_render |= resized;
+                            clear_display |= resized;
+
+                            // PTY output — process directly into parser
+                            let parser = pane.shared_parser();
+                            let mut parser = parser.lock().unwrap();
+                            parser.process(&data);
+                            None
+                        }
+                        Err(_) => {
+                            // push channel disconnected → will be detected
+                            // by drain_pushes() below
+                            None
+                        }
                     }
                 }
             }
@@ -378,7 +469,34 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         }
 
         // Handle the input event (if any)
-        if let Some(evt) = input_event {
+        if let Some(mut evt) = input_event {
+            // Coalesce rapid mouse motion (Moved / Drag) events currently in
+            // the channel buffer.  Only the latest position matters — discard
+            // intermediate positions.  Modifier changes and non-motion events
+            // break the coalescing loop so they are never lost or reordered.
+            if let Event::Mouse(ref mut mouse) = evt
+                && matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Drag(_))
+            {
+                while let Ok(next_evt) = input_rx.try_recv() {
+                    match next_evt {
+                        Event::Mouse(ref next_mouse)
+                            if is_coalescable_mouse(
+                                &mouse.kind,
+                                &mouse.modifiers,
+                                &next_mouse.kind,
+                                &next_mouse.modifiers,
+                            ) =>
+                        {
+                            *mouse = *next_mouse;
+                        }
+                        other => {
+                            pending_input = Some(other);
+                            break;
+                        }
+                    }
+                }
+            }
+
             match evt {
                 Event::Key(ref key)
                     if key.kind == KeyKind::Press || key.kind == KeyKind::Repeat =>
@@ -439,10 +557,14 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                         pixel_width: 0,
                         pixel_height: 0,
                     };
-                    let _ = pane.resize(size);
+                    if let Err(err) = pane.resize(size) {
+                        tracing::warn!(error = %err, "resize request failed on PTY pane");
+                    }
+                    force_render = true;
+                    clear_display = true;
                 }
                 Event::Paste(text) => {
-                    let mut wrapped = Vec::with_capacity(text.len() + 12);
+                    let mut wrapped = Vec::with_capacity(text.len() + BRACKETED_PASTE_OVERHEAD);
                     wrapped.extend_from_slice(b"\x1b[200~");
                     wrapped.extend_from_slice(text.as_bytes());
                     wrapped.extend_from_slice(b"\x1b[201~");
@@ -457,19 +579,13 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             return Err(io::Error::other("connection to session server lost"));
         }
 
-        // Check if OnPtyResized signaled a geometry change
-        if resize_pending.swap(false, Ordering::Relaxed) {
-            let _ = out.write_all(b"\x1b[0m\x1b[2J\x1b[H");
-            let _ = out.flush();
-        }
-
         // Full-frame explicit row-by-row render
-        if has_new_data {
+        if has_new_data || force_render {
             let parser = pane.shared_parser();
             let parser = parser.lock().unwrap();
             let screen = parser.screen();
             let (rows, cols) = screen.size();
-            render_frame(&mut out, screen, rows, cols)?;
+            render_frame(&mut out, screen, rows, cols, clear_display)?;
         }
 
         // Exit on session exit
@@ -534,39 +650,65 @@ fn apply_sgr(out: &mut dyn Write, style: &CellStyle) -> io::Result<()> {
     Ok(())
 }
 
-pub fn render_frame(out: &mut dyn Write, screen: &Screen, rows: u16, cols: u16) -> io::Result<()> {
-    let mut buf = Vec::with_capacity((rows as usize) * (cols as usize) * 3);
+pub fn render_frame(
+    out: &mut dyn Write,
+    screen: &Screen,
+    rows: u16,
+    cols: u16,
+    clear_display: bool,
+) -> io::Result<()> {
+    let mut buf =
+        Vec::with_capacity((rows as usize) * (cols as usize) * RENDER_BUF_CELL_MULTIPLIER);
     let mut active_style = CellStyle::default();
 
-    buf.extend_from_slice(b"\x1b[0m");
+    // Synchronized Output begin, hide cursor, reset attributes
+    buf.extend_from_slice(b"\x1b[?2026h\x1b[?25l\x1b[0m");
+    if clear_display {
+        buf.extend_from_slice(b"\x1b[2J");
+    }
+    buf.extend_from_slice(b"\x1b[?7l");
 
     for row in 0..rows {
         write!(buf, "\x1b[{};1H", row + 1)?;
+
         let mut col: u16 = 0;
         while col < cols {
+            // Compute cell width first to handle wide chars (CJK, emoji) that
+            // span multiple columns — checking col + width >= cols catches the
+            // right-edge case even when a wide char at cols-2 jumps past cols-1.
             let cell_opt = screen.cell(row, col);
-            let style = cell_opt.map(CellStyle::from_cell).unwrap_or_default();
+            let contents = cell_opt.map_or("", |c| c.contents());
+            let width = if contents.is_empty() {
+                1
+            } else {
+                unicode_width::UnicodeWidthStr::width(contents).max(1) as u16
+            };
 
+            // Margin sanitation: clear right margin before writing the cell that
+            // touches or passes the right edge.  Placing \x1b[K here (while the
+            // cursor is still at col) avoids cursor-inclusive erasure of the cell.
+            if col + width >= cols {
+                buf.extend_from_slice(b"\x1b[0m\x1b[K");
+                active_style = CellStyle::default();
+            }
+
+            let style = cell_opt.map(CellStyle::from_cell).unwrap_or_default();
             if style != active_style {
                 apply_sgr(&mut buf, &style)?;
                 active_style = style;
             }
 
-            if let Some(cell) = cell_opt {
-                let c = cell.contents();
-                if !c.is_empty() {
-                    buf.extend_from_slice(c.as_bytes());
-                    let w = unicode_width::UnicodeWidthStr::width(c).max(1) as u16;
-                    col += w;
-                    continue;
-                }
+            if contents.is_empty() {
+                buf.push(b' ');
+            } else {
+                buf.extend_from_slice(contents.as_bytes());
             }
 
-            buf.push(b' ');
-            col += 1;
+            col += width;
         }
     }
 
+    buf.extend_from_slice(b"\x1b[?7h");
     buf.extend_from_slice(b"\x1b[0m");
     let (cur_row, cur_col) = screen.cursor_position();
     write!(buf, "\x1b[{};{}H", cur_row + 1, cur_col + 1)?;
@@ -575,6 +717,8 @@ pub fn render_frame(out: &mut dyn Write, screen: &Screen, rows: u16, cols: u16) 
     } else {
         buf.extend_from_slice(b"\x1b[?25h");
     }
+    // Synchronized Output end — terminal now paints atomically
+    buf.extend_from_slice(b"\x1b[?2026l");
 
     out.write_all(&buf)?;
     out.flush()
@@ -584,6 +728,8 @@ pub fn render_frame(out: &mut dyn Write, screen: &Screen, rows: u16, cols: u16) 
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    use term_wm_core::events::{KeyCode, KeyEvent, MouseButton, MouseEvent};
 
     struct TestWriter {
         buf: Arc<Mutex<Vec<u8>>>,
@@ -698,7 +844,7 @@ mod tests {
         let screen = parser.screen();
         let mut buf: Vec<u8> = Vec::new();
         let (rows, cols) = screen.size();
-        render_frame(&mut buf, screen, rows, cols).unwrap();
+        render_frame(&mut buf, screen, rows, cols, false).unwrap();
         let output = String::from_utf8_lossy(&buf);
         // Should contain CUP to each row (4 rows)
         assert!(output.contains("\x1b[1;1H"));
@@ -714,5 +860,419 @@ mod tests {
         );
         // Should not contain raw ESC characters without following sequences
         assert!(!output.contains("\x1b\x1b"), "no double ESC sequences");
+    }
+
+    // ── is_coalescable_mouse tests ────────────────────────────────────────
+
+    #[test]
+    fn coalesce_moved_with_moved() {
+        assert!(is_coalescable_mouse(
+            &MouseEventKind::Moved,
+            &KeyModifiers::NONE,
+            &MouseEventKind::Moved,
+            &KeyModifiers::NONE,
+        ));
+    }
+
+    #[test]
+    fn coalesce_drag_same_button() {
+        assert!(is_coalescable_mouse(
+            &MouseEventKind::Drag(MouseButton::Left),
+            &KeyModifiers::NONE,
+            &MouseEventKind::Drag(MouseButton::Left),
+            &KeyModifiers::NONE,
+        ));
+        assert!(is_coalescable_mouse(
+            &MouseEventKind::Drag(MouseButton::Right),
+            &KeyModifiers {
+                shift: true,
+                ..KeyModifiers::NONE
+            },
+            &MouseEventKind::Drag(MouseButton::Right),
+            &KeyModifiers {
+                shift: true,
+                ..KeyModifiers::NONE
+            },
+        ));
+    }
+
+    #[test]
+    fn reject_drag_different_button() {
+        assert!(!is_coalescable_mouse(
+            &MouseEventKind::Drag(MouseButton::Left),
+            &KeyModifiers::NONE,
+            &MouseEventKind::Drag(MouseButton::Right),
+            &KeyModifiers::NONE,
+        ));
+    }
+
+    #[test]
+    fn reject_moved_vs_drag() {
+        assert!(!is_coalescable_mouse(
+            &MouseEventKind::Moved,
+            &KeyModifiers::NONE,
+            &MouseEventKind::Drag(MouseButton::Left),
+            &KeyModifiers::NONE,
+        ));
+    }
+
+    #[test]
+    fn reject_different_modifiers() {
+        assert!(!is_coalescable_mouse(
+            &MouseEventKind::Moved,
+            &KeyModifiers::NONE,
+            &MouseEventKind::Moved,
+            &KeyModifiers {
+                shift: true,
+                ..KeyModifiers::NONE
+            },
+        ));
+        assert!(!is_coalescable_mouse(
+            &MouseEventKind::Drag(MouseButton::Left),
+            &KeyModifiers {
+                control: true,
+                ..KeyModifiers::NONE
+            },
+            &MouseEventKind::Drag(MouseButton::Left),
+            &KeyModifiers::NONE,
+        ));
+    }
+
+    #[test]
+    fn reject_discrete_events() {
+        assert!(!is_coalescable_mouse(
+            &MouseEventKind::Press(MouseButton::Left),
+            &KeyModifiers::NONE,
+            &MouseEventKind::Press(MouseButton::Left),
+            &KeyModifiers::NONE,
+        ));
+        assert!(!is_coalescable_mouse(
+            &MouseEventKind::Release(MouseButton::Left),
+            &KeyModifiers::NONE,
+            &MouseEventKind::Moved,
+            &KeyModifiers::NONE,
+        ));
+        assert!(!is_coalescable_mouse(
+            &MouseEventKind::Moved,
+            &KeyModifiers::NONE,
+            &MouseEventKind::ScrollDown,
+            &KeyModifiers::NONE,
+        ));
+        assert!(!is_coalescable_mouse(
+            &MouseEventKind::ScrollUp,
+            &KeyModifiers::NONE,
+            &MouseEventKind::ScrollUp,
+            &KeyModifiers::NONE,
+        ));
+    }
+
+    // ── Coalescing loop integration tests ─────────────────────────────────
+
+    /// Helper: run the coalescing logic from the main loop against a real
+    /// bounded channel, returning the final event (or None if filtered away).
+    fn coalesce_through(
+        events: &[Event],
+        kind: MouseEventKind,
+        modifiers: KeyModifiers,
+    ) -> Option<Event> {
+        let (tx, rx) = crossbeam_channel::bounded::<Event>(events.len());
+        for e in events.iter().cloned() {
+            tx.send(e).ok();
+        }
+        drop(tx);
+
+        let mut result = Event::Mouse(MouseEvent {
+            kind,
+            modifiers,
+            column: 0,
+            row: 0,
+        });
+
+        if let Event::Mouse(ref mut mouse) = result
+            && matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Drag(_))
+        {
+            while let Ok(next) = rx.try_recv() {
+                match next {
+                    Event::Mouse(ref next_mouse)
+                        if is_coalescable_mouse(
+                            &mouse.kind,
+                            &mouse.modifiers,
+                            &next_mouse.kind,
+                            &next_mouse.modifiers,
+                        ) =>
+                    {
+                        *mouse = *next_mouse;
+                    }
+                    _other => return Some(result),
+                }
+            }
+        }
+
+        Some(result)
+    }
+
+    #[test]
+    fn coalesce_keeps_latest_moved_position() {
+        let events = vec![
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                modifiers: KeyModifiers::NONE,
+                column: 5,
+                row: 5,
+            }),
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                modifiers: KeyModifiers::NONE,
+                column: 10,
+                row: 10,
+            }),
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                modifiers: KeyModifiers::NONE,
+                column: 15,
+                row: 15,
+            }),
+        ];
+        let result = coalesce_through(&events, MouseEventKind::Moved, KeyModifiers::NONE);
+        let Event::Mouse(m) = result.unwrap() else {
+            panic!("expected mouse")
+        };
+        assert_eq!((m.column, m.row), (15, 15));
+    }
+
+    #[test]
+    fn coalesce_keeps_latest_drag_position() {
+        let events = vec![
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                modifiers: KeyModifiers::NONE,
+                column: 1,
+                row: 1,
+            }),
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                modifiers: KeyModifiers::NONE,
+                column: 2,
+                row: 2,
+            }),
+        ];
+        let result = coalesce_through(
+            &events,
+            MouseEventKind::Drag(MouseButton::Left),
+            KeyModifiers::NONE,
+        );
+        let Event::Mouse(m) = result.unwrap() else {
+            panic!("expected mouse")
+        };
+        assert_eq!((m.column, m.row), (2, 2));
+    }
+
+    #[test]
+    fn coalesce_stops_at_modifier_change() {
+        let events = vec![Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            modifiers: KeyModifiers {
+                shift: true,
+                ..KeyModifiers::NONE
+            },
+            column: 99,
+            row: 99,
+        })];
+        let result = coalesce_through(&events, MouseEventKind::Moved, KeyModifiers::NONE);
+        let Event::Mouse(m) = result.unwrap() else {
+            panic!("expected mouse")
+        };
+        // The first event (modifier change) should NOT be consumed — we
+        // still hold the original event at (0,0) with NONE modifiers.
+        assert_eq!((m.column, m.row), (0, 0));
+    }
+
+    #[test]
+    fn coalesce_stops_at_non_mouse_event() {
+        let key = Event::Key(KeyEvent {
+            code: KeyCode::Char('q'),
+            kind: KeyKind::Press,
+            modifiers: KeyModifiers::NONE,
+        });
+        let events = vec![key.clone()];
+        let result = coalesce_through(&events, MouseEventKind::Moved, KeyModifiers::NONE);
+        let Event::Mouse(m) = result.unwrap() else {
+            panic!("expected mouse")
+        };
+        // Should retain original event, not consuming the key
+        assert_eq!((m.column, m.row), (0, 0));
+    }
+
+    #[test]
+    fn coalesce_stops_at_discrete_mouse_event() {
+        let events = vec![Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            modifiers: KeyModifiers::NONE,
+            column: 10,
+            row: 10,
+        })];
+        let result = coalesce_through(&events, MouseEventKind::Moved, KeyModifiers::NONE);
+        let Event::Mouse(m) = result.unwrap() else {
+            panic!("expected mouse")
+        };
+        // Should NOT consume the Press event
+        assert_eq!((m.column, m.row), (0, 0));
+    }
+}
+
+// ── Snapshot tests for render_frame byte output ─────────────────────────
+// Uses a push_rx mock (crossbeam channel) + RemotePane(client: None) for
+// deterministic, non-flaky byte-stream assertions.
+#[cfg(test)]
+#[allow(clippy::type_complexity)]
+mod snapshot_tests {
+    use super::*;
+
+    /// Render a screen from deterministic PTY bytes, capturing the raw
+    /// ANSI output.
+    fn render_and_capture(pty_bytes: &[u8], rows: u16, cols: u16, clear_display: bool) -> Vec<u8> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("tokio rt");
+        let (push_tx, push_rx) = crossbeam_channel::bounded(16);
+        let input_writer: Box<dyn FnMut(&[u8]) -> io::Result<()> + Send> = Box::new(|_| Ok(()));
+        let mut pane = RemotePane::new(
+            0,
+            None,
+            rt.handle().clone(),
+            cols,
+            rows,
+            push_rx,
+            input_writer,
+        );
+        drop(rt); // rt must outlive the channels but not RemotePane
+
+        push_tx.send(pty_bytes.to_vec()).ok();
+        pane.drain_pushes();
+
+        let parser = pane.shared_parser();
+        let parser = parser.lock().unwrap();
+        let screen = parser.screen();
+        let (rows, cols) = screen.size();
+        let mut out = Vec::new();
+        render_frame(&mut out, screen, rows, cols, clear_display).unwrap();
+        out
+    }
+
+    /// Escape ANSI and control bytes for readable snapshot diffs.
+    fn escape_ansi(bytes: &[u8]) -> String {
+        let mut out: Vec<u8> = Vec::with_capacity(bytes.len() * 4);
+        for &b in bytes {
+            match b {
+                b'\x1b' => out.extend_from_slice(b"\\x1b"),
+                b'\n' => out.extend_from_slice(b"\\n"),
+                b'\r' => out.extend_from_slice(b"\\r"),
+                b'\t' => out.extend_from_slice(b"\\t"),
+                0x20..=0x7e => out.push(b),
+                _ => {
+                    out.push(b'\\');
+                    out.push(b'x');
+                    out.extend_from_slice(&hex_byte(b));
+                }
+            }
+        }
+        // SAFETY: all bytes are valid ASCII (0x20-0x7e or escaped sequences)
+        unsafe { String::from_utf8_unchecked(out) }
+    }
+
+    fn hex_byte(b: u8) -> [u8; 2] {
+        #[inline]
+        fn hex_nibble(n: u8) -> u8 {
+            let digit = n & 0x0f;
+            if digit < 10 {
+                b'0' + digit
+            } else {
+                b'a' + digit - 10
+            }
+        }
+        [hex_nibble(b >> 4), hex_nibble(b)]
+    }
+
+    // ── Tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn snapshot_empty_grid() {
+        let out = render_and_capture(b"", 4, 8, false);
+        insta::assert_snapshot!("empty_grid", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_basic_text() {
+        let out = render_and_capture(b"Hello\nWorld", 4, 8, false);
+        insta::assert_snapshot!("basic_text", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_colored_text() {
+        let out = render_and_capture(b"\x1b[31mred\x1b[1mbold", 4, 8, false);
+        insta::assert_snapshot!("colored_text", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_normal_char_at_margin() {
+        // Fill a 4-wide grid so the last column contains 'D' — triggers
+        // margin sanitation before the final cell in the row.
+        let out = render_and_capture(b"ABCD", 1, 4, false);
+        insta::assert_snapshot!("normal_char_at_margin", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_clear_display() {
+        let out = render_and_capture(b"", 4, 8, true);
+        insta::assert_snapshot!("clear_display", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_hidden_cursor() {
+        let out = render_and_capture(b"\x1b[?25l", 4, 8, false);
+        insta::assert_snapshot!("hidden_cursor", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_color_across_margin() {
+        // Red background on a block char right at the last column.
+        // Verify \x1b[0m resets the color before \x1b[K clears the margin.
+        let out = render_and_capture(b"\x1b[41mX", 1, 4, false);
+        insta::assert_snapshot!("color_across_margin", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_multi_row_fill() {
+        // Fill all 4×3 cells with unique chars to verify row-by-row CUP +
+        // margin sanitation on every row.
+        let out = render_and_capture(b"ABCDEFGHIJKL", 3, 4, false);
+        insta::assert_snapshot!("multi_row_fill", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_wide_char_margin() {
+        // Use 3-wide grid with CJK at col 1 (width 2, fills cols 1-2).
+        // Margin check: 1 + 2 = 3 >= 3 → \x1b[K fires before the char.
+        let out = render_and_capture(
+            b"B\xe3\x81\x82", // HIRAGANA A (U+3042, width 2 in unicode-width)
+            1,
+            3,
+            false,
+        );
+        insta::assert_snapshot!("wide_char_margin", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_wide_char_middle() {
+        // Wide char at col 1 in a 5-wide grid (cols 1-2).  Does NOT
+        // trigger margin sanitation (1 + 2 = 3 < 5) — verifies wide
+        // chars render correctly in the middle of a row.
+        let out = render_and_capture(
+            b"A\xe3\x81\x82\xe3\x81\x83", // CJK chars at col 1 and col 3
+            1,
+            5,
+            false,
+        );
+        insta::assert_snapshot!("wide_char_middle", escape_ansi(&out));
     }
 }
