@@ -14,6 +14,7 @@ development = ["term-bench", "term-session-client"]
 [workspace]
 members = [
     "crates/term-bench",
+    "crates/term-resize-indicator",
     "crates/term-session-client",
     "crates/term-session-mock",
     "crates/term-session-muxio-service-definitions",
