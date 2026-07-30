@@ -7,7 +7,6 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
-/// Dark background to distinguish the overlay from normal terminal content.
 const BG: Color = Color::Rgb(20, 20, 48);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,19 +21,11 @@ impl Size {
     }
 }
 
-/// Only two modes: unlocked (interactive) and locked.
-/// Both viewers see the same session, so they always see identical output.
-enum Mode {
-    Interactive,
-    Locked(Size),
-}
-
 struct App {
-    mode: Mode,
     live_size: Size,
 }
 
-pub fn run(initial_lock: Option<Size>) -> std::io::Result<()> {
+pub fn run() -> std::io::Result<()> {
     terminal::enable_raw_mode()?;
     let mut stdout = std::io::stdout();
     crossterm::execute!(stdout, EnterAlternateScreen, DisableLineWrap)?;
@@ -43,16 +34,8 @@ pub fn run(initial_lock: Option<Size>) -> std::io::Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let current = terminal::size().unwrap_or((80, 24));
-    let mut app = if let Some(size) = initial_lock {
-        App {
-            mode: Mode::Locked(size),
-            live_size: size,
-        }
-    } else {
-        App {
-            mode: Mode::Interactive,
-            live_size: Size::new(current.0, current.1),
-        }
+    let mut app = App {
+        live_size: Size::new(current.0, current.1),
     };
 
     let res = run_loop(&mut terminal, &mut app);
@@ -71,8 +54,7 @@ fn run_loop(
         terminal.draw(|f| {
             let area = f.area();
             let dim = app.live_size;
-            let locked = matches!(app.mode, Mode::Locked(_));
-            draw_overlay(f, area, dim.width, dim.height, locked);
+            draw_overlay(f, area, dim.width, dim.height);
         })?;
 
         if !event::poll(std::time::Duration::from_millis(50))? {
@@ -82,7 +64,6 @@ fn run_loop(
         match event::read()? {
             Event::Resize(w, h) => app.live_size = Size::new(w, h),
             Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                KeyCode::Char('l' | 'L') => toggle_lock(app),
                 KeyCode::Char('q' | 'Q') | KeyCode::Esc => break,
                 KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => break,
                 _ => {}
@@ -93,29 +74,7 @@ fn run_loop(
     Ok(())
 }
 
-fn toggle_lock(app: &mut App) {
-    match app.mode {
-        Mode::Interactive => {
-            if let Ok((w, h)) = terminal::size() {
-                let locked = Size::new(w, h);
-                app.live_size = locked;
-                app.mode = Mode::Locked(locked);
-            }
-        }
-        Mode::Locked(locked) => {
-            app.live_size = locked;
-            app.mode = Mode::Interactive;
-        }
-    }
-}
-
-/// Draw the full-screen overlay.
-///
-/// - Background fill (dark blue) so both viewers see a uniform canvas.
-/// - Box-drawing border (`┌─┐│└─┘`) edge-to-edge — a deliberate measured box
-///   that is visually distinct from the terminal boundary.
-/// - Centered text shows the live terminal dimensions (and lock state).
-fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool) {
+fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16) {
     if full.width < 4 || full.height < 3 {
         return;
     }
@@ -138,21 +97,16 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool
         }
     }
 
-    // Border position in i32 — no .max(0) clamping.  Parts that extend beyond
-    // the terminal boundaries simply won't have buffer cells to draw to.
-    // Use exact signed centering: (full - w) / 2 to avoid truncation asymmetry.
     let bx = full.left() as i32 + (full.width as i32 - w as i32) / 2;
     let by = full.top() as i32 + (full.height as i32 - h as i32) / 2;
     let bw = w as i32;
     let bh = h as i32;
 
-    // Visible region of the border intersecting the terminal buffer
     let x_lo = bx.max(full.left() as i32);
     let x_hi = (bx + bw).min(full.right() as i32);
     let y_lo = by.max(full.top() as i32);
     let y_hi = (by + bh).min(full.bottom() as i32);
 
-    // Helper to draw a box-drawing character at a buffer cell if in range.
     let set_cell = |buf: &mut ratatui::buffer::Buffer, x: i32, y: i32, ch: char| {
         if x >= full.left() as i32
             && x < full.right() as i32
@@ -167,7 +121,6 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool
     };
 
     if x_lo < x_hi && y_lo < y_hi {
-        // Top edge
         let ty = by;
         if ty >= full.top() as i32 && ty < full.bottom() as i32 {
             for x in x_lo..x_hi {
@@ -181,7 +134,6 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool
                 set_cell(buf, x, ty, ch);
             }
         }
-        // Bottom edge
         let ty2 = by + bh - 1;
         if ty2 >= full.top() as i32 && ty2 < full.bottom() as i32 {
             for x in x_lo..x_hi {
@@ -195,14 +147,12 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool
                 set_cell(buf, x, ty2, ch);
             }
         }
-        // Left edge (skip corners — already drawn above)
         let lx = bx;
         if lx >= full.left() as i32 && lx < full.right() as i32 {
             for y in (by + 1).max(y_lo)..(by + bh - 1).min(y_hi) {
                 set_cell(buf, lx, y, '│');
             }
         }
-        // Right edge
         let rx = bx + bw - 1;
         if rx >= full.left() as i32 && rx < full.right() as i32 {
             for y in (by + 1).max(y_lo)..(by + bh - 1).min(y_hi) {
@@ -211,18 +161,13 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool
         }
     }
 
-    let label = if locked {
-        format!("{}x{}  [LOCKED]", w, h)
-    } else {
-        format!("{}x{}", w, h)
-    };
+    let label = format!("{}x{}", w, h);
 
     let text_style = Style::default()
         .fg(Color::White)
         .bg(BG)
         .add_modifier(Modifier::BOLD);
 
-    // Text centered on the border rect, clamped to terminal bounds
     let text_x = (bx + bw / 2 - label.len() as i32 / 2).max(full.left() as i32) as u16;
     let text_y =
         (by + bh / 2).clamp(full.top() as i32, full.bottom().saturating_sub(1) as i32) as u16;
