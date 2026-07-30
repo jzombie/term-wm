@@ -2,6 +2,7 @@ use ratatui::style::{Color, Modifier, Style};
 use term_wm_core::events::MouseButton;
 use term_wm_layout_engine::LayoutRect;
 
+use term_wm_core::utils::truncate_with_ellipsis;
 use term_wm_core::{
     actions::{EventResult, TermWmAction},
     components::{Component, ComponentContext},
@@ -131,13 +132,8 @@ impl Component<TermWmAction> for WmSessionManagerComponent {
             };
 
             let title = format!("{} {}", indicator, entry.title);
-            let title_width = title.chars().count() as u16;
-            let max_width = bounds.width.saturating_sub(2);
-            let display_title = if title_width > max_width {
-                format!("{}...", &title[..max_width.saturating_sub(3) as usize])
-            } else {
-                title
-            };
+            let max_width = bounds.width.saturating_sub(2) as usize;
+            let display_title = truncate_with_ellipsis(&title, max_width);
 
             for (j, ch) in display_title.chars().enumerate() {
                 let xx = bounds.x + j as u16;

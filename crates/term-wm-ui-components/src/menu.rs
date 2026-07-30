@@ -8,6 +8,7 @@ use crate::helpers::{color_to_ratatui, layout_rect_to_clipped_rect, safe_set_str
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext, MenuDisplayItem, MenuItem};
 use term_wm_core::keybindings::KeyBindings;
+use term_wm_core::utils::truncate_with_ellipsis;
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
 
@@ -241,7 +242,7 @@ impl MenuComponent {
                     } else {
                         format!("{marker}   {label}", label = item.label)
                     };
-                    let text: String = line.chars().take(inner_width as usize).collect();
+                    let text = truncate_with_ellipsis(&line, inner_width as usize);
                     safe_set_string(buffer, bounds, inner_x, y, &text, row_style);
                 }
             }
