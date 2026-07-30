@@ -391,25 +391,26 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     loop {
         let mut force_render = false;
 
-        // Helper: synchronize parser geometry from server-driven resize signal
-        let mut apply_pending_resize = |shared_parser: &Arc<Mutex<Parser>>,
-                                         stdout: &mut io::Stdout|
-        {
+        // Helper: synchronize parser geometry from server-driven resize signal.
+        // Returns true if geometry was actually updated.
+        let apply_pending_resize = |shared_parser: &Arc<Mutex<Parser>>| -> bool {
             if resize_pending.swap(false, Ordering::Relaxed) {
                 let cols = server_cols.load(Ordering::Relaxed);
                 let rows = server_rows.load(Ordering::Relaxed);
                 if cols > 0 && rows > 0 {
                     let mut parser_lk = shared_parser.lock().unwrap();
-                    parser_lk.screen_mut().set_size(rows, cols);
+                    let (cur_rows, cur_cols) = parser_lk.screen().size();
+                    if cur_cols != cols || cur_rows != rows {
+                        parser_lk.screen_mut().set_size(rows, cols);
+                        return true;
+                    }
                 }
-                let _ = stdout.write_all(b"\x1b[0m\x1b[2J\x1b[H");
-                let _ = stdout.flush();
-                force_render = true;
             }
+            false
         };
 
         // Site 1: Apply any pending resize that arrived before this iteration
-        apply_pending_resize(&pane.shared_parser(), &mut out);
+        force_render |= apply_pending_resize(&pane.shared_parser());
 
         // Retrieve next input event (either buffered from previous coalescing
         // pass or blocking on the input/PTY-output channel)
@@ -430,7 +431,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                             // (prevents DECAWM auto-scroll row duplication when
                             // geometry changed between entering select and receiving
                             // push_rx data)
-                            apply_pending_resize(&pane.shared_parser(), &mut out);
+                            force_render |= apply_pending_resize(&pane.shared_parser());
 
                             // PTY output — process directly into parser
                             let parser = pane.shared_parser();
@@ -649,6 +650,7 @@ pub fn render_frame(out: &mut dyn Write, screen: &Screen, rows: u16, cols: u16) 
     let mut active_style = CellStyle::default();
 
     buf.extend_from_slice(b"\x1b[0m");
+    buf.extend_from_slice(b"\x1b[?7l");
 
     for row in 0..rows {
         write!(buf, "\x1b[{};1H", row + 1)?;
@@ -677,6 +679,7 @@ pub fn render_frame(out: &mut dyn Write, screen: &Screen, rows: u16, cols: u16) 
         }
     }
 
+    buf.extend_from_slice(b"\x1b[?7h");
     buf.extend_from_slice(b"\x1b[0m");
     let (cur_row, cur_col) = screen.cursor_position();
     write!(buf, "\x1b[{};{}H", cur_row + 1, cur_col + 1)?;
