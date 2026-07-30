@@ -5,8 +5,8 @@ pub use remote_pane::RemotePane;
 use std::io::{self, IsTerminal, Write, stdout};
 #[cfg(unix)]
 use std::os::unix::io::FromRawFd;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crossterm::QueueableCommand;
@@ -1117,5 +1117,162 @@ mod tests {
         };
         // Should NOT consume the Press event
         assert_eq!((m.column, m.row), (0, 0));
+    }
+}
+
+// ── Snapshot tests for render_frame byte output ─────────────────────────
+// Uses a push_rx mock (crossbeam channel) + RemotePane(client: None) for
+// deterministic, non-flaky byte-stream assertions.
+#[cfg(test)]
+#[allow(clippy::type_complexity)]
+mod snapshot_tests {
+    use super::*;
+
+    /// Render a screen from deterministic PTY bytes, capturing the raw
+    /// ANSI output.
+    fn render_and_capture(pty_bytes: &[u8], rows: u16, cols: u16, clear_display: bool) -> Vec<u8> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("tokio rt");
+        let (push_tx, push_rx) = crossbeam_channel::bounded(16);
+        let input_writer: Box<dyn FnMut(&[u8]) -> io::Result<()> + Send> = Box::new(|_| Ok(()));
+        let mut pane = RemotePane::new(
+            0,
+            None,
+            rt.handle().clone(),
+            cols,
+            rows,
+            push_rx,
+            input_writer,
+        );
+        drop(rt); // rt must outlive the channels but not RemotePane
+
+        push_tx.send(pty_bytes.to_vec()).ok();
+        pane.drain_pushes();
+
+        let parser = pane.shared_parser();
+        let parser = parser.lock().unwrap();
+        let screen = parser.screen();
+        let (rows, cols) = screen.size();
+        let mut out = Vec::new();
+        render_frame(&mut out, screen, rows, cols, clear_display).unwrap();
+        out
+    }
+
+    /// Escape ANSI and control bytes for readable snapshot diffs.
+    fn escape_ansi(bytes: &[u8]) -> String {
+        let mut out: Vec<u8> = Vec::with_capacity(bytes.len() * 4);
+        for &b in bytes {
+            match b {
+                b'\x1b' => out.extend_from_slice(b"\\x1b"),
+                b'\n' => out.extend_from_slice(b"\\n"),
+                b'\r' => out.extend_from_slice(b"\\r"),
+                b'\t' => out.extend_from_slice(b"\\t"),
+                0x20..=0x7e => out.push(b),
+                _ => {
+                    out.push(b'\\');
+                    out.push(b'x');
+                    out.extend_from_slice(&hex_byte(b));
+                }
+            }
+        }
+        // SAFETY: all bytes are valid ASCII (0x20-0x7e or escaped sequences)
+        unsafe { String::from_utf8_unchecked(out) }
+    }
+
+    fn hex_byte(b: u8) -> [u8; 2] {
+        #[inline]
+        fn hex_nibble(n: u8) -> u8 {
+            let digit = n & 0x0f;
+            if digit < 10 {
+                b'0' + digit
+            } else {
+                b'a' + digit - 10
+            }
+        }
+        [hex_nibble(b >> 4), hex_nibble(b)]
+    }
+
+    // ── Tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn snapshot_empty_grid() {
+        let out = render_and_capture(b"", 4, 8, false);
+        insta::assert_snapshot!("empty_grid", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_basic_text() {
+        let out = render_and_capture(b"Hello\nWorld", 4, 8, false);
+        insta::assert_snapshot!("basic_text", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_colored_text() {
+        let out = render_and_capture(b"\x1b[31mred\x1b[1mbold", 4, 8, false);
+        insta::assert_snapshot!("colored_text", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_normal_char_at_margin() {
+        // Fill a 4-wide grid so the last column contains 'D' — triggers
+        // margin sanitation before the final cell in the row.
+        let out = render_and_capture(b"ABCD", 1, 4, false);
+        insta::assert_snapshot!("normal_char_at_margin", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_clear_display() {
+        let out = render_and_capture(b"", 4, 8, true);
+        insta::assert_snapshot!("clear_display", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_hidden_cursor() {
+        let out = render_and_capture(b"\x1b[?25l", 4, 8, false);
+        insta::assert_snapshot!("hidden_cursor", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_color_across_margin() {
+        // Red background on a block char right at the last column.
+        // Verify \x1b[0m resets the color before \x1b[K clears the margin.
+        let out = render_and_capture(b"\x1b[41mX", 1, 4, false);
+        insta::assert_snapshot!("color_across_margin", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_multi_row_fill() {
+        // Fill all 4×3 cells with unique chars to verify row-by-row CUP +
+        // margin sanitation on every row.
+        let out = render_and_capture(b"ABCDEFGHIJKL", 3, 4, false);
+        insta::assert_snapshot!("multi_row_fill", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_wide_char_margin() {
+        // Use 3-wide grid with CJK at col 1 (width 2, fills cols 1-2).
+        // Margin check: 1 + 2 = 3 >= 3 → \x1b[K fires before the char.
+        let out = render_and_capture(
+            b"B\xe3\x81\x82", // HIRAGANA A (U+3042, width 2 in unicode-width)
+            1,
+            3,
+            false,
+        );
+        insta::assert_snapshot!("wide_char_margin", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_wide_char_middle() {
+        // Wide char at col 1 in a 5-wide grid (cols 1-2).  Does NOT
+        // trigger margin sanitation (1 + 2 = 3 < 5) — verifies wide
+        // chars render correctly in the middle of a row.
+        let out = render_and_capture(
+            b"A\xe3\x81\x82\xe3\x81\x83", // CJK chars at col 1 and col 3
+            1,
+            5,
+            false,
+        );
+        insta::assert_snapshot!("wide_char_middle", escape_ansi(&out));
     }
 }
