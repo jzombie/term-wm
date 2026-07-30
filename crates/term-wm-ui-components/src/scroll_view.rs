@@ -390,6 +390,17 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
             } else if kb.matches(TermWmAction::ScrollEnd, key) {
                 return EventResult::Action(TermWmAction::ScrollToBottom);
             }
+
+            // Full mode also intercepts ScrollUp/ScrollDown for line scrolling.
+            // The default keybindings bind ScrollUp/ScrollDown to both
+            // Shift+Up/Down and bare Up/Down (see KeyBindings::default).
+            if self.keyboard_mode == ScrollKeyMode::Full {
+                if kb.matches(TermWmAction::ScrollUp, key) {
+                    return EventResult::Action(TermWmAction::ScrollView(-1));
+                } else if kb.matches(TermWmAction::ScrollDown, key) {
+                    return EventResult::Action(TermWmAction::ScrollView(1));
+                }
+            }
         }
 
         self.content.borrow_mut().handle_events(event, &child_ctx)
@@ -1282,7 +1293,7 @@ mod tests {
     }
 
     #[test]
-    fn scroll_view_full_mode_passes_arrow_keys() {
+    fn scroll_view_full_mode_intercepts_arrow_keys() {
         let mut sv = ScrollViewComponent::new(EventRecorder {
             received_scroll: false,
         });
@@ -1297,12 +1308,16 @@ mod tests {
         ));
         let result = sv.handle_events(&up, &ctx);
         assert!(
-            result.is_ignored(),
-            "Full mode must NOT intercept Up — arrow keys always pass through"
+            !result.is_ignored(),
+            "Full mode must intercept Up for scrolling"
         );
         assert!(
-            sv.content.borrow().received_scroll,
-            "Up must reach the child component"
+            matches!(result, EventResult::Action(TermWmAction::ScrollView(-1))),
+            "Up should produce ScrollView(-1)"
+        );
+        assert!(
+            !sv.content.borrow().received_scroll,
+            "Up must NOT reach the child component"
         );
 
         sv.content.borrow_mut().received_scroll = false;
@@ -1312,10 +1327,14 @@ mod tests {
             term_wm_core::events::KeyKind::Press,
         ));
         let result = sv.handle_events(&down, &ctx);
-        assert!(result.is_ignored(), "Full mode must NOT intercept Down");
+        assert!(!result.is_ignored(), "Full mode must intercept Down");
         assert!(
-            sv.content.borrow().received_scroll,
-            "Down must reach the child component"
+            matches!(result, EventResult::Action(TermWmAction::ScrollView(1))),
+            "Down should produce ScrollView(1)"
+        );
+        assert!(
+            !sv.content.borrow().received_scroll,
+            "Down must NOT reach the child component"
         );
     }
 
