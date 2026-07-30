@@ -5,8 +5,8 @@ pub use remote_pane::RemotePane;
 use std::io::{self, IsTerminal, Write, stdout};
 #[cfg(unix)]
 use std::os::unix::io::FromRawFd;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crossterm::QueueableCommand;
@@ -27,7 +27,7 @@ use term_wm_pty_engine::Pane;
 use term_wm_pty_engine::clipboard::{Clipboard, Osc52Extractor};
 use term_wm_pty_engine::input_encoding::mouse_event_to_bytes;
 use term_wm_pty_engine::signal::install_sigint_handler;
-use vt100::{MouseProtocolEncoding, MouseProtocolMode, Screen};
+use vt100::{MouseProtocolEncoding, MouseProtocolMode, Parser, Screen};
 
 /// Redirect an OS-level file descriptor (stdout or stderr) into `tracing`.
 ///
@@ -384,12 +384,37 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         let parser = parser.lock().unwrap();
         let screen = parser.screen();
         let (rows, cols) = screen.size();
-        render_frame(&mut out, screen, rows, cols)?;
+        render_frame(&mut out, screen, rows, cols, false)?;
     }
 
     let mut pending_input: Option<Event> = None;
     loop {
         let mut force_render = false;
+        let mut clear_display = false;
+
+        // Helper: synchronize parser geometry from server-driven resize signal.
+        // Returns true if geometry was actually updated.
+        let apply_pending_resize = |shared_parser: &Arc<Mutex<Parser>>| -> bool {
+            if resize_pending.swap(false, Ordering::Relaxed) {
+                let cols = server_cols.load(Ordering::Relaxed);
+                let rows = server_rows.load(Ordering::Relaxed);
+                if cols > 0 && rows > 0 {
+                    let mut parser_lk = shared_parser.lock().unwrap();
+                    let (cur_rows, cur_cols) = parser_lk.screen().size();
+                    if cur_cols != cols || cur_rows != rows {
+                        parser_lk.screen_mut().set_size(rows, cols);
+                        return true;
+                    }
+                }
+            }
+            false
+        };
+
+        // Site 1: Apply any pending resize that arrived before this iteration
+        let resized = apply_pending_resize(&pane.shared_parser());
+        force_render |= resized;
+        clear_display |= resized;
+
         // Retrieve next input event (either buffered from previous coalescing
         // pass or blocking on the input/PTY-output channel)
         let input_event = if let Some(evt) = pending_input.take() {
@@ -405,6 +430,14 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                 recv(push_rx) -> msg => {
                     match msg {
                         Ok(data) => {
+                            // Site 2: Apply pending resize before parsing PTY bytes
+                            // (prevents DECAWM auto-scroll row duplication when
+                            // geometry changed between entering select and receiving
+                            // push_rx data)
+                            let resized = apply_pending_resize(&pane.shared_parser());
+                            force_render |= resized;
+                            clear_display |= resized;
+
                             // PTY output — process directly into parser
                             let parser = pane.shared_parser();
                             let mut parser = parser.lock().unwrap();
@@ -528,6 +561,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                         tracing::warn!(error = %err, "resize request failed on PTY pane");
                     }
                     force_render = true;
+                    clear_display = true;
                 }
                 Event::Paste(text) => {
                     let mut wrapped = Vec::with_capacity(text.len() + BRACKETED_PASTE_OVERHEAD);
@@ -545,27 +579,13 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             return Err(io::Error::other("connection to session server lost"));
         }
 
-        // Check if OnPtyResized signaled a geometry change
-        if resize_pending.swap(false, Ordering::Relaxed) {
-            let cols = server_cols.load(Ordering::Relaxed);
-            let rows = server_rows.load(Ordering::Relaxed);
-            if cols > 0 && rows > 0 {
-                let parser = pane.shared_parser();
-                let mut parser_lk = parser.lock().unwrap();
-                parser_lk.screen_mut().set_size(rows, cols);
-            }
-            let _ = out.write_all(b"\x1b[0m\x1b[2J\x1b[H");
-            let _ = out.flush();
-            force_render = true;
-        }
-
         // Full-frame explicit row-by-row render
         if has_new_data || force_render {
             let parser = pane.shared_parser();
             let parser = parser.lock().unwrap();
             let screen = parser.screen();
             let (rows, cols) = screen.size();
-            render_frame(&mut out, screen, rows, cols)?;
+            render_frame(&mut out, screen, rows, cols, clear_display)?;
         }
 
         // Exit on session exit
@@ -630,40 +650,65 @@ fn apply_sgr(out: &mut dyn Write, style: &CellStyle) -> io::Result<()> {
     Ok(())
 }
 
-pub fn render_frame(out: &mut dyn Write, screen: &Screen, rows: u16, cols: u16) -> io::Result<()> {
+pub fn render_frame(
+    out: &mut dyn Write,
+    screen: &Screen,
+    rows: u16,
+    cols: u16,
+    clear_display: bool,
+) -> io::Result<()> {
     let mut buf =
         Vec::with_capacity((rows as usize) * (cols as usize) * RENDER_BUF_CELL_MULTIPLIER);
     let mut active_style = CellStyle::default();
 
-    buf.extend_from_slice(b"\x1b[0m");
+    // Synchronized Output begin, hide cursor, reset attributes
+    buf.extend_from_slice(b"\x1b[?2026h\x1b[?25l\x1b[0m");
+    if clear_display {
+        buf.extend_from_slice(b"\x1b[2J");
+    }
+    buf.extend_from_slice(b"\x1b[?7l");
 
     for row in 0..rows {
         write!(buf, "\x1b[{};1H", row + 1)?;
+
         let mut col: u16 = 0;
         while col < cols {
+            // Compute cell width first to handle wide chars (CJK, emoji) that
+            // span multiple columns — checking col + width >= cols catches the
+            // right-edge case even when a wide char at cols-2 jumps past cols-1.
             let cell_opt = screen.cell(row, col);
-            let style = cell_opt.map(CellStyle::from_cell).unwrap_or_default();
+            let contents = cell_opt.map_or("", |c| c.contents());
+            let width = if contents.is_empty() {
+                1
+            } else {
+                unicode_width::UnicodeWidthStr::width(contents).max(1) as u16
+            };
 
+            // Margin sanitation: clear right margin before writing the cell that
+            // touches or passes the right edge.  Placing \x1b[K here (while the
+            // cursor is still at col) avoids cursor-inclusive erasure of the cell.
+            if col + width >= cols {
+                buf.extend_from_slice(b"\x1b[0m\x1b[K");
+                active_style = CellStyle::default();
+            }
+
+            let style = cell_opt.map(CellStyle::from_cell).unwrap_or_default();
             if style != active_style {
                 apply_sgr(&mut buf, &style)?;
                 active_style = style;
             }
 
-            if let Some(cell) = cell_opt {
-                let c = cell.contents();
-                if !c.is_empty() {
-                    buf.extend_from_slice(c.as_bytes());
-                    let w = unicode_width::UnicodeWidthStr::width(c).max(1) as u16;
-                    col += w;
-                    continue;
-                }
+            if contents.is_empty() {
+                buf.push(b' ');
+            } else {
+                buf.extend_from_slice(contents.as_bytes());
             }
 
-            buf.push(b' ');
-            col += 1;
+            col += width;
         }
     }
 
+    buf.extend_from_slice(b"\x1b[?7h");
     buf.extend_from_slice(b"\x1b[0m");
     let (cur_row, cur_col) = screen.cursor_position();
     write!(buf, "\x1b[{};{}H", cur_row + 1, cur_col + 1)?;
@@ -672,6 +717,8 @@ pub fn render_frame(out: &mut dyn Write, screen: &Screen, rows: u16, cols: u16) 
     } else {
         buf.extend_from_slice(b"\x1b[?25h");
     }
+    // Synchronized Output end — terminal now paints atomically
+    buf.extend_from_slice(b"\x1b[?2026l");
 
     out.write_all(&buf)?;
     out.flush()
@@ -797,7 +844,7 @@ mod tests {
         let screen = parser.screen();
         let mut buf: Vec<u8> = Vec::new();
         let (rows, cols) = screen.size();
-        render_frame(&mut buf, screen, rows, cols).unwrap();
+        render_frame(&mut buf, screen, rows, cols, false).unwrap();
         let output = String::from_utf8_lossy(&buf);
         // Should contain CUP to each row (4 rows)
         assert!(output.contains("\x1b[1;1H"));
@@ -1070,5 +1117,162 @@ mod tests {
         };
         // Should NOT consume the Press event
         assert_eq!((m.column, m.row), (0, 0));
+    }
+}
+
+// ── Snapshot tests for render_frame byte output ─────────────────────────
+// Uses a push_rx mock (crossbeam channel) + RemotePane(client: None) for
+// deterministic, non-flaky byte-stream assertions.
+#[cfg(test)]
+#[allow(clippy::type_complexity)]
+mod snapshot_tests {
+    use super::*;
+
+    /// Render a screen from deterministic PTY bytes, capturing the raw
+    /// ANSI output.
+    fn render_and_capture(pty_bytes: &[u8], rows: u16, cols: u16, clear_display: bool) -> Vec<u8> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("tokio rt");
+        let (push_tx, push_rx) = crossbeam_channel::bounded(16);
+        let input_writer: Box<dyn FnMut(&[u8]) -> io::Result<()> + Send> = Box::new(|_| Ok(()));
+        let mut pane = RemotePane::new(
+            0,
+            None,
+            rt.handle().clone(),
+            cols,
+            rows,
+            push_rx,
+            input_writer,
+        );
+        drop(rt); // rt must outlive the channels but not RemotePane
+
+        push_tx.send(pty_bytes.to_vec()).ok();
+        pane.drain_pushes();
+
+        let parser = pane.shared_parser();
+        let parser = parser.lock().unwrap();
+        let screen = parser.screen();
+        let (rows, cols) = screen.size();
+        let mut out = Vec::new();
+        render_frame(&mut out, screen, rows, cols, clear_display).unwrap();
+        out
+    }
+
+    /// Escape ANSI and control bytes for readable snapshot diffs.
+    fn escape_ansi(bytes: &[u8]) -> String {
+        let mut out: Vec<u8> = Vec::with_capacity(bytes.len() * 4);
+        for &b in bytes {
+            match b {
+                b'\x1b' => out.extend_from_slice(b"\\x1b"),
+                b'\n' => out.extend_from_slice(b"\\n"),
+                b'\r' => out.extend_from_slice(b"\\r"),
+                b'\t' => out.extend_from_slice(b"\\t"),
+                0x20..=0x7e => out.push(b),
+                _ => {
+                    out.push(b'\\');
+                    out.push(b'x');
+                    out.extend_from_slice(&hex_byte(b));
+                }
+            }
+        }
+        // SAFETY: all bytes are valid ASCII (0x20-0x7e or escaped sequences)
+        unsafe { String::from_utf8_unchecked(out) }
+    }
+
+    fn hex_byte(b: u8) -> [u8; 2] {
+        #[inline]
+        fn hex_nibble(n: u8) -> u8 {
+            let digit = n & 0x0f;
+            if digit < 10 {
+                b'0' + digit
+            } else {
+                b'a' + digit - 10
+            }
+        }
+        [hex_nibble(b >> 4), hex_nibble(b)]
+    }
+
+    // ── Tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn snapshot_empty_grid() {
+        let out = render_and_capture(b"", 4, 8, false);
+        insta::assert_snapshot!("empty_grid", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_basic_text() {
+        let out = render_and_capture(b"Hello\nWorld", 4, 8, false);
+        insta::assert_snapshot!("basic_text", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_colored_text() {
+        let out = render_and_capture(b"\x1b[31mred\x1b[1mbold", 4, 8, false);
+        insta::assert_snapshot!("colored_text", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_normal_char_at_margin() {
+        // Fill a 4-wide grid so the last column contains 'D' — triggers
+        // margin sanitation before the final cell in the row.
+        let out = render_and_capture(b"ABCD", 1, 4, false);
+        insta::assert_snapshot!("normal_char_at_margin", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_clear_display() {
+        let out = render_and_capture(b"", 4, 8, true);
+        insta::assert_snapshot!("clear_display", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_hidden_cursor() {
+        let out = render_and_capture(b"\x1b[?25l", 4, 8, false);
+        insta::assert_snapshot!("hidden_cursor", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_color_across_margin() {
+        // Red background on a block char right at the last column.
+        // Verify \x1b[0m resets the color before \x1b[K clears the margin.
+        let out = render_and_capture(b"\x1b[41mX", 1, 4, false);
+        insta::assert_snapshot!("color_across_margin", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_multi_row_fill() {
+        // Fill all 4×3 cells with unique chars to verify row-by-row CUP +
+        // margin sanitation on every row.
+        let out = render_and_capture(b"ABCDEFGHIJKL", 3, 4, false);
+        insta::assert_snapshot!("multi_row_fill", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_wide_char_margin() {
+        // Use 3-wide grid with CJK at col 1 (width 2, fills cols 1-2).
+        // Margin check: 1 + 2 = 3 >= 3 → \x1b[K fires before the char.
+        let out = render_and_capture(
+            b"B\xe3\x81\x82", // HIRAGANA A (U+3042, width 2 in unicode-width)
+            1,
+            3,
+            false,
+        );
+        insta::assert_snapshot!("wide_char_margin", escape_ansi(&out));
+    }
+
+    #[test]
+    fn snapshot_wide_char_middle() {
+        // Wide char at col 1 in a 5-wide grid (cols 1-2).  Does NOT
+        // trigger margin sanitation (1 + 2 = 3 < 5) — verifies wide
+        // chars render correctly in the middle of a row.
+        let out = render_and_capture(
+            b"A\xe3\x81\x82\xe3\x81\x83", // CJK chars at col 1 and col 3
+            1,
+            5,
+            false,
+        );
+        insta::assert_snapshot!("wide_char_middle", escape_ansi(&out));
     }
 }

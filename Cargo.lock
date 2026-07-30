@@ -3033,6 +3033,7 @@ dependencies = [
  "clap",
  "crossbeam-channel",
  "crossterm",
+ "insta",
  "libc",
  "muxio-core",
  "muxio-rpc-service",
