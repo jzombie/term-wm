@@ -2,13 +2,13 @@ use ratatui::style::{Color, Modifier, Style};
 use term_wm_core::events::MouseButton;
 use term_wm_layout_engine::LayoutRect;
 
+use term_wm_core::utils::truncate_with_ellipsis;
 use term_wm_core::{
     actions::{EventResult, TermWmAction},
     components::{Component, ComponentContext},
     hitbox_registry::{HitboxId, HitboxRegistry},
     window::WindowKey,
 };
-use term_wm_core::utils::truncate_with_ellipsis;
 use term_wm_ui_components::helpers::{downcast_ratatui, layout_rect_to_clipped_rect};
 
 /// Entry in the session manager list.
