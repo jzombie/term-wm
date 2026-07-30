@@ -29,10 +29,17 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 // Was tiled: restore Void → Leaf in layout tree
                 self.clear_floating_rect(key);
                 let void_id = self.window(key).and_then(|w| w.void_id());
+
+                let mut restored = false;
                 if let Some(vid) = void_id
                     && let Some(ref mut layout) = self.managed_layout
                 {
-                    layout.replace_void_by_id(vid, LayoutNode::leaf(key));
+                    restored = layout.replace_void_by_id(vid, LayoutNode::leaf(key));
+                }
+
+                // Force re-attachment if the Void node was destroyed (e.g., during minimize)
+                if !restored && self.window_state(key) == Some(WindowState::Mapped) {
+                    self.reattach_to_tiling_layout(key);
                 }
             }
 

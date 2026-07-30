@@ -485,7 +485,14 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             active_keys.push(floating_key);
         }
 
-        self.z_order.retain(|key| active_keys.contains(key));
+        // Retain only windows that are not Unmapped — uses window_state authority,
+        // not geometric active_keys, to avoid purging Iconic/Shaded from z_order.
+        self.z_order = self
+            .z_order
+            .iter()
+            .filter(|k| self.window_state(**k).is_some_and(|s| s != WindowState::Unmapped))
+            .copied()
+            .collect();
         for &key in &active_keys {
             if !self.z_order.contains(&key) {
                 self.z_order.push(key);
@@ -808,6 +815,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 if let Some(w) = self.windows.get_mut(key) {
                     w.clear_void_id();
                 }
+            } else if layout.root().unwrap_leaf() == Some(key) {
+                // Single-leaf root — nullify the entire layout tree
+                self.managed_layout = None;
             } else {
                 let _ = layout.root_mut().remove_leaf(key);
                 layout.root_mut().cleanup_after_removal();
@@ -845,7 +855,15 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             return;
         };
 
-        // Try spatial placement via floating_rect
+        // 1. VOID CONSUMPTION — fill existing void holes before splitting
+        let voids = layout.void_regions(self.managed_area);
+        if !voids.is_empty() {
+            let target_void_id = voids[0].0;
+            layout.replace_void_by_id(target_void_id, LayoutNode::leaf(key));
+            return;
+        }
+
+        // 2. EXISTING SPATIAL PLACEMENT LOGIC — via floating_rect
         if let Some(rect) = floating_info {
             let (cx, cy) = rect.center();
             let regions = layout.regions(self.managed_area);
@@ -1069,6 +1087,97 @@ mod tests {
         };
         let result = wm.localize_event_content(key, &Event::Mouse(mouse));
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn maximize_minimize_unmaximize_retains_window() {
+        let mut wm = make_wm();
+
+        // Create and map two windows so we have a tiling layout
+        let key_a = wm.create_window(NoopComponent);
+        let key_b = wm.create_window(NoopComponent);
+        wm.transition_window(key_a, WindowState::Mapped);
+        wm.transition_window(key_b, WindowState::Mapped);
+
+        // Register a layout to set up managed_area + tiling tree
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        // 1. Maximize window A (creates Void, assigns void_id)
+        wm.toggle_maximize(key_a);
+        assert!(wm.window(key_a).is_some_and(|w| w.is_maximized()));
+        assert!(wm.is_window_floating(key_a));
+
+        // 2. Minimize window A (destroys Void, clears void_id)
+        wm.minimize_window(key_a);
+        assert_eq!(wm.window_state(key_a), Some(WindowState::Iconic));
+
+        // 3. Restore window A (state -> Mapped)
+        wm.restore_minimized(key_a);
+        assert_eq!(wm.window_state(key_a), Some(WindowState::Mapped));
+
+        // 4. Unmaximize window A (toggle_maximize — void pointer is stale)
+        wm.toggle_maximize(key_a);
+        assert!(!wm.window(key_a).is_some_and(|w| w.is_maximized()));
+        assert!(!wm.is_window_floating(key_a));
+
+        // Assert: Window A is in z_order and has valid geometry
+        assert!(wm.z_order.contains(&key_a), "must be in z_order");
+        assert!(
+            wm.region(key_a).width > 0 && wm.region(key_a).height > 0,
+            "must have valid geometry after unmaximize"
+        );
+    }
+
+    #[test]
+    fn single_leaf_minimization_nullifies_layout() {
+        let mut wm = make_wm();
+
+        // 1. Tile single window A
+        let key = wm.create_window(NoopComponent);
+        wm.transition_window(key, WindowState::Mapped);
+
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        assert!(
+            wm.managed_layout.is_some(),
+            "must have layout after first tile"
+        );
+
+        // 2. Minimize window A
+        wm.minimize_window(key);
+        assert_eq!(wm.window_state(key), Some(WindowState::Iconic));
+
+        // Assert: managed_layout is explicitly None (root nullified)
+        assert!(
+            wm.managed_layout.is_none(),
+            "single-leaf minimization must nullify layout tree"
+        );
+
+        // 3. Restore window A
+        wm.restore_minimized(key);
+        assert_eq!(wm.window_state(key), Some(WindowState::Mapped));
+
+        // Assert: Window A is the new root Leaf
+        assert!(
+            wm.managed_layout.is_some(),
+            "must have layout after restore"
+        );
+        if let Some(ref layout) = wm.managed_layout {
+            assert_eq!(
+                layout.root().unwrap_leaf(),
+                Some(key),
+                "restored window must be the root leaf"
+            );
+        }
     }
 }
 
