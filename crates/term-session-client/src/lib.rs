@@ -653,7 +653,15 @@ pub fn render_frame(out: &mut dyn Write, screen: &Screen, rows: u16, cols: u16) 
     buf.extend_from_slice(b"\x1b[?7l");
 
     for row in 0..rows {
-        write!(buf, "\x1b[{};1H", row + 1)?;
+        // Pre-line margin sanitation: save cursor, reset SGR, clear margins, restore.
+        // This prevents color bleed (\x1b[K/\x1b[J inherit active background) and
+        // cursor-inclusive erasure (the bottom-right cell is written after the clear).
+        if row == rows - 1 {
+            write!(buf, "\x1b[{};1H\x1b7\x1b[0m\x1b[J\x1b8", row + 1)?;
+        } else {
+            write!(buf, "\x1b[{};1H\x1b7\x1b[0m\x1b[K\x1b8", row + 1)?;
+        }
+
         let mut col: u16 = 0;
         while col < cols {
             let cell_opt = screen.cell(row, col);
@@ -677,10 +685,8 @@ pub fn render_frame(out: &mut dyn Write, screen: &Screen, rows: u16, cols: u16) 
             buf.push(b' ');
             col += 1;
         }
-        buf.extend_from_slice(b"\x1b[K");
     }
 
-    buf.extend_from_slice(b"\x1b[J");
     buf.extend_from_slice(b"\x1b[?7h");
     buf.extend_from_slice(b"\x1b[0m");
     let (cur_row, cur_col) = screen.cursor_position();
