@@ -501,7 +501,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 self.focus_add(key);
             }
             (WindowState::Mapped, WindowState::Iconic) => {
-                self.z_order.retain(|x| *x != key);
                 self.managed_draw_order.retain(|x| *x != key);
                 if *self.focus.current() == key {
                     self.select_fallback_focus();
@@ -520,9 +519,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                     .windows
                     .values()
                     .any(|w| w.state() == WindowState::Mapped && w.is_floating());
-                let floating_mode = self.managed_layout.is_none();
 
-                if !self.is_window_floating(key) && (has_other_floating || floating_mode) {
+                if !self.is_window_floating(key) && has_other_floating {
                     let index = self.windows.len().saturating_sub(1);
                     let fallback = self.default_cascading_rect(index);
                     self.set_floating_rect(
@@ -557,16 +555,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                     self.managed_draw_order.push(key);
                 }
 
-                // If floating windows are present or there's no tiling layout,
-                // and this window has no floating spec, assign a default
-                // cascading rect so it floats with the rest of the workspace.
                 let has_other_floating = self
                     .windows
                     .values()
                     .any(|w| w.state() == WindowState::Mapped && w.is_floating());
-                let floating_mode = self.managed_layout.is_none();
 
-                if !self.is_window_floating(key) && (has_other_floating || floating_mode) {
+                if !self.is_window_floating(key) && has_other_floating {
                     let index = self.windows.len().saturating_sub(1);
                     let fallback = self.default_cascading_rect(index);
                     self.set_floating_rect(
@@ -5875,7 +5869,7 @@ mod tests {
     }
 
     #[test]
-    fn transition_window_mapped_to_iconic_removes_from_z_order() {
+    fn transition_window_mapped_to_iconic_retains_z_order() {
         let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
@@ -5890,7 +5884,10 @@ mod tests {
 
         wm.transition_window(target, WindowState::Iconic);
         assert_eq!(wm.window_state(target), Some(WindowState::Iconic));
-        assert!(!wm.z_order.contains(&target), "removed from z_order");
+        assert!(
+            wm.z_order.contains(&target),
+            "Iconic windows persist in z_order"
+        );
         assert!(
             !wm.managed_draw_order.contains(&target),
             "removed from draw order"
@@ -5910,7 +5907,10 @@ mod tests {
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
         wm.transition_window(target, WindowState::Iconic);
-        assert!(!wm.z_order.contains(&target), "was removed");
+        assert!(
+            wm.z_order.contains(&target),
+            "Iconic windows persist in z_order"
+        );
 
         wm.transition_window(target, WindowState::Mapped);
         assert_eq!(wm.window_state(target), Some(WindowState::Mapped));

@@ -978,6 +978,7 @@ mod tests {
         // 1. Tile single window A
         let key = wm.create_window(NoopComponent);
         wm.transition_window(key, WindowState::Mapped);
+        wm.tile_window_key(key);
 
         wm.register_managed_layout(Rect {
             x: 0,
