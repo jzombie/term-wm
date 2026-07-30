@@ -22,19 +22,11 @@ impl Size {
     }
 }
 
-/// Only two modes: unlocked (interactive) and locked.
-/// Both viewers see the same session, so they always see identical output.
-enum Mode {
-    Interactive,
-    Locked(Size),
-}
-
 struct App {
-    mode: Mode,
     live_size: Size,
 }
 
-pub fn run(initial_lock: Option<Size>) -> std::io::Result<()> {
+pub fn run() -> std::io::Result<()> {
     terminal::enable_raw_mode()?;
     let mut stdout = std::io::stdout();
     crossterm::execute!(stdout, EnterAlternateScreen, DisableLineWrap)?;
@@ -43,16 +35,8 @@ pub fn run(initial_lock: Option<Size>) -> std::io::Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let current = terminal::size().unwrap_or((80, 24));
-    let mut app = if let Some(size) = initial_lock {
-        App {
-            mode: Mode::Locked(size),
-            live_size: size,
-        }
-    } else {
-        App {
-            mode: Mode::Interactive,
-            live_size: Size::new(current.0, current.1),
-        }
+    let mut app = App {
+        live_size: Size::new(current.0, current.1),
     };
 
     let res = run_loop(&mut terminal, &mut app);
@@ -71,8 +55,7 @@ fn run_loop(
         terminal.draw(|f| {
             let area = f.area();
             let dim = app.live_size;
-            let locked = matches!(app.mode, Mode::Locked(_));
-            draw_overlay(f, area, dim.width, dim.height, locked);
+            draw_overlay(f, area, dim.width, dim.height);
         })?;
 
         if !event::poll(std::time::Duration::from_millis(50))? {
@@ -82,7 +65,6 @@ fn run_loop(
         match event::read()? {
             Event::Resize(w, h) => app.live_size = Size::new(w, h),
             Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                KeyCode::Char('l' | 'L') => toggle_lock(app),
                 KeyCode::Char('q' | 'Q') | KeyCode::Esc => break,
                 KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => break,
                 _ => {}
@@ -93,29 +75,13 @@ fn run_loop(
     Ok(())
 }
 
-fn toggle_lock(app: &mut App) {
-    match app.mode {
-        Mode::Interactive => {
-            if let Ok((w, h)) = terminal::size() {
-                let locked = Size::new(w, h);
-                app.live_size = locked;
-                app.mode = Mode::Locked(locked);
-            }
-        }
-        Mode::Locked(locked) => {
-            app.live_size = locked;
-            app.mode = Mode::Interactive;
-        }
-    }
-}
-
 /// Draw the full-screen overlay.
 ///
 /// - Background fill (dark blue) so both viewers see a uniform canvas.
 /// - Box-drawing border (`┌─┐│└─┘`) edge-to-edge — a deliberate measured box
 ///   that is visually distinct from the terminal boundary.
-/// - Centered text shows the live terminal dimensions (and lock state).
-fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool) {
+/// - Centered text shows the live terminal dimensions.
+fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16) {
     if full.width < 4 || full.height < 3 {
         return;
     }
@@ -211,11 +177,7 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16, locked: bool
         }
     }
 
-    let label = if locked {
-        format!("{}x{}  [LOCKED]", w, h)
-    } else {
-        format!("{}x{}", w, h)
-    };
+    let label = format!("{}x{}", w, h);
 
     let text_style = Style::default()
         .fg(Color::White)

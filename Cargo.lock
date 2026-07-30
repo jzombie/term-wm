@@ -3022,7 +3022,6 @@ dependencies = [
 name = "term-resize-indicator"
 version = "0.8.20-alpha"
 dependencies = [
- "clap",
  "crossterm",
  "ratatui",
 ]

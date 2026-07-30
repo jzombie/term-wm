@@ -1,6 +1,6 @@
 [package]
 name = "term-resize-indicator"
-description = "Draws a dotted-line border with terminal dimensions on resize, with lock-to-size capability for matching viewports across terminals."
+description = "Draws a dotted-line border with terminal dimensions on resize."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -9,6 +9,5 @@ license.workspace = true
 publish = false
 
 [dependencies]
-clap = { workspace = true }
 crossterm = { workspace = true }
 ratatui = { workspace = true }
