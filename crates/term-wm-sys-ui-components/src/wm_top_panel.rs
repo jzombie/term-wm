@@ -12,7 +12,7 @@ use term_wm_core::{
     },
     hitbox_registry::HitboxId,
     layout::rect_contains,
-    utils::truncate_to_width,
+    utils::truncate_with_ellipsis,
     window::WindowKey,
 };
 use term_wm_ui_components::helpers::{
@@ -214,7 +214,7 @@ impl WmTopPanelComponent {
         }
         if let Some(status) = status_line {
             let available = (max_x.saturating_sub(x)).max(1);
-            let text = truncate_to_width(status, available as usize);
+            let text = truncate_with_ellipsis(status, available as usize);
             safe_set_string(buffer, bounds, x as u16, y as u16, &text, Style::default());
         } else {
             for key in display_order.iter().copied() {
@@ -226,7 +226,7 @@ impl WmTopPanelComponent {
                     .unwrap_or_else(|| format!("{key:?}"));
                 let max_label = (max_x.saturating_sub(x).saturating_sub(2)) as usize;
                 if label.chars().count() > max_label {
-                    label = truncate_to_width(&label, max_label);
+                    label = truncate_with_ellipsis(&label, max_label);
                 }
                 let chunk = format!(" {label} ");
                 let chunk_width = chunk.chars().count() as u16;
