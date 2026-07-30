@@ -6,7 +6,7 @@ use std::io::{self, IsTerminal, Write, stdout};
 #[cfg(unix)]
 use std::os::unix::io::FromRawFd;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::time::Duration;
 
 use crossterm::QueueableCommand;
@@ -204,6 +204,37 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         .block_on(RpcIpcClient::new(socket_path))
         .map_err(|e| io::Error::new(io::ErrorKind::ConnectionRefused, format!("{e:?}")))?;
 
+    // Atomic registers for server-initiated geometry changes (OnPtyResized).
+    // Initialised before Spawn::call() so the handler is registered before
+    // the server can send any notifications — prevents RpcMethodNotFound.
+    let server_cols = Arc::new(AtomicU16::new(0));
+    let server_rows = Arc::new(AtomicU16::new(0));
+    let resize_pending = Arc::new(AtomicBool::new(false));
+
+    {
+        let cols_ref = Arc::clone(&server_cols);
+        let rows_ref = Arc::clone(&server_rows);
+        let pending_ref = Arc::clone(&resize_pending);
+        rt.block_on(client.get_endpoint().register_prebuffered(
+            OnPtyResized::METHOD_ID,
+            move |payload, _ctx| {
+                let cols_ref = Arc::clone(&cols_ref);
+                let rows_ref = Arc::clone(&rows_ref);
+                let pending_ref = Arc::clone(&pending_ref);
+                async move {
+                    let (cols, rows) = OnPtyResized::decode_request(&payload)
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                    cols_ref.store(cols, Ordering::Relaxed);
+                    rows_ref.store(rows, Ordering::Relaxed);
+                    pending_ref.store(true, Ordering::Relaxed);
+                    OnPtyResized::encode_response(())
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                }
+            },
+        ))
+        .map_err(|e| io::Error::other(format!("register OnPtyResized: {e:?}")))?;
+    }
+
     // Channels for raw PTY output bytes and clipboard text from the subscription stream.
     // Using crossbeam so the main loop can block on both input and PTY output.
     // Bounded to cap head-of-line queuing under burst load.
@@ -320,29 +351,6 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
 
     let mut clipboard = Clipboard::new();
     let sigint = install_sigint_handler()?;
-    let resize_pending = Arc::new(AtomicBool::new(false));
-    let resize_flag = Arc::clone(&resize_pending);
-
-    // Register OnPtyResized handler so the server can notify us of
-    // geometry changes (e.g., when another client connects at a smaller size).
-    let parser_handle = pane.shared_parser();
-    rt.block_on(client.get_endpoint().register_prebuffered(
-        OnPtyResized::METHOD_ID,
-        move |payload, _ctx| {
-            let parser = Arc::clone(&parser_handle);
-            let pending = Arc::clone(&resize_flag);
-            async move {
-                let (cols, rows) = OnPtyResized::decode_request(&payload)
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-                let mut parser = parser.lock().unwrap();
-                parser.screen_mut().set_size(rows, cols);
-                pending.store(true, Ordering::Relaxed);
-                OnPtyResized::encode_response(())
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
-            }
-        },
-    ))
-    .map_err(|e| io::Error::other(format!("register OnPtyResized: {e:?}")))?;
 
     // Channel for crossterm input events from a background thread
     let (input_tx, input_rx) = crossbeam_channel::bounded::<Event>(INPUT_CHANNEL_CAPACITY);
@@ -381,6 +389,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
 
     let mut pending_input: Option<Event> = None;
     loop {
+        let mut force_render = false;
         // Retrieve next input event (either buffered from previous coalescing
         // pass or blocking on the input/PTY-output channel)
         let input_event = if let Some(evt) = pending_input.take() {
@@ -515,7 +524,10 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                         pixel_width: 0,
                         pixel_height: 0,
                     };
-                    let _ = pane.resize(size);
+                    if let Err(err) = pane.resize(size) {
+                        tracing::warn!(error = %err, "resize request failed on PTY pane");
+                    }
+                    force_render = true;
                 }
                 Event::Paste(text) => {
                     let mut wrapped = Vec::with_capacity(text.len() + BRACKETED_PASTE_OVERHEAD);
@@ -535,12 +547,20 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
 
         // Check if OnPtyResized signaled a geometry change
         if resize_pending.swap(false, Ordering::Relaxed) {
+            let cols = server_cols.load(Ordering::Relaxed);
+            let rows = server_rows.load(Ordering::Relaxed);
+            if cols > 0 && rows > 0 {
+                let parser = pane.shared_parser();
+                let mut parser_lk = parser.lock().unwrap();
+                parser_lk.screen_mut().set_size(rows, cols);
+            }
             let _ = out.write_all(b"\x1b[0m\x1b[2J\x1b[H");
             let _ = out.flush();
+            force_render = true;
         }
 
         // Full-frame explicit row-by-row render
-        if has_new_data {
+        if has_new_data || force_render {
             let parser = pane.shared_parser();
             let parser = parser.lock().unwrap();
             let screen = parser.screen();
