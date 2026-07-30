@@ -15,6 +15,7 @@ development = ["term-bench", "term-session-client"]
 members = [
     "crates/term-bench",
     "crates/term-resize-indicator",
+    "crates/term-resize-indicator",
     "crates/term-session-client",
     "crates/term-session-mock",
     "crates/term-session-muxio-service-definitions",
@@ -28,7 +29,6 @@ members = [
     "crates/term-wm-sys-ui-components",
     "crates/term-wm-ui-components",
     "crates/term-wm-ui-facade",
-    "crates/term-resize-indicator",
 ]
 resolver = "2"
 
