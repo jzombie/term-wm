@@ -104,11 +104,30 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
         self.root.remove_void_by_id(void_id)
     }
 
+    /// Unified topological fallback: consumes the first available Void node.
+    /// Returns true if a Void was successfully filled.
+    pub fn consume_first_void(&mut self, insert: Id, area: Rect) -> bool {
+        let voids = self.void_regions(area);
+        if !voids.is_empty() {
+            let target_void_id = voids[0].0;
+            self.replace_void_by_id(target_void_id, LayoutNode::leaf(insert));
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn swap_nodes(&mut self, source: &Id, target: &Id) -> bool {
         self.root.swap_leaves(source, target)
     }
 
     pub fn insert_window_balanced(&mut self, insert: Id, area: Rect) {
+        // 1. Unified topological fallback — fill voids before splitting
+        if self.consume_first_void(insert, area) {
+            return;
+        }
+
+        // 2. Existing largest-leaf split logic
         let regions = self.regions(area);
         if regions.is_empty() {
             self.split_root(insert, InsertPosition::Right);

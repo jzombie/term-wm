@@ -855,15 +855,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             return;
         };
 
-        // 1. VOID CONSUMPTION — fill existing void holes before splitting
-        let voids = layout.void_regions(self.managed_area);
-        if !voids.is_empty() {
-            let target_void_id = voids[0].0;
-            layout.replace_void_by_id(target_void_id, LayoutNode::leaf(key));
-            return;
-        }
-
-        // 2. EXISTING SPATIAL PLACEMENT LOGIC — via floating_rect
+        // 1. SPATIAL PLACEMENT — explicit coordinates preempt hole-filling
         if let Some(rect) = floating_info {
             let (cx, cy) = rect.center();
             let regions = layout.regions(self.managed_area);
@@ -882,7 +874,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             }
         }
 
-        // Absolute fallback: window was never floating — use current_focus
+        // 2. UNIFIED TOPOLOGICAL FALLBACK — fill voids before splitting
+        if layout.consume_first_void(key, self.managed_area) {
+            return;
+        }
+
+        // 3. ABSOLUTE FALLBACK — window was never floating, no voids — use current_focus
         if current_focus == key {
             layout.split_root(key, InsertPosition::Right);
             return;
