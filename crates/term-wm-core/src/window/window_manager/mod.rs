@@ -122,6 +122,9 @@ pub(crate) enum SnapPreviewState {
     /// Tiled insert next to an existing window (quadrant-based).
     #[allow(dead_code)]
     TiledInsert(WindowKey, InsertPosition),
+    /// Drop into an empty void placeholder (stores void ID).
+    #[allow(dead_code)]
+    VoidInsert(usize),
 }
 
 /// Cached snap preview state to avoid recalculating the full
@@ -1252,6 +1255,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             SnapPreviewState::Edge(_) => "snap to edge",
             SnapPreviewState::Corner(_) => "snap to corner",
             SnapPreviewState::TiledInsert(_, _) => "tile",
+            SnapPreviewState::VoidInsert(_) => "fill void",
         })
     }
 
@@ -2943,6 +2947,7 @@ fn map_layout_node(node: &LayoutNode<WindowKey>) -> LayoutNode<WindowKey> {
             weights: weights.clone(),
             resizable: *resizable,
         },
+        LayoutNode::Void(key) => LayoutNode::Void(*key),
     }
 }
 
@@ -3447,26 +3452,32 @@ mod tests {
         wm.focus_window_key(keys[0]);
 
         // Record original region for position check
+        let orig_region = wm.region(keys[0]);
+
         // Maximize
         wm.toggle_maximize(keys[0]);
         assert!(wm.windows.get(keys[0]).unwrap().is_maximized());
+        assert!(wm.windows.get(keys[0]).unwrap().void_id().is_some());
 
         // Toggle back (unmaximize directly)
         wm.toggle_maximize(keys[0]);
         let w0 = wm.windows.get(keys[0]).unwrap();
         assert!(!w0.is_maximized(), "unmaximized");
+        assert!(w0.void_id().is_none(), "void_id cleared");
         assert!(!w0.is_floating(), "not floating");
-        // Should be back in tree
+        // Should be back in tree at original position
         assert!(
             wm.managed_layout
                 .as_ref()
                 .is_some_and(|l| l.root().subtree_any(|k| k == keys[0])),
             "back in tree"
         );
+        let restored = wm.region(keys[0]);
+        assert_eq!(restored, orig_region, "same region as before maximize");
     }
 
     #[test]
-    fn tiled_maximize_removes_from_tree() {
+    fn tiled_maximize_void_id_set() {
         use crate::layout::{LayoutNode, TilingLayout};
         let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
@@ -3487,12 +3498,17 @@ mod tests {
         wm.focus_window_key(keys[0]);
 
         wm.toggle_maximize(keys[0]);
-        // Tree should be empty (leaf was removed)
+        let w0 = wm.windows.get(keys[0]).unwrap();
+        assert!(
+            w0.void_id().is_some(),
+            "void_id set after maximizing tiled window"
+        );
+        // Tree should contain a Void, not a Leaf(keys[0])
         assert!(
             !wm.managed_layout
                 .as_ref()
                 .is_some_and(|l| l.root().subtree_any(|k| k == keys[0])),
-            "leaf removed from tree after maximizing"
+            "leaf replaced by void in tree"
         );
     }
 
@@ -3652,21 +3668,19 @@ mod tests {
 
         wm.toggle_maximize(keys[0]);
         assert!(wm.windows.get(keys[0]).unwrap().is_maximized());
-        // Tree should be empty (leaf was removed)
-        assert!(
-            wm.managed_layout.as_ref().unwrap().root().collect_leaves().is_empty(),
-            "tree should be empty after maximizing sole leaf"
-        );
+        // Tree should be Void (single leaf replaced)
+        assert!(matches!(
+            wm.managed_layout.as_ref().unwrap().root(),
+            LayoutNode::Void(_)
+        ));
 
         wm.toggle_maximize(keys[0]);
         let w0 = wm.windows.get(keys[0]).unwrap();
         assert!(!w0.is_maximized(), "unmaximized");
-        // Back in tree
-        assert!(
-            wm.managed_layout
-                .as_ref()
-                .is_some_and(|l| l.root().subtree_any(|k| k == keys[0])),
-            "back in tree"
+        // Back to a leaf at root
+        assert_eq!(
+            wm.managed_layout.as_ref().unwrap().root().unwrap_leaf(),
+            Some(keys[0])
         );
     }
 
@@ -3713,9 +3727,9 @@ mod tests {
             vec![keys[0], keys[2]],
             "other windows still in tree"
         );
-        // 2 children now (window was removed, not replaced with void)
+        // 3 children still (void preserves position)
         if let LayoutNode::Split { children, .. } = wm.managed_layout.as_ref().unwrap().root() {
-            assert_eq!(children.len(), 2, "window removed from split");
+            assert_eq!(children.len(), 3, "void placeholder preserves split slot");
         } else {
             panic!("expected split");
         }
@@ -3857,12 +3871,13 @@ mod tests {
         wm.restore_minimized(keys[0]);
         assert_eq!(wm.window_state(keys[0]), Some(WindowState::Mapped));
 
-        // After restore, the tree should have the window back
+        // After restore, the tree should have the window as a single Leaf root
+        // (this assertion FAILS on current code — Bug 2 creates a 50/50 split with Void)
         assert!(
             wm.managed_layout
                 .as_ref()
-                .is_some_and(|l| l.root().subtree_any(|k| k == keys[0])),
-            "window back in tree after restore"
+                .is_some_and(|l| l.root().unwrap_leaf() == Some(keys[0])),
+            "single window should be a Leaf root, not a split with Void"
         );
     }
 
@@ -4035,9 +4050,13 @@ mod tests {
         // Unmap (transition_window instead of close)
         wm.transition_window(keys[0], WindowState::Unmapped);
 
-        // Only remaining window in tree
+        // Void should be removed from tree
         let leaves: Vec<_> = wm.managed_layout.as_ref().unwrap().root().collect_leaves();
         assert_eq!(leaves, vec![keys[1]], "only remaining window in tree");
+        assert!(
+            wm.windows.get(keys[0]).unwrap().void_id().is_none(),
+            "void_id cleared"
+        );
     }
 
     #[test]

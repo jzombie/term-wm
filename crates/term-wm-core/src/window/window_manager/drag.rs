@@ -159,6 +159,10 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                     layout.project_insert(Some(target_key), dragging_key, pos, area)
                 })
             }
+            SnapPreviewState::VoidInsert(void_id) => self
+                .managed_layout
+                .as_ref()
+                .and_then(|layout| layout.project_insert_void(dragging_key, void_id, area)),
             SnapPreviewState::Maximize => None,
         };
         self.snap_projection_cache = Some((state, area, rect));
@@ -338,7 +342,29 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     #[allow(clippy::collapsible_if)]
     pub(super) fn apply_snap(&mut self, key: WindowKey) {
+        use crate::layout::LayoutNode;
         if let Some((_target, position, _preview)) = self.drag_snap.take() {
+            // Void snap: replace the void placeholder in the BSP tree
+            if let Some(SnapPreviewState::VoidInsert(void_id)) = self.snap_preview {
+                if self.is_window_floating(key) {
+                    self.clear_floating_rect(key);
+                }
+                if let Some(layout) = &mut self.managed_layout {
+                    layout.root_mut().remove_leaf(key);
+                    layout.root_mut().cleanup_after_removal();
+                    layout
+                        .root_mut()
+                        .replace_void_by_id(void_id, LayoutNode::leaf(key));
+                }
+                if let Some(pos) = self.z_order.iter().position(|&z_key| z_key == key) {
+                    self.z_order.remove(pos);
+                }
+                self.z_order.push(key);
+                self.bifurcate_draw_order();
+                self.snap_projection_cache = None;
+                return;
+            }
+
             // Remove key from existing tree before insertion (prevents duplicates)
             if self.layout_contains(key)
                 && let Some(layout) = &mut self.managed_layout
@@ -610,8 +636,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         }
 
         if others.is_empty() {
-            // Create an empty split to preserve snap geometry
-            let mut layout = TilingLayout::new_empty();
+            // Create a void split to preserve snap geometry
+            let mut layout = TilingLayout::new_void();
             layout.split_root(anchor_key, snap_position);
             self.managed_layout = Some(layout);
             return;
@@ -674,7 +700,7 @@ fn simulate_position_based_layout(
         .collect();
 
     if others.is_empty() {
-        let mut layout = TilingLayout::new_empty();
+        let mut layout = TilingLayout::new_void();
         layout.split_root(anchor_key, snap_position);
         return layout
             .regions(workspace_bounds)
