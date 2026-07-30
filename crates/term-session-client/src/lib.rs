@@ -677,8 +677,10 @@ pub fn render_frame(out: &mut dyn Write, screen: &Screen, rows: u16, cols: u16) 
             buf.push(b' ');
             col += 1;
         }
+        buf.extend_from_slice(b"\x1b[K");
     }
 
+    buf.extend_from_slice(b"\x1b[J");
     buf.extend_from_slice(b"\x1b[?7h");
     buf.extend_from_slice(b"\x1b[0m");
     let (cur_row, cur_col) = screen.cursor_position();
