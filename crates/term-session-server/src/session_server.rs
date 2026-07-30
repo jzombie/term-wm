@@ -17,6 +17,15 @@ use term_wm_pty_engine::PtyStatus;
 
 use crate::session::Session;
 
+/// Default terminal columns when no client constrains the PTY size.
+const FALLBACK_COLS: u16 = 80;
+/// Default terminal rows when no client constrains the PTY size.
+const FALLBACK_ROWS: u16 = 24;
+/// Hardcoded singleton session ID (this server manages one PTY at a time).
+const SESSION_ID: u64 = 1;
+/// Bounded input channel capacity — memory safety against extreme input bursts.
+const INPUT_CHANNEL_CAPACITY: usize = 128;
+
 pub struct SessionServerConfig {
     pub socket_path: String,
     pub cmd: Vec<String>,
@@ -102,14 +111,14 @@ impl ServerState {
             .map(|c| c.cols)
             .filter(|&c| c != u16::MAX)
             .min()
-            .unwrap_or(80);
+            .unwrap_or(FALLBACK_COLS);
         let min_rows = self
             .clients
             .values()
             .map(|c| c.rows)
             .filter(|&r| r != u16::MAX)
             .min()
-            .unwrap_or(24);
+            .unwrap_or(FALLBACK_ROWS);
         let size = PtySize {
             rows: min_rows,
             cols: min_cols,
@@ -153,7 +162,7 @@ pub async fn run_server(
         } else {
             Some(config.cmd.clone())
         };
-        let session = Session::spawn(1, cmd, config.cols, config.rows)?;
+        let session = Session::spawn(SESSION_ID, cmd, config.cols, config.rows)?;
         st.set_session(session);
     }
 
@@ -188,9 +197,9 @@ pub async fn run_server(
                         .session
                         .as_ref()
                         .map(|s| (s.cols, s.rows))
-                        .unwrap_or((80, 24));
+                        .unwrap_or((FALLBACK_COLS, FALLBACK_ROWS));
                     let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
-                    let id = guard.session.as_ref().map(|s| s.id).unwrap_or(1);
+                    let id = guard.session.as_ref().map(|s| s.id).unwrap_or(SESSION_ID);
                     let cols = guard.session.as_ref().map(|s| s.cols).unwrap_or(cols);
                     let rows = guard.session.as_ref().map(|s| s.rows).unwrap_or(rows);
                     drop(guard);
@@ -198,7 +207,7 @@ pub async fn run_server(
                     return Spawn::encode_response((id, cols, rows))
                         .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
                 }
-                let id = 1;
+                let id = SESSION_ID;
                 let session = Session::spawn(id, cmd, cols, rows)?;
                 guard.set_session(session);
                 // Enforce global geometric constraints on the newly instantiated PTY
@@ -207,7 +216,7 @@ pub async fn run_server(
                     .session
                     .as_ref()
                     .map(|s| (s.cols, s.rows))
-                    .unwrap_or((80, 24));
+                    .unwrap_or((FALLBACK_COLS, FALLBACK_ROWS));
                 let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
                 let session = guard.session.as_ref().unwrap();
                 let (sid, scol, srow) = (session.id, session.cols, session.rows);
@@ -309,11 +318,18 @@ pub async fn run_server(
     // The channel persists across client disconnects so reconnecting
     // clients can still send input — we drop it only when the server
     // shuts down.
-    let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    // Bounded to 128 items + try_send provides memory safety when the
+    // PTY write task falls behind under extreme input bursts.  Dropped
+    // chunks may fragment the PTY byte stream (multi-byte sequences);
+    // client-side coalescing (in term-session-client) prevents most
+    // over-production, but the bound is the last line of defense.
+    let (input_tx, mut input_rx) = mpsc::channel::<Vec<u8>>(INPUT_CHANNEL_CAPACITY);
     endpoint
         .register_stream_handler(STREAM_INPUT_METHOD_ID, move |event, _responder, _ctx| {
-            if let RpcStreamEvent::PayloadChunk { bytes, .. } = event {
-                let _ = input_tx.send(bytes);
+            if let RpcStreamEvent::PayloadChunk { bytes, .. } = event
+                && let Err(e) = input_tx.try_send(bytes)
+            {
+                tracing::warn!(error = %e, "server input buffer full; dropping input chunk");
             }
             // Intentionally ignore End/Error — the channel stays alive.
         })
@@ -403,7 +419,7 @@ pub async fn run_server(
                         .session
                         .as_ref()
                         .map(|s| (s.cols, s.rows))
-                        .unwrap_or((80, 24));
+                        .unwrap_or((FALLBACK_COLS, FALLBACK_ROWS));
                     let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
                     drop(guard);
                     ServerState::notify_clients(&targets, ncols, nrows);

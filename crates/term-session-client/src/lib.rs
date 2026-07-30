@@ -22,7 +22,7 @@ use portable_pty::PtySize;
 use term_session_muxio_service_definitions::{
     OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
 };
-use term_wm_core::events::{Event, KeyKind};
+use term_wm_core::events::{Event, KeyKind, KeyModifiers, MouseEventKind};
 use term_wm_pty_engine::Pane;
 use term_wm_pty_engine::clipboard::{Clipboard, Osc52Extractor};
 use term_wm_pty_engine::input_encoding::mouse_event_to_bytes;
@@ -93,6 +93,29 @@ const CLIPBOARD_CHANNEL_CAPACITY: usize = 64;
 /// Maximum buffered input events (covers paste bursts without over-allocating).
 const INPUT_CHANNEL_CAPACITY: usize = 64;
 
+/// Number of trailing bytes retained to detect OSC 52 clipboard sequences
+/// that straddle chunk boundaries.  8 bytes is enough to hold the longest
+/// OSC 52 tail (the BEL terminator and preceding data).
+const PREV_TAIL_LEN: usize = 8;
+
+/// Sleep duration (ms) between iterations while waiting for initial PTY output.
+const INITIAL_WAIT_SLEEP_MS: u64 = 50;
+
+/// Crossterm input polling interval (ms).  Short enough for responsive
+/// input, long enough to keep CPU idle when nothing is happening.
+const INPUT_POLL_MS: u64 = 50;
+
+/// Sleep duration (ms) in the output-backpressure loop when the PTY
+/// output channel is saturated.
+const BACKPRESSURE_SLEEP_MS: u64 = 1;
+
+/// Extra allocation headroom for bracketed-paste wrapper sequences:
+/// 6 bytes for `\x1b[200~` + 6 bytes for `\x1b[201~`.
+const BRACKETED_PASTE_OVERHEAD: usize = 12;
+
+/// Rough per-cell ANSI byte multiplier for initial render-buffer capacity.
+const RENDER_BUF_CELL_MULTIPLIER: usize = 3;
+
 /// Initialize terminal for TUI mode: write startup escape sequences
 /// (alternate screen, hide cursor, bracketed paste, mouse capture) to
 /// the given writer, enable raw mode on stdin, and return a guard that
@@ -139,6 +162,26 @@ impl<W: Write> Drop for TerminalGuard<W> {
 /// Convert a crossterm event into a core Event for use in the event-driven loop.
 fn convert_crossterm_event(evt: crossterm::event::Event) -> Option<Event> {
     term_wm_crossterm_adapter::try_translate_event(evt)
+}
+
+/// Two motion mouse events may be coalesced (keep only the latest position)
+/// only when both the event kind and modifier flags match.  Modifier changes
+/// mid-drag (Shift/Ctrl/Alt pressed or released) must be preserved — they
+/// signal state transitions that terminal applications rely on.
+fn is_coalescable_mouse(
+    a_kind: &MouseEventKind,
+    a_mod: &KeyModifiers,
+    b_kind: &MouseEventKind,
+    b_mod: &KeyModifiers,
+) -> bool {
+    if a_mod != b_mod {
+        return false;
+    }
+    match (a_kind, b_kind) {
+        (MouseEventKind::Moved, MouseEventKind::Moved) => true,
+        (MouseEventKind::Drag(btn1), MouseEventKind::Drag(btn2)) => btn1 == btn2,
+        _ => false,
+    }
 }
 
 /// Connect to a term-session-server and run the TUI viewer.
@@ -190,7 +233,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         // Intercept OSC 52 clipboard sequences before the parser consumes them.
         rt.spawn(async move {
             let mut osc52 = Osc52Extractor::new();
-            let mut prev_tail: [u8; 8] = [0; 8];
+            let mut prev_tail: [u8; PREV_TAIL_LEN] = [0; PREV_TAIL_LEN];
 
             while let Some(chunk) = reader.recv().await {
                 if let Ok(mut data) = chunk {
@@ -199,11 +242,11 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                     }
 
                     let n = data.len();
-                    if n >= 8 {
-                        prev_tail.copy_from_slice(&data[n - 8..n]);
+                    if n >= PREV_TAIL_LEN {
+                        prev_tail.copy_from_slice(&data[n - PREV_TAIL_LEN..n]);
                     } else if n > 0 {
                         prev_tail.rotate_left(n);
-                        prev_tail[8 - n..].copy_from_slice(&data[..n]);
+                        prev_tail[PREV_TAIL_LEN - n..].copy_from_slice(&data[..n]);
                     }
 
                     // Non-blocking push; if saturated, sleep 1ms to allow
@@ -212,7 +255,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                         push_tx.try_send(data)
                     {
                         data = pending;
-                        tokio::time::sleep(Duration::from_millis(1)).await;
+                        tokio::time::sleep(Duration::from_millis(BACKPRESSURE_SLEEP_MS)).await;
                     }
                 } else {
                     break;
@@ -256,7 +299,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             break;
         }
         drop(parser);
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(INITIAL_WAIT_SLEEP_MS));
     }
 
     // Resize local parser to server-constrained geometry
@@ -305,13 +348,13 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     let (input_tx, input_rx) = crossbeam_channel::bounded::<Event>(INPUT_CHANNEL_CAPACITY);
 
     // Spawn background crossterm input thread.
-    // Uses poll(50ms) so the thread can detect disconnection and exit
+    // Uses poll(INPUT_POLL_MS) so the thread can detect disconnection and exit
     // promptly when run_session terminates.
     std::thread::Builder::new()
         .name("crossterm-input".into())
         .spawn(move || {
             loop {
-                match crossterm::event::poll(Duration::from_millis(50)) {
+                match crossterm::event::poll(Duration::from_millis(INPUT_POLL_MS)) {
                     Ok(true) => {
                         if let Ok(crossterm_evt) = crossterm::event::read()
                             && let Some(e) = convert_crossterm_event(crossterm_evt)
@@ -336,28 +379,34 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         render_frame(&mut out, screen, rows, cols)?;
     }
 
+    let mut pending_input: Option<Event> = None;
     loop {
-        // Block until either user input or PTY output arrives (0 CPU when idle)
-        let input_event = crossbeam_channel::select! {
-            recv(input_rx) -> msg => {
-                match msg {
-                    Ok(evt) => Some(evt),
-                    Err(_) => return Err(io::Error::other("input thread died")),
-                }
-            }
-            recv(push_rx) -> msg => {
-                match msg {
-                    Ok(data) => {
-                        // PTY output — process directly into parser
-                        let parser = pane.shared_parser();
-                        let mut parser = parser.lock().unwrap();
-                        parser.process(&data);
-                        None
+        // Retrieve next input event (either buffered from previous coalescing
+        // pass or blocking on the input/PTY-output channel)
+        let input_event = if let Some(evt) = pending_input.take() {
+            Some(evt)
+        } else {
+            crossbeam_channel::select! {
+                recv(input_rx) -> msg => {
+                    match msg {
+                        Ok(evt) => Some(evt),
+                        Err(_) => return Err(io::Error::other("input thread died")),
                     }
-                    Err(_) => {
-                        // push channel disconnected → will be detected
-                        // by drain_pushes() below
-                        None
+                }
+                recv(push_rx) -> msg => {
+                    match msg {
+                        Ok(data) => {
+                            // PTY output — process directly into parser
+                            let parser = pane.shared_parser();
+                            let mut parser = parser.lock().unwrap();
+                            parser.process(&data);
+                            None
+                        }
+                        Err(_) => {
+                            // push channel disconnected → will be detected
+                            // by drain_pushes() below
+                            None
+                        }
                     }
                 }
             }
@@ -378,7 +427,34 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         }
 
         // Handle the input event (if any)
-        if let Some(evt) = input_event {
+        if let Some(mut evt) = input_event {
+            // Coalesce rapid mouse motion (Moved / Drag) events currently in
+            // the channel buffer.  Only the latest position matters — discard
+            // intermediate positions.  Modifier changes and non-motion events
+            // break the coalescing loop so they are never lost or reordered.
+            if let Event::Mouse(ref mut mouse) = evt
+                && matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Drag(_))
+            {
+                while let Ok(next_evt) = input_rx.try_recv() {
+                    match next_evt {
+                        Event::Mouse(ref next_mouse)
+                            if is_coalescable_mouse(
+                                &mouse.kind,
+                                &mouse.modifiers,
+                                &next_mouse.kind,
+                                &next_mouse.modifiers,
+                            ) =>
+                        {
+                            *mouse = *next_mouse;
+                        }
+                        other => {
+                            pending_input = Some(other);
+                            break;
+                        }
+                    }
+                }
+            }
+
             match evt {
                 Event::Key(ref key)
                     if key.kind == KeyKind::Press || key.kind == KeyKind::Repeat =>
@@ -442,7 +518,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                     let _ = pane.resize(size);
                 }
                 Event::Paste(text) => {
-                    let mut wrapped = Vec::with_capacity(text.len() + 12);
+                    let mut wrapped = Vec::with_capacity(text.len() + BRACKETED_PASTE_OVERHEAD);
                     wrapped.extend_from_slice(b"\x1b[200~");
                     wrapped.extend_from_slice(text.as_bytes());
                     wrapped.extend_from_slice(b"\x1b[201~");
@@ -535,7 +611,8 @@ fn apply_sgr(out: &mut dyn Write, style: &CellStyle) -> io::Result<()> {
 }
 
 pub fn render_frame(out: &mut dyn Write, screen: &Screen, rows: u16, cols: u16) -> io::Result<()> {
-    let mut buf = Vec::with_capacity((rows as usize) * (cols as usize) * 3);
+    let mut buf =
+        Vec::with_capacity((rows as usize) * (cols as usize) * RENDER_BUF_CELL_MULTIPLIER);
     let mut active_style = CellStyle::default();
 
     buf.extend_from_slice(b"\x1b[0m");
@@ -584,6 +661,8 @@ pub fn render_frame(out: &mut dyn Write, screen: &Screen, rows: u16, cols: u16) 
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    use term_wm_core::events::{KeyCode, KeyEvent, MouseButton, MouseEvent};
 
     struct TestWriter {
         buf: Arc<Mutex<Vec<u8>>>,
@@ -714,5 +793,262 @@ mod tests {
         );
         // Should not contain raw ESC characters without following sequences
         assert!(!output.contains("\x1b\x1b"), "no double ESC sequences");
+    }
+
+    // ── is_coalescable_mouse tests ────────────────────────────────────────
+
+    #[test]
+    fn coalesce_moved_with_moved() {
+        assert!(is_coalescable_mouse(
+            &MouseEventKind::Moved,
+            &KeyModifiers::NONE,
+            &MouseEventKind::Moved,
+            &KeyModifiers::NONE,
+        ));
+    }
+
+    #[test]
+    fn coalesce_drag_same_button() {
+        assert!(is_coalescable_mouse(
+            &MouseEventKind::Drag(MouseButton::Left),
+            &KeyModifiers::NONE,
+            &MouseEventKind::Drag(MouseButton::Left),
+            &KeyModifiers::NONE,
+        ));
+        assert!(is_coalescable_mouse(
+            &MouseEventKind::Drag(MouseButton::Right),
+            &KeyModifiers {
+                shift: true,
+                ..KeyModifiers::NONE
+            },
+            &MouseEventKind::Drag(MouseButton::Right),
+            &KeyModifiers {
+                shift: true,
+                ..KeyModifiers::NONE
+            },
+        ));
+    }
+
+    #[test]
+    fn reject_drag_different_button() {
+        assert!(!is_coalescable_mouse(
+            &MouseEventKind::Drag(MouseButton::Left),
+            &KeyModifiers::NONE,
+            &MouseEventKind::Drag(MouseButton::Right),
+            &KeyModifiers::NONE,
+        ));
+    }
+
+    #[test]
+    fn reject_moved_vs_drag() {
+        assert!(!is_coalescable_mouse(
+            &MouseEventKind::Moved,
+            &KeyModifiers::NONE,
+            &MouseEventKind::Drag(MouseButton::Left),
+            &KeyModifiers::NONE,
+        ));
+    }
+
+    #[test]
+    fn reject_different_modifiers() {
+        assert!(!is_coalescable_mouse(
+            &MouseEventKind::Moved,
+            &KeyModifiers::NONE,
+            &MouseEventKind::Moved,
+            &KeyModifiers {
+                shift: true,
+                ..KeyModifiers::NONE
+            },
+        ));
+        assert!(!is_coalescable_mouse(
+            &MouseEventKind::Drag(MouseButton::Left),
+            &KeyModifiers {
+                control: true,
+                ..KeyModifiers::NONE
+            },
+            &MouseEventKind::Drag(MouseButton::Left),
+            &KeyModifiers::NONE,
+        ));
+    }
+
+    #[test]
+    fn reject_discrete_events() {
+        assert!(!is_coalescable_mouse(
+            &MouseEventKind::Press(MouseButton::Left),
+            &KeyModifiers::NONE,
+            &MouseEventKind::Press(MouseButton::Left),
+            &KeyModifiers::NONE,
+        ));
+        assert!(!is_coalescable_mouse(
+            &MouseEventKind::Release(MouseButton::Left),
+            &KeyModifiers::NONE,
+            &MouseEventKind::Moved,
+            &KeyModifiers::NONE,
+        ));
+        assert!(!is_coalescable_mouse(
+            &MouseEventKind::Moved,
+            &KeyModifiers::NONE,
+            &MouseEventKind::ScrollDown,
+            &KeyModifiers::NONE,
+        ));
+        assert!(!is_coalescable_mouse(
+            &MouseEventKind::ScrollUp,
+            &KeyModifiers::NONE,
+            &MouseEventKind::ScrollUp,
+            &KeyModifiers::NONE,
+        ));
+    }
+
+    // ── Coalescing loop integration tests ─────────────────────────────────
+
+    /// Helper: run the coalescing logic from the main loop against a real
+    /// bounded channel, returning the final event (or None if filtered away).
+    fn coalesce_through(
+        events: &[Event],
+        kind: MouseEventKind,
+        modifiers: KeyModifiers,
+    ) -> Option<Event> {
+        let (tx, rx) = crossbeam_channel::bounded::<Event>(events.len());
+        for e in events.iter().cloned() {
+            tx.send(e).ok();
+        }
+        drop(tx);
+
+        let mut result = Event::Mouse(MouseEvent {
+            kind,
+            modifiers,
+            column: 0,
+            row: 0,
+        });
+
+        if let Event::Mouse(ref mut mouse) = result
+            && matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Drag(_))
+        {
+            while let Ok(next) = rx.try_recv() {
+                match next {
+                    Event::Mouse(ref next_mouse)
+                        if is_coalescable_mouse(
+                            &mouse.kind,
+                            &mouse.modifiers,
+                            &next_mouse.kind,
+                            &next_mouse.modifiers,
+                        ) =>
+                    {
+                        *mouse = *next_mouse;
+                    }
+                    _other => return Some(result),
+                }
+            }
+        }
+
+        Some(result)
+    }
+
+    #[test]
+    fn coalesce_keeps_latest_moved_position() {
+        let events = vec![
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                modifiers: KeyModifiers::NONE,
+                column: 5,
+                row: 5,
+            }),
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                modifiers: KeyModifiers::NONE,
+                column: 10,
+                row: 10,
+            }),
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                modifiers: KeyModifiers::NONE,
+                column: 15,
+                row: 15,
+            }),
+        ];
+        let result = coalesce_through(&events, MouseEventKind::Moved, KeyModifiers::NONE);
+        let Event::Mouse(m) = result.unwrap() else {
+            panic!("expected mouse")
+        };
+        assert_eq!((m.column, m.row), (15, 15));
+    }
+
+    #[test]
+    fn coalesce_keeps_latest_drag_position() {
+        let events = vec![
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                modifiers: KeyModifiers::NONE,
+                column: 1,
+                row: 1,
+            }),
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                modifiers: KeyModifiers::NONE,
+                column: 2,
+                row: 2,
+            }),
+        ];
+        let result = coalesce_through(
+            &events,
+            MouseEventKind::Drag(MouseButton::Left),
+            KeyModifiers::NONE,
+        );
+        let Event::Mouse(m) = result.unwrap() else {
+            panic!("expected mouse")
+        };
+        assert_eq!((m.column, m.row), (2, 2));
+    }
+
+    #[test]
+    fn coalesce_stops_at_modifier_change() {
+        let events = vec![Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            modifiers: KeyModifiers {
+                shift: true,
+                ..KeyModifiers::NONE
+            },
+            column: 99,
+            row: 99,
+        })];
+        let result = coalesce_through(&events, MouseEventKind::Moved, KeyModifiers::NONE);
+        let Event::Mouse(m) = result.unwrap() else {
+            panic!("expected mouse")
+        };
+        // The first event (modifier change) should NOT be consumed — we
+        // still hold the original event at (0,0) with NONE modifiers.
+        assert_eq!((m.column, m.row), (0, 0));
+    }
+
+    #[test]
+    fn coalesce_stops_at_non_mouse_event() {
+        let key = Event::Key(KeyEvent {
+            code: KeyCode::Char('q'),
+            kind: KeyKind::Press,
+            modifiers: KeyModifiers::NONE,
+        });
+        let events = vec![key.clone()];
+        let result = coalesce_through(&events, MouseEventKind::Moved, KeyModifiers::NONE);
+        let Event::Mouse(m) = result.unwrap() else {
+            panic!("expected mouse")
+        };
+        // Should retain original event, not consuming the key
+        assert_eq!((m.column, m.row), (0, 0));
+    }
+
+    #[test]
+    fn coalesce_stops_at_discrete_mouse_event() {
+        let events = vec![Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            modifiers: KeyModifiers::NONE,
+            column: 10,
+            row: 10,
+        })];
+        let result = coalesce_through(&events, MouseEventKind::Moved, KeyModifiers::NONE);
+        let Event::Mouse(m) = result.unwrap() else {
+            panic!("expected mouse")
+        };
+        // Should NOT consume the Press event
+        assert_eq!((m.column, m.row), (0, 0));
     }
 }
