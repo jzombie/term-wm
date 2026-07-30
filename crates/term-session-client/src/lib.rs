@@ -6,6 +6,7 @@ use std::io::{self, IsTerminal, Write, stdout};
 #[cfg(unix)]
 use std::os::unix::io::FromRawFd;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crossterm::QueueableCommand;
@@ -14,18 +15,19 @@ use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
+use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
 use muxio_tokio_mpsc_adapter::ChannelCallerExt;
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient, RpcServiceCallerInterface};
 use portable_pty::PtySize;
 use term_session_muxio_service_definitions::{
-    STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
+    OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
 };
 use term_wm_core::events::{Event, KeyKind};
 use term_wm_pty_engine::Pane;
 use term_wm_pty_engine::clipboard::{Clipboard, Osc52Extractor};
 use term_wm_pty_engine::input_encoding::mouse_event_to_bytes;
 use term_wm_pty_engine::signal::install_sigint_handler;
-use vt100::{MouseProtocolEncoding, MouseProtocolMode};
+use vt100::{MouseProtocolEncoding, MouseProtocolMode, Screen};
 
 /// Redirect an OS-level file descriptor (stdout or stderr) into `tracing`.
 ///
@@ -168,8 +170,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     // Get terminal size
     let (term_cols, term_rows) = crossterm::terminal::size()?;
 
-    // Spawn session on the server
-    rt.block_on(async {
+    let (_session_id, actual_cols, actual_rows) = rt.block_on(async {
         Spawn::call(&*client, (None, term_cols, term_rows))
             .await
             .map_err(|e| io::Error::other(format!("spawn: {e:?}")))
@@ -184,40 +185,37 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             .await
             .map_err(|e| io::Error::other(format!("subscribe: {e:?}")))?;
 
-        // Forward response chunks to push_tx.  When the stream ends
-        // (session exits), the sender is dropped, and `drain_pushes`
-        // detects the disconnect.
-        // Intercept OSC 52 clipboard sequences from the raw byte stream
-        // before the VT100 parser can consume them.
+        // Forward raw PTY output chunks to push_tx.  Each chunk from the
+        // muxio stream is a complete message — no custom framing needed.
+        // Intercept OSC 52 clipboard sequences before the parser consumes them.
         rt.spawn(async move {
             let mut osc52 = Osc52Extractor::new();
             let mut prev_tail: [u8; 8] = [0; 8];
 
             while let Some(chunk) = reader.recv().await {
-                match chunk {
-                    Ok(mut data) => {
-                        if let Some(text) = osc52.push(&data, &prev_tail) {
-                            let _ = clip_tx.try_send(text);
-                        }
-
-                        let n = data.len();
-                        if n >= 8 {
-                            prev_tail.copy_from_slice(&data[n - 8..n]);
-                        } else if n > 0 {
-                            prev_tail.rotate_left(n);
-                            prev_tail[8 - n..].copy_from_slice(&data[..n]);
-                        }
-
-                        // Non-blocking push; if saturated, sleep 1ms to allow
-                        // the main loop to drain the channel without CPU spinning.
-                        while let Err(crossbeam_channel::TrySendError::Full(pending)) =
-                            push_tx.try_send(data)
-                        {
-                            data = pending;
-                            tokio::time::sleep(Duration::from_millis(1)).await;
-                        }
+                if let Ok(mut data) = chunk {
+                    if let Some(text) = osc52.push(&data, &prev_tail) {
+                        let _ = clip_tx.try_send(text);
                     }
-                    Err(_) => break,
+
+                    let n = data.len();
+                    if n >= 8 {
+                        prev_tail.copy_from_slice(&data[n - 8..n]);
+                    } else if n > 0 {
+                        prev_tail.rotate_left(n);
+                        prev_tail[8 - n..].copy_from_slice(&data[..n]);
+                    }
+
+                    // Non-blocking push; if saturated, sleep 1ms to allow
+                    // the main loop to drain the channel without CPU spinning.
+                    while let Err(crossbeam_channel::TrySendError::Full(pending)) =
+                        push_tx.try_send(data)
+                    {
+                        data = pending;
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                } else {
+                    break;
                 }
             }
         });
@@ -261,6 +259,17 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         std::thread::sleep(Duration::from_millis(50));
     }
 
+    // Resize local parser to server-constrained geometry
+    {
+        let parser = pane.shared_parser();
+        let mut parser_lk = parser.lock().unwrap();
+        let (cur_rows, cur_cols) = parser_lk.screen().size();
+        if actual_cols != cur_cols || actual_rows != cur_rows {
+            parser_lk.screen_mut().set_size(actual_rows, actual_cols);
+        }
+        drop(parser_lk);
+    }
+
     // Pass one stdout handle to init_terminal for the startup sequences
     // and TerminalGuard teardown; keep a second handle for rendering.
     let _guard = init_terminal(stdout())?;
@@ -268,6 +277,29 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
 
     let mut clipboard = Clipboard::new();
     let sigint = install_sigint_handler()?;
+    let resize_pending = Arc::new(AtomicBool::new(false));
+    let resize_flag = Arc::clone(&resize_pending);
+
+    // Register OnPtyResized handler so the server can notify us of
+    // geometry changes (e.g., when another client connects at a smaller size).
+    let parser_handle = pane.shared_parser();
+    rt.block_on(client.get_endpoint().register_prebuffered(
+        OnPtyResized::METHOD_ID,
+        move |payload, _ctx| {
+            let parser = Arc::clone(&parser_handle);
+            let pending = Arc::clone(&resize_flag);
+            async move {
+                let (cols, rows) = OnPtyResized::decode_request(&payload)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                let mut parser = parser.lock().unwrap();
+                parser.screen_mut().set_size(rows, cols);
+                pending.store(true, Ordering::Relaxed);
+                OnPtyResized::encode_response(())
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+            }
+        },
+    ))
+    .map_err(|e| io::Error::other(format!("register OnPtyResized: {e:?}")))?;
 
     // Channel for crossterm input events from a background thread
     let (input_tx, input_rx) = crossbeam_channel::bounded::<Event>(INPUT_CHANNEL_CAPACITY);
@@ -295,18 +327,14 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         })
         .map_err(|e| io::Error::other(format!("spawn input thread: {e}")))?;
 
-    // Initial full screen render
+    // Initial full-frame render
     {
         let parser = pane.shared_parser();
         let parser = parser.lock().unwrap();
         let screen = parser.screen();
-        let data = screen.contents_formatted();
-        out.write_all(&data)?;
-        out.flush()?;
+        let (rows, cols) = screen.size();
+        render_frame(&mut out, screen, rows, cols)?;
     }
-
-    let mut prev_content: Option<Vec<u8>> = None;
-    let mut prev_parser: Option<vt100::Parser> = None;
 
     loop {
         // Block until either user input or PTY output arrives (0 CPU when idle)
@@ -321,8 +349,8 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                 match msg {
                     Ok(data) => {
                         // PTY output — process directly into parser
-                        let shared = pane.shared_parser();
-                        let mut parser = shared.lock().unwrap();
+                        let parser = pane.shared_parser();
+                        let mut parser = parser.lock().unwrap();
                         parser.process(&data);
                         None
                     }
@@ -411,7 +439,6 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                         pixel_width: 0,
                         pixel_height: 0,
                     };
-                    prev_content = None;
                     let _ = pane.resize(size);
                 }
                 Event::Paste(text) => {
@@ -430,30 +457,19 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             return Err(io::Error::other("connection to session server lost"));
         }
 
-        // Diff-based incremental render
-        if has_new_data || prev_content.is_none() {
+        // Check if OnPtyResized signaled a geometry change
+        if resize_pending.swap(false, Ordering::Relaxed) {
+            let _ = out.write_all(b"\x1b[0m\x1b[2J\x1b[H");
+            let _ = out.flush();
+        }
+
+        // Full-frame explicit row-by-row render
+        if has_new_data {
             let parser = pane.shared_parser();
             let parser = parser.lock().unwrap();
             let screen = parser.screen();
             let (rows, cols) = screen.size();
-
-            let diff = match &prev_content {
-                Some(prev) => {
-                    let p = prev_parser.get_or_insert_with(|| vt100::Parser::new(rows, cols, 0));
-                    p.screen_mut().set_size(rows, cols);
-                    p.process(b"\x1bc");
-                    p.process(prev);
-                    screen.contents_diff(p.screen())
-                }
-                None => screen.contents_formatted(),
-            };
-
-            if !diff.is_empty() {
-                out.write_all(&diff)?;
-                out.flush()?;
-            }
-
-            prev_content = Some(screen.contents_formatted());
+            render_frame(&mut out, screen, rows, cols)?;
         }
 
         // Exit on session exit
@@ -463,12 +479,112 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     }
 }
 
+#[derive(Default, PartialEq, Clone, Copy)]
+struct CellStyle {
+    fg: vt100::Color,
+    bg: vt100::Color,
+    bold: bool,
+    dim: bool,
+    italic: bool,
+    underline: bool,
+    inverse: bool,
+}
+
+impl CellStyle {
+    fn from_cell(cell: &vt100::Cell) -> Self {
+        Self {
+            fg: cell.fgcolor(),
+            bg: cell.bgcolor(),
+            bold: cell.bold(),
+            dim: cell.dim(),
+            italic: cell.italic(),
+            underline: cell.underline(),
+            inverse: cell.inverse(),
+        }
+    }
+}
+
+fn apply_sgr(out: &mut dyn Write, style: &CellStyle) -> io::Result<()> {
+    write!(out, "\x1b[0m")?;
+    if style.bold {
+        write!(out, "\x1b[1m")?;
+    }
+    if style.dim {
+        write!(out, "\x1b[2m")?;
+    }
+    if style.italic {
+        write!(out, "\x1b[3m")?;
+    }
+    if style.underline {
+        write!(out, "\x1b[4m")?;
+    }
+    if style.inverse {
+        write!(out, "\x1b[7m")?;
+    }
+    match style.fg {
+        vt100::Color::Idx(i) => write!(out, "\x1b[38;5;{}m", i)?,
+        vt100::Color::Rgb(r, g, b) => write!(out, "\x1b[38;2;{};{};{}m", r, g, b)?,
+        _ => {}
+    }
+    match style.bg {
+        vt100::Color::Idx(i) => write!(out, "\x1b[48;5;{}m", i)?,
+        vt100::Color::Rgb(r, g, b) => write!(out, "\x1b[48;2;{};{};{}m", r, g, b)?,
+        _ => {}
+    }
+    Ok(())
+}
+
+pub fn render_frame(out: &mut dyn Write, screen: &Screen, rows: u16, cols: u16) -> io::Result<()> {
+    let mut buf = Vec::with_capacity((rows as usize) * (cols as usize) * 3);
+    let mut active_style = CellStyle::default();
+
+    buf.extend_from_slice(b"\x1b[0m");
+
+    for row in 0..rows {
+        write!(buf, "\x1b[{};1H", row + 1)?;
+        let mut col: u16 = 0;
+        while col < cols {
+            let cell_opt = screen.cell(row, col);
+            let style = cell_opt.map(CellStyle::from_cell).unwrap_or_default();
+
+            if style != active_style {
+                apply_sgr(&mut buf, &style)?;
+                active_style = style;
+            }
+
+            if let Some(cell) = cell_opt {
+                let c = cell.contents();
+                if !c.is_empty() {
+                    buf.extend_from_slice(c.as_bytes());
+                    let w = unicode_width::UnicodeWidthStr::width(c).max(1) as u16;
+                    col += w;
+                    continue;
+                }
+            }
+
+            buf.push(b' ');
+            col += 1;
+        }
+    }
+
+    buf.extend_from_slice(b"\x1b[0m");
+    let (cur_row, cur_col) = screen.cursor_position();
+    write!(buf, "\x1b[{};{}H", cur_row + 1, cur_col + 1)?;
+    if screen.hide_cursor() {
+        buf.extend_from_slice(b"\x1b[?25l");
+    } else {
+        buf.extend_from_slice(b"\x1b[?25h");
+    }
+
+    out.write_all(&buf)?;
+    out.flush()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    /// Helper writer that captures bytes into a shared `Vec<u8>`.
     struct TestWriter {
         buf: Arc<Mutex<Vec<u8>>>,
     }
@@ -502,11 +618,7 @@ mod tests {
         assert!(
             bytes
                 .windows(b"\x1b[?2004h".len())
-                .any(|w| w == b"\x1b[?2004h"),
-            "init_terminal must write bracketed paste enable \\x1b[?2004h. \
-             If this fails, EnableBracketedPaste may have been removed \
-             from the startup sequence. Captured bytes: {:?}",
-            String::from_utf8_lossy(&bytes)
+                .any(|w| w == b"\x1b[?2004h")
         );
     }
 
@@ -524,11 +636,7 @@ mod tests {
         assert!(
             bytes
                 .windows(b"\x1b[?2004l".len())
-                .any(|w| w == b"\x1b[?2004l"),
-            "TerminalGuard drop must write bracketed paste disable \\x1b[?2004l. \
-             If this fails, DisableBracketedPaste may have been removed \
-             from TerminalGuard::drop. Captured bytes: {:?}",
-            String::from_utf8_lossy(&bytes)
+                .any(|w| w == b"\x1b[?2004l")
         );
     }
 
@@ -543,14 +651,12 @@ mod tests {
         assert!(
             bytes
                 .windows(b"\x1b[?2004h".len())
-                .any(|w| w == b"\x1b[?2004h"),
-            "init/teardown roundtrip must contain enable \\x1b[?2004h"
+                .any(|w| w == b"\x1b[?2004h")
         );
         assert!(
             bytes
                 .windows(b"\x1b[?2004l".len())
-                .any(|w| w == b"\x1b[?2004l"),
-            "init/teardown roundtrip must contain disable \\x1b[?2004l"
+                .any(|w| w == b"\x1b[?2004l")
         );
     }
 
@@ -583,5 +689,30 @@ mod tests {
             fresh_parser.screen().contents_formatted(),
             "Reused parser state after set_size + RIS must match fresh parser"
         );
+    }
+
+    #[test]
+    fn render_frame_outputs_correct_cup_and_sgr() {
+        let mut parser = vt100::Parser::new(4, 8, 0);
+        parser.process(b"\x1b[31mhello\x1b[0m");
+        let screen = parser.screen();
+        let mut buf: Vec<u8> = Vec::new();
+        let (rows, cols) = screen.size();
+        render_frame(&mut buf, screen, rows, cols).unwrap();
+        let output = String::from_utf8_lossy(&buf);
+        // Should contain CUP to each row (4 rows)
+        assert!(output.contains("\x1b[1;1H"));
+        assert!(output.contains("\x1b[2;1H"));
+        assert!(output.contains("\x1b[3;1H"));
+        assert!(output.contains("\x1b[4;1H"));
+        // Should contain "hello"
+        assert!(output.contains("hello"));
+        // Should contain red foreground SGR
+        assert!(
+            output.contains("\x1b[38;5;1m") || output.contains("\x1b[31m"),
+            "Expected red foreground SGR in output: {output:?}"
+        );
+        // Should not contain raw ESC characters without following sequences
+        assert!(!output.contains("\x1b\x1b"), "no double ESC sequences");
     }
 }
