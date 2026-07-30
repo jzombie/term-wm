@@ -7,7 +7,6 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
-/// Dark background to distinguish the overlay from normal terminal content.
 const BG: Color = Color::Rgb(20, 20, 48);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,21 +103,16 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16) {
         }
     }
 
-    // Border position in i32 — no .max(0) clamping.  Parts that extend beyond
-    // the terminal boundaries simply won't have buffer cells to draw to.
-    // Use exact signed centering: (full - w) / 2 to avoid truncation asymmetry.
     let bx = full.left() as i32 + (full.width as i32 - w as i32) / 2;
     let by = full.top() as i32 + (full.height as i32 - h as i32) / 2;
     let bw = w as i32;
     let bh = h as i32;
 
-    // Visible region of the border intersecting the terminal buffer
     let x_lo = bx.max(full.left() as i32);
     let x_hi = (bx + bw).min(full.right() as i32);
     let y_lo = by.max(full.top() as i32);
     let y_hi = (by + bh).min(full.bottom() as i32);
 
-    // Helper to draw a box-drawing character at a buffer cell if in range.
     let set_cell = |buf: &mut ratatui::buffer::Buffer, x: i32, y: i32, ch: char| {
         if x >= full.left() as i32
             && x < full.right() as i32
@@ -133,7 +127,6 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16) {
     };
 
     if x_lo < x_hi && y_lo < y_hi {
-        // Top edge
         let ty = by;
         if ty >= full.top() as i32 && ty < full.bottom() as i32 {
             for x in x_lo..x_hi {
@@ -147,7 +140,6 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16) {
                 set_cell(buf, x, ty, ch);
             }
         }
-        // Bottom edge
         let ty2 = by + bh - 1;
         if ty2 >= full.top() as i32 && ty2 < full.bottom() as i32 {
             for x in x_lo..x_hi {
@@ -161,14 +153,12 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16) {
                 set_cell(buf, x, ty2, ch);
             }
         }
-        // Left edge (skip corners — already drawn above)
         let lx = bx;
         if lx >= full.left() as i32 && lx < full.right() as i32 {
             for y in (by + 1).max(y_lo)..(by + bh - 1).min(y_hi) {
                 set_cell(buf, lx, y, '│');
             }
         }
-        // Right edge
         let rx = bx + bw - 1;
         if rx >= full.left() as i32 && rx < full.right() as i32 {
             for y in (by + 1).max(y_lo)..(by + bh - 1).min(y_hi) {
@@ -184,7 +174,6 @@ fn draw_overlay(f: &mut ratatui::Frame, full: Rect, w: u16, h: u16) {
         .bg(BG)
         .add_modifier(Modifier::BOLD);
 
-    // Text centered on the border rect, clamped to terminal bounds
     let text_x = (bx + bw / 2 - label.len() as i32 / 2).max(full.left() as i32) as u16;
     let text_y =
         (by + bh / 2).clamp(full.top() as i32, full.bottom().saturating_sub(1) as i32) as u16;

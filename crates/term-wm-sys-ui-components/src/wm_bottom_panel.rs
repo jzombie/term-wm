@@ -16,6 +16,7 @@ use term_wm_core::{
 use term_wm_ui_components::helpers::{
     color_to_ratatui, layout_rect_to_clipped_rect, safe_set_string,
 };
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug)]
 pub struct WmBottomPanelComponent {
@@ -154,15 +155,46 @@ impl WmBottomPanelComponent {
             .as_ref()
             .map(|s| s.chars().count() as u16)
             .unwrap_or(0);
-        let right_margin = info_width + 2 + indicator_reserved;
-        let max_hint_x = if info_width > 0 {
-            bounds
-                .x
-                .saturating_add(bounds.width)
-                .saturating_sub(right_margin)
+
+        // Level 0 → 1: suppress info section when full hints don't fit
+        let potential_right_margin = if show_info && info_width > 0 {
+            info_width + 2 + indicator_reserved
         } else {
-            bounds.x.saturating_add(bounds.width)
+            indicator_reserved
         };
+
+        let total_full_hints_w: u16 = self
+            .keybinding_hints
+            .iter()
+            .map(|(action, combos)| {
+                let combo_str = combos.join("/");
+                let combo_w = UnicodeWidthStr::width(combo_str.as_str()) as u16;
+                let action_str = format!(" {}", action);
+                let action_w = UnicodeWidthStr::width(action_str.as_str()) as u16;
+                combo_w + action_w + 1
+            })
+            .sum();
+
+        let actual_info_width = if show_info && info_width > 0 {
+            let available_with_info = bounds.width.saturating_sub(potential_right_margin);
+            if total_full_hints_w > available_with_info {
+                0
+            } else {
+                info_width
+            }
+        } else {
+            0
+        };
+
+        let right_margin = if actual_info_width > 0 {
+            actual_info_width + 2 + indicator_reserved
+        } else {
+            indicator_reserved
+        };
+        let max_hint_x = bounds
+            .x
+            .saturating_add(bounds.width)
+            .saturating_sub(right_margin);
 
         if !self.keybinding_hints.is_empty() {
             let combo_style = Style::default()
@@ -175,39 +207,15 @@ impl WmBottomPanelComponent {
                 if cursor_x >= max_hint_x {
                     break;
                 }
+
                 let combo_str = combos.join("/");
-                let entry = format!("{combo_str} {action}");
-                let entry_width = entry.chars().count() as u16;
+                let combo_cols = UnicodeWidthStr::width(combo_str.as_str()) as u16;
 
-                if cursor_x.saturating_add(entry_width) > max_hint_x && cursor_x > bounds.x {
+                if cursor_x.saturating_add(combo_cols) > max_hint_x {
                     break;
                 }
 
-                let available_w = max_hint_x.saturating_sub(cursor_x);
-                if cursor_x == bounds.x && entry_width > available_w {
-                    let text = truncate_to_width(&entry, available_w as usize);
-                    safe_set_string(buffer, bounds, cursor_x, area.y as u16, &text, style);
-                    self.hint_rects.push((
-                        LayoutRect {
-                            x: i32::from(cursor_x),
-                            y: area.y,
-                            width: available_w,
-                            height: 1,
-                        },
-                        action.clone(),
-                    ));
-                    break;
-                }
-
-                self.hint_rects.push((
-                    LayoutRect {
-                        x: i32::from(cursor_x),
-                        y: area.y,
-                        width: entry_width,
-                        height: 1,
-                    },
-                    action.clone(),
-                ));
+                let entry_start = cursor_x;
 
                 safe_set_string(
                     buffer,
@@ -217,12 +225,30 @@ impl WmBottomPanelComponent {
                     &combo_str,
                     combo_style,
                 );
-                cursor_x = cursor_x.saturating_add(combo_str.chars().count() as u16);
-                let desc = format!(" {action}");
-                safe_set_string(buffer, bounds, cursor_x, area.y as u16, &desc, style);
-                cursor_x = cursor_x.saturating_add(desc.chars().count() as u16);
+                cursor_x = cursor_x.saturating_add(combo_cols);
 
-                if cursor_x < max_hint_x {
+                let remaining = max_hint_x.saturating_sub(cursor_x);
+                if remaining > 0 {
+                    let desc = format!(" {action}");
+                    let desc_cols = UnicodeWidthStr::width(desc.as_str()) as u16;
+                    let display_desc = if desc_cols <= remaining {
+                        desc
+                    } else {
+                        truncate_to_width(&desc, remaining as usize)
+                    };
+                    safe_set_string(
+                        buffer,
+                        bounds,
+                        cursor_x,
+                        area.y as u16,
+                        &display_desc,
+                        style,
+                    );
+                    cursor_x = cursor_x
+                        .saturating_add(UnicodeWidthStr::width(display_desc.as_str()) as u16);
+                }
+
+                if cursor_x.saturating_add(1) <= max_hint_x {
                     safe_set_string(
                         buffer,
                         bounds,
@@ -233,10 +259,22 @@ impl WmBottomPanelComponent {
                     );
                     cursor_x = cursor_x.saturating_add(1);
                 }
+
+                self.hint_rects.push((
+                    LayoutRect {
+                        x: i32::from(entry_start),
+                        y: area.y,
+                        width: cursor_x.saturating_sub(entry_start),
+                        height: 1,
+                    },
+                    action.clone(),
+                ));
             }
         }
 
-        if let Some(ref info) = info_opt {
+        if let Some(ref info) = info_opt
+            && actual_info_width > 0
+        {
             let text = truncate_to_width(
                 info,
                 (bounds.width.saturating_sub(indicator_reserved)) as usize,
@@ -381,6 +419,163 @@ impl Default for WmBottomPanelComponent {
 mod tests {
     use super::*;
     use ratatui::buffer::Buffer;
+    use term_wm_console::RatatuiBackend;
+    use term_wm_core::theme::NOIR;
+
+    fn make_panel(hints: Vec<(TermWmAction, Vec<String>)>) -> WmBottomPanelComponent {
+        let mut p = WmBottomPanelComponent::new("term-wm", "0.1.0", Some("test-host"));
+        p.set_keybinding_hints(hints);
+        p
+    }
+
+    fn render_at_width(
+        p: &mut WmBottomPanelComponent,
+        width: u16,
+        show_info: bool,
+    ) -> RatatuiBackend {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width,
+            height: 1,
+        };
+        p.area = area;
+        let ratatui_area = layout_rect_to_clipped_rect(area);
+        let buf = Buffer::empty(ratatui_area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, ratatui_area);
+        p.render_bottom_impl(&mut backend, show_info, &NOIR);
+        backend
+    }
+
+    fn collect_rendered(backend: &RatatuiBackend) -> String {
+        let ratatui_area = layout_rect_to_clipped_rect(LayoutRect {
+            x: 0,
+            y: 0,
+            width: backend.buffer.area.width,
+            height: 1,
+        });
+        let mut s = String::new();
+        for xx in ratatui_area.x..ratatui_area.x.saturating_add(ratatui_area.width) {
+            if let Some(cell) = backend.buffer.cell((xx, ratatui_area.y)) {
+                s.push_str(cell.symbol());
+            }
+        }
+        s
+    }
+
+    fn default_hints() -> Vec<(TermWmAction, Vec<String>)> {
+        vec![
+            (TermWmAction::NewWindow, vec!["Ctrl+N".into()]),
+            (TermWmAction::FocusNext, vec!["Alt+Tab".into()]),
+            (TermWmAction::OpenHelp, vec!["F1".into()]),
+        ]
+    }
+
+    // --- Progressive degradation tests ---
+
+    #[test]
+    fn level_0_full_hints_with_info() {
+        let mut p = make_panel(default_hints());
+        let backend = render_at_width(&mut p, 120, true);
+        let rendered = collect_rendered(&backend);
+
+        assert!(rendered.contains("Ctrl+N New window"));
+        assert!(rendered.contains("Alt+Tab Focus next"));
+        assert!(rendered.contains("F1 Open help"));
+        assert!(rendered.contains("term-wm 0.1.0"), "info section rendered");
+    }
+
+    #[test]
+    fn level_1_info_suppressed_to_fit_hints() {
+        let mut p = make_panel(default_hints());
+        // 68 cols: hints need ~56 cols, info needs ~33 cols -> doesn't fit together
+        let backend = render_at_width(&mut p, 68, true);
+        let rendered = collect_rendered(&backend);
+
+        assert!(
+            rendered.contains("Ctrl+N") || rendered.contains("Alt+Tab"),
+            "hints rendered after info suppression"
+        );
+        assert!(
+            !rendered.contains("term-wm 0.1.0"),
+            "info section suppressed"
+        );
+    }
+
+    #[test]
+    fn level_2_descriptions_truncated_combos_atomic() {
+        let mut p = make_panel(vec![
+            (TermWmAction::NewWindow, vec!["Ctrl+Shift+N".into()]),
+            (TermWmAction::FocusNext, vec!["Alt+Tab".into()]),
+        ]);
+        // 40 cols (hint area = 39): both combos fit, but second description truncates
+        let backend = render_at_width(&mut p, 40, false);
+        let rendered = collect_rendered(&backend);
+
+        assert!(
+            rendered.contains("Ctrl+Shift+N"),
+            "first combo fully present, not truncated"
+        );
+        assert!(rendered.contains("Alt+Tab"), "second combo fully present");
+    }
+
+    #[test]
+    fn combo_never_truncated_on_boundary() {
+        let mut p = make_panel(vec![
+            (TermWmAction::NewWindow, vec!["Ctrl+N".into()]),
+            (TermWmAction::FocusNext, vec!["X".into()]),
+        ]);
+        // 14 cols: exactly fits "Ctrl+N" + "|" + "X", combo must be atomic
+        let backend = render_at_width(&mut p, 14, false);
+        let rendered = collect_rendered(&backend);
+
+        assert!(
+            rendered.contains("Ctrl+N"),
+            "first combo fully rendered, not truncated"
+        );
+    }
+
+    #[test]
+    fn no_hints_when_too_narrow() {
+        let mut p = make_panel(default_hints());
+        let backend = render_at_width(&mut p, 6, false);
+        let rendered = collect_rendered(&backend);
+
+        assert!(
+            !rendered.contains("Ctrl+N"),
+            "no hints rendered when combos don't fit"
+        );
+    }
+
+    #[test]
+    fn combo_highlighting_preserved_after_truncation() {
+        let mut p = make_panel(default_hints());
+        // 25 cols: combo fits but description is severely truncated or omitted
+        let backend = render_at_width(&mut p, 25, false);
+        let ratatui_area = layout_rect_to_clipped_rect(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 25,
+            height: 1,
+        });
+
+        // First non-space cell should have combo_style (green bg)
+        let mut found_combo_cell = false;
+        for xx in ratatui_area.x..ratatui_area.x.saturating_add(ratatui_area.width) {
+            if let Some(cell) = backend.buffer.cell((xx, ratatui_area.y))
+                && cell.symbol() != " "
+            {
+                assert_eq!(
+                    cell.style().bg,
+                    Some(color_to_ratatui(NOIR.menu_selected_bg)),
+                    "first non-space cell should have combo highlighting"
+                );
+                found_combo_cell = true;
+                break;
+            }
+        }
+        assert!(found_combo_cell, "expected at least one rendered hint cell");
+    }
 
     #[test]
     fn bottom_panel_renders_provided_hostname() {
@@ -398,7 +593,7 @@ mod tests {
         let buf = Buffer::empty(ratatui_area);
         let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, ratatui_area);
 
-        p.render_bottom_impl(&mut backend, true, &term_wm_core::theme::NOIR);
+        p.render_bottom_impl(&mut backend, true, &NOIR);
 
         let mut rendered = String::new();
         for xx in ratatui_area.x..ratatui_area.x.saturating_add(ratatui_area.width) {
@@ -428,9 +623,8 @@ mod tests {
         let buf = Buffer::empty(ratatui_area);
         let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, ratatui_area);
 
-        p.render_bottom_impl(&mut backend, true, &term_wm_core::theme::NOIR);
+        p.render_bottom_impl(&mut backend, true, &NOIR);
 
-        // All cells except the rightmost indicator cell have panel bg
         let last_x = ratatui_area
             .x
             .saturating_add(ratatui_area.width)
@@ -442,11 +636,11 @@ mod tests {
                 .expect("cell present");
             assert_eq!(
                 cell.style().bg,
-                Some(color_to_ratatui(term_wm_core::theme::NOIR.bottom_panel_bg))
+                Some(color_to_ratatui(NOIR.bottom_panel_bg))
             );
             assert_eq!(
                 cell.style().fg,
-                Some(color_to_ratatui(term_wm_core::theme::NOIR.bottom_panel_fg))
+                Some(color_to_ratatui(NOIR.bottom_panel_fg))
             );
         }
 
@@ -478,7 +672,7 @@ mod tests {
         let buf = Buffer::empty(ratatui_area);
         let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, ratatui_area);
 
-        p.render_bottom_impl(&mut backend, true, &term_wm_core::theme::NOIR);
+        p.render_bottom_impl(&mut backend, true, &NOIR);
 
         let mut rendered = String::new();
         for xx in ratatui_area.x..ratatui_area.x.saturating_add(ratatui_area.width) {
