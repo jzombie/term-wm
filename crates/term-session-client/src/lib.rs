@@ -5,7 +5,7 @@ pub use remote_pane::RemotePane;
 use std::io::{self, IsTerminal, Write, stdout};
 #[cfg(unix)]
 use std::os::unix::io::FromRawFd;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::time::Duration;
 
@@ -27,7 +27,7 @@ use term_wm_pty_engine::Pane;
 use term_wm_pty_engine::clipboard::{Clipboard, Osc52Extractor};
 use term_wm_pty_engine::input_encoding::mouse_event_to_bytes;
 use term_wm_pty_engine::signal::install_sigint_handler;
-use vt100::{MouseProtocolEncoding, MouseProtocolMode, Screen};
+use vt100::{MouseProtocolEncoding, MouseProtocolMode, Parser, Screen};
 
 /// Redirect an OS-level file descriptor (stdout or stderr) into `tracing`.
 ///
@@ -390,6 +390,27 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     let mut pending_input: Option<Event> = None;
     loop {
         let mut force_render = false;
+
+        // Helper: synchronize parser geometry from server-driven resize signal
+        let mut apply_pending_resize = |shared_parser: &Arc<Mutex<Parser>>,
+                                         stdout: &mut io::Stdout|
+        {
+            if resize_pending.swap(false, Ordering::Relaxed) {
+                let cols = server_cols.load(Ordering::Relaxed);
+                let rows = server_rows.load(Ordering::Relaxed);
+                if cols > 0 && rows > 0 {
+                    let mut parser_lk = shared_parser.lock().unwrap();
+                    parser_lk.screen_mut().set_size(rows, cols);
+                }
+                let _ = stdout.write_all(b"\x1b[0m\x1b[2J\x1b[H");
+                let _ = stdout.flush();
+                force_render = true;
+            }
+        };
+
+        // Site 1: Apply any pending resize that arrived before this iteration
+        apply_pending_resize(&pane.shared_parser(), &mut out);
+
         // Retrieve next input event (either buffered from previous coalescing
         // pass or blocking on the input/PTY-output channel)
         let input_event = if let Some(evt) = pending_input.take() {
@@ -405,6 +426,12 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                 recv(push_rx) -> msg => {
                     match msg {
                         Ok(data) => {
+                            // Site 2: Apply pending resize before parsing PTY bytes
+                            // (prevents DECAWM auto-scroll row duplication when
+                            // geometry changed between entering select and receiving
+                            // push_rx data)
+                            apply_pending_resize(&pane.shared_parser(), &mut out);
+
                             // PTY output — process directly into parser
                             let parser = pane.shared_parser();
                             let mut parser = parser.lock().unwrap();
@@ -543,20 +570,6 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         // Connection health — check after wakeup
         if !client.is_connected() {
             return Err(io::Error::other("connection to session server lost"));
-        }
-
-        // Check if OnPtyResized signaled a geometry change
-        if resize_pending.swap(false, Ordering::Relaxed) {
-            let cols = server_cols.load(Ordering::Relaxed);
-            let rows = server_rows.load(Ordering::Relaxed);
-            if cols > 0 && rows > 0 {
-                let parser = pane.shared_parser();
-                let mut parser_lk = parser.lock().unwrap();
-                parser_lk.screen_mut().set_size(rows, cols);
-            }
-            let _ = out.write_all(b"\x1b[0m\x1b[2J\x1b[H");
-            let _ = out.flush();
-            force_render = true;
         }
 
         // Full-frame explicit row-by-row render
