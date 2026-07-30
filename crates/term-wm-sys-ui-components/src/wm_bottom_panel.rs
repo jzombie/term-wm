@@ -16,6 +16,7 @@ use term_wm_core::{
 use term_wm_ui_components::helpers::{
     color_to_ratatui, layout_rect_to_clipped_rect, safe_set_string,
 };
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug)]
 pub struct WmBottomPanelComponent {
@@ -185,8 +186,18 @@ impl WmBottomPanelComponent {
 
                 let available_w = max_hint_x.saturating_sub(cursor_x);
                 if cursor_x == bounds.x && entry_width > available_w {
-                    let text = truncate_to_width(&entry, available_w as usize);
-                    safe_set_string(buffer, bounds, cursor_x, area.y as u16, &text, style);
+                    let truncated_combo = truncate_to_width(&combo_str, available_w as usize);
+                    let combo_cols = UnicodeWidthStr::width(truncated_combo.as_str()) as u16;
+                    safe_set_string(buffer, bounds, cursor_x, area.y as u16, &truncated_combo, combo_style);
+
+                    let desc_available = available_w.saturating_sub(combo_cols);
+                    if desc_available > 0 {
+                        let desc = format!(" {action}");
+                        let truncated_desc = truncate_to_width(&desc, desc_available as usize);
+                        let desc_cursor = cursor_x.saturating_add(combo_cols);
+                        safe_set_string(buffer, bounds, desc_cursor, area.y as u16, &truncated_desc, style);
+                    }
+
                     self.hint_rects.push((
                         LayoutRect {
                             x: i32::from(cursor_x),
