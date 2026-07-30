@@ -93,6 +93,29 @@ const CLIPBOARD_CHANNEL_CAPACITY: usize = 64;
 /// Maximum buffered input events (covers paste bursts without over-allocating).
 const INPUT_CHANNEL_CAPACITY: usize = 64;
 
+/// Number of trailing bytes retained to detect OSC 52 clipboard sequences
+/// that straddle chunk boundaries.  8 bytes is enough to hold the longest
+/// OSC 52 tail (the BEL terminator and preceding data).
+const PREV_TAIL_LEN: usize = 8;
+
+/// Sleep duration (ms) between iterations while waiting for initial PTY output.
+const INITIAL_WAIT_SLEEP_MS: u64 = 50;
+
+/// Crossterm input polling interval (ms).  Short enough for responsive
+/// input, long enough to keep CPU idle when nothing is happening.
+const INPUT_POLL_MS: u64 = 50;
+
+/// Sleep duration (ms) in the output-backpressure loop when the PTY
+/// output channel is saturated.
+const BACKPRESSURE_SLEEP_MS: u64 = 1;
+
+/// Extra allocation headroom for bracketed-paste wrapper sequences:
+/// 6 bytes for `\x1b[200~` + 6 bytes for `\x1b[201~`.
+const BRACKETED_PASTE_OVERHEAD: usize = 12;
+
+/// Rough per-cell ANSI byte multiplier for initial render-buffer capacity.
+const RENDER_BUF_CELL_MULTIPLIER: usize = 3;
+
 /// Initialize terminal for TUI mode: write startup escape sequences
 /// (alternate screen, hide cursor, bracketed paste, mouse capture) to
 /// the given writer, enable raw mode on stdin, and return a guard that
@@ -210,7 +233,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         // Intercept OSC 52 clipboard sequences before the parser consumes them.
         rt.spawn(async move {
             let mut osc52 = Osc52Extractor::new();
-            let mut prev_tail: [u8; 8] = [0; 8];
+            let mut prev_tail: [u8; PREV_TAIL_LEN] = [0; PREV_TAIL_LEN];
 
             while let Some(chunk) = reader.recv().await {
                 if let Ok(mut data) = chunk {
@@ -219,11 +242,11 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                     }
 
                     let n = data.len();
-                    if n >= 8 {
-                        prev_tail.copy_from_slice(&data[n - 8..n]);
+                    if n >= PREV_TAIL_LEN {
+                        prev_tail.copy_from_slice(&data[n - PREV_TAIL_LEN..n]);
                     } else if n > 0 {
                         prev_tail.rotate_left(n);
-                        prev_tail[8 - n..].copy_from_slice(&data[..n]);
+                        prev_tail[PREV_TAIL_LEN - n..].copy_from_slice(&data[..n]);
                     }
 
                     // Non-blocking push; if saturated, sleep 1ms to allow
@@ -232,7 +255,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                         push_tx.try_send(data)
                     {
                         data = pending;
-                        tokio::time::sleep(Duration::from_millis(1)).await;
+                        tokio::time::sleep(Duration::from_millis(BACKPRESSURE_SLEEP_MS)).await;
                     }
                 } else {
                     break;
@@ -276,7 +299,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             break;
         }
         drop(parser);
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(INITIAL_WAIT_SLEEP_MS));
     }
 
     // Resize local parser to server-constrained geometry
@@ -325,13 +348,13 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     let (input_tx, input_rx) = crossbeam_channel::bounded::<Event>(INPUT_CHANNEL_CAPACITY);
 
     // Spawn background crossterm input thread.
-    // Uses poll(50ms) so the thread can detect disconnection and exit
+    // Uses poll(INPUT_POLL_MS) so the thread can detect disconnection and exit
     // promptly when run_session terminates.
     std::thread::Builder::new()
         .name("crossterm-input".into())
         .spawn(move || {
             loop {
-                match crossterm::event::poll(Duration::from_millis(50)) {
+                match crossterm::event::poll(Duration::from_millis(INPUT_POLL_MS)) {
                     Ok(true) => {
                         if let Ok(crossterm_evt) = crossterm::event::read()
                             && let Some(e) = convert_crossterm_event(crossterm_evt)
@@ -498,7 +521,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                     let _ = pane.resize(size);
                 }
                 Event::Paste(text) => {
-                    let mut wrapped = Vec::with_capacity(text.len() + 12);
+                    let mut wrapped = Vec::with_capacity(text.len() + BRACKETED_PASTE_OVERHEAD);
                     wrapped.extend_from_slice(b"\x1b[200~");
                     wrapped.extend_from_slice(text.as_bytes());
                     wrapped.extend_from_slice(b"\x1b[201~");
@@ -591,7 +614,7 @@ fn apply_sgr(out: &mut dyn Write, style: &CellStyle) -> io::Result<()> {
 }
 
 pub fn render_frame(out: &mut dyn Write, screen: &Screen, rows: u16, cols: u16) -> io::Result<()> {
-    let mut buf = Vec::with_capacity((rows as usize) * (cols as usize) * 3);
+    let mut buf = Vec::with_capacity((rows as usize) * (cols as usize) * RENDER_BUF_CELL_MULTIPLIER);
     let mut active_style = CellStyle::default();
 
     buf.extend_from_slice(b"\x1b[0m");
