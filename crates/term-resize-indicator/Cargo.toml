@@ -9,6 +9,5 @@ license.workspace = true
 publish = false
 
 [dependencies]
-clap = { workspace = true }
 crossterm = { workspace = true }
 ratatui = { workspace = true }
