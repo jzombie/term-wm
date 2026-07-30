@@ -1246,7 +1246,6 @@ mod tests {
         let result = wm.localize_event_content(key, &Event::Mouse(mouse));
         assert!(result.is_some());
     }
-
 }
 
 #[cfg(test)]
