@@ -317,10 +317,10 @@ pub async fn run_server(
     let (input_tx, mut input_rx) = mpsc::channel::<Vec<u8>>(128);
     endpoint
         .register_stream_handler(STREAM_INPUT_METHOD_ID, move |event, _responder, _ctx| {
-            if let RpcStreamEvent::PayloadChunk { bytes, .. } = event {
-                if let Err(e) = input_tx.try_send(bytes) {
-                    tracing::warn!(error = %e, "server input buffer full; dropping input chunk");
-                }
+            if let RpcStreamEvent::PayloadChunk { bytes, .. } = event
+                && let Err(e) = input_tx.try_send(bytes)
+            {
+                tracing::warn!(error = %e, "server input buffer full; dropping input chunk");
             }
             // Intentionally ignore End/Error — the channel stays alive.
         })

@@ -409,27 +409,27 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             // the channel buffer.  Only the latest position matters — discard
             // intermediate positions.  Modifier changes and non-motion events
             // break the coalescing loop so they are never lost or reordered.
-            if let Event::Mouse(ref mut mouse) = evt {
-                if matches!(
+            if let Event::Mouse(ref mut mouse) = evt
+                && matches!(
                     mouse.kind,
                     MouseEventKind::Moved | MouseEventKind::Drag(_)
-                ) {
-                    while let Ok(next_evt) = input_rx.try_recv() {
-                        match next_evt {
-                            Event::Mouse(ref next_mouse)
-                                if is_coalescable_mouse(
-                                    &mouse.kind,
-                                    &mouse.modifiers,
-                                    &next_mouse.kind,
-                                    &next_mouse.modifiers,
-                                ) =>
-                            {
-                                *mouse = next_mouse.clone();
-                            }
-                            other => {
-                                pending_input = Some(other);
-                                break;
-                            }
+                )
+            {
+                while let Ok(next_evt) = input_rx.try_recv() {
+                    match next_evt {
+                        Event::Mouse(ref next_mouse)
+                            if is_coalescable_mouse(
+                                &mouse.kind,
+                                &mouse.modifiers,
+                                &next_mouse.kind,
+                                &next_mouse.modifiers,
+                            ) =>
+                        {
+                            *mouse = *next_mouse;
+                        }
+                        other => {
+                            pending_input = Some(other);
+                            break;
                         }
                     }
                 }
