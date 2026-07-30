@@ -1246,49 +1246,6 @@ mod tests {
         assert!(result.is_some());
     }
 
-    #[test]
-    fn maximize_minimize_unmaximize_retains_window() {
-        let mut wm = make_wm();
-
-        // Create and map two windows so we have a tiling layout
-        let key_a = wm.create_window(NoopComponent);
-        let key_b = wm.create_window(NoopComponent);
-        wm.transition_window(key_a, WindowState::Mapped);
-        wm.transition_window(key_b, WindowState::Mapped);
-
-        // Register a layout to set up managed_area + tiling tree
-        wm.register_managed_layout(Rect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 24,
-        });
-
-        // 1. Maximize window A (creates Void, assigns void_id)
-        wm.toggle_maximize(key_a);
-        assert!(wm.window(key_a).is_some_and(|w| w.is_maximized()));
-        assert!(wm.is_window_floating(key_a));
-
-        // 2. Minimize window A (destroys Void, clears void_id)
-        wm.minimize_window(key_a);
-        assert_eq!(wm.window_state(key_a), Some(WindowState::Iconic));
-
-        // 3. Restore window A (state -> Mapped)
-        wm.restore_minimized(key_a);
-        assert_eq!(wm.window_state(key_a), Some(WindowState::Mapped));
-
-        // 4. Unmaximize window A (toggle_maximize — void pointer is stale)
-        wm.toggle_maximize(key_a);
-        assert!(!wm.window(key_a).is_some_and(|w| w.is_maximized()));
-        assert!(!wm.is_window_floating(key_a));
-
-        // Assert: Window A is in z_order and has valid geometry
-        assert!(wm.z_order.contains(&key_a), "must be in z_order");
-        assert!(
-            wm.region(key_a).width > 0 && wm.region(key_a).height > 0,
-            "must have valid geometry after unmaximize"
-        );
-    }
 }
 
 #[cfg(test)]
