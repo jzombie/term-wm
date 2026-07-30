@@ -340,7 +340,7 @@ impl fmt::Display for TermWmAction {
             TermWmAction::ProcessExited => "Process exited",
             TermWmAction::ProfileChange(_) => "Profile change",
             TermWmAction::RequestKeyboardFocus(_) => "Request keyboard focus",
-            TermWmAction::OpenCommandPalette => "Open command palette",
+            TermWmAction::OpenCommandPalette => "Open Command Palette",
             TermWmAction::CloseCommandPalette => "Close command palette",
             TermWmAction::BeginTapSwap(_) => "Begin tap-to-swap",
             TermWmAction::TapSwapTarget(_) => "Tap swap target",
