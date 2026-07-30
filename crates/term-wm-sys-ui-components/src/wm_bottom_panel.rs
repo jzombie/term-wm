@@ -218,7 +218,12 @@ impl WmBottomPanelComponent {
                 let entry_start = cursor_x;
 
                 safe_set_string(
-                    buffer, bounds, cursor_x, area.y as u16, &combo_str, combo_style,
+                    buffer,
+                    bounds,
+                    cursor_x,
+                    area.y as u16,
+                    &combo_str,
+                    combo_style,
                 );
                 cursor_x = cursor_x.saturating_add(combo_cols);
 
@@ -232,15 +237,26 @@ impl WmBottomPanelComponent {
                         truncate_to_width(&desc, remaining as usize)
                     };
                     safe_set_string(
-                        buffer, bounds, cursor_x, area.y as u16, &display_desc, style,
+                        buffer,
+                        bounds,
+                        cursor_x,
+                        area.y as u16,
+                        &display_desc,
+                        style,
                     );
-                    cursor_x = cursor_x.saturating_add(
-                        UnicodeWidthStr::width(display_desc.as_str()) as u16,
-                    );
+                    cursor_x = cursor_x
+                        .saturating_add(UnicodeWidthStr::width(display_desc.as_str()) as u16);
                 }
 
                 if cursor_x.saturating_add(1) <= max_hint_x {
-                    safe_set_string(buffer, bounds, cursor_x, area.y as u16, "|", Style::default());
+                    safe_set_string(
+                        buffer,
+                        bounds,
+                        cursor_x,
+                        area.y as u16,
+                        "|",
+                        Style::default(),
+                    );
                     cursor_x = cursor_x.saturating_add(1);
                 }
 
@@ -256,7 +272,9 @@ impl WmBottomPanelComponent {
             }
         }
 
-        if let Some(ref info) = info_opt && actual_info_width > 0 {
+        if let Some(ref info) = info_opt
+            && actual_info_width > 0
+        {
             let text = truncate_to_width(
                 info,
                 (bounds.width.saturating_sub(indicator_reserved)) as usize,
@@ -410,8 +428,17 @@ mod tests {
         p
     }
 
-    fn render_at_width(p: &mut WmBottomPanelComponent, width: u16, show_info: bool) -> RatatuiBackend {
-        let area = LayoutRect { x: 0, y: 0, width, height: 1 };
+    fn render_at_width(
+        p: &mut WmBottomPanelComponent,
+        width: u16,
+        show_info: bool,
+    ) -> RatatuiBackend {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width,
+            height: 1,
+        };
         p.area = area;
         let ratatui_area = layout_rect_to_clipped_rect(area);
         let buf = Buffer::empty(ratatui_area);
@@ -422,7 +449,10 @@ mod tests {
 
     fn collect_rendered(backend: &RatatuiBackend) -> String {
         let ratatui_area = layout_rect_to_clipped_rect(LayoutRect {
-            x: 0, y: 0, width: backend.buffer.area.width, height: 1,
+            x: 0,
+            y: 0,
+            width: backend.buffer.area.width,
+            height: 1,
         });
         let mut s = String::new();
         for xx in ratatui_area.x..ratatui_area.x.saturating_add(ratatui_area.width) {
@@ -462,10 +492,14 @@ mod tests {
         let backend = render_at_width(&mut p, 68, true);
         let rendered = collect_rendered(&backend);
 
-        assert!(rendered.contains("Ctrl+N") || rendered.contains("Alt+Tab"),
-                "hints rendered after info suppression");
-        assert!(!rendered.contains("term-wm 0.1.0"),
-                "info section suppressed");
+        assert!(
+            rendered.contains("Ctrl+N") || rendered.contains("Alt+Tab"),
+            "hints rendered after info suppression"
+        );
+        assert!(
+            !rendered.contains("term-wm 0.1.0"),
+            "info section suppressed"
+        );
     }
 
     #[test]
@@ -478,10 +512,11 @@ mod tests {
         let backend = render_at_width(&mut p, 40, false);
         let rendered = collect_rendered(&backend);
 
-        assert!(rendered.contains("Ctrl+Shift+N"),
-                "first combo fully present, not truncated");
-        assert!(rendered.contains("Alt+Tab"),
-                "second combo fully present");
+        assert!(
+            rendered.contains("Ctrl+Shift+N"),
+            "first combo fully present, not truncated"
+        );
+        assert!(rendered.contains("Alt+Tab"), "second combo fully present");
     }
 
     #[test]
@@ -494,8 +529,10 @@ mod tests {
         let backend = render_at_width(&mut p, 14, false);
         let rendered = collect_rendered(&backend);
 
-        assert!(rendered.contains("Ctrl+N"),
-                "first combo fully rendered, not truncated");
+        assert!(
+            rendered.contains("Ctrl+N"),
+            "first combo fully rendered, not truncated"
+        );
     }
 
     #[test]
@@ -504,8 +541,10 @@ mod tests {
         let backend = render_at_width(&mut p, 6, false);
         let rendered = collect_rendered(&backend);
 
-        assert!(!rendered.contains("Ctrl+N"),
-                "no hints rendered when combos don't fit");
+        assert!(
+            !rendered.contains("Ctrl+N"),
+            "no hints rendered when combos don't fit"
+        );
     }
 
     #[test]
@@ -513,7 +552,12 @@ mod tests {
         let mut p = make_panel(default_hints());
         // 25 cols: combo fits but description is severely truncated or omitted
         let backend = render_at_width(&mut p, 25, false);
-        let ratatui_area = layout_rect_to_clipped_rect(LayoutRect { x: 0, y: 0, width: 25, height: 1 });
+        let ratatui_area = layout_rect_to_clipped_rect(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 25,
+            height: 1,
+        });
 
         // First non-space cell should have combo_style (green bg)
         let mut found_combo_cell = false;
