@@ -3779,6 +3779,108 @@ mod tests {
         );
     }
 
+    // ── BUG 1: minimize+restore then focus-other causes window to disappear ──────
+
+    #[test]
+    fn tiled_maximize_minimize_restore_focus_other_stays_in_tree() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+        for &k in &keys {
+            wm.transition_window(k, WindowState::Mapped);
+        }
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.managed_layout = Some(TilingLayout::new(split));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_window_key(keys[0]);
+
+        // Maximize tiled window
+        wm.toggle_maximize(keys[0]);
+        assert!(wm.windows.get(keys[0]).unwrap().is_maximized());
+
+        // Minimize (void removed, void_id cleared)
+        wm.minimize_window(keys[0]);
+        assert_eq!(wm.window_state(keys[0]), Some(WindowState::Iconic));
+
+        // Restore (comes back maximized floating — is_window_floating returns true)
+        wm.restore_minimized(keys[0]);
+        assert_eq!(wm.window_state(keys[0]), Some(WindowState::Mapped));
+
+        // Focus the OTHER window → triggers auto-unmaximize on keys[0]
+        wm.focus_window_key(keys[1]);
+        assert_eq!(wm.focused_window(), keys[1]);
+
+        // After auto-unmaximize, keys[0] should NOT be maximized or floating
+        let w0 = wm.windows.get(keys[0]).unwrap();
+        assert!(!w0.is_maximized(), "should no longer be maximized");
+        assert!(!w0.is_floating(), "should be tiled (not floating)");
+
+        // After auto-unmaximize, keys[0] MUST still be in the tiling layout tree
+        // (this assertion FAILS on current code — Bug 1)
+        assert!(
+            wm.managed_layout
+                .as_ref()
+                .is_some_and(|l| l.root().subtree_any(|k| k == keys[0])),
+            "must remain in tiling layout after unmaximize"
+        );
+    }
+
+    // ── BUG 2: minimize+restore single tiled window creates half-screen void ────
+
+    #[test]
+    fn minimize_restore_single_tiled_window_takes_full_area() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.transition_window(keys[0], WindowState::Mapped);
+        wm.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(keys[0])));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        // Minimize (Leaf becomes Void, managed_layout stays Some(Void))
+        wm.minimize_window(keys[0]);
+        assert_eq!(wm.window_state(keys[0]), Some(WindowState::Iconic));
+
+        // Restore (reattach_to_tiling_layout called)
+        wm.restore_minimized(keys[0]);
+        assert_eq!(wm.window_state(keys[0]), Some(WindowState::Mapped));
+
+        // After restore, the tree should have the window as a single Leaf root
+        // (this assertion FAILS on current code — Bug 2 creates a 50/50 split with Void)
+        assert!(
+            wm.managed_layout
+                .as_ref()
+                .is_some_and(|l| l.root().unwrap_leaf() == Some(keys[0])),
+            "single window should be a Leaf root, not a split with Void"
+        );
+    }
+
     // ── No-op safety ──────────────────────────────────────────────────
 
     #[test]
