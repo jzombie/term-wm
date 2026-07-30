@@ -384,12 +384,13 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         let parser = parser.lock().unwrap();
         let screen = parser.screen();
         let (rows, cols) = screen.size();
-        render_frame(&mut out, screen, rows, cols)?;
+        render_frame(&mut out, screen, rows, cols, false)?;
     }
 
     let mut pending_input: Option<Event> = None;
     loop {
         let mut force_render = false;
+        let mut clear_display = false;
 
         // Helper: synchronize parser geometry from server-driven resize signal.
         // Returns true if geometry was actually updated.
@@ -410,7 +411,9 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         };
 
         // Site 1: Apply any pending resize that arrived before this iteration
-        force_render |= apply_pending_resize(&pane.shared_parser());
+        let resized = apply_pending_resize(&pane.shared_parser());
+        force_render |= resized;
+        clear_display |= resized;
 
         // Retrieve next input event (either buffered from previous coalescing
         // pass or blocking on the input/PTY-output channel)
@@ -431,7 +434,9 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                             // (prevents DECAWM auto-scroll row duplication when
                             // geometry changed between entering select and receiving
                             // push_rx data)
-                            force_render |= apply_pending_resize(&pane.shared_parser());
+                            let resized = apply_pending_resize(&pane.shared_parser());
+                            force_render |= resized;
+                            clear_display |= resized;
 
                             // PTY output — process directly into parser
                             let parser = pane.shared_parser();
@@ -556,6 +561,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                         tracing::warn!(error = %err, "resize request failed on PTY pane");
                     }
                     force_render = true;
+                    clear_display = true;
                 }
                 Event::Paste(text) => {
                     let mut wrapped = Vec::with_capacity(text.len() + BRACKETED_PASTE_OVERHEAD);
@@ -579,7 +585,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             let parser = parser.lock().unwrap();
             let screen = parser.screen();
             let (rows, cols) = screen.size();
-            render_frame(&mut out, screen, rows, cols)?;
+            render_frame(&mut out, screen, rows, cols, clear_display)?;
         }
 
         // Exit on session exit
@@ -644,12 +650,21 @@ fn apply_sgr(out: &mut dyn Write, style: &CellStyle) -> io::Result<()> {
     Ok(())
 }
 
-pub fn render_frame(out: &mut dyn Write, screen: &Screen, rows: u16, cols: u16) -> io::Result<()> {
+pub fn render_frame(
+    out: &mut dyn Write,
+    screen: &Screen,
+    rows: u16,
+    cols: u16,
+    clear_display: bool,
+) -> io::Result<()> {
     let mut buf =
         Vec::with_capacity((rows as usize) * (cols as usize) * RENDER_BUF_CELL_MULTIPLIER);
     let mut active_style = CellStyle::default();
 
     buf.extend_from_slice(b"\x1b[0m");
+    if clear_display {
+        buf.extend_from_slice(b"\x1b[2J");
+    }
     buf.extend_from_slice(b"\x1b[?7l");
 
     for row in 0..rows {
@@ -657,32 +672,39 @@ pub fn render_frame(out: &mut dyn Write, screen: &Screen, rows: u16, cols: u16) 
 
         let mut col: u16 = 0;
         while col < cols {
+            // Compute cell width first to handle wide chars (CJK, emoji) that
+            // span multiple columns — checking col + width >= cols catches the
+            // right-edge case even when a wide char at cols-2 jumps past cols-1.
             let cell_opt = screen.cell(row, col);
-            let style = cell_opt.map(CellStyle::from_cell).unwrap_or_default();
+            let contents = cell_opt.map_or("", |c| c.contents());
+            let width = if contents.is_empty() {
+                1
+            } else {
+                unicode_width::UnicodeWidthStr::width(contents).max(1) as u16
+            };
 
+            // Margin sanitation: clear right margin before writing the cell that
+            // touches or passes the right edge.  Placing \x1b[K here (while the
+            // cursor is still at col) avoids cursor-inclusive erasure of the cell.
+            if col + width >= cols {
+                buf.extend_from_slice(b"\x1b[0m\x1b[K");
+                active_style = CellStyle::default();
+            }
+
+            let style = cell_opt.map(CellStyle::from_cell).unwrap_or_default();
             if style != active_style {
                 apply_sgr(&mut buf, &style)?;
                 active_style = style;
             }
 
-            if let Some(cell) = cell_opt {
-                let c = cell.contents();
-                if !c.is_empty() {
-                    buf.extend_from_slice(c.as_bytes());
-                    let w = unicode_width::UnicodeWidthStr::width(c).max(1) as u16;
-                    col += w;
-                    continue;
-                }
+            if contents.is_empty() {
+                buf.push(b' ');
+            } else {
+                buf.extend_from_slice(contents.as_bytes());
             }
 
-            buf.push(b' ');
-            col += 1;
+            col += width;
         }
-
-        // Post-cell right-margin sanitation: reset SGR then clear to end of line
-        buf.extend_from_slice(b"\x1b[0m\x1b[K");
-        // Synchronize tracker with the physical \x1b[0m reset
-        active_style = CellStyle::default();
     }
 
     buf.extend_from_slice(b"\x1b[?7h");
@@ -819,7 +841,7 @@ mod tests {
         let screen = parser.screen();
         let mut buf: Vec<u8> = Vec::new();
         let (rows, cols) = screen.size();
-        render_frame(&mut buf, screen, rows, cols).unwrap();
+        render_frame(&mut buf, screen, rows, cols, false).unwrap();
         let output = String::from_utf8_lossy(&buf);
         // Should contain CUP to each row (4 rows)
         assert!(output.contains("\x1b[1;1H"));
