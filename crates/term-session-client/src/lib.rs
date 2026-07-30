@@ -433,10 +433,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
             // intermediate positions.  Modifier changes and non-motion events
             // break the coalescing loop so they are never lost or reordered.
             if let Event::Mouse(ref mut mouse) = evt
-                && matches!(
-                    mouse.kind,
-                    MouseEventKind::Moved | MouseEventKind::Drag(_)
-                )
+                && matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Drag(_))
             {
                 while let Ok(next_evt) = input_rx.try_recv() {
                     match next_evt {
@@ -614,7 +611,8 @@ fn apply_sgr(out: &mut dyn Write, style: &CellStyle) -> io::Result<()> {
 }
 
 pub fn render_frame(out: &mut dyn Write, screen: &Screen, rows: u16, cols: u16) -> io::Result<()> {
-    let mut buf = Vec::with_capacity((rows as usize) * (cols as usize) * RENDER_BUF_CELL_MULTIPLIER);
+    let mut buf =
+        Vec::with_capacity((rows as usize) * (cols as usize) * RENDER_BUF_CELL_MULTIPLIER);
     let mut active_style = CellStyle::default();
 
     buf.extend_from_slice(b"\x1b[0m");
@@ -664,7 +662,7 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    use term_wm_core::events::{KeyEvent, KeyCode, MouseButton, MouseEvent};
+    use term_wm_core::events::{KeyCode, KeyEvent, MouseButton, MouseEvent};
 
     struct TestWriter {
         buf: Arc<Mutex<Vec<u8>>>,
@@ -802,68 +800,102 @@ mod tests {
     #[test]
     fn coalesce_moved_with_moved() {
         assert!(is_coalescable_mouse(
-            &MouseEventKind::Moved, &KeyModifiers::NONE,
-            &MouseEventKind::Moved, &KeyModifiers::NONE,
+            &MouseEventKind::Moved,
+            &KeyModifiers::NONE,
+            &MouseEventKind::Moved,
+            &KeyModifiers::NONE,
         ));
     }
 
     #[test]
     fn coalesce_drag_same_button() {
         assert!(is_coalescable_mouse(
-            &MouseEventKind::Drag(MouseButton::Left), &KeyModifiers::NONE,
-            &MouseEventKind::Drag(MouseButton::Left), &KeyModifiers::NONE,
+            &MouseEventKind::Drag(MouseButton::Left),
+            &KeyModifiers::NONE,
+            &MouseEventKind::Drag(MouseButton::Left),
+            &KeyModifiers::NONE,
         ));
         assert!(is_coalescable_mouse(
-            &MouseEventKind::Drag(MouseButton::Right), &KeyModifiers { shift: true, ..KeyModifiers::NONE },
-            &MouseEventKind::Drag(MouseButton::Right), &KeyModifiers { shift: true, ..KeyModifiers::NONE },
+            &MouseEventKind::Drag(MouseButton::Right),
+            &KeyModifiers {
+                shift: true,
+                ..KeyModifiers::NONE
+            },
+            &MouseEventKind::Drag(MouseButton::Right),
+            &KeyModifiers {
+                shift: true,
+                ..KeyModifiers::NONE
+            },
         ));
     }
 
     #[test]
     fn reject_drag_different_button() {
         assert!(!is_coalescable_mouse(
-            &MouseEventKind::Drag(MouseButton::Left), &KeyModifiers::NONE,
-            &MouseEventKind::Drag(MouseButton::Right), &KeyModifiers::NONE,
+            &MouseEventKind::Drag(MouseButton::Left),
+            &KeyModifiers::NONE,
+            &MouseEventKind::Drag(MouseButton::Right),
+            &KeyModifiers::NONE,
         ));
     }
 
     #[test]
     fn reject_moved_vs_drag() {
         assert!(!is_coalescable_mouse(
-            &MouseEventKind::Moved, &KeyModifiers::NONE,
-            &MouseEventKind::Drag(MouseButton::Left), &KeyModifiers::NONE,
+            &MouseEventKind::Moved,
+            &KeyModifiers::NONE,
+            &MouseEventKind::Drag(MouseButton::Left),
+            &KeyModifiers::NONE,
         ));
     }
 
     #[test]
     fn reject_different_modifiers() {
         assert!(!is_coalescable_mouse(
-            &MouseEventKind::Moved, &KeyModifiers::NONE,
-            &MouseEventKind::Moved, &KeyModifiers { shift: true, ..KeyModifiers::NONE },
+            &MouseEventKind::Moved,
+            &KeyModifiers::NONE,
+            &MouseEventKind::Moved,
+            &KeyModifiers {
+                shift: true,
+                ..KeyModifiers::NONE
+            },
         ));
         assert!(!is_coalescable_mouse(
-            &MouseEventKind::Drag(MouseButton::Left), &KeyModifiers { control: true, ..KeyModifiers::NONE },
-            &MouseEventKind::Drag(MouseButton::Left), &KeyModifiers::NONE,
+            &MouseEventKind::Drag(MouseButton::Left),
+            &KeyModifiers {
+                control: true,
+                ..KeyModifiers::NONE
+            },
+            &MouseEventKind::Drag(MouseButton::Left),
+            &KeyModifiers::NONE,
         ));
     }
 
     #[test]
     fn reject_discrete_events() {
         assert!(!is_coalescable_mouse(
-            &MouseEventKind::Press(MouseButton::Left), &KeyModifiers::NONE,
-            &MouseEventKind::Press(MouseButton::Left), &KeyModifiers::NONE,
+            &MouseEventKind::Press(MouseButton::Left),
+            &KeyModifiers::NONE,
+            &MouseEventKind::Press(MouseButton::Left),
+            &KeyModifiers::NONE,
         ));
         assert!(!is_coalescable_mouse(
-            &MouseEventKind::Release(MouseButton::Left), &KeyModifiers::NONE,
-            &MouseEventKind::Moved, &KeyModifiers::NONE,
+            &MouseEventKind::Release(MouseButton::Left),
+            &KeyModifiers::NONE,
+            &MouseEventKind::Moved,
+            &KeyModifiers::NONE,
         ));
         assert!(!is_coalescable_mouse(
-            &MouseEventKind::Moved, &KeyModifiers::NONE,
-            &MouseEventKind::ScrollDown, &KeyModifiers::NONE,
+            &MouseEventKind::Moved,
+            &KeyModifiers::NONE,
+            &MouseEventKind::ScrollDown,
+            &KeyModifiers::NONE,
         ));
         assert!(!is_coalescable_mouse(
-            &MouseEventKind::ScrollUp, &KeyModifiers::NONE,
-            &MouseEventKind::ScrollUp, &KeyModifiers::NONE,
+            &MouseEventKind::ScrollUp,
+            &KeyModifiers::NONE,
+            &MouseEventKind::ScrollUp,
+            &KeyModifiers::NONE,
         ));
     }
 
@@ -896,8 +928,10 @@ mod tests {
                 match next {
                     Event::Mouse(ref next_mouse)
                         if is_coalescable_mouse(
-                            &mouse.kind, &mouse.modifiers,
-                            &next_mouse.kind, &next_mouse.modifiers,
+                            &mouse.kind,
+                            &mouse.modifiers,
+                            &next_mouse.kind,
+                            &next_mouse.modifiers,
                         ) =>
                     {
                         *mouse = *next_mouse;
@@ -913,33 +947,74 @@ mod tests {
     #[test]
     fn coalesce_keeps_latest_moved_position() {
         let events = vec![
-            Event::Mouse(MouseEvent { kind: MouseEventKind::Moved, modifiers: KeyModifiers::NONE, column: 5, row: 5 }),
-            Event::Mouse(MouseEvent { kind: MouseEventKind::Moved, modifiers: KeyModifiers::NONE, column: 10, row: 10 }),
-            Event::Mouse(MouseEvent { kind: MouseEventKind::Moved, modifiers: KeyModifiers::NONE, column: 15, row: 15 }),
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                modifiers: KeyModifiers::NONE,
+                column: 5,
+                row: 5,
+            }),
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                modifiers: KeyModifiers::NONE,
+                column: 10,
+                row: 10,
+            }),
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                modifiers: KeyModifiers::NONE,
+                column: 15,
+                row: 15,
+            }),
         ];
         let result = coalesce_through(&events, MouseEventKind::Moved, KeyModifiers::NONE);
-        let Event::Mouse(m) = result.unwrap() else { panic!("expected mouse") };
+        let Event::Mouse(m) = result.unwrap() else {
+            panic!("expected mouse")
+        };
         assert_eq!((m.column, m.row), (15, 15));
     }
 
     #[test]
     fn coalesce_keeps_latest_drag_position() {
         let events = vec![
-            Event::Mouse(MouseEvent { kind: MouseEventKind::Drag(MouseButton::Left), modifiers: KeyModifiers::NONE, column: 1, row: 1 }),
-            Event::Mouse(MouseEvent { kind: MouseEventKind::Drag(MouseButton::Left), modifiers: KeyModifiers::NONE, column: 2, row: 2 }),
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                modifiers: KeyModifiers::NONE,
+                column: 1,
+                row: 1,
+            }),
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                modifiers: KeyModifiers::NONE,
+                column: 2,
+                row: 2,
+            }),
         ];
-        let result = coalesce_through(&events, MouseEventKind::Drag(MouseButton::Left), KeyModifiers::NONE);
-        let Event::Mouse(m) = result.unwrap() else { panic!("expected mouse") };
+        let result = coalesce_through(
+            &events,
+            MouseEventKind::Drag(MouseButton::Left),
+            KeyModifiers::NONE,
+        );
+        let Event::Mouse(m) = result.unwrap() else {
+            panic!("expected mouse")
+        };
         assert_eq!((m.column, m.row), (2, 2));
     }
 
     #[test]
     fn coalesce_stops_at_modifier_change() {
-        let events = vec![
-            Event::Mouse(MouseEvent { kind: MouseEventKind::Moved, modifiers: KeyModifiers { shift: true, ..KeyModifiers::NONE }, column: 99, row: 99 }),
-        ];
+        let events = vec![Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            modifiers: KeyModifiers {
+                shift: true,
+                ..KeyModifiers::NONE
+            },
+            column: 99,
+            row: 99,
+        })];
         let result = coalesce_through(&events, MouseEventKind::Moved, KeyModifiers::NONE);
-        let Event::Mouse(m) = result.unwrap() else { panic!("expected mouse") };
+        let Event::Mouse(m) = result.unwrap() else {
+            panic!("expected mouse")
+        };
         // The first event (modifier change) should NOT be consumed — we
         // still hold the original event at (0,0) with NONE modifiers.
         assert_eq!((m.column, m.row), (0, 0));
@@ -954,18 +1029,25 @@ mod tests {
         });
         let events = vec![key.clone()];
         let result = coalesce_through(&events, MouseEventKind::Moved, KeyModifiers::NONE);
-        let Event::Mouse(m) = result.unwrap() else { panic!("expected mouse") };
+        let Event::Mouse(m) = result.unwrap() else {
+            panic!("expected mouse")
+        };
         // Should retain original event, not consuming the key
         assert_eq!((m.column, m.row), (0, 0));
     }
 
     #[test]
     fn coalesce_stops_at_discrete_mouse_event() {
-        let events = vec![
-            Event::Mouse(MouseEvent { kind: MouseEventKind::Press(MouseButton::Left), modifiers: KeyModifiers::NONE, column: 10, row: 10 }),
-        ];
+        let events = vec![Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            modifiers: KeyModifiers::NONE,
+            column: 10,
+            row: 10,
+        })];
         let result = coalesce_through(&events, MouseEventKind::Moved, KeyModifiers::NONE);
-        let Event::Mouse(m) = result.unwrap() else { panic!("expected mouse") };
+        let Event::Mouse(m) = result.unwrap() else {
+            panic!("expected mouse")
+        };
         // Should NOT consume the Press event
         assert_eq!((m.column, m.row), (0, 0));
     }
