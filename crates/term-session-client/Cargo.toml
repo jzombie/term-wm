@@ -13,7 +13,6 @@ clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
 crossterm = { workspace = true, features = ["bracketed-paste"] }
 libc = { workspace = true }
-line-ending.workspace = true
 muxio-core = { workspace = true }
 muxio-rpc-service = { workspace = true }
 muxio-rpc-service-caller = { workspace = true }
