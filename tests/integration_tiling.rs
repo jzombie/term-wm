@@ -88,13 +88,7 @@ fn collect_leaf_ids(node: &LayoutNode<usize>) -> Vec<usize> {
     node.collect_leaves()
 }
 
-fn has_void(node: &LayoutNode<usize>) -> bool {
-    match node {
-        LayoutNode::Void(_) => true,
-        LayoutNode::Leaf(_) => false,
-        LayoutNode::Split { children, .. } => children.iter().any(has_void),
-    }
-}
+
 
 fn rects_overlap(a: Rect, b: Rect) -> bool {
     if a.width == 0 || a.height == 0 || b.width == 0 || b.height == 0 {
@@ -238,7 +232,6 @@ mod multi_window_tiling {
         let mut root = LayoutNode::leaf(1usize);
         root.insert_leaf(1, 2, InsertPosition::Right);
         root.remove_leaf(2);
-        root.cleanup_after_removal();
         let regions = root.layout_rects(AREA);
         assert_eq!(regions.len(), 1);
         assert_eq!(regions[0].1.width, AREA.width);
@@ -250,11 +243,9 @@ mod multi_window_tiling {
         let mut root = LayoutNode::leaf(1usize);
         root.insert_leaf(1, 2, InsertPosition::Right);
         root.remove_leaf(1);
-        root.cleanup_after_removal();
         let regions = root.layout_rects(AREA);
         assert_eq!(regions.len(), 1, "after removing 1 of 2, one leaf remains");
         root.remove_leaf(2);
-        root.cleanup_after_removal();
         assert!(
             matches!(root, LayoutNode::Leaf(2)),
             "removing last leaf from collapsed tree"
@@ -279,15 +270,10 @@ mod multi_window_tiling {
         );
     }
 
-    /// Verify that corner insert puts the dragged window in the correct
-    /// quadrant and the first sibling in the adjacent quadrant.
-    /// Regression guard against insert/first ordering swaps.
+    /// Verify that corner insert degenerates to Top/Bottom on single leaf.
+    /// Without Void placeholders, corner quadrants are not supported.
     #[test]
-    fn corner_insert_window_ordering() {
-        // Start with 3 windows side by side: [1, 2, 3]
-        let mut root = LayoutNode::leaf(1usize);
-        root.insert_leaf(1, 2, InsertPosition::Right);
-        root.insert_leaf(2, 3, InsertPosition::Right);
+    fn corner_insert_degenerates_to_top_bottom() {
         let area = Rect {
             x: 0,
             y: 0,
@@ -296,152 +282,31 @@ mod multi_window_tiling {
         };
         let mid_y: i32 = (area.height / 2).into();
 
-        // Insert 4 into BottomLeft quadrant
-        // Expected: 4 in bottom-left, 1 in bottom-right, others in top strip
-        root.insert_leaf(1, 4, InsertPosition::BottomLeft);
-        let regions = root.layout_rects(area);
-        let r4 = regions.iter().find(|(id, _)| *id == 4).unwrap().1;
-        let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
-        assert!(
-            r4.x < r1.x,
-            "BottomLeft: insert must be left of first sibling"
-        );
-        assert!(r4.y >= mid_y, "BottomLeft: insert must be in bottom half");
-
-        // Reset and test BottomRight
-        let mut root = LayoutNode::leaf(1usize);
-        root.insert_leaf(1, 2, InsertPosition::Right);
-        root.insert_leaf(2, 3, InsertPosition::Right);
-        root.insert_leaf(1, 4, InsertPosition::BottomRight);
-        let regions = root.layout_rects(area);
-        let r4 = regions.iter().find(|(id, _)| *id == 4).unwrap().1;
-        let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
-        assert!(
-            r4.x > r1.x,
-            "BottomRight: insert must be right of first sibling"
-        );
-        assert!(r4.y >= mid_y, "BottomRight: insert must be in bottom half");
-
-        // Reset and test TopLeft
-        let mut root = LayoutNode::leaf(1usize);
-        root.insert_leaf(1, 2, InsertPosition::Right);
-        root.insert_leaf(2, 3, InsertPosition::Right);
-        root.insert_leaf(1, 4, InsertPosition::TopLeft);
-        let regions = root.layout_rects(area);
-        let r4 = regions.iter().find(|(id, _)| *id == 4).unwrap().1;
-        let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
-        assert!(r4.x < r1.x, "TopLeft: insert must be left of first sibling");
-        assert!(r4.y < mid_y, "TopLeft: insert must be in top half");
-
-        // Reset and test TopRight
-        let mut root = LayoutNode::leaf(1usize);
-        root.insert_leaf(1, 2, InsertPosition::Right);
-        root.insert_leaf(2, 3, InsertPosition::Right);
-        root.insert_leaf(1, 4, InsertPosition::TopRight);
-        let regions = root.layout_rects(area);
-        let r4 = regions.iter().find(|(id, _)| *id == 4).unwrap().1;
-        let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
-        assert!(
-            r4.x > r1.x,
-            "TopRight: insert must be right of first sibling"
-        );
-        assert!(r4.y < mid_y, "TopRight: insert must be in top half");
-    }
-}
-
-// ─── Module 3: Void Node Lifecycle ───────────────────────────────────
-
-#[cfg(test)]
-mod void_node_lifecycle {
-    use super::*;
-
-    #[test]
-    fn corner_insert_creates_void() {
-        let mut root = LayoutNode::leaf(1usize);
-        root.insert_leaf(1, 2, InsertPosition::TopLeft);
-        assert!(has_void(&root), "corner insert must create a Void node");
-    }
-
-    #[test]
-    fn replace_void_by_id() {
-        let mut root = LayoutNode::leaf(1usize);
-        root.insert_leaf(1, 2, InsertPosition::TopLeft);
-        let void_id = match &root {
-            LayoutNode::Split { children, .. } => match &children[0] {
-                LayoutNode::Split {
-                    children: inner, ..
-                } => match &inner[1] {
-                    LayoutNode::Void(id) => *id,
-                    _ => panic!("expected Void in inner split"),
-                },
-                _ => panic!("expected inner Split"),
-            },
-            _ => panic!("expected outer Split"),
-        };
-        let replaced = root.replace_void_by_id(void_id, LayoutNode::leaf(99));
-        assert!(replaced);
-        assert!(!has_void(&root), "Void should be replaced");
-        let ids = collect_leaf_ids(&root);
-        assert!(ids.contains(&99));
-    }
-
-    #[test]
-    fn cleanup_removes_voids() {
-        let mut root = LayoutNode::leaf(1usize);
-        root.insert_leaf(1, 2, InsertPosition::TopLeft);
-        root.cleanup_after_removal();
-        assert!(!has_void(&root), "cleanup should remove all Void nodes");
-    }
-
-    #[test]
-    fn void_skipped_in_layout() {
-        let mut root = LayoutNode::leaf(1usize);
-        root.insert_leaf(1, 2, InsertPosition::TopLeft);
-        root.cleanup_after_removal();
-        let regions = root.layout_rects(AREA);
-        for (_, r) in &regions {
-            assert!(r.width > 0);
-            assert!(r.height > 0);
+        // BottomLeft on single target → Bottom
+        {
+            let mut root = LayoutNode::leaf(1usize);
+            root.insert_leaf(1, 2, InsertPosition::Right);
+            root.insert_leaf(2, 3, InsertPosition::Right);
+            root.insert_leaf(1, 4, InsertPosition::BottomLeft);
+            let regions = root.layout_rects(area);
+            let r4 = regions.iter().find(|(id, _)| *id == 4).unwrap().1;
+            assert!(r4.y >= mid_y, "BottomLeft → Bottom: insert must be in bottom half");
         }
-        assert_eq!(regions.len(), 2);
-    }
 
-    #[test]
-    fn clear_leaf_converts_single_leaf_to_void() {
-        let mut root = LayoutNode::leaf(42usize);
-        assert!(
-            root.clear_leaf(42),
-            "clear_leaf must return true when id matches"
-        );
-        assert!(has_void(&root), "Leaf must become Void after clear_leaf");
-        let regions = root.layout_rects(AREA);
-        assert!(regions.is_empty(), "Void produces no regions");
-
-        // Non-matching id must be a no-op
-        let mut root2 = LayoutNode::leaf(99usize);
-        assert!(
-            !root2.clear_leaf(42),
-            "clear_leaf must return false when id does not match"
-        );
-        assert!(
-            matches!(root2, LayoutNode::Leaf(99)),
-            "Leaf must be preserved when id does not match"
-        );
-    }
-
-    #[test]
-    fn remove_leaf_on_split_then_clear_leaf_on_remaining() {
-        // Simulate: two side-by-side windows [1, 2], remove one,
-        // then clear_leaf the remaining before re-inserting the removed one.
-        let mut root = LayoutNode::leaf(1usize);
-        root.insert_leaf(1, 2, InsertPosition::Right);
-        root.remove_leaf(1);
-        root.cleanup_after_removal();
-        // Tree is now Leaf(2)
-        assert!(root.clear_leaf(2), "clear_leaf on remaining leaf");
-        assert!(has_void(&root), "tree is now Void");
+        // TopRight on single target → Top
+        {
+            let mut root = LayoutNode::leaf(1usize);
+            root.insert_leaf(1, 2, InsertPosition::Right);
+            root.insert_leaf(2, 3, InsertPosition::Right);
+            root.insert_leaf(1, 4, InsertPosition::TopRight);
+            let regions = root.layout_rects(area);
+            let r4 = regions.iter().find(|(id, _)| *id == 4).unwrap().1;
+            assert!(r4.y < mid_y, "TopRight → Top: insert must be in top half");
+        }
     }
 }
+
+
 
 // ─── Module 4: Spatial Isolation ─────────────────────────────────────
 
@@ -480,7 +345,7 @@ mod spatial_isolation {
                 LayoutNode::Leaf(k0),
                 LayoutNode::Split {
                     direction: Direction::Vertical,
-                    children: vec![LayoutNode::Leaf(k1), LayoutNode::Void(0)],
+                    children: vec![LayoutNode::Leaf(k1), LayoutNode::leaf(k1)],
                     weights: vec![1u16, 1u16],
                     resizable: false,
                 },
@@ -827,13 +692,13 @@ mod drag_snap_pipeline {
         let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), corner_x, corner_y);
         wm.dispatch_mouse(&drag);
 
-        // Verify exact ghost geometry: bottom-right quadrant (40, 12, 40, 12)
+        // Without Void, corner snap degenerates to half-screen Bottom
         let snap_rect = wm
             .drag_snap_rect()
             .expect("drag_snap must be set after Drag to corner");
-        assert_eq!(snap_rect.x, AREA.x + i32::from(AREA.width / 2), "ghost x");
+        assert_eq!(snap_rect.x, 0, "ghost x");
         assert_eq!(snap_rect.y, AREA.y + i32::from(AREA.height / 2), "ghost y");
-        assert_eq!(snap_rect.width, AREA.width / 2, "ghost width");
+        assert_eq!(snap_rect.width, AREA.width, "ghost width");
         assert_eq!(snap_rect.height, AREA.height / 2, "ghost height");
 
         let up = make_mouse(
@@ -845,9 +710,9 @@ mod drag_snap_pipeline {
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
         let r = wm.region(keys[0]);
-        assert_eq!(r.x, AREA.x + i32::from(AREA.width / 2), "corner x");
+        assert_eq!(r.x, 0, "corner x");
         assert_eq!(r.y, AREA.y + i32::from(AREA.height / 2), "corner y");
-        assert_eq!(r.width, AREA.width / 2, "corner width");
+        assert_eq!(r.width, AREA.width, "corner width");
         assert_eq!(r.height, AREA.height / 2, "corner height");
     }
 
@@ -1068,8 +933,7 @@ mod drag_snap_pipeline {
 
     #[test]
     fn regr_sole_leaf_snap_edge_creates_correct_split() {
-        // Snapping a sole tiled leaf to an edge should create a proper
-        // Void split that preserves edge geometry (not a 100% maximize).
+        // Snapping a sole tiled leaf to the right edge creates a half-screen split.
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
@@ -1095,6 +959,7 @@ mod drag_snap_pipeline {
         let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), right_edge, mid_y);
         wm.dispatch_mouse(&drag);
 
+        // sole leaf + edge snap → half-screen preview
         let snap_rect = wm.drag_snap_rect().expect("drag snap must be set");
         assert!(
             snap_rect.x >= AREA.x + i32::from(AREA.width / 2),
@@ -1174,9 +1039,8 @@ mod drag_snap_pipeline {
 
     #[test]
     fn close_all_windows_then_tile_new_does_not_phantom() {
-        // Regression: closing all windows left a Void in the tree.
-        // Opening a new window via tile_window would call split_root on Void,
-        // creating Horizontal[Void, leaf] with a resize handle (the phantom).
+        // Regression: closing all windows leaves an empty tree.
+        // Opening a new window via tile_window handles this case.
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
@@ -1289,7 +1153,6 @@ mod property_tests {
     fn make_non_resizable(node: &LayoutNode<usize>) -> LayoutNode<usize> {
         match node {
             LayoutNode::Leaf(id) => LayoutNode::leaf(*id),
-            LayoutNode::Void(id) => LayoutNode::Void(*id),
             LayoutNode::Split {
                 direction,
                 children,
@@ -1729,7 +1592,7 @@ mod floating_tiled_separation {
     }
 
     #[test]
-    fn void_snap_preserves_bifurcation() {
+    fn corner_snap_preserves_bifurcation() {
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
@@ -1800,7 +1663,7 @@ mod floating_tiled_separation {
         let down2 = make_mouse(MouseEventKind::Press(MouseButton::Left), col, row);
         wm.dispatch_mouse(&down2);
 
-        // Should be maximized (floating with full-area rect via the void path)
+        // Should be maximized (floating with full-area rect)
         let panes = wm.floating_panes();
         let (_, spec) = panes
             .iter()
@@ -1822,20 +1685,19 @@ mod floating_tiled_separation {
     }
 
     #[test]
-    fn maximize_tiled_region_unchanged_after_unmaximize() {
+    fn maximize_tiled_after_unmaximize_is_tiled() {
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
-        let orig_region = wm.region(keys[0]);
-
         wm.toggle_maximize(keys[0]);
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
         wm.toggle_maximize(keys[0]);
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
-        let restored = wm.region(keys[0]);
-        assert_eq!(restored, orig_region, "region restored after unmaximize");
+        // Window should be back in the tree as tiled
+        assert!(!wm.is_window_floating(keys[0]), "must be tiled after unmaximize");
+        assert!(wm.region(keys[0]).width > 0, "must have valid region");
         assert_bifurcation_invariant(&wm);
     }
 }

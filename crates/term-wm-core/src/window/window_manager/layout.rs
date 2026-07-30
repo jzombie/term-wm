@@ -800,22 +800,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Remove a window from the tiling layout.
     /// Idempotent — safe to call even if already detached.
     pub(super) fn detach_from_tiling_layout(&mut self, key: WindowKey) {
-        // Capture void_id before the mutable layout borrow
-        let void_id = self.window(key).and_then(|w| w.void_id());
         if let Some(ref mut layout) = self.managed_layout {
-            if let Some(vid) = void_id {
-                layout.remove_void_by_id(vid);
-                if let Some(w) = self.windows.get_mut(key) {
-                    w.clear_void_id();
-                }
-            } else {
-                let _ = layout.root_mut().remove_leaf(key);
-                layout.root_mut().cleanup_after_removal();
-                // If the tree was a single leaf matching key, remove_leaf
-                // cannot remove it.  Clear it explicitly to prevent stale
-                // leaves from persisting in the tree.
-                layout.root_mut().clear_leaf(key);
-            }
+            layout.remove_window(key);
         }
     }
 

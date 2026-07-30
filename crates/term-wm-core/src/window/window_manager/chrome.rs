@@ -26,19 +26,19 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 // Was floating: restore pre-maximize floating rect
                 self.set_floating_rect(key, Some(prev_spec));
             } else {
-                // Was tiled: restore Void → Leaf in layout tree
+                // Was tiled: re-insert key into layout tree
                 self.clear_floating_rect(key);
-                let void_id = self.window(key).and_then(|w| w.void_id());
-                if let Some(vid) = void_id
-                    && let Some(ref mut layout) = self.managed_layout
-                {
-                    layout.replace_void_by_id(vid, LayoutNode::leaf(key));
+                if let Some(ref mut layout) = self.managed_layout {
+                    if !layout.root().collect_leaves().is_empty() {
+                        layout.split_root(key, term_wm_layout_engine::InsertPosition::Right);
+                    } else {
+                        *layout = crate::layout::TilingLayout::new(LayoutNode::leaf(key));
+                    }
                 }
             }
 
             if let Some(w) = self.windows.get_mut(key) {
                 w.set_maximized(false);
-                w.clear_void_id();
             }
             self.bring_floating_to_front_key(key);
             return;
@@ -56,12 +56,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             // Was floating: save current floating rect to prev_floating_rect
             self.set_prev_floating_rect(key, Some(current));
         } else {
-            // Was tiled: replace Leaf with Void in-place, preserving tree
-            if let Some(ref mut layout) = self.managed_layout
-                && let Some(void_id) = layout.replace_leaf_with_void(key)
-                && let Some(w) = self.windows.get_mut(key)
-            {
-                w.set_void_id(Some(void_id));
+            // Was tiled: remove key from tree (it will float as maximized)
+            if let Some(ref mut layout) = self.managed_layout {
+                layout.remove_window(key);
             }
             self.set_prev_floating_rect(key, None);
         }
