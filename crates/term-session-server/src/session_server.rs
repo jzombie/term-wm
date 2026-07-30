@@ -309,11 +309,18 @@ pub async fn run_server(
     // The channel persists across client disconnects so reconnecting
     // clients can still send input — we drop it only when the server
     // shuts down.
-    let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    // Bounded to 128 items + try_send provides memory safety when the
+    // PTY write task falls behind under extreme input bursts.  Dropped
+    // chunks may fragment the PTY byte stream (multi-byte sequences);
+    // client-side coalescing (in term-session-client) prevents most
+    // over-production, but the bound is the last line of defense.
+    let (input_tx, mut input_rx) = mpsc::channel::<Vec<u8>>(128);
     endpoint
         .register_stream_handler(STREAM_INPUT_METHOD_ID, move |event, _responder, _ctx| {
             if let RpcStreamEvent::PayloadChunk { bytes, .. } = event {
-                let _ = input_tx.send(bytes);
+                if let Err(e) = input_tx.try_send(bytes) {
+                    tracing::warn!(error = %e, "server input buffer full; dropping input chunk");
+                }
             }
             // Intentionally ignore End/Error — the channel stays alive.
         })

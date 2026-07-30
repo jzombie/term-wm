@@ -22,7 +22,7 @@ use portable_pty::PtySize;
 use term_session_muxio_service_definitions::{
     OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
 };
-use term_wm_core::events::{Event, KeyKind};
+use term_wm_core::events::{Event, KeyKind, KeyModifiers, MouseEventKind};
 use term_wm_pty_engine::Pane;
 use term_wm_pty_engine::clipboard::{Clipboard, Osc52Extractor};
 use term_wm_pty_engine::input_encoding::mouse_event_to_bytes;
@@ -139,6 +139,26 @@ impl<W: Write> Drop for TerminalGuard<W> {
 /// Convert a crossterm event into a core Event for use in the event-driven loop.
 fn convert_crossterm_event(evt: crossterm::event::Event) -> Option<Event> {
     term_wm_crossterm_adapter::try_translate_event(evt)
+}
+
+/// Two motion mouse events may be coalesced (keep only the latest position)
+/// only when both the event kind and modifier flags match.  Modifier changes
+/// mid-drag (Shift/Ctrl/Alt pressed or released) must be preserved — they
+/// signal state transitions that terminal applications rely on.
+fn is_coalescable_mouse(
+    a_kind: &MouseEventKind,
+    a_mod: &KeyModifiers,
+    b_kind: &MouseEventKind,
+    b_mod: &KeyModifiers,
+) -> bool {
+    if a_mod != b_mod {
+        return false;
+    }
+    match (a_kind, b_kind) {
+        (MouseEventKind::Moved, MouseEventKind::Moved) => true,
+        (MouseEventKind::Drag(btn1), MouseEventKind::Drag(btn2)) => btn1 == btn2,
+        _ => false,
+    }
 }
 
 /// Connect to a term-session-server and run the TUI viewer.
@@ -336,28 +356,34 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         render_frame(&mut out, screen, rows, cols)?;
     }
 
+    let mut pending_input: Option<Event> = None;
     loop {
-        // Block until either user input or PTY output arrives (0 CPU when idle)
-        let input_event = crossbeam_channel::select! {
-            recv(input_rx) -> msg => {
-                match msg {
-                    Ok(evt) => Some(evt),
-                    Err(_) => return Err(io::Error::other("input thread died")),
-                }
-            }
-            recv(push_rx) -> msg => {
-                match msg {
-                    Ok(data) => {
-                        // PTY output — process directly into parser
-                        let parser = pane.shared_parser();
-                        let mut parser = parser.lock().unwrap();
-                        parser.process(&data);
-                        None
+        // Retrieve next input event (either buffered from previous coalescing
+        // pass or blocking on the input/PTY-output channel)
+        let input_event = if let Some(evt) = pending_input.take() {
+            Some(evt)
+        } else {
+            crossbeam_channel::select! {
+                recv(input_rx) -> msg => {
+                    match msg {
+                        Ok(evt) => Some(evt),
+                        Err(_) => return Err(io::Error::other("input thread died")),
                     }
-                    Err(_) => {
-                        // push channel disconnected → will be detected
-                        // by drain_pushes() below
-                        None
+                }
+                recv(push_rx) -> msg => {
+                    match msg {
+                        Ok(data) => {
+                            // PTY output — process directly into parser
+                            let parser = pane.shared_parser();
+                            let mut parser = parser.lock().unwrap();
+                            parser.process(&data);
+                            None
+                        }
+                        Err(_) => {
+                            // push channel disconnected → will be detected
+                            // by drain_pushes() below
+                            None
+                        }
                     }
                 }
             }
@@ -378,7 +404,37 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         }
 
         // Handle the input event (if any)
-        if let Some(evt) = input_event {
+        if let Some(mut evt) = input_event {
+            // Coalesce rapid mouse motion (Moved / Drag) events currently in
+            // the channel buffer.  Only the latest position matters — discard
+            // intermediate positions.  Modifier changes and non-motion events
+            // break the coalescing loop so they are never lost or reordered.
+            if let Event::Mouse(ref mut mouse) = evt {
+                if matches!(
+                    mouse.kind,
+                    MouseEventKind::Moved | MouseEventKind::Drag(_)
+                ) {
+                    while let Ok(next_evt) = input_rx.try_recv() {
+                        match next_evt {
+                            Event::Mouse(ref next_mouse)
+                                if is_coalescable_mouse(
+                                    &mouse.kind,
+                                    &mouse.modifiers,
+                                    &next_mouse.kind,
+                                    &next_mouse.modifiers,
+                                ) =>
+                            {
+                                *mouse = next_mouse.clone();
+                            }
+                            other => {
+                                pending_input = Some(other);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
             match evt {
                 Event::Key(ref key)
                     if key.kind == KeyKind::Press || key.kind == KeyKind::Repeat =>
