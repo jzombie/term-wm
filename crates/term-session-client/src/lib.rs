@@ -224,9 +224,13 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                 async move {
                     let (cols, rows) = OnPtyResized::decode_request(&payload)
                         .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-                    cols_ref.store(cols, Ordering::Relaxed);
-                    rows_ref.store(rows, Ordering::Relaxed);
-                    pending_ref.store(true, Ordering::Relaxed);
+                    let cur_cols = cols_ref.load(Ordering::Relaxed);
+                    let cur_rows = rows_ref.load(Ordering::Relaxed);
+                    if cols != cur_cols || rows != cur_rows {
+                        cols_ref.store(cols, Ordering::Relaxed);
+                        rows_ref.store(rows, Ordering::Relaxed);
+                        pending_ref.store(true, Ordering::Relaxed);
+                    }
                     OnPtyResized::encode_response(())
                         .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
                 }
@@ -400,11 +404,14 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                 let rows = server_rows.load(Ordering::Relaxed);
                 if cols > 0 && rows > 0 {
                     let mut parser_lk = shared_parser.lock().unwrap();
-                    parser_lk.screen_mut().set_size(rows, cols);
+                    let (cur_rows, cur_cols) = parser_lk.screen().size();
+                    if cur_cols != cols || cur_rows != rows {
+                        parser_lk.screen_mut().set_size(rows, cols);
+                        let _ = stdout.write_all(b"\x1b[0m\x1b[2J\x1b[H");
+                        let _ = stdout.flush();
+                        force_render = true;
+                    }
                 }
-                let _ = stdout.write_all(b"\x1b[0m\x1b[2J\x1b[H");
-                let _ = stdout.flush();
-                force_render = true;
             }
         };
 
@@ -545,6 +552,16 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                     }
                 }
                 Event::Resize(w, h) => {
+                    // Pre-emptively update atomics so echoed OnPtyResized is a no-op
+                    server_cols.store(w, Ordering::Relaxed);
+                    server_rows.store(h, Ordering::Relaxed);
+
+                    // Resize parser locally
+                    let parser = pane.shared_parser();
+                    let mut parser_lk = parser.lock().unwrap();
+                    parser_lk.screen_mut().set_size(h, w);
+
+                    // Send RPC to server
                     let size = PtySize {
                         rows: h,
                         cols: w,
@@ -554,6 +571,10 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                     if let Err(err) = pane.resize(size) {
                         tracing::warn!(error = %err, "resize request failed on PTY pane");
                     }
+
+                    // Clear terminal + force the render gate
+                    let _ = out.write_all(b"\x1b[0m\x1b[2J\x1b[H");
+                    let _ = out.flush();
                     force_render = true;
                 }
                 Event::Paste(text) => {
