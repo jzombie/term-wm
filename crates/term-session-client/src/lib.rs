@@ -661,7 +661,8 @@ pub fn render_frame(
         Vec::with_capacity((rows as usize) * (cols as usize) * RENDER_BUF_CELL_MULTIPLIER);
     let mut active_style = CellStyle::default();
 
-    buf.extend_from_slice(b"\x1b[0m");
+    // Synchronized Output begin, hide cursor, reset attributes
+    buf.extend_from_slice(b"\x1b[?2026h\x1b[?25l\x1b[0m");
     if clear_display {
         buf.extend_from_slice(b"\x1b[2J");
     }
@@ -716,6 +717,8 @@ pub fn render_frame(
     } else {
         buf.extend_from_slice(b"\x1b[?25h");
     }
+    // Synchronized Output end — terminal now paints atomically
+    buf.extend_from_slice(b"\x1b[?2026l");
 
     out.write_all(&buf)?;
     out.flush()
