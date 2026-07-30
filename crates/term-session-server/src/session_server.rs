@@ -248,11 +248,7 @@ pub async fn run_server(
                     .as_ref()
                     .map(|s| (s.cols, s.rows))
                     .unwrap_or((cols, rows));
-                let origin = ctx.conn_id;
-                let targets: Vec<ClientEntry> = guard.clients.iter()
-                    .filter(|(id, _)| **id != origin)
-                    .map(|(_, entry)| entry.clone())
-                    .collect();
+                let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
                 drop(guard);
                 ServerState::notify_clients(&targets, ncols, nrows);
                 ResizePty::encode_response((ncols, nrows))
