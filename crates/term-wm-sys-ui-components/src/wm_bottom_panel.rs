@@ -155,15 +155,46 @@ impl WmBottomPanelComponent {
             .as_ref()
             .map(|s| s.chars().count() as u16)
             .unwrap_or(0);
-        let right_margin = info_width + 2 + indicator_reserved;
-        let max_hint_x = if info_width > 0 {
-            bounds
-                .x
-                .saturating_add(bounds.width)
-                .saturating_sub(right_margin)
+
+        // Level 0 → 1: suppress info section when full hints don't fit
+        let potential_right_margin = if show_info && info_width > 0 {
+            info_width + 2 + indicator_reserved
         } else {
-            bounds.x.saturating_add(bounds.width)
+            indicator_reserved
         };
+
+        let total_full_hints_w: u16 = self
+            .keybinding_hints
+            .iter()
+            .map(|(action, combos)| {
+                let combo_str = combos.join("/");
+                let combo_w = UnicodeWidthStr::width(combo_str.as_str()) as u16;
+                let action_str = format!(" {}", action);
+                let action_w = UnicodeWidthStr::width(action_str.as_str()) as u16;
+                combo_w + action_w + 1
+            })
+            .sum();
+
+        let actual_info_width = if show_info && info_width > 0 {
+            let available_with_info = bounds.width.saturating_sub(potential_right_margin);
+            if total_full_hints_w > available_with_info {
+                0
+            } else {
+                info_width
+            }
+        } else {
+            0
+        };
+
+        let right_margin = if actual_info_width > 0 {
+            actual_info_width + 2 + indicator_reserved
+        } else {
+            indicator_reserved
+        };
+        let max_hint_x = bounds
+            .x
+            .saturating_add(bounds.width)
+            .saturating_sub(right_margin);
 
         if !self.keybinding_hints.is_empty() {
             let combo_style = Style::default()
@@ -176,78 +207,56 @@ impl WmBottomPanelComponent {
                 if cursor_x >= max_hint_x {
                     break;
                 }
-                let combo_str = combos.join("/");
-                let entry = format!("{combo_str} {action}");
-                let entry_width = entry.chars().count() as u16;
 
-                if cursor_x.saturating_add(entry_width) > max_hint_x && cursor_x > bounds.x {
+                let combo_str = combos.join("/");
+                let combo_cols = UnicodeWidthStr::width(combo_str.as_str()) as u16;
+
+                if cursor_x.saturating_add(combo_cols) > max_hint_x {
                     break;
                 }
 
-                let available_w = max_hint_x.saturating_sub(cursor_x);
-                if cursor_x == bounds.x && entry_width > available_w {
-                    let truncated_combo = truncate_to_width(&combo_str, available_w as usize);
-                    let combo_cols = UnicodeWidthStr::width(truncated_combo.as_str()) as u16;
-                    safe_set_string(buffer, bounds, cursor_x, area.y as u16, &truncated_combo, combo_style);
+                let entry_start = cursor_x;
 
-                    let desc_available = available_w.saturating_sub(combo_cols);
-                    if desc_available > 0 {
-                        let desc = format!(" {action}");
-                        let truncated_desc = truncate_to_width(&desc, desc_available as usize);
-                        let desc_cursor = cursor_x.saturating_add(combo_cols);
-                        safe_set_string(buffer, bounds, desc_cursor, area.y as u16, &truncated_desc, style);
-                    }
+                safe_set_string(
+                    buffer, bounds, cursor_x, area.y as u16, &combo_str, combo_style,
+                );
+                cursor_x = cursor_x.saturating_add(combo_cols);
 
-                    self.hint_rects.push((
-                        LayoutRect {
-                            x: i32::from(cursor_x),
-                            y: area.y,
-                            width: available_w,
-                            height: 1,
-                        },
-                        action.clone(),
-                    ));
-                    break;
+                let remaining = max_hint_x.saturating_sub(cursor_x);
+                if remaining > 0 {
+                    let desc = format!(" {action}");
+                    let desc_cols = UnicodeWidthStr::width(desc.as_str()) as u16;
+                    let display_desc = if desc_cols <= remaining {
+                        desc
+                    } else {
+                        truncate_to_width(&desc, remaining as usize)
+                    };
+                    safe_set_string(
+                        buffer, bounds, cursor_x, area.y as u16, &display_desc, style,
+                    );
+                    cursor_x = cursor_x.saturating_add(
+                        UnicodeWidthStr::width(display_desc.as_str()) as u16,
+                    );
+                }
+
+                if cursor_x.saturating_add(1) <= max_hint_x {
+                    safe_set_string(buffer, bounds, cursor_x, area.y as u16, "|", Style::default());
+                    cursor_x = cursor_x.saturating_add(1);
                 }
 
                 self.hint_rects.push((
                     LayoutRect {
-                        x: i32::from(cursor_x),
+                        x: i32::from(entry_start),
                         y: area.y,
-                        width: entry_width,
+                        width: cursor_x.saturating_sub(entry_start),
                         height: 1,
                     },
                     action.clone(),
                 ));
-
-                safe_set_string(
-                    buffer,
-                    bounds,
-                    cursor_x,
-                    area.y as u16,
-                    &combo_str,
-                    combo_style,
-                );
-                cursor_x = cursor_x.saturating_add(combo_str.chars().count() as u16);
-                let desc = format!(" {action}");
-                safe_set_string(buffer, bounds, cursor_x, area.y as u16, &desc, style);
-                cursor_x = cursor_x.saturating_add(desc.chars().count() as u16);
-
-                if cursor_x < max_hint_x {
-                    safe_set_string(
-                        buffer,
-                        bounds,
-                        cursor_x,
-                        area.y as u16,
-                        "|",
-                        Style::default(),
-                    );
-                    cursor_x = cursor_x.saturating_add(1);
-                }
             }
         }
 
-        if let Some(ref info) = info_opt {
+        if let Some(ref info) = info_opt && actual_info_width > 0 {
             let text = truncate_to_width(
                 info,
                 (bounds.width.saturating_sub(indicator_reserved)) as usize,
