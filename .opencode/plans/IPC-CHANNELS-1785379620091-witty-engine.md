@@ -62,13 +62,37 @@ struct Cli {
     cmd: Vec<String>,
 }
 
+### 3a. Update `SessionServerConfig` — remove `socket_path`, add `base_dir`
+
+`run_server` resolves the socket path internally:
+
+```rust
+// crates/term-session-server/src/session_server.rs
+pub struct SessionServerConfig {
+    pub channel: ChannelName,
+    pub base_dir: Option<PathBuf>,
+    pub cmd: Vec<String>,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+pub async fn run_server(config: SessionServerConfig) -> Result<...> {
+    let resolver = ChannelResolver::new(config.base_dir)?;
+    let socket_path = resolver.resolve(&config.channel)?;
+    // ... rest unchanged, binds to socket_path ...
+}
+```
+
+### 3b. Combined `main.rs` — `run_server_mode` with lock + resolve
+
+```rust
 // In main():
 let channel = ChannelName::parse(&channel_input)?;
 if cli.server {
     run_server_mode(&channel, &cli)?;
 } else {
     let resolver = ChannelResolver::new(cli.base_dir.clone());
-    let socket_path = connect_or_spawn_server(&channel, &resolver, cli.base_dir.as_deref())?;
+    let socket_path = connect_or_spawn_server(&channel, &resolver, &cli)?;
     let socket_str = socket_path.to_str()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Invalid UTF-8"))?;
     run_session(socket_str)?;
@@ -86,7 +110,7 @@ fn run_server_mode(channel: &ChannelName, cli: &Cli) -> Result<(), ...> {
     }
     let config = SessionServerConfig {
         channel: channel.clone(),
-        socket_path: socket_path.to_string_lossy().to_string(),
+        base_dir: cli.base_dir.clone(),
         cmd: cli.cmd.clone(),
         cols: cli.cols,
         rows: cli.rows,
@@ -103,12 +127,17 @@ fn run_server_mode(channel: &ChannelName, cli: &Cli) -> Result<(), ...> {
 `spawn_detached_server` re-executes `current_exe()` with `--server`:
 
 ```rust
-fn spawn_detached_server(channel: &ChannelName, base_dir: Option<&Path>) -> io::Result<Child> {
+fn spawn_detached_server(channel: &ChannelName, cli: &Cli) -> io::Result<Child> {
     let bin = std::env::current_exe()?;
     let mut cmd = Command::new(bin);
     cmd.arg("--server").arg("--channel").arg(channel.to_string());
-    if let Some(dir) = base_dir {
+    if let Some(ref dir) = cli.base_dir {
         cmd.arg("--base-dir").arg(dir);
+    }
+    cmd.arg("--cols").arg(cli.cols.to_string());
+    cmd.arg("--rows").arg(cli.rows.to_string());
+    if !cli.cmd.is_empty() {
+        cmd.arg("--").args(&cli.cmd);
     }
     cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(windows)] { cmd.creation_flags(0x08000000); }
@@ -146,13 +175,13 @@ tracing-subscriber = { workspace = true }
 pub fn connect_or_spawn_server(
     channel: &ChannelName,
     resolver: &ChannelResolver,
-    base_dir: Option<&Path>,
+    cli: &Cli,
 ) -> io::Result<PathBuf> {
     let socket_path = resolver.resolve(channel)?;
     if probe_ipc_endpoint(&socket_path) {
         return Ok(socket_path);
     }
-    let mut child = spawn_detached_server(channel, base_dir)?;
+    let mut child = spawn_detached_server(channel, cli)?;
     // ... polling loop same as before ...
 }
 ```
@@ -175,9 +204,11 @@ use term_session_muxio_service_definitions::{
 |------|--------|
 | `crates/term-session-server/src/main.rs` | **DELETE** |
 | `crates/term-session-muxio-service-definitions/src/channel.rs` | Add `probe_ipc_endpoint`, `acquire_sidecar_lock` (pub, platform-gated) |
+| `crates/term-session-muxio-service-definitions/Cargo.toml` | Add `[target.'cfg(windows)'.dependencies] windows-sys` |
 | `crates/term-session-client/src/main.rs` | Add `--server` flag; server mode calls `run_server` via tokio block_on |
-| `crates/term-session-client/src/auto_spawn.rs` | `spawn_detached_server(channel, base_dir)`; `connect_or_spawn_server(channel, resolver, base_dir)`; import probe/lock from definitions |
+| `crates/term-session-client/src/auto_spawn.rs` | `spawn_detached_server(channel, &Cli)` forwards `--cols`, `--rows`, `cmd`; `connect_or_spawn_server(channel, resolver, &Cli)`; import probe/lock from definitions |
 | `crates/term-session-client/Cargo.toml` | Add `[[bin]] name = "term-session"`; add `term-session-server`, `tokio`, `tracing-subscriber` deps |
+| `crates/term-session-server/src/session_server.rs` | `SessionServerConfig`: remove `socket_path`, add `channel: ChannelName` + `base_dir: Option<PathBuf>`; resolve socket path inside `run_server` |
 | `Cargo.toml` (workspace) | Remove `term-session-server` from workspace member `[[bin]]` if listed (it's lib-only now) |
 | `.zed/tasks.json` | Update task name from `term-session-server` to `term-session --server` (optional) |
 
