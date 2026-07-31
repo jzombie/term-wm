@@ -27,6 +27,24 @@ fn spawn_detached_server(cfg: &ServerSpawnConfig<'_>) -> io::Result<Child> {
         .stdout(Stdio::null())
         // Keep stderr so startup failures (PTY spawn, socket bind) can be surfaced.
         .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Start the server in its own session and process group via setsid().
+        // This is the only process-group manipulation done here: a child that
+        // already became a process-group leader (e.g. via setpgid) would have
+        // setsid() fail with EPERM. Detaching from the launching terminal means
+        // the daemon can never freeze its input, and terminal Ctrl+C / Ctrl+Z /
+        // SIGHUP-on-close are never delivered to it.
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
