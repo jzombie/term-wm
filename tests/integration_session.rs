@@ -343,7 +343,7 @@ async fn session_reconnect() {
     assert!(output1.windows(3).any(|w| w == b"one"));
     drop(client1);
 
-    let client2 = connect_client_with_retry(&socket_str).await;
+    let client2 = connect_client_with_retry(&channel.to_string()).await;
     let (_, mut reader2) = client2
         .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
         .await
