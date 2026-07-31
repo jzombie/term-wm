@@ -72,36 +72,69 @@ impl ChannelResolver {
 
 Add `dirs` to workspace deps and `term-session-muxio-service-definitions`.
 
-### 2. Modify the server CLI
+### 2. Auto-spawn pattern: client launches server on demand
+
+Core UX: the client resolves a channel name, probes the socket, and if no server is listening, spawns `term-session-server --channel <name>` as a detached background process before connecting.
+
+**Interaction pipeline:**
+
+```
+term-session-client --channel workspace/dev
+  │
+  ├── 1. Resolve "workspace/dev" → socket path
+  ├── 2. Probe: UnixStream::connect(socket_path)
+  │      ├── [OK] → Connect & run session
+  │      └── [ECONNREFUSED / ENOENT]
+  │             ├── 3. unlink() stale socket if present
+  │             ├── 4. Spawn detached: term-session-server --channel workspace/dev
+  │             ├── 5. Poll socket until ready (50ms loop, 3s timeout)
+  │             └── 6. Connect & run session
+```
+
+**Key details:**
+- Detach server with `stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())`
+- Windows: use `CREATE_NO_WINDOW` flag to suppress console popup
+- Server binary resolution: check `$PATH` first, fall back to `current_exe()/../term-session-server`
+
+**Environment inheritance:** The server should export `TERM_WM_CHANNEL="namespace/name"` into the spawned PTY child process so that any nested `term-session-client` calls inside that shell auto-inherit the channel.
+
+**Stale socket cleanup:** On startup, the server probes the socket path — if `connect()` yields `ECONNREFUSED`, `unlink()` the stale file before binding.
+
+**Files:**
+- `crates/term-session-client/src/auto_spawn.rs` — **NEW**, module with `connect_or_spawn_server()`
+- `crates/term-session-client/src/lib.rs` — export the auto-spawn module
+
+### 3. Modify the server CLI
 
 File: `crates/term-session-server/src/main.rs`
 
 - Replace `--socket <PATH>` with `--channel <NAMESPACE/NAME>` (default: `default/main`)
-- Change `SessionServerConfig` field from `socket_path: String` to `channel: ChannelName`
-- In `main()`, resolve the channel name to a socket path before calling `run_server`
+- Add stale socket cleanup on startup
+- Export `TERM_WM_CHANNEL` in the spawned PTY session's environment
+- `SessionServerConfig` field changes: `socket_path: String` → `channel: ChannelName`
 
-### 3. Modify `run_server`
+### 4. Modify `run_server`
 
 File: `crates/term-session-server/src/session_server.rs`
 
 - `SessionServerConfig.socket_path` → `SessionServerConfig.channel: ChannelName`
 - `run_server()` resolves the channel name internally → keeps socket path for `RpcIpcServer`
 
-### 4. Modify the client CLI
+### 5. Modify the client CLI
 
 File: `crates/term-session-client/src/main.rs`
 
 - Replace positional `<session_server_socket>` with `--channel <NAMESPACE/NAME>` (default: `default/main`)
-- Resolve channel name to socket path before calling `run_session`
+- Use `connect_or_spawn_server()` to auto-launch if needed
 
-### 5. Modify `run_session`
+### 6. Modify `run_session`
 
 File: `crates/term-session-client/src/lib.rs`
 
 - Keep the function signature accepting `&str` socket path — resolution happens at the CLI layer
 - The lib function is a low-level API; channel resolution is a CLI concern
 
-### 6. Tests
+### 7. Tests
 
 File: `tests/common/session.rs`
 
@@ -118,9 +151,12 @@ File: `tests/common/session.rs`
 | `crates/term-session-muxio-service-definitions/src/lib.rs` | Add `mod channel;` and `pub use channel::*;` |
 | `crates/term-session-muxio-service-definitions/Cargo.toml` | Add `dirs` dependency |
 | `Cargo.toml` (workspace) | Add `dirs` workspace dep (if not present) |
-| `crates/term-session-server/src/main.rs` | Replace `--socket` with `--channel`, resolve before passing to `run_server` |
-| `crates/term-session-server/src/session_server.rs` | `SessionServerConfig.socket_path` → `SessionServerConfig.channel: ChannelName`; resolve inside `run_server` |
-| `crates/term-session-client/src/main.rs` | Replace positional arg with `--channel`, resolve before calling `run_session` |
+| `crates/term-session-client/src/auto_spawn.rs` | **NEW** — `connect_or_spawn_server()` |
+| `crates/term-session-client/src/lib.rs` | Export auto_spawn module |
+| `crates/term-session-server/src/main.rs` | `--socket` → `--channel`; stale socket cleanup; export `TERM_WM_CHANNEL` env |
+| `crates/term-session-server/src/session.rs` | Include `TERM_WM_CHANNEL` in child PTY environment |
+| `crates/term-session-server/src/session_server.rs` | `socket_path` → `channel: ChannelName` in `SessionServerConfig`; resolve inside `run_server` |
+| `crates/term-session-client/src/main.rs` | Positional arg → `--channel`; use `connect_or_spawn_server()` |
 | `tests/common/session.rs` | `spawn_session` adapts to use `ChannelName` |
 
 ---
