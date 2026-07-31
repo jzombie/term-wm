@@ -116,10 +116,6 @@ const CLIPBOARD_CHANNEL_CAPACITY: usize = 64;
 /// Maximum buffered input events (covers paste bursts without over-allocating).
 const INPUT_CHANNEL_CAPACITY: usize = 64;
 
-/// How often the main loop wakes to check whether the server connection is
-/// still alive when no input or output is pending.
-const CONNECTION_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
-
 /// Number of trailing bytes retained to detect OSC 52 clipboard sequences
 /// that straddle chunk boundaries.  8 bytes is enough to hold the longest
 /// OSC 52 tail (the BEL terminator and preceding data).
@@ -484,14 +480,6 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                             None
                         }
                     }
-                }
-                recv(crossbeam_channel::after(CONNECTION_CHECK_INTERVAL)) -> _ => {
-                    // Periodic wakeup so a lost connection (e.g. the server
-                    // exiting when the session ends) is noticed by the
-                    // `client.is_connected()` check below even when no input
-                    // or PTY output ever arrives.
-
-                    None
                 }
             }
         };
